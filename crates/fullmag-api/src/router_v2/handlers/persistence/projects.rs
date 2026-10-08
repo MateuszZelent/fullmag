@@ -902,24 +902,23 @@ fn authoring_update_blocking(
             dir: private_dir.clone(),
             path: generated_source_path.clone(),
         };
-        let rendered = crate::script::render_scene_document_via_python_helper_bounded(
+        let rendered = crate::script::try_render_scene_document_for_persistence(
             repo_root,
             &private_dir,
             &generated_source_path,
             &scene_document,
         )?;
-        if !rendered.written {
-            return Err(ApiError::internal(
-                "canonical SceneDocument render helper did not write source",
-            ));
+        if let Some(rendered) = rendered {
+            let generated_source = read_generated_source(&generated_source_path)?;
+            if rendered.bytes_written != generated_source.len() {
+                return Err(ApiError::internal(
+                    "canonical SceneDocument render helper byte count is inconsistent",
+                ));
+            }
+            Some(generated_source)
+        } else {
+            None
         }
-        let generated_source = read_generated_source(&generated_source_path)?;
-        if rendered.bytes_written != generated_source.len() {
-            return Err(ApiError::internal(
-                "canonical SceneDocument render helper byte count is inconsistent",
-            ));
-        }
-        Some(generated_source)
     } else {
         None
     };

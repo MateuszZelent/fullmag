@@ -3322,6 +3322,12 @@ function buildDimensionFrameAction({
       ["viewport-3d.dimension-frame-cage", "cage"],
       ["viewport-3d.dimension-frame-off", "off"],
     ]) ?? "floor";
+  const annotation =
+    activeCommandValue(commands, commandContext, [
+      ["viewport-3d.dimension-annotation-ticks", "ticks"],
+      ["viewport-3d.dimension-annotation-extents", "extents"],
+      ["viewport-3d.dimension-annotation-both", "both"],
+    ]) ?? "ticks";
   const gridDensity =
     activeCommandValue(commands, commandContext, [
       ["viewport-3d.dimension-density-auto", "auto"],
@@ -3367,6 +3373,29 @@ function buildDimensionFrameAction({
             commandId: "viewport-3d.dimension-frame-off",
             value: "off",
             label: "Off",
+          },
+        ],
+      },
+      {
+        type: "radio-group",
+        id: "frame:annotation",
+        label: "Annotations",
+        value: annotation,
+        items: [
+          {
+            commandId: "viewport-3d.dimension-annotation-ticks",
+            value: "ticks",
+            label: "Tick scales",
+          },
+          {
+            commandId: "viewport-3d.dimension-annotation-extents",
+            value: "extents",
+            label: "Overall size",
+          },
+          {
+            commandId: "viewport-3d.dimension-annotation-both",
+            value: "both",
+            label: "Both",
           },
         ],
       },

@@ -127,6 +127,18 @@ case "${recipe}" in
     exec "${python_cmd}" "${script_dir}/export_runner_openapi.py" --repo-root "${repo_root}" --job-id "${BASH_REMATCH[1]}" --expected-commit "${BASH_REMATCH[2]}"
     ;;
     *"scripts/verify_development_backend_api.py"*)
+    frozen_project_pattern='^[^[:space:]]+ "[^"]+/scripts/verify_development_backend_api.py" --repo-root "[^"]+" --project-document-only --frozen-native-build-id "([0-9a-f]{64})"( --archive-frozen-bundle)?$'
+    if [[ "${recipe}" =~ ${frozen_project_pattern} ]]; then
+      if ! is_windows_shell; then
+        echo "[fullmag just] frozen project document verification requires Windows" >&2
+        exit 2
+      fi
+      archive_args=()
+      if [[ -n "${BASH_REMATCH[2]}" ]]; then
+        archive_args=(--archive-frozen-bundle)
+      fi
+      exec "${python_cmd}" "${script_dir}/verify_development_backend_api.py" --repo-root "${repo_root}" --project-document-only --frozen-native-build-id "${BASH_REMATCH[1]}" "${archive_args[@]}"
+    fi
     frozen_native_pattern='^[^[:space:]]+ "[^"]+/scripts/verify_development_backend_api.py" --repo-root "[^"]+" --frozen-native-build-id "([0-9a-f]{64})"$'
     if [[ "${recipe}" =~ ${frozen_native_pattern} ]]; then
       if ! is_windows_shell; then

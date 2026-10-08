@@ -113,6 +113,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: Validate resource and managed-store contracts
         run: |
+          cargo test -p fullmag-authoring --lib scene_ --no-fail-fast
           cargo test -p fullmag-runtime-control --lib accepted_store --no-fail-fast
           cargo test -p fullmag-api --bin fullmag-api frequency_domain_dispersion_resource --no-fail-fast
           cargo test -p fullmag-api --bin fullmag-api observation_store_tests --no-fail-fast

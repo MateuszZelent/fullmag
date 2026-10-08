@@ -86,7 +86,10 @@ def run(repo_root: str, cross_build_bundle: str = "", project_document_only: boo
         frozen_native_build_id: str | None = None,
         active_run_refusal_owner_bundle: str | None = None,
         active_run_scenario: str = "running",
-        start_freeze_race_only: bool = False) -> int:
+        start_freeze_race_only: bool = False,
+        archive_frozen_bundle: bool = False) -> int:
+    if archive_frozen_bundle and (not project_document_only or frozen_native_build_id is None):
+        raise storage.StorageError("Native bundle archive requires the frozen project-document verification scope")
     active_run_refusal = active_run_refusal_owner_bundle is not None
     _validate_start_freeze_race_scope(
         start_freeze_race_only,
@@ -112,12 +115,12 @@ def run(repo_root: str, cross_build_bundle: str = "", project_document_only: boo
     if frozen_native_build_id is not None:
         if not re.fullmatch(r"[0-9a-f]{64}", frozen_native_build_id):
             raise storage.StorageError("Frozen native build ID must be a lowercase SHA-256")
-        if (cross_build_bundle or project_document_only or restart_transport_only
+        if (cross_build_bundle or restart_transport_only
                 or observer_pause_only or restart_consumer_only or consumer_readiness_only
                 or consumer_pump_owner_bundle is not None or candidate_preparation_only
                 or active_run_refusal
                 or workspace_browser_owner_bundle is not None):
-            raise storage.StorageError("Frozen native package verification is a separate default-gate scope")
+            raise storage.StorageError("Frozen native package verification allows only the default or project-document scope")
     if workspace_browser_owner_bundle is not None:
         if (cross_build_bundle or project_document_only or restart_transport_only
                 or observer_pause_only or restart_consumer_only or consumer_readiness_only
@@ -175,6 +178,8 @@ def run(repo_root: str, cross_build_bundle: str = "", project_document_only: boo
     storage.initialize(layout)
     with storage.build_lock(layout):
         preflight_started = storage.now()
+        project_source_root = None
+        project_source_binding = None
         try:
             manifest_path = storage.validate_path(Path(native["build_root"]) / "windows-runtime/build-manifest.json", layout["storage_root"], "native build manifest")
             verified = verified_build_identity(
@@ -188,6 +193,20 @@ def run(repo_root: str, cross_build_bundle: str = "", project_document_only: boo
             if hashlib.sha256(raw_manifest).hexdigest() != verified["ready_build_id"]:
                 raise storage.StorageError("Native build manifest changed after verification")
             manifest = json.loads(raw_manifest)
+            if project_document_only and frozen_native_build_id is not None:
+                from windows.build_snapshot import verify_snapshot
+                snapshot_record = manifest["build_source_snapshot"]
+                frozen = verify_snapshot(snapshot_record["record_path"], native["build_root"])
+                if (frozen["source_root"] != snapshot_record.get("source_root")
+                        or frozen["inventory_sha256"] != snapshot_record.get("inventory_sha256")
+                        or frozen["backend_source_sha256"] != verified["ready_source_sha256"]):
+                    raise storage.StorageError("Project document helper source differs from the sealed native package")
+                project_source_root = Path(frozen["source_root"])
+                project_source_binding = {
+                    "source_root": str(project_source_root),
+                    "inventory_sha256": frozen["inventory_sha256"],
+                    "backend_source_sha256": frozen["backend_source_sha256"],
+                }
             source_api = storage.validate_path(manifest["api_binary"], native["build_root"], "verified native API")
         except Exception as error:
             # A refused package is terminal diagnostic evidence, never permission
@@ -229,6 +248,8 @@ def run(repo_root: str, cross_build_bundle: str = "", project_document_only: boo
                    "started_at": storage.now(), "checks": [], "processes": [],
                    "scope": "native resource observation, private owner-authorized acquisition and admission freeze/abort/disconnect, cold handoff acceptance with ACK/lost-ACK reconciliation and graceful owned API exit, committed candidate prelisten asset-backed authoring restore and live cold completion with HTTP mutation admission, interrupted store completion journals and repeated store cycles, empty-service terminal drain; no UI hydration, end-to-end compute reopening, solver or release qualification"}
         receipt["project_document_only"] = project_document_only
+        if project_source_binding is not None:
+            receipt["project_python_source_binding"] = project_source_binding
         if frozen_native_build_id is not None:
             receipt["frozen_native_build_id"] = frozen_native_build_id
             receipt["frozen_native_source_sha256"] = verified["ready_source_sha256"]
@@ -359,6 +380,7 @@ def run(repo_root: str, cross_build_bundle: str = "", project_document_only: boo
                 exercise(api, repo, run_root, receipt, start_freeze_race_only=True)
             else:
                 exercise(api, repo, run_root, receipt, project_document_only=project_document_only,
+                         project_source_root=project_source_root,
                          restart_transport_only=restart_transport_only,
                          consumer_readiness_only=consumer_readiness_only)
             if (not project_document_only and not restart_transport_only and not observer_pause_only
@@ -403,6 +425,24 @@ def run(repo_root: str, cross_build_bundle: str = "", project_document_only: boo
                 raise storage.StorageError("Native API verifier changed during verification")
             if not receipt["checks"] or not all(item["waited"] for item in receipt["processes"]):
                 raise storage.StorageError("Native API verification lacks terminal evidence")
+            if archive_frozen_bundle:
+                from windows.runtime_bundle import create_bundle, validate_bundle
+                required = sum((source_bin / name).stat().st_size for name in BINARY_NAMES)
+                if shutil.disk_usage(native["storage_root"]).free < required + 512 * 1024 * 1024:
+                    raise storage.StorageError("Insufficient storage for the verified native bundle archive")
+                bundle = create_bundle(native["build_root"], native["runtime_root"], manifest_path, "dev")
+                archived, hashes = validate_bundle(bundle["bundle_root"], native["runtime_root"], "dev")
+                if (archived["source"]["manifest_sha256"] != frozen_native_build_id
+                        or archived["source"]["backend_source_sha256"] != source_before):
+                    raise storage.StorageError("Native bundle archive does not match the verified package")
+                # Retain this immutable A bundle before a later build replaces
+                # the mutable target; this does not activate any workspace.
+                receipt["archived_native_bundle"] = {**bundle, "verified_files": hashes}
+                verified_build_identity(native["build_root"], native["runtime_root"], manifest_path,
+                                        None, expected_manifest_sha256=frozen_native_build_id)
+                if hashlib.sha256(Path(__file__).read_bytes()).hexdigest() != verifier_hash:
+                    raise storage.StorageError("Native API verifier changed while archiving the verified package")
+                receipt["checks"].append("frozen-native-bundle-archive")
             code = 0
         except Exception as error:
             receipt["reason"] = type(error).__name__
@@ -1514,6 +1554,7 @@ def exercise_service(repo: Path, run_root: Path, manifest: dict, receipt: dict, 
 
 
 def exercise(api: Path, repo: Path, run_root: Path, receipt: dict, *, project_document_only: bool = False,
+             project_source_root: Path | None = None,
              restart_transport_only: bool = False, consumer_readiness_only: bool = False,
              start_freeze_race_only: bool = False) -> None:
     generation, source, worktree = "1" * 32, "a" * 64, "fixture-worktree"
@@ -1550,8 +1591,10 @@ def exercise(api: Path, repo: Path, run_root: Path, receipt: dict, *, project_do
             port = reservation.getsockname()[1]
         env = {key: os.environ[key] for key in ("SYSTEMROOT", "WINDIR", "PATH", "PATHEXT", "TEMP", "TMP", "COMPUTERNAME") if key in os.environ}
         native_layout = storage.resolve_layout(repo, "windows-native-fdm-cpu-dev")
-        env.update(FULLMAG_REPO_ROOT=str(repo), FULLMAG_STATE_ROOT=str(run_root / (label + "-state")), FULLMAG_API_PORT=str(port), FULLMAG_DISABLE_STATIC_CONTROL_ROOM="1",
+        env.update(FULLMAG_REPO_ROOT=str(project_source_root or repo), FULLMAG_STATE_ROOT=str(run_root / (label + "-state")), FULLMAG_API_PORT=str(port), FULLMAG_DISABLE_STATIC_CONTROL_ROOM="1",
                    FULLMAG_PYTHON=str(Path(native_layout["build_root"]) / "python/fullmag/Scripts/python.exe"))
+        # Python helpers must not add bytecode to the sealed source inventory.
+        env["PYTHONDONTWRITEBYTECODE"] = "1"
         env.update(config)
         log_path = run_root / (label + ".log")
         with log_path.open("w", encoding="utf-8") as log:
@@ -1786,6 +1829,47 @@ def exercise(api: Path, repo: Path, run_root: Path, receipt: dict, *, project_do
             "scene_document": material_scene}, timeout=30)
         assert complete_noop["revision"] == authored["revision"] and complete_noop["archive_base64"] == authored["archive_base64"]
         checks.append("project-authoring-complete-source-canonical-utf8-and-noop")
+        no_physics_scene = json.loads(json.dumps(material_scene))
+        no_physics_scene["study"].update(exchange_enabled=False, demag_enabled=False)
+        no_physics_scene["objects"][0]["physics_stack"] = []
+        _, _, no_physics = get("/v2/persistence/projects/authoring", method="POST", payload={
+            **request, "archive_base64": authored["archive_base64"], "expected_revision": authored["revision"],
+            "scene_document": no_physics_scene}, timeout=30)
+        no_physics_entries = entries(no_physics["archive_base64"])
+        assert no_physics["revision"] == authored["revision"] + 1 and no_physics["dirty"] is True
+        assert json.loads(no_physics_entries["project/scene_document.json"]) == no_physics_scene
+        assert json.loads(no_physics_entries["manifest/project.json"]).get("source") is None
+        assert "project/source.py" not in no_physics_entries
+        history_path = "project/source-history/" + hashlib.sha256(source.encode("utf-8")).hexdigest() + ".py"
+        assert no_physics_entries[history_path] == source.encode("utf-8")
+        assert no_physics_entries["project/assets/retained.bin"] == bytes(range(256))
+        assert no_physics_entries["project/notes/retained.txt"] == b"future project extension\n"
+        checks.append("project-authoring-no-physics-retains-scene-assets-and-source-history")
+        _, _, no_physics_repeat = get("/v2/persistence/projects/authoring", method="POST", payload={
+            **request, "archive_base64": no_physics["archive_base64"], "expected_revision": no_physics["revision"],
+            "scene_document": no_physics_scene}, timeout=30)
+        assert no_physics_repeat["revision"] == no_physics["revision"]
+        assert no_physics_repeat["archive_base64"] == no_physics["archive_base64"]
+        _, _, no_physics_open = get("/v2/persistence/projects/open", method="POST", payload={
+            "archive_base64": no_physics["archive_base64"], "display_name": "no-physics.fms"})
+        assert no_physics_open["project_id"] == authored["project_id"]
+        assert no_physics_open["archive_base64"] == no_physics["archive_base64"]
+        checks.append("project-authoring-no-physics-noop-and-reopen-preserve-archive")
+        _, _, physics_restored = get("/v2/persistence/projects/authoring", method="POST", payload={
+            **request, "archive_base64": no_physics["archive_base64"], "expected_revision": no_physics["revision"],
+            "scene_document": material_scene}, timeout=30)
+        physics_entries = entries(physics_restored["archive_base64"])
+        physics_source_path = json.loads(physics_entries["manifest/project.json"])["source"]
+        assert physics_entries[physics_source_path] == source.encode("utf-8")
+        assert physics_entries[history_path] == source.encode("utf-8")
+        checks.append("project-authoring-physics-restored-regenerates-exact-canonical-source")
+        receipt["project_no_physics_observation"] = {
+            "project_id": no_physics["project_id"], "revision": no_physics["revision"],
+            "archive_sha256": hashlib.sha256(base64.b64decode(no_physics["archive_base64"])).hexdigest(),
+            "source_history_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
+            "physics_restored_revision": physics_restored["revision"],
+            "scope": "project persistence only; no runtime sync or solver execution",
+        }
         receipt["project_authoring_observation"] = {
             "project_id": authored["project_id"], "revision": authored["revision"],
             "incomplete_archive_sha256": hashlib.sha256(base64.b64decode(updated["archive_base64"])).hexdigest(),
@@ -1900,6 +1984,8 @@ def exercise(api: Path, repo: Path, run_root: Path, receipt: dict, *, project_do
 
     if project_document_only:
         with_api("project-document", {}, project_document)
+        from windows.verify_scene_stage_authoring import exercise as exercise_scene_stages
+        with_api("scene-stage-authoring", {}, lambda get: exercise_scene_stages(get, checks, receipt, run_root))
         # Fault helpers live only in a verifier-owned source root. No user
         # package or interpreter is modified, and no authored script executes.
         for fault in ("deadline", "log-overflow"):
@@ -2518,6 +2604,7 @@ if __name__ == "__main__":
     parser.add_argument("--candidate-preparation-only", action="store_true")
     parser.add_argument("--workspace-browser-owner-bundle")
     parser.add_argument("--frozen-native-build-id")
+    parser.add_argument("--archive-frozen-bundle", action="store_true")
     args = parser.parse_args()
     try:
         raise SystemExit(run(args.repo_root, args.cross_build_bundle, args.project_document_only,
@@ -2526,7 +2613,8 @@ if __name__ == "__main__":
                              args.consumer_pump_owner_bundle, args.candidate_preparation_only,
                              args.workspace_browser_owner_bundle, args.frozen_native_build_id,
                               args.active_run_refusal_owner_bundle, args.active_run_scenario,
-                              args.start_freeze_race_only))
+                              args.start_freeze_race_only,
+                              archive_frozen_bundle=args.archive_frozen_bundle))
     except Exception as error:
         print(f"Native development resource verification failed: {error}", file=sys.stderr)
         raise SystemExit(2)

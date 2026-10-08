@@ -232,7 +232,8 @@ fn validate_scene_document_with_mode(
         ));
     }
     for (index, stage) in scene.study.stages.iter().enumerate() {
-        validate_stage_solver_state(stage, index)?;
+        let builder_stage = stage.to_script_builder();
+        validate_stage_solver_state(&builder_stage, index)?;
     }
 
     let mut object_ids = BTreeSet::new();

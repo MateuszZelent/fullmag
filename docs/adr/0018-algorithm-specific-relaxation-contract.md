@@ -82,3 +82,30 @@ fallback, nonconservative relaxation, or `completed` backend failures.
   independence;
 - OpenAPI generation and Control Room default/conditional-field/unit tests;
 - managed FEM source, runtime, convergence, consistency, and production gates.
+
+## Uzupełnienie reprezentacji authoringu — 07.10.2026
+
+Naprawa P8-53BE rozdziela `SceneStudyStageState` od tekstowego
+`ScriptBuilderStageState`. W kanonicznym JSON sceny zadane wartości
+liczbowe etapów i adaptive timestep są liczbami; format tekstowy buildera
+jest wyłącznie adapterem roboczym. Jednostki, nazwy parametrów Python/IR,
+algorytmy, wartości domyślne i capability lanes nie zmieniają się.
+Nie dodaje się publicznego endpointu ani drugiego writera; istniejąca
+transakcja `merge_patch` i resource hook sceny pozostają właścicielami zapisu.
+
+Nazwany czytelnik `LegacyText` zachowuje stare tekstowe drafty i archiwa.
+Poprawny tekst liczbowy normalizuje do liczby przy zapisie sceny; niepoprawny
+tekst zachowuje jako draft. Eksport wykonawczy odmawia przy zadanym,
+nieparsowalnym scalarze zamiast zastępować go `null` lub domyślną wartością.
+Step budget wymaga u64; JSON bool/object/array/null nie stanowi scalaru.
+Wektor k zachowuje liczbową trójkę i dotychczasowy czytelnik tekstu buildera.
+
+Właścicielem adaptera jest `fullmag-authoring::scene` wraz z `adapters`.
+Nie usuwać czytelnika, dopóki migracja wszystkich wspieranych archiwów i
+builder consumers nie ma dowodu. Rollback wymaga starego readera, który
+umie odczytać liczbową scenę; nie zakładać zgodności starszego EXE.
+
+Dowody implementacji oraz granice weryfikacji są w
+[raporcie P8-53BE](../plans/active/refactor_runtime/final/p8/53be-compute-after-workspace-restore.md).
+Test transportu/authoringu nie kwalifikuje wykonania ani parytetu żadnego
+solvera. Ta poprawka nie awansuje FDM GPU, FEM CPU ani FEM GPU.

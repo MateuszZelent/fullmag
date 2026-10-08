@@ -205,6 +205,12 @@ describe("viewport3dManifest", () => {
     expect(viewport3dStore.getSnapshot().widgets.dimensionFrameDensity).toBe("fine");
 
     expect(
+      registry.isActive("viewport-3d.dimension-annotation-ticks", { source: "test" }),
+    ).toBe(true);
+    await registry.execute("viewport-3d.dimension-annotation-extents", { source: "test" });
+    expect(viewport3dStore.getSnapshot().widgets.dimensionFrameAnnotation).toBe("extents");
+
+    expect(
       registry.isActive("viewport-3d.scale-labels-toggle", { source: "test" }),
     ).toBe(true);
     await registry.execute("viewport-3d.scale-labels-toggle", { source: "test" });
