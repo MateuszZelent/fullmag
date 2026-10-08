@@ -83,6 +83,7 @@ import type {
   Viewport3DPrimitiveRenderModel,
 } from "../viewport3dPrimitiveModel";
 import type {
+  Viewport3DCameraFitScope,
   Viewport3DCameraProjection,
   Viewport3DCameraState,
   Viewport3DDimensionFrameDensity,
@@ -176,6 +177,7 @@ interface Viewport3DSceneProps {
   adoptionRegistry?: Viewport3DRenderAdoptionRegistry;
   sessionIdentity?: SessionResourceIdentity | null;
   bounds: Viewport3DBounds | null;
+  cameraFocusBounds: Viewport3DBounds | null;
   cameraOrthographicScale: number | null;
   cameraProjection: Viewport3DCameraProjection;
   cameraState: Viewport3DCameraState;
@@ -217,6 +219,7 @@ interface Viewport3DSceneProps {
   fieldModel: Viewport3DFieldRenderModel | null;
   hysteresisReplayGlyphModel: HysteresisReplayGlyphModel | null;
   fitRevision: number;
+  fitScope: Viewport3DCameraFitScope;
   getObjectSettings: (
     object: Viewport3DPrimitiveObject,
   ) => VisualizationTargetSettings;
@@ -855,10 +858,12 @@ export function useViewport3DModelLayerStage({
 
 function Viewport3DProjectionStack({
   bounds,
+  cameraFocusBounds,
   cameraClip,
   cameraGestureRef,
   cameraState,
   fitRevision,
+  fitScope,
   onCameraChange,
   orthographicCameraFrame,
   orthographicCameraRef,
@@ -868,8 +873,10 @@ function Viewport3DProjectionStack({
 }: Pick<
   Viewport3DSceneProps,
   | "bounds"
+  | "cameraFocusBounds"
   | "cameraState"
   | "fitRevision"
+  | "fitScope"
   | "onCameraChange"
   | "resetCameraRevision"
   | "tracker"
@@ -904,9 +911,11 @@ function Viewport3DProjectionStack({
       />
       <CameraController
         bounds={bounds}
+        focusBounds={cameraFocusBounds}
         cameraGestureRef={cameraGestureRef}
         cameraState={cameraState}
         fitRevision={fitRevision}
+        fitScope={fitScope}
         onCameraChange={onCameraChange}
         resetCameraRevision={resetCameraRevision}
         tracker={tracker}
@@ -1723,6 +1732,7 @@ export function Viewport3DScene({
   adoptionRegistry,
   sessionIdentity,
   bounds,
+  cameraFocusBounds,
   cameraOrthographicScale,
   cameraProjection,
   cameraState,
@@ -1755,6 +1765,7 @@ export function Viewport3DScene({
   frozenSpinsOverlayVisible,
   fieldModel,
   fitRevision,
+  fitScope,
   getObjectSettings,
   getPartSettings,
   hysteresisReplayGlyphModel,
@@ -2006,10 +2017,12 @@ export function Viewport3DScene({
       ) : null}
       <Viewport3DProjectionStack
         bounds={bounds}
+        cameraFocusBounds={cameraFocusBounds}
         cameraClip={cameraClip}
         cameraGestureRef={cameraGestureRef}
         cameraState={effectiveCameraState}
         fitRevision={fitRevision}
+        fitScope={fitScope}
         onCameraChange={onCameraChange}
         orthographicCameraFrame={orthographicCameraFrame}
         orthographicCameraRef={orthographicCameraRef}

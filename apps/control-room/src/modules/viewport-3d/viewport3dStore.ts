@@ -23,12 +23,15 @@ export interface Viewport3DCommandState {
   camera: Viewport3DCameraState;
   captureReturnProfileId: Viewport3DVisualProfileId | null;
   captureRevision: number;
+  fitScope: Viewport3DCameraFitScope;
   fitRevision: number;
   renderedScalarRanges: Viewport3DRenderedScalarRange[];
   resetCameraRevision: number;
   visualProfileId: Viewport3DVisualProfileId;
   widgets: Viewport3DWidgetState;
 }
+
+export type Viewport3DCameraFitScope = "scene" | "selection";
 
 type Viewport3DListener = () => void;
 export type Viewport3DHslReferenceMode = "auto" | "off" | "on";
@@ -141,6 +144,7 @@ const DEFAULT_VIEWPORT_3D_STATE: Viewport3DCommandState = {
   },
   captureReturnProfileId: null,
   captureRevision: 0,
+  fitScope: "scene",
   fitRevision: 0,
   renderedScalarRanges: [],
   resetCameraRevision: 0,
@@ -176,9 +180,10 @@ class Viewport3DStore {
     return this.snapshot;
   }
 
-  requestFit(): void {
+  requestFit(fitScope: Viewport3DCameraFitScope = "scene"): void {
     this.snapshot = {
       ...this.snapshot,
+      fitScope,
       fitRevision: this.snapshot.fitRevision + 1,
     };
     this.notify();

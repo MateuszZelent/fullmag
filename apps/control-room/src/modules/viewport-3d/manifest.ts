@@ -207,8 +207,10 @@ export const viewport3dManifest: ModuleManifest = {
         group: "viewport-3d",
         category: "Viewport",
         scope: "viewport",
-        run: () => {
-          viewport3dStore.requestFit();
+        run: (context) => {
+          viewport3dStore.requestFit(
+            context.source === "inspector" ? "selection" : "scene",
+          );
           return { status: "completed" };
         },
       },

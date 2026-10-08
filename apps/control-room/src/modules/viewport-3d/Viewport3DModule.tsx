@@ -1731,6 +1731,7 @@ export default function Viewport3DModule({
       dimensionFrameMode={commandState.widgets.dimensionFrameMode}
       effectAntialias={commandState.widgets.effectAntialias}
       fitRevision={commandState.fitRevision}
+      fitScope={commandState.fitScope}
       kernel={kernel}
       fdmSelectionCellOrdinal={fdmSelectionCellOrdinal}
       fdmSelectionAnnouncement={fdmSelectionAnnouncement}

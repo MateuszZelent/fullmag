@@ -8,6 +8,7 @@ import {
   resolveViewport3DOrbitDebugControlDeltas,
   resolveViewport3DOrbitDebugStep,
   resolveViewport3DCameraFit,
+  resolveViewport3DCameraFitBounds,
   resolveViewport3DCameraInteractionOptions,
   shouldApplyViewport3DOrbitDebugAngles,
   shouldApplyViewport3DCameraState,
@@ -462,6 +463,65 @@ describe("CameraControls", () => {
     expect(fit.position[0]).toBeCloseTo(2.4e-7);
     expect(fit.near).toBeLessThan(1e-8);
     expect(fit.far).toBeGreaterThan(1e-6);
+  });
+
+  it("keeps Frame All scene-wide and lets Inspector Focus use selected bounds", () => {
+    const sceneBounds = {
+      center: [0, 0, 0] as [number, number, number],
+      radius: 2e-6,
+      size: [4e-6, 4e-6, 4e-6] as [number, number, number],
+    };
+    const selectedBounds = {
+      center: [1e-7, 0, 0] as [number, number, number],
+      radius: 5e-8,
+      size: [1e-7, 6e-8, 5e-9] as [number, number, number],
+    };
+
+    expect(
+      resolveViewport3DCameraFitBounds({
+        bounds: sceneBounds,
+        fitRequested: true,
+        fitScope: "selection",
+        focusBounds: selectedBounds,
+        resetRequested: false,
+      }),
+    ).toEqual(selectedBounds);
+    expect(
+      resolveViewport3DCameraFitBounds({
+        bounds: sceneBounds,
+        fitRequested: true,
+        fitScope: "scene",
+        focusBounds: selectedBounds,
+        resetRequested: false,
+      }),
+    ).toEqual(sceneBounds);
+    expect(
+      resolveViewport3DCameraFitBounds({
+        bounds: sceneBounds,
+        fitRequested: true,
+        fitScope: "selection",
+        focusBounds: null,
+        resetRequested: false,
+      }),
+    ).toEqual(sceneBounds);
+    expect(
+      resolveViewport3DCameraFitBounds({
+        bounds: sceneBounds,
+        fitRequested: false,
+        fitScope: "selection",
+        focusBounds: selectedBounds,
+        resetRequested: false,
+      }),
+    ).toEqual(sceneBounds);
+    expect(
+      resolveViewport3DCameraFitBounds({
+        bounds: sceneBounds,
+        fitRequested: true,
+        fitScope: "selection",
+        focusBounds: selectedBounds,
+        resetRequested: true,
+      }),
+    ).toEqual(sceneBounds);
   });
 
   it("uses micrometer-scale defaults before resources arrive", () => {

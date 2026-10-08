@@ -237,6 +237,7 @@ import {
   resolveFdmMultilayerAirboxFieldVector,
   shouldRequestFdmMultilayerAirboxField,
 } from "../model/viewport3DFdmMultilayerAirbox";
+import { isEigenModeFrequencyDomainSelectionKind } from "@/kernel/visualization/ModeFieldOverlayIntent";
 import { buildViewport3DFdmCuboidJobKey } from "../build-engine/viewport3dBuildJobKeys";
 import { modeCompositionTargetIdForMeshPart } from "../model/modeCompositionViewportProjection";
 import { Viewport3DScene } from "../layers/Viewport3DScene";
@@ -254,6 +255,7 @@ import {
   adaptFdmMultilayerNativeLayerDomains,
   adaptFemSharedDomainManifest,
   resolveFdmNativeLayerActiveMaskForRendering,
+  resolveMeshPartBounds,
   resolveViewport3DFdmRealizedRegionIds,
   type FdmNativeLayerRenderView,
   type FdmMultilayerAirboxRenderView,
@@ -2858,6 +2860,34 @@ export function resolveViewport3DSceneCameraView({
   };
 }
 
+export function resolveViewport3DSelectionFocusBounds({
+  magneticSupportBounds,
+  selectionBounds,
+  selectionKind,
+}: {
+  magneticSupportBounds: Viewport3DBounds | null;
+  selectionBounds: Viewport3DBounds | null;
+  selectionKind: string | null;
+}): Viewport3DBounds | null {
+  if (selectionBounds) return selectionBounds;
+  return isEigenModeFrequencyDomainSelectionKind(selectionKind)
+    ? magneticSupportBounds
+    : null;
+}
+
+export function resolveViewport3DModalMagneticSupportBounds({
+  authoredMagneticSupportBounds,
+  realizedMagneticObjectBounds,
+}: {
+  authoredMagneticSupportBounds: Viewport3DBounds | null;
+  realizedMagneticObjectBounds: readonly (Viewport3DBounds | null)[];
+}): Viewport3DBounds | null {
+  return (
+    authoredMagneticSupportBounds ??
+    combineViewport3DBounds([...realizedMagneticObjectBounds])
+  );
+}
+
 export function useViewport3DSceneModel({
   commandState,
   colors,
@@ -3608,6 +3638,17 @@ export function useViewport3DSceneModel({
       ),
     [fdmDomainPresentation],
   );
+  const modalMagneticSupportBounds = useMemo(
+    () =>
+      resolveViewport3DModalMagneticSupportBounds({
+        authoredMagneticSupportBounds:
+          fdmUniverseOutsideSupport?.magneticSupportBounds ?? null,
+        realizedMagneticObjectBounds: femDomain.magneticParts.map(
+          resolveMeshPartBounds,
+        ),
+      }),
+    [fdmUniverseOutsideSupport, femDomain.magneticParts],
+  );
   const topologyBounds = useMemo(
     () => (topologyCurrent ? resolveTopologyBounds(topology.data) : null),
     [topology.data, topologyCurrent],
@@ -3732,6 +3773,31 @@ export function useViewport3DSceneModel({
       fdmUniverseOutsideSupport,
     ],
   );
+  const selectionFitBounds = useMemo(
+    () =>
+      resolveViewport3DRegionSelectionBounds(selection, allRegionOverlays) ??
+      resolvePrimitiveSelectionBounds(selection, primitiveModel) ??
+      resolveViewport3DSelectionBounds(
+        selection,
+        femDomain,
+        null,
+        fdmSelectionGrid,
+        fdmUniverseOutsideSupport,
+      ),
+    [
+      selection,
+      allRegionOverlays,
+      primitiveModel,
+      femDomain,
+      fdmSelectionGrid,
+      fdmUniverseOutsideSupport,
+    ],
+  );
+  const cameraFocusBounds = resolveViewport3DSelectionFocusBounds({
+    magneticSupportBounds: modalMagneticSupportBounds,
+    selectionBounds: selectionFitBounds,
+    selectionKind: selection.kind,
+  });
   const globalLayers = renderingState?.layers;
   const globalObjectBaseSettings = useMemo(
     () => resolveGlobalObjectVisualizationSettings(renderingState),
@@ -7061,6 +7127,7 @@ export function useViewport3DSceneModel({
     selectedLabel,
     selectedObjectId: savedSelectionActive ? null : selectedObjectId,
     selectedRegionId: savedSelectionActive ? null : selectedRegionId,
+    cameraFocusBounds: savedSelectionActive ? null : cameraFocusBounds,
     selectionBounds: savedSelectionActive ? null : selectionBounds,
     scalarColorPalette,
     savedViewportCamera,

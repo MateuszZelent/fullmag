@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { CommandRegistry } from "@/kernel/commands/CommandRegistry";
 import { VISUALIZATION_STATE_PATH } from "@/kernel/api/apiPaths";
+import type { SelectionController } from "@/kernel/selection/SelectionController";
 import { ALL_MODULES } from "@/modules/registry";
 
 import { viewport3dManifest } from "./manifest";
@@ -53,6 +54,20 @@ describe("viewport3dManifest", () => {
     expect(viewport3dStore.getSnapshot().captureReturnProfileId).toBe(
       "interactive",
     );
+  });
+
+  it("uses selection scope for Inspector Focus but scene scope for Frame All", async () => {
+    viewport3dStore.resetForTest();
+    const registry = registerViewportCommands();
+
+    await registry.execute("viewport-3d.fit", { source: "inspector" });
+    expect(viewport3dStore.getSnapshot().fitScope).toBe("selection");
+
+    await registry.execute("viewport-3d.fit", {
+      selection: {} as SelectionController,
+      source: "ribbon",
+    });
+    expect(viewport3dStore.getSnapshot().fitScope).toBe("scene");
   });
 
   it("contributes orientation widget commands for ribbon and palette", async () => {

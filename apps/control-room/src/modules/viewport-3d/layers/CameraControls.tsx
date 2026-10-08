@@ -14,6 +14,7 @@ import { useBatchedInvalidate } from "../viewport3dBatchedInvalidate";
 import {
   DEFAULT_VIEWPORT_3D_CAMERA_STATE,
   viewport3dStore,
+  type Viewport3DCameraFitScope,
   type Viewport3DCameraProjection,
   type Viewport3DCameraState,
 } from "../viewport3dStore";
@@ -379,6 +380,24 @@ export function resolveViewport3DCameraFit(
   };
 }
 
+export function resolveViewport3DCameraFitBounds({
+  bounds,
+  fitRequested,
+  fitScope,
+  focusBounds,
+  resetRequested,
+}: {
+  bounds: Viewport3DBounds | null;
+  fitRequested: boolean;
+  fitScope: Viewport3DCameraFitScope;
+  focusBounds: Viewport3DBounds | null;
+  resetRequested: boolean;
+}): Viewport3DBounds | null {
+  return fitRequested && !resetRequested && fitScope === "selection"
+    ? focusBounds ?? bounds
+    : bounds;
+}
+
 function boundsSignature(bounds: Viewport3DBounds | null): string | null {
   if (!bounds) return null;
   return [
@@ -486,6 +505,8 @@ export function CameraController({
   cameraGestureRef,
   cameraState,
   fitRevision,
+  fitScope = "scene",
+  focusBounds = null,
   onCameraChange,
   resetCameraRevision,
   tracker,
@@ -494,6 +515,8 @@ export function CameraController({
   cameraGestureRef: Viewport3DCameraGestureRef;
   cameraState: Viewport3DCameraState;
   fitRevision: number;
+  fitScope?: Viewport3DCameraFitScope;
+  focusBounds?: Viewport3DBounds | null;
   onCameraChange: (
     camera: Viewport3DCameraChange,
     epoch?: number,
@@ -549,7 +572,14 @@ export function CameraController({
       shouldAutoFitChangedBounds;
     if (!shouldFit) return;
 
-    const fit = resolveViewport3DCameraFit(bounds);
+    const fitBounds = resolveViewport3DCameraFitBounds({
+      bounds,
+      fitRequested,
+      fitScope,
+      focusBounds,
+      resetRequested,
+    });
+    const fit = resolveViewport3DCameraFit(fitBounds);
 
     applyViewport3DWorldUp(camera);
     camera.position.set(...fit.position);
@@ -580,6 +610,8 @@ export function CameraController({
     camera,
     cameraGestureRef,
     fitRevision,
+    fitScope,
+    focusBounds,
     invalidate,
     resetCameraRevision,
     tracker,

@@ -62,6 +62,8 @@ import {
   resolveViewport3DRegionTargetsForMembershipOwnerParts,
   resolveViewport3DResourceFrameState,
   resolveViewport3DSceneCameraView,
+  resolveViewport3DModalMagneticSupportBounds,
+  resolveViewport3DSelectionFocusBounds,
   resolveViewport3DFdmTargetVisualization,
   resolveViewport3DAirboxFieldVectorDemandPlan,
   resolveViewport3DAirboxVectorSampleBudget,
@@ -5426,6 +5428,83 @@ describe("useViewport3DSceneModel", () => {
     expect(source).toContain("planarMonitorFramePreviewFromDraft");
     expect(adapter).toContain("operator: draft.monitor.operator");
     expect(source).toContain("planarMonitorFramePreview,");
+  });
+
+  it("focuses canonical selections and modal magnetic support bounds", () => {
+    const selectedBounds = {
+      center: [1e-7, 0, 0] as [number, number, number],
+      radius: 5e-8,
+      size: [1e-7, 6e-8, 5e-9] as [number, number, number],
+    };
+    const magneticSupportBounds = {
+      center: [0, 0, 0] as [number, number, number],
+      radius: 2e-8,
+      size: [4e-8, 4e-8, 4e-9] as [number, number, number],
+    };
+
+    for (const selectionKind of [
+      "results.eigen.mode",
+      "results.dispersion.modal.mode_at_k",
+      "results.resonance.modal.mode",
+    ]) {
+      expect(
+        resolveViewport3DSelectionFocusBounds({
+          magneticSupportBounds,
+          selectionBounds: selectedBounds,
+          selectionKind,
+        }),
+      ).toEqual(selectedBounds);
+      expect(
+        resolveViewport3DSelectionFocusBounds({
+          magneticSupportBounds,
+          selectionBounds: null,
+          selectionKind,
+        }),
+      ).toEqual(magneticSupportBounds);
+    }
+    expect(
+      resolveViewport3DSelectionFocusBounds({
+        magneticSupportBounds,
+        selectionBounds: null,
+        selectionKind: "object.geometry",
+      }),
+    ).toBeNull();
+  });
+
+  it("uses authored FDM support or unions realized FEM magnetic-object bounds", () => {
+    const realizedMagneticObjectBounds = [
+      {
+        center: [0, 0, 0] as [number, number, number],
+        radius: Math.sqrt(3) / 2,
+        size: [1, 1, 1] as [number, number, number],
+      },
+      {
+        center: [2, 0, 0] as [number, number, number],
+        radius: Math.sqrt(3) / 2,
+        size: [1, 1, 1] as [number, number, number],
+      },
+    ];
+    const authoredMagneticSupportBounds = {
+      center: [1e-7, 0, 0] as [number, number, number],
+      radius: 5e-8,
+      size: [1e-7, 6e-8, 5e-9] as [number, number, number],
+    };
+
+    expect(
+      resolveViewport3DModalMagneticSupportBounds({
+        authoredMagneticSupportBounds: null,
+        realizedMagneticObjectBounds,
+      }),
+    ).toMatchObject({
+      center: [1, 0, 0],
+      size: [3, 1, 1],
+    });
+    expect(
+      resolveViewport3DModalMagneticSupportBounds({
+        authoredMagneticSupportBounds,
+        realizedMagneticObjectBounds,
+      }),
+    ).toEqual(authoredMagneticSupportBounds);
   });
 
   it("uses the committed camera registry snapshot for live scene rendering", () => {
