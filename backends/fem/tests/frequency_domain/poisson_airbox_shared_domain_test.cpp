@@ -1172,6 +1172,7 @@ int main()
 {
 #if FULLMAG_HAS_MFEM_STACK
     floquet_positive_tangent_mass_matches_independent_phase_reduction();
+    std::printf("PASS: floquet_positive_tangent_mass_matches_independent_phase_reduction\n");
     mfem::Mesh mesh = mfem::Mesh::MakeCartesian3D(
         1,
         1,

@@ -1,5 +1,7 @@
 FROM ubuntu:22.04 AS deps
 
+ARG FULLMAG_FEM_CPU_BUILD_JOBS=auto
+
 ENV DEBIAN_FRONTEND=noninteractive
 ENV CMAKE_VERSION=3.30.5
 ENV MFEM_REF=v4.10
@@ -37,9 +39,26 @@ RUN git clone --depth 1 --branch ${MFEM_REF} https://github.com/mfem/mfem.git &&
     test "$(git -C mfem rev-parse HEAD)" = "${MFEM_SOURCE_COMMIT}"
 RUN git clone --depth 1 --branch ${HYPRE_REF} https://github.com/hypre-space/hypre.git
 
+RUN set -eu; \
+    mfem_observed="$(git -C /tmp/build/mfem rev-parse HEAD)"; \
+    test "$mfem_observed" = "${MFEM_SOURCE_COMMIT}"; \
+    hypre_observed="$(git -C /tmp/build/hypre rev-parse HEAD)"; \
+    build_jobs="${FULLMAG_FEM_CPU_BUILD_JOBS}"; \
+    if [ "$build_jobs" = auto ]; then build_jobs="$(nproc)"; fi; \
+    case "$build_jobs" in ''|*[!0-9]*) echo "FULLMAG_FEM_CPU_BUILD_JOBS must be auto or a positive integer" >&2; exit 2 ;; esac; \
+    [ "$build_jobs" -gt 0 ]; \
+    mkdir -p "${INSTALL_PREFIX}/share/fullmag"; \
+    printf '{"schema":"fullmag.fem.cpu_image_build_inputs.v1","base_image":"ubuntu:22.04","mfem_ref":"%s","mfem_source_commit_expected":"%s","mfem_source_commit_observed":"%s","hypre_ref":"%s","hypre_source_commit_observed":"%s","cmake_version":"%s","dependency_build_jobs":%s}\n' \
+      "${MFEM_REF}" "${MFEM_SOURCE_COMMIT}" "$mfem_observed" "${HYPRE_REF}" "$hypre_observed" "${CMAKE_VERSION}" "$build_jobs" \
+      > "${INSTALL_PREFIX}/share/fullmag/fem-cpu-build-inputs.json"
+
 # This dependency prefix is immutable input to Fullmag's native configure.
 # Both hypre and MFEM are built explicitly without accelerator support.
-RUN cd /tmp/build/hypre/src && \
+RUN build_jobs="${FULLMAG_FEM_CPU_BUILD_JOBS}"; \
+    if [ "$build_jobs" = auto ]; then build_jobs="$(nproc)"; fi; \
+    case "$build_jobs" in ''|*[!0-9]*) echo "FULLMAG_FEM_CPU_BUILD_JOBS must be auto or a positive integer" >&2; exit 2 ;; esac; \
+    [ "$build_jobs" -gt 0 ] && \
+    cd /tmp/build/hypre/src && \
     CC=mpicc CXX=mpicxx FC=mpifort \
     ./configure \
       --prefix=${INSTALL_PREFIX} \
@@ -47,10 +66,14 @@ RUN cd /tmp/build/hypre/src && \
       --with-openmp \
       --without-cuda \
       --without-umpire && \
-    make -j"$(nproc)" && \
+    make -j"$build_jobs" && \
     make install
 
-RUN cmake -S /tmp/build/mfem -B /tmp/build/mfem/build \
+RUN build_jobs="${FULLMAG_FEM_CPU_BUILD_JOBS}"; \
+    if [ "$build_jobs" = auto ]; then build_jobs="$(nproc)"; fi; \
+    case "$build_jobs" in ''|*[!0-9]*) echo "FULLMAG_FEM_CPU_BUILD_JOBS must be auto or a positive integer" >&2; exit 2 ;; esac; \
+    [ "$build_jobs" -gt 0 ] && \
+    cmake -S /tmp/build/mfem -B /tmp/build/mfem/build \
       -G Ninja \
       -DCMAKE_BUILD_TYPE=Release \
       -DCMAKE_CXX_STANDARD=17 \
@@ -65,7 +88,7 @@ RUN cmake -S /tmp/build/mfem -B /tmp/build/mfem/build \
       -DMFEM_USE_HYPRE=YES \
       -DHYPRE_DIR=${INSTALL_PREFIX} \
       -DMFEM_ENABLE_TESTING=OFF && \
-    cmake --build /tmp/build/mfem/build --target mfem -j"$(nproc)" && \
+    cmake --build /tmp/build/mfem/build --target mfem -j"$build_jobs" && \
     cmake --install /tmp/build/mfem/build
 
 FROM ubuntu:22.04 AS fem-cpu-dev

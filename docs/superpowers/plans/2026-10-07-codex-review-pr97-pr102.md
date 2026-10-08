@@ -946,3 +946,26 @@ odrzuca header FMMT bez strong ETag przed decode. Fixture fulfilTopology wysyła
 z Content-Range bez ETag. Dodano ETag z istniejących generation/revision/fingerprint
 manifestu do200 i każdego206. Production identity/admission nie zostały osłabione.
 Source/node/diff review PASS; positive overlay/vector/uniform proof oczekiwany GHA.
+
+### Checkpoint 08.10 — weryfikacja provider MFEM i ponowienie browser CI
+
+PR97 nadal OPEN; odświeżona lista zawiera 257 komentarzy inline. Brak nowych
+review Codex po ostatnio sklasyfikowanych wpisach. PR102 pozostaje zamknięty.
+Bootstrap37789659042 na7ec5ae9de: Rust, Control Room, native C ABI i determinism
+przeszły. Browser job113353350442 zakończył się błędem parsera TLS Node/Undici
+przed wykonaniem smoke; ponowiono wyłącznie ten job po terminalnym stanie runa.
+Nowy handle browser113361219462 jest aktywny. Strong ETag fixture i pełny
+matched-B overlay/vector/uniform/WebGL pozostają NOT VERIFIED do jego wyniku.
+
+Python job113361281190 ujawnił realny błąd exact-layer realization:
+`test_direct_layered_box_region_floor_beats_eligible_upper_actual_density`
+żąda2warstw filmu, lecz scoped branch generuje41przedziałów z. Diagnoza dotyczy
+swobodnego meshingu 3D po GEO partition, bez ograniczenia węzłów do zadanych
+płaszczyzn. Nie zmieniono oczekiwań testu ani nie pominięto regresji.
+
+Nowa trasa GHA buduje tylko CPU MFEM assembly contract z dwoma zadaniami
+kompilacji, canonical storage resolverem i lease. Wymaga rzeczywistego macro
+MFEM, dokładnie jednego passing CTest oraz znacznika po oracle. Receipt wiąże
+SHA, obraz i biblioteki. Review wymagało porównania HEAD z GITHUB_SHA, ponownej
+kontroli źródeł oraz overall failed po błędzie finalizacji ownera. Wykonanie tej
+trasy i kwalifikacja fizyki pozostają NOT VERIFIED; nie jest to SLEPc/runtime proof.

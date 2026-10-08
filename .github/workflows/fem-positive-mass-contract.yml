@@ -1,0 +1,44 @@
+name: FEM positive tangent-mass source contract
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/fem-positive-mass-contract.yml'
+      - '.dockerignore'
+      - 'docker/fem-cpu/Dockerfile'
+      - 'native/CMakeLists.txt'
+      - 'native/cmake/FindFullmagMfem.cmake'
+      - 'backends/fem/CMakeLists.txt'
+      - 'backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.hpp'
+      - 'backends/fem/cpu/frequency_domain/operators/poisson_airbox_shared_domain.cpp'
+      - 'backends/fem/cpu/frequency_domain/operators/poisson_airbox_shared_domain.hpp'
+      - 'backends/fem/src/frequency_domain/modal_eigen_solver.cpp'
+      - 'backends/fem/tests/frequency_domain/poisson_airbox_shared_domain_test.cpp'
+      - 'scripts/ci/run_fem_positive_mass_contract.py'
+      - 'scripts/fullmag_storage.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fem-positive-mass-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      FULLMAG_STORAGE_PROFILE: linux-host
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Build pinned CPU MFEM image and run the single assembly contract
+        id: contract
+        run: python3 scripts/ci/run_fem_positive_mass_contract.py
+
+      - name: Upload contract receipt and logs
+        if: always() && steps.contract.outputs.evidence_dir != ''
+        uses: actions/upload-artifact@v7
+        with:
+          name: fem-positive-mass-contract-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ steps.contract.outputs.evidence_dir }}/**
+          if-no-files-found: warn
+          compression-level: 6
