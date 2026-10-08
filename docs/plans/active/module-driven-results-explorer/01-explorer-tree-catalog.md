@@ -64,7 +64,12 @@ Dispersion · DE wzdłuż kᵧ                       auto   zbiór
 | Branches / Branch | wyróżnia gałąź | wykres z wyróżnioną gałęzią | Tracking source, overlap, crossingi | — |
 | k samples / próbka / mod | kursor k / punkt | wykres z kursorem | k vector, mody, f, Im f, residual | Create mode visualization |
 | Mode visualizations | — | lista przypiętych wizualizacji | — | — |
-| Wizualizacja modu | ładuje pole; wykres pokazuje przypięty punkt | `field-3d` z wykresem źródłowym: zamiast, pod lub obok | Field (Re/Im/|m̃|/arg, składowa, faza, tempo animacji), Layers, Framing, Recompute (osobno) | Placement, Representation, Animate, Export figure |
+| Wizualizacja modu | ustawia wielkość głównego viewportu na mod; wykres pokazuje przypięty punkt | główny `viewport-3d` z wielkością „Mode m̃”; z wykresem źródłowym zamiast, pod lub obok | kopia Inspectora wizualizacji ferromagnetyka (spec 32 §12): Display (chipy, tryb renderowania, Quantity source = mod), Surface coloring (+ część zespolona i składowa), Vectors, Phase & animation, Layout, Clipping & section, Camera & view, Recompute (osobno) | Quantity (mod aktywny), Layout, Animate, Export figure |
+
+Wszystkie Inspectory w tej tabeli mają układ z spec 32 §12: identyfikacja,
+cztery metryki, jedna główna karta, sekcje nawigacyjne z ikonami lucide i
+zwinięty kontekst. To ten sam układ co Inspector ferromagnetyka w drzewie
+modelu.
 | Quality & provenance | — | tabela jakości próbek | Completeness, Tracking, Accuracy, Provenance | Export report |
 
 ## Moduł `analysis.resonance` (FMR i odpowiedź wymuszona)

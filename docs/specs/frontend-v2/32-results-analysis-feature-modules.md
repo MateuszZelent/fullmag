@@ -89,7 +89,7 @@ sekcji Provenance.
 ```ts
 interface AnalysisFeatureModule {
   views: Partial<Record<AnalysisNodeKind, ViewContribution>>;
-  inspectorSections: Partial<Record<AnalysisNodeKind, InspectorSectionContribution[]>>;
+  inspectorSections: Partial<Record<AnalysisNodeKind, InspectorSectionContribution>>;
   ribbonGroups: Partial<Record<AnalysisNodeKind, RibbonGroupContribution[]>>;
   commands: CommandContribution[];               // istniejący typ z kernel/commands
   children?: Partial<Record<AnalysisNodeKind, ChildrenProvider>>; // dynamiczne dzieci, np. gałęzie
@@ -105,11 +105,19 @@ interface ViewContribution {
   };
 }
 
+// Moduł dostarcza treść, kernel składa ją w ramę z §12 (ten sam układ co
+// Inspector wizualizacji ferromagnetyka). Moduł nie buduje własnej ramy.
 interface InspectorSectionContribution {
-  id: string;
-  title: string;
-  group: "presentation" | "data" | "comparison" | "quality" | "recompute";
-  component: ComponentType<InspectorSectionProps>;
+  identity: { title: string; badges: [string, string] };
+  view?: ComponentType<InspectorSectionProps>;            // opcjonalna grupa „View”
+  metrics: (props: InspectorSectionProps) => [Metric, Metric, Metric, Metric];
+  primary: { title: string; icon: LucideIconName; component: ComponentType<InspectorSectionProps> };
+  nav: Array<{ id: string; title: string; icon: LucideIconName;
+               summary: (props: InspectorSectionProps) => string;
+               group: "presentation" | "data" | "comparison" | "quality";
+               component: ComponentType<InspectorSectionProps> }>;
+  recompute?: ComponentType<InspectorSectionProps>;      // parametry badania, wizualnie oddzielone
+  editSession?: "liveViewport";                           // Reset/Apply w stopce
 }
 
 interface RibbonGroupContribution {
@@ -120,9 +128,10 @@ interface RibbonGroupContribution {
 }
 ```
 
-Sekcje dodawane zawsze przez kernel, bez kodu modułu: **Identity** (nazwa,
-rodzaj, ścieżka w drzewie), **State** (słownik z §7) i **Provenance** (run,
-stage, dataset, rewizje, schemat, silnik, urządzenie, requested → resolved).
+Kernel dodaje zawsze, bez kodu modułu, zwinięty kontekst
+(`ScientificInspectorContext`): **Status** (słownik z §7), **Physical
+properties** i **Provenance** (run, stage, dataset, rewizje, schemat, silnik,
+urządzenie, requested → resolved), a także stopkę akcji powłoki.
 Sekcje z grupy `recompute` są wizualnie oddzielone i nigdy nie zmieniają
 istniejącego wyniku: prowadzą do ustawień badania.
 
@@ -150,12 +159,29 @@ istniejącego wyniku: prowadzą do ustawień badania.
 - `viewport-main` zachowuje karty `3D Viewport | 2D View | Live Charts |
   Analysis`. Karta Analysis to host widoku zaznaczonego węzła, bez
   podzakładek.
-- Widok `field-3d` z `companion` składa układ z dwóch istniejących modułów:
-  wykresu źródłowego (`analysis-plots`) i jedynego `viewport-3d`.
-  `ViewportTabHost` dostaje tryb podziału, który przenosi tę samą instancję
-  viewportu, zamiast tworzyć drugą. Ułożenie (`replace`, `below`, `beside`)
-  jest ustawieniem definicji węzła. Proporcja podziału jest preferencją
-  użytkownika (`Resizable`, `autoSaveId`).
+- **Wizualizacja pola to wielkość głównego viewportu.** Moduł analizy nie
+  ma własnego renderera 3D. Widok `field-3d` ustawia aktywną wielkość
+  jedynego modułu `viewport-3d` na pole wyniku (np. `analysis:eigen:…`,
+  rozpoznawane przez `isAnalysisFieldQuantityId`,
+  `kernel/api/quantityIds.ts:259`). Używa przy tym tej samej ścieżki co
+  `m` czy `H_eff`: `buildViewport3DFieldRenderModel`, plany per część
+  magnetyczna, colorbar.
+- **Jeden właściciel wielkości.** `visualization/state.quantity.active_quantity_id`
+  niesie identyfikator pola modu, a jego parametry (faza harmoniczna, część
+  zespolona, intencja punktu) są parametrami tej wielkości. Kontroler
+  `AnalysisFieldOverlayController` przestaje być równoległym nadpisaniem
+  (`useViewport3DSceneModel.ts:3060`, `2199-2270`) i staje się resolverem
+  wielkości. Grupa Quantity w ribbonie oraz HUD viewportu pokazują wtedy
+  „Mode m̃ · kᵧ … · f”, a wybór `m` opuszcza wizualizację modu (komenda
+  `analysis.frequency-domain.clear-3d-overlay` już istnieje). Wygląd (kolor
+  powierzchni, paleta, wektory) płynie przez ustawienia celu wizualizacji z
+  specyfikacji 23, a nie przez `overlay.appearance`.
+- Ułożenie `replace` to po prostu karta `3D Viewport` z modem jako wielkością.
+  Ułożenia `below` i `beside` składają w karcie Analysis wykres źródłowy
+  (`analysis-plots`) z tą samą instancją `viewport-3d`. `ViewportTabHost`
+  dostaje tryb podziału, który przenosi tę instancję, zamiast tworzyć drugą.
+  Ułożenie jest ustawieniem definicji węzła. Proporcja podziału jest
+  preferencją użytkownika (`Resizable`, `autoSaveId`).
 - Wykres źródłowy pokazuje przypięty punkt definicji. Kliknięcie innego punktu
   tworzy zaznaczenie chwilowe i nie zmienia przypiętej wizualizacji.
 - Ochrona przed polem poprzedniego punktu pozostaje w
@@ -202,7 +228,10 @@ interface AnalysisDefinition {
 }
 ```
 
-Definicje są zapisywane razem z projektem (rodzina `persistence`). Zmiana
+Zasób należy do rodziny `analysis` (ADR 0054, rozstrzygnięcie 1). Rodzina
+`workspace` przechowuje układ i preferencje interfejsu, nie treść naukową.
+Definicje są zapisywane razem z projektem (rodzina `persistence`) i nie
+trafiają do `ProblemIR`. Zmiana
 definicji jest transakcją z rewizją. Nieznany `definition_schema` lub
 niezgodna wersja daje stan `unsupported` z powodem, bez cichej migracji.
 Dopóki zasób nie istnieje, komendy tworzące węzły użytkownika są wyłączone z
@@ -212,7 +241,8 @@ powodem; definicji nie przechowuje się w `localStorage`.
 
 | Luka | Dziś | Potrzebne |
 |---|---|---|
-| Kontekst k i role osi w manifeście zbioru | klasyfikacja w kliencie (ADR 0023) | `k_context` i `axes[].role` w `AnalysisResultDatasetManifestResource` |
+| Kontekst k i role osi w manifeście zbioru | klasyfikacja w kliencie (ADR 0023) | `k_context` i `axes[].role` w `AnalysisResultDatasetManifestResource` publikowane przez backend; klasyfikator kliencki tylko dla starszych manifestów, ze stanem „legacy classification” |
+| Mod jako wielkość viewportu | osobna nakładka nadpisująca wielkość | `active_quantity_id` z identyfikatorem pola modu i jego parametrami; wpisy w `visualizationQuantityItems` (`ObjectVisualizationPanelModel.ts:2242`) i w grupie Quantity ribbonu; colorbar i field-meta dla identyfikatorów `analysis:*` |
 | Rodzaje produktów | `product_kind`: `modal_eigen`, `driven_response`, `time_domain_spectrum`, `dynamic_structure_factor` | rodzaje dla histerezy i transmisji, gdy backend je opublikuje |
 | Referencje | `analytic_frequency_hz` jako kolumna CSV; punkty referencji dzielą `rowIndex` z policzonym wierszem (`frequencyDomainChartModels.ts:1135-1162`) | osobny zasób referencji z modelem, założeniami i zakresem ważności |
 | Tracking gałęzi | typed results zwraca `tracking_score: None` | źródło score i statystyki overlap |
@@ -240,3 +270,58 @@ powodem; definicji nie przechowuje się w `localStorage`.
 - Stabilność Inspectora zgodnie z regułami frontendu (bez remountu, z
   zachowaniem scrolla i fokusu).
 - Testy jednostkowe uruchamiane w GitHub Actions.
+- Kontrakt stylu z §12 sprawdzany testem projektu Inspectora
+  (`modules/inspector/inspectorDesignSystemContract.test.ts`) dla wszystkich
+  tras `analysis.*`.
+
+## 12. Kontrakt stylu Inspectora
+
+Wszystkie widoki Inspectora w drzewie wyników mają ten sam styl co Inspector
+ferromagnetyka w drzewie modelu. Wzorcem jest Inspector wizualizacji obiektu:
+`VisualizationTargetInspectorPanel`
+(`modules/inspector/panels/ObjectVisualizationPanel.tsx:1127-1280`), oparty na
+`InspectorOverviewFrame` (`modules/inspector/primitives/InspectorOverviewFrame.tsx`)
+i stylach `design/styles/inspector-visualization.css`. Ten sam wzorzec
+stosują już `MeshPartVisualizationPanel`, `AirboxVisualizationPanel` i
+`FieldQuantityInspectorPanel`.
+
+Układ każdej sekcji modułu, od góry:
+
+1. `ScientificInspectorIdentity`: tytuł i dwie odznaki (rodzaj, rola).
+2. Opcjonalna grupa „View” (np. 3D / planar).
+3. `InspectorMetricStrip` z dokładnie czterema metrykami i tonem
+   (`success`, `warning`, `degraded`, `danger`, `stale`).
+4. Jedna główna karta (`fm-viz-display-card`) z ikoną lucide 18 px.
+5. Sekcje nawigacyjne (`InspectorGroup variant="nav"`, `fm-viz-nav-sections`)
+   z ikoną lucide 16 px w okrągłym polu, podsumowaniem po prawej i
+   `ChevronRight`.
+6. Opcjonalny blok „Needs a new computation” dla parametrów badania.
+7. Zwinięty `ScientificInspectorContext`: Status, Physical properties,
+   Provenance.
+
+Kontrolki: tylko `FormField`, `InspectorPropertyRow`, `FieldRow`,
+`NumberField`, `ColorField`, `VisualizationRadioGroup`, `Switch`,
+`SegmentedControl` i `ScalarColorbarControl`. Żadnych surowych `<select>` ani
+`<input>`. Edycje wyświetlania rejestrują sesję edycji
+(`useRegisterInspectorEditSession("liveViewport")`), żeby Reset w stopce
+działał.
+
+**Wizualizacja modu kopiuje Inspector wizualizacji obiektu**, zamiast mieć
+własny panel. Węzeł wizualizacji modu to cel wizualizacji z własnym
+`VisualizationInspectorOwner` (identyfikator, tytuł, etykieta celu, opis).
+Zachowuje sekcje: Display (chipy Visible / Bounds / Surface / Vectors,
+kafelki trybu renderowania, „Quantity source” = mod), Surface coloring
+(z `ScalarColorbarControl`), Vectors, Clipping & section, Camera & view.
+Dochodzą tylko:
+
+- w Surface coloring: część zespolona (Re / Im / |m̃| / arg) i składowa;
+- sekcja nawigacyjna „Phase & animation” (ikona `Play`): faza harmoniczna,
+  tempo odtwarzania z adnotacją, że tempo jest wizualne, a częstotliwość
+  fizyczna się nie zmienia;
+- sekcja „Layout” (zamiast / pod / obok wykresu).
+
+Obecne `ModeVisualizationViewControls`
+(`modules/inspector/panels/ModeVisualizationInspectorPanel.tsx:342-533`),
+`FrequencyDomainModeDisplayControls` (14 wierszy z surowymi kontrolkami) i
+grupa „Eigen Mode 3D Visualization” w `EigenModeInspectorPanel` są
+zastępowane przez ten wzorzec.

@@ -112,7 +112,7 @@ table.t th:first-child,table.t td:first-child{text-align:left}
 @keyframes spin{to{transform:rotate(360deg)}}
 @media (prefers-reduced-motion:reduce){.spinner{animation:none}}
 /* inspector */
-.insp{display:grid;grid-template-rows:38px auto minmax(0,1fr);min-height:0;background:var(--bg-panel)}
+.insp{display:grid;grid-template-rows:38px auto minmax(0,1fr) auto;min-height:0;background:var(--bg-panel)}
 .ihead{padding:10px 10px 8px;background:var(--bg-chrome);border-bottom:1px solid var(--border-subtle)}
 .crumbs{font-size:11px;color:var(--text-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .ident{display:flex;gap:10px;align-items:center;margin-top:8px}
@@ -146,6 +146,52 @@ details.sec[open]>summary::before{content:"▾"}
 .cmp{display:grid;grid-template-columns:84px minmax(0,1fr) minmax(0,1fr) 14px;gap:6px;padding:4px 4px 4px 16px;font-size:10.5px;border-top:1px solid var(--border-muted)}
 .cmp span:nth-child(1){color:var(--text-3)}
 .cmp span:nth-child(3){color:var(--degraded)}
+/* Inspector recipe copied from the ferromagnet Visualization inspector
+   (ObjectVisualizationPanel / InspectorOverviewFrame, design/styles/inspector-visualization.css) */
+.sci-id{display:flex;align-items:center;gap:8px;padding:8px 2px 4px}
+.sci-id h3{margin:0;font-size:13px;font-weight:650}
+.metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:4px;margin:6px 0 10px}
+.metric{position:relative;height:58px;padding:4px 8px;border-radius:6px;border:1px solid var(--border-subtle);background:var(--bg-raised);overflow:hidden}
+.metric::before{content:"";position:absolute;inset:0 0 auto 0;height:2px;background:var(--border-subtle)}
+.metric[data-state="success"]::before{background:var(--success)}.metric[data-state="warning"]::before{background:var(--warning)}
+.metric[data-state="degraded"]::before{background:var(--degraded)}.metric[data-state="danger"]::before{background:var(--danger)}.metric[data-state="stale"]::before{background:var(--stale)}
+.metric small{display:block;font-size:10px;font-weight:600;color:var(--text-3);text-transform:uppercase;letter-spacing:.04em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.metric span{display:block;margin-top:4px;font-size:11.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dcard{border:1px solid var(--border-subtle);border-radius:10px;background:#242438;padding:4px 0 12px;margin-bottom:10px;box-shadow:0 1px 2px rgb(0 0 0/50%)}
+.dcard-head{display:flex;align-items:center;gap:10px;padding:12px 10px}
+.dcard-head h3{margin:0;font-size:15px;font-weight:650}
+.dcard-head .ibox{width:38px;height:38px;border-radius:6px;border:1px solid var(--border-subtle);background:color-mix(in srgb,var(--accent) 12%,var(--bg-raised));color:var(--accent);display:flex;align-items:center;justify-content:center}
+.dcard-head .ibox svg{width:18px;height:18px}
+.dcard-body{padding:0 14px;display:flex;flex-direction:column;gap:10px}
+.chips{display:flex;gap:8px}
+.chip{flex:1;display:inline-flex;align-items:center;justify-content:center;gap:4px;height:38px;padding:0 8px;border:1.5px solid var(--border-subtle);border-radius:6px;background:var(--bg-raised);color:var(--text-3);font-size:11px;font-weight:600;cursor:pointer}
+.chip svg{width:13px;height:13px}
+.chip.on{background:color-mix(in srgb,var(--accent) 12%,var(--bg-raised));border-color:color-mix(in srgb,var(--accent) 40%,transparent);color:var(--accent)}
+.tiles{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:4px}
+.tile{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;min-height:44px;padding:8px 4px;border:1px solid var(--border-subtle);border-radius:6px;background:var(--bg-raised);color:var(--text-2);font-size:10px;font-weight:500;cursor:pointer}
+.tile svg{width:16px;height:16px}
+.tile.on{border-color:var(--accent);color:var(--accent);background:color-mix(in srgb,var(--accent) 10%,var(--bg-raised))}
+.formf{display:grid;grid-template-columns:minmax(96px,.8fr) minmax(0,1.2fr);align-items:center;gap:8px;font-size:11px}
+.formf label{color:var(--text-2);font-weight:500}
+.formf .ctl{height:26px;display:flex;align-items:center;justify-content:space-between;padding:0 8px;border:1px solid var(--border-default);border-radius:7px;background:var(--bg-panel);font-size:11px}
+.navs{border:1px solid var(--border-subtle);border-radius:10px;background:#242438;overflow:hidden;box-shadow:0 1px 2px rgb(0 0 0/50%);margin-bottom:10px}
+details.nav+details.nav{border-top:1px solid var(--border-subtle)}
+details.nav>summary{display:flex;align-items:center;gap:10px;min-height:52px;padding:0 10px;cursor:pointer;list-style:none}
+details.nav>summary::-webkit-details-marker{display:none}
+details.nav>summary .nicon{flex:none;width:36px;height:36px;border-radius:50%;border:1px solid var(--border-subtle);background:var(--bg-raised);color:var(--text-3);display:flex;align-items:center;justify-content:center}
+details.nav>summary .nicon svg{width:16px;height:16px}
+details.nav>summary:hover .nicon{color:var(--accent);border-color:color-mix(in srgb,var(--accent) 30%,var(--border-subtle))}
+details.nav>summary b{font-size:12.5px;font-weight:600}
+details.nav>summary .sum{margin-left:auto;font-size:10.5px;color:var(--text-3);max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+details.nav>summary .chevr{color:var(--text-3);transition:transform .12s}
+details.nav[open]>summary .chevr{transform:rotate(90deg)}
+details.nav>.navbody{padding:2px 10px 10px}
+.ramp{height:10px;border-radius:3px;background:linear-gradient(90deg,#3b63c4,#e6e9f2,#d0504b);border:1px solid var(--border-default)}
+.ctxgrp{margin-top:6px;border-top:1px solid var(--border-muted)}
+.actbar{display:grid;grid-template-columns:1fr 1fr 1fr 1.4fr;gap:6px;padding:8px 10px;background:var(--bg-chrome);border-top:1px solid var(--border-subtle)}
+.actbar .btn{justify-content:center}
+.hud{position:absolute;left:10px;top:38px;display:flex;flex-direction:column;gap:4px;z-index:2;font-size:11px}
+.hud .q{display:inline-flex;align-items:center;gap:6px;padding:3px 8px;border-radius:6px;background:color-mix(in srgb,var(--bg-chrome) 88%,transparent);border:1px solid var(--border-default)}
 .status{display:flex;align-items:center;gap:10px;padding:0 12px;background:var(--bg-chrome);border-top:1px solid var(--border-subtle);font-size:11px;color:var(--text-3);white-space:nowrap;overflow:hidden}
 .status .sep{width:1px;height:12px;background:var(--border-subtle)}
 svg text{font-family:var(--font-ui)}
@@ -178,7 +224,7 @@ svg text{font-family:var(--font-ui)}
     <div class="split"></div>
     <section class="center" aria-label="Viewport">
       <div class="colhead">Viewport</div>
-      <div class="vtabs"><div class="seg"><button type="button">3D Viewport</button><button type="button">2D View</button><button type="button">Live Charts</button><button type="button" class="on">Analysis</button></div><span style="flex:1"></span><span style="color:var(--text-3);font-size:10.5px">Analysis shows the view of the selected Results node — no sub-tabs</span></div>
+      <div class="vtabs" id="vtabs"></div>
       <div class="host" id="host"></div>
       <div class="dock"><span>Samples table</span><span>Diagnostics</span><span>Progress</span><span>Logs</span><span style="flex:1"></span><span>Dock collapsed</span></div>
     </section>
@@ -187,6 +233,7 @@ svg text{font-family:var(--font-ui)}
       <div class="colhead">Inspector</div>
       <div class="ihead" id="ihead"></div>
       <div class="ibody" id="ibody"></div>
+      <div class="actbar" id="actbar"></div>
     </aside>
   </main>
   <footer class="status" id="status"></footer>
@@ -400,6 +447,12 @@ const DISPERSION_MODULE = {
       ] });
     }
     if (node.kind === "viz") {
+      // Same Quantity group as the Results tab: the mode is just the active quantity of the main viewport.
+      g.push({ title: "Quantity", actions: [
+        { id: "q-m", label: "m", icon: "activity", disabled: true, why: "Selecting m would leave this visualization (clears the mode quantity)" },
+        { id: "q-heff", label: "H_eff", icon: "activity", disabled: true, why: "Selecting H_eff would leave this visualization" },
+        { id: "q-mode", label: "Mode m̃\nkᵧ " + fmtK(sampleById(node.def.sample).k), icon: "focus", on: true },
+      ] });
       g.push({ title: "Layout", tone: true, actions: ["replace", "below", "beside"].map((p) => ({ id: "place-" + p, label: p === "replace" ? "Field\nonly" : p === "below" ? "Chart +\nfield below" : "Chart +\nfield beside", icon: "layout-" + p, on: node.def.placement === p })) });
       g.push({ title: "Field", tone: true, actions: [
         { id: "animate", label: node.def.animate ? "Pause\nphase" : "Animate\nphase", icon: "play", on: node.def.animate },
@@ -443,7 +496,11 @@ const DISPERSION_MODULE = {
       case "viz": {
         const d = node.def;
         const chart = '<div class="pane"><div class="panehead">Dispersion relation · pinned point ◆</div><div style="padding:4px 8px">' + chartSvg({ showRef: S.refs.length > 0, pinned: d.sample, transient: S.transient, compact: true, h: 300 }) + "</div></div>";
-        const field = '<div class="pane v3d"><div class="panehead" style="background:var(--bg-chrome)">3D Viewport · the single viewport-3d instance</div><div style="position:absolute;inset:30px 0 0 0">' + fieldSvg(d) + "</div></div>";
+        const s = sampleById(d.sample);
+        const field = '<div class="pane v3d"><div class="panehead" style="background:var(--bg-chrome)">3D Viewport — main viewport-3d module; quantity switched to the mode</div>' +
+          '<div class="hud"><span class="q"><span class="ndot" style="background:var(--success)"></span>Quantity: <b>Mode m̃ · kᵧ ' + fmtK(s.k) + " rad/µm · " + s.f.toFixed(4) + ' GHz</b></span>' +
+          '<span class="q mono" style="color:var(--text-3)">analysis:eigen:' + d.sample + ':mode-1 · ' + d.part + " m" + d.comp + (d.passes.vectors ? " + vectors" : "") + "</span></div>" +
+          '<div style="position:absolute;inset:30px 0 0 0">' + fieldSvg(d) + "</div></div>";
         const body = d.placement === "replace" ? field : chart + '<div class="paneHandle"></div>' + field;
         return head("Mode visualization", "layout: " + d.placement + " · change in ribbon or Inspector") + '<div class="compose ' + d.placement + '" style="height:calc(100% - 40px)">' + body + "</div>";
       }
@@ -455,47 +512,102 @@ const DISPERSION_MODULE = {
     }
     return "";
   },
+  // Every Inspector view follows the ferromagnet Visualization recipe
+  // (VisualizationTargetInspectorPanel / InspectorOverviewFrame): identity → 4-metric strip →
+  // one primary card → nav sections. The kernel adds the context group and the action bar.
   inspector(node) {
-    const secs = [];
-    if (node.kind === "dataset" || node.kind === "overview") {
-      secs.push(sec("Study setup (read-only)", rows([["k path", "kᵧ −25 … 25 rad/µm"], ["Samples", "7"], ["Target modes", "1 per sample"], ["Method", "FEM eigen"]]) + recompute()));
-      secs.push(sec("Ranges", rows([["f range", "9.2993 – 13.5023 GHz"], ["kd max", "0.25"]])));
+    const t = S.transient && sampleById(S.transient);
+    const NA = '<span class="na">not available</span>';
+    const resultMetrics = [["Samples", "7 k points", ""], ["Completeness", "selected_only", "warning"], ["Branches", "unconfirmed", "degraded"], ["Mode fields", "published", "success"]];
+    const seg = (key, opts, cur) => '<span class="seg">' + opts.map((o) => '<button data-set="' + key + '" data-val="' + o + '" class="' + (cur === o ? "on" : "") + '">' + o + "</button>").join("") + "</span>";
+    switch (node.kind) {
+      case "dataset": case "overview":
+        return {
+          identity: ["DE dispersion along kᵧ", ["Dispersion", "Results dataset"]],
+          metrics: resultMetrics,
+          primary: { title: "Study summary", icon: "figure", html: rows([["Problem", "film 40 × 40 × 10 nm"], ["Bias", "0.1 T ∥ x"], ["k direction", "k ∥ y ⊥ M₀ (DE)"], ["Frequency range", "9.2993 – 13.5023 GHz"]]) },
+          nav: [
+            nav("Ranges", "ruler", "kd ≤ 0.25", rows([["k range", "−25 … 25 rad/µm"], ["kd max", "0.25"], ["Modes per sample", "1"]])),
+            nav("Study setup", "settings", "read-only", rows([["Method", "FEM eigen"], ["Boundary", "Floquet xy · Dirichlet airbox"], ["Interactions", "exchange · demag · Zeeman"]]) + recompute()),
+          ],
+        };
+      case "relation": case "series": case "delta": case "branches": case "branch": case "samples": case "sample": case "mode":
+        return {
+          identity: ["Dispersion relation", ["Dispersion", "1D plot"]],
+          metrics: [["Series", 1 + S.refs.length + " visible", ""], ["k axis", "kᵧ signed", ""], ["Completeness", "selected_only", "warning"], ["Selection", t ? "kᵧ " + fmtK(t.k) + " rad/µm" : "none", t ? "success" : ""]],
+          primary: { title: "Selected point", icon: "target", html: t
+            ? rows([["k vector", "(0, " + t.k + ", 0) rad/µm"], ["Frequency", t.f.toFixed(6) + " GHz"], ["Sample · mode", SAMPLES.indexOf(t) + 1 + " / 7 · Mode 1"], ["Branch", '<span style="color:var(--degraded)">unconfirmed</span>'], ["Mode field", "published"]]) +
+              '<div><button class="btn primary" data-act="create-viz">Create mode visualization</button></div>'
+            : '<div class="note" style="margin-left:0">Click a point in the chart. The selection stays temporary until you create a mode visualization from it.</div>' },
+          nav: [
+            nav("Axes", "axes", "kᵧ · rad/µm · GHz", rows([["k axis", '<span class="seg"><button class="on">kᵧ signed</button><button>path length</button></span>'], ["k unit", "rad/µm"], ["f unit", "GHz"]])),
+            nav("Series", "layers", 1 + S.refs.length + " visible", rows([["Computed modes", "visible"]].concat(S.refs.map((r) => [r.label, "visible"])))),
+            nav("Plot style", "palette", "markers · link", rows([["Computed", "markers"], ["Link between samples", "dotted · not tracked"]])),
+          ],
+        };
+      case "reference":
+        return {
+          identity: ["Kalinikos–Slavin n=0 · open film", ["Reference", "Different assumptions"]],
+          metrics: [["Comparison", "different assumptions", "warning"], ["Material · bias", "match", "success"], ["Boundary", "differs", "warning"], ["Validity", "kd ≤ 0.25", ""]],
+          primary: { title: "Comparison status", icon: "compare", html:
+            '<div class="note" style="margin:0;color:var(--warning)">The reference is an infinite open film; this run is a 40 × 40 nm Floquet cell in a finite Dirichlet airbox. Agreement does not validate the result.</div>' +
+            '<div class="cmp" style="padding-left:0"><span>Geometry</span><span>40×40×10 nm, Floquet</span><span>infinite film, 10 nm</span><span style="color:var(--warning)">≠</span></div>' +
+            '<div class="cmp" style="padding-left:0"><span>Ms · A</span><span>800 kA/m · 13 pJ/m</span><span>800 kA/m · 13 pJ/m</span><span style="color:var(--success)">=</span></div>' +
+            '<div class="cmp" style="padding-left:0"><span>Bias</span><span>0.1 T ∥ x</span><span>0.1 T in plane</span><span style="color:var(--success)">=</span></div>' +
+            '<div class="cmp" style="padding-left:0"><span>Boundary</span><span>Dirichlet airbox</span><span>open space</span><span style="color:var(--warning)">≠</span></div>' +
+            '<div class="cmp" style="padding-left:0"><span>Profile</span><span>resolved by mesh</span><span>uniform (n = 0)</span><span style="color:var(--warning)">≠</span></div>' },
+          nav: [
+            nav("Reference model", "database", "backend resource", rows([["Model", "Kalinikos–Slavin, n = 0"], ["Source", '<span class="na">reference resource (proposed)</span>'], ["Values here", '<span class="na">illustrative</span>']])),
+            nav("Deviation", "delta", S.delta ? "Δf shown" : "Δf hidden", rows([["max |Δf|", "≈ 183 MHz at kᵧ = ±25"], ["Gate", '<span class="na">not configured</span>']])),
+          ],
+        };
+      case "viz": {
+        const d = node.def, s = sampleById(d.sample);
+        const p = d.passes;
+        const chip = (key, ic, label) => '<button class="chip' + (p[key] ? " on" : "") + '" data-pass="' + key + '" aria-pressed="' + p[key] + '">' + icon(ic) + label + "</button>";
+        const tile = (key, ic, label) => '<button class="tile' + (d.render === key ? " on" : "") + '" data-set="render" data-val="' + key + '">' + icon(ic) + label + "</button>";
+        return {
+          identity: ["Mode field m̃", ["Mode visualization", "Display controls"]],
+          view: '<div class="formf" style="margin:2px 0 4px"><label>View</label>' + seg("context", ["3D", "Planar"], d.context) + "</div>",
+          metrics: [["Display passes", Object.values(p).filter(Boolean).length + " on", ""], ["Quantity source", "Mode m̃", "success"], ["Mesh readiness", "ready", "success"], ["Data state", "bound", "success"]],
+          primary: { title: "Display", icon: "box", html:
+            '<div class="chips">' + chip("visible", "eye", "Visible") + chip("bounds", "dashed", "Bounds") + chip("primitive", "box", "Surface") + chip("vectors", "arrows", "Vectors") + "</div>" +
+            '<div class="tiles">' + tile("shaded", "box", "Shaded") + tile("shaded-wire", "grid", "Shaded + wire") + tile("wire", "grid", "Wireframe") + tile("points", "points", "Points") + "</div>" +
+            '<div class="formf"><label>Quantity source</label><span class="ctl">Mode m̃ · kᵧ ' + fmtK(s.k) + " rad/µm<span>▾</span></span></div>" },
+          nav: [
+            nav("Surface coloring", "palette", d.part + " m" + d.comp + " · diverging",
+              rows([["Complex part", seg("part", ["Re", "Im", "|m̃|", "arg"], d.part)], ["Component", seg("comp", ["x", "y", "z", "‖·‖"], d.comp)], ["Color map", "diverging"], ["Display unit", '<span class="na">from field metadata</span>'], ["Range", "auto · symmetric"], ["Viewport colorbar", "on"]]) +
+              '<div class="ramp" style="margin:6px 0 0 16px"></div>', true),
+            nav("Vectors", "arrowUp", p.vectors ? "on" : "off", rows([["Coloring", "magnitude"], ["Arrow length", "auto"], ["Budget", "default"]])),
+            nav("Phase & animation", "play", "φ 90° · 0.5 cycle/s",
+              rows([["Harmonic phase", "90°"], ["Playback rate", "0.5 cycle/s"], ["Direction", "forward · loop"]]) +
+              '<div class="note">Playback speed is visual only. The physical eigenfrequency stays ' + s.f.toFixed(4) + " GHz.</div>"),
+            nav("Layout", "layout-" + d.placement, d.placement, rows([["Chart and viewport", seg("placement", ["replace", "below", "beside"], d.placement)]])),
+            nav("Clipping & section", "scissors", "off", rows([["Slice", "off"], ["Thickness profile", '<span class="na">unsupported · needs line probe</span>']])),
+            nav("Camera & view", "camera", "focus magnetic", rows([["Focus", "magnetic region"], ["Airbox", "outline"]])),
+          ],
+          after: recompute(),
+        };
+      }
+      case "vizgroup":
+        return {
+          identity: ["Mode visualizations", ["Dispersion", "Group"]],
+          metrics: [["Pinned", String(S.viz.length), S.viz.length ? "success" : ""], ["Source", "Dispersion relation", ""], ["Viewport", "shared", ""], ["Storage", "definitions", ""]],
+          primary: { title: "Pinned visualizations", icon: "box", html: S.viz.length ? rows(S.viz.map((v) => { const s = sampleById(v.sample); return ["kᵧ " + fmtK(s.k) + " rad/µm", s.f.toFixed(4) + " GHz"]; })) : '<div class="note" style="margin-left:0">None yet. Create one from a point in Dispersion relation.</div>' },
+          nav: [],
+        };
+      case "quality":
+        return {
+          identity: ["Quality & provenance", ["Dispersion", "Quality"]],
+          metrics: [["Completeness", "selected_only", "warning"], ["Tracking", "frequency order", "degraded"], ["Residual", "not reported", ""], ["Qualification", "not qualified", "warning"]],
+          primary: { title: "Completeness", icon: "gauge", html: rows([["Spectrum", '<span style="color:var(--warning)">selected_only</span>'], ["Search window complete", NA], ["Modes per sample", "1"]]) },
+          nav: [
+            nav("Branch tracking", "layers", "frequency order", rows([["Score source", '<span style="color:var(--degraded)">frequency order only</span>'], ["Min / median overlap", NA]])),
+            nav("Accuracy", "target", "not reported", rows([["Residual ‖r‖/‖λx‖", NA], ["Im f · FWHM · Q", '<span class="na">not reported (≠ 0)</span>']])),
+          ],
+        };
     }
-    if (["relation", "series", "branches", "branch", "samples", "sample", "mode", "delta"].includes(node.kind)) {
-      secs.push(sec("Axes", rows([["k axis", '<span class="seg"><button class="on">kᵧ signed</button><button>path length</button></span>'], ["k unit", "rad/µm"], ["f unit", "GHz"]])));
-      secs.push(sec("Series", rows([["Computed modes", "visible"]].concat(S.refs.map((r) => [r.label, "visible"])))));
-      const t = S.transient && sampleById(S.transient);
-      secs.push(sec("Selected point", t
-        ? rows([["k vector", "(0, " + t.k + ", 0) rad/µm"], ["f", t.f.toFixed(6) + " GHz"], ["Sample · mode", SAMPLES.indexOf(t) + 1 + " / 7 · Mode 1"], ["Branch", '<span style="color:var(--degraded)">unconfirmed</span>'], ["3D field", "available"]]) +
-          '<div style="padding:6px 4px 8px 16px"><button class="btn primary" data-act="create-viz">Create mode visualization</button></div>'
-        : '<div class="note">Click a point in the chart. The selection is temporary until you create a mode visualization from it.</div>'));
-    }
-    if (node.kind === "reference") {
-      secs.push(sec("Comparison status", '<div class="note" style="color:var(--warning)"><b>Different assumptions.</b> The reference is an infinite open film; this run is a 40 × 40 nm Floquet cell in a finite Dirichlet airbox. Agreement does not validate the result.</div>'));
-      secs.push(sec("Reference model", rows([["Model", "Kalinikos–Slavin, n = 0"], ["Source", '<span class="na">backend resource (proposed)</span>'], ["Validity", "kd ≪ 1 · here ≤ 0.25"]])));
-      secs.push(sec("Metadata", '<div class="cmp"><span>Geometry</span><span>40×40×10 nm, Floquet</span><span>infinite film, 10 nm</span><span style="color:var(--warning)">≠</span></div>' +
-        '<div class="cmp"><span>Ms · A</span><span>800 kA/m · 13 pJ/m</span><span>800 kA/m · 13 pJ/m</span><span style="color:var(--success)">=</span></div>' +
-        '<div class="cmp"><span>Bias</span><span>0.1 T ∥ x</span><span>0.1 T in plane</span><span style="color:var(--success)">=</span></div>' +
-        '<div class="cmp"><span>Boundary</span><span>Dirichlet airbox</span><span>open space</span><span style="color:var(--warning)">≠</span></div>' +
-        '<div class="cmp"><span>Profile</span><span>resolved by mesh</span><span>uniform (n = 0)</span><span style="color:var(--warning)">≠</span></div>'));
-    }
-    if (node.kind === "viz") {
-      const d = node.def;
-      const segs = (key, opts) => '<span class="seg">' + opts.map((o) => '<button data-set="' + key + '" data-val="' + o + '" class="' + (d[key] === o ? "on" : "") + '">' + o + "</button>").join("") + "</span>";
-      secs.push(sec("Field (presentation only)", rows([["Part", segs("part", ["Re", "Im", "|m̃|", "arg"])], ["Component", segs("comp", ["x", "y", "z", "‖·‖"])], ["Layout", segs("placement", ["replace", "below", "beside"])], ["Harmonic phase", "90°"], ["Playback", "0.5 cycle/s"]]) +
-        '<div class="note">Playback speed is visual only. The physical eigenfrequency stays ' + sampleById(d.sample).f.toFixed(4) + " GHz.</div>"));
-      secs.push(sec("Layers", rows([["Surface", "Re/Im colour map"], ["Arrows", "off"], ["Slice", "off"], ["Thickness profile", '<span class="na">unsupported — needs line probe</span>']])));
-      secs.push(sec("Framing", rows([["Focus", "magnetic region"], ["Airbox", "outline"]])));
-      secs.push(sec("Definition", rows([["Schema", "analysis.dispersion.mode_visualization.v1"], ["Data ref", "dataset · sample · item"], ["Stored", '<span class="na">in memory (mockup)</span>']])));
-      secs.push(sec("Recompute", recompute()));
-    }
-    if (node.kind === "quality") {
-      secs.push(sec("Completeness", rows([["Spectrum", '<span style="color:var(--warning)">selected_only</span>'], ["Window complete", '<span class="na">not reported</span>']])));
-      secs.push(sec("Tracking", rows([["Score source", '<span style="color:var(--degraded)">frequency order only</span>'], ["Overlap", '<span class="na">not available</span>']])));
-      secs.push(sec("Accuracy", rows([["Residual", '<span class="na">not available</span>'], ["Im f · FWHM · Q", '<span class="na">not reported (≠ 0)</span>']])));
-    }
-    if (node.kind === "vizgroup") secs.push(sec("About", '<div class="note">Children are user-created definitions owned by analysis.dispersion and persisted with the project.</div>'));
-    return secs;
+    return { identity: [node.label, []], metrics: resultMetrics, primary: { title: node.label, icon: "figure", html: "" }, nav: [] };
   },
 };
 
@@ -503,7 +615,8 @@ const DISPERSION_MODULE = {
 function head(t, sub) { return '<div class="viewhead"><h2>' + t + '</h2><span class="sub">' + sub + "</span></div>"; }
 function card(t, kvs) { return '<div class="card"><h3>' + t + "</h3>" + kvs.map((r) => '<div class="kv"><span>' + r[0] + "</span><span>" + r[1] + "</span></div>").join("") + "</div>"; }
 function rows(list) { return list.map((r) => '<div class="ir"><span>' + r[0] + "</span><span>" + r[1] + "</span></div>").join(""); }
-function sec(title, html, owner, open) { return { title, html, owner: owner || "m", open: open !== false }; }
+function nav(title, ic, summary, html, open) { return { title, ic, summary, html, open: !!open }; }
+function navHtml(n) { return '<details class="nav"' + (n.open ? " open" : "") + '><summary><span class="nicon">' + icon(n.ic) + "</span><b>" + n.title + '</b><span class="sum">' + n.summary + '</span><span class="chevr">›</span></summary><div class="navbody">' + n.html + "</div></details>"; }
 function recompute() { return '<div class="recompute"><b>Needs a new computation</b>k path, mode count, frequency window and mesh belong to the study. Changing them never edits this result.<div style="margin-top:6px"><button class="btn">Open study settings…</button></div></div>'; }
 function stateBox(kind, title, text) { return '<div class="state">' + (kind === "loading" ? '<span class="spinner"></span>' : "") + "<b>" + title + "</b><span>" + text + "</span></div>"; }
 
@@ -515,6 +628,21 @@ const ICONS = {
   "layout-beside": '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M11 4v16"/>', play: '<path d="M8 5l11 7-11 7z"/>',
   figure: '<rect x="4" y="4" width="16" height="16" rx="2"/><path d="M8 15l3-3 2 2 3-4"/>', data: '<path d="M5 4h10l4 4v12H5z"/><path d="M8 12h8M8 16h8"/>',
   vtk: '<path d="M3 8l9-5 9 5-9 5z"/>', state: '<path d="M5 4h14v16l-7-4-7 4z"/>',
+  // lucide-equivalent shapes for the icons used by the ferromagnet Visualization inspector
+  target: '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1"/>',
+  ruler: '<path d="M3 17 17 3l4 4L7 21z"/><path d="M7 13l2 2M10 10l2 2M13 7l2 2"/>',
+  settings: '<circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M5 19l2-2M17 7l2-2"/>',
+  axes: '<path d="M4 4v16h16"/><path d="M8 14l3-4 3 2 4-6"/>', layers: '<path d="m12 3 9 5-9 5-9-5z"/><path d="m3 13 9 5 9-5"/>',
+  palette: '<circle cx="12" cy="12" r="9"/><circle cx="8" cy="10" r="1.2"/><circle cx="12" cy="7" r="1.2"/><circle cx="16" cy="10" r="1.2"/>',
+  eye: '<path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>',
+  dashed: '<rect x="4" y="4" width="16" height="16" rx="2" stroke-dasharray="3 3"/>', box: '<path d="M3 8l9-5 9 5v8l-9 5-9-5z"/><path d="M3 8l9 5 9-5M12 13v8"/>',
+  arrows: '<path d="M4 8h14l-3-3M20 16H6l3 3"/>', arrowUp: '<path d="M7 17 17 7M8 7h9v9"/>', grid: '<path d="M4 4h16v16H4zM4 12h16M12 4v16"/>',
+  points: '<circle cx="7" cy="7" r="1.5"/><circle cx="17" cy="7" r="1.5"/><circle cx="7" cy="17" r="1.5"/><circle cx="17" cy="17" r="1.5"/><circle cx="12" cy="12" r="1.5"/>',
+  scissors: '<circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M8.5 7.5 20 18M8.5 16.5 20 6"/>',
+  camera: '<path d="M4 7h4l2-3h4l2 3h4v12H4z"/><circle cx="12" cy="13" r="3.5"/>', gauge: '<path d="M4 18a8 8 0 1 1 16 0"/><path d="m12 18 4-6"/>',
+  history: '<path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5M12 7v5l3 2"/>', database: '<ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/>',
+  focus: '<circle cx="12" cy="12" r="3"/><path d="M3 8V5a2 2 0 0 1 2-2h3M16 3h3a2 2 0 0 1 2 2v3M21 16v3a2 2 0 0 1-2 2h-3M8 21H5a2 2 0 0 1-2-2v-3"/>',
+  chart: '<path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/>', activity: '<path d="M22 12h-4l-3 9L9 3l-3 9H2"/>',
 };
 const icon = (n) => '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true">' + (ICONS[n] || "") + "</svg>";
 
@@ -529,6 +657,12 @@ function render() {
   renderTree(tree);
   renderModules();
   renderRibbon(node, moduleReady);
+  // A mode visualization in "replace" layout is simply the 3D Viewport tab with the mode as quantity;
+  // in "below"/"beside" the Analysis host composes the chart with the same viewport instance.
+  const fieldOnly = node.kind === "viz" && moduleReady && node.def.placement === "replace";
+  const withField = node.kind === "viz" && moduleReady && !fieldOnly;
+  document.getElementById("vtabs").innerHTML = '<div class="seg"><button type="button"' + (fieldOnly || withField ? ' class="on"' : "") + '>3D Viewport</button><button type="button">2D View</button><button type="button">Live Charts</button><button type="button"' + (fieldOnly ? "" : ' class="on"') + ">Analysis</button></div>" +
+    '<span style="flex:1"></span><span style="color:var(--text-3);font-size:10.5px">' + (fieldOnly ? "3D Viewport shows quantity: Mode m̃" : withField ? "Analysis chart + the same 3D Viewport, side by side" : "Analysis shows the view of the selected Results node — no sub-tabs") + "</span>";
   renderView(node, moduleReady);
   renderInspector(node, moduleReady);
   document.getElementById("status").innerHTML =
@@ -596,19 +730,44 @@ function renderView(node, ready) {
 function renderInspector(node, ready) {
   const path = []; for (let n = node; n; n = n.parent) path.unshift(n.label.split(" · ")[0]);
   const badges = [];
-  if (node.module) badges.push('<span class="bdg acc">' + node.module + "</span>");
   if (node.kind === "viz") badges.push('<span class="bdg ok">bound</span>');
   if (node.module) badges.push('<span class="bdg warn">partial</span>');
   if (node.kind === "reference") badges.push('<span class="bdg deg">different assumptions</span>');
-  document.getElementById("ihead").innerHTML = '<nav class="crumbs" aria-label="Breadcrumbs">' + path.join(" / ") + '</nav><div class="ident"><div class="iicon" style="color:' + (node.module ? "#89b4fa" : "#cba6f7") + '">' + icon(node.kind === "viz" ? "cube" : node.kind === "reference" ? "ref" : "figure") + '</div><div style="min-width:0"><h1>' + node.label + '</h1><div class="badges">' + badges.join("") + "</div></div></div>";
-  const secs = [];
-  secs.push(sec("Identity", rows([["Node kind", node.module ? "analysis.dispersion." + node.kind : node.kind], ["Owner", node.module || "kernel"]]), "k", false));
-  if (node.module && !ready) secs.push(sec("State", stateBox("loading", "Loading module sections", ""), "k"));
-  else if (node.module) secs.push.apply(secs, DISPERSION_MODULE.inspector(node));
-  else if (node.kind === "results") secs.push(sec("Module matching", rows(MANIFESTS.map((m) => [m.title, evaluateMatch(m, DATASETS[0]).ok ? '<span style="color:var(--success)">matched</span>' : '<span class="na">no dataset</span>'])), "k"));
-  else secs.push(sec("State", '<div class="note">No persistent owner resource for this node type yet.</div>', "k"));
-  secs.push(sec("Provenance", rows([["Run · stage", "[run_id] · [stage_id]"], ["Dataset", DATASETS[0].dataset_id + " @ [revision]"], ["Schema", "frequency_domain_eigen_dispersion.v1"], ["Engine · device", "[engine_id] · [device]"]]), "k", false));
-  document.getElementById("ibody").innerHTML = secs.map((s) => '<details class="sec"' + (s.open ? " open" : "") + "><summary>" + s.title + '<span class="owner ' + s.owner + '">' + (s.owner === "k" ? "kernel" : "module") + "</span></summary>" + s.html + "</details>").join("");
+  const headIcon = node.kind === "viz" ? "focus" : node.kind === "reference" ? "ref" : node.module ? "chart" : "activity";
+  document.getElementById("ihead").innerHTML = '<nav class="crumbs" aria-label="Breadcrumbs">' + path.join(" / ") + '</nav><div class="ident"><div class="iicon" style="color:var(--accent)">' + icon(headIcon) + '</div><div style="min-width:0"><h1>' + node.label + '</h1><div class="badges">' + badges.join("") + "</div></div></div>";
+
+  let r;
+  if (node.module && !ready) r = null;
+  else if (node.module) r = DISPERSION_MODULE.inspector(node);
+  else if (node.kind === "results") r = {
+    identity: ["Results · " + RUN.label, ["Results", "Run"]],
+    metrics: [["Datasets", String(DATASETS.length), ""], ["Matched modules", "1 of " + MANIFESTS.length, "success"], ["Unmatched datasets", "0", "success"], ["Run state", "partial", "warning"]],
+    primary: { title: "Module matching", icon: "layers", html: rows(MANIFESTS.map((m) => [m.title, evaluateMatch(m, DATASETS[0]).ok ? '<span style="color:var(--success)">matched</span>' : '<span class="na">no dataset</span>'])) },
+    nav: [],
+  };
+  else r = {
+    identity: [node.label, ["Results", "Kernel node"]],
+    metrics: [["Definitions", "0", ""], ["Owner resource", "missing", "warning"], ["Catalog", "—", ""], ["State", "unavailable", ""]],
+    primary: { title: "Unavailable", icon: "database", html: '<div class="note" style="margin-left:0">No persistent owner resource is published for user-defined postprocessing definitions yet (spec 32 §8).</div>' },
+    nav: [],
+  };
+
+  let html = "";
+  if (!r) html = stateBox("loading", "Loading module sections", "");
+  else {
+    html += '<div class="sci-id"><h3>' + r.identity[0] + '</h3><span class="badges" style="margin:0">' + r.identity[1].map((b) => '<span class="bdg">' + b + "</span>").join("") + "</span></div>";
+    if (r.view) html += r.view;
+    html += '<div class="metrics">' + r.metrics.map((m) => '<div class="metric" data-state="' + m[2] + '"><small>' + m[0] + "</small><span>" + m[1] + "</span></div>").join("") + "</div>";
+    html += '<section class="dcard"><div class="dcard-head"><span class="ibox">' + icon(r.primary.icon) + "</span><h3>" + r.primary.title + '</h3><span style="flex:1"></span><span class="owner ' + (node.module ? "m" : "k") + '">' + (node.module ? "module" : "kernel") + '</span></div><div class="dcard-body">' + r.primary.html + "</div></section>";
+    if (r.nav.length) html += '<div class="navs">' + r.nav.map(navHtml).join("") + "</div>";
+    if (r.after) html += r.after;
+  }
+  html += '<div class="navs ctxgrp">' + navHtml(nav("Context", "history", "status · properties · provenance",
+    rows([["Status", node.module ? "partial · selected_only" : "—"], ["Owner", node.module || "kernel"], ["Node kind", node.module ? "analysis.dispersion." + node.kind : node.kind],
+      ["Run · stage", "[run_id] · [stage_id]"], ["Dataset", DATASETS[0].dataset_id + " @ [revision]"], ["Schema", "frequency_domain_eigen_dispersion.v1"], ["Engine · device", "[engine_id] · [device]"]]))) + "</div>";
+  document.getElementById("ibody").innerHTML = html;
+  const editable = node.kind === "viz";
+  document.getElementById("actbar").innerHTML = '<button class="btn">Focus</button><button class="btn" disabled>Isolate</button><button class="btn" data-act="reset-display"' + (editable ? "" : " disabled") + '>Reset</button><button class="btn primary" disabled title="Display edits apply live">Apply</button>';
 }
 
 /* ------------------------------------------------------------------ behaviour */
@@ -640,7 +799,8 @@ function act(id) {
     const existing = S.viz.find((v) => v.sample === S.transient);
     if (existing) { S.selected = existing.id; }
     else {
-      const def = { id: "def-" + defSeq++, sample: S.transient, placement: "beside", part: "Re", comp: "y", animate: false };
+      const def = { id: "def-" + defSeq++, sample: S.transient, placement: "beside", context: "3D", render: "shaded", part: "Re", comp: "y", animate: false,
+        passes: { visible: true, bounds: false, primitive: true, vectors: false } };
       S.viz.push(def); S.selected = def.id; S.expanded.add(base + "/viz");
       S.log.push("Definition created: mode visualization pinned to kᵧ " + fmtK(sampleById(def.sample).k) + " rad/µm");
     }
@@ -649,6 +809,9 @@ function act(id) {
   } else if (id === "animate" && node.def) {
     node.def.animate = !node.def.animate;
     S.log.push(node.def.animate ? "Phase animation on (visual rate 0.5 cycle/s, physical f unchanged)" : "Phase animation paused");
+  } else if (id === "reset-display" && node.def) {
+    Object.assign(node.def, { context: "3D", render: "shaded", part: "Re", comp: "y", passes: { visible: true, bounds: false, primitive: true, vectors: false } });
+    S.log.push("Display settings reset to module defaults (edit session)");
   } else if (id.startsWith("export")) {
     S.log.push("Export is outside the scope of this mockup");
   }
@@ -661,6 +824,8 @@ document.addEventListener("click", (e) => {
   const r = e.target.closest("[data-node]"); if (r) { select(r.dataset.node); return; }
   const a = e.target.closest("[data-act]"); if (a && !a.disabled) { act(a.dataset.act); return; }
   const p = e.target.closest("[data-sample]"); if (p) { S.transient = p.dataset.sample; render(); return; }
+  const pass = e.target.closest("[data-pass]");
+  if (pass) { const n = NODES.get(S.selected); if (n && n.def) { n.def.passes[pass.dataset.pass] = !n.def.passes[pass.dataset.pass]; render(); } return; }
   const set = e.target.closest("[data-set]");
   if (set) { const n = NODES.get(S.selected); if (n && n.def) { n.def[set.dataset.set] = set.dataset.val; render(); } }
 });

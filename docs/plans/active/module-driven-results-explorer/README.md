@@ -15,6 +15,29 @@ badanie opublikowało: Explorer pokazuje węzły modułów pasujących do danych
 Kliknięcie węzła ładuje moduł, który dokłada główny widok, sekcje Inspectora
 i kontekstową zakładkę ribbonu, tak jak w COMSOL-u.
 
+## Uwagi z przeglądu (2026-10-09)
+
+1. **Bez nowego silnika renderowania.** Wizualizacja modu używa dokładnie
+   tego samego głównego modułu viewportu. Zmienia się tylko wielkość
+   (quantity): zamiast `m` viewport pokazuje mod. Dziś mod jest osobną
+   nakładką nadpisującą wielkość, więc ribbon może pokazywać `M`, gdy
+   viewport rysuje mod. Plan to naprawia: jeden właściciel
+   `active_quantity_id` (spec 32 §6).
+2. **Jeden styl Inspectorów.** Wszystkie widoki Inspectora w drzewie wyników
+   mają styl Inspectora ferromagnetyka z drzewa modelu. Inspector
+   wizualizacji modu kopiuje Inspector wizualizacji obiektu
+   (`VisualizationTargetInspectorPanel`): ten sam układ, ikony, chipy warstw,
+   kafelki trybu renderowania, `ScalarColorbarControl`, sesja edycji. Dochodzą
+   tylko część zespolona i składowa, faza i animacja oraz ułożenie (spec 32 §12).
+
+Obecny Inspector modu odbiega od wzorca. Nie ma ramy przeglądu, paska metryk,
+głównej karty ani sekcji nawigacyjnych. Używa surowych `<select>` i `<input>`,
+nie ma ikon, ma własną rampę kolorów zamiast `ScalarColorbarControl` i nie
+rejestruje sesji edycji, więc Reset i Apply w stopce nie działają
+(`ModeVisualizationInspectorPanel.tsx:342-533`,
+`FrequencyDomainModeDisplayControls.tsx:387-655`,
+`frequency-domain/EigenModeInspectorPanel.tsx:262-310`).
+
 ## Diagnoza (stan na `92a5fc689`, `apps/control-room/src`)
 
 | Obszar | Kod | Problem |
@@ -27,6 +50,8 @@ i kontekstową zakładkę ribbonu, tak jak w COMSOL-u.
 | Środek ekranu | `kernel/layout/ViewportTabHost.tsx:24-84` | montuje jedną powierzchnię naraz; wykres i pole 3D się wykluczają |
 | Referencje | `shared/domain/analysis/frequencyDomainChartModels.ts:1135-1162` | punkty referencji dzielą `rowIndex` z policzonym wierszem |
 | Manifest modułu | `kernel/types.ts:54-69` | `component` już ładowany leniwie; `contributes` obsługuje tylko komendy |
+| Mod w viewporcie | `useViewport3DSceneModel.ts:3060`, `2199-2270` | mod jest nakładką nadpisującą wielkość, nie wielkością; HUD pokazuje tylko tekst wielkości (`Viewport3DModule.tsx:2646`) |
+| Inspector modu | `ModeVisualizationInspectorPanel.tsx:342-533` | inny styl niż Inspector wizualizacji obiektu (patrz wyżej) |
 
 ## Co zostaje, co się zmienia
 
@@ -66,6 +91,13 @@ generowany z danych, a nie rysowany ręcznie:
 - kliknięcie punktu wykresu tworzy zaznaczenie chwilowe; „Create mode
   visualization” tworzy węzeł w `Mode visualizations`, z ułożeniem
   zamiast / pod / obok wykresu;
+- wizualizacja modu to główny viewport z wielkością „Mode m̃”: HUD i grupa
+  Quantity w ribbonie pokazują mod, a ułożenie „zamiast” to po prostu karta
+  3D Viewport;
+- każdy Inspector ma układ Inspectora wizualizacji ferromagnetyka: pasek
+  czterech metryk, jedna główna karta, sekcje nawigacyjne z ikonami,
+  zwinięty kontekst i stopka akcji; Inspector modu ma chipy warstw, kafelki
+  trybu renderowania i działający Reset;
 - „Add reference” tworzy nakładkę referencji z panelem porównania metadanych
   („Different assumptions”); „Δf vs reference” dodaje wykres odchyłki;
 - „Iso-frequency contour” i import COMSOL/CSV są wyszarzone z powodem.
@@ -88,7 +120,11 @@ Sprawdzone w przeglądarce (2026-10-09, lokalny serwer na `127.0.0.1`):
 - „Create mode visualization” jest nieaktywne bez punktu i aktywne po
   kliknięciu punktu; po utworzeniu jest jeden panel 3D, a zmiana ułożenia
   działa;
-- „Add reference” tworzy węzeł referencji, a „Δf” dodaje drugi wykres.
+- „Add reference” tworzy węzeł referencji, a „Δf” dodaje drugi wykres;
+- po przebudowie Inspectora: pasek metryk, karta Display z czterema chipami
+  i czterema kafelkami, sześć sekcji nawigacyjnych i kontekst; chip Vectors
+  zmienia opis wielkości w HUD; Reset przywraca ustawienia; ułożenie
+  „replace” przełącza na kartę 3D Viewport; bez błędów JavaScript.
 
 ## Kolejność wdrożenia i kryteria odbioru
 
@@ -119,20 +155,39 @@ Actions (lokalny zakaz kompilacji testów obowiązuje).
 - Odbiór: zaznaczenie węzła ładuje moduł raz; zmiana zaznaczenia usuwa
   renderer wykresu (test lifecycle).
 
-### Etap 4 — sekcje Inspectora i zakładki kontekstowe
+### Etap 4 — Inspectory w stylu ferromagnetyka i zakładki kontekstowe
 
-- Katalog Inspectora przyjmuje sekcje modułów; ribbon dostaje zakładkę
-  kontekstową; sekcje kernela Identity, State, Provenance.
-- Odbiór: regresja stabilności Inspectora (bez remountu, z zachowaniem
-  scrolla i fokusu); zakładka kontekstowa znika po wyjściu z węzłów modułu.
+- Kernel składa treść modułu w ramę z spec 32 §12 (identyfikacja, pasek
+  czterech metryk, główna karta, sekcje nawigacyjne, kontekst, stopka).
+  Ribbon dostaje zakładkę kontekstową.
+- Inspector wizualizacji modu powstaje jako kolejny właściciel
+  `VisualizationTargetInspectorPanel`, a nie osobny panel.
+  `ModeVisualizationViewControls`, `FrequencyDomainModeDisplayControls` i
+  grupa 3D w `EigenModeInspectorPanel` są usuwane.
+- Odbiór:
+  - test kontraktu projektu (`inspectorDesignSystemContract.test.ts`)
+    rozszerzony na wszystkie trasy `analysis.*`: rama przeglądu, dokładnie
+    cztery metryki, jedna główna karta, brak surowych `<select>` / `<input>`;
+  - zrzut porównawczy: Inspector wizualizacji modu i Inspector wizualizacji
+    ferromagnetyka mają te same sekcje wspólne, ikony i odstępy;
+  - Reset w stopce działa dla wizualizacji modu;
+  - regresja stabilności Inspectora (bez remountu, z zachowaniem scrolla i
+    fokusu); zakładka kontekstowa znika po wyjściu z węzłów modułu.
 
-### Etap 5 — podział wykres + pole
+### Etap 5 — mod jako wielkość głównego viewportu i podział wykres + pole
 
+- `active_quantity_id` niesie identyfikator pola modu; kontroler nakładki
+  staje się resolverem wielkości; mod w grupie Quantity ribbonu i w HUD;
+  colorbar i field-meta dla `analysis:*`. Bez nowego renderera.
 - Tryb podziału w `ViewportTabHost` z tą samą instancją `viewport-3d`;
-  ułożenie z definicji węzła.
-- Odbiór w przeglądarce: dokładnie jeden canvas, kontekst WebGL nie utracony,
-  niezerowy drawing buffer po wielokrotnym przełączaniu ułożeń; szybkie
-  przełączanie wizualizacji kończy się polem ostatnio wybranego węzła.
+  ułożenie z definicji węzła; ułożenie „zamiast” to karta 3D Viewport.
+- Odbiór:
+  - ribbon, HUD i viewport zawsze pokazują tę samą wielkość; wybór `m`
+    opuszcza wizualizację modu;
+  - w przeglądarce dokładnie jeden canvas, kontekst WebGL nie utracony,
+    niezerowy drawing buffer po wielokrotnym przełączaniu ułożeń i wielkości;
+  - szybkie przełączanie wizualizacji kończy się polem ostatnio wybranego
+    węzła (istniejąca ochrona tożsamości).
 
 ### Etap 6 — trwałe definicje (backend + frontend)
 
@@ -156,14 +211,16 @@ Actions (lokalny zakaz kompilacji testów obowiązuje).
 - Odbiór: dodanie modułu nie wymaga zmian w builderze, katalogu Inspectora ani
   w kodzie ribbonu kernela.
 
-## Otwarte decyzje
+## Rozstrzygnięcia
 
-1. Czy zasób definicji należy do rodziny `analysis` (propozycja), czy
-   `workspace`.
-2. Czy `k_context` i role osi publikuje backend w manifeście zbioru
-   (propozycja), czy klient nadal je klasyfikuje.
-3. Czy istniejące rodzaje węzłów `results.dispersion.*` migrują od razu, czy
-   przez warstwę zgodności na jeden etap.
+Szczegóły i uzasadnienie: ADR 0054, sekcja „Rozstrzygnięcia”.
+
+1. Zasób definicji należy do rodziny `analysis` i jest zapisywany z
+   projektem. `workspace` zostaje dla układu i preferencji interfejsu.
+2. `k_context` i role osi publikuje backend w manifeście zbioru. Klasyfikator
+   kliencki zostaje tylko dla starszych manifestów, z widocznym stanem.
+3. Migracja moduł po module, dyspersja pierwsza, z aliasami
+   `results.dispersion.*` → `analysis.dispersion.*` przez jeden etap.
 
 ## Poza zakresem
 

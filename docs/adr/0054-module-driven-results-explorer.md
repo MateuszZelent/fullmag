@@ -66,6 +66,47 @@ zakładce ribbonu.
 7. **Zbiór bez modułu jest widoczny.** Taki zbiór pokazuje się jako
    „Dataset · brak modułu analizy” z widokiem tabeli i powodem. Nie znika z
    drzewa.
+8. **Mod to wielkość głównego viewportu, nie osobny silnik.** Wizualizacja
+   modu używa tego samego modułu `viewport-3d` i tej samej ścieżki
+   renderowania co pola modelu. Zaznaczenie węzła wizualizacji ustawia
+   aktywną wielkość viewportu na pole modu (np. `analysis:eigen:…`), tak jak
+   wybór `m` czy `H_eff`. Dziś mod jest osobną nakładką
+   (`AnalysisFieldOverlayController`) nadpisującą wielkość
+   (`useViewport3DSceneModel.ts:3060`, `2199-2270`). Przez to ribbon może
+   pokazywać `M`, gdy viewport rysuje mod. Docelowo jest jeden właściciel:
+   `active_quantity_id` niesie identyfikator pola modu, a kontroler nakładki
+   staje się resolverem tej wielkości (faza, widok, intencja), a nie drugim
+   stanem. Wybór innej wielkości opuszcza wizualizację modu.
+9. **Jeden styl Inspectora dla całego drzewa.** Każdy widok Inspectora w
+   drzewie wyników używa wzorca Inspectora wizualizacji ferromagnetyka z
+   drzewa modelu (`VisualizationTargetInspectorPanel` w
+   `modules/inspector/panels/ObjectVisualizationPanel.tsx:1127`, na
+   `InspectorOverviewFrame`). Wizualizacja modu kopiuje ten Inspector
+   dosłownie: te same sekcje, chipy warstw, kafelki trybu renderowania,
+   kolorowanie powierzchni przez `ScalarColorbarControl`, ikony lucide i
+   sesję edycji (Reset w stopce). Dochodzą tylko sekcje specyficzne dla modu:
+   część zespolona i składowa (w kolorowaniu powierzchni) oraz faza i
+   animacja. Szczegóły: specyfikacja 32 §12.
+
+### Rozstrzygnięcia (2026-10-09)
+
+1. **Właściciel definicji: rodzina API `analysis`, zapis z projektem.**
+   Definicje opisują postprocessing wyników, więc należą do `analysis` (ta
+   sama rodzina co katalog zbiorów). Rodzina `workspace` przechowuje układ i
+   preferencje interfejsu, a nie treść naukową projektu. Definicje są
+   zapisywane razem z projektem przez `persistence`. Nie trafiają do
+   `ProblemIR`, bo nie zmieniają fizyki.
+2. **Kontekst k i role osi publikuje backend.** Manifest zbioru dostaje
+   `k_context` i `axes[].role`. Dopasowanie modułów działa wyłącznie na
+   polach manifestu (fail-closed, bez parsowania etykiet). Obecny
+   klasyfikator kliencki z ADR 0023 zostaje tylko dla starszych manifestów,
+   ze stanem „legacy classification” widocznym w Inspectorze. Usuwamy go,
+   gdy backend publikuje nowe pola dla wszystkich produktów.
+3. **Migracja przez jedną warstwę zgodności, moduł po module.** Dyspersja
+   migruje pierwsza. Stare rodzaje `results.dispersion.*` są aliasami nowych
+   `analysis.dispersion.*` przez jeden etap, żeby zachować trasy Inspectora,
+   zapisane zaznaczenia i testy. Alias usuwamy w następnym etapie. Nie
+   robimy migracji wszystkich analiz naraz.
 
 ## Zmiana wcześniejszych decyzji
 
@@ -76,6 +117,7 @@ zakładce ribbonu.
 | `docs/specs/frequency-domain-results-product-projection-v1.md` | `:219-221` nowy produkt wymaga osobnych węzłów w builderze | nowe produkty dostają węzły przez manifest modułu; zamknięta unia w builderze zostaje wycofana |
 | `docs/plans/active/dynamics-analysis-interface-comsol-inspired/02-target-interface-contract.md` | `:134-180` statyczna hierarchia | zastąpiona szablonami węzłów modułów |
 | tamże `03-schematics.md` | `:174-199` wizualizacja modu pod `Model › Objects` | przeniesiona pod węzeł analizy w `Results` |
+| ADR 0023 | jeden `Active Analysis Overlay` (`:55`) jako stan obok wielkości | mod staje się aktywną wielkością viewportu; nakładka jest jej resolverem |
 | `docs/plans/active/2026-07-25-analysis-workbench-refactor.md` | etap 6, stałe zakładki workbench | zastąpione widokiem zaznaczonego węzła; renderer, plan danych i eksport zostają |
 
 Niezmienione invariants: jeden typowany klient API, jedna warstwa resource
