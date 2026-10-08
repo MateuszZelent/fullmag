@@ -177,6 +177,18 @@ def _artifact_dir(root: Path) -> Path:
     return Path(result["runtime_output_binding"]["artifact_dir"])
 
 
+def _bind_semantic_fault(root: Path, artifact: Path) -> None:
+    """Model an honestly receipted bad payload to exercise semantic checks."""
+    path = root / "run-result.json"
+    result = json.loads(path.read_text(encoding="utf-8"))
+    payload = artifact.read_bytes()
+    relative = artifact.relative_to(_artifact_dir(root)).as_posix()
+    result["artifacts"]["required_artifact_hashes"][relative] = {
+        "sha256": hashlib.sha256(payload).hexdigest(), "size": len(payload)
+    }
+    path.write_text(json.dumps(result), encoding="utf-8")
+
+
 def _request_and_result(
     root: Path,
     *,
@@ -282,6 +294,16 @@ def _request_and_result(
     _, result["runtime_output_binding"] = resolve_runtime_artifact_root(
         root, PILOT, model_hash
     )
+    artifact_root = Path(result["runtime_output_binding"]["artifact_dir"])
+    hashes = artifacts.setdefault("required_artifact_hashes", {})
+    for path in artifact_root.rglob("*"):
+        if path.is_file():
+            payload = path.read_bytes()
+            entry = hashes.setdefault(path.relative_to(artifact_root).as_posix(), {
+                "sha256": hashlib.sha256(payload).hexdigest()
+            })
+            entry.setdefault("size", len(payload))
+
     root.mkdir(parents=True, exist_ok=True)
     (root / "run-request.json").write_text(json.dumps(request), encoding="utf-8")
     (root / "run-result.json").write_text(json.dumps(result), encoding="utf-8")
@@ -349,6 +371,29 @@ class SerialAdaptiveProbeTests(unittest.TestCase):
             self.assertFalse(result["structural_report"]["serial_process_pool_report"]["present"])
             self.assertEqual(result["science"]["status"], "NOT VERIFIED")
 
+    def test_every_declared_artifact_is_bound_even_when_both_modes_match(self) -> None:
+        paths = ("metadata.json", "eigen/diagnostics/solver.v1.json", "eigen/dispersion.csv",
+                 "eigen/spectrum.v3.json", MANIFEST_RELATIVE_PATH)
+        for relative in paths:
+            with self.subTest(relative=relative), tempfile.TemporaryDirectory() as directory:
+                serial, adaptive = _make_batches(Path(directory))
+                for root in (serial, adaptive):
+                    path = _artifact_dir(root) / relative
+                    path.write_bytes(path.read_bytes() + b" ")
+                with self.assertRaisesRegex(ValidationError, "receipt-bound artifact failed"):
+                    validate_serial_adaptive_probe(serial, adaptive)
+
+    def test_missing_numeric_artifact_binding_is_not_verified(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            serial, adaptive = _make_batches(Path(directory))
+            path = serial / "run-result.json"
+            result = json.loads(path.read_text(encoding="utf-8"))
+            del result["artifacts"]["required_artifact_hashes"]["eigen/spectrum.v3.json"]
+            path.write_text(json.dumps(result), encoding="utf-8")
+            report = validate_serial_adaptive_probe(serial, adaptive)
+            self.assertEqual(report["status"], "not_verified")
+            self.assertIn("omits", report["structural_report"]["reason"])
+
     def test_missing_runtime_output_binding_is_not_verified(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             serial, adaptive = _make_batches(Path(directory))
@@ -405,6 +450,7 @@ class SerialAdaptiveProbeTests(unittest.TestCase):
             value = json.loads(path.read_text())
             value["equilibrium_artifact_sha256"] = "sha256:ce9d630b90234933cce60304b5564f543304d587680d08e5793e114be1f655d1"
             path.write_text(json.dumps(value))
+            _bind_semantic_fault(adaptive, path)
             with self.assertRaisesRegex(ValidationError, "manifest.equilibrium_artifact_sha256"):
                 validate_serial_adaptive_probe(serial, adaptive)
 
@@ -415,6 +461,7 @@ class SerialAdaptiveProbeTests(unittest.TestCase):
             value = json.loads(path.read_text())
             value["samples"][1]["modes"][0]["linearization_state_sha256"] = "sha256:" + "f" * 64
             path.write_text(json.dumps(value))
+            _bind_semantic_fault(adaptive, path)
             with self.assertRaisesRegex(ValidationError, "native_states_by_sample"):
                 validate_serial_adaptive_probe(serial, adaptive)
 
@@ -425,6 +472,7 @@ class SerialAdaptiveProbeTests(unittest.TestCase):
             value = json.loads(path.read_text())
             value["samples"][1]["modes"][0].pop("linearization_state_sha256")
             path.write_text(json.dumps(value))
+            _bind_semantic_fault(adaptive, path)
             result = validate_serial_adaptive_probe(serial, adaptive)
             self.assertEqual(result["status"], "not_verified")
             self.assertIn("linearization_state_sha256", result["structural_report"]["reason"])
@@ -436,6 +484,7 @@ class SerialAdaptiveProbeTests(unittest.TestCase):
             value = json.loads(path.read_text())
             value["inputs"][0]["equilibrium_artifact_sha256"] = "sha256:ce9d630b90234933cce60304b5564f543304d587680d08e5793e114be1f655d1"
             path.write_text(json.dumps(value))
+            _bind_semantic_fault(adaptive, path)
             with self.assertRaisesRegex(ValidationError, "different equilibrium"):
                 validate_serial_adaptive_probe(serial, adaptive)
 
@@ -465,7 +514,7 @@ class SerialAdaptiveProbeTests(unittest.TestCase):
             report_path.unlink()
             result_path = adaptive / "run-result.json"
             result = json.loads(result_path.read_text(encoding="utf-8"))
-            result["artifacts"] = {}
+            result["artifacts"]["required_artifact_hashes"].pop(REPORT_RELATIVE_PATH)
             result_path.write_text(json.dumps(result), encoding="utf-8")
             result = validate_serial_adaptive_probe(serial, adaptive)
             adaptive_report = result["structural_report"]["adaptive_process_pool_report"]
@@ -478,13 +527,13 @@ class SerialAdaptiveProbeTests(unittest.TestCase):
             serial, adaptive = _make_batches(Path(directory))
             result_path = adaptive / "run-result.json"
             result = json.loads(result_path.read_text(encoding="utf-8"))
-            result["artifacts"] = {}
+            result["artifacts"]["required_artifact_hashes"].pop(REPORT_RELATIVE_PATH)
             result_path.write_text(json.dumps(result), encoding="utf-8")
             result = validate_serial_adaptive_probe(serial, adaptive)
             adaptive_report = result["structural_report"]["adaptive_process_pool_report"]
             self.assertTrue(adaptive_report["present"])
             self.assertEqual(adaptive_report["status"], "not_verified")
-            self.assertIn("required_artifact_hashes", adaptive_report["reason"])
+            self.assertIn("does not bind", adaptive_report["reason"])
             self.assertEqual(result["status"], "not_verified")
 
     def test_mesh_identity_mismatch_fails_closed(self) -> None:
@@ -494,6 +543,7 @@ class SerialAdaptiveProbeTests(unittest.TestCase):
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
             manifest["mesh_identity"] = "sha256:" + "a" * 64
             manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            _bind_semantic_fault(adaptive, manifest_path)
             with self.assertRaisesRegex(ValidationError, "mesh or operator identity"):
                 validate_serial_adaptive_probe(serial, adaptive)
 
@@ -507,6 +557,7 @@ class SerialAdaptiveProbeTests(unittest.TestCase):
                 mode["residual_relative_l2"] = 2e-8
                 mode["block_residuals"]["floquet_full_magnetic_relative_residual"] = 2e-8
             spectrum_path.write_text(json.dumps(spectrum), encoding="utf-8")
+            _bind_semantic_fault(adaptive, spectrum_path)
             with self.assertRaisesRegex(ValidationError, "physical residual"):
                 validate_serial_adaptive_probe(serial, adaptive)
 
@@ -517,6 +568,7 @@ class SerialAdaptiveProbeTests(unittest.TestCase):
             spectrum = json.loads(path.read_text(encoding="utf-8"))
             spectrum["samples"][1]["modes"][0]["phase_constraint_sha256"] = "sha256:" + "f" * 64
             path.write_text(json.dumps(spectrum), encoding="utf-8")
+            _bind_semantic_fault(adaptive, path)
             with self.assertRaisesRegex(ValidationError, "phase_constraints_by_sample"):
                 validate_serial_adaptive_probe(serial, adaptive)
 

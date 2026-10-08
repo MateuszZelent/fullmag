@@ -29,7 +29,7 @@ from managed_runtime_artifact_root import (
     RuntimeArtifactRootError,
     resolve_runtime_artifact_root,
 )
-from de_pilot_receipts import validate_de_pilot_receipts
+from de_pilot_receipts import verify_required_artifact_hash, validate_de_pilot_receipts
 from validate_de_smoke_rows import (
     DENSE_CERTIFICATION_TOLERANCE,
     MAX_PROBE_RELATIVE_TOLERANCE,
@@ -555,6 +555,32 @@ def _read_probe_rows(case_dir: Path) -> dict[tuple[int, int], dict[str, Any]]:
     return rows
 
 
+def _case_artifact_hash_bindings(result: Mapping[str, Any], case_dir: Path, mode: str) -> dict[str, Any]:
+    artifacts = result.get("artifacts")
+    hashes = artifacts.get("required_artifact_hashes") if isinstance(artifacts, Mapping) else None
+    if not isinstance(hashes, Mapping) or not hashes:
+        raise EvidenceUnavailable(f"{mode} has no required artifact hash catalog")
+    required = {"metadata.json", "eigen/diagnostics/solver.v1.json", "eigen/dispersion.csv",
+                "eigen/spectrum.v3.json", MANIFEST_RELATIVE_PATH}
+    if not required.issubset(hashes):
+        raise EvidenceUnavailable(f"{mode} required artifact hash catalog omits {sorted(required - hashes.keys())}")
+    if any(not isinstance(path, str) for path in hashes):
+        raise ValidationError(f"{mode} artifact hash catalog has a non-string path")
+    bindings = {}
+    for relative in sorted(hashes):
+        try:
+            binding = verify_required_artifact_hash(result, case_dir.parent, case_dir.name, relative)
+        except (OSError, TypeError, ValueError) as error:
+            if isinstance(error.__cause__, FileNotFoundError):
+                raise EvidenceUnavailable(f"{mode} receipt-bound artifact is missing: {relative}") from error
+            if relative == REPORT_RELATIVE_PATH:
+                raise ValidationError(f"{mode} report hash binding failed: {error}") from error
+            raise ValidationError(f"{mode} receipt-bound artifact failed: {relative}: {error}") from error
+        bindings[relative] = binding
+    return {"status": "pass", "artifact_count": len(bindings),
+            "catalog_sha256": hashlib.sha256(_canonical_json(bindings).encode("utf-8")).hexdigest()}
+
+
 def _validate_case(receipt: Mapping[str, Any], mode: str) -> dict[str, Any]:
     output_root = Path(receipt["root"])
     model_sha256 = _digest(receipt["probe"]["model_sha256"], f"{mode}.model_sha256")
@@ -574,6 +600,7 @@ def _validate_case(receipt: Mapping[str, Any], mode: str) -> dict[str, Any]:
         raise EvidenceUnavailable(f"{mode} run-result is missing runtime_output_binding")
     if dict(recorded_binding) != resolved_binding:
         raise ValidationError(f"{mode} runtime_output_binding differs from resolved artifacts")
+    artifact_bindings = _case_artifact_hash_bindings(result, case_dir, mode)
     metadata_path = case_dir / "metadata.json"
     diagnostics_path = case_dir / "eigen/diagnostics/solver.v1.json"
     try:
@@ -602,9 +629,12 @@ def _validate_case(receipt: Mapping[str, Any], mode: str) -> dict[str, Any]:
         raise ValidationError(f"{mode} native probe artifacts failed revalidation: {error}") from error
     rows = _read_probe_rows(case_dir)
     identity = _manifest_identity(case_dir, receipt["probe"], solver_result)
+    if _case_artifact_hash_bindings(result, case_dir, mode) != artifact_bindings:
+        raise ValidationError(f"{mode} artifact binding changed during revalidation")
     return {
         "status": "pass",
         "case_dir": str(case_dir),
+        "artifact_hash_binding": artifact_bindings,
         "metadata": metadata_result,
         "solver_artifacts": solver_result,
         "rows": rows,
@@ -902,9 +932,11 @@ def validate_serial_adaptive_probe(serial_dir: str | Path, adaptive_dir: str | P
         "mesh_identity": mesh_identity,
         "artifact_revalidation": {
             "serial": {"status": serial_case["status"], "metadata": serial_case["metadata"],
-                        "solver_artifacts": serial_case["solver_artifacts"]},
+                        "solver_artifacts": serial_case["solver_artifacts"],
+                        "artifact_hash_binding": serial_case["artifact_hash_binding"]},
             "adaptive": {"status": adaptive_case["status"], "metadata": adaptive_case["metadata"],
-                          "solver_artifacts": adaptive_case["solver_artifacts"]},
+                          "solver_artifacts": adaptive_case["solver_artifacts"],
+                          "artifact_hash_binding": adaptive_case["artifact_hash_binding"]},
         },
     }
     concurrency = adaptive_report.get("validation", {}).get("concurrency") \

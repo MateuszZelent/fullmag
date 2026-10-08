@@ -3,9 +3,11 @@ import copy
 import hashlib
 import json
 from pathlib import Path
+from unittest.mock import patch
 from tempfile import TemporaryDirectory
 import unittest
 from de_pilot_receipts import (
+    verify_required_artifact_hash,
     read_required_artifact_bytes,
     validate_de_pilot_receipts,
 )
@@ -95,6 +97,32 @@ class ReceiptTests(unittest.TestCase):
         del request["cases"], request["operation"]
         validate_de_pilot_receipts(request, result, "de100")
 
+    def test_streaming_hash_reads_large_artifacts_in_bounded_chunks(self):
+        with TemporaryDirectory() as tmp:
+            run = Path(tmp)
+            artifact = run / "de100" / "large.bin"
+            artifact.parent.mkdir()
+            payload = b"verified" * (300_000)
+            artifact.write_bytes(payload)
+            expected = {"size": len(payload), "sha256": hashlib.sha256(payload).hexdigest()}
+            result = {"artifacts": {"required_artifact_hashes": {"large.bin": expected}}}
+            sizes = []
+            original_open = Path.open
+            class ObservedStream:
+                def __init__(self, stream): self.stream = stream
+                def __enter__(self): return self
+                def __exit__(self, *args): self.stream.close()
+                def fileno(self): return self.stream.fileno()
+                def read(self, size):
+                    sizes.append(size)
+                    return self.stream.read(size)
+            def observed_open(path, *args, **kwargs):
+                return ObservedStream(original_open(path, *args, **kwargs))
+            with patch.object(Path, "open", observed_open):
+                self.assertEqual(verify_required_artifact_hash(result, run, "de100", "large.bin"), expected)
+            self.assertGreater(len(sizes), 2)
+            self.assertTrue(all(0 < size <= 1024 * 1024 for size in sizes))
+
     def test_required_artifact_reader_is_bound_to_contained_relative_path(self):
         with TemporaryDirectory() as tmp:
             run = Path(tmp)
@@ -119,6 +147,10 @@ class ReceiptTests(unittest.TestCase):
                     result, run, "de100", "eigen/dispersion.csv"
                 ),
                 payload,
+            )
+            self.assertEqual(
+                verify_required_artifact_hash(result, run, "de100", "eigen/dispersion.csv"),
+                {"size": len(payload), "sha256": hashlib.sha256(payload).hexdigest()},
             )
             with self.assertRaisesRegex(ValueError, "normalized relative path"):
                 read_required_artifact_bytes(

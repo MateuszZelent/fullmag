@@ -10,6 +10,15 @@ from pathlib import Path, PurePosixPath
 
 def read_required_artifact_bytes(result, run, pilot, relative_path):
     """Read one receipt-bound artifact from its exact contained case path."""
+    return _verify_required_artifact(result, run, pilot, relative_path, materialize=True)["payload"]
+
+
+def verify_required_artifact_hash(result, run, pilot, relative_path):
+    """Verify receipt-bound bytes with bounded streaming storage."""
+    return _verify_required_artifact(result, run, pilot, relative_path, materialize=False)
+
+
+def _verify_required_artifact(result, run, pilot, relative_path, *, materialize):
     artifacts = result.get("artifacts") if isinstance(result, dict) else None
     hashes = artifacts.get("required_artifact_hashes") if isinstance(artifacts, dict) else None
     entry = hashes.get(relative_path) if isinstance(hashes, dict) else None
@@ -70,8 +79,20 @@ def read_required_artifact_bytes(result, run, pilot, relative_path):
                 raise ValueError(f"required artifact is not a regular file: {relative_path}")
             if opened.st_size != expected_size:
                 raise ValueError(f"required artifact size differs from run-result: {relative_path}")
-            payload = stream.read(expected_size + 1)
-            if len(payload) != expected_size or stream.read(1):
+            digest = hashlib.sha256()
+            chunks = [] if materialize else None
+            observed_size = 0
+            while True:
+                chunk = stream.read(min(1024 * 1024, expected_size - observed_size + 1))
+                if not chunk:
+                    break
+                observed_size += len(chunk)
+                if observed_size > expected_size:
+                    raise ValueError(f"required artifact changed size while reading: {relative_path}")
+                digest.update(chunk)
+                if chunks is not None:
+                    chunks.append(chunk)
+            if observed_size != expected_size:
                 raise ValueError(f"required artifact changed size while reading: {relative_path}")
             finished = os.fstat(stream.fileno())
             if (finished.st_size != expected_size or
@@ -81,10 +102,13 @@ def read_required_artifact_bytes(result, run, pilot, relative_path):
     except OSError as error:
         raise ValueError(f"cannot read contained required artifact {relative_path}") from error
 
-    actual_sha256 = hashlib.sha256(payload).hexdigest()
+    actual_sha256 = digest.hexdigest()
     if actual_sha256 != expected_sha256:
         raise ValueError(f"required artifact SHA-256 differs from run-result: {relative_path}")
-    return payload
+    result = {"sha256": actual_sha256, "size": observed_size}
+    if chunks is not None:
+        result["payload"] = b"".join(chunks)
+    return result
 
 
 def validate_de_pilot_receipts(request, result, pilot):
