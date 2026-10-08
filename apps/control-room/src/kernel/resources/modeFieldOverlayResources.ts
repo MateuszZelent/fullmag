@@ -17,7 +17,7 @@ import {
   ModeFieldOverlayIntentController,
   type ModeFieldOverlayIntentSnapshot,
 } from "../visualization/ModeFieldOverlayIntentController";
-import { sessionResourceIdentityKey } from "./sessionResourceIdentity";
+import { sessionRequestScopeKey } from "./sessionResourceIdentity";
 import { useSessionResourceIdentity } from "./useSessionStatus";
 
 import { useFrequencyDomainEigenModeFieldMetaResource } from "./studyRuntimeResources";
@@ -144,9 +144,7 @@ export function useModeFieldOverlayIntentResource({
 }): ModeFieldOverlayIntentSnapshot {
   const { api } = useKernel();
   const sessionIdentity = useSessionResourceIdentity();
-  const sessionScope = sessionIdentity
-    ? sessionResourceIdentityKey(sessionIdentity)
-    : null;
+  const sessionScope = sessionRequestScopeKey(sessionIdentity);
   const [controller] = useState(() => new ModeFieldOverlayIntentController());
   const subscribe = useCallback(
     (listener: () => void) => controller.subscribe(listener),
