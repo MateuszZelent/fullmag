@@ -19,6 +19,8 @@ import {
 } from "./fullmagChartTokens";
 import type { ChartScientificTrust } from "./chartScientificTrust";
 
+const MAX_INTERACTIVE_LINE_POINTS = 5_000;
+
 export type ChartRenderStatus =
   | "loading"
   | "ready"
@@ -328,6 +330,8 @@ export function chartRenderModelToEChartsOption(
 
     series: model.series.map((series, visibleIndex) => {
       const color = chartSeriesColor(series, visibleIndex, palette);
+      const linePointHitTargets =
+        series.kind === "line" && series.points.length <= MAX_INTERACTIVE_LINE_POINTS;
       return {
         // NOTE: No `sampling` property — data is already server-decimated.
         connectNulls: false,
@@ -338,17 +342,27 @@ export function chartRenderModelToEChartsOption(
           [point.x, point.y, point.rowIndex],
         ]),
         emphasis: {
+          itemStyle: linePointHitTargets && color ? { color } : undefined,
           lineStyle: { color, width: 3 },
           scale: false,
         },
-        itemStyle: color ? { color } : undefined,
+        // `showSymbol: false` removes LineView's per-datum event targets. Keep
+        // bounded lines point-selectable with transparent (but hit-testable)
+        // fills; opacity zero is culled by ZRender and cannot receive clicks.
+        itemStyle: linePointHitTargets
+          ? { color: "transparent" }
+          : color
+            ? { color }
+            : undefined,
         lineStyle: { color, width: 1.5 },
         name: seriesDisplayName(series, yScales),
         progressive: 0,
-        // Keep line markers hidden at rest while retaining their emphasis hit target.
-        showSymbol: series.kind === "scatter",
+        // Line points are capped to the chart's 5,000 point budget. Transparent
+        // circles provide actual ECharts dataIndex click targets without adding
+        // visible markers at rest. Larger line inputs stay marker-free.
+        showSymbol: series.kind === "scatter" || linePointHitTargets,
         symbol: "circle",
-        symbolSize: 4,
+        symbolSize: series.kind === "line" ? 2 : 4,
         type: series.kind,
         yAxisIndex: series.yAxis,
       };

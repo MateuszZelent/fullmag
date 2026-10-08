@@ -88,8 +88,47 @@ describe("chart renderer owner", () => {
       expect.objectContaining({
         connectNulls: false,
         data: [[1, 0.25, 0], [3, null, null], [3, 0.5, 2]],
-        showSymbol: false,
+        emphasis: expect.objectContaining({
+          itemStyle: { color: expect.any(String) },
+        }),
+        itemStyle: { color: "transparent" },
+        showSymbol: true,
         symbol: "circle",
+        symbolSize: 2,
+        type: "line",
+      }),
+    ]);
+  });
+
+  it("keeps line point hit targets inside the 5,000 point rendering budget", () => {
+    const points = Array.from({ length: 5_000 }, (_, rowIndex) => ({
+      rowIndex,
+      x: rowIndex,
+      y: rowIndex / 10,
+    }));
+    const boundedOption = chartRenderModelToEChartsOption({
+      ...model,
+      series: [{ ...model.series[0]!, points }],
+    });
+    expect(boundedOption.series).toEqual([
+      expect.objectContaining({
+        data: expect.arrayContaining([[4_999, 499.9, 4_999]]),
+        itemStyle: { color: "transparent" },
+        showSymbol: true,
+        symbolSize: 2,
+      }),
+    ]);
+
+    const overBudgetOption = chartRenderModelToEChartsOption({
+      ...model,
+      series: [{
+        ...model.series[0]!,
+        points: [...points, { rowIndex: 5_000, x: 5_000, y: 500 }],
+      }],
+    });
+    expect(overBudgetOption.series).toEqual([
+      expect.objectContaining({
+        showSymbol: false,
         type: "line",
       }),
     ]);
