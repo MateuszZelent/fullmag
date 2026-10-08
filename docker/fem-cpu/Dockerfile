@@ -104,6 +104,8 @@ RUN if [ "${FULLMAG_FEM_CPU_WITH_SLEPC}" = ON ]; then \
       rm -rf /var/lib/apt/lists/*; \
     fi
 
+# Prefix-based SLEPc config resolves its temporary PETSC_ARCH from generated
+# slepcvariables; keep it unset so make can load that value.
 RUN set -eu; \
     case "${FULLMAG_FEM_CPU_WITH_SLEPC}" in ON|OFF) ;; *) echo "FULLMAG_FEM_CPU_WITH_SLEPC must be ON or OFF" >&2; exit 2 ;; esac; \
     if [ "${FULLMAG_FEM_CPU_WITH_SLEPC}" = ON ]; then \
@@ -132,11 +134,19 @@ RUN set -eu; \
       slepc_observed="$(git -C /tmp/build/slepc-cpu rev-parse HEAD)"; \
       test "$slepc_observed" = "${SLEPC_SOURCE_COMMIT}"; \
       cd /tmp/build/slepc-cpu; \
-      SLEPC_DIR=/tmp/build/slepc-cpu PETSC_DIR="${INSTALL_PREFIX}" PETSC_ARCH= \
+      unset PETSC_ARCH; \
+      SLEPC_DIR=/tmp/build/slepc-cpu PETSC_DIR="${INSTALL_PREFIX}" \
         python3 ./configure --prefix="${INSTALL_PREFIX}"; \
-      make SLEPC_DIR=/tmp/build/slepc-cpu PETSC_DIR="${INSTALL_PREFIX}" PETSC_ARCH= -j"$build_jobs" all; \
-      make SLEPC_DIR=/tmp/build/slepc-cpu PETSC_DIR="${INSTALL_PREFIX}" PETSC_ARCH= install; \
-      export PETSC_DIR="${INSTALL_PREFIX}" SLEPC_DIR="${INSTALL_PREFIX}" PETSC_ARCH=; \
+      slepc_variables="/tmp/build/slepc-cpu/lib/slepc/conf/slepcvariables"; \
+      slepc_build_arch="$(sed -n 's/^PETSC_ARCH[[:space:]]*=[[:space:]]*//p' "$slepc_variables" | head -n 1)"; \
+      [ -n "$slepc_build_arch" ]; \
+      case "$slepc_build_arch" in installed-arch-*) ;; *) echo "SLEPc prefix configure did not resolve an installed-PETSc arch" >&2; exit 2 ;; esac; \
+      test -f "/tmp/build/slepc-cpu/$slepc_build_arch/lib/slepc/conf/slepcvariables"; \
+      test -f "/tmp/build/slepc-cpu/$slepc_build_arch/lib/slepc/conf/slepcrules"; \
+      test -z "${PETSC_ARCH+x}"; \
+      make SLEPC_DIR=/tmp/build/slepc-cpu PETSC_DIR="${INSTALL_PREFIX}" -j"$build_jobs" all; \
+      make SLEPC_DIR=/tmp/build/slepc-cpu PETSC_DIR="${INSTALL_PREFIX}" install; \
+      export PETSC_DIR="${INSTALL_PREFIX}" SLEPC_DIR="${INSTALL_PREFIX}"; \
       export PKG_CONFIG_PATH="${INSTALL_PREFIX}/lib/pkgconfig:${INSTALL_PREFIX}/lib64/pkgconfig"; \
       petscconf="${INSTALL_PREFIX}/include/petscconf.h"; \
       grep -Eq '^#define PETSC_USE_REAL_DOUBLE 1$' "$petscconf"; \
@@ -151,8 +161,9 @@ RUN set -eu; \
       export PETSC_PKGCONFIG_DIR="$(pkg-config --variable=pcfiledir PETSc)" SLEPC_PKGCONFIG_DIR="$(pkg-config --variable=pcfiledir SLEPc)"; \
       export BLAS_DEV_PACKAGE_VERSION="$(dpkg-query -W -f='${Version}' libblas-dev)"; \
       export LAPACK_DEV_PACKAGE_VERSION="$(dpkg-query -W -f='${Version}' liblapack-dev)"; \
+      export SLEPC_RESOLVED_BUILD_ARCH="$slepc_build_arch"; \
       export PETSC_CONF_SHA256="$(sha256sum "$petscconf" | awk '{print $1}')"; \
-      python3 -c "import json,os; data={'schema':'fullmag.fem.cpu_slepc_build_inputs.v1','petsc_ref':os.environ['PETSC_REF'],'petsc_source_commit_expected':os.environ['PETSC_SOURCE_COMMIT'],'petsc_source_commit_observed':os.environ['PETSC_OBSERVED_COMMIT'],'petsc_version':os.environ['PETSC_VERSION'],'petsc_arch':'arch-linux-cpu','petsc_prefix':os.environ['INSTALL_PREFIX'],'petsc_configure_flags':['--with-cc=mpicc','--with-cxx=mpicxx','--with-fc=mpifort','COPTFLAGS=-O3','CXXOPTFLAGS=-O3','FOPTFLAGS=-O3','--with-debugging=0','--with-shared-libraries=1','--with-scalar-type=real','--with-precision=double','--with-cuda=0','--with-hip=0','--with-sycl=0','--with-opencl=0','--with-blaslapack-lib=-llapack -lblas','--with-hypre=1','--with-hypre-dir='+os.environ['INSTALL_PREFIX']],'petsc_scalar_type':'real','petsc_precision':'double','petsc_accelerators':{'cuda':False,'hip':False,'sycl':False,'opencl':False},'petsc_use_real_double_macro':True,'petsc_use_complex_macro':False,'petscconf_sha256':os.environ['PETSC_CONF_SHA256'],'petsc_pkgconfig_dir':os.environ['PETSC_PKGCONFIG_DIR'],'blas_lapack_provider':'system-ubuntu','blas_build_package':'libblas-dev','blas_build_package_version':os.environ['BLAS_DEV_PACKAGE_VERSION'],'lapack_build_package':'liblapack-dev','lapack_build_package_version':os.environ['LAPACK_DEV_PACKAGE_VERSION'],'slepc_ref':os.environ['SLEPC_REF'],'slepc_source_commit_expected':os.environ['SLEPC_SOURCE_COMMIT'],'slepc_source_commit_observed':os.environ['SLEPC_OBSERVED_COMMIT'],'slepc_version':os.environ['SLEPC_VERSION'],'slepc_prefix':os.environ['INSTALL_PREFIX'],'slepc_petsc_dir':os.environ['INSTALL_PREFIX'],'slepc_petsc_arch':'','slepc_configure_flags':['--prefix='+os.environ['INSTALL_PREFIX']],'slepc_pkgconfig_dir':os.environ['SLEPC_PKGCONFIG_DIR'],'hypre_ref':os.environ['HYPRE_REF'],'hypre_source_commit_observed':os.environ['HYPRE_OBSERVED_COMMIT'],'dependency_build_jobs':int(os.environ['FULLMAG_FEM_CPU_RESOLVED_BUILD_JOBS'])}; path=os.path.join(os.environ['INSTALL_PREFIX'],'share/fullmag/fem-cpu-slepc-build-inputs.json'); open(path,'w',encoding='utf-8').write(json.dumps(data,indent=2,sort_keys=True)+'\\n')"; \
+      python3 -c "import json,os; data={'schema':'fullmag.fem.cpu_slepc_build_inputs.v1','petsc_ref':os.environ['PETSC_REF'],'petsc_source_commit_expected':os.environ['PETSC_SOURCE_COMMIT'],'petsc_source_commit_observed':os.environ['PETSC_OBSERVED_COMMIT'],'petsc_version':os.environ['PETSC_VERSION'],'petsc_arch':'arch-linux-cpu','petsc_prefix':os.environ['INSTALL_PREFIX'],'petsc_configure_flags':['--with-cc=mpicc','--with-cxx=mpicxx','--with-fc=mpifort','COPTFLAGS=-O3','CXXOPTFLAGS=-O3','FOPTFLAGS=-O3','--with-debugging=0','--with-shared-libraries=1','--with-scalar-type=real','--with-precision=double','--with-cuda=0','--with-hip=0','--with-sycl=0','--with-opencl=0','--with-blaslapack-lib=-llapack -lblas','--with-hypre=1','--with-hypre-dir='+os.environ['INSTALL_PREFIX']],'petsc_scalar_type':'real','petsc_precision':'double','petsc_accelerators':{'cuda':False,'hip':False,'sycl':False,'opencl':False},'petsc_use_real_double_macro':True,'petsc_use_complex_macro':False,'petscconf_sha256':os.environ['PETSC_CONF_SHA256'],'petsc_pkgconfig_dir':os.environ['PETSC_PKGCONFIG_DIR'],'blas_lapack_provider':'system-ubuntu','blas_build_package':'libblas-dev','blas_build_package_version':os.environ['BLAS_DEV_PACKAGE_VERSION'],'lapack_build_package':'liblapack-dev','lapack_build_package_version':os.environ['LAPACK_DEV_PACKAGE_VERSION'],'slepc_ref':os.environ['SLEPC_REF'],'slepc_source_commit_expected':os.environ['SLEPC_SOURCE_COMMIT'],'slepc_source_commit_observed':os.environ['SLEPC_OBSERVED_COMMIT'],'slepc_version':os.environ['SLEPC_VERSION'],'slepc_prefix':os.environ['INSTALL_PREFIX'],'slepc_petsc_dir':os.environ['INSTALL_PREFIX'],'slepc_petsc_arch_environment_set':False,'slepc_petsc_arch_environment_value':None,'slepc_resolved_build_arch':os.environ['SLEPC_RESOLVED_BUILD_ARCH'],'slepc_resolved_build_arch_directory_verified':True,'slepc_configure_flags':['--prefix='+os.environ['INSTALL_PREFIX']],'slepc_pkgconfig_dir':os.environ['SLEPC_PKGCONFIG_DIR'],'hypre_ref':os.environ['HYPRE_REF'],'hypre_source_commit_observed':os.environ['HYPRE_OBSERVED_COMMIT'],'dependency_build_jobs':int(os.environ['FULLMAG_FEM_CPU_RESOLVED_BUILD_JOBS'])}; path=os.path.join(os.environ['INSTALL_PREFIX'],'share/fullmag/fem-cpu-slepc-build-inputs.json'); open(path,'w',encoding='utf-8').write(json.dumps(data,indent=2,sort_keys=True)+'\\n')"; \
       rm -rf /tmp/build/petsc-cpu /tmp/build/slepc-cpu; \
     fi
 

@@ -1127,3 +1127,15 @@ oczekiwał średniej Im_x=4/5 jako Re_y. Korekta niezależnej arytmetyki: real
 [3,2,3] dla face i [4,2,3] dla thickness; imaginary nadal[4,0,0]/[5,0,0].
 Source review potwierdziło interleaved layout i world-Z column nodes0/3.
 Nie zmieniono algorytmu ani nie osłabiono sprawdzania projekcji.
+
+Pinned-source arch correction reviewed: PETSC_ARCH jest unset w configure/make,
+generated installed-arch oraz reguły są sprawdzane; runner zapisuje observed arch
+bez runtime empty override. To korekta route, nowy build wciąż wymagany.
+Browser37803740912/job113402451478 SUCCESS dowodzi matched modal handoff/canvas,
+ale review coverage nie znalazło specyficznych browser prób dla ośmiu chart findings.
+Ich jawne Vitest regresje PASS w tym samym runie; pozostają pending_browser,
+nie promowano ich wyłącznie na podstawie ogólnego green smoke.
+Dodatkowy source P1: modal thickness_average_z sumuje globalnodes zamiast target
+membership, więc drugi body/air o tym samymXY może zaniżać/zmieniać średnią.
+Spec26 wymaga complete target nodes. Trwa wspólna korekta scalar+Re/Im projection
+z osobnym membership filter i negativefixture2targets+air, bez zmiany fieldindexmap.

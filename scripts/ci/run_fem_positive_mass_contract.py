@@ -785,7 +785,13 @@ def _execute_contract(args: Any) -> int:
                 or slepc_inputs.get("slepc_version") != dockerfile_pins["SLEPC_REF"][1:]
                 or slepc_inputs.get("slepc_prefix") != INSTALL_PREFIX
                 or slepc_inputs.get("slepc_petsc_dir") != INSTALL_PREFIX
-                or slepc_inputs.get("slepc_petsc_arch") != ""
+                or slepc_inputs.get("slepc_petsc_arch_environment_set") is not False
+                or slepc_inputs.get("slepc_petsc_arch_environment_value") is not None
+                or not re.fullmatch(
+                    r"installed-arch-[a-zA-Z0-9_-]+",
+                    str(slepc_inputs.get("slepc_resolved_build_arch", "")),
+                )
+                or slepc_inputs.get("slepc_resolved_build_arch_directory_verified") is not True
                 or slepc_inputs.get("slepc_configure_flags") != [f"--prefix={INSTALL_PREFIX}"]
                 or not str(slepc_inputs.get("slepc_pkgconfig_dir", "")).startswith(INSTALL_PREFIX + "/")
                 or slepc_inputs.get("hypre_ref") != dockerfile_pins["HYPRE_REF"]
@@ -935,14 +941,13 @@ def _execute_contract(args: Any) -> int:
         library_dir = f"{INSTALL_PREFIX}/lib"
         if profile["uses_slepc"]:
             provider_environment = [
-                f"export PETSC_DIR={INSTALL_PREFIX} SLEPC_DIR={INSTALL_PREFIX} PETSC_ARCH=",
+                f"export PETSC_DIR={INSTALL_PREFIX} SLEPC_DIR={INSTALL_PREFIX}",
                 f"export PKG_CONFIG_PATH={INSTALL_PREFIX}/lib/pkgconfig:{INSTALL_PREFIX}/lib64/pkgconfig",
             ]
             container_environment.extend(
                 [
                     ("PETSC_DIR", INSTALL_PREFIX),
                     ("SLEPC_DIR", INSTALL_PREFIX),
-                    ("PETSC_ARCH", ""),
                     ("PKG_CONFIG_PATH", f"{INSTALL_PREFIX}/lib/pkgconfig:{INSTALL_PREFIX}/lib64/pkgconfig"),
                 ]
             )
