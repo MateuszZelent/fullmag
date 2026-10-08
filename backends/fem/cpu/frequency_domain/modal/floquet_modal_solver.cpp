@@ -1060,6 +1060,45 @@ PetscErrorCode monitor_native_floquet_eps(
     return 0;
 }
 
+struct NativeFloquetEpsCancellationContext {
+    void *user_data = nullptr;
+    int (*cancel_requested)(void *user_data) = nullptr;
+    bool observed = false;
+};
+
+PetscErrorCode stop_native_floquet_eps(
+    EPS eps,
+    PetscInt iteration,
+    PetscInt max_iterations,
+    PetscInt converged,
+    PetscInt requested,
+    EPSConvergedReason *reason,
+    void *raw_context)
+{
+    if (reason == nullptr || raw_context == nullptr) {
+        return PETSC_ERR_ARG_NULL;
+    }
+    PetscErrorCode error = EPSStoppingBasic(
+        eps,
+        iteration,
+        max_iterations,
+        converged,
+        requested,
+        reason,
+        nullptr);
+    if (error != 0 || *reason != EPS_CONVERGED_ITERATING) {
+        return error;
+    }
+    auto *context =
+        static_cast<NativeFloquetEpsCancellationContext *>(raw_context);
+    if (context->cancel_requested != nullptr &&
+        context->cancel_requested(context->user_data) != 0) {
+        context->observed = true;
+        *reason = EPS_CONVERGED_USER;
+    }
+    return 0;
+}
+
 struct NativeFloquetMatShellContext {
     Mat a_qq = nullptr;
     Mat rotated_a_qq = nullptr;
@@ -3470,6 +3509,22 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
     result.unsupported_reason = "floquet_shared_domain_requires_real_petsc_split";
     return result;
 #else
+    if (spectral_request.cancel_requested != nullptr &&
+        spectral_request.cancel_requested(spectral_request.cancel_user_data) != 0) {
+        result.status = "cancelled";
+        result.unsupported_reason = "user_cancelled";
+        result.eps_cancellation_observed = true;
+        return result;
+    }
+    std::unique_ptr<NativeFloquetEpsCancellationContext> cancellation_context_owner(
+        new (std::nothrow) NativeFloquetEpsCancellationContext{});
+    if (cancellation_context_owner == nullptr) {
+        result.status = "solve_error";
+        result.unsupported_reason = "floquet_eps_cancellation_context_allocation_failed";
+        return result;
+    }
+    cancellation_context_owner->user_data = spectral_request.cancel_user_data;
+    cancellation_context_owner->cancel_requested = spectral_request.cancel_requested;
     const std::lock_guard<std::mutex> lock(native_floquet_solver_mutex());
 
     PetscBool slepc_initialized = PETSC_FALSE;
@@ -3553,44 +3608,94 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
         shifted_ksp_true_convergence_context{};
     bool shifted_ksp_true_convergence_test_registration_attempted = false;
     auto destroy_all = [&]() noexcept {
-        if (last_shifted_solve.rhs != nullptr) {
-            VecDestroy(&last_shifted_solve.rhs);
-        }
-        if (last_shifted_solve.solution != nullptr) {
-            VecDestroy(&last_shifted_solve.solution);
-        }
-        if (last_shifted_solve.true_residual != nullptr) {
-            VecDestroy(&last_shifted_solve.true_residual);
-        }
-        if (xr != nullptr) {
-            VecDestroy(&xr);
-        }
-        if (xi != nullptr) {
-            VecDestroy(&xi);
-        }
+        bool cleanup_succeeded = eps_cleanup_is_safe;
         PetscErrorCode eps_destroy_error = 0;
         if (eps != nullptr && eps_cleanup_is_safe) {
             eps_destroy_error = EPSDestroy(&eps);
+            cleanup_succeeded = cleanup_succeeded && eps_destroy_error == 0;
+        }
+        // A live or unsafe EPS may still reference its callbacks, shifted
+        // preconditioner, and the reusable operator graph. Retain the entire
+        // reachable state and fail closed instead of freeing callback owners
+        // or allowing a later EPSCreate to overwrite this handle.
+        if (eps != nullptr) {
+            state->invalidated = true;
+            state->eps_lifetime_unsafe = true;
+            if (shifted_ksp_true_convergence_context != nullptr &&
+                shifted_ksp_true_convergence_test_registration_attempted) {
+                (void)shifted_ksp_true_convergence_context.release();
+            }
+            (void)cancellation_context_owner.release();
+            result.ok = false;
+            result.status = "solve_error";
+            result.unsupported_reason = "floquet_eps_cleanup_failed";
+            return false;
         }
         if (shifted_ksp_true_convergence_context != nullptr) {
-            if ((!eps_cleanup_is_safe ||
-                 (eps_destroy_error != 0 && eps != nullptr)) &&
+            if (!eps_cleanup_is_safe &&
                 shifted_ksp_true_convergence_test_registration_attempted) {
                 (void)shifted_ksp_true_convergence_context.release();
             } else {
-                (void)detail::clear_floquet_shifted_ksp_true_convergence_context(
-                    shifted_ksp_true_convergence_context.get());
+                const PetscErrorCode clear_error =
+                    detail::clear_floquet_shifted_ksp_true_convergence_context(
+                        shifted_ksp_true_convergence_context.get());
+                cleanup_succeeded = cleanup_succeeded && clear_error == 0;
             }
         }
+        if (!eps_cleanup_is_safe) {
+            (void)cancellation_context_owner.release();
+        }
+        if (last_shifted_solve.rhs != nullptr) {
+            const PetscErrorCode error = VecDestroy(&last_shifted_solve.rhs);
+            cleanup_succeeded = cleanup_succeeded && error == 0 &&
+                last_shifted_solve.rhs == nullptr;
+        }
+        if (last_shifted_solve.solution != nullptr) {
+            const PetscErrorCode error = VecDestroy(&last_shifted_solve.solution);
+            cleanup_succeeded = cleanup_succeeded && error == 0 &&
+                last_shifted_solve.solution == nullptr;
+        }
+        if (last_shifted_solve.true_residual != nullptr) {
+            const PetscErrorCode error =
+                VecDestroy(&last_shifted_solve.true_residual);
+            cleanup_succeeded = cleanup_succeeded && error == 0 &&
+                last_shifted_solve.true_residual == nullptr;
+        }
+        if (xr != nullptr) {
+            const PetscErrorCode error = VecDestroy(&xr);
+            cleanup_succeeded = cleanup_succeeded && error == 0 && xr == nullptr;
+        }
+        if (xi != nullptr) {
+            const PetscErrorCode error = VecDestroy(&xi);
+            cleanup_succeeded = cleanup_succeeded && error == 0 && xi == nullptr;
+        }
         if (last_shifted_solve.shifted_operator != nullptr) {
-            MatDestroy(&last_shifted_solve.shifted_operator);
+            const PetscErrorCode error =
+                MatDestroy(&last_shifted_solve.shifted_operator);
+            cleanup_succeeded = cleanup_succeeded && error == 0 &&
+                last_shifted_solve.shifted_operator == nullptr;
         }
         if (shifted_preconditioner != nullptr) {
-            MatDestroy(&shifted_preconditioner);
+            const PetscErrorCode error = MatDestroy(&shifted_preconditioner);
+            cleanup_succeeded = cleanup_succeeded && error == 0 &&
+                shifted_preconditioner == nullptr;
+        }
+        if (!cleanup_succeeded) {
+            state->invalidated = true;
+            const bool already_solve_error = result.status != nullptr &&
+                std::strcmp(result.status, "solve_error") == 0;
+            result.ok = false;
+            result.status = "solve_error";
+            if (!already_solve_error) {
+                result.unsupported_reason = "floquet_eps_cleanup_failed";
+            }
         }
         // Heap-owned nonreuse state is released by local_state_owner.  A
         // borrowed window state belongs to FloquetSharedDomainSparseModal-
         // SolveContext and remains available for the next subwindow.
+        return detail::floquet_eps_cleanup_allows_refill(
+            cleanup_succeeded && eps_destroy_error == 0,
+            eps != nullptr);
     };
 
     const PetscReal target_shift = static_cast<PetscReal>(
@@ -3772,32 +3877,34 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
             result.operator_normalization_scale,
             &result.floquet_dense_oracle);
     }
-    if (EPSCreate(PETSC_COMM_SELF, &eps) != 0 ||
-        EPSSetOperators(eps, shell, gyrotropic) != 0 ||
-        EPSSetProblemType(eps, EPS_GNHEP) != 0 ||
-        EPSSetType(eps, EPSKRYLOVSCHUR) != 0) {
-        result.status = "solve_error";
-        result.unsupported_reason = "floquet_slepc_configuration_failed";
-        destroy_all();
-        return result;
-    }
     const PetscInt split_dimension = context.q_split_count;
-    const PetscInt requested_pairs = std::max<PetscInt>(
-        1,
-        static_cast<PetscInt>(std::max(1, spectral_request.requested_mode_count) * 2));
-    const PetscInt nev = std::min<PetscInt>(
-        std::max<PetscInt>(1, split_dimension - 1), requested_pairs);
+    const PetscInt initial_nev_cap = std::max<PetscInt>(1, split_dimension - 1);
+    const PetscInt requested_mode_count = std::max<PetscInt>(
+        1, static_cast<PetscInt>(spectral_request.requested_mode_count));
+    const PetscInt initial_nev = requested_mode_count > initial_nev_cap / 2
+        ? initial_nev_cap
+        : static_cast<PetscInt>(2 * requested_mode_count);
     // The default Krylov subspace can be too narrow for the clustered
     // interior spectrum produced by the Floquet Schur pencil. Use a bounded
     // 32-vector floor for the current small-mode path, while preserving the
     // usual >= 2*nev relation and never exceeding the operator dimension.
     // This is a solver-convergence experiment; original-pencil residual gates
     // remain unchanged and decide physical acceptance.
-    const PetscInt doubled_nev = nev > split_dimension / 2
+    const PetscInt doubled_nev = initial_nev > split_dimension / 2
         ? split_dimension
-        : static_cast<PetscInt>(2 * nev);
+        : static_cast<PetscInt>(2 * initial_nev);
     const PetscInt ncv = std::min<PetscInt>(
         split_dimension, std::max<PetscInt>(32, doubled_nev));
+    const PetscInt legal_nev_cap = std::min<PetscInt>(
+        initial_nev_cap,
+        std::max<PetscInt>(1, ncv - 1));
+    PetscInt current_nev = initial_nev;
+    PetscInt initial_mpd = PETSC_DEFAULT;
+    PetscInt total_outer_iteration_budget = 0;
+    PetscInt cumulative_outer_iterations = 0;
+    result.eps_initial_nev = static_cast<int>(std::min<PetscInt>(
+        initial_nev,
+        static_cast<PetscInt>(std::numeric_limits<int>::max())));
     ST spectral_transform = nullptr;
     KSP shifted_ksp = nullptr;
     PC shifted_pc = nullptr;
@@ -3848,32 +3955,76 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
     }
     result.eps_normalized_absolute_tolerance =
         static_cast<double>(eps_absolute_tolerance);
-    const PetscInt max_outer = spectral_request.max_outer_iterations > 0
+    const PetscInt configured_max_outer = spectral_request.max_outer_iterations > 0
         ? static_cast<PetscInt>(spectral_request.max_outer_iterations)
         : PETSC_DEFAULT;
-    if (EPSSetDimensions(eps, nev, ncv, PETSC_DEFAULT) != 0 ||
-        EPSSetWhichEigenpairs(eps, EPS_TARGET_MAGNITUDE) != 0 ||
-        EPSSetTarget(eps, static_cast<PetscScalar>(target_shift)) != 0 ||
-        EPSSetTrueResidual(eps, PETSC_TRUE) != 0 ||
-        EPSSetConvergenceTest(eps, EPS_CONV_ABS) != 0 ||
-        EPSMonitorSet(eps, monitor_native_floquet_eps, &result, nullptr) != 0 ||
-        EPSSetTolerances(eps, eps_absolute_tolerance, max_outer) != 0 ||
-        EPSGetST(eps, &spectral_transform) != 0 ||
-        STSetType(spectral_transform, STSINVERT) != 0 ||
-        // Keep the generalized shift-invert action matrix-free.  With the
-        // default COPY mode PETSc tries to materialize shell - sigma*B;
-        // the explicit rotated magnetic block below is only its safe
-        // preconditioner and must not become the eigensolver operator.
-        STSetMatMode(spectral_transform, ST_MATMODE_SHELL) != 0 ||
-        STSetShift(spectral_transform, static_cast<PetscScalar>(target_shift)) != 0 ||
-        !create_native_floquet_shifted_preconditioner(
-            shell,
-            context.rotated_a_qq,
-            gyrotropic,
-            static_cast<PetscScalar>(target_shift),
-            &shifted_preconditioner,
-            &result.preconditioner_normalization_scale,
-            &exact_schur_preconditioner_materialized)) {
+    // Recreate EPS/ST/KSP on each attempt while retaining the normalized
+    // operator and Poisson context; every retry keeps the initial NCV/MPD.
+    for (;;) {
+        if (cancellation_context_owner->cancel_requested != nullptr &&
+            cancellation_context_owner->cancel_requested(
+                cancellation_context_owner->user_data) != 0) {
+            result.status = "cancelled";
+            result.unsupported_reason = "user_cancelled";
+            result.eps_cancellation_observed = true;
+            destroy_all();
+            return result;
+        }
+        ++result.eps_attempt_count;
+        eps_cleanup_is_safe = true;
+        context.error_message[0] = '\0';
+        exact_schur_preconditioner_materialized = false;
+        spectral_transform = nullptr;
+        shifted_ksp = nullptr;
+        shifted_pc = nullptr;
+        last_shifted_solve = {};
+        shifted_ksp_true_convergence_context.reset();
+        shifted_ksp_true_convergence_test_registration_attempted = false;
+        if (EPSCreate(PETSC_COMM_SELF, &eps) != 0 ||
+            EPSSetOperators(eps, shell, gyrotropic) != 0 ||
+            EPSSetProblemType(eps, EPS_GNHEP) != 0 ||
+            EPSSetType(eps, EPSKRYLOVSCHUR) != 0) {
+            result.status = "solve_error";
+            result.unsupported_reason = "floquet_slepc_configuration_failed";
+            destroy_all();
+            return result;
+        }
+        const PetscInt attempt_max_outer = result.eps_attempt_count == 1
+            ? configured_max_outer
+            : total_outer_iteration_budget - cumulative_outer_iterations;
+        if ((result.eps_attempt_count > 1 && attempt_max_outer <= 0) ||
+            EPSSetDimensions(
+                eps,
+                current_nev,
+                ncv,
+                result.eps_attempt_count == 1 ? PETSC_DEFAULT : initial_mpd) != 0 ||
+            EPSSetWhichEigenpairs(eps, EPS_TARGET_MAGNITUDE) != 0 ||
+            EPSSetTarget(eps, static_cast<PetscScalar>(target_shift)) != 0 ||
+            EPSSetTrueResidual(eps, PETSC_TRUE) != 0 ||
+            EPSSetConvergenceTest(eps, EPS_CONV_ABS) != 0 ||
+            EPSMonitorSet(eps, monitor_native_floquet_eps, &result, nullptr) != 0 ||
+            EPSSetStoppingTestFunction(
+                eps,
+                stop_native_floquet_eps,
+                cancellation_context_owner.get(),
+                nullptr) != 0 ||
+            EPSSetTolerances(eps, eps_absolute_tolerance, attempt_max_outer) != 0 ||
+            EPSGetST(eps, &spectral_transform) != 0 ||
+            STSetType(spectral_transform, STSINVERT) != 0 ||
+            // Keep the generalized shift-invert action matrix-free.  With the
+            // default COPY mode PETSc tries to materialize shell - sigma*B;
+            // the explicit rotated magnetic block below is only its safe
+            // preconditioner and must not become the eigensolver operator.
+            STSetMatMode(spectral_transform, ST_MATMODE_SHELL) != 0 ||
+            STSetShift(spectral_transform, static_cast<PetscScalar>(target_shift)) != 0 ||
+            !create_native_floquet_shifted_preconditioner(
+                shell,
+                context.rotated_a_qq,
+                gyrotropic,
+                static_cast<PetscScalar>(target_shift),
+                &shifted_preconditioner,
+                &result.preconditioner_normalization_scale,
+                &exact_schur_preconditioner_materialized)) {
         result.status = "solve_error";
         result.unsupported_reason = "floquet_slepc_configuration_failed";
         destroy_all();
@@ -4038,6 +4189,48 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
         state->invalidated = true;
         state->eps_lifetime_unsafe = true;
         eps_cleanup_is_safe = false;
+        (void)cancellation_context_owner.release();
+        return result;
+    }
+    PetscInt attempt_resolved_nev = 0;
+    PetscInt attempt_resolved_ncv = 0;
+    PetscInt attempt_resolved_mpd = 0;
+    PetscReal attempt_resolved_tolerance = 0.0;
+    PetscInt attempt_resolved_max_iterations = 0;
+    const PetscInt result_int_max = static_cast<PetscInt>(
+        std::numeric_limits<int>::max());
+    if (EPSGetDimensions(
+            eps,
+            &attempt_resolved_nev,
+            &attempt_resolved_ncv,
+            &attempt_resolved_mpd) != 0 ||
+        EPSGetTolerances(
+            eps,
+            &attempt_resolved_tolerance,
+            &attempt_resolved_max_iterations) != 0 ||
+        attempt_resolved_nev != current_nev ||
+        attempt_resolved_ncv != ncv ||
+        attempt_resolved_mpd <= 0 ||
+        attempt_resolved_tolerance != eps_absolute_tolerance ||
+        attempt_resolved_max_iterations <= 0 ||
+        attempt_resolved_max_iterations > result_int_max) {
+        result.status = "solve_error";
+        result.unsupported_reason = "floquet_slepc_refill_setup_query_failed";
+        destroy_all();
+        return result;
+    }
+    if (result.eps_attempt_count == 1) {
+        initial_mpd = attempt_resolved_mpd;
+        total_outer_iteration_budget = attempt_resolved_max_iterations;
+        result.max_outer_iterations =
+            static_cast<int>(total_outer_iteration_budget);
+        result.eps_iteration_budget_available = true;
+    } else if (attempt_resolved_mpd != initial_mpd ||
+               attempt_resolved_ncv != ncv ||
+               attempt_resolved_max_iterations != attempt_max_outer) {
+        result.status = "solve_error";
+        result.unsupported_reason = "floquet_slepc_refill_policy_changed";
+        destroy_all();
         return result;
     }
     const char *resolved_shifted_ksp_type_after_setup = nullptr;
@@ -4094,6 +4287,39 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
             capture_floquet_shifted_ksp_progress,
             &last_shifted_solve,
             nullptr) == 0;
+    cancellation_context_owner->observed = false;
+    result.eps_monitor_iteration = 0;
+    result.eps_first_unconverged_error_estimate =
+        std::numeric_limits<double>::quiet_NaN();
+    result.eps_cumulative_iterations_available = false;
+    result.ksp_diagnostics_available = false;
+    result.ksp_converged_reason_available = false;
+    result.ksp_converged_reason = 0;
+    result.linear_iterations_total = 0;
+    result.ksp_last_iterations = 0;
+    result.ksp_final_residual = std::numeric_limits<double>::quiet_NaN();
+    result.ksp_monitor_registered = false;
+    result.ksp_monitor_observation_count = 0;
+    result.ksp_monitor_last_iteration_available = false;
+    result.ksp_monitor_recursive_residual_available = false;
+    result.ksp_monitor_last_reason_available = false;
+    result.ksp_true_residual_sample_count = 0;
+    result.ksp_true_residual_measurement_failure_count = 0;
+    result.ksp_true_criterion_solve_count = 0;
+    result.ksp_true_criterion_measured_count = 0;
+    result.ksp_true_criterion_violation_count = 0;
+    result.ksp_true_criterion_unavailable_count = 0;
+    result.ksp_true_criterion_maximum_tolerance_ratio =
+        std::numeric_limits<double>::quiet_NaN();
+    result.ksp_max_true_relative_residual =
+        std::numeric_limits<double>::quiet_NaN();
+    result.ksp_last_true_residual_available = false;
+    result.ksp_last_true_residual_norm =
+        std::numeric_limits<double>::quiet_NaN();
+    result.ksp_last_rhs_norm = std::numeric_limits<double>::quiet_NaN();
+    result.ksp_last_true_relative_residual =
+        std::numeric_limits<double>::quiet_NaN();
+    result.shifted_ksp_configuration_before_eps_available = false;
     const PetscErrorCode eps_solve_error = EPSSolve(eps);
     // A KSP error can unwind through Krylov--Schur while SLEPc owns a
     // DSGetMat() view.  SLEPc 3.24 then cannot safely destroy that EPS because
@@ -4126,6 +4352,8 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
     result.ksp_true_criterion_measured_count = last_shifted_solve.criterion_measured_count;
     result.ksp_true_criterion_violation_count = last_shifted_solve.criterion_violation_count;
     result.ksp_true_criterion_unavailable_count = last_shifted_solve.criterion_unavailable_count;
+    result.eps_cancellation_observed =
+        result.eps_cancellation_observed || cancellation_context_owner->observed;
     if (last_shifted_solve.criterion_measured_count > 0) {
         result.ksp_true_criterion_maximum_tolerance_ratio =
             last_shifted_solve.criterion_maximum_tolerance_ratio;
@@ -4135,6 +4363,7 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
             last_shifted_solve.maximum_true_relative_residual;
     }
     if (eps_solve_error != 0) {
+        result.eps_cumulative_iterations_available = false;
         result.status = "solve_error";
         result.unsupported_reason =
             context.error_message[0] != '\0'
@@ -4153,25 +4382,17 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
             // EPS/KSP graph after an unsafe hard failure.
             (void)shifted_ksp_true_convergence_context.release();
         }
+        (void)cancellation_context_owner.release();
         return result;
     }
-    PetscInt resolved_nev = 0;
-    PetscInt resolved_ncv = 0;
-    PetscInt resolved_mpd = 0;
-    if (EPSGetDimensions(eps, &resolved_nev, &resolved_ncv, &resolved_mpd) == 0 &&
-        resolved_nev > 0 && resolved_ncv >= resolved_nev) {
-        const PetscInt int_max = static_cast<PetscInt>(
-            std::numeric_limits<int>::max());
-        const PetscInt int_min = static_cast<PetscInt>(
-            std::numeric_limits<int>::min());
-        result.eps_nev = static_cast<int>(
-            std::min(std::max<PetscInt>(int_min, resolved_nev), int_max));
-        result.eps_ncv = static_cast<int>(
-            std::min(std::max<PetscInt>(int_min, resolved_ncv), int_max));
-        result.eps_mpd = static_cast<int>(
-            std::min(std::max<PetscInt>(int_min, resolved_mpd), int_max));
-        result.eps_dimensions_available = true;
-    }
+    ++result.eps_solved_attempt_count;
+    result.eps_nev = static_cast<int>(
+        std::min<PetscInt>(attempt_resolved_nev, result_int_max));
+    result.eps_ncv = static_cast<int>(
+        std::min<PetscInt>(attempt_resolved_ncv, result_int_max));
+    result.eps_mpd = static_cast<int>(
+        std::min<PetscInt>(attempt_resolved_mpd, result_int_max));
+    result.eps_dimensions_available = true;
     // These values describe the inner shift-invert KSP, separately from the
     // EPS outer iteration count. KSPGetTotalIterations accumulates over every
     // linear solve made by this KSP object; the last-solve values identify
@@ -4261,13 +4482,64 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
         EPSGetConvergedReason(eps, &converged_reason) != 0) {
         result.status = "solve_error";
         result.unsupported_reason = "floquet_slepc_convergence_query_failed";
+        result.eps_cumulative_iterations_available = false;
         destroy_all();
         return result;
     }
-    result.outer_iterations = static_cast<int>(outer_iterations);
+    if (!result.eps_iteration_budget_available || outer_iterations < 0 ||
+        cumulative_outer_iterations > total_outer_iteration_budget ||
+        outer_iterations >
+            total_outer_iteration_budget - cumulative_outer_iterations ||
+        outer_iterations > result_int_max ||
+        cumulative_outer_iterations + outer_iterations > result_int_max) {
+        result.status = "solve_error";
+        result.unsupported_reason = "floquet_refill_outer_iteration_budget_exceeded";
+        result.eps_cumulative_iterations_available = false;
+        destroy_all();
+        return result;
+    }
+    cumulative_outer_iterations += outer_iterations;
+    result.outer_iterations = static_cast<int>(cumulative_outer_iterations);
+    result.eps_cumulative_iterations_available = true;
     result.eps_converged_reason_available = true;
     result.eps_converged_reason = static_cast<int>(converged_reason);
-    result.converged_eigenpair_count = static_cast<int>(converged_eigenpair_count);
+    result.converged_eigenpair_count = static_cast<int>(
+        std::min<PetscInt>(converged_eigenpair_count, result_int_max));
+    result.eps_cancellation_observed =
+        result.eps_cancellation_observed || cancellation_context_owner->observed ||
+        converged_reason == EPS_CONVERGED_USER;
+
+    result.positive_frequency_candidate_count = 0;
+    result.frequency_window_candidate_count = 0;
+    result.residual_rejection_count = 0;
+    result.non_real_rotated_eigenvalue_count = 0;
+    result.residual_evaluation_candidate_count = 0;
+    result.eigenpair_evaluation_failure_count = 0;
+    result.mode_vector_failure_count = 0;
+    result.potential_reconstruction_failure_count = 0;
+    result.max_candidate_relative_residual =
+        std::numeric_limits<double>::quiet_NaN();
+    result.max_eps_normalized_absolute_residual =
+        std::numeric_limits<double>::quiet_NaN();
+    result.max_floquet_magnetic_relative_residual =
+        std::numeric_limits<double>::quiet_NaN();
+    result.max_floquet_potential_relative_residual =
+        std::numeric_limits<double>::quiet_NaN();
+    result.worst_candidate_frequency_hz = 0.0;
+    result.worst_candidate_eps_normalized_absolute_residual =
+        std::numeric_limits<double>::quiet_NaN();
+    result.worst_candidate_floquet_magnetic_relative_residual =
+        std::numeric_limits<double>::quiet_NaN();
+    result.worst_candidate_floquet_potential_relative_residual =
+        std::numeric_limits<double>::quiet_NaN();
+    result.worst_candidate_unprojected_magnetic_relative_residual =
+        std::numeric_limits<double>::quiet_NaN();
+    result.worst_candidate_rotated_imaginary_rad_s =
+        std::numeric_limits<double>::quiet_NaN();
+    result.worst_candidate_q_projection_ratio =
+        std::numeric_limits<double>::quiet_NaN();
+    result.min_candidate_frequency_hz = 0.0;
+    result.max_candidate_frequency_hz = 0.0;
 
     using Candidate = detail::CertifiedFloquetModalCandidate;
     std::vector<Candidate> candidates;
@@ -4277,6 +4549,9 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
     bool saw_window_candidate = false;
     bool saw_residual_rejection = false;
     bool saw_phi_failure = false;
+    bool saw_eigenpair_evaluation_failure = false;
+    bool saw_mode_vector_failure = false;
+    bool saw_descriptor_failure = false;
     const bool filter_window = spectral_request.frequency_max_hz >
         spectral_request.frequency_min_hz && spectral_request.frequency_max_hz > 0.0;
     const double target_omega = omega_rad_s_from_frequency_hz(
@@ -4287,6 +4562,7 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
         PetscReal eps_absolute_residual = 0.0;
         if (EPSGetEigenpair(eps, index, &kr, &ki, xr, xi) != 0 ||
             EPSComputeError(eps, index, EPS_ERROR_ABSOLUTE, &eps_absolute_residual) != 0) {
+            saw_eigenpair_evaluation_failure = true;
             ++result.eigenpair_evaluation_failure_count;
             continue;
         }
@@ -4336,6 +4612,7 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
         ++result.frequency_window_candidate_count;
         std::vector<Complex> split_eigenvector;
         if (!copy_native_floquet_eigenvector(xr, xi, split_dimension, split_eigenvector)) {
+            saw_mode_vector_failure = true;
             ++result.mode_vector_failure_count;
             continue;
         }
@@ -4347,6 +4624,7 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
         if (q.size() != static_cast<std::size_t>(operator_view.q_complex_dof_count) ||
             !std::isfinite(q_norm) ||
             !(q_norm > std::numeric_limits<double>::epsilon())) {
+            saw_mode_vector_failure = true;
             ++result.mode_vector_failure_count;
             continue;
         }
@@ -4394,6 +4672,7 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
             : std::numeric_limits<double>::infinity();
         if (full_descriptor_required) {
             if (!full_descriptor.available) {
+                saw_descriptor_failure = true;
                 residual_components_finite = false;
                 residual = std::numeric_limits<double>::infinity();
             } else {
@@ -4517,9 +4796,30 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
             std::abs(kinematics.omega_rad_s - target_omega);
         candidates.push_back(std::move(candidate));
     }
-    destroy_all();
-
-    if (candidates.empty()) {
+    if (cancellation_context_owner->cancel_requested != nullptr &&
+        cancellation_context_owner->cancel_requested(
+            cancellation_context_owner->user_data) != 0) {
+        result.eps_cancellation_observed = true;
+    }
+    if (candidates.empty() &&
+        (!saw_residual_rejection || saw_phi_failure ||
+         saw_eigenpair_evaluation_failure || saw_mode_vector_failure ||
+         saw_descriptor_failure)) {
+        if (result.eps_cancellation_observed) {
+            result.status = "cancelled";
+            result.unsupported_reason = "user_cancelled";
+            destroy_all();
+            return result;
+        }
+        if (converged_reason == EPS_DIVERGED_ITS &&
+            !saw_phi_failure && !saw_eigenpair_evaluation_failure &&
+            !saw_mode_vector_failure && !saw_descriptor_failure) {
+            result.status = "partial";
+            result.unsupported_reason =
+                "floquet_nev_refill_outer_iteration_budget_exhausted";
+            destroy_all();
+            return result;
+        }
         result.status = "solve_error";
         if (converged_eigenpair_count == 0 && converged_reason < 0) {
             result.unsupported_reason = converged_reason == EPS_DIVERGED_ITS
@@ -4531,11 +4831,18 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
             result.unsupported_reason = "no_positive_frequency_eigenpair_in_window";
         } else if (saw_phi_failure) {
             result.unsupported_reason = "floquet_potential_reconstruction_failed";
+        } else if (saw_eigenpair_evaluation_failure) {
+            result.unsupported_reason = "floquet_slepc_eigenpair_evaluation_failed";
+        } else if (saw_mode_vector_failure) {
+            result.unsupported_reason = "floquet_slepc_mode_vector_failed";
+        } else if (saw_descriptor_failure) {
+            result.unsupported_reason = "floquet_full_descriptor_unavailable";
         } else if (saw_residual_rejection) {
             result.unsupported_reason = "floquet_original_descriptor_residual_not_met";
         } else {
             result.unsupported_reason = "no_accepted_positive_frequency_mode";
         }
+        destroy_all();
         return result;
     }
     detail::FloquetModalCandidateFinalization finalization =
@@ -4548,9 +4855,12 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
     if (!finalization.success) {
         result.status = "solve_error";
         result.unsupported_reason = finalization.failure_reason;
+        destroy_all();
         return result;
     }
 
+    result.accepted_modes.clear();
+    result.max_relative_residual = 0.0;
     result.accepted_modes.reserve(finalization.accepted_candidates.size());
     for (Candidate &candidate : finalization.accepted_candidates) {
         result.max_relative_residual = std::max(
@@ -4559,15 +4869,111 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
         result.accepted_modes.push_back(std::move(candidate.mode));
     }
     result.accepted_mode_count = static_cast<int>(result.accepted_modes.size());
-    const SLEPcModalAcceptedMode &first = result.accepted_modes.front();
-    result.selected_eigenpair_index = first.eigenpair_index;
-    result.lambda_real = first.lambda_real;
-    result.lambda_imag = first.lambda_imag;
-    result.frequency_hz = first.frequency_hz;
-    result.relative_residual = first.relative_residual;
-    result.ok = true;
-    result.status = "ok";
+    result.eps_finalized_attempt_number = result.eps_attempt_count;
+    result.eps_finalized_nev = static_cast<int>(std::min<PetscInt>(
+        attempt_resolved_nev,
+        result_int_max));
+    result.eps_unique_certified_mode_count = result.accepted_mode_count;
+    if (!result.accepted_modes.empty()) {
+        const SLEPcModalAcceptedMode &first = result.accepted_modes.front();
+        result.selected_eigenpair_index = first.eigenpair_index;
+        result.lambda_real = first.lambda_real;
+        result.lambda_imag = first.lambda_imag;
+        result.frequency_hz = first.frequency_hz;
+        result.relative_residual = first.relative_residual;
+    } else {
+        result.selected_eigenpair_index = -1;
+        result.lambda_real = 0.0;
+        result.lambda_imag = 0.0;
+        result.frequency_hz = 0.0;
+        result.relative_residual = 0.0;
+    }
+
+    const bool cancellation_now = detail::floquet_cancellation_is_observed(
+        result.eps_cancellation_observed,
+        cancellation_context_owner->observed,
+        spectral_request.cancel_requested != nullptr &&
+            spectral_request.cancel_requested(
+                spectral_request.cancel_user_data) != 0);
+    if (cancellation_now) {
+        result.eps_cancellation_observed = true;
+        result.ok = false;
+        result.status = "cancelled";
+        result.unsupported_reason = "user_cancelled";
+        destroy_all();
+        return result;
+    }
+    const PetscInt requested_certified_modes = std::max<PetscInt>(
+        1, static_cast<PetscInt>(spectral_request.requested_mode_count));
+    if (static_cast<PetscInt>(result.accepted_mode_count) >=
+        requested_certified_modes) {
+        result.ok = true;
+        result.status = "ok";
+        result.unsupported_reason = "";
+        destroy_all();
+        return result;
+    }
+
+    const bool hard_candidate_failure =
+        saw_phi_failure || saw_eigenpair_evaluation_failure ||
+        saw_mode_vector_failure || saw_descriptor_failure;
+    const bool refill_candidate_pool_available =
+        saw_window_candidate || saw_residual_rejection;
+    const bool eps_reason_allows_refill =
+        converged_reason > 0 && converged_reason != EPS_CONVERGED_USER;
+    const bool iteration_budget_remains =
+        cumulative_outer_iterations < total_outer_iteration_budget;
+    if (!hard_candidate_failure &&
+        refill_candidate_pool_available &&
+        eps_reason_allows_refill &&
+        iteration_budget_remains &&
+        current_nev < legal_nev_cap) {
+        const PetscInt next_nev = current_nev > legal_nev_cap / 2
+            ? legal_nev_cap
+            : static_cast<PetscInt>(current_nev * 2);
+        if (next_nev > current_nev &&
+            next_nev <= legal_nev_cap &&
+            next_nev < ncv &&
+            next_nev < split_dimension) {
+            const bool cleanup_succeeded = destroy_all();
+            if (!detail::floquet_eps_cleanup_allows_refill(
+                    cleanup_succeeded,
+                    eps != nullptr)) {
+                result.ok = false;
+                result.status = "solve_error";
+                result.unsupported_reason =
+                    "floquet_eps_refill_cleanup_failed";
+                return result;
+            }
+            current_nev = next_nev;
+            continue;
+        }
+    }
+
+    result.ok = false;
+    if (hard_candidate_failure) {
+        result.status = "solve_error";
+        result.unsupported_reason = saw_phi_failure
+            ? "floquet_potential_reconstruction_failed"
+            : saw_descriptor_failure
+                ? "floquet_full_descriptor_unavailable"
+                : saw_mode_vector_failure
+                    ? "floquet_slepc_mode_vector_failed"
+                    : "floquet_slepc_eigenpair_evaluation_failed";
+    } else {
+        result.status = "partial";
+        result.unsupported_reason =
+            converged_reason == EPS_DIVERGED_ITS || !iteration_budget_remains
+                ? "floquet_nev_refill_outer_iteration_budget_exhausted"
+                : current_nev >= legal_nev_cap
+                    ? "floquet_nev_refill_dimension_limit_reached"
+                    : converged_reason <= 0
+                        ? "floquet_nev_refill_eps_stopped_without_convergence"
+                        : "floquet_nev_refill_insufficient_certified_modes";
+    }
+    destroy_all();
     return result;
+    }
 #endif
 }
 

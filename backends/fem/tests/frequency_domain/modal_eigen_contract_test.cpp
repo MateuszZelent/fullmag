@@ -4199,6 +4199,33 @@ void modal_nonzero_k_floquet_shared_domain_nearest_reports_shifted_ksp_diagnosti
           "nearest result does not claim a complete window");
     fullmag_fem_frequency_domain_result_destroy(&result);
 
+    FullmagFemModalEigenRequest underfilled_nearest_request = request;
+    underfilled_nearest_request.requested_mode_count = 100;
+    FullmagFemFrequencyDomainResult underfilled_nearest_result =
+        fullmag_fem_modal_eigen_solve(&underfilled_nearest_request);
+    check(underfilled_nearest_result.status == FULLMAG_FEM_FD_SOLVE_ERROR,
+          "native nearest solve cannot report success when its requested count is underfilled");
+    check(contains(underfilled_nearest_result.result_json,
+                   "\"accepted_mode_count\":") &&
+              !contains(underfilled_nearest_result.result_json,
+                        "\"accepted_mode_count\":0") &&
+              !contains(underfilled_nearest_result.result_json,
+                        "\"accepted_mode_count\":100") &&
+              contains(underfilled_nearest_result.result_json,
+                       "\"modes\":[{") &&
+              contains(underfilled_nearest_result.result_json,
+                       "\"floquet_descriptor_certified\":true"),
+          "public nearest result retains certified modes below the requested count");
+    check(contains(underfilled_nearest_result.result_json,
+                   "\"solve_complete\":false") &&
+              contains(underfilled_nearest_result.result_json,
+                       "\"window_complete\":false") &&
+              contains(underfilled_nearest_result.result_json,
+                       "\"stop_reason\":\"floquet_nev_refill_dimension_limit_reached\""),
+          "public nearest JSON reports the refill limit without claiming solve or window completion");
+    fullmag_fem_frequency_domain_result_destroy(&underfilled_nearest_result);
+    std::printf("PASS: public_native_floquet_nearest_underfill_retains_certified_modes\n");
+
     // Reuse the exact imported native operator through the public production
     // entry. The broad window spans overlapping subwindows; its outer merge
     // must use the owned positive mass instead of the former Euclidean path.
@@ -4230,6 +4257,45 @@ void modal_nonzero_k_floquet_shared_domain_nearest_reports_shifted_ksp_diagnosti
           "native merge does not promote selected modes to a certified full window");
     fullmag_fem_frequency_domain_result_destroy(&window_result);
     std::printf("PASS: native_floquet_production_window_positive_mass_merge\n");
+
+    // Request substantially more modes than this bounded fixture's tangent
+    // dimension can provide inside a single narrow band. The public ABI must
+    // preserve the modes that passed descriptor certification while reporting
+    // the underfilled native refill as incomplete.
+    FullmagFemModalEigenRequest underfilled_request = request;
+    underfilled_request.target_kind = "frequency_window";
+    underfilled_request.frequency_min_hz = 0.15;
+    underfilled_request.frequency_max_hz = 0.17;
+    underfilled_request.requested_mode_count = 100;
+    underfilled_request.completeness_policy = 0;
+    FullmagFemFrequencyDomainResult underfilled_result =
+        fullmag_fem_modal_eigen_solve(&underfilled_request);
+    check(underfilled_result.status == FULLMAG_FEM_FD_SOLVE_ERROR,
+          "native underfilled requested mode count is not reported as successful completion");
+    check(contains(underfilled_result.result_json,
+                   "\"accepted_mode_count\":") &&
+              !contains(underfilled_result.result_json,
+                        "\"accepted_mode_count\":0") &&
+              !contains(underfilled_result.result_json,
+                        "\"accepted_mode_count\":100") &&
+              contains(underfilled_result.result_json, "\"modes\":[{"),
+          "public native window result retains its certified partial modes below the requested count");
+    check(contains(underfilled_result.diagnostics_json,
+                   "\"requested_mode_count\":100") &&
+              contains(underfilled_result.diagnostics_json,
+                       "\"complete\":false") &&
+              contains(underfilled_result.diagnostics_json,
+                       "\"window_complete\":false") &&
+              contains(underfilled_result.diagnostics_json,
+                       "\"stop_reason\":\"partial_convergence\""),
+          "public native diagnostics explain the underfilled request without claiming window completion");
+    check(contains(underfilled_result.result_json,
+                   "\"status\":\"solve_error\"") &&
+              contains(underfilled_result.result_json,
+                       "\"window_completeness\":\"partial_convergence\""),
+          "public result JSON keeps the underfilled request terminal and explicitly partial");
+    fullmag_fem_frequency_domain_result_destroy(&underfilled_result);
+    std::printf("PASS: public_native_floquet_window_underfill_retains_certified_modes\n");
 
     request.residual_tolerance = 0.0;
     FullmagFemFrequencyDomainResult default_tolerance_result =

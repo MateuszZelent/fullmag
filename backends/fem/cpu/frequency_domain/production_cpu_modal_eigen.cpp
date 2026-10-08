@@ -221,6 +221,46 @@ std::string floquet_shifted_ksp_diagnostics_json_fields(
         (result.eps_dimensions_available && result.eps_mpd > 0
             ? std::to_string(result.eps_mpd)
             : std::string("null"));
+    json +=
+        ",\"floquet_eps_nev_refill\":{"
+        "\"schema_version\":\"floquet_eps_nev_refill.v1\","
+        "\"attempt_count\":" + std::to_string(result.eps_attempt_count) +
+        ",\"solved_attempt_count\":" +
+        std::to_string(result.eps_solved_attempt_count) +
+        ",\"initial_nev\":" +
+        (result.eps_initial_nev > 0
+            ? std::to_string(result.eps_initial_nev)
+            : std::string("null")) +
+        ",\"last_solved_nev\":" +
+        (result.eps_dimensions_available
+            ? std::to_string(result.eps_nev)
+            : std::string("null")) +
+        ",\"last_finalized_attempt\":" +
+        (result.eps_finalized_attempt_number > 0
+            ? std::to_string(result.eps_finalized_attempt_number)
+            : std::string("null")) +
+        ",\"last_finalized_nev\":" +
+        (result.eps_finalized_nev > 0
+            ? std::to_string(result.eps_finalized_nev)
+            : std::string("null")) +
+        ",\"unique_certified_mode_count\":" +
+        std::to_string(result.eps_unique_certified_mode_count) +
+        ",\"iteration_budget_available\":" +
+        std::string(result.eps_iteration_budget_available ? "true" : "false") +
+        ",\"outer_iteration_budget\":" +
+        (result.eps_iteration_budget_available
+            ? std::to_string(result.max_outer_iterations)
+            : std::string("null")) +
+        ",\"cumulative_outer_iterations_available\":" +
+        std::string(result.eps_cumulative_iterations_available ? "true" : "false") +
+        ",\"cumulative_outer_iterations\":" +
+        (result.eps_cumulative_iterations_available
+            ? std::to_string(result.outer_iterations)
+            : std::string("null")) +
+        ",\"cancellation_observed\":" +
+        std::string(result.eps_cancellation_observed ? "true" : "false") + "}";
+    json +=
+        ",\"eps_monitor_iteration_scope\":\"last_actual_eps_attempt\"";
     // Sparse nearest success already publishes these configuration fields.
     // Window and nearest failure need them here; emit each key exactly once.
     if (include_basic_fields) {
@@ -1409,6 +1449,14 @@ std::vector<SLEPcModalAcceptedMode> deduplicate_slepc_modes_by_overlap(
 const char *subwindow_stop_reason(
     const SLEPcTinyGyrotropicModalEigenResult &slepc_result) noexcept
 {
+    if (slepc_result.status != nullptr &&
+        std::strcmp(slepc_result.status, "cancelled") == 0) {
+        return "cancelled";
+    }
+    if (slepc_result.status != nullptr &&
+        std::strcmp(slepc_result.status, "partial") == 0) {
+        return "partial_convergence";
+    }
     if (slepc_result.ok) {
         return "converged";
     }
@@ -2764,6 +2812,8 @@ FrequencyDomainContractResult solve_sparse_production_modal_payload(
     slepc_request.max_outer_iterations = request.max_outer_iterations;
     slepc_request.max_linear_iterations = request.max_linear_iterations;
     slepc_request.phase_convention = request.phase_convention;
+    slepc_request.cancel_user_data = request.cancel_user_data;
+    slepc_request.cancel_requested = request.cancel_requested;
     const SLEPcTinyGyrotropicModalEigenResult slepc_result =
         solve_sparse_modal_spectrum_for_request(request, slepc_request, nullptr);
 
@@ -2789,13 +2839,26 @@ FrequencyDomainContractResult solve_sparse_production_modal_payload(
         slepc_result, !slepc_result.ok);
     if (!slepc_result.ok) {
         const char *stop_reason = stop_reason_or_default(slepc_result);
-        result.status = FrequencyDomainStatus::solve_error;
-        result.error_message =
-            "native FEM modal_eigen production CPU sparse CSR SLEPc shift-invert solve failed";
+        const bool cancelled =
+            slepc_result.status != nullptr &&
+            std::strcmp(slepc_result.status, "cancelled") == 0;
+        const bool partial =
+            slepc_result.status != nullptr &&
+            std::strcmp(slepc_result.status, "partial") == 0;
+        result.status = cancelled
+            ? FrequencyDomainStatus::interrupted
+            : FrequencyDomainStatus::solve_error;
+        result.error_message = cancelled
+            ? "native FEM modal_eigen production CPU sparse CSR SLEPc shift-invert solve was cancelled"
+            : partial
+                ? "native FEM modal_eigen production CPU sparse CSR SLEPc shift-invert solve did not certify the requested mode count"
+                : "native FEM modal_eigen production CPU sparse CSR SLEPc shift-invert solve failed";
         result.diagnostics_json =
             "{\"schema_version\":\"frequency_domain_modal_diagnostics.v1\","
             "\"study_product\":\"modal_eigen\","
-            "\"status\":\"solve_error\","
+            "\"status\":\"" +
+            std::string(cancelled ? "interrupted" : "solve_error") +
+            "\","
             "\"complete\":false,"
             "\"execution_lane\":\"production_cpu\","
             "\"progress_schema_version\":\"fem_frequency_domain_progress.v1\","
@@ -2829,14 +2892,22 @@ FrequencyDomainContractResult solve_sparse_production_modal_payload(
         result.result_json =
             "{\"schema_version\":\"frequency_domain_modal_result.v1\","
             "\"study_product\":\"modal_eigen\","
-            "\"status\":\"solve_error\","
-            "\"accepted_mode_count\":0,"
-            "\"resolved_solver_family\":\"" +
+            "\"status\":\"" +
+            std::string(cancelled ? "interrupted" : "solve_error") +
+            "\","
+            "\"accepted_mode_count\":" +
+            std::to_string(slepc_result.accepted_mode_count) +
+            ",\"resolved_solver_family\":\"" +
             std::string(selection.family) +
             "\",\"shift_frequency_hz\":" +
             format_double(shift.shift_frequency_hz) +
             ",\"shift_omega_rad_s\":" +
             format_double(shift.shift_omega_rad_s) +
+            ",\"stop_reason\":\"" +
+            std::string(stop_reason) +
+            "\","
+            "\"modes\":" +
+            format_slepc_modes_json(slepc_result) +
             "}";
         append_nearest_frequency_metadata(result.result_json, request, result.status);
         append_optional_json_field(
@@ -3021,6 +3092,8 @@ FrequencyDomainContractResult solve_sparse_production_modal_window_payload(
     subwindow_solves.reserve(partition.subwindows.size());
     std::vector<SLEPcModalAcceptedMode> candidate_modes;
     bool subwindow_hard_failure = false;
+    bool cancellation_interrupted = false;
+    bool native_floquet_refill_partial = false;
     const char *subwindow_failure_reason = nullptr;
     FloquetSharedDomainSparseModalSolveContext floquet_window_context{};
     FloquetSharedDomainSparseModalSolveContext *reuse_context =
@@ -3043,11 +3116,17 @@ FrequencyDomainContractResult solve_sparse_production_modal_window_payload(
         slepc_request.max_outer_iterations = request.max_outer_iterations;
         slepc_request.max_linear_iterations = request.max_linear_iterations;
         slepc_request.phase_convention = request.phase_convention;
+        slepc_request.cancel_user_data = request.cancel_user_data;
+        slepc_request.cancel_requested = request.cancel_requested;
         SLEPcTinyGyrotropicModalEigenResult slepc_result =
             solve_sparse_modal_spectrum_for_request(
                 request,
                 slepc_request,
                 reuse_context);
+        if (slepc_result.status != nullptr &&
+            std::strcmp(slepc_result.status, "partial") == 0) {
+            native_floquet_refill_partial = true;
+        }
         const char *stop_reason = subwindow_stop_reason(slepc_result);
         emit_production_shift_invert_progress(
             request,
@@ -3068,6 +3147,11 @@ FrequencyDomainContractResult solve_sparse_production_modal_window_payload(
         if (subwindow_requires_fail_closed(completed_subwindow.result)) {
             subwindow_hard_failure = true;
             subwindow_failure_reason = completed_subwindow.result.unsupported_reason;
+            break;
+        }
+        if (completed_subwindow.result.status != nullptr &&
+            std::strcmp(completed_subwindow.result.status, "cancelled") == 0) {
+            cancellation_interrupted = true;
             break;
         }
     }
@@ -3152,11 +3236,12 @@ FrequencyDomainContractResult solve_sparse_production_modal_window_payload(
                     std::strcmp(solve.stop_reason, "converged") != 0;
             });
     const char *window_stop_reason = subwindow_hard_failure
-        ? "subwindow_failed" : (truncated_by_requested_count ?
+        ? "subwindow_failed" : (cancellation_interrupted ?
+            "cancelled" : (truncated_by_requested_count ?
         "requested_count_reached" :
         (accepted_modes.empty() ?
             (partial_convergence ? "partial_convergence" : "window_exhausted") :
-            (partial_convergence ? "partial_convergence" : "converged")));
+            (partial_convergence ? "partial_convergence" : "converged"))));
     const char *window_completeness_status = subwindow_hard_failure
         ? "solver_error" : (truncated_by_requested_count ?
         "truncated_by_requested_count" :
@@ -3237,17 +3322,28 @@ FrequencyDomainContractResult solve_sparse_production_modal_window_payload(
             "\",\"stop_reason\":\"subwindow_failed\","
             "\"window_completeness\":\"solver_error\","
             "\"failure_reason\":\"" +
-            std::string(failure_reason) + "\"}";
+            std::string(failure_reason) +
+            "\","
+            "\"modes\":" +
+            format_slepc_modes_json(accepted_modes) +
+            "}";
         return result;
     }
     if (accepted_modes.empty()) {
-        result.status = FrequencyDomainStatus::solve_error;
-        result.error_message =
-            "native FEM modal_eigen production CPU sparse CSR multi-shift solve found no accepted modes in the requested window";
+        const char *terminal_status = cancellation_interrupted
+            ? "interrupted" : "solve_error";
+        result.status = cancellation_interrupted
+            ? FrequencyDomainStatus::interrupted
+            : FrequencyDomainStatus::solve_error;
+        result.error_message = cancellation_interrupted
+            ? "native FEM modal_eigen production CPU sparse CSR multi-shift solve was cancelled"
+            : "native FEM modal_eigen production CPU sparse CSR multi-shift solve found no accepted modes in the requested window";
         result.diagnostics_json =
             "{\"schema_version\":\"frequency_domain_modal_diagnostics.v1\","
             "\"study_product\":\"modal_eigen\","
-            "\"status\":\"solve_error\","
+            "\"status\":\"" +
+            std::string(terminal_status) +
+            "\","
             "\"complete\":false,"
             "\"execution_lane\":\"production_cpu\","
             "\"progress_schema_version\":\"fem_frequency_domain_progress.v1\","
@@ -3276,7 +3372,9 @@ FrequencyDomainContractResult solve_sparse_production_modal_window_payload(
         result.result_json =
             "{\"schema_version\":\"frequency_domain_modal_result.v1\","
             "\"study_product\":\"modal_eigen\","
-            "\"status\":\"solve_error\","
+            "\"status\":\"" +
+            std::string(terminal_status) +
+            "\","
             "\"accepted_mode_count\":0,"
             "\"resolved_solver_family\":\"" +
             std::string(selection.family) +
@@ -3294,8 +3392,17 @@ FrequencyDomainContractResult solve_sparse_production_modal_window_payload(
             std::max(max_relative_residual, mode.relative_residual);
     }
     const SLEPcModalAcceptedMode &first_mode = accepted_modes.front();
-    result.status = FrequencyDomainStatus::ok;
-    result.error_message.clear();
+    const bool refill_incomplete =
+        native_floquet_sparse && native_floquet_refill_partial;
+    result.status = cancellation_interrupted
+        ? FrequencyDomainStatus::interrupted
+        : refill_incomplete ? FrequencyDomainStatus::solve_error
+                            : FrequencyDomainStatus::ok;
+    result.error_message = cancellation_interrupted
+        ? std::string("native FEM modal_eigen production CPU sparse CSR multi-shift solve was cancelled")
+        : refill_incomplete
+            ? std::string("native FEM modal_eigen production CPU sparse CSR multi-shift solve did not certify the requested mode count; certified partial modes are retained")
+            : std::string();
     const char *deduplication_inner_product =
         native_floquet_sparse ? "floquet_positive_tangent_mass" :
         (deduplication_mass_matrix != nullptr ? "mfem_sparse_tangent_mass" :
@@ -3307,7 +3414,10 @@ FrequencyDomainContractResult solve_sparse_production_modal_window_payload(
     result.diagnostics_json =
         "{\"schema_version\":\"frequency_domain_modal_diagnostics.v1\","
         "\"study_product\":\"modal_eigen\","
-        "\"status\":\"ok\","
+        "\"status\":\"" +
+        std::string(cancellation_interrupted
+            ? "interrupted" : refill_incomplete ? "solve_error" : "ok") +
+        "\","
         "\"complete\":" +
         std::string(window_complete ? "true" : "false") +
         ","
@@ -3367,7 +3477,10 @@ FrequencyDomainContractResult solve_sparse_production_modal_window_payload(
     result.result_json =
         "{\"schema_version\":\"frequency_domain_modal_result.v1\","
         "\"study_product\":\"modal_eigen\","
-        "\"status\":\"ok\","
+        "\"status\":\"" +
+        std::string(cancellation_interrupted
+            ? "interrupted" : refill_incomplete ? "solve_error" : "ok") +
+        "\","
         "\"solver_adapter\":\"" +
         std::string(kSparseAdapter) +
         "\","

@@ -18,6 +18,7 @@
 
 #if FULLMAG_FEM_WITH_SLEPC
 #include <petscksp.h>
+#include <slepceps.h>
 #endif
 
 namespace fd = fullmag::fem::frequency_domain;
@@ -30,6 +31,64 @@ void check(bool condition, const char *message)
         std::fprintf(stderr, "FAIL: %s\n", message);
         std::exit(1);
     }
+}
+
+#if FULLMAG_FEM_WITH_SLEPC
+struct CancelAfterPolls {
+    int poll_count = 0;
+    int cancel_on_poll = 3;
+};
+
+struct CancelOnceOnPoll {
+    int poll_count = 0;
+    int cancel_on_poll = 3;
+    bool fired = false;
+};
+
+int cancel_after_polls(void *raw_context)
+{
+    if (raw_context == nullptr) {
+        return 0;
+    }
+    auto *context = static_cast<CancelAfterPolls *>(raw_context);
+    ++context->poll_count;
+    return context->poll_count >= context->cancel_on_poll ? 1 : 0;
+}
+
+int cancel_once_on_poll(void *raw_context)
+{
+    if (raw_context == nullptr) {
+        return 0;
+    }
+    auto *context = static_cast<CancelOnceOnPoll *>(raw_context);
+    ++context->poll_count;
+    if (!context->fired && context->poll_count == context->cancel_on_poll) {
+        context->fired = true;
+        return 1;
+    }
+    return 0;
+}
+#endif
+
+void cleanup_and_cancellation_gates_fail_closed()
+{
+    check(fd::detail::floquet_eps_cleanup_allows_refill(true, false),
+          "refill is allowed after complete teardown with no live EPS handle");
+    check(!fd::detail::floquet_eps_cleanup_allows_refill(false, false),
+          "a failed teardown cannot authorize another EPS attempt");
+    check(!fd::detail::floquet_eps_cleanup_allows_refill(true, true),
+          "a live EPS handle cannot be overwritten by another EPS attempt");
+    check(!fd::detail::floquet_eps_cleanup_allows_refill(false, true),
+          "a failed teardown with a live EPS handle is terminal");
+
+    check(!fd::detail::floquet_cancellation_is_observed(false, false, false),
+          "an unrequested cancellation remains clear");
+    check(fd::detail::floquet_cancellation_is_observed(false, false, true),
+          "a one-shot cancellation callback is observed when requested");
+    check(fd::detail::floquet_cancellation_is_observed(true, false, false),
+          "a one-shot post-solve cancellation remains sticky after the callback clears");
+    check(fd::detail::floquet_cancellation_is_observed(false, true, false),
+          "an EPS stopping-callback cancellation remains observed after solve");
 }
 
 int set_action_diagnostic_environment(const char *value)
@@ -254,6 +313,36 @@ fd::PoissonAirboxSharedDomainComplexCsrMatrix diagonal_complex_csr(
     }
     return matrix;
 }
+
+#if FULLMAG_FEM_WITH_SLEPC
+fd::PoissonAirboxSharedDomainComplexCsrMatrix correlated_mass_csr(
+    std::size_t dimension,
+    std::size_t correlated_prefix,
+    double correlation)
+{
+    fd::PoissonAirboxSharedDomainComplexCsrMatrix matrix{};
+    matrix.row_count = dimension;
+    matrix.column_count = dimension;
+    matrix.row_offsets.reserve(dimension + 1u);
+    matrix.row_offsets.push_back(0u);
+    for (std::size_t row = 0u; row < dimension; ++row) {
+        for (std::size_t column = 0u; column < dimension; ++column) {
+            const double value = row == column
+                ? 1.0
+                : (row < correlated_prefix && column < correlated_prefix
+                    ? correlation : 0.0);
+            if (value != 0.0) {
+                matrix.column_indices.push_back(
+                    static_cast<std::uint32_t>(column));
+                matrix.values.emplace_back(value, 0.0);
+            }
+        }
+        matrix.row_offsets.push_back(
+            static_cast<std::uint32_t>(matrix.values.size()));
+    }
+    return matrix;
+}
+#endif
 
 fd::PoissonAirboxSharedDomainComplexCsrMatrix q_to_phi_complex_csr(
     std::size_t q_dimension,
@@ -910,10 +999,200 @@ void normalizes_si_scale_floquet_pencil()
 #endif
 }
 
+void refills_native_floquet_nev_before_tangent_mass_cap()
+{
+#if FULLMAG_FEM_WITH_SLEPC
+    constexpr std::size_t q_dimension = 8u;
+    constexpr double coefficient_scale = 1.0e-60;
+    constexpr double target_frequency_hz = 1.0e6;
+    const double frequency_offsets_hz[q_dimension] = {
+        -0.003, -0.001, 0.001, 0.003, 0.2, 0.4, 0.6, 0.8};
+    std::vector<std::complex<double>> a_diagonal(q_dimension);
+    const std::vector<std::complex<double>> b_diagonal(
+        q_dimension, std::complex<double>(0.0, -coefficient_scale));
+    for (std::size_t row = 0u; row < q_dimension; ++row) {
+        a_diagonal[row] = coefficient_scale * fd::omega_rad_s_from_frequency_hz(
+            target_frequency_hz + frequency_offsets_hz[row]);
+    }
+    const auto a_qq = diagonal_complex_csr(q_dimension, a_diagonal);
+    const auto b_qq = diagonal_complex_csr(q_dimension, b_diagonal);
+    const auto positive_tangent_mass = correlated_mass_csr(
+        q_dimension, 4u, 0.99);
+    const auto p = diagonal_complex_csr(1u, {1.0});
+    const auto a_qphi = q_to_phi_complex_csr(q_dimension, 0.0);
+    const auto a_phiq = phi_to_q_complex_csr(q_dimension, 0.0);
+    fd::FloquetSharedDomainSparseModalOperator operator_view{};
+    operator_view.a_qq = &a_qq;
+    operator_view.b_qq = &b_qq;
+    operator_view.positive_tangent_mass = &positive_tangent_mass;
+    operator_view.p = &p;
+    operator_view.a_qphi = &a_qphi;
+    operator_view.a_phiq = &a_phiq;
+    operator_view.q_complex_dof_count = q_dimension;
+    operator_view.phi_dof_count = 1u;
+
+    const auto make_request = [=](int requested_count, int outer_budget) {
+        fd::SLEPcSparseGyrotropicModalEigenRequest request{};
+        request.tangent_dof_count = static_cast<int>(q_dimension);
+        request.requested_mode_count = requested_count;
+        request.target_frequency_hz = target_frequency_hz;
+        request.frequency_min_hz = target_frequency_hz - 1.0;
+        request.frequency_max_hz = target_frequency_hz + 1.0;
+        request.residual_tolerance = 1.0e-10;
+        request.max_outer_iterations = outer_budget;
+        request.max_linear_iterations = 96;
+        return request;
+    };
+
+    const auto refill_request = make_request(2, 160);
+    const auto refill_result = fd::solve_floquet_shared_domain_sparse_modal_spectrum(
+        operator_view, refill_request);
+    check(refill_result.ok && refill_result.accepted_mode_count == 2,
+          "native Floquet refill publishes the requested certified mode count");
+    check(refill_result.eps_attempt_count >= 2 &&
+              refill_result.eps_solved_attempt_count >= 2 &&
+              refill_result.eps_finalized_attempt_number ==
+                  refill_result.eps_solved_attempt_count,
+          "native Floquet refill records attempts, safe solves, and the finalized pool identity");
+    check(refill_result.eps_initial_nev == 4 &&
+              refill_result.eps_nev > refill_result.eps_initial_nev &&
+              refill_result.eps_ncv == 16 &&
+              refill_result.eps_mpd == 16 &&
+              refill_result.eps_nev < refill_result.eps_ncv,
+          "native Floquet refill grows NEV while holding the initial NCV and MPD fixed");
+    check(refill_result.eps_unique_certified_mode_count == 2 &&
+              refill_result.eps_cumulative_iterations_available &&
+              refill_result.eps_iteration_budget_available &&
+              refill_result.outer_iterations <= refill_result.max_outer_iterations &&
+              refill_result.ksp_max_iterations == refill_request.max_linear_iterations,
+          "native Floquet refill reports the unique certified pool within one cumulative EPS budget");
+    bool has_refilled_orthogonal_mode = false;
+    for (const fd::SLEPcModalAcceptedMode &mode : refill_result.accepted_modes) {
+        check(mode.relative_residual <= refill_request.residual_tolerance,
+              "refilled modes retain the original descriptor residual gate");
+        has_refilled_orthogonal_mode =
+            has_refilled_orthogonal_mode ||
+            mode.frequency_hz > target_frequency_hz + 0.1;
+    }
+    check(has_refilled_orthogonal_mode,
+          "the final pool includes a farther mode outside the initial duplicate cluster");
+    const auto first_mass_vector = complex_csr_matvec_for_test(
+        positive_tangent_mass, refill_result.accepted_modes[0].mode_vector);
+    const auto second_mass_vector = complex_csr_matvec_for_test(
+        positive_tangent_mass, refill_result.accepted_modes[1].mode_vector);
+    std::complex<double> mass_inner_product{};
+    double first_mass_norm_squared = 0.0;
+    double second_mass_norm_squared = 0.0;
+    for (std::size_t index = 0u; index < q_dimension; ++index) {
+        mass_inner_product += std::conj(
+            refill_result.accepted_modes[0].mode_vector[index]) *
+            second_mass_vector[index];
+        first_mass_norm_squared += std::real(
+            std::conj(refill_result.accepted_modes[0].mode_vector[index]) *
+            first_mass_vector[index]);
+        second_mass_norm_squared += std::real(
+            std::conj(refill_result.accepted_modes[1].mode_vector[index]) *
+            second_mass_vector[index]);
+    }
+    const double normalized_mass_overlap = std::abs(mass_inner_product) /
+        std::sqrt(first_mass_norm_squared * second_mass_norm_squared);
+    check(std::isfinite(normalized_mass_overlap) &&
+              normalized_mass_overlap < 0.90,
+          "the returned nearest modes remain distinct in the positive tangent mass metric");
+
+    const auto dimension_limited_request = make_request(9, 160);
+    const auto dimension_limited_result =
+        fd::solve_floquet_shared_domain_sparse_modal_spectrum(
+            operator_view, dimension_limited_request);
+    check(!dimension_limited_result.ok &&
+              dimension_limited_result.status != nullptr &&
+              std::strcmp(dimension_limited_result.status, "partial") == 0 &&
+              dimension_limited_result.unsupported_reason != nullptr &&
+              std::strcmp(
+                  dimension_limited_result.unsupported_reason,
+                  "floquet_nev_refill_dimension_limit_reached") == 0 &&
+              dimension_limited_result.accepted_mode_count > 0 &&
+              dimension_limited_result.accepted_mode_count < 9,
+          "a dimension-limited refill returns only its certified partial pool");
+    check(dimension_limited_result.eps_nev == 15 &&
+              dimension_limited_result.eps_ncv == 16 &&
+              dimension_limited_result.eps_mpd == 16,
+          "the refill ceiling never exceeds the initially admitted Krylov dimensions");
+
+    const auto budget_limited_request = make_request(2, 1);
+    const auto budget_limited_result =
+        fd::solve_floquet_shared_domain_sparse_modal_spectrum(
+            operator_view, budget_limited_request);
+    check(!budget_limited_result.ok &&
+              budget_limited_result.status != nullptr &&
+              std::strcmp(budget_limited_result.status, "partial") == 0 &&
+              budget_limited_result.unsupported_reason != nullptr &&
+              std::strcmp(
+                  budget_limited_result.unsupported_reason,
+                  "floquet_nev_refill_outer_iteration_budget_exhausted") == 0 &&
+              budget_limited_result.accepted_mode_count < 2,
+          "EPS iteration exhaustion is an explicit incomplete result, not requested-count success");
+    check(budget_limited_result.eps_iteration_budget_available &&
+              budget_limited_result.max_outer_iterations == 1 &&
+              budget_limited_result.eps_cumulative_iterations_available &&
+              budget_limited_result.outer_iterations <= 1,
+          "refill cannot reset or exceed the resolved total EPS iteration budget");
+
+    CancelAfterPolls cancellation{};
+    auto cancellation_request = make_request(2, 160);
+    cancellation_request.cancel_user_data = &cancellation;
+    cancellation_request.cancel_requested = cancel_after_polls;
+    const auto cancelled_result =
+        fd::solve_floquet_shared_domain_sparse_modal_spectrum(
+            operator_view, cancellation_request);
+    check(!cancelled_result.ok &&
+              cancelled_result.status != nullptr &&
+              std::strcmp(cancelled_result.status, "cancelled") == 0 &&
+              cancelled_result.eps_cancellation_observed &&
+              cancelled_result.eps_attempt_count == 1 &&
+              cancelled_result.eps_solved_attempt_count == 1 &&
+              cancelled_result.eps_converged_reason_available &&
+              cancelled_result.eps_converged_reason == EPS_CONVERGED_USER,
+          "native EPS cancellation stops refill and remains distinct from convergence");
+
+    CancelOnceOnPoll pre_solve_cancellation{};
+    pre_solve_cancellation.cancel_on_poll = 1;
+    auto pre_solve_request = make_request(2, 160);
+    pre_solve_request.cancel_user_data = &pre_solve_cancellation;
+    pre_solve_request.cancel_requested = cancel_once_on_poll;
+    const auto pre_solve_result = fd::solve_floquet_shared_domain_sparse_modal_spectrum(
+        operator_view, pre_solve_request);
+    check(!pre_solve_result.ok &&
+              pre_solve_result.status != nullptr &&
+              std::strcmp(pre_solve_result.status, "cancelled") == 0 &&
+              pre_solve_result.eps_cancellation_observed &&
+              pre_solve_result.eps_attempt_count == 0 &&
+              pre_solve_cancellation.fired,
+          "one-shot cancellation before EPS setup remains a terminal cancellation");
+
+    CancelOnceOnPoll one_shot_cancellation{};
+    one_shot_cancellation.cancel_on_poll = 3;
+    auto one_shot_request = make_request(2, 160);
+    one_shot_request.cancel_user_data = &one_shot_cancellation;
+    one_shot_request.cancel_requested = cancel_once_on_poll;
+    const auto one_shot_result = fd::solve_floquet_shared_domain_sparse_modal_spectrum(
+        operator_view, one_shot_request);
+    check(!one_shot_result.ok &&
+              one_shot_result.status != nullptr &&
+              std::strcmp(one_shot_result.status, "cancelled") == 0 &&
+              one_shot_result.eps_cancellation_observed &&
+              one_shot_result.eps_attempt_count == 1 &&
+              one_shot_result.eps_solved_attempt_count == 1 &&
+              one_shot_cancellation.fired,
+          "a one-shot cancellation after EPS starts remains terminal if later polls clear");
+#endif
+}
+
 } // namespace
 
 int main()
 {
+    cleanup_and_cancellation_gates_fail_closed();
     accepts_finite_nonzero_k_cpu_contract();
     rejects_missing_dynamic_payload_and_gpu();
     rejects_zero_k_and_missing_pairs();
@@ -925,6 +1204,7 @@ int main()
     executes_native_sparse_matshell_above_dense_bound();
     finalizes_certified_candidates_by_tangent_mass_before_nearest_cap();
     normalizes_si_scale_floquet_pencil();
+    refills_native_floquet_nev_before_tangent_mass_cap();
     executes_native_sparse_matshell_above_dense_bound(true);
     std::printf("PASS: fem_floquet_modal_solver_contract\n");
     return 0;

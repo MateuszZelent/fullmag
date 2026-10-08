@@ -15,6 +15,25 @@ struct PoissonAirboxSharedDomainAssemblyResult;
 
 namespace detail {
 
+// Refill is only safe after the whole attempt was torn down and EPS no longer
+// owns its per-attempt graph. Keep this decision pure so its fail-closed cases
+// can be tested without fabricating an invalid PETSc/MPI object graph.
+constexpr bool floquet_eps_cleanup_allows_refill(
+    bool teardown_succeeded,
+    bool eps_handle_live) noexcept
+{
+    return teardown_succeeded && !eps_handle_live;
+}
+
+constexpr bool floquet_cancellation_is_observed(
+    bool sticky_result_observed,
+    bool stopping_callback_observed,
+    bool callback_requested_now) noexcept
+{
+    return sticky_result_observed || stopping_callback_observed ||
+        callback_requested_now;
+}
+
 // Internal seam shared by the native solver and its deterministic candidate
 // finalization regression. Inputs are already certified against the original
 // Floquet descriptor; this stage only mass-deduplicates, target-ranks, and

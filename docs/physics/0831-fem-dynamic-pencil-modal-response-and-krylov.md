@@ -2525,9 +2525,33 @@ według częstotliwości i końcowym limitem użytkownika. Błąd metryki propag
 jako hard solve failure; wcześniejsza przyczyna hard subwindow failure pozostaje
 zachowana. Native merge nie materializuje dense mass ani nie stosuje identity
 fallbacku. Generic sparse/dense adapter pozostaje osobnym etapem i nadal wymaga
-korekty. Podłączenie native outer branch oraz SLEPc/NEV refill pozostają
-**NOT VERIFIED** do rzeczywistej regresji production frequency-window entry;
-deterministyczny test lokalnego finalizatora nie dowodzi tego podłączenia.
+korekty.
+
+### Bounded NEV refill w native Floquet
+
+Natywny solver wykonuje mass-deduplication i nearest cap na certyfikowanych
+kandydatach przed zamknięciem bieżącego EPS. Jeżeli liczba unikalnych modów jest
+mniejsza od żądanej, tworzy kolejną próbę Krylov–Schur ze ściśle większym NEV.
+Początkowe NCV i MPD pozostają niezmienione; retry zatrzymuje się na legalnym
+limicie NEV wyznaczonym przez początkowe NCV i wymiar real-split. Żadna próba nie
+łączy indeksów ani niecertyfikowanych kandydatów z poprzednim EPS: wynikowa pula
+zawiera wyłącznie finalizację ostatniej bezpiecznie rozwiązanej próby.
+
+Pierwsze EPSSetUp rozstrzyga całkowity budżet max_outer_iterations.
+Każde kolejne EPSSolve otrzymuje wyłącznie pozostałe iteracje, a wynik sumuje
+faktycznie zaraportowane iteracje wszystkich prób. Budżet iteracji liniowych KSP
+pozostaje niezmieniony dla każdej próby. Osiągnięcie limitu wymiaru lub iteracji
+zwraca status partial i tylko certyfikowane mody; adapter frequency-window mapuje
+ten stan na partial_convergence, nie deklaruje kompletnego okna i zachowuje
+dostępne mody. Anulowanie jest sprawdzane przed próbą, przez standardowe
+EPSStoppingBasic z EPS_CONVERGED_USER oraz przed następnym retry; wynik ma status
+interrupted, nie zbieżność.
+
+Jest to wewnętrzna polityka solvera. Nie zmienia równań, residuów, SI, publicznego
+Python/ProblemIR, liczby żądanych modów ani wejściowego limitu pamięci. Źródło i
+regresja produkcyjnego SLEPc są widoczne; provider-backed GHA regresja jest
+jeszcze **NOT VERIFIED**. Sam test finalizatora nadal nie dowodzi refill ani
+kwalifikacji fizycznej.
 
 Regresja assembly porównuje full i reduced CSR z niezależną analityczną masą
 tet4 / prism6 oraz ręcznie zbudowanym ograniczeniem fazy i ram stycznych.
@@ -2556,6 +2580,9 @@ produkcji całej dyspersji.
 | `source-floquet-tangent-mass-overlap-owner` | `backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp` | `detail::finalize_certified_floquet_candidates` | Apply the positive reduced CSR mass action to already residual-certified candidates, retain original modes by source index, then target-rank and cap |
 | `source-floquet-tangent-mass-overlap-seam` | `backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.hpp` | `detail::CertifiedFloquetModalCandidate` | Internal data seam shared by production and deterministic finalizer regression |
 | `source-floquet-tangent-mass-overlap-regression` | `backends/fem/tests/frequency_domain/floquet_modal_solver_test.cpp` | `finalizes_certified_candidates_by_tangent_mass_before_nearest_cap` | Directly tests the production finalizer with explicitly supplied candidates; bypasses EPS and does not prove candidate supply, residual certification or refill/NEV; no-provider GHA 37795426460 passed |
+| `source-floquet-nev-refill-owner` | `backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp` | `solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context` | Repeated safe EPS attempts increase NEV within fixed initial NCV/MPD, recertify the final pool with the owned positive tangent mass, and account against one cumulative EPS outer-iteration budget; source visible, provider GHA pending |
+| `source-floquet-nev-refill-adapter` | `backends/fem/cpu/frequency_domain/production_cpu_modal_eigen.cpp` | `solve_sparse_production_modal_window_payload` | Propagate the existing cancellation callback, expose attempt/budget diagnostics, and preserve explicit partial/cancelled window outcomes; source visible, runtime pending |
+| `source-floquet-nev-refill-regression` | `backends/fem/tests/frequency_domain/floquet_modal_solver_test.cpp` | `refills_native_floquet_nev_before_tangent_mass_cap` | Provider-backed EPS regression for duplicate-cluster refill, fixed dimensions, dimension and iteration limits, cancellation and mass/residual gates; execution pending |
 | `source-floquet-window-cross-subwindow-dedup-followup` | `backends/fem/cpu/frequency_domain/production_cpu_modal_eigen.cpp` | `solve_sparse_production_modal_window_payload` | Native Floquet subwindow merge uses the owned positive CSR mass finalizer before the final window cap; production-entry regression pending |
 
 

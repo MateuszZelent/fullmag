@@ -247,6 +247,15 @@ struct SLEPcTinyGyrotropicModalEigenResult {
     int selected_eigenpair_index = -1;
     int outer_iterations = 0;
     int max_outer_iterations = 0;
+    int eps_initial_nev = 0;
+    int eps_attempt_count = 0;
+    int eps_solved_attempt_count = 0;
+    int eps_finalized_attempt_number = 0;
+    int eps_finalized_nev = 0;
+    int eps_unique_certified_mode_count = 0;
+    bool eps_iteration_budget_available = false;
+    bool eps_cumulative_iterations_available = false;
+    bool eps_cancellation_observed = false;
     int linear_iterations_total = 0;
     int ksp_last_iterations = 0;
     bool ksp_diagnostics_available = false;
@@ -349,6 +358,8 @@ struct SLEPcSparseGyrotropicModalEigenRequest {
        caller; the owner builds the phase-reduced static blocks and applies
        the scalar-potential Schur complement through a PETSc MatShell. */
     const FloquetSharedDomainSparseModalOperator *floquet_shared_domain_operator = nullptr;
+    void *cancel_user_data = nullptr;
+    int (*cancel_requested)(void *user_data) = nullptr;
 };
 
 SLEPcTinyGyrotropicModalEigenResult
