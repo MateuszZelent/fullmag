@@ -41,3 +41,4 @@ jobs:
           scripts/test_plot_signed_de_campaign.py
           scripts/test_validate_serial_adaptive_probe.py
           scripts/test_comsol_modal_field_certificate.py
+          scripts/test_run_comsol_dispersion_benchmark.py

@@ -1158,6 +1158,8 @@ def _compose_environment(
 def _new_output_dir(
     context: BuildContext,
     requested: str | None,
+    *,
+    persist: bool = True,
 ) -> Path:
     storage = Path(context.layout["storage_root"])
     if requested is not None:
@@ -1170,8 +1172,9 @@ def _new_output_dir(
             raise BenchmarkError("benchmark output must be inside canonical storage") from error
         if candidate.exists() or _is_reparse(candidate):
             raise BenchmarkError(f"benchmark output already exists: {candidate}")
-        candidate.parent.mkdir(parents=True, exist_ok=True)
-        register_runtime_reference_root(context.layout, candidate)
+        if persist:
+            candidate.parent.mkdir(parents=True, exist_ok=True)
+            register_runtime_reference_root(context.layout, candidate)
         return candidate
     parent = _contained_path(
         storage,
@@ -1180,11 +1183,13 @@ def _new_output_dir(
     )
     if parent.exists() and _is_reparse(parent):
         raise BenchmarkError("benchmark run root is a reparse point")
-    parent.mkdir(parents=True, exist_ok=True)
+    if persist:
+        parent.mkdir(parents=True, exist_ok=True)
     for _ in range(8):
         candidate = parent / uuid.uuid4().hex
         if not candidate.exists() and not _is_reparse(candidate):
-            register_runtime_reference_root(context.layout, candidate)
+            if persist:
+                register_runtime_reference_root(context.layout, candidate)
             return candidate
     raise BenchmarkError("could not allocate a unique benchmark output directory")
 
@@ -1746,9 +1751,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         # completed runner job; build_lock still blocks an active runner lease.
         if args.dry_run:
             context = _validate_build_context(layout, job)
-            output_dir = Path(args.output_dir) if args.output_dir else Path(
-                layout["storage_root"]
-            ) / "runs" / layout["worktree_id"] / args.job_id / "comsol-dispersion" / "<new-run>"
+            output_dir = _new_output_dir(context, args.output_dir, persist=False)
             command = _compose_command(
                 context,
                 output_dir,

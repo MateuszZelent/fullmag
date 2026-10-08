@@ -805,3 +805,13 @@ workflow37774715764 dispersion-artifact-consumers rozpoczęty, wynik oczekiwany.
 Certyfikat: workflow37774715764 / job113302569874 SUCCESS. Log potwierdza
 wykonanie test_comsol_modal_field_certificate.py razem z trzema suite consumers:
 54 passed, 22 subtests passed. Review4060687869: implemented w tym zakresie.
+
+### Review4060687829 — walidacja dry-run benchmarku
+
+Tryb podglądu korzysta z tego samego _new_output_dir co wykonanie, z persist=False.
+Waliduje canonical storage, containment, reparse oraz nieistnienie celu; nie tworzy
+rodziców ani runtime-reference root. Plan nie akceptuje już obcego/existing celu,
+więc _compose_command nie zapisuje override do wskazanego istniejącego folderu.
+Dodano regresje braku zapisów/rejestracji, foreign/existing rejection i odmowy
+przed compose plan. Suite włączono do dispersion-artifact-consumers GHA.
+Source/diff review PASS; wykonanie CI oczekiwane. Nie wykonano lokalnych testów.

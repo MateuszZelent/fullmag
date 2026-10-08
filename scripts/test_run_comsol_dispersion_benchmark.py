@@ -643,6 +643,40 @@ class ComsolDispersionBenchmarkTests(unittest.TestCase):
                 else:
                     self.assertIn("could not start", result["execution_error"])
 
+    def test_dry_run_output_validation_has_no_persistent_side_effects(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            context = self.fake_context(root)
+            requested = root / "not-created" / "output"
+            with patch.object(benchmark, "register_runtime_reference_root") as register:
+                candidate = benchmark._new_output_dir(context, str(requested), persist=False)
+                automatic = benchmark._new_output_dir(context, None, persist=False)
+                register.assert_not_called()
+            self.assertEqual(candidate, requested)
+            self.assertFalse(requested.parent.exists())
+            self.assertFalse(automatic.parent.exists())
+            with self.assertRaises(benchmark.BenchmarkError):
+                benchmark._new_output_dir(context, str(root.parent / "foreign-output"), persist=False)
+            existing = root / "existing"
+            existing.mkdir()
+            with self.assertRaises(benchmark.BenchmarkError):
+                benchmark._new_output_dir(context, str(existing), persist=False)
+
+    def test_dry_run_rejects_foreign_output_before_compose_plan(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            context = self.fake_context(root)
+            with patch.object(benchmark.fullmag_storage, "resolve_layout", return_value=context.layout), \
+                 patch.object(benchmark, "_read_job", return_value=context.job), \
+                 patch.object(benchmark, "_validate_build_context", return_value=context), \
+                 patch.object(benchmark, "_compose_command") as compose:
+                status = benchmark.main([
+                    "--job-id", context.job["job_id"], "--dry-run",
+                    "--output-dir", str(root.parent / "foreign-output"),
+                ])
+                self.assertEqual(status, 2)
+                compose.assert_not_called()
+
     def test_dry_run_does_not_contact_docker(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
