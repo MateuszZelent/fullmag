@@ -815,3 +815,34 @@ API przeglądarki (`TypeError`); nie potwierdzono `isContextLost()` ani
 drawing buffer i nie zaliczono pełnego WebGL smoke. Heatmapa niewykonana.
 Następnie uzupełnić pomiar WebGL aktualnego viewportu, usunąć
 otwarte defekty oraz kontynuować cały T00–T18. PR pozostaje Draft.
+
+## Trwałość relay podczas edycji źródeł
+
+Baza `71776afd1c23937d44255e92dc4741bd203dd3df`. Poprawiono konkretną
+przyczynę utraty aktualizacji UI: wyczerpanie pięciu niestabilnych skanów
+w `dev-source-mirror.mjs::DevSourceMirror.reconcileUntilStable` klasyfikuje
+teraz błąd jako `EAGAIN`. Wyłącznie działający watcher w `schedule`
+ponawia bounded batch po istniejącym debounce. Nie wywołuje fatalnego
+`onError` dla chwilowej edycji źródeł. Błędy walidacji ścieżek, odmowy
+dostępu i pozostałe trwałe błędy nadal przechodzą przez `fail`.
+Initial/start i jednorazowy helper nadal odmawiają braku zbieżności;
+nie ma pozornego sukcesu, zmiany katalogów synchronizacji ani wyłączenia
+kontroli symlink/reparse. `close()` nadal usuwa timer i watchery.
+
+Interpretowane regresje JavaScript bez kompilacji, fixture w storage na D:
+na poprzednim module odczytanym przez `git show HEAD` test ponowienia
+FAIL, 3 pozostałe PASS i 1 symlink SKIP (exit 1). Po poprawce i dodaniu
+regresji rzeczywistego wyczerpania pięciu skanów: 5 PASS, 1 SKIP, exit 0.
+Zestaw obejmuje atomowe create/update/delete, startup race, klasyfikację
+niestabilności, ponowienie z publikacją pliku i fatalny `EACCES`.
+Symlink SKIP wynika z hostowego `EPERM`; brak kwalifikacji tego przypadku.
+`node --check`, scoped ESLint i whitespace PASS. Bez kompilacji native
+lub testów TypeScript/Rust i bez restartu istniejącego workspace.
+
+Poprawka nie odtwarza już zakończonego ownera działającego relay.
+Uruchomienie nowego ownera na nowym kodzie i obserwacja dłuższej sesji
+HMR pozostają wymagane. Aktualny frontend jest uzgodniony przez opisany
+wcześniej one-shot helper, nie przez żywy nowy watcher.
+CI resource fix 113170079959 dla bazy nadal `in_progress` przy ostatnim
+odczycie; nie zgłaszamy jeszcze PASS fazy B. Pełna kwalifikacja WebGL,
+native/current→field→basis→LLG/FFT i T00–T18 pozostaje otwarta.

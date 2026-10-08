@@ -87,6 +87,79 @@ test("mirrors regular source trees and relays atomic create/update/delete", asyn
   }
 });
 
+test("exhausted unstable scans report a retryable error without claiming convergence", async () => {
+  const { root, source, target } = await fixture();
+  const mirror = createDevSourceMirror({ sourceRoot: source, targetRoot: target });
+  let attempts = 0;
+  mirror.reconcileOnce = async () => { attempts += 1; return "previous fingerprint"; };
+  mirror.snapshotSources = async () => new Map();
+  try {
+    await assert.rejects(
+      mirror.reconcileUntilStable(),
+      (error) => error instanceof DevSourceMirrorError && error.cause?.code === "EAGAIN",
+    );
+    assert.equal(attempts, 5);
+  } finally {
+    await mirror.close();
+    await cleanup(root);
+  }
+});
+
+test("live reconciliation retries transient churn without failing the relay", async () => {
+  const { root, source, target } = await fixture();
+  const failures = [];
+  const mirror = createDevSourceMirror({
+    sourceRoot: source,
+    targetRoot: target,
+    debounceMs: 1,
+    onError: (error) => failures.push(error),
+  });
+  try {
+    await mirror.start();
+    const reconcile = mirror.reconcileUntilStable.bind(mirror);
+    let attempts = 0;
+    mirror.reconcileUntilStable = async () => {
+      attempts += 1;
+      if (attempts === 1) {
+        throw new DevSourceMirrorError("source is still being edited", { cause: { code: "EAGAIN" } });
+      }
+      await reconcile();
+    };
+    await writeFile(join(source, "src", "initial.ts"), "export const initial = 2;\n");
+    mirror.schedule();
+    await waitFor(async () => (await readFile(join(target, "src", "initial.ts"), "utf8")) === "export const initial = 2;\n");
+    assert.ok(attempts >= 2);
+    assert.deepEqual(failures, []);
+    assert.equal(mirror.failed, null);
+  } finally {
+    await mirror.close();
+    await cleanup(root);
+  }
+});
+
+test("live reconciliation still fails closed for permanent errors", async () => {
+  const { root, source, target } = await fixture();
+  const failures = [];
+  const mirror = createDevSourceMirror({
+    sourceRoot: source,
+    targetRoot: target,
+    debounceMs: 1,
+    onError: (error) => failures.push(error),
+  });
+  try {
+    await mirror.start();
+    const failure = new DevSourceMirrorError("unsafe source", { cause: { code: "EACCES" } });
+    mirror.reconcileUntilStable = async () => { throw failure; };
+    mirror.schedule();
+    await waitFor(async () => failures.length === 1);
+    assert.equal(mirror.failed, failure);
+    assert.deepEqual(failures, [failure]);
+  } finally {
+    await mirror.close();
+    await cleanup(root);
+  }
+});
+
 test("initial reconciliation closes the copy/watch startup race", async () => {
   const { root, source, target } = await fixture();
   try {
