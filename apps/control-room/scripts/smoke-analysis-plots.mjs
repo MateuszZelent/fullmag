@@ -30,6 +30,7 @@ const ANALYSIS_SURFACES = [
   "Dynamics", "Resonance & FMR", "Dispersion", "Hysteresis", "Comparison",
 ];
 const SESSION_COLLECTION_PATH = "/v2/sessions";
+const DEVELOPMENT_BACKEND_FIXTURE_PATH = "/v2/platform/development-backend";
 const FIXTURE_SESSION_ID = "analysis-plots-fixture";
 const FIXTURE_SESSION_EPOCH = "00000000-0000-4000-8000-000000000017";
 const FIXTURE_REQUEST_SCOPE_EPOCH = "00000000-0000-4000-8000-000000000018";
@@ -1556,6 +1557,47 @@ async function installAnalysisDatasetFixtureRoutes(page, frequencyDomainFixture 
     table_id: datasetRef,
     total_rows: 256,
   };
+  await page.route(`**${DEVELOPMENT_BACKEND_FIXTURE_PATH}`, async (route) => {
+    const request = route.request();
+    const url = new URL(request.url());
+    const headers = {
+      "access-control-allow-headers": request.headers()["access-control-request-headers"] ?? "*",
+      "access-control-allow-methods": "GET, OPTIONS",
+      "access-control-allow-origin": "*",
+      "access-control-expose-headers": "x-api-contract-version",
+      "x-api-contract-version": "1.0.0",
+    };
+    if (url.pathname !== DEVELOPMENT_BACKEND_FIXTURE_PATH) {
+      await route.fulfill({ body: "", headers, status: 404 });
+      return;
+    }
+    if (request.method() === "OPTIONS") {
+      await route.fulfill({ body: "", headers, status: 204 });
+      return;
+    }
+    if (request.method() !== "GET") {
+      await route.fulfill({ body: "", headers, status: 405 });
+      return;
+    }
+    await route.fulfill({
+      body: JSON.stringify({
+        schema_version: "1.0.0",
+        configured: false,
+        revision: 0,
+        state: "disabled",
+        current_build: null,
+        ready_build: null,
+        build_available: false,
+        build_request_id: null,
+        workspace_identity: null,
+        restart_available: false,
+        reason: "disabled",
+      }),
+      contentType: "application/json",
+      headers,
+      status: 200,
+    });
+  });
   await page.route(`**${SESSION_COLLECTION_PATH}`, async (route) => {
     const request = route.request();
     const url = new URL(request.url());

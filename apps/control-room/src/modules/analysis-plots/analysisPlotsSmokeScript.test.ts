@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   MODEL_READINESS_PATH,
   MODEL_UNIVERSE_PATH,
+  PLATFORM_DEVELOPMENT_BACKEND_PATH,
   SESSIONS_PATH,
   SESSION_STATUS_PATH,
   VISUALIZATION_MODE_COMPOSITION_ACTIVE_PATH,
@@ -43,6 +44,11 @@ describe("analysis plots smoke script", () => {
     expect(smokeScript).toContain("function sessionCollectionFixture()");
     expect(smokeScript).toContain("session_id: FIXTURE_SESSION_ID");
     expect(smokeScript).toContain("url.pathname !== SESSION_COLLECTION_PATH");
+    expect(smokeScript).toContain(`const DEVELOPMENT_BACKEND_FIXTURE_PATH = "${PLATFORM_DEVELOPMENT_BACKEND_PATH}";`);
+    expect(smokeScript).toContain('url.pathname !== DEVELOPMENT_BACKEND_FIXTURE_PATH');
+    expect(smokeScript).toContain('"access-control-allow-methods": "GET, OPTIONS"');
+    expect(smokeScript).toContain('state: "disabled"');
+    expect(smokeScript).toContain("configured: false");
     expect(smokeScript).toContain("current: true");
     expect(smokeScript).toContain("session_epoch: FIXTURE_SESSION_EPOCH");
     expect(smokeScript).toContain(
