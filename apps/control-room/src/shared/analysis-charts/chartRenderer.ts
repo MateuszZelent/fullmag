@@ -355,6 +355,7 @@ export function chartRenderModelToEChartsOption(
     }),
 
     tooltip: {
+      className: "fm-chart-tooltip",
       backgroundColor: bgSurface,
       borderColor: borderStrong,
       borderWidth: 1,

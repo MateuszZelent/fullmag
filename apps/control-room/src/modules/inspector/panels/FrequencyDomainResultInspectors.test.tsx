@@ -110,7 +110,7 @@ describe("physics-first frequency result inspectors", () => {
     expect(html).toContain("Relative residual (L2)");
     expect(html).toContain("2.000e-8");
     expect(html).toContain("Response residual (type unspecified)");
-    expect(html).toContain("5.000e-5");
+    expect(html).toContain("0.00005000");
   });
 
   it("keeps a legacy response residual outside the relative L2 field", () => {

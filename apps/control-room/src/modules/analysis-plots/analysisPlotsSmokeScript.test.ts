@@ -50,6 +50,10 @@ describe("analysis plots smoke script", () => {
     expect(smokeScript).toContain("expectModeDetailRelativeL2Absent: true");
     expect(smokeScript).toContain("modeDetailCanonicalRelativeL2Present");
     expect(smokeScript).toContain("page.waitForResponse(");
+    expect(smokeScript).toContain("waitForFrequencyDomainTooltip");
+    expect(smokeScript).toContain('tooltipTerms: ["mode index: 1", "Eigen frequency", "2.25 GHz"]');
+    expect(smokeScript).toContain("fm-chart-tooltip");
+    expect(smokeScript).toContain("tooltip-failure.png");
     expect(smokeScript).toContain('schemaVersion: "frequency_domain_eigen_spectrum.v1"');
     expect(smokeScript).toContain('schemaVersion: "frequency_domain_eigen_mode_resource.v1"');
     expect(smokeScript).toContain('schema_version: "eigen_mode.v2"');

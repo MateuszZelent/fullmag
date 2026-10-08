@@ -47,6 +47,7 @@ describe("chart renderer owner", () => {
   it("keeps dimensionless axes unscaled, enables ECharts aria and removes the bottom slider", () => {
     const option = chartRenderModelToEChartsOption(model);
     expect(option.aria).toMatchObject({ enabled: true });
+    expect(option.tooltip).toMatchObject({ className: "fm-chart-tooltip" });
     expect(option.dataZoom).toEqual([{ filterMode: "none", type: "inside", zoomOnMouseWheel: "ctrl" }]);
     expect(option.xAxis).toMatchObject({ name: "time [s]" });
     expect(option.yAxis).toEqual(expect.arrayContaining([expect.objectContaining({ name: "magnetization" })]));

@@ -808,7 +808,11 @@ async function verifyFrequencyDomainChartFixtures(browser, workspaceUrl, baseUrl
       };
 
       if (fixture.expectedSelection) {
-        proof.selectedPoint = await clickFrequencyDomainPoint(page, fixture.expectedSelection);
+        proof.selectedPoint = await clickFrequencyDomainPoint(
+          page,
+          fixture.expectedSelection,
+          fixture.id,
+        );
       }
       if (fixture.screenshot) {
         mkdirSync(acceptanceDirectory, { recursive: true });
@@ -986,7 +990,7 @@ async function inspectFrequencyChartOption(page, fixture) {
   return evidence.series;
 }
 
-async function clickFrequencyDomainPoint(page, expected) {
+async function clickFrequencyDomainPoint(page, expected, fixtureId) {
   const host = page.locator(".fm-analysis-plots__echarts").first();
   const coordinateTarget = await page.evaluate(({ rowId, seriesType }) => {
     const diagnostics = window.__FULLMAG_CHART_DIAGNOSTICS__;
@@ -1031,13 +1035,15 @@ async function clickFrequencyDomainPoint(page, expected) {
 
   const expectedModePath = `${FREQUENCY_DOMAIN_PATHS.modePrefix}${expected.sampleIndex}/${expected.modeIndex}`;
   await page.mouse.move(coordinateTarget.x, coordinateTarget.y);
-  await page.waitForTimeout(30);
-  const tooltipMatch = await readFrequencyDomainTooltip(host);
-  if (!tooltipHasRowId(tooltipMatch, expected.rowId)) {
-    throw new Error(
-      `Frequency-domain chart tooltip did not expose rendered source row ${expected.rowId}.`,
-    );
-  }
+  // Tooltip text proves the user-facing mode/frequency content; the actual source row
+  // is proven separately by the applied option, click tuple, and selected Inspector.
+  const tooltip = await waitForFrequencyDomainTooltip(
+    page,
+    host,
+    coordinateTarget,
+    expected.tooltipTerms,
+    fixtureId,
+  );
   const expectedModeRequest = page.waitForRequest(
     (request) => currentSessionPath(request.url())?.split("?")[0] === expectedModePath,
     { timeout: 800 },
@@ -1185,7 +1191,7 @@ async function clickFrequencyDomainPoint(page, expected) {
     rowId: expected.rowId,
     sampleId: expected.sampleId,
     sampleIndex: expected.sampleIndex,
-    tooltip: tooltipMatch,
+    tooltip,
   };
 }
 
@@ -1234,16 +1240,116 @@ async function readFrequencyDomainInspectorFields(page) {
   });
 }
 
-async function readFrequencyDomainTooltip(host) {
-  return host.evaluate((element) =>
-    Array.from(element.querySelectorAll("div"))
-      .map((node) => node.textContent?.trim() ?? "")
-      .find((text) => text.includes("row id:")) ?? "",
+async function waitForFrequencyDomainTooltip(
+  page,
+  host,
+  coordinateTarget,
+  expectedTerms,
+  fixtureId,
+) {
+  if (!Array.isArray(expectedTerms) || expectedTerms.length === 0) {
+    throw new Error(`${fixtureId} is missing user-facing tooltip expectations.`);
+  }
+  const tooltipAppeared = await page.waitForFunction((terms) => {
+    const tooltipNodes = Array.from(document.querySelectorAll(".fm-chart-tooltip"));
+    return tooltipNodes.some((node) => {
+      const style = getComputedStyle(node);
+      const rect = node.getBoundingClientRect();
+      if (
+        style.display === "none" ||
+        style.visibility === "hidden" ||
+        style.opacity === "0" ||
+        rect.width <= 0 ||
+        rect.height <= 0
+      ) return false;
+      const text = (node.textContent ?? "").replace(/\s+/g, " ").trim().toLowerCase();
+      return terms.every((term) => text.includes(String(term).toLowerCase()));
+    });
+  }, expectedTerms, { timeout: 1_000 }).catch(() => null);
+
+  const tooltipTexts = await readFrequencyDomainTooltip(host);
+  const matchingTooltip = tooltipTexts.find((entry) =>
+    entry.visible && tooltipIncludesTerms(entry.text, expectedTerms),
+  );
+  if (tooltipAppeared && matchingTooltip) {
+    return { expectedTerms, text: matchingTooltip.text };
+  }
+
+  const evidence = await readFrequencyDomainTooltipEvidence(host, coordinateTarget);
+  const screenshotPath = path.join(
+    acceptanceDirectory,
+    `${fixtureId.replace(/[^a-z0-9_-]/gi, "-")}-tooltip-failure.png`,
+  );
+  let screenshot = screenshotPath;
+  try {
+    mkdirSync(acceptanceDirectory, { recursive: true });
+    await page.screenshot({ path: screenshotPath });
+  } catch (error) {
+    screenshot = `unavailable: ${error instanceof Error ? error.message : String(error)}`;
+  }
+  throw new Error(
+    `${fixtureId} did not show expected user-facing tooltip content ${JSON.stringify(expectedTerms)}. Evidence: ${JSON.stringify({ tooltipTexts, ...evidence })}. Screenshot: ${screenshot}`,
   );
 }
 
-function tooltipHasRowId(tooltip, rowId) {
-  return new RegExp(`row id:\\s*${rowId}(?!\\d)`).test(tooltip);
+async function readFrequencyDomainTooltip(host) {
+  return host.evaluate((element) => {
+    const nodes = Array.from(element.ownerDocument.querySelectorAll(".fm-chart-tooltip"));
+    return nodes.map((node) => {
+      const style = getComputedStyle(node);
+      const rect = node.getBoundingClientRect();
+      return {
+        className: typeof node.className === "string" ? node.className : "",
+        text: (node.textContent ?? "").replace(/\s+/g, " ").trim(),
+        visible: style.display !== "none" &&
+          style.visibility !== "hidden" &&
+          style.opacity !== "0" &&
+          rect.width > 0 && rect.height > 0,
+      };
+    }).filter((entry) => entry.text.length > 0);
+  });
+}
+
+function tooltipIncludesTerms(tooltip, expectedTerms) {
+  const normalized = String(tooltip).replace(/\s+/g, " ").trim().toLowerCase();
+  return expectedTerms.every((term) => normalized.includes(String(term).toLowerCase()));
+}
+
+async function readFrequencyDomainTooltipEvidence(host, coordinateTarget) {
+  return host.evaluate((element, target) => {
+    const rect = element.getBoundingClientRect();
+    const option = window.__FULLMAG_CHART_DIAGNOSTICS__?.readRenderedOption?.();
+    const series = Array.isArray(option?.series)
+      ? option.series[target.seriesIndex]
+      : null;
+    const data = Array.isArray(series?.data)
+      ? series.data[target.dataIndex]
+      : null;
+    return {
+      chartRect: {
+        height: rect.height,
+        left: rect.left,
+        top: rect.top,
+        width: rect.width,
+      },
+      renderedPoint: {
+        data,
+        dataIndex: target.dataIndex,
+        seriesIndex: target.seriesIndex,
+        seriesName: series?.name ?? null,
+        seriesType: series?.type ?? null,
+      },
+      pointer: { x: target.x, y: target.y },
+      tooltipTexts: Array.from(element.ownerDocument.querySelectorAll(".fm-chart-tooltip"))
+        .map((node) => ({
+          className: typeof node.className === "string" ? node.className : "",
+          text: (node.textContent ?? "").replace(/\s+/g, " ").trim(),
+          visible: getComputedStyle(node).display !== "none" &&
+            getComputedStyle(node).visibility !== "hidden" &&
+            getComputedStyle(node).opacity !== "0",
+        })),
+    };
+  }, coordinateTarget);
 }
 
 function createFrequencyDomainChartFixtures() {
@@ -1263,6 +1369,7 @@ function createFrequencyDomainChartFixtures() {
         sampleIndex: 3,
         seriesType: "line",
         frequencyHz: 2.25e9,
+        tooltipTerms: ["mode index: 1", "Eigen frequency", "2.25 GHz"],
         residualFields: {
           "Absolute residual (L2)": "not available",
           "Relative residual (L2)": 1e-7,
@@ -1396,6 +1503,7 @@ function makeDecimatedDispersionFixture() {
       sampleIndex: targetSampleIndex,
       seriesType: "line",
       sourceGapRow: 2 * gapAtRow,
+      tooltipTerms: ["path_s", "Branch tracked"],
     },
     text: rows.join("\n"),
   };
