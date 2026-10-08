@@ -57,7 +57,20 @@ fn managed_store_root(state: &AppState) -> Result<PathBuf, ApiError> {
     state
         .submit_store_root
         .clone()
-        .ok_or_else(|| ApiError::internal("managed project run storage is not configured"))
+        .ok_or_else(|| ApiError::not_found("managed observation run storage is not configured"))
+}
+
+fn observation_store_error(error: anyhow::Error) -> ApiError {
+    // Imported archives need not have an accepted-run store on this host.
+    // Corruption, permissions and unexpected I/O remain operational failures.
+    if error
+        .downcast_ref::<std::io::Error>()
+        .is_some_and(|source| source.kind() == std::io::ErrorKind::NotFound)
+    {
+        ApiError::not_found("durable observation run storage was not found")
+    } else {
+        ApiError::internal(error.to_string())
+    }
 }
 
 fn load_observation_frames(
@@ -65,7 +78,7 @@ fn load_observation_frames(
     run_id: String,
 ) -> Result<Vec<LoadedObservationFrame>, ApiError> {
     let store = fullmag_session::SessionStore::open_existing(&store_root)
-        .map_err(|error| ApiError::internal(error.to_string()))?;
+        .map_err(observation_store_error)?;
     let run_catalog = store
         .read_run_catalog(&run_id)
         .map_err(|error| ApiError::internal(error.to_string()))?
@@ -431,4 +444,32 @@ pub async fn get_observation_frame_magnetization(
         }
     }
     Ok(response)
+}
+
+#[cfg(test)]
+mod observation_store_tests {
+    use super::*;
+    use axum::http::StatusCode;
+
+    #[test]
+    fn missing_observation_store_is_a_missing_resource() {
+        let root = tempfile::tempdir().unwrap();
+        let error =
+            load_observation_frames(root.path().join("absent-store"), "imported-run".into())
+                .err()
+                .expect("a missing store must not invent observation frames");
+        assert_eq!(error.status, StatusCode::NOT_FOUND);
+        assert!(!root.path().join("absent-store").exists());
+    }
+
+    #[test]
+    fn observation_store_permissions_and_corruption_remain_failures() {
+        let denied = observation_store_error(anyhow::Error::new(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "access denied",
+        )));
+        assert_eq!(denied.status, StatusCode::INTERNAL_SERVER_ERROR);
+        let corrupt = observation_store_error(anyhow::anyhow!("corrupt store record"));
+        assert_eq!(corrupt.status, StatusCode::INTERNAL_SERVER_ERROR);
+    }
 }
