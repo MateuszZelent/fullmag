@@ -13,9 +13,10 @@ struct PoissonAirboxSharedDomainComplexCsrMatrix;
 struct PoissonAirboxSharedDomainAssemblyResult;
 
 /*
- * Native shared-domain Floquet owner.  All five blocks are phase-reduced
- * complex CSR matrices assembled from one MFEM mesh/material/equilibrium
- * payload.  The modal solver realifies only the sparse PETSc views and keeps
+ * Native shared-domain Floquet owner.  The five pencil blocks and positive
+ * tangent-overlap metric are phase-reduced complex CSR matrices assembled
+ * from one MFEM mesh/material/equilibrium payload. The metric is not a pencil
+ * block. The modal solver realifies only the sparse PETSc views and keeps
  * A_qphi P^{-1} A_phiq as a MatShell action, so the dense512 diagnostic bound
  * is not part of this production contract.
  */
@@ -25,6 +26,8 @@ struct FloquetSharedDomainSparseModalOperator {
     const PoissonAirboxSharedDomainComplexCsrMatrix *p = nullptr;
     const PoissonAirboxSharedDomainComplexCsrMatrix *a_qphi = nullptr;
     const PoissonAirboxSharedDomainComplexCsrMatrix *a_phiq = nullptr;
+    // Non-pencil physical overlap metric borrowed from full_descriptor_assembly.
+    const PoissonAirboxSharedDomainComplexCsrMatrix *positive_tangent_mass = nullptr;
     std::uint64_t q_complex_dof_count = 0;
     std::uint64_t phi_dof_count = 0;
     const std::vector<double> *uniform_transverse_probe_q_y = nullptr;

@@ -2150,6 +2150,8 @@ FrequencyDomainContractResult solve_modal_eigen_contract(
             &native_floquet_sparse_assembly.floquet_a_qphi;
         native_floquet_sparse_operator.a_phiq =
             &native_floquet_sparse_assembly.floquet_a_phiq;
+        native_floquet_sparse_operator.positive_tangent_mass =
+            &native_floquet_sparse_assembly.floquet_positive_tangent_mass;
         native_floquet_sparse_operator.q_complex_dof_count =
             native_floquet_sparse_assembly.floquet_a_qq.row_count;
         native_floquet_sparse_operator.phi_dof_count =

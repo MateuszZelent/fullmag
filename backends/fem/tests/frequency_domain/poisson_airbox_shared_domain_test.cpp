@@ -835,11 +835,343 @@ double dense_matrix_max_difference(
     return maximum;
 }
 
+#if FULLMAG_HAS_MFEM_STACK
+void floquet_positive_tangent_mass_matches_independent_phase_reduction()
+{
+    mfem::Mesh mesh(3, 10, 2, 0, 3);
+    const double vertices[][3] = {
+        {0.0, 0.0, 0.0}, {1.0, 0.0, 0.0}, {0.0, 1.0, 0.0},
+        {0.0, 0.0, 1.0}, {1.0, 0.0, 1.0}, {0.0, 1.0, 1.0},
+        {3.0, 0.0, 0.0}, {4.0, 0.0, 0.0}, {3.0, 1.0, 0.0},
+        {3.0, 0.0, 1.0},
+    };
+    for (const auto &vertex : vertices) {
+        mesh.AddVertex(vertex);
+    }
+    const int prism6[] = {0, 1, 2, 3, 4, 5};
+    const int tet4[] = {6, 7, 8, 9};
+    mesh.AddWedge(prism6, 1);
+    mesh.AddTet(tet4, 2);
+    mesh.FinalizeTopology();
+    mesh.Finalize(false, true);
+
+    mfem::H1_FECollection collection(1, mesh.Dimension());
+    mfem::FiniteElementSpace scalar_space(&mesh, &collection);
+    const std::uint64_t node_count =
+        static_cast<std::uint64_t>(scalar_space.GetVSize());
+    check(node_count == 10u, "tangent-mass oracle fixture has ten P1 nodes");
+    const std::uint64_t full_q_count = 2u * node_count;
+
+    std::vector<fd::TangentFrameNode> frames(static_cast<std::size_t>(node_count));
+    for (fd::TangentFrameNode &frame : frames) {
+        frame.m[2] = 1.0;
+        frame.e1[0] = 1.0;
+        frame.e2[1] = 1.0;
+    }
+    constexpr std::uint32_t master_node = 0u;
+    constexpr std::uint32_t member_node = 3u;
+    constexpr double tangent_rotation_rad = 0.37;
+    frames[member_node].e1[0] = std::cos(tangent_rotation_rad);
+    frames[member_node].e1[1] = std::sin(tangent_rotation_rad);
+    frames[member_node].e2[0] = -std::sin(tangent_rotation_rad);
+    frames[member_node].e2[1] = std::cos(tangent_rotation_rad);
+
+    const std::vector<std::uint8_t> magnetic_elements = {1u, 1u};
+    const std::vector<std::uint32_t> magnetic_classes = {
+        0u, 1u, 2u, 0u, 3u, 4u, 5u, 6u, 7u, 8u};
+    constexpr std::uint64_t reduced_node_count = 9u;
+    fd::FrequencyDomainFloquetPeriodicPair periodic_pair{};
+    periodic_pair.pair_id = "prism-z-copy";
+    periodic_pair.node_a = master_node;
+    periodic_pair.node_b = member_node;
+    periodic_pair.translation_m[2] = 1.0;
+    periodic_pair.has_translation = true;
+    periodic_pair.has_phase = true;
+    periodic_pair.phase_rad = -0.4;
+
+    mfem::Array<int> boundary_marker(mesh.bdr_attributes.Max());
+    boundary_marker = 1;
+    const std::array<double, 3> wavevector{{0.0, 0.0, 0.4}};
+    fd::FloquetAirboxSharedDomainBlockRequest block_request{};
+    block_request.scalar_space = &scalar_space;
+    block_request.tangent_frames = frames.data();
+    block_request.tangent_frame_count = node_count;
+    block_request.magnetic_element_mask = magnetic_elements.data();
+    block_request.magnetic_element_count = magnetic_elements.size();
+    block_request.uniform_saturation_magnetization_a_per_m = 2.0;
+    block_request.scalar_reduced_node = magnetic_classes.data();
+    block_request.scalar_reduced_node_count = reduced_node_count;
+    block_request.magnetic_reduced_node = magnetic_classes.data();
+    block_request.magnetic_reduced_node_count = reduced_node_count;
+    block_request.periodic_pairs = &periodic_pair;
+    block_request.periodic_pair_count = 1u;
+    block_request.k_rad_per_m = wavevector;
+    block_request.boundary_kind = fd::FloquetAirboxBoundaryKind::robin;
+    block_request.robin_beta = 1.0;
+    block_request.robin_boundary_marker = &boundary_marker;
+    fd::FloquetAirboxSharedDomainBlockResult floquet_blocks{};
+    check(fd::assemble_floquet_airbox_shared_domain_blocks(
+              block_request, &floquet_blocks) == fd::FrequencyDomainStatus::ok,
+          floquet_blocks.error_message);
+    check(floquet_blocks.tangent_constraint != nullptr,
+          "tangent-mass oracle obtains the actual phase/frame constraint");
+
+    std::vector<std::uint32_t> zero_row_offsets(
+        static_cast<std::size_t>(full_q_count + 1u), 0u);
+    const fd::CsrMatrixView zero_a_qq{
+        full_q_count,
+        full_q_count,
+        zero_row_offsets.data(),
+        zero_row_offsets.size(),
+        nullptr,
+        0u,
+        nullptr,
+        0u};
+    fd::PoissonAirboxSharedDomainAssemblyRequest request{};
+    request.scalar_space = &scalar_space;
+    request.tangent_frames = frames.data();
+    request.tangent_frame_count = node_count;
+    request.magnetic_element_mask = magnetic_elements.data();
+    request.magnetic_element_count = magnetic_elements.size();
+    request.uniform_saturation_magnetization_a_per_m = 2.0;
+    request.gamma0_m_per_a_s = 3.0;
+    request.mu0_T_m_A = 4.0;
+    request.magnetic_a_qq_csr = &zero_a_qq;
+    request.magnetic_phase_constraint = floquet_blocks.tangent_constraint.get();
+    request.scalar_reduced_node = magnetic_classes.data();
+    request.scalar_reduced_node_count = reduced_node_count;
+    request.magnetic_reduced_node = magnetic_classes.data();
+    request.magnetic_reduced_node_count = reduced_node_count;
+    request.equivalence_classes_complete = true;
+    request.boundary_kind = fd::PoissonAirboxBoundaryKind::robin;
+    request.robin_beta = 1.0;
+    request.robin_boundary_marker = &boundary_marker;
+    fd::PoissonAirboxSharedDomainAssemblyResult assembled{};
+    check(fd::assemble_poisson_airbox_shared_domain(request, &assembled) ==
+              fd::FrequencyDomainStatus::ok,
+          assembled.error_message);
+
+    const std::uint64_t reduced_q_count = 2u * reduced_node_count;
+    check(assembled.floquet_full_positive_tangent_mass.row_count == full_q_count &&
+              assembled.floquet_full_positive_tangent_mass.column_count == full_q_count,
+          "Floquet assembly retains the full physical tangent P1 mass");
+    check(assembled.floquet_positive_tangent_mass.row_count == reduced_q_count &&
+              assembled.floquet_positive_tangent_mass.column_count == reduced_q_count &&
+              !assembled.floquet_positive_tangent_mass.values.empty(),
+          "Floquet assembly retains the phase-reduced complex tangent P1 mass");
+
+    // Independent exact local mass formulas: tet4 uses V/20*(1+delta_ij);
+    // prism6 uses the tensor product of the triangle and segment P1 masses.
+    // Tangent-frame dot products lift each scalar entry into physical XYZ.
+    std::vector<double> full_mass(
+        static_cast<std::size_t>(full_q_count * full_q_count), 0.0);
+    const auto dot3 = [](const double *left, const double *right) {
+        return left[0] * right[0] + left[1] * right[1] + left[2] * right[2];
+    };
+    const auto tangent_component = [](const fd::TangentFrameNode &frame,
+                                      std::uint32_t component) -> const double * {
+        return component == 0u ? frame.e1 : frame.e2;
+    };
+    for (int element = 0; element < mesh.GetNE(); ++element) {
+        mfem::Array<int> dofs;
+        scalar_space.GetElementDofs(element, dofs);
+        const mfem::Geometry::Type geometry = mesh.GetElementGeometry(element);
+        double volume = 0.0;
+        if (geometry == mfem::Geometry::TETRAHEDRON) {
+            volume = tetra_volume_from_vertices(mesh, element);
+        } else {
+            check(geometry == mfem::Geometry::PRISM && dofs.Size() == 6,
+                  "independent tangent-mass oracle accepts tet4 and prism6 only");
+            mfem::Array<int> element_vertices;
+            mesh.GetElementVertices(element, element_vertices);
+            check(element_vertices.Size() == 6,
+                  "independent prism mass has six ordered vertices");
+            const double *x0 = mesh.GetVertex(element_vertices[0]);
+            const double *x1 = mesh.GetVertex(element_vertices[1]);
+            const double *x2 = mesh.GetVertex(element_vertices[2]);
+            const double *x3 = mesh.GetVertex(element_vertices[3]);
+            const double edge_a[3] = {x1[0] - x0[0], x1[1] - x0[1], x1[2] - x0[2]};
+            const double edge_b[3] = {x2[0] - x0[0], x2[1] - x0[1], x2[2] - x0[2]};
+            const double extrusion[3] = {x3[0] - x0[0], x3[1] - x0[1], x3[2] - x0[2]};
+            const double base_normal[3] = {
+                edge_a[1] * edge_b[2] - edge_a[2] * edge_b[1],
+                edge_a[2] * edge_b[0] - edge_a[0] * edge_b[2],
+                edge_a[0] * edge_b[1] - edge_a[1] * edge_b[0]};
+            volume = 0.5 * std::abs(dot3(base_normal, extrusion));
+        }
+        check(std::isfinite(volume) && volume > 0.0,
+              "independent tangent-mass element volume is positive");
+        for (int local_row = 0; local_row < dofs.Size(); ++local_row) {
+            const int raw_row = dofs[local_row];
+            const std::uint64_t row_node = static_cast<std::uint64_t>(
+                raw_row >= 0 ? raw_row : -1 - raw_row);
+            const double row_sign = raw_row >= 0 ? 1.0 : -1.0;
+            for (int local_column = 0; local_column < dofs.Size(); ++local_column) {
+                const int raw_column = dofs[local_column];
+                const std::uint64_t column_node = static_cast<std::uint64_t>(
+                    raw_column >= 0 ? raw_column : -1 - raw_column);
+                const double column_sign = raw_column >= 0 ? 1.0 : -1.0;
+                double scalar_mass = 0.0;
+                if (geometry == mfem::Geometry::TETRAHEDRON) {
+                    scalar_mass = volume / 20.0 * (local_row == local_column ? 2.0 : 1.0);
+                } else {
+                    const int triangle_factor = local_row % 3 == local_column % 3 ? 2 : 1;
+                    const int segment_factor = local_row / 3 == local_column / 3 ? 2 : 1;
+                    scalar_mass = volume / 72.0 * triangle_factor * segment_factor;
+                }
+                scalar_mass *= row_sign * column_sign;
+                for (std::uint32_t row_component = 0u; row_component < 2u; ++row_component) {
+                    for (std::uint32_t column_component = 0u; column_component < 2u;
+                         ++column_component) {
+                        const double frame_dot = dot3(
+                            tangent_component(frames[row_node], row_component),
+                            tangent_component(frames[column_node], column_component));
+                        full_mass[static_cast<std::size_t>(
+                            (2u * row_node + row_component) * full_q_count +
+                            2u * column_node + column_component)] += scalar_mass * frame_dot;
+                    }
+                }
+            }
+        }
+    }
+
+    double full_error = 0.0;
+    double full_scale = 0.0;
+    for (std::uint64_t row = 0u; row < full_q_count; ++row) {
+        for (std::uint64_t column = 0u; column < full_q_count; ++column) {
+            const double expected = full_mass[static_cast<std::size_t>(
+                row * full_q_count + column)];
+            const double actual = matrix_value(
+                assembled.floquet_full_positive_tangent_mass, row, column);
+            full_error = std::max(full_error, std::abs(actual - expected));
+            full_scale = std::max(full_scale, std::max(std::abs(actual), std::abs(expected)));
+        }
+    }
+    check(full_error <= 1.0e-12 * std::max(1.0, full_scale),
+          "full tangent P1 CSR matches independent tet4/prism6 mass formulas");
+    check(std::abs(full_mass[0] - full_mass[static_cast<std::size_t>(
+              (2u * 6u) * full_q_count + 2u * 6u)]) > 1.0e-6,
+          "full P1 mass retains nonuniform nodal diagonal weights");
+    check(std::abs(matrix_value(
+              assembled.floquet_full_positive_tangent_mass,
+              2u * master_node,
+              2u * member_node + 1u)) > 1.0e-6,
+          "full tangent mass uses the nonuniform local tangent basis");
+
+    const auto build_independent_constraint = [&](bool include_phase, bool include_member) {
+        std::vector<std::complex<double>> constraint(
+            static_cast<std::size_t>(full_q_count * reduced_q_count),
+            std::complex<double>{});
+        for (std::uint64_t node = 0u; node < node_count; ++node) {
+            if (node == member_node && !include_member) {
+                continue;
+            }
+            const std::uint32_t class_id = magnetic_classes[static_cast<std::size_t>(node)];
+            const std::complex<double> phase = node == member_node && include_phase
+                ? std::complex<double>(std::cos(0.4), -std::sin(0.4))
+                : std::complex<double>(1.0, 0.0);
+            for (std::uint32_t row_component = 0u; row_component < 2u; ++row_component) {
+                for (std::uint32_t column_component = 0u; column_component < 2u;
+                     ++column_component) {
+                    const double tangent_rotation = node == member_node
+                        ? dot3(
+                              tangent_component(frames[node], row_component),
+                              tangent_component(frames[master_node], column_component))
+                        : (row_component == column_component ? 1.0 : 0.0);
+                    constraint[static_cast<std::size_t>(
+                        (2u * node + row_component) * reduced_q_count +
+                        2u * class_id + column_component)] = phase * tangent_rotation;
+                }
+            }
+        }
+        return constraint;
+    };
+    const auto reduce_independently = [&](const std::vector<std::complex<double>> &constraint) {
+        std::vector<std::complex<double>> reduced_mass(
+            static_cast<std::size_t>(reduced_q_count * reduced_q_count),
+            std::complex<double>{});
+        for (std::uint64_t row = 0u; row < reduced_q_count; ++row) {
+            for (std::uint64_t column = 0u; column < reduced_q_count; ++column) {
+                std::complex<double> value{};
+                for (std::uint64_t full_row = 0u; full_row < full_q_count; ++full_row) {
+                    const auto row_map = std::conj(constraint[
+                        static_cast<std::size_t>(full_row * reduced_q_count + row)]);
+                    if (row_map == std::complex<double>{}) continue;
+                    for (std::uint64_t full_column = 0u; full_column < full_q_count;
+                         ++full_column) {
+                        const double mass = full_mass[static_cast<std::size_t>(
+                            full_row * full_q_count + full_column)];
+                        if (mass == 0.0) continue;
+                        value += row_map * mass * constraint[static_cast<std::size_t>(
+                            full_column * reduced_q_count + column)];
+                    }
+                }
+                reduced_mass[static_cast<std::size_t>(row * reduced_q_count + column)] = value;
+            }
+        }
+        return reduced_mass;
+    };
+    const auto expected_reduced = reduce_independently(
+        build_independent_constraint(true, true));
+    const auto no_phase_reduced = reduce_independently(
+        build_independent_constraint(false, true));
+    const auto master_only_reduced = reduce_independently(
+        build_independent_constraint(true, false));
+
+    double reduced_error = 0.0;
+    double reduced_scale = 0.0;
+    double phase_effect = 0.0;
+    for (std::uint64_t row = 0u; row < reduced_q_count; ++row) {
+        for (std::uint64_t column = 0u; column < reduced_q_count; ++column) {
+            const std::size_t offset = static_cast<std::size_t>(row * reduced_q_count + column);
+            const std::complex<double> expected = expected_reduced[offset];
+            const std::complex<double> actual = complex_matrix_value(
+                assembled.floquet_positive_tangent_mass, row, column);
+            reduced_error = std::max(reduced_error, std::abs(actual - expected));
+            reduced_scale = std::max(
+                reduced_scale, std::max(std::abs(actual), std::abs(expected)));
+            phase_effect = std::max(
+                phase_effect, std::abs(expected - no_phase_reduced[offset]));
+            const std::complex<double> adjoint = std::conj(complex_matrix_value(
+                assembled.floquet_positive_tangent_mass, column, row));
+            check(std::abs(actual - adjoint) <= 1.0e-12 * std::max(1.0, reduced_scale),
+                  "phase-reduced tangent P1 mass is Hermitian");
+        }
+    }
+    check(reduced_error <= 1.0e-12 * std::max(1.0, reduced_scale),
+          "reduced tangent mass equals independent C^H M_full C");
+    check(phase_effect > 1.0e-5,
+          "Floquet phase changes the mass contribution of periodic physical copies");
+    check(std::abs(expected_reduced[0] - master_only_reduced[0]) > 1.0e-5,
+          "both master and periodic member contribute to the reduced physical mass");
+
+    std::complex<double> quadratic{};
+    for (std::uint64_t row = 0u; row < reduced_q_count; ++row) {
+        const std::complex<double> left(
+            0.1 * static_cast<double>(row + 1u),
+            -0.03 * static_cast<double>(row + 2u));
+        std::complex<double> action{};
+        for (std::uint64_t column = 0u; column < reduced_q_count; ++column) {
+            const std::complex<double> right(
+                0.1 * static_cast<double>(column + 1u),
+                -0.03 * static_cast<double>(column + 2u));
+            action += complex_matrix_value(
+                assembled.floquet_positive_tangent_mass, row, column) * right;
+        }
+        quadratic += std::conj(left) * action;
+    }
+    check(quadratic.real() > 0.0 &&
+              std::abs(quadratic.imag()) <= 1.0e-12 * std::max(1.0, quadratic.real()),
+          "phase-reduced tangent mass has a positive real quadratic form");
+}
+#endif
+
 } // namespace
 
 int main()
 {
 #if FULLMAG_HAS_MFEM_STACK
+    floquet_positive_tangent_mass_matches_independent_phase_reduction();
     mfem::Mesh mesh = mfem::Mesh::MakeCartesian3D(
         1,
         1,

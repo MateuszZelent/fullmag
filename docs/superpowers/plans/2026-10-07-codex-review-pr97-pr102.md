@@ -922,3 +922,18 @@ Review4061061326 implemented (producer+consumer contracts), nie physics qualific
 GUI f614 trace potwierdza wybrany mode-visualization, a timeout przeszedł z expand
 na wait-wavevector-uniform. SVG event fix rozwiązał tę część; admission viewportu
 przed binary nadal wymaga diagnozy. Pełny browser gate pozostaje NOT VERIFIED.
+
+### Fundament owned Floquet mass — źródła, nie wykonanie provider
+
+Assembly składa pełną geometryczną consistent P1 mass i redukuje C^HMC.
+Macierz nie jest blokiem Bqq, bez Ms/gamma; obejmuje physical slave nodes
+oraz intercomponent frame dot products. DTO pożycza reducedCSR z tego samego
+owned lifetime. Pełna macierz może mieć zerowe air/inactive rows; dodatniość
+dotyczy aktywnej reduced magnetic space, nie całego padded full space.
+Source review PASS. Independent tet4/prism6 phase/frame oracle dodany pod
+FULLMAG_HAS_MFEM_STACK. No-provider CI nie jest dowodem jego wykonania.
+GitHub repo runners=[]: istniejący self-hosted fem-managed route niedostępny.
+Trwa ustalenie GitHub-hosted MFEM proof; zakaz lokalnej kompilacji testów zachowany.
+Fixture air/inactive/pinned reduction nadal potrzebna przed pełną admission claim.
+Solver/finalizer jeszcze nie konsumuje nowej metryki; trzy uwagi mode selection
+pozostają otwarte do integracji, cap ordering/refill oraz real-pencil regresji.

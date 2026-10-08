@@ -422,6 +422,8 @@
         "source-tracking-consistent-subspace",
         "source-tracking-consistent-fem-adapter",
         "source-tracking-consistent-basis-regression",
+        "source-floquet-tangent-mass-assembly",
+        "source-floquet-tangent-mass-regression",
         "source-profile-packing",
         "source-profile-mass",
         "source-profile-overlap",
@@ -1441,6 +1443,18 @@
       "path": "crates/fullmag-runner/src/eigen/tracking_mass.rs",
       "symbol": "ConsistentP1TrackingMetric",
       "responsibility": "Exact consistent tet4 Cartesian embedding and nodal recovery"
+    },
+    {
+      "id": "source-floquet-tangent-mass-assembly",
+      "path": "backends/fem/cpu/frequency_domain/operators/poisson_airbox_shared_domain.cpp",
+      "symbol": "assemble_poisson_airbox_shared_domain",
+      "responsibility": "Full geometric P1 tangent mass on physical magnetic nodes and phase-reduced complex CSR; not consumed by solve or deduplication"
+    },
+    {
+      "id": "source-floquet-tangent-mass-regression",
+      "path": "backends/fem/tests/frequency_domain/poisson_airbox_shared_domain_test.cpp",
+      "symbol": "floquet_positive_tangent_mass_matches_independent_phase_reduction",
+      "responsibility": "Independent tet4/prism6 mass and phase-reduction oracle with periodic copies and nonuniform tangent frames; source regression authored, uncompiled"
     },
     {
       "id": "source-tracking-consistent-pair",

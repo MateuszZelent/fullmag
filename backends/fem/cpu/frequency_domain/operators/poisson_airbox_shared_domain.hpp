@@ -169,6 +169,13 @@ struct PoissonAirboxSharedDomainAssemblyResult {
     // not exported as a second persistent copy of the operator.
     PoissonAirboxSharedDomainCsrMatrix floquet_full_a_qq{};
     PoissonAirboxSharedDomainCsrMatrix floquet_full_b_qq{};
+    // Geometric consistent P1 inner product, positive on the active magnetic
+    // tangent space (full-mesh air rows may be zero), including periodic members,
+    // and its C^H M C
+    // phase-reduced complex CSR form. This is not gyrotropic B_qq and carries
+    // no Ms/gamma weighting.
+    PoissonAirboxSharedDomainCsrMatrix floquet_full_positive_tangent_mass{};
+    PoissonAirboxSharedDomainComplexCsrMatrix floquet_positive_tangent_mass{};
     FloquetAirboxSharedDomainBlockResult floquet_full_field_blocks{};
     std::vector<TangentFrameNode> floquet_tangent_frames{};
     std::vector<FloquetDescriptorPeriodicPair> floquet_periodic_pairs{};

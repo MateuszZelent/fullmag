@@ -2651,6 +2651,13 @@ FrequencyDomainStatus assemble_poisson_airbox_shared_domain(
         SparseAccumulator a_phiq_full(node_count, full_q_count);
         SparseAccumulator a_qphi_full(full_q_count, node_count);
         SparseAccumulator b_qq_full(full_q_count, full_q_count);
+        // The positive geometric metric is separate from the gyrotropic
+        // pencil block and is retained only for phase-reduced Floquet owners.
+        std::unique_ptr<SparseAccumulator> positive_tangent_mass_full;
+        if (request.magnetic_phase_constraint != nullptr) {
+            positive_tangent_mass_full = std::make_unique<SparseAccumulator>(
+                full_q_count, full_q_count);
+        }
         mfem::Mesh *mesh = request.scalar_space->GetMesh();
         for (int element = 0; element < mesh->GetNE(); ++element) {
             if (request.magnetic_element_mask[static_cast<std::size_t>(element)] == 0u) {
@@ -2841,6 +2848,36 @@ FrequencyDomainStatus assemble_poisson_airbox_shared_domain(
                                         gyrotropic * weight);
                             }
                         }
+                        if (positive_tangent_mass_full != nullptr) {
+                            // Lift the scalar consistent P1 mass by the
+                            // physical dot product of the two nodal tangent
+                            // bases. No material or gyromagnetic coefficient
+                            // belongs in this inner product.
+                            const double scalar_mass_weight =
+                                test_sign * trial_sign *
+                                shape[local_test] * shape[local_trial] * weight;
+                            for (std::uint32_t row_component = 0u; row_component < 2u;
+                                 ++row_component) {
+                                const double *row_frame = row_component == 0u
+                                    ? request.tangent_frames[test_node].e1
+                                    : request.tangent_frames[test_node].e2;
+                                for (std::uint32_t column_component = 0u;
+                                     column_component < 2u;
+                                     ++column_component) {
+                                    const double *column_frame = column_component == 0u
+                                        ? request.tangent_frames[trial_node].e1
+                                        : request.tangent_frames[trial_node].e2;
+                                    const double frame_dot =
+                                        row_frame[0] * column_frame[0] +
+                                        row_frame[1] * column_frame[1] +
+                                        row_frame[2] * column_frame[2];
+                                    positive_tangent_mass_full->add(
+                                        2u * test_node + row_component,
+                                        2u * trial_node + column_component,
+                                        scalar_mass_weight * frame_dot);
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -2891,6 +2928,16 @@ FrequencyDomainStatus assemble_poisson_airbox_shared_domain(
                 return out_result->status;
             }
             b_qq_full.finish(out_result->floquet_full_b_qq);
+            positive_tangent_mass_full->finish(
+                out_result->floquet_full_positive_tangent_mass);
+            if (!project_real_csr_with_complex_constraint(
+                    out_result->floquet_full_positive_tangent_mass.view(),
+                    phase_constraint,
+                    out_result->floquet_positive_tangent_mass,
+                    error)) {
+                copy_error(out_result->error_message, error.c_str());
+                return out_result->status;
+            }
         }
         a_phiq_reduced.finish(out_result->a_phiq);
         a_qphi_reduced.finish(out_result->a_qphi);
@@ -3704,11 +3751,22 @@ FrequencyDomainStatus assemble_poisson_airbox_shared_domain_payload(
             out_result->floquet_p.row_count == 0u ||
             out_result->floquet_a_phiq.row_count == 0u ||
             out_result->floquet_a_qphi.row_count == 0u ||
+            out_result->floquet_full_positive_tangent_mass.row_count != 2u * node_count ||
+            out_result->floquet_full_positive_tangent_mass.column_count != 2u * node_count ||
+            out_result->floquet_positive_tangent_mass.row_count !=
+                2u * request.magnetic_reduced_node_count ||
+            out_result->floquet_positive_tangent_mass.column_count !=
+                2u * request.magnetic_reduced_node_count ||
+            out_result->floquet_full_positive_tangent_mass.values.empty() ||
+            out_result->floquet_positive_tangent_mass.values.empty() ||
+            !csr_is_valid(
+                out_result->floquet_full_positive_tangent_mass.view(), 2u * node_count) ||
             !complex_csr_is_valid(out_result->floquet_a_qq) ||
             !complex_csr_is_valid(out_result->floquet_b_qq) ||
             !complex_csr_is_valid(out_result->floquet_p) ||
             !complex_csr_is_valid(out_result->floquet_a_phiq) ||
-            !complex_csr_is_valid(out_result->floquet_a_qphi)) {
+            !complex_csr_is_valid(out_result->floquet_a_qphi) ||
+            !complex_csr_is_valid(out_result->floquet_positive_tangent_mass)) {
             copy_error(
                 out_result->error_message,
                 "Floquet shared-domain sparse block assembly returned an invalid block");

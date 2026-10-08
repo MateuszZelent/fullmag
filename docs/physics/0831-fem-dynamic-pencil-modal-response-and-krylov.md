@@ -2493,6 +2493,30 @@ równowagi pozostają wymaganiami przed zaliczeniem S06/S07.
 | `source-tracking-consistent-fem-adapter` | `crates/fullmag-runner/src/fem/eigen_path.rs` | `eigen_path_consistent_tracking_metric` | Construct a shared exact metric on every physical magnetic node |
 | `source-tracking-consistent-basis-regression` | `crates/fullmag-runner/src/eigen/tracking.rs` | `exact_consistent_tracking_overlap_includes_offdiagonal_p1_mass` | Uncompiled analytic regression distinguishes consistent and diagonal mass |
 
+### Natywny Floquet tangent-mass assembly foundation
+
+Niezależnie od metryki używanej przez postprocessing trackingu, natywne
+assembly FEM CPU dla niezerowego $\mathbf k$ przechowuje teraz geometryczną,
+consistent masę P1 w pełnej lokalnej bazie stycznej. Wkład każdego aktywnego
+elementu magnetycznego używa fizycznych węzłów i iloczynów wektorów ram
+stycznych; periodyczne kopie pozostają w pełnej macierzy. Wewnętrzny
+Floquet tangent constraint redukuje macierz do zespolonego CSR przez
+$C_q(\mathbf k)^\mathsf H M_\mathrm{tan,full} C_q(\mathbf k)$. Metryka nie
+jest blokiem żyromagnetycznym $B_{qq}$ i nie ma wag $M_s$ ani $\gamma_0$.
+
+Ten przyrost dodaje właściciela full/reduced CSR i przekazuje wskaźnik do
+wewnętrznego DTO operatora. Solver, pencyl, normalizacja modów, wybór
+kandydatów i deduplikacja jeszcze nie konsumują tej masy. Regresja
+assembly porównuje full i reduced CSR z niezależną analityczną masą tet4 /
+prism6 oraz ręcznie zbudowanym ograniczeniem fazy i ram stycznych. Źródło i
+test są niekompilowane; managed runtime i użycie metryki przez overlap
+pozostają **NOT VERIFIED**.
+
+| Source ID | Path | Symbol | Responsibility |
+|---|---|---|---|
+| `source-floquet-tangent-mass-assembly` | `backends/fem/cpu/frequency_domain/operators/poisson_airbox_shared_domain.cpp` | `assemble_poisson_airbox_shared_domain` | Full geometric P1 tangent mass on physical magnetic nodes and phase-reduced complex CSR; not consumed by solve/dedup |
+| `source-floquet-tangent-mass-regression` | `backends/fem/tests/frequency_domain/poisson_airbox_shared_domain_test.cpp` | `floquet_positive_tangent_mass_matches_independent_phase_reduction` | Independent tet4/prism6 mass and $C_q^\mathsf H M C_q$ oracle with phase copies and nonuniform tangent frames; authored, uncompiled |
+
 
 ## Rzeczywisty parametr żyromagnetyczny w wynikach (S07/S10, źródła WIP)
 
