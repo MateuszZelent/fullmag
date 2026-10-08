@@ -45,6 +45,24 @@ export interface ScalarRangeDiagnostics extends ScalarRange {
   zeroCount: number;
 }
 
+/**
+ * Optional mesh-node membership for target-scoped world-Z projection. This is
+ * separate from targetNodeIndices, which maps payload entries to global nodes.
+ */
+export interface Viewport3DProjectionNodeSelection {
+  nodeCount?: number;
+  node_count?: number;
+  nodeIndices?: ArrayLike<number>;
+  node_indices?: ArrayLike<number>;
+  nodeStart?: number;
+  node_start?: number;
+}
+
+export interface Viewport3DProjectionNodeMembership {
+  cacheKey: string;
+  contains(nodeIndex: number): boolean;
+}
+
 export interface ScalarColorBuffer {
   amplitudeScale?: number;
   buildKey?: string;
@@ -550,6 +568,7 @@ export function buildThicknessAverageZScalarColors(
   scalarRange?: ScalarRange | null,
   maxSynchronousPoints = VIEWPORT_3D_SYNC_COLOR_POINT_LIMIT,
   targetNodeIndices?: ArrayLike<number> | null,
+  projectionNodeMembership?: Viewport3DProjectionNodeMembership | null,
 ): ScalarColorBuffer | null {
   const resolvedColorMode = normalizeViewport3DVectorColorMode(
     colorMode,
@@ -584,6 +603,7 @@ export function buildThicknessAverageZScalarColors(
     nodeToFieldIndex,
     positions,
     vertexCount,
+    projectionNodeMembership,
   });
   if (!projection) return null;
   const projectedVectors = projection.vectors;
@@ -716,6 +736,7 @@ export function buildThicknessAverageZScalarColors(
 export function buildProjectedComplexSurfaceShaderValues({
   complexFieldVector,
   positions,
+  projectionNodeMembership,
   projectionMode,
   surfaceIndices,
   targetNodeIndices,
@@ -723,6 +744,7 @@ export function buildProjectedComplexSurfaceShaderValues({
 }: {
   complexFieldVector: DecodedComplexFieldVector | null | undefined;
   positions?: ArrayLike<number> | null;
+  projectionNodeMembership?: Viewport3DProjectionNodeMembership | null;
   projectionMode: "surface_faces" | "thickness_average_z";
   surfaceIndices: Uint32Array | null | undefined;
   targetNodeIndices?: ArrayLike<number> | null;
@@ -756,6 +778,7 @@ export function buildProjectedComplexSurfaceShaderValues({
       nodeToFieldIndex,
       positions,
       vertexCount,
+      projectionNodeMembership,
     });
     if (!projectedVectors) return null;
   }
@@ -842,14 +865,17 @@ function buildWorldZProjectedComplexVectors({
   complexFieldVector,
   nodeToFieldIndex,
   positions,
+  projectionNodeMembership,
   vertexCount,
 }: {
   complexFieldVector: DecodedComplexFieldVector;
   nodeToFieldIndex: ReadonlyMap<number, number>;
   positions: ArrayLike<number>;
+  projectionNodeMembership?: Viewport3DProjectionNodeMembership | null;
   vertexCount: number;
 }): Map<number, ComplexFieldVector6> | null {
-  const bounds = worldZProjectionBounds(positions, vertexCount);
+  const membership = projectionNodeMembership ?? null;
+  const bounds = worldZProjectionBounds(positions, vertexCount, membership);
   if (!bounds) return null;
   const tolerance = worldZProjectionTolerance(bounds);
   if (!Number.isFinite(tolerance) || tolerance <= 0) return null;
@@ -861,6 +887,7 @@ function buildWorldZProjectedComplexVectors({
 
   for (const [nodeIndex, fieldIndex] of nodeToFieldIndex) {
     if (nodeIndex < 0 || nodeIndex >= vertexCount) return null;
+    if (membership && !membership.contains(nodeIndex)) continue;
     const positionOffset = nodeIndex * 3;
     const x = positions[positionOffset] ?? Number.NaN;
     const y = positions[positionOffset + 1] ?? Number.NaN;
@@ -1271,11 +1298,13 @@ function buildWorldZProjectedVectors({
   fieldVector,
   nodeToFieldIndex,
   positions,
+  projectionNodeMembership,
   vertexCount,
 }: {
   fieldVector: Viewport3DFieldVector;
   nodeToFieldIndex: ReadonlyMap<number, number>;
   positions: ArrayLike<number>;
+  projectionNodeMembership?: Viewport3DProjectionNodeMembership | null;
   vertexCount: number;
 }): {
   binCount: number;
@@ -1286,7 +1315,8 @@ function buildWorldZProjectedVectors({
   tolerance: number;
   vectors: Map<number, readonly [number, number, number]>;
 } | null {
-  const bounds = worldZProjectionBounds(positions, vertexCount);
+  const membership = projectionNodeMembership ?? null;
+  const bounds = worldZProjectionBounds(positions, vertexCount, membership);
   if (!bounds) return null;
   const tolerance = worldZProjectionTolerance(bounds);
   if (!Number.isFinite(tolerance) || tolerance <= 0) return null;
@@ -1298,6 +1328,7 @@ function buildWorldZProjectedVectors({
 
   for (const [nodeIndex, fieldIndex] of nodeToFieldIndex) {
     if (nodeIndex < 0 || nodeIndex >= vertexCount) return null;
+    if (membership && !membership.contains(nodeIndex)) continue;
     const positionOffset = nodeIndex * 3;
     const x = positions[positionOffset] ?? Number.NaN;
     const y = positions[positionOffset + 1] ?? Number.NaN;
@@ -1361,6 +1392,7 @@ function buildWorldZProjectedVectors({
 function worldZProjectionBounds(
   positions: ArrayLike<number>,
   vertexCount: number,
+  membership: Viewport3DProjectionNodeMembership | null,
 ): {
   maxX: number;
   maxY: number;
@@ -1376,6 +1408,7 @@ function worldZProjectionBounds(
   let minZ = Infinity;
   let maxZ = -Infinity;
   for (let nodeIndex = 0; nodeIndex < vertexCount; nodeIndex += 1) {
+    if (membership && !membership.contains(nodeIndex)) continue;
     const offset = nodeIndex * 3;
     const x = positions[offset] ?? Number.NaN;
     const y = positions[offset + 1] ?? Number.NaN;
@@ -1401,6 +1434,57 @@ function worldZProjectionBounds(
     return null;
   }
   return { maxX, maxY, maxZ, minX, minY, minZ };
+}
+
+export function buildViewport3DProjectionNodeMembership(
+  selection: Viewport3DProjectionNodeSelection | null | undefined,
+  vertexCount: number,
+): Viewport3DProjectionNodeMembership | null {
+  if (!selection) return null;
+
+  const explicitNodeIndices = selection.nodeIndices ?? selection.node_indices;
+  if (explicitNodeIndices !== undefined) {
+    const selected = new Set<number>();
+    let hash = 2166136261;
+    for (let offset = 0; offset < explicitNodeIndices.length; offset += 1) {
+      const nodeIndex = explicitNodeIndices[offset];
+      hash ^= nodeIndex ?? 0;
+      hash = Math.imul(hash, 16777619);
+      if (
+        nodeIndex !== undefined &&
+        Number.isInteger(nodeIndex) &&
+        nodeIndex >= 0 &&
+        nodeIndex < vertexCount
+      ) {
+        selected.add(nodeIndex);
+      }
+    }
+    return {
+      cacheKey: `indices:${explicitNodeIndices.length}:${hash >>> 0}`,
+      contains: (nodeIndex) => selected.has(nodeIndex),
+    };
+  }
+
+  const rawStart = selection.nodeStart ?? selection.node_start ?? 0;
+  if (!Number.isFinite(rawStart)) {
+    return {
+      cacheKey: `range:invalid:${vertexCount}`,
+      contains: () => false,
+    };
+  }
+  const start = Math.max(0, Math.floor(rawStart));
+  const rawCount = selection.nodeCount ?? selection.node_count;
+  const count =
+    rawCount === undefined || (rawCount <= 0 && start > 0)
+      ? vertexCount - start
+      : Math.max(0, Math.floor(rawCount));
+  const end = Number.isNaN(count)
+    ? start
+    : Math.min(vertexCount, start + count);
+  return {
+    cacheKey: `range:${start}:${end}:${vertexCount}`,
+    contains: (nodeIndex) => nodeIndex >= start && nodeIndex < end,
+  };
 }
 
 function worldZProjectionTolerance(

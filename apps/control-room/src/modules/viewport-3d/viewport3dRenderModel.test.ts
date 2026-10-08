@@ -3,7 +3,11 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import type { DecodedFieldVector, DecodedTopology } from "@/kernel/api/codecs";
+import type {
+  DecodedComplexFieldVector,
+  DecodedFieldVector,
+  DecodedTopology,
+} from "@/kernel/api/codecs";
 import {
   canonicalFieldVectorQuery,
   serializeCanonicalFieldVectorResourceKey,
@@ -1637,6 +1641,210 @@ describe("viewport3dRenderModel", () => {
         targetId: "complex-field",
       }),
     );
+  });
+
+  it("projects complete modal fields within each target membership", () => {
+    const topology: DecodedTopology = {
+      ...topologyFixture(),
+      boundaryFaceCount: 3,
+      boundaryFaces: new Uint32Array([
+        0, 1, 2,
+        4, 5, 6,
+        8, 9, 10,
+      ]),
+      boundaryMarkers: new Uint32Array([1, 1, 1]),
+      elementCount: 0,
+      elementMarkers: new Uint32Array(),
+      indices: new Uint32Array(),
+      nodeCount: 12,
+      positions: new Float64Array([
+        0, 0, 0,
+        1, 0, 0,
+        0, 1, 0,
+        0, 0, 1,
+        0, 0, 10,
+        1, 0, 10,
+        0, 1, 10,
+        0, 0, 11,
+        0, 0, 20,
+        1, 0, 20,
+        0, 1, 20,
+        0, 0, 21,
+      ]),
+    };
+    const firstTarget = {
+      boundary_face_count: 1,
+      boundary_face_indices: [0],
+      boundary_face_start: 0,
+      id: "body-a",
+      label: "Body A",
+      node_indices: [0, 1, 2, 3],
+    };
+    const secondTarget = {
+      boundary_face_count: 1,
+      boundary_face_indices: [1],
+      boundary_face_start: 0,
+      id: "body-b",
+      label: "Body B",
+      node_indices: [4, 5, 6, 7],
+    };
+    const airboxTarget = {
+      boundary_face_count: 1,
+      boundary_face_indices: [2],
+      boundary_face_start: 0,
+      id: "airbox",
+      label: "Airbox",
+      node_indices: [8, 9, 10, 11],
+    };
+    const topologyModel = buildViewport3DTopologyRenderModel(
+      topology,
+      [firstTarget, secondTarget],
+      [airboxTarget],
+    );
+    expect(
+      topologyModel?.magneticParts[0]?.fullNodeSelection.nodeIndices,
+    ).toEqual([0, 1, 2, 3]);
+    expect(
+      topologyModel?.magneticParts[1]?.fullNodeSelection.nodeIndices,
+    ).toEqual([4, 5, 6, 7]);
+    expect(
+      topologyModel?.airboxParts[0]?.fullNodeSelection.nodeIndices,
+    ).toEqual([8, 9, 10, 11]);
+
+    const nodeIndices = Uint32Array.from(
+      { length: 12 },
+      (_value, index) => index,
+    );
+    const values = new Float64Array(12 * 6);
+    const complexX = [
+      [2, 20],
+      [6, 60],
+      [8, 80],
+      [4, 40],
+      [100, 1_000],
+      [300, 3_000],
+      [500, 5_000],
+      [200, 2_000],
+      [1_000, 10_000],
+      [5_000, 50_000],
+      [7_000, 70_000],
+      [3_000, 30_000],
+    ];
+    for (let nodeIndex = 0; nodeIndex < complexX.length; nodeIndex += 1) {
+      const pair = complexX[nodeIndex];
+      values[nodeIndex * 6] = pair?.[0] ?? 0;
+      values[nodeIndex * 6 + 1] = pair?.[1] ?? 0;
+    }
+    const complexFieldVector: DecodedComplexFieldVector = {
+      componentCount: 3,
+      dtype: "complex128",
+      grid: [12, 1, 1],
+      indexing: "explicit_node_indices",
+      nodeIndices,
+      pointCount: 12,
+      quantityId: "analysis:eigen:sample-0000:mode-0002",
+      valueCount: values.length,
+      values,
+    };
+    const targetRenderPlans = new Map([
+      [
+        "body-a",
+        targetRenderPlanFixture({
+          quantityId: complexFieldVector.quantityId,
+          targetId: "body-a",
+          surfaceColorSource: "component_x",
+          surfaceProjectionMode: "thickness_average_z",
+        }),
+      ],
+      [
+        "body-b",
+        targetRenderPlanFixture({
+          quantityId: complexFieldVector.quantityId,
+          targetId: "body-b",
+          surfaceColorSource: "component_x",
+          surfaceProjectionMode: "thickness_average_z",
+        }),
+      ],
+      [
+        "airbox",
+        targetRenderPlanFixture({
+          quantityId: complexFieldVector.quantityId,
+          targetId: "airbox",
+          surfaceColorSource: "component_x",
+          surfaceProjectionMode: "thickness_average_z",
+        }),
+      ],
+    ]);
+    const options = {
+      analysisFieldIntentActive: true,
+      complexFieldVector,
+      scalarColorsVisible: true,
+      targetRenderPlans,
+      visualizationPhaseRad: 0,
+    };
+    const model = buildViewport3DFieldRenderModel(
+      topologyModel,
+      null,
+      0.5,
+      options,
+    );
+
+    const firstSurface = model?.targetPasses.get("body-a")?.surface;
+    const secondSurface = model?.targetPasses.get("body-b")?.surface;
+    const airboxSurface = model?.targetPasses.get("airbox")?.surface;
+    expect(firstSurface?.projectionMode).toBe("thickness_average_z");
+    expect(secondSurface?.projectionMode).toBe("thickness_average_z");
+    expect(airboxSurface?.projectionMode).toBe("thickness_average_z");
+    expect(firstSurface?.degradation).toBeNull();
+    expect(secondSurface?.degradation).toBeNull();
+    expect(airboxSurface?.degradation).toBeNull();
+
+    expect(firstSurface?.scalarColors?.range.min).toBeCloseTo(17 / 3);
+    expect(firstSurface?.scalarColors?.range.max).toBeCloseTo(17 / 3);
+    expect(secondSurface?.scalarColors?.range.min).toBeCloseTo(950 / 3);
+    expect(secondSurface?.scalarColors?.range.max).toBeCloseTo(950 / 3);
+    expect(airboxSurface?.scalarColors?.range.min).toBeCloseTo(14_000 / 3);
+    expect(airboxSurface?.scalarColors?.range.max).toBeCloseTo(14_000 / 3);
+    expect(
+      firstSurface?.scalarColors?.complexRealValues?.[0],
+    ).toBeCloseTo(17 / 3);
+    expect(
+      firstSurface?.scalarColors?.complexImagValues?.[0],
+    ).toBeCloseTo(170 / 3);
+    expect(
+      secondSurface?.scalarColors?.complexRealValues?.[0],
+    ).toBeCloseTo(950 / 3);
+    expect(
+      secondSurface?.scalarColors?.complexImagValues?.[0],
+    ).toBeCloseTo(9_500 / 3);
+    expect(
+      airboxSurface?.scalarColors?.complexRealValues?.[0],
+    ).toBeCloseTo(14_000 / 3);
+    expect(
+      airboxSurface?.scalarColors?.complexImagValues?.[0],
+    ).toBeCloseTo(140_000 / 3);
+
+    // Reusing the same topology and payload with changed target membership must
+    // rebuild the target projection instead of returning its prior cached mean.
+    firstTarget.node_indices = [0, 1, 2];
+    const changedMembershipModel = buildViewport3DFieldRenderModel(
+      topologyModel,
+      null,
+      0.5,
+      options,
+    );
+    expect(
+      changedMembershipModel?.targetPasses.get("body-a")?.surface.scalarColors
+        ?.range?.min,
+    ).toBeCloseTo(16 / 3);
+    expect(
+      changedMembershipModel?.targetPasses.get("body-a")?.surface.scalarColors
+        ?.range?.max,
+    ).toBeCloseTo(16 / 3);
+    expect(
+      changedMembershipModel?.targetPasses.get("body-a")?.surface.scalarColors
+        ?.complexRealValues?.[0],
+    ).toBeCloseTo(16 / 3);
   });
 
   it("bounds complex phase projection cache entries during phase animation", () => {

@@ -1,14 +1,19 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type { DecodedFieldVector } from "@/kernel/api/codecs";
+import type {
+  DecodedComplexFieldVector,
+  DecodedFieldVector,
+} from "@/kernel/api/codecs";
 
 import {
   buildSampledScalarColors,
   buildFdmSampledScalarColors,
+  buildProjectedComplexSurfaceShaderValues,
   buildSurfaceFaceScalarColors,
   buildThicknessAverageZScalarColors,
   buildVertexScalarColors,
   buildVertexScalarColorsChunked,
+  buildViewport3DProjectionNodeMembership,
   fieldTransformNeedsChunking,
   normalizeScalarValueForShaderAttributeFieldMappingForTests,
   resolveScalarRange,
@@ -532,6 +537,82 @@ describe("viewport3dFieldMapping", () => {
     expect(result?.projectionMode).toBe("thickness_average_z");
     expect(result?.degradedFaceCount).toBe(0);
     expect(result?.projectedSamplesPerBinMin).toBe(2);
+  });
+
+  it("keeps explicit global field indices while restricting thickness projection membership", () => {
+    const positions = Float32Array.from([
+      0, 0, 0,
+      1, 0, 0,
+      0, 1, 0,
+      0, 0, 1,
+      0, 0, 10,
+      1, 0, 10,
+    ]);
+    const surfaceIndices = Uint32Array.from([0, 1, 2]);
+    const nodeIndices = Uint32Array.from([5, 3, 4, 2, 1, 0]);
+    const scalarValues = new Float64Array(nodeIndices.length * 3);
+    const complexValues = new Float64Array(nodeIndices.length * 6);
+    const scalarXByNode = [2, 6, 8, 4, 100, 300];
+    for (let fieldIndex = 0; fieldIndex < nodeIndices.length; fieldIndex += 1) {
+      const nodeIndex = nodeIndices[fieldIndex] ?? 0;
+      const realX = scalarXByNode[nodeIndex] ?? 0;
+      scalarValues[fieldIndex * 3] = realX;
+      complexValues[fieldIndex * 6] = realX;
+      complexValues[fieldIndex * 6 + 1] = realX * 10;
+    }
+    const scalarFieldVector: DecodedFieldVector = {
+      dtype: "float64",
+      grid: [6, 1, 1],
+      indexing: "explicit_node_indices",
+      nodeIndices,
+      nComp: 3,
+      pointCount: 6,
+      quantityId: "m",
+      valueCount: scalarValues.length,
+      values: scalarValues,
+    };
+    const complexFieldVector: DecodedComplexFieldVector = {
+      componentCount: 3,
+      dtype: "complex128",
+      grid: [6, 1, 1],
+      indexing: "explicit_node_indices",
+      nodeIndices,
+      pointCount: 6,
+      quantityId: "analysis:eigen:sample-0000:mode-0002",
+      valueCount: complexValues.length,
+      values: complexValues,
+    };
+    const projectionNodeMembership = buildViewport3DProjectionNodeMembership(
+      { nodeIndices: [0, 1, 2, 3] },
+      6,
+    );
+
+    const scalarColors = buildThicknessAverageZScalarColors(
+      scalarFieldVector,
+      positions,
+      surfaceIndices,
+      6,
+      "x",
+      "plasma",
+      undefined,
+      Number.POSITIVE_INFINITY,
+      Uint32Array.from([0, 1, 2, 3]),
+      projectionNodeMembership,
+    );
+    const complexColors = buildProjectedComplexSurfaceShaderValues({
+      complexFieldVector,
+      positions,
+      projectionNodeMembership,
+      projectionMode: "thickness_average_z",
+      surfaceIndices,
+      targetNodeIndices: Uint32Array.from([0, 1, 2, 3]),
+      vertexCount: 6,
+    });
+
+    expect(scalarColors?.range.min).toBeCloseTo(17 / 3);
+    expect(scalarColors?.range.max).toBeCloseTo(17 / 3);
+    expect(complexColors?.complexRealValues[0]).toBeCloseTo(17 / 3);
+    expect(complexColors?.complexImagValues[0]).toBeCloseTo(170 / 3);
   });
 
   it("maps legacy scoped payloads for thickness-average-z projection", () => {

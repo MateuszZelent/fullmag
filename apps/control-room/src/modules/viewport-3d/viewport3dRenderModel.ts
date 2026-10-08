@@ -16,6 +16,7 @@ import type { SurfaceFieldProjectionMode } from "@/kernel/visualization/ObjectVi
 import { buildAirOnlyVisualizationNodeSelection } from "@/shared/domain/mesh/visualizationNodeSelection";
 
 import {
+  buildViewport3DProjectionNodeMembership,
   buildMappedVertexScalarColors,
   buildProjectedComplexSurfaceShaderValues,
   buildSurfaceFaceScalarColors,
@@ -25,6 +26,7 @@ import {
   type ScalarColorBuffer,
   type ScalarRange,
   type Viewport3DFieldVector,
+  type Viewport3DProjectionNodeMembership,
 } from "./viewport3dFieldMapping";
 import { buildViewport3DVectorGlyphJobKey } from "./build-engine/viewport3dBuildJobKeys";
 import {
@@ -822,6 +824,13 @@ export function buildViewport3DFieldRenderModel(
   for (const partModel of [...topology.magneticParts, ...topology.airboxParts]) {
     const partId = partModel.part.id;
     const targetRenderPlan = options.targetRenderPlans?.get(partId) ?? null;
+    const thicknessProjectionNodeMembership =
+      targetRenderPlan?.shader.projectionMode === "thickness_average_z"
+        ? buildViewport3DProjectionNodeMembership(
+            partModel.fullNodeSelection,
+            topology.nodeCount,
+          )
+        : null;
     const partBudget = targetRenderPlan
       ? targetRenderPlan.vectors.visible
         ? targetRenderPlan.vectors.budget
@@ -994,6 +1003,7 @@ export function buildViewport3DFieldRenderModel(
                 partScalarColorPalette,
                 partScalarRangesByMode?.get(colorMode),
                 partProjectionFieldNodeIndices,
+                thicknessProjectionNodeMembership,
               )
             : buildCachedPartVertexScalarColors(
                 partModel,
@@ -1034,6 +1044,10 @@ export function buildViewport3DFieldRenderModel(
               buildProjectedComplexSurfaceShaderValues({
                 complexFieldVector: options.complexFieldVector,
                 positions: topology.positions,
+                projectionNodeMembership:
+                  projectionMode === "thickness_average_z"
+                    ? thicknessProjectionNodeMembership
+                    : null,
                 projectionMode,
                 surfaceIndices: partModel.surfaceIndices,
                 targetNodeIndices: complexNodeIndices,
@@ -1796,6 +1810,7 @@ function buildCachedThicknessAverageZScalarColors(
   colorPalette: string | undefined,
   scalarRange?: ScalarRange | null,
   targetNodeIndices?: Uint32Array | null,
+  projectionNodeMembership?: Viewport3DProjectionNodeMembership | null,
 ): ScalarColorBuffer | null {
   if (!fieldVector || !partModel.surfaceIndices) return null;
 
@@ -1812,6 +1827,7 @@ function buildCachedThicknessAverageZScalarColors(
       topology.nodeCount,
       topology.positions.length,
       nodeIndexMappingCacheKey(targetNodeIndices),
+      projectionNodeMembership?.cacheKey ?? "all-nodes",
       colorMode ?? "magnitude",
       colorPalette ?? "viridis",
       scalarRangeCacheKey(scalarRange),
@@ -1827,6 +1843,7 @@ function buildCachedThicknessAverageZScalarColors(
         scalarRange,
         Number.POSITIVE_INFINITY,
         targetNodeIndices,
+        projectionNodeMembership,
       ),
     "viewport3d.render.thicknessAverageZScalarColorCache",
   );
