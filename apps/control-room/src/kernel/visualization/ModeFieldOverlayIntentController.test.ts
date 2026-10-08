@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type {
   AnalysisResultFieldRef,
   FrequencyDomainFieldResource,
+  FrequencyDomainJsonArtifactResource,
 } from "../api/apiTypes";
 import type { DecodedFieldVector } from "../api/codecs";
 import { analysisResultSelectionRef } from "@/shared/domain/analysis/results";
@@ -148,6 +149,50 @@ describe("ModeFieldOverlayIntentController", () => {
       intent: second,
       status: "ready",
     });
+  });
+
+  it("aborts the sibling metadata request and preserves the original load error", async () => {
+    const controller = new ModeFieldOverlayIntentController();
+    const active = intent("mode-1", 1);
+    const originalError = new Error("field metadata failed");
+    let siblingAbortObserved = false;
+    let metadataSignal: AbortSignal | undefined;
+    const loadBinary = vi.fn(async () => binary(active.fieldId));
+
+    const run = controller.activate(active, {
+      loadMetadata: async (_next, signal) => {
+        metadataSignal = signal;
+        const fieldMetadata = Promise.reject<FrequencyDomainFieldResource>(originalError);
+        const modeArtifact = new Promise<FrequencyDomainJsonArtifactResource>((_resolve, reject) => {
+          signal.addEventListener(
+            "abort",
+            () => {
+              siblingAbortObserved = true;
+              reject(new Error("mode artifact request aborted"));
+            },
+            { once: true },
+          );
+        });
+        const [data, artifact] = await Promise.all([fieldMetadata, modeArtifact]);
+        return {
+          data,
+          modeArtifact: artifact,
+          revision: "sha256:field-v1",
+        };
+      },
+      loadBinary,
+    }, topology);
+
+    await expect(run).resolves.toBe("error");
+
+    expect(metadataSignal?.aborted).toBe(true);
+    expect(siblingAbortObserved).toBe(true);
+    expect(loadBinary).not.toHaveBeenCalled();
+    expect(controller.getSnapshot()).toMatchObject({
+      intent: active,
+      status: "error",
+    });
+    expect(controller.getSnapshot().error).toBe(originalError);
   });
 
   it("aborts an in-flight binary load on clear and never publishes its late payload", async () => {

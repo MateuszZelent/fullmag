@@ -15,6 +15,7 @@ import {
   buildEigenSpectrumChartModel,
   eigenModeFieldAvailable,
   frequencyDomainManifestPayload,
+  frequencyDomainResultContextFromManifest,
 } from "@/shared/domain/analysis/frequencyDomainChartModels";
 import type { EigenDispersionPoint } from "@/shared/domain/analysis/frequencyDomainChartModels";
 import { formatFrequencyHz, formatFrequencyRangeHz } from "@/shared/domain/analysis/frequencyUnits";
@@ -57,6 +58,11 @@ export function useEigenDispersionInspectorSummary() {
     branchesModel,
   );
   const manifestPayload = record(frequencyDomainManifestPayload(manifest.data));
+  const resultContext = frequencyDomainResultContextFromManifest(manifestPayload, {
+    meshGenerationId: manifest.data?.result_manifest?.mesh_generation_id,
+    runId: manifest.data?.result_manifest?.run_id,
+    stageId: manifest.data?.result_manifest?.stage_id,
+  });
   const capabilities = frequencyDomainRuntimeCapabilities(manifest.data);
   const dispersionCapabilities = record(capabilities?.dispersion);
   const boundaryCapabilities = record(capabilities?.boundary);
@@ -73,6 +79,8 @@ export function useEigenDispersionInspectorSummary() {
 
   return {
     analyticReference: dispersionAnalyticReferenceSummary(dispersionModel.points),
+    artifactPath: dispersion.data?.artifact_path ?? null,
+    artifactRevision: dispersion.data?.revision ?? null,
     badge:
       dispersion.status === "ready"
         ? `${dispersionModel.points.length} point(s)`
@@ -91,6 +99,7 @@ export function useEigenDispersionInspectorSummary() {
     pathLabels: pathMetadata.labels,
     pathMetadataArtifact: pathMetadata.artifact,
     pathSampling: pathMetadata.sampling,
+    resultContext,
     primaryBranch: primaryBranch
       ? `${primaryBranch.label ?? primaryBranch.branchId}; ${formatFrequencyRange(
           primaryBranch.points.map((point) => point.frequencyRealHz),

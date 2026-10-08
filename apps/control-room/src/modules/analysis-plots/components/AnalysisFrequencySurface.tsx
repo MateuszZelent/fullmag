@@ -28,6 +28,7 @@ import { DispersionModeAction } from "./DispersionModeAction";
 import { availableDispersionAxes, defaultDispersionAxis, projectDispersionSeries, type DispersionAxis } from "@/shared/domain/analysis/dispersionChartAxes";
 import {
   type FmrModalDrivenComparisonModel,
+  frequencyDomainEquilibriumIdForSample,
   frequencyDomainResultTitle,
   type FrequencyDomainChartRoute,
   type FrequencyDomainResultContext,
@@ -132,12 +133,17 @@ export function AnalysisFrequencySurface({
     () => buildFrequencyDomainCursorSummary(displayedSelection, qualifiedCalculationMode, displaySeries),
     [displaySeries, displayedSelection, qualifiedCalculationMode],
   );
+  const selectedEquilibriumId = displayedSelection && physicalContext
+    ? frequencyDomainEquilibriumIdForSample(physicalContext, displayedSelection.point.sampleIndex)
+    : null;
   const physicalMetadata = frequencyPhysicalMetadata(
     physicalContext,
     descriptor,
     displayUnits ?? {},
     series,
     presentation,
+    selectedEquilibriumId,
+    displayedSelection?.point.sampleIndex,
   );
 
   if (series.length === 0) {
@@ -263,10 +269,11 @@ export function AnalysisFrequencySurface({
       {isDispersion && displayedSelection ? <DispersionModeAction
         kernel={kernel} available={displayedSelection.point.modeFieldAvailable === true}
         target={{ runId: physicalContext?.runId ?? null, stageId: physicalContext?.stageId ?? null,
-          sampleIndex: displayedSelection.point.sampleIndex, modeIndex: displayedSelection.point.modeIndex,
-          sampleId: displayedSelection.point.sampleId, modeId: displayedSelection.point.itemId }}
+          equilibriumId: selectedEquilibriumId, sampleIndex: displayedSelection.point.sampleIndex,
+          modeIndex: displayedSelection.point.modeIndex, sampleId: displayedSelection.point.sampleId,
+          modeId: displayedSelection.point.itemId }}
         onSelectPoint={() => onPointSelect(displayedSelection)}
-        identity={`${datasetKey}:${displayedSelection.seriesId}:${displayedSelection.point.rowIndex}`}
+        identity={`${datasetKey}:${selectedEquilibriumId ?? ""}:${displayedSelection.seriesId}:${displayedSelection.point.rowIndex}`}
       /> : null}
     </div>
   ) : undefined;
@@ -385,6 +392,8 @@ function frequencyPhysicalMetadata(
   displayUnits: Readonly<Record<string, string>>,
   series: readonly ChartSeries[],
   presentation?: AnalysisFrequencyPresentationState,
+  selectedEquilibriumId?: string | null,
+  selectedSampleIndex?: number,
 ) {
   const first = series[0];
   const sourceIdentity = first?.sourceIdentity ?? UNKNOWN_FREQUENCY_SOURCE_IDENTITY;
@@ -410,6 +419,11 @@ function frequencyPhysicalMetadata(
       : null;
   const runId = context?.runId ?? sourceIdentity.runId;
   const stageId = context?.stageId ?? sourceIdentity.stageId;
+  const equilibriumLabel = selectedEquilibriumId && context?.equilibriumIdentityStatus === "per_sample" && context.equilibriumIdBySample
+    ? `${selectedEquilibriumId} (sample ${selectedSampleIndex ?? "selected"})`
+    : context?.equilibriumId ?? (context?.equilibriumIdentityStatus === "per_sample"
+      ? "sample-specific; select a point"
+      : "unavailable");
   const summary = [
     "Physical context and provenance",
     context ? frequencyKContextLabel(context) : "Context unavailable",
@@ -422,7 +436,7 @@ function frequencyPhysicalMetadata(
       <div className="fm-analysis-plots__physical-context-grid">
         <span>Run: {runId ?? "unavailable"}</span>
         <span>Stage: {stageId ?? "unavailable"}</span>
-        <span>Equilibrium: {context?.equilibriumId ?? "unavailable"}</span>
+        <span>Equilibrium: {equilibriumLabel}</span>
         <span>Geometry: {context?.geometryId ?? "unavailable"}</span>
         <span>Mesh: {context?.meshId ?? "unavailable"}</span>
         <span>Boundary: {context?.boundaryContext ?? "unavailable"}</span>

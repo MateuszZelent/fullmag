@@ -12,11 +12,16 @@ import type { SelectionRef } from "@/kernel/selection/selectionTypes";
 import { SelectionController } from "@/kernel/selection/SelectionController";
 import type { KernelApi } from "@/kernel/types";
 
-import { DispersionModeAction, type DispersionModeTarget } from "./DispersionModeAction";
+import {
+  DispersionModeAction,
+  dispersionModeSelectionMatches,
+  type DispersionModeTarget,
+} from "./DispersionModeAction";
 
 const target: DispersionModeTarget = {
   runId: "run-a",
   stageId: "stage-a",
+  equilibriumId: "eq-sample-3",
   sampleIndex: 3,
   modeIndex: 4,
   sampleId: "sample-a",
@@ -26,6 +31,7 @@ const target: DispersionModeTarget = {
 const targetModeRef: SelectionRef = {
   analysisRunId: "run-a",
   analysisStageId: "stage-a",
+  equilibriumId: "eq-sample-3",
   kind: "results.eigen.mode",
   modeId: "mode-a",
   modeIndex: 4,
@@ -54,6 +60,12 @@ function makeSelection(ref: SelectionRef): SelectionController {
 }
 
 describe("DispersionModeAction", () => {
+  it("requires the exact sample equilibrium identity when rebinding a mode", () => {
+    expect(dispersionModeSelectionMatches(targetModeRef, target)).toBe(true);
+    expect(dispersionModeSelectionMatches({ ...targetModeRef, equilibriumId: "eq-other-sample" }, target)).toBe(false);
+    expect(dispersionModeSelectionMatches({ ...targetModeRef, equilibriumId: null }, target)).toBe(false);
+  });
+
   it("rebinds the clicked chart mode before dispatching the 3D command", async () => {
     const dom = installSimulationPreparationTestDom();
     const container = dom.document.createElement("div");

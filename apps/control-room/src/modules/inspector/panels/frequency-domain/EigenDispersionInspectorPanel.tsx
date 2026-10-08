@@ -30,9 +30,21 @@ export function EigenDispersionInspectorPanel({
     : null;
 
   const selectPoint = (point: EigenDispersionPoint): void => {
+    const resultContext = summary.resultContext;
     const ref = buildEigenDispersionPointSelectionRef(point, {
+      analysisRunId: resultContext.runId,
+      analysisStageId: resultContext.stageId,
+      artifactPath: summary.artifactPath,
+      artifactRevision: summary.artifactRevision,
       calculationMode: "dispersion_modal",
+      equilibriumId: resultContext.equilibriumId,
+      equilibriumIdBySample: resultContext.equilibriumIdBySample,
+      equilibriumIdentityStatus: resultContext.equilibriumIdentityStatus,
+      kContextKind: resultContext.classification?.kContext.kind,
+      normalization: resultContext.normalization,
       resourceRef: ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DISPERSION_PATH,
+      source: "eigen-mode",
+      studyProduct: resultContext.studyProduct,
     });
     kernel.selection.set(
       {

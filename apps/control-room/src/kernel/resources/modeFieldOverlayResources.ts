@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
 
-import type { FrequencyDomainFieldResource } from "../api/apiTypes";
+import type {
+  FrequencyDomainFieldResource,
+  FrequencyDomainJsonArtifactResource,
+} from "../api/apiTypes";
 import { useKernel } from "../KernelContext";
 import type { ResourceResult, ResourceStatus } from "./resourceTypes";
 import {
@@ -20,7 +23,10 @@ import {
 import { sessionRequestScopeKey } from "./sessionResourceIdentity";
 import { useSessionResourceIdentity } from "./useSessionStatus";
 
-import { useFrequencyDomainEigenModeFieldMetaResource } from "./studyRuntimeResources";
+import {
+  useFrequencyDomainEigenModeFieldMetaResource,
+  useFrequencyDomainEigenModeResource,
+} from "./studyRuntimeResources";
 
 export interface ModeFieldOverlayResource {
   readonly binaryResourceKey: string | null;
@@ -37,6 +43,7 @@ const MODE_FIELD_METADATA_INVALID = new Error(
 export function resolveModeFieldOverlayMetadataRevision(
   intent: ModeFieldOverlayIntent,
   metadata: FrequencyDomainFieldResource,
+  modeArtifact?: FrequencyDomainJsonArtifactResource | null,
 ): string {
   return JSON.stringify({
     artifactRevision: intent.artifactRevision,
@@ -44,6 +51,11 @@ export function resolveModeFieldOverlayMetadataRevision(
     contentDigest: metadata.content_digest ?? null,
     metadataRevision: metadata.revision ?? null,
     metadataStatus: metadata.status,
+    modeArtifactPath: modeArtifact?.artifact_path ?? null,
+    modeArtifactDigest: modeArtifact?.content_digest ?? null,
+    modeArtifactRevision: modeArtifact?.revision ?? null,
+    modeArtifactRunId: modeArtifact?.run_id ?? null,
+    modeArtifactStageId: modeArtifact?.stage_id ?? null,
   });
 }
 
@@ -58,6 +70,10 @@ export function resolveModeFieldOverlayResource(
     ResourceResult<FrequencyDomainFieldResource | null>,
     "data" | "error" | "revision" | "status"
   >,
+  modeArtifactResource?: Pick<
+    ResourceResult<FrequencyDomainJsonArtifactResource | null>,
+    "data" | "error" | "revision" | "status"
+  > | null,
 ): ModeFieldOverlayResource {
   if (!intent) {
     return {
@@ -66,6 +82,25 @@ export function resolveModeFieldOverlayResource(
       metadata: null,
       metadataStatus: "idle",
       status: "idle",
+    };
+  }
+
+  if (
+    intent.equilibriumId !== undefined &&
+    (!modeArtifactResource ||
+      modeArtifactResource.status !== "ready" ||
+      modeArtifactResource.data === null ||
+      modeArtifactResource.revision == null)
+  ) {
+    const status = modeArtifactResource?.status === "ready"
+      ? "error"
+      : modeArtifactResource?.status ?? "error";
+    return {
+      binaryResourceKey: null,
+      error: modeArtifactResource?.error ?? MODE_FIELD_METADATA_INVALID,
+      metadata: null,
+      metadataStatus: status,
+      status,
     };
   }
 
@@ -79,10 +114,16 @@ export function resolveModeFieldOverlayResource(
     };
   }
 
+  const metadataRevision = resource.revision === null
+    ? null
+    : intent.equilibriumId !== undefined
+      ? JSON.stringify([resource.revision, modeArtifactResource?.revision ?? null])
+      : resource.revision;
   const metadata = resolveModeFieldOverlayMetadata(
     intent,
     resource.data,
-    resource.revision,
+    metadataRevision,
+    modeArtifactResource?.data,
   );
   if (!metadata) {
     return {
@@ -113,14 +154,21 @@ export function useModeFieldOverlayResource(
   { enabled = true }: { enabled?: boolean } = {},
 ): ModeFieldOverlayResource {
   const sessionIdentity = useSessionResourceIdentity();
+  const modeArtifactResource = useFrequencyDomainEigenModeResource(
+    intent?.sampleIndex,
+    intent?.modeIndex,
+    {
+      enabled: enabled && intent?.equilibriumId !== undefined && sessionIdentity !== null,
+    },
+  );
   const metadataResource = useFrequencyDomainEigenModeFieldMetaResource(
     intent?.sampleIndex,
     intent?.modeIndex,
     { enabled: enabled && Boolean(intent) && sessionIdentity !== null },
   );
   return useMemo(
-    () => resolveModeFieldOverlayResource(intent, metadataResource),
-    [intent, metadataResource],
+    () => resolveModeFieldOverlayResource(intent, metadataResource, modeArtifactResource),
+    [intent, metadataResource, modeArtifactResource],
   );
 }
 
@@ -179,14 +227,28 @@ export function useModeFieldOverlayIntentResource({
               revision: activeIntent.fieldRevision,
             };
           }
-          const data = await api.analysis.frequencyDomain.eigenModeFieldMeta(
-            activeIntent.sampleIndex,
-            activeIntent.modeIndex,
-            { sessionScopeKey: sessionScope, signal },
-          );
+          const [data, modeArtifact] = await Promise.all([
+            api.analysis.frequencyDomain.eigenModeFieldMeta(
+              activeIntent.sampleIndex,
+              activeIntent.modeIndex,
+              { sessionScopeKey: sessionScope, signal },
+            ),
+            activeIntent.equilibriumId !== undefined
+              ? api.analysis.frequencyDomain.eigenMode(
+                  activeIntent.sampleIndex,
+                  activeIntent.modeIndex,
+                  { sessionScopeKey: sessionScope, signal },
+                )
+              : Promise.resolve(null),
+          ]);
           return {
             data,
-            revision: resolveModeFieldOverlayMetadataRevision(activeIntent, data),
+            modeArtifact,
+            revision: resolveModeFieldOverlayMetadataRevision(
+              activeIntent,
+              data,
+              modeArtifact,
+            ),
           };
         },
         loadBinary: async (metadata, signal) => {

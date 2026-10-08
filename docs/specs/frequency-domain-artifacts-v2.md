@@ -66,8 +66,12 @@ jest obecne i zgodne we wszystkich próbkach. Pierwsza próbka nie reprezentuje
 całego sweepa; nie tworzy się zastępczego globalnego identyfikatora równowagi.
 
 UI może wyświetlić krzywą z kompletną mapą tożsamości próbek. Kliknięcie punktu
-rozwiązuje tożsamość według jego jawnego indeksu i porównuje ją z metadanymi
-wybranego pola. Porównanie modalne–wymuszone nadal wymaga rzeczywiście wspólnej
+rozwiązuje tożsamość według jego jawnego indeksu i porównuje ją z opublikowanym
+artefaktem modu: właścicielem run/stage, indeksami próbki/modu, `mode_field_id`
+i tożsamością równowagi w payloadzie oraz `candidate_identity`. Transportowe
+`FrequencyDomainFieldResource` opisuje format i identyfikator pola; nie
+publikuje tożsamości równowagi. UI nie dopisuje tych metadanych do odpowiedzi
+pola. Oba odczyty pozostają w tym samym scope i cyklu anulowania. Porównanie modalne–wymuszone nadal wymaga rzeczywiście wspólnej
 tożsamości równowagi. Różne hashe artefaktów nie dowodzą różnicy fizycznego
 stanu magnetyzacji; mogą obejmować różny kontekst liniaryzacji lub więzów.
 Brakujące, sprzeczne albo niekompletne dowody pozostają błędem kontraktu.

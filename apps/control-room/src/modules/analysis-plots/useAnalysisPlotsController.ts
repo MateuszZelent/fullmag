@@ -27,6 +27,7 @@ import type { ChartValueRange } from "./chartTableModel";
 import type { ChartDataPresentationState } from "@/shared/analysis-charts/chartPresentationState";
 import {
   eigenModeFieldAvailable,
+  frequencyDomainEquilibriumIdForSample,
   type FrequencyDomainResultContext,
 } from "@/shared/domain/analysis/frequencyDomainChartModels";
 
@@ -352,6 +353,9 @@ export function frequencyDomainSelectionFromPoint(input: {
     ? dispersionMode
     : input.spectrumModel.points[point.point.rowIndex];
   const modeFieldAvailable = mode == null || eigenModeFieldAvailable(mode);
+  const modeEquilibriumId = resultContext
+    ? frequencyDomainEquilibriumIdForSample(resultContext, mode?.sampleIndex)
+    : null;
   return {
     kind: "results.eigen.mode",
     label: `${point.label} ${point.point.y} ${point.unit}`,
@@ -359,6 +363,7 @@ export function frequencyDomainSelectionFromPoint(input: {
     objectId: null,
     ref: compactSelectionRef({
       ...identity,
+      equilibriumId: modeEquilibriumId ?? undefined,
       artifactPath: point.source.resourceKey,
       branchId: mode?.branchId ?? undefined,
       calculationMode: input.routeMode,

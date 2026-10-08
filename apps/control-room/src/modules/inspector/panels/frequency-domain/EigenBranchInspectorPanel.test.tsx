@@ -66,6 +66,30 @@ const modalManifestOwner = buildEigenBranchResultManifestOwner(
   modalManifestResource(),
 );
 
+function perSampleModalManifestResource(sampleIds: Record<string, string>) {
+  const resource = modalManifestResource();
+  const resultManifest = resource.result_manifest;
+  const payloadWithoutLegacyIdentity = Object.fromEntries(
+    Object.entries(resultManifest.payload).filter(([key]) => key !== "equilibrium_identity"),
+  );
+  return {
+    ...resource,
+    result_manifest: {
+      ...resultManifest,
+      payload: {
+        ...payloadWithoutLegacyIdentity,
+        native_provenance_by_sample: Object.fromEntries(
+          Object.entries(sampleIds).map(([sampleIndex, equilibriumArtifactSha256]) => [
+            sampleIndex,
+            { equilibrium_artifact_sha256: equilibriumArtifactSha256 },
+          ]),
+        ),
+      },
+    },
+  };
+}
+
+
 describe("EigenBranchInspectorPanel point model", () => {
   it("preserves branch, sample, mode and missing-field identity", () => {
     expect(buildEigenBranchPointViewModel("acoustic", point)).toEqual({
@@ -157,6 +181,92 @@ describe("EigenBranchInspectorPanel point model", () => {
     });
   });
 
+
+  it("resolves branch Inspector handoffs with the exact sample equilibrium identity", () => {
+    const owner = buildEigenBranchResultManifestOwner(perSampleModalManifestResource({
+      "0": "eq-nonzero-k",
+      "1": "eq-gamma",
+    }));
+    const plotPoint: EigenBranchPoint = {
+      ...point,
+      frequencyRealHz: 13.1e9,
+      modeFieldAvailable: true,
+      modeFieldId: "analysis:eigen:sample-0001:mode-0001",
+      modeFieldResourceKey: "data/fields/analysis%3Aeigen%3Asample-0001%3Amode-0001",
+      modeId: "mode-0001",
+      pathS: 1.25e7,
+      sampleId: "sample-0001",
+      sampleIndex: 1,
+      wavevectorKf: [1.25e7, 0, 0],
+    };
+    const artifact: FrequencyDomainJsonArtifactResource = {
+      artifact_set_id: "sha256:artifact-set-7",
+      artifact_path: "eigen/branches.v2.json",
+      content_digest: "sha256:branch-bytes-7",
+      revision: "sha256:branches-revision-7",
+      resource_key: ANALYSIS_FREQUENCY_DOMAIN_EIGEN_BRANCHES_V2_PATH,
+      run_id: "run-7",
+      session_id: "session-7",
+      stage_id: "eigen-stage-7",
+      status: "ready",
+    };
+
+    const handoff = buildEigenBranchModePlotHandoff(
+      "acoustic",
+      plotPoint,
+      "ready",
+      artifact,
+      "ready",
+      owner,
+    );
+
+    expect(handoff?.commandInput).toMatchObject({
+      equilibriumId: "eq-gamma",
+      sampleIndex: 1,
+    });
+    expect(handoff?.selectionRef).toMatchObject({
+      equilibriumId: "eq-gamma",
+      sampleIndex: 1,
+    });
+  });
+
+  it("fails closed when a per-sample branch identity map is incomplete", () => {
+    const owner = buildEigenBranchResultManifestOwner(perSampleModalManifestResource({
+      "0": "eq-nonzero-k",
+    }));
+    const plotPoint: EigenBranchPoint = {
+      ...point,
+      frequencyRealHz: 13.1e9,
+      modeFieldAvailable: true,
+      modeFieldId: "analysis:eigen:sample-0001:mode-0001",
+      modeFieldResourceKey: "data/fields/analysis%3Aeigen%3Asample-0001%3Amode-0001",
+      modeId: "mode-0001",
+      pathS: 1.25e7,
+      sampleId: "sample-0001",
+      sampleIndex: 1,
+      wavevectorKf: [1.25e7, 0, 0],
+    };
+    const artifact: FrequencyDomainJsonArtifactResource = {
+      artifact_set_id: "sha256:artifact-set-7",
+      artifact_path: "eigen/branches.v2.json",
+      content_digest: "sha256:branch-bytes-7",
+      revision: "sha256:branches-revision-7",
+      resource_key: ANALYSIS_FREQUENCY_DOMAIN_EIGEN_BRANCHES_V2_PATH,
+      run_id: "run-7",
+      session_id: "session-7",
+      stage_id: "eigen-stage-7",
+      status: "ready",
+    };
+
+    expect(buildEigenBranchModePlotHandoff(
+      "acoustic",
+      plotPoint,
+      "ready",
+      artifact,
+      "ready",
+      owner,
+    )).toBeNull();
+  });
   it("does not create a plot handoff without a current complete owner", () => {
     const plotPoint: EigenBranchPoint = {
       ...point,

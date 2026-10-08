@@ -54,6 +54,7 @@ import {
   buildFmrPeakTableModel,
   eigenModeFieldAvailable,
   frequencyDomainManifestPayload,
+  frequencyDomainResultContextFromManifest,
   frequencyResponseSeriesUnit,
   responseFieldResourcesFromManifest,
   routeFrequencyDomainCalculationMode,
@@ -1155,9 +1156,21 @@ export function FrequencyDomainDispersionInspectorPanel(
   const summary = useFrequencyDomainDispersionSummary();
   const kernel = useKernel();
   const selectPoint = (point: EigenDispersionPoint): void => {
+    const resultContext = summary.resultContext;
     const ref = buildEigenDispersionPointSelectionRef(point, {
+      analysisRunId: resultContext.runId,
+      analysisStageId: resultContext.stageId,
+      artifactPath: summary.artifactPath,
+      artifactRevision: summary.artifactRevision,
       calculationMode: "dispersion_modal",
+      equilibriumId: resultContext.equilibriumId,
+      equilibriumIdBySample: resultContext.equilibriumIdBySample,
+      equilibriumIdentityStatus: resultContext.equilibriumIdentityStatus,
+      kContextKind: resultContext.classification?.kContext.kind,
+      normalization: resultContext.normalization,
       resourceRef: ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DISPERSION_PATH,
+      source: "eigen-mode",
+      studyProduct: resultContext.studyProduct,
     });
     kernel.selection.set(
       {
@@ -1254,9 +1267,21 @@ export function EigenKPathInspectorPanel(props: InspectorPanelProps) {
   const summary = useFrequencyDomainDispersionSummary();
   const kernel = useKernel();
   const selectPoint = (point: EigenDispersionPoint): void => {
+    const resultContext = summary.resultContext;
     const ref = buildEigenDispersionPointSelectionRef(point, {
+      analysisRunId: resultContext.runId,
+      analysisStageId: resultContext.stageId,
+      artifactPath: summary.artifactPath,
+      artifactRevision: summary.artifactRevision,
       calculationMode: "dispersion_modal",
+      equilibriumId: resultContext.equilibriumId,
+      equilibriumIdBySample: resultContext.equilibriumIdBySample,
+      equilibriumIdentityStatus: resultContext.equilibriumIdentityStatus,
+      kContextKind: resultContext.classification?.kContext.kind,
+      normalization: resultContext.normalization,
       resourceRef: ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DISPERSION_PATH,
+      source: "eigen-mode",
+      studyProduct: resultContext.studyProduct,
     });
     kernel.selection.set(
       {
@@ -4134,6 +4159,11 @@ function useFrequencyDomainDispersionSummary() {
     branchesModel,
   );
   const manifestPayload = record(frequencyDomainManifestPayload(manifest.data));
+  const resultContext = frequencyDomainResultContextFromManifest(manifestPayload, {
+    meshGenerationId: manifest.data?.result_manifest?.mesh_generation_id,
+    runId: manifest.data?.result_manifest?.run_id,
+    stageId: manifest.data?.result_manifest?.stage_id,
+  });
   const capabilities = frequencyDomainRuntimeCapabilities(manifest.data);
   const dispersionCapabilities = record(capabilities?.dispersion);
   const boundaryCapabilities = record(capabilities?.boundary);
@@ -4158,6 +4188,9 @@ function useFrequencyDomainDispersionSummary() {
       dispersion.status === "ready"
         ? `${dispersionModel.points.length} point(s)`
         : dispersion.status,
+    artifactPath: dispersion.data?.artifact_path ?? null,
+    artifactRevision: dispersion.data?.revision ?? null,
+    resultContext,
     branchCount: branchesModel.branches.length,
     analyticReference,
     capabilitySummary: dispersionCapabilitySummary(dispersionCapabilities),

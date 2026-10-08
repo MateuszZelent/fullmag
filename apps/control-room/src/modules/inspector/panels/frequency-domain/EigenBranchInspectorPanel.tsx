@@ -17,6 +17,7 @@ import {
   buildEigenBranchPointModeSelectionRef,
   buildEigenBranchesModel,
   eigenModeFieldAvailable,
+  frequencyDomainEquilibriumIdForSample,
   frequencyDomainManifestPayload,
   frequencyDomainResultContextFromManifest,
 } from "@/shared/domain/analysis/frequencyDomainChartModels";
@@ -110,7 +111,9 @@ export function buildEigenBranchModePlotHandoff(
   const artifactPath = artifact?.artifact_path;
   const resourceRef = point.modeFieldResourceKey;
   const manifestContext = manifestOwner?.resultContext;
-  const equilibriumId = manifestContext?.equilibriumId;
+  const equilibriumId = manifestContext
+    ? frequencyDomainEquilibriumIdForSample(manifestContext, point.sampleIndex)
+    : null;
   const kContextKind = manifestContext?.classification?.kContext.kind;
   const studyProduct = manifestContext?.studyProduct;
   const wavevectorKf = point.wavevectorKf;
@@ -181,6 +184,8 @@ export function buildEigenBranchModePlotHandoff(
       artifactPath,
       artifactRevision,
       equilibriumId,
+      equilibriumIdBySample: manifestContext.equilibriumIdBySample,
+      equilibriumIdentityStatus: manifestContext.equilibriumIdentityStatus,
       kContextKind,
       normalization: manifestContext.normalization ?? undefined,
       representation: EIGEN_MODE_FIELD_REPRESENTATION,
@@ -367,9 +372,25 @@ function BranchSampleTable({
       left.rawModeIndex - right.rawModeIndex,
   );
   const openMode = (point: EigenBranchPoint): void => {
+    const resultContext = manifestOwner?.resultContext;
     const modeRef = buildEigenBranchPointModeSelectionRef(
       branch.branchId,
       point,
+      {
+        analysisRunId: resultContext?.runId,
+        analysisStageId: resultContext?.stageId,
+        artifactPath: artifact?.artifact_path,
+        artifactRevision: artifact?.revision,
+        calculationMode: "dispersion_modal",
+        equilibriumId: resultContext?.equilibriumId,
+        equilibriumIdBySample: resultContext?.equilibriumIdBySample,
+        equilibriumIdentityStatus: resultContext?.equilibriumIdentityStatus,
+        kContextKind: resultContext?.classification?.kContext.kind,
+        normalization: resultContext?.normalization,
+        resourceRef: point.modeFieldResourceKey,
+        source: "eigen-mode",
+        studyProduct: resultContext?.studyProduct,
+      },
     );
     kernel.selection.set(
       {

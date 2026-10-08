@@ -8,7 +8,7 @@ import type { KernelApi } from "@/kernel/types";
 import { Button } from "@/shared/ui/Button";
 
 export interface DispersionModeTarget {
-  runId: string | null; stageId: string | null;
+  runId: string | null; stageId: string | null; equilibriumId: string | null;
   sampleIndex?: number; modeIndex?: number;
   sampleId?: string | null; modeId?: string | null;
 }
@@ -16,7 +16,9 @@ export interface DispersionModeTarget {
 /** A different Explorer selection must never redirect a chart-point action. */
 export function dispersionModeSelectionMatches(ref: SelectionRef | null | undefined, target: DispersionModeTarget): boolean {
   return Boolean(ref?.type === "frequency-domain" && ref.kind === "results.eigen.mode" &&
-    target.runId && target.stageId && ref.analysisRunId === target.runId && ref.analysisStageId === target.stageId &&
+    target.runId && target.stageId && target.equilibriumId &&
+    ref.analysisRunId === target.runId && ref.analysisStageId === target.stageId &&
+    ref.equilibriumId === target.equilibriumId &&
     target.sampleIndex !== undefined && ref.sampleIndex === target.sampleIndex &&
     target.modeIndex !== undefined && ref.modeIndex === target.modeIndex &&
     (!target.sampleId || ref.sampleId === target.sampleId) && (!target.modeId || ref.modeId === target.modeId));
@@ -28,7 +30,7 @@ export function DispersionModeAction({ kernel, available, identity, target, onSe
 }) {
   const [feedback, setFeedback] = useState<{ identity: string; message: string } | null>(null);
   const message = feedback?.identity === identity ? feedback.message : null;
-  const ready = available && Boolean(target.runId && target.stageId);
+  const ready = available && Boolean(target.runId && target.stageId && target.equilibriumId);
   async function showMode() {
     onSelectPoint();
     if (!dispersionModeSelectionMatches(kernel.selection.get().ref, target)) {
@@ -49,7 +51,7 @@ export function DispersionModeAction({ kernel, available, identity, target, onSe
     <Button size="sm" variant="primary" disabled={!ready} onClick={() => void showMode()}>
       <Eye size={14} aria-hidden="true" /> View selected mode in 3D
     </Button>
-    {!available ? <span>Mode field was not published for this point.</span> : !ready ? <span>Run identity is unavailable. Inspect the selected mode before loading its field.</span> : null}
+    {!available ? <span>Mode field was not published for this point.</span> : !ready ? <span>Run, stage, or equilibrium identity is unavailable. Inspect the selected mode before loading its field.</span> : null}
     {message ? <span role="status">{message}</span> : null}
   </div>;
 }

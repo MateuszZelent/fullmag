@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import type { FrequencyDomainFieldResource } from "../api/apiTypes";
+import type {
+  FrequencyDomainFieldResource,
+  FrequencyDomainJsonArtifactResource,
+} from "../api/apiTypes";
 import { createModeFieldOverlayIntent } from "../visualization/ModeFieldOverlayIntent";
 import {
   resolveModeFieldOverlayMetadataRevision,
@@ -42,6 +45,46 @@ const metadata: FrequencyDomainFieldResource = {
   value_kind: "complex_spatial_vector",
 };
 
+const eqBoundIntent = createModeFieldOverlayIntent({
+  analysisRunId: "run-k0",
+  analysisStageId: "stage-eigen",
+  artifactRevision: "sha256:artifact-v1",
+  equilibriumId: "eq-k0",
+  fieldId: "analysis:eigen:sample-k0:mode-1:delta_m_xyz",
+  kind: "results.eigen.mode",
+  modeId: "mode-1",
+  modeIndex: 1,
+  nodeId: "results:eigen:sample-k0:mode-1",
+  sampleId: "sample-k0",
+  sampleIndex: 0,
+  type: "frequency-domain",
+})!;
+
+function ownedModeArtifact(equilibriumId: string): FrequencyDomainJsonArtifactResource {
+  return {
+    artifact_path: "eigen/mode.v1.json",
+    content_digest: "sha256:mode-artifact",
+    payload: {
+      candidate_identity: {
+        equilibrium_artifact_sha256: equilibriumId,
+        schema_version: "frequency_domain_candidate_identity.v1",
+        source_identity: {},
+      },
+      equilibrium_artifact_sha256: equilibriumId,
+      mode_field_id: eqBoundIntent.fieldId,
+      raw_mode_index: eqBoundIntent.modeIndex,
+      sample_index: eqBoundIntent.sampleIndex,
+      schema_version: "eigen_mode.v2",
+    },
+    resource_key: "analysis/frequency-domain/eigen/modes/0/1",
+    revision: "sha256:mode-artifact",
+    run_id: eqBoundIntent.analysisRunId,
+    schema_version: "frequency_domain_eigen_artifact.v1",
+    stage_id: eqBoundIntent.analysisStageId,
+    status: "ready",
+  };
+}
+
 describe("mode field overlay resource", () => {
   it("does not expose a binary request until metadata is verified against the active intent", () => {
     expect(
@@ -56,6 +99,39 @@ describe("mode field overlay resource", () => {
       metadataStatus: "ready",
       status: "ready",
     });
+  });
+
+  it("requires the owned mode artifact before exposing an Eq-bound field", () => {
+    const fieldResource = {
+      data: metadata,
+      error: null,
+      revision: "sha256:field-v1",
+      status: "ready" as const,
+    };
+    const ownedResource = (equilibriumId: string) => ({
+      data: ownedModeArtifact(equilibriumId),
+      error: null,
+      revision: "sha256:mode-artifact",
+      status: "ready" as const,
+    });
+
+    expect(
+      resolveModeFieldOverlayResource(eqBoundIntent, fieldResource),
+    ).toMatchObject({ binaryResourceKey: null, status: "error" });
+    expect(
+      resolveModeFieldOverlayResource(
+        eqBoundIntent,
+        fieldResource,
+        ownedResource("eq-k0"),
+      ),
+    ).toMatchObject({ status: "ready" });
+    expect(
+      resolveModeFieldOverlayResource(
+        eqBoundIntent,
+        fieldResource,
+        ownedResource("eq-gamma"),
+      ),
+    ).toMatchObject({ binaryResourceKey: null, status: "error" });
   });
 
   it("keeps a malformed or stale metadata payload fail-closed", () => {

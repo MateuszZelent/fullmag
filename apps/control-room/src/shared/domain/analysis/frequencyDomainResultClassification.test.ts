@@ -25,6 +25,19 @@ const drivenBase = {
 } satisfies FrequencyDomainResultEvidence;
 
 describe("classifyFrequencyDomainResult", () => {
+  it("classifies typed dispersion evidence independently of common equilibrium identity", () => {
+    expect(classifyFrequencyDomainResult({
+      ...modalBase,
+      boundaryContext: "floquet_periodic",
+      equilibriumId: null,
+      kSampling: { kind: "path", sampleCount: 4, label: "Gamma-X" },
+    })).toMatchObject({
+      family: "k_resolved",
+      kContext: { kind: "k_path" },
+      resultLabel: "Dispersion Relation · fₙ(k)",
+    });
+  });
+
   it("classifies a finite open modal solve with k not applicable", () => {
     expect(classifyFrequencyDomainResult(modalBase)).toMatchObject({
       family: "resonance",

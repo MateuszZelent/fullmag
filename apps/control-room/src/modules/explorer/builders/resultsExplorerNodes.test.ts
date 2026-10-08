@@ -187,6 +187,61 @@ describe("buildPhysicsFirstResultsTree", () => {
     expect(labels).toContain("Spectral Response Map · A(k,f)");
   });
 
+
+  it("binds each dispersion Explorer mode leaf to its sample equilibrium identity", () => {
+    const entry: PhysicsFirstResultEntry = {
+      ...modalFinite,
+      boundaryContext: "floquet_periodic",
+      equilibriumId: null,
+      equilibriumIdBySample: {
+        "0": "eq-nonzero-k",
+        "1": "eq-nonzero-k",
+        "2": "eq-nonzero-k",
+        "3": "eq-gamma",
+      },
+      equilibriumIdentityStatus: "per_sample",
+      kSampling: { kind: "path", label: "Gamma-X-Gamma", sampleCount: 4 },
+      products: { modeShapes: true, spectrum: true },
+      analysisFieldTargets: [{
+        fieldId: "analysis:eigen:sample-0003:mode-0001",
+        frequencyHz: 12.5e9,
+        label: "Sample 3 · Mode 1",
+        modeId: "sample-0003/mode-0001",
+        modeIndex: 1,
+        representation: "complex-vector-xyz",
+        resourceRef: "data/fields/analysis:eigen:sample-0003:mode-0001",
+        sampleId: "k-path-sample-0003",
+        sampleIndex: 3,
+        source: "eigen-mode",
+        view: "phase_rotated_real",
+        wavevectorKf: [0, 0, 0],
+      }],
+    };
+    const nodes = flattenExplorerNodes(buildPhysicsFirstResultsTree({
+      entries: [entry],
+      resultContextRunId: entry.runId,
+    }));
+    const aggregateRelation = nodes.find((node) => node.kind === "results.dispersion.modal.relation");
+    const modeLeaf = nodes.find((node) =>
+      node.kind === "results.dispersion.modal.mode_at_k" && node.sampleIndex === 3,
+    );
+
+    expect(aggregateRelation?.equilibriumId).toBeNull();
+    expect(modeLeaf).toMatchObject({
+      equilibriumId: "eq-gamma",
+      modeIndex: 1,
+      sampleIndex: 3,
+    });
+    if (!modeLeaf) throw new Error("Missing per-sample dispersion mode leaf");
+    const selection = new SelectionController(new EventBus<KernelEventMap>());
+    selectExplorerNode({ selection } as KernelApi, modeLeaf, "explorer");
+    expect(selection.get().ref).toMatchObject({
+      equilibriumId: "eq-gamma",
+      modeIndex: 1,
+      sampleIndex: 3,
+    });
+  });
+
   it("routes provenance to the physical product and wavevector family", () => {
     const kPath = { kind: "path", label: "Γ–X", sampleCount: 8 } as const;
     const nodes = flattenExplorerNodes(
@@ -1479,6 +1534,7 @@ describe("optional state snapshot availability", () => {
     const nodes = flattenExplorerNodes(buildPhysicsFirstResultsTree({
       entries: [modalFinite],
       observationFrames: { data: null, error: null, missing: true, revision: null, status: "ready" },
+      resultContextRunId: modalFinite.runId,
     }));
     const snapshots = nodes.find((entry) => entry.kind === "results.observation_frames.root");
     expect(snapshots).toMatchObject({

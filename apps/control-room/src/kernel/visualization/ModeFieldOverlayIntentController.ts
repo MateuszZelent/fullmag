@@ -2,6 +2,7 @@ import type { DecodedComplexFieldVector, DecodedFieldVector } from "../api/codec
 import type {
   AnalysisResultFieldRef,
   FrequencyDomainFieldResource,
+  FrequencyDomainJsonArtifactResource,
   ResourceRevision,
 } from "../api/apiTypes";
 
@@ -27,6 +28,7 @@ export interface ModeFieldOverlayIntentSnapshot {
 
 export interface ModeFieldOverlayMetadataLoadResult {
   readonly data: FrequencyDomainFieldResource | AnalysisResultFieldRef;
+  readonly modeArtifact?: FrequencyDomainJsonArtifactResource | null;
   readonly revision: ResourceRevision | null;
 }
 
@@ -112,6 +114,7 @@ export class ModeFieldOverlayIntentController {
         intent,
         loadedMetadata.data,
         loadedMetadata.revision,
+        loadedMetadata.modeArtifact,
       );
       if (!metadata) {
         this.setError(requestToken, intent, "Mode field metadata failed validation.");
@@ -138,10 +141,12 @@ export class ModeFieldOverlayIntentController {
       return "ready";
     } catch (error) {
       if (!this.isCurrent(requestToken, intent)) return "cancelled";
+      abortController.abort();
+      if (!this.isCurrent(requestToken, intent)) return "cancelled";
       this.setError(
         requestToken,
         intent,
-        error instanceof Error ? error.message : "Mode field request failed.",
+        error instanceof Error ? error : "Mode field request failed.",
       );
       return "error";
     } finally {
@@ -158,12 +163,12 @@ export class ModeFieldOverlayIntentController {
   private setError(
     requestToken: number,
     intent: ModeFieldOverlayIntent,
-    message: string,
+    message: string | Error,
   ): void {
     if (!this.isCurrent(requestToken, intent)) return;
     this.setSnapshot({
       binary: null,
-      error: new Error(message),
+      error: message instanceof Error ? message : new Error(message),
       field: null,
       intent,
       metadata: null,

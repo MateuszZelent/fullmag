@@ -28,7 +28,7 @@ export interface FrequencyDriveEvidence {
 export interface FrequencyDomainResultEvidence {
   boundaryContext: FrequencyBoundaryContext;
   drive?: FrequencyDriveEvidence;
-  equilibriumId: string;
+  equilibriumId: string | null;
   kSampling?: FrequencyKSampling;
   normalization?: string;
   observables: readonly FrequencyObservableEvidence[];

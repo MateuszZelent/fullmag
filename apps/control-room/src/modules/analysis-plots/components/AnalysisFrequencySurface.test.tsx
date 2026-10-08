@@ -214,4 +214,46 @@ describe("AnalysisFrequencySurface", () => {
       html.indexOf("Frequency-domain physical context"),
     );
   });
+  it("displays the selected sample equilibrium identity when no common identity exists", () => {
+    const evidence = {
+      boundaryContext: "floquet_periodic" as const,
+      equilibriumId: null,
+      kSampling: { kind: "path" as const, sampleCount: 4, label: "Gamma-X-Gamma" },
+      observables: [],
+      runId: "run-path",
+      stageId: "stage-path",
+      studyProduct: "modal_eigen" as const,
+    };
+    const html = renderToStaticMarkup(
+      <AnalysisFrequencySurface
+        calculationMode="dispersion_modal"
+        context={{
+          ...evidence,
+          classification: classifyFrequencyDomainResult(evidence),
+          contractGaps: [],
+          equilibriumIdBySample: { "3": "eq-gamma" },
+          equilibriumIdentityStatus: "per_sample",
+          evidence,
+          geometryId: "geometry-path",
+          meshId: "mesh-path",
+        }}
+        kernel={{} as KernelApi}
+        onPointSelect={() => undefined}
+        onSelectedSeriesIdsChange={() => undefined}
+        selectedPoint={{
+          ...selectedPoint,
+          label: "Gamma",
+          point: { rowIndex: 3, x: 0, y: 12.5, sampleIndex: 3 },
+        } as unknown as AnalysisChartCursorPoint}
+        selectedSeriesIds={["response"]}
+        series={series}
+        status="ready"
+        title="Dispersion Relation · fₙ(k)"
+        unavailableReason={null}
+      />,
+    );
+
+    expect(html).toContain("Equilibrium: eq-gamma (sample 3)");
+  });
+
 });

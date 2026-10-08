@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { AnalysisFieldOverlayController } from "./AnalysisFieldOverlayController";
+import type { ModeFieldOverlayIntent } from "./ModeFieldOverlayIntent";
 
 describe("AnalysisFieldOverlay result context", () => {
   it("preserves the complete immutable result identity", () => {
@@ -28,6 +29,32 @@ describe("AnalysisFieldOverlay result context", () => {
       visualizationPhaseRad: 0.25,
       wavevectorKf: [0, 0, 0],
     });
+  });
+
+  it("keeps a changed sample equilibrium identity as a distinct mode intent", () => {
+    const controller = ownedOverlayController();
+    const current = controller.getSnapshot()!;
+    const modeIntent: ModeFieldOverlayIntent = {
+      analysisRunId: "run-1",
+      analysisStageId: "stage-eigen",
+      artifactRevision: "sha256:artifact-v1",
+      equilibriumId: "eq-nonzero-k",
+      fieldId: "mode-field",
+      metadataResourceKey: "mode-field-meta",
+      modeId: "mode-1",
+      modeIndex: 1,
+      nodeId: "mode-1",
+      sampleId: "sample-1",
+      sampleIndex: 0,
+    };
+    controller.set({ ...current, modeIntent });
+
+    controller.set({
+      ...controller.getSnapshot()!,
+      modeIntent: { ...modeIntent, equilibriumId: "eq-gamma" },
+    });
+
+    expect(controller.getSnapshot()?.modeIntent?.equilibriumId).toBe("eq-gamma");
   });
 
   it("makes a foreign overlay non-renderable when result context changes", () => {

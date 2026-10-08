@@ -7,6 +7,7 @@ import type {
   AnalysisResultFieldRef,
   FieldVectorQuery,
   FrequencyDomainFieldResource,
+  FrequencyDomainJsonArtifactResource,
   ResourceRevision,
 } from "../api/apiTypes";
 import type { SelectionRef } from "../selection/selectionTypes";
@@ -27,6 +28,7 @@ export interface ModeFieldOverlayIntent {
   readonly analysisStageId: string;
   readonly artifactRevision: string;
   readonly fieldId: string;
+  readonly equilibriumId?: string;
   readonly metadataResourceKey: string;
   readonly modeId: string;
   readonly modeIndex: number;
@@ -82,6 +84,9 @@ export function createModeFieldOverlayIntent(
   const analysisStageId = requiredString(selection.analysisStageId);
   const artifactRevision = requiredString(selection.artifactRevision);
   const fieldId = requiredString(selection.fieldId);
+  const equilibriumId = selection.equilibriumId == null
+    ? null
+    : requiredString(selection.equilibriumId);
   const modeId = requiredString(selection.modeId);
   const sampleId = requiredString(selection.sampleId);
   if (
@@ -89,6 +94,7 @@ export function createModeFieldOverlayIntent(
     !analysisStageId ||
     !artifactRevision ||
     !fieldId ||
+    (selection.equilibriumId != null && !equilibriumId) ||
     !modeId ||
     !sampleId ||
     !isNonNegativeInteger(selection.modeIndex) ||
@@ -102,6 +108,7 @@ export function createModeFieldOverlayIntent(
     analysisStageId,
     artifactRevision,
     fieldId,
+    ...(equilibriumId ? { equilibriumId } : {}),
     metadataResourceKey:
       `analysis/frequency-domain/eigen/samples/${encodeURIComponent(sampleId)}` +
       `/modes/${encodeURIComponent(modeId)}/fields/${encodeURIComponent(fieldId)}/meta`,
@@ -114,14 +121,15 @@ export function createModeFieldOverlayIntent(
 }
 
 /**
- * Admits only the canonical generated FrequencyDomainFieldResource contract.
- * Topology identity is owned by the FMVP binary header and is checked at the
- * next gate against the active viewport topology, never reconstructed here.
+ * Admits the generated field metadata only after the owned mode artifact
+ * proves any sample-specific Eq identity. Topology identity is owned by the
+ * FMVP binary header and checked against the active viewport topology later.
  */
 export function resolveModeFieldOverlayMetadata(
   intent: ModeFieldOverlayIntent,
   metadata: FrequencyDomainFieldResource | AnalysisResultFieldRef,
   resourceRevision: ResourceRevision | null,
+  modeArtifact?: FrequencyDomainJsonArtifactResource | null,
 ): ResolvedModeFieldOverlayMetadata | null {
   if (isAnalysisResultFieldOverlayIntent(intent)) {
     if (!("field_revision" in metadata)) return null;
@@ -147,6 +155,7 @@ export function resolveModeFieldOverlayMetadata(
     legacyMetadata.payload_encoding !== "f64_interleaved_real_imag_xyz" ||
     legacyMetadata.binary_layout !== "complex_f64_pairs_little_endian" ||
     fieldId !== intent.fieldId ||
+    !modeArtifactMatchesIntent(intent, modeArtifact) ||
     !artifactPath ||
     !revision ||
     payloadValueCount === null ||
@@ -234,6 +243,191 @@ function isAnalysisResultFieldOverlayIntent(
     (intent as ModeFieldOverlayIntent & { sourceKind?: unknown }).sourceKind ===
     "analysis-result"
   );
+}
+
+function modeArtifactMatchesIntent(
+  intent: ModeFieldOverlayIntent,
+  modeArtifact: FrequencyDomainJsonArtifactResource | null | undefined,
+): boolean {
+  if (!modeArtifact) return intent.equilibriumId === undefined;
+  if (modeArtifact.status !== "ready") return false;
+
+  const artifact = recordValue(modeArtifact);
+  const payload = recordValue(modeArtifact.payload);
+  if (
+    !artifact ||
+    !payload ||
+    !(requiredString(modeArtifact.revision) ?? requiredString(modeArtifact.content_digest)) ||
+    requiredString(modeArtifact.run_id) !== intent.analysisRunId ||
+    requiredString(modeArtifact.stage_id) !== intent.analysisStageId
+  ) {
+    return false;
+  }
+  if (
+    !optionalStringPropertyMatches(
+      ownProperty(payload, "run_id"),
+      intent.analysisRunId,
+    ) ||
+    !optionalStringPropertyMatches(
+      ownProperty(payload, "stage_id"),
+      intent.analysisStageId,
+    ) ||
+    !optionalStringPropertyMatches(
+      ownProperty(payload, "sample_id"),
+      intent.sampleId,
+    ) ||
+    !optionalStringPropertyMatches(
+      ownProperty(payload, "mode_id"),
+      intent.modeId,
+    )
+  ) {
+    return false;
+  }
+
+  if (
+    !numberPropertiesMatch([ownProperty(payload, "sample_index")], intent.sampleIndex) ||
+    !numberPropertiesMatch([ownProperty(payload, "raw_mode_index")], intent.modeIndex) ||
+    !stringPropertiesMatch([ownProperty(payload, "mode_field_id")], intent.fieldId)
+  ) {
+    return false;
+  }
+
+  const identitySources = [artifact, payload];
+  const topLevelEquilibriumProperties = presentProperties(
+    identitySources,
+    "equilibrium_artifact_sha256",
+  );
+  const candidateProperties = identitySources.map(candidateEquilibriumProperty);
+  if (candidateProperties.some((property) => property.malformed)) return false;
+  const candidateEqProperties = candidateProperties.flatMap((property) =>
+    property.equilibriumProperty.present
+      ? [property.equilibriumProperty]
+      : [],
+  );
+  const payloadCandidate = candidateEquilibriumProperty(payload);
+  if (payloadCandidate.malformed) return false;
+
+  if (intent.equilibriumId !== undefined) {
+    const expected = requiredString(intent.equilibriumId);
+    const payloadTopLevelEq = ownProperty(payload, "equilibrium_artifact_sha256");
+    return expected !== null &&
+      payloadTopLevelEq.present &&
+      candidateEqProperties.length > 0 &&
+      payloadCandidate.present &&
+      payloadCandidate.equilibriumProperty.present &&
+      candidateProperties.every((property) =>
+        !property.present || property.equilibriumProperty.present,
+      ) &&
+      [...topLevelEquilibriumProperties, ...candidateEqProperties].every(
+        (property) =>
+          typeof property.value === "string" &&
+          property.value.trim().length > 0 &&
+          property.value === expected,
+      );
+  }
+
+  // Historical selections without Eq remain valid only while the owned mode
+  // artifact itself publishes no Eq-bearing identity fields.
+  return topLevelEquilibriumProperties.length === 0 &&
+    candidateEqProperties.length === 0;
+}
+
+interface PublishedIdentityProperty {
+  present: boolean;
+  value: unknown;
+}
+
+interface CandidateEquilibriumProperty {
+  equilibriumProperty: PublishedIdentityProperty;
+  malformed: boolean;
+  present: boolean;
+}
+
+function presentProperties(
+  sources: readonly Record<string, unknown>[],
+  key: string,
+): PublishedIdentityProperty[] {
+  return sources
+    .map((source) => ownProperty(source, key))
+    .filter((property) => property.present);
+}
+
+function optionalStringPropertyMatches(
+  property: PublishedIdentityProperty,
+  expected: string,
+): boolean {
+  return !property.present || (
+    typeof property.value === "string" &&
+    property.value.trim().length > 0 &&
+    property.value === expected
+  );
+}
+
+function stringPropertiesMatch(
+  properties: readonly PublishedIdentityProperty[],
+  expected: string,
+): boolean {
+  return properties.length > 0 && properties.every((property) =>
+    typeof property.value === "string" &&
+    property.value.trim().length > 0 &&
+    property.value === expected,
+  );
+}
+
+function numberPropertiesMatch(
+  properties: readonly PublishedIdentityProperty[],
+  expected: number,
+): boolean {
+  return properties.length > 0 && properties.every((property) =>
+    typeof property.value === "number" &&
+    Number.isSafeInteger(property.value) &&
+    property.value === expected,
+  );
+}
+
+function candidateEquilibriumProperty(
+  source: Record<string, unknown>,
+): CandidateEquilibriumProperty {
+  const candidate = ownProperty(source, "candidate_identity");
+  if (!candidate.present || candidate.value === null) {
+    return {
+      equilibriumProperty: { present: false, value: undefined },
+      malformed: false,
+      present: false,
+    };
+  }
+  const candidateRecord = recordValue(candidate.value);
+  if (!candidateRecord) {
+    return {
+      equilibriumProperty: { present: false, value: undefined },
+      malformed: true,
+      present: true,
+    };
+  }
+  return {
+    equilibriumProperty: ownProperty(
+      candidateRecord,
+      "equilibrium_artifact_sha256",
+    ),
+    malformed: false,
+    present: true,
+  };
+}
+
+function ownProperty(
+  source: Record<string, unknown>,
+  key: string,
+): PublishedIdentityProperty {
+  if (!Object.prototype.hasOwnProperty.call(source, key)) {
+    return { present: false, value: undefined };
+  }
+  return { present: true, value: source[key] };
+}
+
+function recordValue(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
 }
 
 function requiredString(value: unknown): string | null {

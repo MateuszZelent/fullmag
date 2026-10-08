@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import type { FrequencyDomainFieldResource } from "../api/apiTypes";
+import type {
+  FrequencyDomainFieldResource,
+  FrequencyDomainJsonArtifactResource,
+} from "../api/apiTypes";
 import type { DecodedFieldVector } from "../api/codecs";
 import type { SelectionRef } from "../selection/selectionTypes";
 
@@ -16,6 +19,7 @@ const selection: Extract<SelectionRef, { type: "frequency-domain" }> = {
   analysisStageId: "stage-eigen",
   artifactRevision: "sha256:artifact-v1",
   fieldId: "analysis:eigen:sample-k0:mode-1:delta_m_xyz",
+  equilibriumId: "eq-gamma",
   kind: "results.eigen.mode",
   modeId: "mode-1",
   modeIndex: 1,
@@ -54,6 +58,66 @@ const metadata: FrequencyDomainFieldResource = {
   value_kind: "complex_spatial_vector",
 };
 
+interface ModeArtifactOverrides {
+  candidateEquilibriumId?: unknown;
+  includeCandidateIdentity?: boolean;
+  includePayloadEquilibriumId?: boolean;
+  modeFieldId?: string;
+  modeId?: string;
+  payloadEquilibriumId?: unknown;
+  sampleId?: string;
+  rawModeIndex?: number;
+  runId?: string;
+  sampleIndex?: number;
+  stageId?: string;
+}
+
+function modeArtifact(
+  overrides: ModeArtifactOverrides = {},
+): FrequencyDomainJsonArtifactResource {
+  const hasPayloadEq = Object.prototype.hasOwnProperty.call(
+    overrides,
+    "payloadEquilibriumId",
+  );
+  const hasCandidateEq = Object.prototype.hasOwnProperty.call(
+    overrides,
+    "candidateEquilibriumId",
+  );
+  const payload: Record<string, unknown> = {
+    mode_field_id: overrides.modeFieldId ?? selection.fieldId,
+    mode_id: overrides.modeId ?? selection.modeId,
+    raw_mode_index: overrides.rawModeIndex ?? selection.modeIndex,
+    sample_id: overrides.sampleId ?? selection.sampleId,
+    sample_index: overrides.sampleIndex ?? selection.sampleIndex,
+    schema_version: "eigen_mode.v2",
+  };
+  if (overrides.includePayloadEquilibriumId !== false) {
+    payload.equilibrium_artifact_sha256 = hasPayloadEq
+      ? overrides.payloadEquilibriumId
+      : "eq-gamma";
+  }
+  if (overrides.includeCandidateIdentity !== false) {
+    payload.candidate_identity = {
+      equilibrium_artifact_sha256: hasCandidateEq
+        ? overrides.candidateEquilibriumId
+        : "eq-gamma",
+      schema_version: "frequency_domain_candidate_identity.v1",
+      source_identity: {},
+    };
+  }
+  return {
+    artifact_path: "eigen/mode.v1.json",
+    content_digest: "sha256:mode-artifact",
+    payload: payload as unknown as FrequencyDomainJsonArtifactResource["payload"],
+    resource_key: "analysis/frequency-domain/eigen/mode/0/1",
+    revision: "sha256:mode-artifact",
+    run_id: overrides.runId ?? selection.analysisRunId,
+    schema_version: "frequency_domain_eigen_artifact.v1",
+    stage_id: overrides.stageId ?? selection.analysisStageId,
+    status: "ready",
+  };
+}
+
 const topology = {
   domainGenerationId: "domain-v7",
   meshTopologyHash: "topology-hash-v4",
@@ -85,6 +149,7 @@ describe("ModeFieldOverlayIntent", () => {
     expect(intent).toMatchObject({
       artifactRevision: "sha256:artifact-v1",
       fieldId: "analysis:eigen:sample-k0:mode-1:delta_m_xyz",
+      equilibriumId: "eq-gamma",
       modeId: "mode-1",
       sampleId: "sample-k0",
     });
@@ -102,6 +167,7 @@ describe("ModeFieldOverlayIntent", () => {
       analysisStageId: selection.analysisStageId,
       artifactRevision: selection.artifactRevision,
       fieldId: selection.fieldId,
+      equilibriumId: selection.equilibriumId,
       modeId: selection.modeId,
       nodeId: selection.nodeId,
       sampleId: selection.sampleId,
@@ -115,15 +181,158 @@ describe("ModeFieldOverlayIntent", () => {
     expect(isEigenModeFrequencyDomainSelectionKind("results.eigen.root")).toBe(false);
   });
 
-  it("accepts only canonical ready global XYZ complex field metadata", () => {
+  it("accepts canonical field metadata bound to the exact owned mode artifact", () => {
     const intent = createModeFieldOverlayIntent(selection)!;
 
-    expect(resolveModeFieldOverlayMetadata(intent, metadata, "sha256:field-v1")).toMatchObject({
+    expect(
+      resolveModeFieldOverlayMetadata(
+        intent,
+        metadata,
+        "sha256:field-v1",
+        modeArtifact(),
+      ),
+    ).toMatchObject({
       defaultPhaseRad: 0,
       fieldId: selection.fieldId,
       payloadValueCount: 12,
       resourceRevision: "sha256:field-v1",
     });
+  });
+
+  it("rejects an owned mode artifact bound to another sample equilibrium", () => {
+    const intent = createModeFieldOverlayIntent(selection)!;
+
+    expect(
+      resolveModeFieldOverlayMetadata(
+        intent,
+        metadata,
+        "sha256:field-v1",
+        modeArtifact({ candidateEquilibriumId: "eq-nonzero-k" }),
+      ),
+    ).toBeNull();
+  });
+
+  it("fails closed when an Eq-bound selection has no owned mode artifact", () => {
+    const intent = createModeFieldOverlayIntent(selection)!;
+
+    expect(
+      resolveModeFieldOverlayMetadata(intent, metadata, "sha256:field-v1"),
+    ).toBeNull();
+  });
+
+  it("fails closed when the owned mode artifact omits its sample Eq", () => {
+    const intent = createModeFieldOverlayIntent(selection)!;
+
+    expect(
+      resolveModeFieldOverlayMetadata(
+        intent,
+        metadata,
+        "sha256:field-v1",
+        modeArtifact({ includePayloadEquilibriumId: false }),
+      ),
+    ).toBeNull();
+  });
+
+  it("rejects a malformed duplicate Eq property even when the owned Eq matches", () => {
+    const intent = createModeFieldOverlayIntent(selection)!;
+    const valid = modeArtifact();
+    const validPayload = valid.payload as Record<string, unknown>;
+    const malformedDuplicate = {
+      ...valid,
+      equilibrium_artifact_sha256: "eq-gamma",
+      payload: { ...validPayload, equilibrium_artifact_sha256: null },
+    } as FrequencyDomainJsonArtifactResource;
+
+    expect(
+      resolveModeFieldOverlayMetadata(
+        intent,
+        metadata,
+        "sha256:field-v1",
+        malformedDuplicate,
+      ),
+    ).toBeNull();
+  });
+
+  it("rejects a non-null candidate identity without Eq beside a valid duplicate", () => {
+    const intent = createModeFieldOverlayIntent(selection)!;
+    const valid = modeArtifact();
+    const malformedDuplicate = {
+      ...valid,
+      candidate_identity: {},
+    } as FrequencyDomainJsonArtifactResource;
+
+    expect(
+      resolveModeFieldOverlayMetadata(
+        intent,
+        metadata,
+        "sha256:field-v1",
+        malformedDuplicate,
+      ),
+    ).toBeNull();
+  });
+
+  it("rejects malformed Eq-only mode artifacts for a historical selection", () => {
+    const historicalIntent = createModeFieldOverlayIntent({
+      ...selection,
+      equilibriumId: undefined,
+    })!;
+
+    expect(
+      resolveModeFieldOverlayMetadata(
+        historicalIntent,
+        metadata,
+        "sha256:field-v1",
+        modeArtifact({ payloadEquilibriumId: null, candidateEquilibriumId: null }),
+      ),
+    ).toBeNull();
+  });
+
+  it("keeps historical Eq-less selections with Eq-less mode artifacts", () => {
+    const historicalIntent = createModeFieldOverlayIntent({
+      ...selection,
+      equilibriumId: undefined,
+    })!;
+
+    expect(historicalIntent).not.toHaveProperty("equilibriumId");
+    expect(
+      resolveModeFieldOverlayMetadata(
+        historicalIntent,
+        metadata,
+        "sha256:field-v1",
+        modeArtifact({
+          includeCandidateIdentity: false,
+          includePayloadEquilibriumId: false,
+        }),
+      ),
+    ).not.toBeNull();
+    expect(
+      resolveModeFieldOverlayMetadata(
+        historicalIntent,
+        metadata,
+        "sha256:field-v1",
+      ),
+    ).not.toBeNull();
+  });
+
+  it.each([
+    ["run", { runId: "foreign-run" }],
+    ["stage", { stageId: "foreign-stage" }],
+    ["sample index", { sampleIndex: 2 }],
+    ["sample ID", { sampleId: "different-sample" }],
+    ["raw mode index", { rawModeIndex: 2 }],
+    ["mode ID", { modeId: "different-mode" }],
+    ["mode field ID", { modeFieldId: "field-from-another-mode" }],
+  ])("rejects an owned mode artifact with a different %s", (_label, overrides) => {
+    const intent = createModeFieldOverlayIntent(selection)!;
+
+    expect(
+      resolveModeFieldOverlayMetadata(
+        intent,
+        metadata,
+        "sha256:field-v1",
+        modeArtifact(overrides),
+      ),
+    ).toBeNull();
   });
 
   it.each([
@@ -135,7 +344,12 @@ describe("ModeFieldOverlayIntent", () => {
     const intent = createModeFieldOverlayIntent(selection)!;
 
     expect(
-      resolveModeFieldOverlayMetadata(intent, invalidMetadata, "sha256:field-v1"),
+      resolveModeFieldOverlayMetadata(
+        intent,
+        invalidMetadata,
+        "sha256:field-v1",
+        modeArtifact(),
+      ),
     ).toBeNull();
   });
 
@@ -145,6 +359,7 @@ describe("ModeFieldOverlayIntent", () => {
       intent,
       metadata,
       "sha256:field-v1",
+      modeArtifact(),
     )!;
 
     expect(validateModeFieldOverlayBinary(resolved, validBinary(), topology)).toMatchObject({
@@ -175,6 +390,7 @@ describe("ModeFieldOverlayIntent", () => {
       intent,
       metadata,
       "sha256:field-v1",
+      modeArtifact(),
     )!;
 
     expect(

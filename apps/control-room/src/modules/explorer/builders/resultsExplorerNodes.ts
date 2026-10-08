@@ -3,6 +3,7 @@ import {
   type FrequencyDomainResultEvidence,
 } from "@/shared/domain/analysis/frequencyDomainResultClassification";
 import {
+  frequencyDomainEquilibriumIdForSample,
   frequencyDomainResultContextFromManifest,
   buildEigenDispersionChartModel,
   buildEigenSpectrumChartModel,
@@ -11,6 +12,7 @@ import {
   eigenModeFieldAvailable,
   responseFieldResourcesFromManifest,
   type FrequencyDomainJsonArtifactLike,
+  type FrequencyDomainResultContext,
   type FrequencyDomainTextArtifactLike,
 } from "@/shared/domain/analysis/frequencyDomainChartModels";
 import { fieldVectorResourceKey } from "@/kernel/api/fieldQueryIdentity";
@@ -50,6 +52,8 @@ export interface PhysicsFirstResultProducts {
 
 export interface PhysicsFirstResultEntry extends FrequencyDomainResultEvidence {
   analysisFieldTargets?: readonly PhysicsFirstAnalysisFieldTarget[];
+  equilibriumIdBySample?: FrequencyDomainResultContext["equilibriumIdBySample"];
+  equilibriumIdentityStatus?: FrequencyDomainResultContext["equilibriumIdentityStatus"];
   artifactRevision: number | string;
   products: PhysicsFirstResultProducts;
   stageLabel: string;
@@ -522,13 +526,16 @@ export function physicsFirstResultsSnapshotFromResources(
   const resultRunId = frequencyContext.runId;
   const stageId = frequencyContext.stageId;
   const equilibriumId = frequencyContext.equilibriumId;
+  const hasEquilibriumIdentity = frequencyContext.equilibriumIdentityStatus === "common" ||
+    frequencyContext.equilibriumIdentityStatus === "per_sample";
   const studyProduct = frequencyContext.studyProduct;
   const boundaryContext = frequencyContext.boundaryContext;
   const kSampling = metadataKSampling ?? frequencyContext.kSampling;
 
   const requiredGaps: Readonly<Record<string, string>> = {
     "boundary context unavailable": "Frequency-domain artifact does not publish boundary_context",
-    "equilibrium identity unavailable": "Frequency-domain artifact does not publish equilibrium_identity",
+    "equilibrium identity unavailable": "Frequency-domain artifact does not publish equilibrium_identity or native_provenance_by_sample",
+    "per-sample equilibrium identity map is incomplete or invalid": "Frequency-domain artifact publishes an incomplete or invalid native_provenance_by_sample equilibrium identity map",
     "run identity unavailable": "Frequency-domain artifact does not publish run identity",
     "stage identity unavailable": "Frequency-domain artifact does not publish stage_id",
     "study product unavailable": "Frequency-domain artifact does not publish study_product",
@@ -537,7 +544,7 @@ export function physicsFirstResultsSnapshotFromResources(
     const mappedGap = requiredGaps[gap];
     if (mappedGap) addContractGap(mappedGap);
   }
-  if (!resultRunId || !stageId || !equilibriumId || !studyProduct || !boundaryContext) {
+  if (!resultRunId || !stageId || !hasEquilibriumIdentity || !studyProduct || !boundaryContext) {
     return { contractGaps, snapshot: emptySnapshot };
   }
 
@@ -590,6 +597,8 @@ export function physicsFirstResultsSnapshotFromResources(
     boundaryContext,
     ...(drive ? { drive } : {}),
     equilibriumId,
+    equilibriumIdBySample: frequencyContext.equilibriumIdBySample,
+    equilibriumIdentityStatus: frequencyContext.equilibriumIdentityStatus,
     ...(kSampling ? { kSampling } : {}),
     observables: observablesFromPayload(payload.observables),
     ...(frequencyContext.normalization ? { normalization: frequencyContext.normalization } : {}),
@@ -613,6 +622,17 @@ export function physicsFirstResultsSnapshotFromResources(
       resultContextRunId: resultRunId,
     },
   };
+}
+
+function entryEquilibriumIdForSample(
+  entry: PhysicsFirstResultEntry,
+  sampleIndex?: number | null,
+): string | null {
+  return frequencyDomainEquilibriumIdForSample({
+    equilibriumId: entry.equilibriumId,
+    equilibriumIdBySample: entry.equilibriumIdBySample,
+    equilibriumIdentityStatus: entry.equilibriumIdentityStatus,
+  }, sampleIndex);
 }
 
 function key(identity: string): string {
@@ -688,7 +708,7 @@ function leaf(
     analysisStageId: entry.stageId,
     artifactRevision: entry.artifactRevision,
     badge: String(entry.artifactRevision),
-    equilibriumId: entry.equilibriumId,
+    equilibriumId: entryEquilibriumIdForSample(entry, overrides.sampleIndex) ?? undefined,
     kContextKind: classification.kContext.kind,
     resourceRef: `artifact-revision:${entry.artifactRevision}`,
     ...(entry.normalization ? { normalization: entry.normalization } : {}),
@@ -720,7 +740,7 @@ function analysisFieldTargetNodes(
         analysisRunId: entry.runId,
         analysisStageId: entry.stageId,
         artifactRevision: entry.artifactRevision,
-        equilibriumId: entry.equilibriumId,
+        equilibriumId: entryEquilibriumIdForSample(entry, target.sampleIndex) ?? undefined,
         fieldId: target.fieldId,
         frequencyHz: target.frequencyHz,
         ...(target.frequencyIndex !== undefined
@@ -869,7 +889,7 @@ function resonanceStage(
     artifactRevision: entry.artifactRevision,
     badge: classification.kContext.label,
     children,
-    equilibriumId: entry.equilibriumId,
+    equilibriumId: entry.equilibriumId ?? undefined,
     kContextKind: classification.kContext.kind,
     studyProduct: entry.studyProduct,
     },
@@ -936,7 +956,7 @@ function kResolvedStage(
     artifactRevision: entry.artifactRevision,
     badge: classification.kContext.label,
     children,
-    equilibriumId: entry.equilibriumId,
+    equilibriumId: entry.equilibriumId ?? undefined,
     kContextKind: classification.kContext.kind,
     studyProduct: entry.studyProduct,
     },

@@ -21,11 +21,13 @@ import {
   buildFrequencyResponsePointSelectionRef,
   buildFrequencyResponseChartModel,
   buildFmrPeakTableModel,
+  buildFmrModalDrivenComparisonModel,
   eigenModeFieldAvailable,
   readEigenSpectrumPayload,
   frequencyResponseSeriesUnit,
   frequencyDomainChartRouteOverrideFromSelection,
   frequencyDomainChartRouteOverrideFromSubview,
+  frequencyDomainEquilibriumIdForSample,
   frequencyDomainManifestSupportsChartRoute,
   frequencyDomainResultContextFromManifest,
   routeFrequencyDomainCalculationMode,
@@ -2260,5 +2262,245 @@ describe("historic single-k sampling ownership", () => {
     expect(frequencyDomainResultContextFromManifest({ ...owner,
       k_sampling: { kind: "single", vector_rad_per_m: [0, 1e7, 0], k_vector: [0, -1e7, 0] },
     }).kSampling).toBeNull();
+  });
+});
+
+describe("per-sample equilibrium identity contract", () => {
+  const kPathPayload = {
+    geometry_identity: "geometry-k-path",
+    mesh_identity: "mesh-k-path",
+    run_id: "run-k-path",
+    stage_id: "stage-k-path",
+    study_product: "modal_eigen",
+    requested_execution: {
+      boundary_context: "floquet_periodic",
+      calculation_mode: "dispersion_modal",
+      k_sampling: { kind: "path", sample_count: 7, label: "Gamma-X-Gamma" },
+    },
+    native_provenance_by_sample: {
+      "0": { equilibrium_artifact_sha256: "eq-nonzero-k" },
+      "1": { equilibrium_artifact_sha256: "eq-nonzero-k" },
+      "2": { equilibrium_artifact_sha256: "eq-nonzero-k" },
+      "3": { equilibrium_artifact_sha256: "eq-gamma" },
+      "4": { equilibrium_artifact_sha256: "eq-nonzero-k" },
+      "5": { equilibrium_artifact_sha256: "eq-nonzero-k" },
+      "6": { equilibrium_artifact_sha256: "eq-nonzero-k" },
+    },
+  };
+
+  it("keeps classification and resolves a mixed Gamma path by exact sample index", () => {
+    const context = frequencyDomainResultContextFromManifest(kPathPayload);
+
+    expect(context).toMatchObject({
+      classification: { family: "k_resolved", kContext: { kind: "k_path" } },
+      contractGaps: [],
+      equilibriumId: null,
+      equilibriumIdentityStatus: "per_sample",
+      equilibriumIdBySample: { "0": "eq-nonzero-k", "3": "eq-gamma", "6": "eq-nonzero-k" },
+    });
+    expect(frequencyDomainEquilibriumIdForSample(context, 2)).toBe("eq-nonzero-k");
+    expect(frequencyDomainEquilibriumIdForSample(context, 3)).toBe("eq-gamma");
+    expect(frequencyDomainEquilibriumIdForSample(context, 7)).toBeNull();
+  });
+
+  it("validates finite-open per-sample identities from the published root sample count", () => {
+    const context = frequencyDomainResultContextFromManifest({
+      boundary_context: "finite_open",
+      geometry_identity: "geometry-open",
+      mesh_identity: "mesh-open",
+      native_provenance_by_sample: {
+        "0": { equilibrium_artifact_sha256: "eq-open" },
+      },
+      run_id: "run-open",
+      sample_count: 1,
+      stage_id: "stage-open",
+      study_product: "modal_eigen",
+    });
+
+    expect(context).toMatchObject({
+      boundaryContext: "finite_open",
+      classification: { kContext: { kind: "finite_open" } },
+      equilibriumIdentityStatus: "per_sample",
+      equilibriumIdBySample: { "0": "eq-open" },
+      kSampling: null,
+    });
+    expect(frequencyDomainEquilibriumIdForSample(context, 0)).toBe("eq-open");
+  });
+
+  it("does not fall back from malformed per-sample contexts to a common scalar", () => {
+    const missingMap = {
+      equilibriumId: "eq-common-legacy",
+      equilibriumIdBySample: null,
+      equilibriumIdentityStatus: "per_sample" as const,
+    };
+    const missingSample = {
+      equilibriumId: "eq-common-legacy",
+      equilibriumIdBySample: { "0": "eq-sample-0" },
+      equilibriumIdentityStatus: "per_sample" as const,
+    };
+
+    expect(frequencyDomainEquilibriumIdForSample(missingMap)).toBeNull();
+    expect(frequencyDomainEquilibriumIdForSample(missingMap, 0)).toBeNull();
+    expect(frequencyDomainEquilibriumIdForSample(missingSample, 1)).toBeNull();
+    expect(frequencyDomainEquilibriumIdForSample(missingSample, 0)).toBe(
+      "eq-sample-0",
+    );
+  });
+
+  it("rejects native sample maps that conflict with a published root sample count", () => {
+    const copiedSingleKManifest = {
+      artifacts: {
+        response_sweep_v2_path: "response/sweep.v2.json",
+        spectrum_v2_path: "eigen/spectrum.v2.json",
+      },
+      boundary_context: "floquet_periodic",
+      equilibrium_artifact_sha256: "eq-first-sample",
+      geometry_identity: "geometry-copied-template",
+      mesh_identity: "mesh-copied-template",
+      native_provenance_by_sample: {
+        "0": { equilibrium_artifact_sha256: "eq-first-sample" },
+      },
+      run_id: "run-copied-template",
+      sample_count: 7,
+      stage_id: "stage-copied-template",
+      study_product: "modal_eigen",
+      requested_execution: {
+        boundary_context: "floquet_periodic",
+        calculation_mode: "fmr_modal_driven",
+        k_sampling: { kind: "single", vector_rad_per_m: [0, 0, 0] },
+      },
+    };
+    const context = frequencyDomainResultContextFromManifest(copiedSingleKManifest);
+    const malformedCount = frequencyDomainResultContextFromManifest({
+      ...copiedSingleKManifest,
+      sample_count: "7",
+    });
+
+    expect(context.equilibriumIdentityStatus).toBe("invalid");
+    expect(context.classification).toBeNull();
+    expect(frequencyDomainManifestSupportsChartRoute(copiedSingleKManifest, {
+      mode: "fmr_modal_driven",
+      primaryChart: "comparison",
+    })).toBe(false);
+    expect(malformedCount.equilibriumIdentityStatus).toBe("invalid");
+  });
+
+  it("retains the legacy common identity for single-k results", () => {
+    const context = frequencyDomainResultContextFromManifest({
+      boundary_context: "floquet_periodic",
+      equilibrium_artifact_sha256: "eq-single-k",
+      geometry_identity: "geometry-single-k",
+      mesh_identity: "mesh-single-k",
+      run_id: "run-single-k",
+      stage_id: "stage-single-k",
+      study_product: "modal_eigen",
+      requested_execution: {
+        boundary_context: "floquet_periodic",
+        k_sampling: { kind: "single", vector_rad_per_m: [0, 0, 0] },
+      },
+    });
+
+    expect(context).toMatchObject({
+      contractGaps: [],
+      equilibriumId: "eq-single-k",
+      equilibriumIdBySample: null,
+      equilibriumIdentityStatus: "common",
+    });
+    expect(frequencyDomainEquilibriumIdForSample(context, 0)).toBe("eq-single-k");
+  });
+
+  it("keeps missing and incomplete per-sample identities as contract gaps", () => {
+    const missingPayload = Object.fromEntries(
+      Object.entries(kPathPayload).filter(([key]) => key !== "native_provenance_by_sample"),
+    );
+    const missing = frequencyDomainResultContextFromManifest(missingPayload);
+    const incomplete = frequencyDomainResultContextFromManifest({
+      ...kPathPayload,
+      native_provenance_by_sample: {
+        "0": { equilibrium_artifact_sha256: "eq-nonzero-k" },
+        "02": { equilibrium_artifact_sha256: "eq-gamma" },
+      },
+    });
+    const conflictingCommonIdentity = frequencyDomainResultContextFromManifest({
+      ...kPathPayload,
+      equilibrium_identity: "eq-nonzero-k",
+    });
+
+    expect(missing.equilibriumIdentityStatus).toBe("missing");
+    expect(missing.contractGaps).toContain("equilibrium identity unavailable");
+    expect(missing.classification).toBeNull();
+    expect(incomplete.equilibriumIdentityStatus).toBe("invalid");
+    expect(incomplete.contractGaps).toContain("per-sample equilibrium identity map is incomplete or invalid");
+    expect(incomplete.classification).toBeNull();
+    expect(frequencyDomainEquilibriumIdForSample(incomplete, 0)).toBeNull();
+    expect(conflictingCommonIdentity.equilibriumIdentityStatus).toBe("invalid");
+    expect(conflictingCommonIdentity.contractGaps).toContain(
+      "per-sample equilibrium identity map is incomplete or invalid",
+    );
+  });
+
+
+  it("binds eigen mode references to the requested per-sample identity", () => {
+    const context = frequencyDomainResultContextFromManifest(kPathPayload);
+    const selection = buildEigenBranchPointModeSelectionRef("acoustic", {
+      frequencyImagHz: -1.2e7,
+      frequencyRealHz: 12.5e9,
+      modeFieldAvailable: true,
+      modeFieldId: "analysis:eigen:sample-0003:mode-0001",
+      modeFieldResourceKey: "data/fields/analysis:eigen:sample-0003:mode-0001",
+      modeId: "sample-0003/mode-0001",
+      overlapPrev: null,
+      rawModeIndex: 1,
+      residualNorm: 1.2e-7,
+      sampleId: "k-path-sample-0003",
+      sampleIndex: 3,
+      trackingConfidence: 1,
+    }, {
+      analysisRunId: context.runId,
+      analysisStageId: context.stageId,
+      equilibriumId: context.equilibriumId,
+      equilibriumIdBySample: context.equilibriumIdBySample,
+      equilibriumIdentityStatus: context.equilibriumIdentityStatus,
+      kContextKind: "k_path",
+      studyProduct: "modal_eigen",
+    });
+
+    expect(selection).toMatchObject({
+      equilibriumId: "eq-gamma",
+      sampleIndex: 3,
+    });
+  });
+
+  it("blocks modal-driven comparisons without one published common equilibrium identity", () => {
+    const comparisonManifest = {
+      artifacts: {
+        response_sweep_v2_path: "response/sweep.v2.json",
+        spectrum_v2_path: "eigen/spectrum.v2.json",
+      },
+      geometry_identity: "geometry-comparison",
+      mesh_identity: "mesh-comparison",
+      run_id: "run-comparison",
+      stage_id: "stage-comparison",
+      study_product: "modal_eigen",
+      requested_execution: {
+        boundary_context: "floquet_periodic",
+        calculation_mode: "fmr_modal_driven",
+        k_sampling: { kind: "path", sample_count: 2 },
+      },
+      native_provenance_by_sample: {
+        "0": { equilibrium_artifact_sha256: "eq-sample-a" },
+        "1": { equilibrium_artifact_sha256: "eq-sample-b" },
+      },
+    };
+
+    expect(frequencyDomainManifestSupportsChartRoute(comparisonManifest, {
+      mode: "fmr_modal_driven",
+      primaryChart: "comparison",
+    })).toBe(false);
+    expect(buildFmrModalDrivenComparisonModel({ manifestPayload: comparisonManifest })).toMatchObject({
+      nearestComparison: null,
+      pairs: [],
+      readiness: "missing-common-equilibrium-identity",
+    });
   });
 });

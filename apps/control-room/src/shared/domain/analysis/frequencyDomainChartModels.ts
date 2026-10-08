@@ -141,11 +141,27 @@ export function frequencyDomainChartRouteOverrideFromSubview(
   }
 }
 
+export type FrequencyDomainEquilibriumIdentityStatus =
+  | "common"
+  | "per_sample"
+  | "invalid"
+  | "missing";
+
+export type FrequencyDomainEquilibriumIdsBySample = Readonly<Record<string, string>>;
+
+export interface FrequencyDomainEquilibriumIdentitySource {
+  equilibriumId?: string | null;
+  equilibriumIdBySample?: FrequencyDomainEquilibriumIdsBySample | null;
+  equilibriumIdentityStatus?: FrequencyDomainEquilibriumIdentityStatus;
+}
+
 export interface FrequencyDomainResultContext {
   boundaryContext: FrequencyDomainResultEvidence["boundaryContext"] | null;
   classification: FrequencyDomainResultClassification | null;
   contractGaps: string[];
   equilibriumId: string | null;
+  equilibriumIdBySample?: FrequencyDomainEquilibriumIdsBySample | null;
+  equilibriumIdentityStatus?: FrequencyDomainEquilibriumIdentityStatus;
   evidence: FrequencyDomainResultEvidence | null;
   geometryId: string | null;
   kSampling: FrequencyDomainResultEvidence["kSampling"] | null;
@@ -161,6 +177,117 @@ export interface FrequencyDomainResultOwnerContext {
   meshGenerationId?: string | null;
   runId?: string | null;
   stageId?: string | null;
+}
+
+type ParsedSampleEquilibriumIds =
+  | { status: "absent" }
+  | { status: "invalid" }
+  | { status: "valid"; bySample: FrequencyDomainEquilibriumIdsBySample };
+
+function expectedKSampleCount(
+  sampling: FrequencyDomainResultEvidence["kSampling"] | null,
+): number | null {
+  if (!sampling) return null;
+  return sampling.kind === "single" ? 1 : sampling.sampleCount;
+}
+
+function parseSampleEquilibriumIds(
+  manifest: JsonRecord | null,
+  sampling: FrequencyDomainResultEvidence["kSampling"] | null,
+  commonEquilibriumId: string | null,
+  boundaryContext: FrequencyDomainResultEvidence["boundaryContext"] | null,
+): ParsedSampleEquilibriumIds {
+  if (!manifest) return { status: "absent" };
+
+  let expectedCount = expectedKSampleCount(sampling);
+  let publishedSampleCount: number | null = null;
+  const hasPublishedSampleCount = Object.prototype.hasOwnProperty.call(
+    manifest,
+    "sample_count",
+  );
+  if (hasPublishedSampleCount) {
+    const sampleCount = manifest.sample_count;
+    if (
+      typeof sampleCount !== "number" ||
+      !Number.isSafeInteger(sampleCount) ||
+      sampleCount <= 0 ||
+      (expectedCount !== null && sampleCount !== expectedCount)
+    ) {
+      return { status: "invalid" };
+    }
+    publishedSampleCount = sampleCount;
+  }
+  if (
+    expectedCount === null &&
+    boundaryContext === "finite_open" &&
+    publishedSampleCount !== null
+  ) {
+    expectedCount = publishedSampleCount;
+  }
+
+  if (!Object.prototype.hasOwnProperty.call(manifest, "native_provenance_by_sample")) {
+    return { status: "absent" };
+  }
+  const provenanceBySample = record(manifest.native_provenance_by_sample);
+  if (!expectedCount || !provenanceBySample) return { status: "invalid" };
+
+  const entries = Object.entries(provenanceBySample);
+  if (entries.length !== expectedCount) return { status: "invalid" };
+
+  const bySample: Record<string, string> = {};
+  for (const [sampleIndexString, provenanceValue] of entries) {
+    if (!/^(0|[1-9][0-9]*)$/.test(sampleIndexString)) return { status: "invalid" };
+    const sampleIndex = Number(sampleIndexString);
+    if (!Number.isSafeInteger(sampleIndex) || sampleIndex < 0 || sampleIndex >= expectedCount) {
+      return { status: "invalid" };
+    }
+    const provenance = record(provenanceValue);
+    const equilibriumId = stringValue(provenance?.equilibrium_artifact_sha256);
+    if (!equilibriumId || (commonEquilibriumId && equilibriumId !== commonEquilibriumId)) {
+      return { status: "invalid" };
+    }
+    bySample[sampleIndexString] = equilibriumId;
+  }
+
+  for (let sampleIndex = 0; sampleIndex < expectedCount; sampleIndex += 1) {
+    if (!Object.prototype.hasOwnProperty.call(bySample, String(sampleIndex))) {
+      return { status: "invalid" };
+    }
+  }
+  return { status: "valid", bySample };
+}
+
+export function frequencyDomainEquilibriumIdForSample(
+  context: FrequencyDomainEquilibriumIdentitySource,
+  sampleIndex?: number | null,
+): string | null {
+  const status = context.equilibriumIdentityStatus ??
+    (context.equilibriumIdBySample
+      ? "per_sample"
+      : context.equilibriumId
+        ? "common"
+        : "missing");
+  if (status === "invalid" || status === "missing") return null;
+
+  if (status === "per_sample") {
+    if (
+      sampleIndex == null ||
+      !Number.isSafeInteger(sampleIndex) ||
+      sampleIndex < 0 ||
+      !context.equilibriumIdBySample
+    ) {
+      return null;
+    }
+    return context.equilibriumIdBySample[String(sampleIndex)] ?? null;
+  }
+
+  if (sampleIndex != null) {
+    if (!Number.isSafeInteger(sampleIndex) || sampleIndex < 0) return null;
+    if (context.equilibriumIdBySample) {
+      return context.equilibriumIdBySample[String(sampleIndex)] ?? null;
+    }
+  }
+  return context.equilibriumId ?? null;
 }
 
 export function frequencyDomainResultContextFromManifest(
@@ -189,19 +316,54 @@ export function frequencyDomainResultContextFromManifest(
   const meshId = stringValue(manifest?.mesh_identity) ?? stringValue(owner.meshGenerationId);
   const observables = typedObservableEvidence(manifest?.observables);
   const kSampling = typedKSampling(manifest?.k_sampling ?? requested?.k_sampling);
+  const parsedSampleIds = parseSampleEquilibriumIds(
+    manifest,
+    kSampling,
+    equilibriumId,
+    boundaryContext,
+  );
+  const equilibriumIdentityStatus: FrequencyDomainEquilibriumIdentityStatus =
+    parsedSampleIds.status === "invalid"
+      ? "invalid"
+      : equilibriumId
+        ? "common"
+        : parsedSampleIds.status === "valid"
+          ? "per_sample"
+          : "missing";
+  const equilibriumIdBySample = parsedSampleIds.status === "valid"
+    ? parsedSampleIds.bySample
+    : null;
+
   if (!runId) contractGaps.push("run identity unavailable");
   if (!stageId) contractGaps.push("stage identity unavailable");
-  if (!equilibriumId) contractGaps.push("equilibrium identity unavailable");
+  if (equilibriumIdentityStatus === "missing") {
+    contractGaps.push("equilibrium identity unavailable");
+  } else if (equilibriumIdentityStatus === "invalid") {
+    contractGaps.push("per-sample equilibrium identity map is incomplete or invalid");
+  }
   if (!studyProduct) contractGaps.push("study product unavailable");
   if (!boundaryContext) contractGaps.push("boundary context unavailable");
   if (!geometryId) contractGaps.push("geometry identity unavailable");
   if (!meshId) contractGaps.push("mesh identity unavailable");
-  if (!runId || !stageId || !equilibriumId || !studyProduct || !boundaryContext) {
+
+  const identityContext = {
+    equilibriumId,
+    equilibriumIdBySample,
+    equilibriumIdentityStatus,
+  };
+  if (
+    !runId ||
+    !stageId ||
+    equilibriumIdentityStatus === "missing" ||
+    equilibriumIdentityStatus === "invalid" ||
+    !studyProduct ||
+    !boundaryContext
+  ) {
     return {
       boundaryContext,
       classification: null,
       contractGaps,
-      equilibriumId,
+      ...identityContext,
       evidence: null,
       geometryId,
       kSampling,
@@ -231,7 +393,7 @@ export function frequencyDomainResultContextFromManifest(
       boundaryContext,
       classification: classifyFrequencyDomainResult(evidence),
       contractGaps,
-      equilibriumId,
+      ...identityContext,
       evidence,
       geometryId,
       kSampling,
@@ -247,7 +409,7 @@ export function frequencyDomainResultContextFromManifest(
       boundaryContext,
       classification: null,
       contractGaps: [...contractGaps, "k context unavailable"],
-      equilibriumId,
+      ...identityContext,
       evidence,
       geometryId,
       kSampling,
@@ -544,6 +706,7 @@ export interface FmrModalDrivenComparisonModel {
   pairs: FmrModalDrivenComparisonPoint[];
   readiness:
     | "driven-only"
+    | "missing-common-equilibrium-identity"
     | "missing-peaks"
     | "modal-and-driven"
     | "modal-only";
@@ -556,6 +719,8 @@ export interface FrequencyDomainSelectionContext {
   artifactPath?: string | null;
   calculationMode?: FrequencyDomainCalculationMode | null;
   equilibriumId?: string | null;
+  equilibriumIdBySample?: FrequencyDomainEquilibriumIdsBySample | null;
+  equilibriumIdentityStatus?: FrequencyDomainEquilibriumIdentityStatus;
   kContextKind?: AnalysisFieldOverlayKContextKind | null;
   normalization?: string | null;
   nodeId?: string | null;
@@ -815,6 +980,8 @@ export function frequencyDomainManifestSupportsChartRoute(
     requestedRoute.mode === "fmr_modal_driven" &&
     hasModalArtifact &&
     hasDrivenArtifact &&
+    context.equilibriumIdentityStatus === "common" &&
+    context.equilibriumId !== null &&
     context.contractGaps.length === 0
   );
 }
@@ -1173,7 +1340,7 @@ export function buildEigenModeSelectionRef(
     calculationMode: context.calculationMode ?? "free_modes",
     fieldId: fieldAvailable ? point.modeFieldId ?? undefined : undefined,
     frequencyHz: point.frequencyHz,
-    equilibriumId: context.equilibriumId ?? undefined,
+    equilibriumId: frequencyDomainEquilibriumIdForSample(context, point.sampleIndex) ?? undefined,
     kContextKind: context.kContextKind ?? undefined,
     kind: "results.eigen.mode",
     modeId: point.modeId ?? undefined,
@@ -1311,7 +1478,7 @@ export function buildEigenDispersionPointSelectionRef(
     artifactRevision: context.artifactRevision == null
       ? undefined
       : String(context.artifactRevision),
-    equilibriumId: context.equilibriumId ?? undefined,
+    equilibriumId: frequencyDomainEquilibriumIdForSample(context, point.sampleIndex) ?? undefined,
     kContextKind: context.kContextKind ?? undefined,
     kPathCoordinateRadPerM: point.pathS,
     modeId: point.modeId ?? undefined,
@@ -1388,7 +1555,7 @@ export function buildEigenBranchPointModeSelectionRef(
     artifactPath: context.artifactPath ?? undefined,
     branchId,
     calculationMode: context.calculationMode ?? "dispersion_modal",
-    equilibriumId: context.equilibriumId ?? undefined,
+    equilibriumId: frequencyDomainEquilibriumIdForSample(context, point.sampleIndex) ?? undefined,
     fieldId: fieldAvailable ? point.modeFieldId ?? undefined : undefined,
     kind: "results.eigen.mode",
     kContextKind: context.kContextKind ?? undefined,
@@ -1954,6 +2121,19 @@ export function buildFmrModalDrivenComparisonModel({
   responseSweep?: FrequencyDomainJsonArtifactLike | null;
   spectrum?: FrequencyDomainJsonArtifactLike | null;
 }): FmrModalDrivenComparisonModel {
+  const resultContext = frequencyDomainResultContextFromManifest(manifestPayload);
+  if (resultContext.equilibriumIdentityStatus !== "common" || !resultContext.equilibriumId) {
+    return {
+      diagnostics: [
+        ...resultContext.contractGaps,
+        "Modal-driven comparison requires a published common equilibrium identity.",
+      ],
+      nearestComparison: null,
+      pairs: [],
+      readiness: "missing-common-equilibrium-identity",
+    };
+  }
+
   const peakModel = buildFmrPeakTableModel({
     manifestPayload,
     responseSweep,

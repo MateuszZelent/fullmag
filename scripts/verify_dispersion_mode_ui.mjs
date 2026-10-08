@@ -36,6 +36,12 @@ const dependencyWorkspace = resolve(required('FULLMAG_BROWSER_DEPENDENCY_WORKSPA
 const output = resolve(required('FULLMAG_DISPERSION_BROWSER_OUTPUT'));
 const url = required('FULLMAG_DISPERSION_BROWSER_URL');
 const timeoutMs = 60_000;
+const requestedSampleIndex = process.env.FULLMAG_DISPERSION_BROWSER_SAMPLE_INDEX == null
+  ? null : Number(process.env.FULLMAG_DISPERSION_BROWSER_SAMPLE_INDEX);
+if (requestedSampleIndex !== null && (!Number.isSafeInteger(requestedSampleIndex) || requestedSampleIndex < 0)) {
+  throw new Error('FULLMAG_DISPERSION_BROWSER_SAMPLE_INDEX must be a nonnegative integer.');
+}
+const exerciseFocus = process.env.FULLMAG_DISPERSION_BROWSER_FOCUS === '1';
 const manifestPath = '/v2/sessions/current/analysis/frequency-domain/manifest.v1';
 const spectrumPath = '/v2/sessions/current/analysis/frequency-domain/eigen/spectrum.v2';
 const branchesPath = '/v2/sessions/current/analysis/frequency-domain/eigen/branches.v2';
@@ -216,6 +222,7 @@ function summarizeJson(path, json) {
         stageId: payload.stage_id ?? null,
         studyProduct: payload.study_product ?? null,
         equilibriumIdentity: payload.equilibrium_identity ?? payload.equilibrium_artifact_sha256 ?? null,
+        nativeProvenanceBySample: payload.native_provenance_by_sample ?? null,
         geometryIdentity: payload.geometry_identity ?? null,
         meshIdentity: payload.mesh_identity ?? null,
         boundaryContext: payload.boundary_context ?? requested.boundary_context ?? null,
@@ -240,6 +247,7 @@ function summarizeJson(path, json) {
     };
   }
   if (isRecord(json)) {
+    const payload = isRecord(json.payload) ? json.payload : null;
     const summary = {
       status: json.status ?? null,
       artifactPath: json.artifact_path ?? null,
@@ -249,9 +257,16 @@ function summarizeJson(path, json) {
     };
     const modePathMatch = path.match(/\/analysis\/frequency-domain\/eigen\/modes\/(\d+)\/(\d+)$/);
     if (modePathMatch) {
-      const payload = isRecord(json.payload) ? json.payload : null;
+      const candidateIdentity = isRecord(json.candidate_identity)
+        ? json.candidate_identity
+        : isRecord(payload?.candidate_identity)
+          ? payload.candidate_identity
+          : null;
       return {
         ...summary,
+        equilibriumArtifactSha256: stringValue(json.equilibrium_artifact_sha256) ??
+          stringValue(payload?.equilibrium_artifact_sha256),
+        candidateIdentityEquilibriumArtifactSha256: stringValue(candidateIdentity?.equilibrium_artifact_sha256),
         sampleIndex: payload?.sample_index ?? null,
         rawModeIndex: payload?.raw_mode_index ?? null,
         sampleId: stringValue(payload?.sample_id),
@@ -325,6 +340,71 @@ function classifyAnalysisSurface(boundaryContext, sampling) {
   };
 }
 
+function parseSampleEquilibriumIdentityMap(payload, sampling, commonEquilibriumIdentity, boundaryContext) {
+  if (!isRecord(payload)) return { status: 'absent', bySample: {} };
+
+  let sampleCount = sampling?.kind === 'single'
+    ? 1
+    : (sampling?.kind === 'path' || sampling?.kind === 'grid') &&
+        Number.isSafeInteger(sampling.sample_count) && sampling.sample_count > 0
+      ? sampling.sample_count
+      : null;
+  let publishedSampleCount = null;
+  if (Object.prototype.hasOwnProperty.call(payload, 'sample_count')) {
+    publishedSampleCount = payload.sample_count;
+    if (!Number.isSafeInteger(publishedSampleCount) || publishedSampleCount <= 0 ||
+        (sampleCount !== null && publishedSampleCount !== sampleCount)) {
+      return { status: 'invalid', bySample: {} };
+    }
+  }
+  if (sampleCount === null && boundaryContext === 'finite_open' && publishedSampleCount !== null) {
+    sampleCount = publishedSampleCount;
+  }
+  if (!Object.prototype.hasOwnProperty.call(payload, 'native_provenance_by_sample')) {
+    return { status: 'absent', bySample: {} };
+  }
+
+  const nativeProvenanceBySample = payload.native_provenance_by_sample;
+  if (sampleCount === null || !isRecord(nativeProvenanceBySample) ||
+      Object.keys(nativeProvenanceBySample).length !== sampleCount) {
+    return { status: 'invalid', bySample: {} };
+  }
+
+  const bySample = {};
+  for (const [sampleIndex, provenance] of Object.entries(nativeProvenanceBySample)) {
+    if (!/^(0|[1-9][0-9]*)$/.test(sampleIndex)) {
+      return { status: 'invalid', bySample: {} };
+    }
+    const numericIndex = Number(sampleIndex);
+    const equilibriumIdentity = isRecord(provenance)
+      ? stringValue(provenance.equilibrium_artifact_sha256)
+      : null;
+    if (!Number.isSafeInteger(numericIndex) || numericIndex < 0 ||
+        numericIndex >= sampleCount || !equilibriumIdentity ||
+        (commonEquilibriumIdentity && equilibriumIdentity !== commonEquilibriumIdentity)) {
+      return { status: 'invalid', bySample: {} };
+    }
+    bySample[sampleIndex] = equilibriumIdentity;
+  }
+
+  for (let sampleIndex = 0; sampleIndex < sampleCount; sampleIndex += 1) {
+    if (!Object.prototype.hasOwnProperty.call(bySample, String(sampleIndex))) {
+      return { status: 'invalid', bySample: {} };
+    }
+  }
+  return { status: 'valid', bySample };
+}
+
+function equilibriumIdentityForSample(commonEquilibriumIdentity, sampleEquilibriumIdentityMap, sampleIndex) {
+  if (sampleEquilibriumIdentityMap.status === 'invalid') return null;
+  if (sampleEquilibriumIdentityMap.status === 'valid') {
+    return Number.isSafeInteger(sampleIndex) && sampleIndex >= 0
+      ? sampleEquilibriumIdentityMap.bySample[String(sampleIndex)] ?? null
+      : null;
+  }
+  return commonEquilibriumIdentity;
+}
+
 function frequencyDomainProvenanceGaps({
   runId,
   stageId,
@@ -334,6 +414,7 @@ function frequencyDomainProvenanceGaps({
   envelopeStageId,
   currentRunId,
   equilibriumIdentity,
+  sampleEquilibriumIdentityMap,
   studyProduct,
   boundaryContext,
   kSampling,
@@ -346,7 +427,11 @@ function frequencyDomainProvenanceGaps({
   if (payloadRunId && envelopeRunId && payloadRunId !== envelopeRunId) gaps.push('run identity mismatch');
   if (payloadStageId && envelopeStageId && payloadStageId !== envelopeStageId) gaps.push('stage identity mismatch');
   if (!currentRunId || currentRunId !== runId) gaps.push('current run identity mismatch');
-  if (!equilibriumIdentity) gaps.push('equilibrium identity unavailable');
+  if (sampleEquilibriumIdentityMap.status === 'invalid') {
+    gaps.push('per-sample equilibrium identity map incomplete or invalid');
+  } else if (!equilibriumIdentity && sampleEquilibriumIdentityMap.status !== 'valid') {
+    gaps.push('equilibrium identity unavailable');
+  }
   if (studyProduct !== 'modal_eigen' && studyProduct !== 'driven_response') gaps.push('study product unavailable');
   if (boundaryContext !== 'finite_open' && boundaryContext !== 'floquet_periodic') gaps.push('boundary context unavailable');
   if (boundaryContext === 'floquet_periodic' && !isSupportedKSampling(kSampling)) {
@@ -356,6 +441,7 @@ function frequencyDomainProvenanceGaps({
   if (!meshIdentity) gaps.push('mesh identity unavailable');
   return gaps;
 }
+
 
 function visibleRootGapDetailsAreCompatible(title, description, text = '') {
   const detail = [title, description, text].filter(Boolean).join(' ').toLowerCase();
@@ -720,8 +806,8 @@ async function inspectCanvas(canvas) {
   });
 }
 
-async function inspectFrequencyChartPaint(canvas, expectedColor) {
-  return canvas.evaluate((element, color) => {
+async function inspectFrequencyChartPaint(canvas, expectedColor, connectedLine = false) {
+  return canvas.evaluate((element, { color, connectedLine }) => {
     if (!(element instanceof HTMLCanvasElement)) {
       return { ready: false, reason: "The frequency chart canvas is unavailable." };
     }
@@ -756,9 +842,26 @@ async function inspectFrequencyChartPaint(canvas, expectedColor) {
         }
       }
 
+      // Filled point symbols have a 3x3 interior; the connecting 2px stroke
+      // does not. Erode only connected line charts so a branch remains seven
+      // separate click targets rather than one connected color component.
+      const markerMatches = connectedLine ? new Uint8Array(matches.length) : matches;
+      if (connectedLine) {
+        for (let y = 1; y < element.height - 1; y += 1) {
+          for (let x = 1; x < element.width - 1; x += 1) {
+            let interior = true;
+            for (let dy = -1; dy <= 1 && interior; dy += 1) {
+              for (let dx = -1; dx <= 1; dx += 1) {
+                if (!matches[(y + dy) * element.width + x + dx]) { interior = false; break; }
+              }
+            }
+            if (interior) markerMatches[y * element.width + x] = 1;
+          }
+        }
+      }
       const visited = new Uint8Array(matches.length);
       for (let seed = 0; seed < matches.length; seed += 1) {
-        if (!matches[seed] || visited[seed]) continue;
+        if (!markerMatches[seed] || visited[seed]) continue;
         const stack = [seed];
         visited[seed] = 1;
         let count = 0;
@@ -782,14 +885,14 @@ async function inspectFrequencyChartPaint(canvas, expectedColor) {
           for (let neighborY = Math.max(0, y - 1); neighborY <= Math.min(element.height - 1, y + 1); neighborY += 1) {
             for (let neighborX = Math.max(0, x - 1); neighborX <= Math.min(element.width - 1, x + 1); neighborX += 1) {
               const neighbor = neighborY * element.width + neighborX;
-              if (matches[neighbor] && !visited[neighbor]) {
+              if (markerMatches[neighbor] && !visited[neighbor]) {
                 visited[neighbor] = 1;
                 stack.push(neighbor);
               }
             }
           }
         }
-        if (count < 2) continue;
+        if (count < (connectedLine ? 1 : 2)) continue;
         markers.push({
           centerX: ((sumX / count) + 0.5) * rect.width / element.width,
           centerY: ((sumY / count) + 0.5) * rect.height / element.height,
@@ -820,7 +923,7 @@ async function inspectFrequencyChartPaint(canvas, expectedColor) {
       unclippedByBody,
       visibleInViewport,
     };
-  }, expectedColor);
+  }, { color: expectedColor, connectedLine });
 }
 
 let selectedMode = null;
@@ -837,7 +940,7 @@ try {
   if (cameraConfiguration) {
     report.expectedConditions.push('An explicitly supplied camera JSON is applied through the Camera Controls dialog before the final WebGL capture.');
   } else {
-    addNote('No explicit camera JSON was supplied; the verifier will preserve the current camera and will not run Fit.');
+    addNote(exerciseFocus ? 'Camera framing will be exercised through Frame All and Inspector Focus.' : 'No explicit camera JSON was supplied; the verifier will preserve the current camera and will not run Fit.');
   }
 
   const playwrightEntry = pathToFileURL(
@@ -992,6 +1095,9 @@ try {
   const currentRunOwnerConsistent = Boolean(currentRunEvent?.status === 200 && currentRunId && currentRunId === runId);
   const studyProduct = stringValue(payload?.study_product);
   const equilibriumIdentity = stringValue(payload?.equilibrium_identity ?? payload?.equilibrium_artifact_sha256);
+  const sampleEquilibriumIdentityMap = parseSampleEquilibriumIdentityMap(
+    payload, kSampling, equilibriumIdentity, boundaryContext,
+  );
   const geometryIdentity = stringValue(payload?.geometry_identity);
   const meshIdentity = stringValue(payload?.mesh_identity) ?? stringValue(resultManifest?.mesh_generation_id);
   const surfaceSelection = classifyAnalysisSurface(boundaryContext, kSampling);
@@ -1018,6 +1124,7 @@ try {
     envelopeStageId,
     currentRunId,
     equilibriumIdentity,
+    sampleEquilibriumIdentityMap,
     studyProduct,
     boundaryContext,
     kSampling,
@@ -1041,6 +1148,8 @@ try {
       currentRunId,
       stageId,
       equilibriumIdentity,
+      sampleEquilibriumIdentityStatus: sampleEquilibriumIdentityMap.status,
+      sampleEquilibriumIds: sampleEquilibriumIdentityMap.bySample,
       geometryIdentity,
       meshIdentity,
     },
@@ -1059,6 +1168,8 @@ try {
     currentRunOwnerConsistent,
     studyProduct,
     equilibriumIdentity,
+    sampleEquilibriumIdentityStatus: sampleEquilibriumIdentityMap.status,
+    sampleEquilibriumIds: sampleEquilibriumIdentityMap.bySample,
     geometryIdentity,
     meshIdentity,
     boundaryContext,
@@ -1235,7 +1346,10 @@ try {
       const chartCanvas = page.locator('.fm-analysis-plots__chart-frame canvas').first();
       await chartCanvas.waitFor({ state: 'visible', timeout: timeoutMs });
       await chartCanvas.scrollIntoViewIfNeeded();
-      const legendItem = page.locator('.fm-chart-legend__item').filter({ hasText: 'Eigen frequency' }).first();
+      const legendItems = page.locator('.fm-chart-legend__item');
+      const legendItem = chosenChartShape === 'dispersion'
+        ? legendItems.filter({ hasText: /^(?:Branch|Raw modes)\b/ }).filter({ hasNotText: /analytic/i }).first()
+        : legendItems.filter({ hasText: 'Eigen frequency' }).first();
       await legendItem.waitFor({ state: 'visible', timeout: timeoutMs });
       const legendColor = await legendItem.locator('.fm-chart-legend__swatch').evaluate((element) =>
         getComputedStyle(element).backgroundColor,
@@ -1272,7 +1386,7 @@ try {
         }
         return false;
       }, legendColor, { timeout: timeoutMs });
-      const chartPaintEvidence = await inspectFrequencyChartPaint(chartCanvas, legendColor);
+      const chartPaintEvidence = await inspectFrequencyChartPaint(chartCanvas, legendColor, chosenChartShape === 'dispersion');
       const chartRect = await chartCanvas.boundingBox();
       const pointCountMatch = (await frequencyWorkbench.innerText()).match(/\b(\d+)\s+points?\b/i);
       const chartPointCount = pointCountMatch ? Number(pointCountMatch[1]) : null;
@@ -1330,8 +1444,10 @@ try {
         manifestIdentityGaps[0] === 'geometry identity unavailable';
       const geometryAdvisoryAllowed = geometryGapOnly && rootStatus === 'ready' &&
         resultManifest?.status === 'ready' && runOwnerConsistent && stageOwnerConsistent &&
-        currentRunOwnerConsistent && equilibriumIdentity !== null && meshIdentity !== null &&
-        studyProduct === 'modal_eigen' && surfaceSelection.supported && spectrumReady && spectrumOwnerConsistent;
+        currentRunOwnerConsistent &&
+        (equilibriumIdentity !== null || sampleEquilibriumIdentityMap.status === 'valid') &&
+        meshIdentity !== null && studyProduct === 'modal_eigen' && surfaceSelection.supported &&
+        spectrumReady && spectrumOwnerConsistent;
       const rootGapDetailsCompatible = visibleRootGapDetailsAreCompatible(rootTitle, rootDescription, rootText);
       const rootReady = rootStatus === 'ready' && rootGapDetailsCompatible &&
         (manifestIdentityGaps.length === 0 || geometryAdvisoryAllowed) &&
@@ -1360,7 +1476,10 @@ try {
       await saveScreenshot('02-results-tree.png');
 
       if (rootReady && stageId) {
-        const modeRow = explorer.locator('[role="treeitem"]').filter({ hasText: /Sample\s+\d+\s+·\s+Mode\s+\d+/ }).first();
+        const modeRows = explorer.locator('[role="treeitem"]').filter({ hasText: /Sample\s+\d+\s+·\s+Mode\s+\d+/ });
+        const modeRow = requestedSampleIndex === null ? modeRows.first() : modeRows.filter({
+          hasText: new RegExp(`Sample\\s+${requestedSampleIndex}\\s+·\\s+Mode\\s+\\d+`),
+        }).first();
         await modeRow.waitFor({ state: 'visible', timeout: timeoutMs });
         selectedMode = (await modeRow.innerText()).trim();
         const selectedNodeId = await modeRow.getAttribute('data-node-id');
@@ -1371,12 +1490,17 @@ try {
         } else {
           const sampleIndex = Number(selectedModeMatch[1]);
           const modeIndex = Number(selectedModeMatch[2]);
-          report.ui.modeIndices = { sampleIndex, modeIndex };
+          const selectedSampleEquilibriumIdentity = equilibriumIdentityForSample(
+            equilibriumIdentity, sampleEquilibriumIdentityMap, sampleIndex,
+          );
+          report.ui.modeIndices = { sampleIndex, modeIndex, equilibriumIdentity: selectedSampleEquilibriumIdentity };
           const chartCanvas = page.locator('.fm-analysis-plots__chart-frame canvas').first();
           await chartCanvas.waitFor({ state: 'visible', timeout: timeoutMs });
           await chartCanvas.scrollIntoViewIfNeeded();
           const markers = report.ui.chartPaintEvidence?.markers ?? [];
-          const targetMarker = markers[modeIndex] ?? null;
+          const modeRowOrdinal = await modeRows.evaluateAll((rows, nodeId) =>
+            rows.findIndex((row) => row.getAttribute('data-node-id') === nodeId), selectedNodeId);
+          const targetMarker = markers[modeRowOrdinal] ?? null;
           const chartRect = await chartCanvas.boundingBox();
           if (!targetMarker || !chartRect || report.ui.chartPointCount !== markers.length) {
             chartPointClickEvidence = {
@@ -1435,6 +1559,7 @@ try {
               text: selectedMode,
               nodeId: selectedNodeId,
               selectionSource: 'analysis-chart-point-click',
+              equilibriumIdentity: selectedSampleEquilibriumIdentity,
             };
             addCheck('mode-inspector-open', true,
               'Clicking the real Analysis chart marker opened the eigen-mode Inspector.', report.ui.selectedModeRow);
@@ -1475,19 +1600,32 @@ try {
           const fieldMetadataVectorIdentity = modeFieldVectorIdentity(fieldMetadata?.resourceKey);
           const fieldMetadataComplexArtifactMatches = /(?:^|\/)vector_xyz_complex(?:\/|$)/
             .test(fieldMetadata?.artifactPath ?? '');
-          const modeFieldIdMatches = !modeResource?.fieldId || modeResource.fieldId === expectedFieldId;
+          const modeFieldIdMatches = modeResource?.fieldId === expectedFieldId;
+          const modeResourceEquilibriumIdentityMatches = Boolean(
+            selectedSampleEquilibriumIdentity &&
+            modeResource?.equilibriumArtifactSha256 === selectedSampleEquilibriumIdentity &&
+            modeResource?.candidateIdentityEquilibriumArtifactSha256 === selectedSampleEquilibriumIdentity,
+          );
+          addCheck('selected-mode-equilibrium-identity-matches', modeResourceEquilibriumIdentityMatches,
+            'The selected mode top-level and candidate equilibrium identities match the exact selected sample.', {
+              expected: selectedSampleEquilibriumIdentity,
+              observedTopLevel: modeResource?.equilibriumArtifactSha256 ?? null,
+              observedCandidateIdentity: modeResource?.candidateIdentityEquilibriumArtifactSha256 ?? null,
+              sampleIndex,
+            });
           const modeResourceIdentityMatches = Boolean(
             modeEvent?.status === 200 && modeResource?.status === 'ready' &&
             modeResource?.runId === runId && modeResource?.stageId === stageId &&
             modeResource?.sampleIndex === sampleIndex && modeResource?.rawModeIndex === modeIndex &&
             modeResource?.requestedSampleIndex === sampleIndex && modeResource?.requestedRawModeIndex === modeIndex &&
-            modeFieldIdMatches,
+            modeFieldIdMatches && modeResourceEquilibriumIdentityMatches,
           );
           addCheck('selected-mode-owner-identity-matches', modeResourceIdentityMatches,
             'The selected raw mode resource matches manifest run/stage ownership and the exact selected sample/mode indices.', {
-              expected: { runId, stageId, sampleIndex, rawModeIndex: modeIndex },
+              expected: { runId, stageId, sampleIndex, rawModeIndex: modeIndex, equilibriumArtifactSha256: selectedSampleEquilibriumIdentity },
               observed: modeResource,
               modeFieldIdMatches,
+              modeResourceEquilibriumIdentityMatches,
               requestPath: modeEvent?.path ?? modePath,
             });
           const fieldMetadataIdentityMatches = Boolean(
@@ -1850,6 +1988,36 @@ try {
 
               const viewport3d = page.locator('[data-slot-id="viewport-main"][data-active-module-id="viewport-3d"]');
               await viewport3d.waitFor({ state: 'visible', timeout: timeoutMs });
+              if (exerciseFocus) {
+                phase = 'camera-focus';
+                const geometryTab = page.getByRole('tablist', { name: 'Ribbon tabs', exact: true })
+                  .getByRole('tab', { name: 'Geometry', exact: true });
+                await geometryTab.click();
+                const frameAll = page.locator('button[data-action-id="builder-frame-all"]');
+                await frameAll.waitFor({ state: 'visible', timeout: timeoutMs });
+                await frameAll.click();
+                const readDistance = async () => page.locator('.fm-viewport-3d').evaluate((element) => {
+                  const tuple = (key) => String(element.getAttribute(key) ?? '').trim().split(/\s+/).map(Number);
+                  const position = tuple('data-camera-position');
+                  const target = tuple('data-camera-target');
+                  return position.length === 3 && target.length === 3 && [...position, ...target].every(Number.isFinite)
+                    ? Math.hypot(...position.map((value, i) => value - target[i])) : null;
+                });
+                await page.waitForTimeout(250);
+                const sceneDistance = await readDistance();
+                await page.locator('.fm-inspector__action-bar').getByRole('button', { name: 'Focus', exact: true }).click();
+                await page.waitForFunction((before) => {
+                  const element = document.querySelector('.fm-viewport-3d');
+                  const tuple = (key) => String(element?.getAttribute(key) ?? '').trim().split(/\s+/).map(Number);
+                  const p = tuple('data-camera-position'), t = tuple('data-camera-target');
+                  const d = p.length === 3 && t.length === 3 ? Math.hypot(...p.map((v, i) => v - t[i])) : NaN;
+                  return Number.isFinite(d) && d > 0 && Number.isFinite(before) && d < before / 2;
+                }, sceneDistance, { timeout: timeoutMs });
+                const focusDistance = await readDistance();
+                report.ui.cameraFocus = { sceneDistanceM: sceneDistance, focusDistanceM: focusDistance };
+                addCheck('inspector-focus-frames-magnetic-model', Boolean(sceneDistance && focusDistance && focusDistance < sceneDistance / 2),
+                  'Frame All retains the full scene while explicit Inspector Focus frames the magnetic mode support without a hardcoded camera distance.', report.ui.cameraFocus);
+              }
               if (cameraConfiguration) {
                 phase = 'camera-controls';
                 try {
