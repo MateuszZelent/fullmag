@@ -1600,6 +1600,26 @@ async function installAnalysisDatasetFixtureRoutes(page, frequencyDomainFixture 
       });
       return;
     }
+    if (url.pathname === "/v2/sessions/current/model/readiness") {
+      await route.fulfill({
+        body: JSON.stringify({
+          blockers: [],
+          capabilities: {
+            move: { available: false, reason: "Analysis fixture has no scene objects." },
+            rotate: { available: false, reason: "Analysis fixture has no scene objects." },
+            scale: { available: false, reason: "Analysis fixture has no scene objects." },
+          },
+          checks: [],
+          ready_to_export: true,
+          ready_to_run: false,
+          scene_revision: 0,
+        }),
+        contentType: "application/json",
+        headers: cors,
+        status: 200,
+      });
+      return;
+    }
     const visualizationFixture = url.pathname === "/v2/sessions/current/visualization/state"
       ? analysisVisualizationStateFixture()
       : url.pathname === "/v2/sessions/current/visualization/mode-compositions/active"

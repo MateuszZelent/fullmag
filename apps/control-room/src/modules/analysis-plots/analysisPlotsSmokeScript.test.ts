@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 import {
+  MODEL_READINESS_PATH,
   MODEL_UNIVERSE_PATH,
   SESSIONS_PATH,
   SESSION_STATUS_PATH,
@@ -74,6 +75,8 @@ describe("analysis plots smoke script", () => {
     expect(smokeScript).toContain(`url.pathname === "${VISUALIZATION_STATE_PATH}"`);
     expect(smokeScript).toContain(`url.pathname === "${VISUALIZATION_MODE_COMPOSITION_ACTIVE_PATH}"`);
     expect(smokeScript).toContain(`url.pathname === "${MODEL_UNIVERSE_PATH}"`);
+    expect(smokeScript).toContain(`url.pathname === "${MODEL_READINESS_PATH}"`);
+    expect(smokeScript).toContain("ready_to_run: false");
     expect(smokeScript).toContain("function analysisVisualizationStateFixture()");
     expect(smokeScript).toContain("function analysisModeCompositionFixture(frequencyDomainPublished)");
     expect(smokeScript).toContain('schema_version: "mode-composition.v1"');
