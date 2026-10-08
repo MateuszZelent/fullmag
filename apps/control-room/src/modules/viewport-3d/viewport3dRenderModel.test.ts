@@ -1431,8 +1431,10 @@ describe("viewport3dRenderModel", () => {
         wavevectorKf: [1, 2, 3],
         cellOrigin: [0.25, 0.5, 0.75],
       });
+      // Interleaved pairs are (Re_x, Im_x, Re_y, Im_y, Re_z, Im_z).
+      // Re_y is 2 at every node; the changing 4/5 mean belongs to Im_x.
       const expectedRealVector =
-        projectionMode === "surface_faces" ? [3, 4, 3] : [4, 5, 3];
+        projectionMode === "surface_faces" ? [3, 2, 3] : [4, 2, 3];
       const expectedImagVector =
         projectionMode === "surface_faces" ? [4, 0, 0] : [5, 0, 0];
       expect(modalSurface?.complexRealValues).toHaveLength(9);

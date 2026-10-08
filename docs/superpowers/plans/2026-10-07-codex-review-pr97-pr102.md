@@ -1110,3 +1110,20 @@ mode-detail route z danych istniejącej branches fixture, tym samym ownerem i
 rzeczywistym artifact path/schema. Nieobecny punkt daje missing, nie zawsze-ready.
 Browser error assertion pozostaje bez osłabienia. Source review/Node parse PASS;
 świeży pełny browser/types/Vitest gate wymagany.
+
+CPU-SLEPc run37800314609 zakończony FAILURE podczas budowania obrazu, przed
+CMake/CTest. PETSc skonfigurowany i zbudowany; SLEPc configure wskazuje komendę
+make bez PETSC_ARCH, lecz obraz wymusza pusty PETSC_ARCH, co prowadzi do braku
+slepc/conf/slepcrules. Pinned-source diagnoza i korekta build-arch handling trwają.
+Nie jest to dowód błędu eigen solvera ani wykonania jego nowych regresji.
+GUI2f2236bcb rerun37803740912 obejmuje nowe mode-detail fixture i lint fix.
+Scope4060116242 jest potwierdzonym Python->Rust IR drop; docs nie definiują
+runtime różnicy global/per_sample. Zadano pytanie o publiczny kontrakt artefaktów;
+nie wdrażamy arbitralnie odmowy global ani nowego layoutu bez tej decyzji.
+
+ControlRoom37803740912/job113402451173: types i lint PASS, Vitest FAIL wyłącznie
+w dwóch nowych expectation: fixture ma Re_y=2 we wszystkich węzłach, lecz test
+oczekiwał średniej Im_x=4/5 jako Re_y. Korekta niezależnej arytmetyki: real
+[3,2,3] dla face i [4,2,3] dla thickness; imaginary nadal[4,0,0]/[5,0,0].
+Source review potwierdziło interleaved layout i world-Z column nodes0/3.
+Nie zmieniono algorytmu ani nie osłabiono sprawdzania projekcji.
