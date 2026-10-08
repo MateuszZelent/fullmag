@@ -11,7 +11,10 @@ przypadki do `solver_policy: None`. Cała wartość `modal_solver_policy: null`
 nie jest obiektem i pozostaje błędnym typem. Częściowa polityka zachowuje
 zadane wartości; pozostałe parametry są rozwiązywane przez adapter natywny.
 
-Zadana tolerancja musi być skończona i dodatnia; jest bezwymiarowa. Zadane
+Zadana tolerancja musi być skończona i dodatnia; jest bezwymiarowa.
+Publiczny Python DSL odrzuca `True` i `False` jako tolerancję przez `TypeError`
+przed konwersją do float. Nie interpretuje ich jako 1.0 i 0.0. Niepoprawny
+zakres liczbowy nadal zgłasza `ValueError`. Zadane
 limity iteracji muszą być dodatnimi liczbami całkowitymi i mieścić się
 w natywnym zakresie signed i32. Nie są zaokrąglane ani ograniczane przez clamp.
 Normalizacja pustej polityki zachowuje publiczną semantykę
@@ -27,3 +30,8 @@ rzeczywistego rozwiązania ani osiągniętej dokładności fizycznej.
 `native_solver_diagnostics_json_with_expected_digest` w `crates/fullmag-runner/src/fem/eigen_native_window.rs`.
 Regresje GHA: pełne fullmag-ir oraz filtr
 `fem_eigen_modal_solver_policy` w fullmag-plan.
+
+Python → IR: `world._fem_eigen_solver_policy` przekazuje `solver_rtol` bez
+konwersji do `FemEigenSolverPolicy.__post_init__` w `fullmag/model/study.py`.
+Regresja `test_fem_eigen_solver_policy_rejects_boolean_residual_tolerance`
+należy do `packages/fullmag-py/tests/test_api.py`, uruchamianego w GHA.

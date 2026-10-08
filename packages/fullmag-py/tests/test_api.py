@@ -56,6 +56,39 @@ class ProblemApiTests(unittest.TestCase):
         self.assertEqual(fem.order, 1)
         self.assertIs(type(fem.order), int)
 
+    def test_fem_eigen_solver_policy_rejects_boolean_residual_tolerance(self) -> None:
+        for residual_tolerance in (True, False):
+            with self.subTest(residual_tolerance=residual_tolerance):
+                with self.assertRaisesRegex(
+                    TypeError,
+                    "residual_tolerance must be a real number",
+                ):
+                    fm.FemEigenSolverPolicy(residual_tolerance=residual_tolerance)
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "residual_tolerance must be finite and positive",
+        ):
+            fm.FemEigenSolverPolicy(residual_tolerance=0.0)
+
+        policy = fm.FemEigenSolverPolicy(
+            residual_tolerance=1e-6,
+            max_outer_iterations=17,
+            max_linear_iterations=29,
+        )
+        self.assertEqual(policy.residual_tolerance, 1e-6)
+        self.assertEqual(policy.max_outer_iterations, 17)
+        self.assertEqual(policy.max_linear_iterations, 29)
+        self.assertEqual(
+            policy.to_ir(),
+            {
+                "residual_tolerance": 1e-6,
+                "max_outer_iterations": 17,
+                "max_linear_iterations": 29,
+            },
+        )
+        self.assertEqual(fm.FemEigenSolverPolicy().to_ir(), {})
+
     def test_fem_size_rejects_boolean_values(self) -> None:
         for field_name, kwargs in (
             ("maximum_element_size", {"maximum_element_size": True}),

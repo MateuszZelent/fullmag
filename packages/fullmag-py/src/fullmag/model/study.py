@@ -183,6 +183,8 @@ class FemEigenSolverPolicy:
 
     def __post_init__(self) -> None:
         if self.residual_tolerance is not None:
+            if isinstance(self.residual_tolerance, bool):
+                raise TypeError("residual_tolerance must be a real number")
             tolerance = float(self.residual_tolerance)
             if not math.isfinite(tolerance) or tolerance <= 0.0:
                 raise ValueError("residual_tolerance must be finite and positive")
