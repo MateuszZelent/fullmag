@@ -731,7 +731,7 @@ void executes_native_sparse_matshell_above_dense_bound(bool force_inner_failure 
               result.floquet_schur_action_diagnostic.action_count <= 9,
           "action-only diagnostic is bounded, pre-EPS, and does not materialize a dense operator");
     if (force_inner_failure) {
-        check(!result.ok && result.modes.empty(),
+        check(!result.ok && result.accepted_modes.empty(),
               "inner KSP failure must remain fail-closed");
         check(!result.ksp_diagnostics_available &&
                   !result.ksp_converged_reason_available &&
