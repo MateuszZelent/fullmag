@@ -160,6 +160,38 @@ class RepositoryContractTests(unittest.TestCase):
         self.assertEqual(result["status"], "pass")
         self.assertEqual(result["recipes"], list(GOOD_RECIPE_NAMES))
 
+    def test_repository_contract_accepts_explicitly_disabled_petsc_cuda(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.write_repository(root)
+            dockerfile = root / "docker/fem-cpu/Dockerfile"
+            dockerfile.write_text(
+                dockerfile.read_text(encoding="utf-8")
+                + "RUN ./configure --with-cuda=0\n",
+                encoding="utf-8",
+            )
+
+            result = audit_repository_contract(root)
+
+        self.assertEqual(result["status"], "pass")
+
+    def test_repository_contract_rejects_bare_or_enabled_petsc_cuda(self) -> None:
+        for option in ("--with-cuda", "--with-cuda=1", "--with-cuda=yes"):
+            with self.subTest(option=option), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                self.write_repository(root)
+                dockerfile = root / "docker/fem-cpu/Dockerfile"
+                dockerfile.write_text(
+                    dockerfile.read_text(encoding="utf-8")
+                    + f"RUN ./configure {option}\n",
+                    encoding="utf-8",
+                )
+
+                with self.assertRaisesRegex(
+                    AuditViolation, "accelerator-enabled MFEM/hypre"
+                ):
+                    audit_repository_contract(root)
+
     def test_repository_contract_rejects_recipe_using_gpu_profile(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

@@ -218,6 +218,13 @@ def audit_repository_contract(root: Path) -> dict[str, object]:
     )
 
     lower_dockerfile = dockerfile.lower()
+    # PETSc records its CPU build as --with-cuda=0. Ignore only that exact
+    # disabled option; bare, enabled, and CUDA-specific options stay forbidden.
+    lower_dockerfile = re.sub(
+        r"""--with-cuda=0(?=$|[\s\\'"])""",
+        "",
+        lower_dockerfile,
+    )
     dependency_forbidden = (
         "nvidia/cuda",
         "mfem_use_cuda=yes",
