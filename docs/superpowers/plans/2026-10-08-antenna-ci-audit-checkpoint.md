@@ -504,3 +504,34 @@ Nie jest to odbiór strict Sphinx/render, całego CI ani T18/T00–T18.
 Pozostają: kierunek Gamma source_trace, runtime FFT/resume, spójność PBC,
 waveform-independent cache/provenance i pełna kwalifikacja czterech lanes.
 PR Draft, bez merge, restartu workspace lub usuwania danych.
+
+## Publikacja aktualnego zakresu do PR — kontrakt Problem API
+
+Ponowny fetch na polecenie użytkownika potwierdził master
+`2a3c6becb9c7e111ae1497ec0cd9ac9576acba95`; brak nowych commitów
+mastera poza historią brancha. Wszystkie zmiany trafiają do istniejącego
+Draft PR #147, bez bezpośredniego push na master i bez merge.
+
+CI dla `9ff9370eaf3561af814fe124e41f3219f859d694` potwierdziło usunięcie
+blockera brakującej mapy 0920. Kolejny błąd dokumentacji dotyczył sześciu
+brakujących parametrów konstruktora Problem w tabeli oraz mapie źródeł,
+nie błędnych kotwic. Uzupełniono typy, wartości domyślne, walidację,
+jednostki, lowering i granicę authoringu względem kwalifikacji wykonania.
+
+Lokalnie: cały krok documented Python API contracts 7/7 PASS;
+focused source-map validator PASS; przykład study obniżony przez loader
+bez solvera, fragment JSON dokładnie zgodny z wynikiem PASS.
+Puste physics_objects jest pomijane, a pięć kolekcji anten pozostaje [].
+Nie kompilowano testów jednostkowych. Te dowody nie zastępują strict
+Sphinx/render ani CI nowego commita.
+
+Read-only diagnoza wcześniejszego CI frontendu potwierdziła trzy rozjazdy
+fixtures: brak eksportu useDevelopmentWorkspacePaused w mocku bannera,
+asercja Ms/Aex na magnetic-parameters zamiast osobnego Material child,
+oraz oczekiwanie ośmiu invalidacji przy dziewięciu różnych zasobach.
+Przyczyna retry w useSimulationPreparation pozostaje nierozstrzygnięta;
+sama liczba ticków nie dowodzi błędu produkcyjnego. W tym fragmencie
+nie zmieniano frontendu ani nie osłabiano jego bramek.
+
+PR nadal wymaga zielonego CI, review i brakujących dowodów runtime/nauki.
+Worktree zachowane do dalszej pracy; T00–T18 pozostaje otwarte.
