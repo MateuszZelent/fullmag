@@ -7,6 +7,11 @@ Przyrost T04/T15, po commicie modeli/regresji
 `D:/git/fullmag/worktrees/microwave-antenna-latest-20260909`, branch
 `codex/microwave-antenna-latest-20260909`. PR #147 pozostaje Draft.
 To dowód renderowania proceduralnej geometrii anteny, nie nowa fizyka.
+Przyrost fixture, smoke, managed route i dokumentacji zapisano oraz wysłano
+do PR #147 w commicie `2f6a82724c6d8ae8ec90a514cbb1d74643ed42c1`.
+Bramka changed scientific docs dla zakresu od bazowego `8cab427...` do tego
+commita przeszła exit 0; checkpoint pozostaje wewnętrznym raportem,
+nie publikacją nowej noty fizycznej.
 
 Uruchomienie: `just verify-antenna-cpw-viewport-browser`.
 Recepta używa istniejącego resolvera oraz
