@@ -946,3 +946,35 @@ Rust cold readera i niezależnego czytnika pozostaje niewykazana. Nie zmieniano
 progów, nie dodano ULP slack i nie promowano RAM inspection do qualified basis.
 Po odbiorze CI potrzebny jest przypięty managed runtime i regularny asset,
 a potem compute_fields, Run oraz FFT na tym samym assetcie, osobno dla lanes.
+
+## T01/T14 — rzeczywisty format hashy payloadów
+
+CI HEAD `260e9ccdb87d21a2365e192420d26b1118b78786`: Control Room i build
+dokumentacji SUCCESS. Rust job `113179740542` zakończył się FAILURE:
+988 PASS, 3 FAIL, 3 ignored. Błędy: metadata/ETag anteny (500 zamiast 200),
+coordinator transition (session store writer is busy), session recovery
+(500 zamiast 200). Development restore i inspekcja anten przechodzą.
+Dwóch błędów session store nie przypisujemy formatowi anteny.
+
+W fixture metadata hashe binarnych payloadów miały prefiks `sha256:`,
+podczas gdy producent `antenna_field_solution.rs::sha256` publikuje sam hex,
+a `verify_binary_ref` porównuje ten hex bezpośrednio. Poprawiono hash pięciu
+payloadów generowanych przez wspólną closure oraz hash mutacji NaN i błędnej
+topologii. Zachowano prefiksy podpisów semantycznych i content digest.
+Dodano asercję rzeczywistego SHA bajtów H w odpowiedzi; błąd pierwszego GET
+drukuje JSON przed wymaganiem ETag. Produkcyjnych gate'ów nie zmieniano.
+
+Weryfikacja: interpretowany source check baseline RED (3 niezgodne miejsca)
+→ GREEN (0), rzeczywisty SHA-256 binarnego H i źródła producenta/verifiera
+PASS; rustfmt parser `--emit stdout` i scoped whitespace PASS. Nie wykonano
+ani nie kompilowano lokalnie Rust; wynik endpointu wymaga nowego CI.
+
+Koordynator odczytany przez API jest zdrowy, accepting_jobs=true,
+worker_alive=true, bez aktywnych jobów. Konkretny ostatni job
+`ff4035657e4a40ad84e15ca2a07764a0` (seq 38) ma succeeded/exit 0,
+ale dotyczy starego HEAD `86810f37e21e95b3f8e24d967fdb2bad9511eff1`.
+Endpoint listy zwrócił 500; odczyt pojedynczego joba działa. Nie restartowano
+koordynatora, UI ani joba. Ten odczyt nie potwierdza hashy pakietu ani nauki.
+Następne kroki: odbiór poprawki przez CI, osobna diagnoza session store,
+a następnie przypięty aktualny managed pakiet i regular publish→cold load→reuse.
+Pełny cel T00–T18 pozostaje aktywny; bez merge i cleanup.

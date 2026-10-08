@@ -30036,7 +30036,7 @@ async fn antenna_result_resources_publish_metadata_and_etags() {
         fs::write(field_dir.join(name), &bytes).expect("write field payload");
         serde_json::json!({
             "path": format!("antenna/field_solutions/solution-1/{name}"),
-            "sha256": format!("sha256:{:x}", Sha256::digest(&bytes)),
+            "sha256": format!("{:x}", Sha256::digest(&bytes)),
             "scalar_type": "float64_le",
             "layout": layout,
             "unit": unit,
@@ -30185,9 +30185,13 @@ async fn antenna_result_resources_publish_metadata_and_etags() {
         )
         .await
         .unwrap();
-    assert_eq!(field.status(), StatusCode::OK);
-    let field_etag = field.headers().get("etag").unwrap().clone();
+    let field_status = field.status();
+    let field_etag = field.headers().get("etag").cloned();
     let field_json = body_json(field).await;
+    assert_eq!(field_status, StatusCode::OK, "{field_json}");
+    let field_etag = field_etag.expect("successful antenna metadata has an ETag");
+    assert_eq!(field_json["bases"][0]["magnetic_field_per_ampere"]["sha256"],
+        format!("{:x}", Sha256::digest(fs::read(field_dir.join("port-1/H_per_A.f64le")).unwrap())));
     assert_eq!(field_json["solution_id"], "solution-1");
     assert_eq!(field_json["quantity"], "H_ant_basis");
     assert_eq!(field_json["sample_positions"]["value_count"], 6);
@@ -30460,7 +30464,7 @@ async fn antenna_result_resources_publish_metadata_and_etags() {
     fs::write(&magnetic_path, &non_finite_bytes).expect("write non-finite field payload");
     let mut non_finite_manifest = field_manifest.clone();
     non_finite_manifest["bases"][0]["magnetic_field_per_ampere"]["sha256"] =
-        serde_json::json!(format!("sha256:{:x}", Sha256::digest(&non_finite_bytes)));
+        serde_json::json!(format!("{:x}", Sha256::digest(&non_finite_bytes)));
     write_rehashed_field_manifest(non_finite_manifest);
     let non_finite_payload = app
         .clone()
@@ -30482,7 +30486,7 @@ async fn antenna_result_resources_publish_metadata_and_etags() {
     let mut invalid_topology_manifest = field_manifest.clone();
     invalid_topology_manifest["sample_topology"] = serde_json::json!({
         "path": "antenna/field_solutions/solution-1/sample_topology.u32le",
-        "sha256": format!("sha256:{:x}", Sha256::digest(&invalid_topology_bytes)),
+        "sha256": format!("{:x}", Sha256::digest(&invalid_topology_bytes)),
         "scalar_type": "uint32_le",
         "layout": "tet4_connectivity",
         "unit": "1",
