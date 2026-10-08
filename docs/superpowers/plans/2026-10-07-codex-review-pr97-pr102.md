@@ -988,6 +988,26 @@ GitHub odrzucił bezpośredni dispatch nowego workflow MFEM (404: brak na defaul
 branch); PR97 ma mergeStateStatus=DIRTY, więc push nie uruchamia workflow PR.
 Dodano selektywny dispatch istniejącego bootstrap: domyślny bootstrap zachowuje
 wszystkie kontrole; positive-mass uruchamia wyłącznie reusable MFEM contract;
-browser uruchamia Control Room i smoke dla nowej poprawki transportowej.
+browser uruchamia tylko browser smoke dla nowej poprawki transportowej.
 Nie scala to PR, nie zmienia mastera i nie wymaga lokalnej kompilacji testów.
 Poprawka transportu opublikowana jako32ba085b491a1fd01f0f6a71f57edb61009b3013.
+
+Selektywny routing opublikowany jako56934a2cbb1ff8c6466ff402ec91aed11507e54a.
+Potwierdzone aktywne handles: MFEM run37793696182/job113367486128;
+GUI run37793702278/job113367511792. Wymagany jest ich terminalny wynik i odczyt
+rzeczywistych oracle/overlay dowodów, nie sam status started.
+
+### Checkpoint następnego wykonania — transport naprawiony, render nadal otwarty
+
+GUI run37793702278/job113367511792 zakończony FAILURE w Inspector gate.
+Main smoke, negative control i viewport audits PASS. Modal field metadata GET200,
+field vector GET200 oraz resource controller ready potwierdzają naprawę nagłówka
+sesji. Topology complete i owner compatible. Brak wavevectorUniform oznacza
+kolejny problem w render handoff; pozytywny modal overlay nadal NOT VERIFIED.
+Nie ponowiono tego samego nieudanego joba bez nowej diagnozy/zmiany.
+MFEM run37793696182/job113367486128 nadal IN_PROGRESS w dependency build/test.
+
+Review finalizera Floquet potwierdziło source_index i fizyczną kolejność selekcji,
+ale wskazało niedeterministyczną fixture SLEPc: requested2/NEV4 może wyczerpać
+budżet na kopiach pierwszych modów. Regresja jest poprawiana przez deterministyczne
+wywołanie tego samego finalizera; nie zastępuje to brakującego bounded NEV refill.

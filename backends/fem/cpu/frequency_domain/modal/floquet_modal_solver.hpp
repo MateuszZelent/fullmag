@@ -4,6 +4,7 @@
 #include "frequency_domain/modal_eigen_request.hpp"
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <vector>
 
@@ -11,6 +12,31 @@ namespace fullmag::fem::frequency_domain {
 
 struct PoissonAirboxSharedDomainComplexCsrMatrix;
 struct PoissonAirboxSharedDomainAssemblyResult;
+
+namespace detail {
+
+// Internal seam shared by the native solver and its deterministic candidate
+// finalization regression. Inputs are already certified against the original
+// Floquet descriptor; this stage only mass-deduplicates, target-ranks, and
+// applies the publication count.
+struct CertifiedFloquetModalCandidate {
+    SLEPcModalAcceptedMode mode{};
+    double target_distance = 0.0;
+};
+
+struct FloquetModalCandidateFinalization {
+    bool success = false;
+    const char *failure_reason = "floquet_mass_candidate_finalization_failed";
+    std::vector<CertifiedFloquetModalCandidate> accepted_candidates;
+};
+
+FloquetModalCandidateFinalization finalize_certified_floquet_candidates(
+    std::vector<CertifiedFloquetModalCandidate> candidates,
+    std::uint64_t q_complex_dof_count,
+    const PoissonAirboxSharedDomainComplexCsrMatrix *positive_tangent_mass,
+    std::size_t requested_mode_count);
+
+} // namespace detail
 
 /*
  * Native shared-domain Floquet owner.  The five pencil blocks and positive

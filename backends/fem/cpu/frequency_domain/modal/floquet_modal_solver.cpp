@@ -1,9 +1,11 @@
 #include "cpu/frequency_domain/modal/floquet_modal_solver.hpp"
 #include "cpu/frequency_domain/modal_krylov_tuning.hpp"
+#include "cpu/frequency_domain/mode_deduplication.hpp"
 #include "cpu/frequency_domain/operators/poisson_airbox_shared_domain.hpp"
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -28,6 +30,9 @@ namespace {
 
 // Shared by always-available diagnostics and the optional PETSc implementation.
 constexpr double kFloquetShiftedGmresBreakdownTolerance = 2.0;
+constexpr double kFloquetDedupFrequencyRelativeTolerance = 1.0e-8;
+constexpr double kFloquetDedupFrequencyAbsoluteToleranceHz = 1.0e-12;
+constexpr double kFloquetDedupOverlapThreshold = 0.90;
 
 bool floquet_schur_action_diagnostic_requested() noexcept
 {
@@ -181,6 +186,69 @@ bool complex_sparse_view_is_valid(
     return true;
 }
 
+bool complex_sparse_view_is_hermitian(
+    const PoissonAirboxSharedDomainComplexCsrMatrix *view) noexcept
+{
+    if (!complex_sparse_view_is_valid(view) ||
+        view->row_count != view->column_count ||
+        view->row_count > std::numeric_limits<std::uint32_t>::max()) {
+        return false;
+    }
+
+    // The owned complex CSR producer emits each row through an ordered map.
+    // Require canonical ordering before binary-searching conjugate entries.
+    for (std::uint64_t row = 0u; row < view->row_count; ++row) {
+        const std::size_t begin = static_cast<std::size_t>(
+            view->row_offsets[static_cast<std::size_t>(row)]);
+        const std::size_t end = static_cast<std::size_t>(
+            view->row_offsets[static_cast<std::size_t>(row + 1u)]);
+        for (std::size_t entry = begin + 1u; entry < end; ++entry) {
+            if (view->column_indices[entry - 1u] >= view->column_indices[entry]) {
+                return false;
+            }
+        }
+    }
+
+    constexpr double kHermitianRoundoffUlps = 64.0;
+    const double roundoff =
+        kHermitianRoundoffUlps * std::numeric_limits<double>::epsilon();
+    for (std::uint64_t row = 0u; row < view->row_count; ++row) {
+        const std::size_t begin = static_cast<std::size_t>(
+            view->row_offsets[static_cast<std::size_t>(row)]);
+        const std::size_t end = static_cast<std::size_t>(
+            view->row_offsets[static_cast<std::size_t>(row + 1u)]);
+        for (std::size_t entry = begin; entry < end; ++entry) {
+            const std::uint32_t column = view->column_indices[entry];
+            const std::size_t mirror_begin = static_cast<std::size_t>(
+                view->row_offsets[static_cast<std::size_t>(column)]);
+            const std::size_t mirror_end = static_cast<std::size_t>(
+                view->row_offsets[static_cast<std::size_t>(column + 1u)]);
+            const auto mirror = std::lower_bound(
+                view->column_indices.begin() + static_cast<std::ptrdiff_t>(mirror_begin),
+                view->column_indices.begin() + static_cast<std::ptrdiff_t>(mirror_end),
+                static_cast<std::uint32_t>(row));
+            if (mirror ==
+                    view->column_indices.begin() + static_cast<std::ptrdiff_t>(mirror_end) ||
+                *mirror != row) {
+                return false;
+            }
+            const std::size_t mirror_entry = static_cast<std::size_t>(
+                mirror - view->column_indices.begin());
+            const std::complex<double> value = view->values[entry];
+            const std::complex<double> conjugate_mirror =
+                std::conj(view->values[mirror_entry]);
+            const double scale = std::max(
+                std::abs(value), std::abs(conjugate_mirror));
+            const double defect = std::abs(value - conjugate_mirror);
+            if (!std::isfinite(scale) || !std::isfinite(defect) ||
+                defect > roundoff * scale) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
 const char *floquet_shared_operator_invalid_reason(
     const FloquetSharedDomainSparseModalOperator *operator_view,
     int spectral_dimension) noexcept
@@ -249,6 +317,13 @@ const char *floquet_shared_operator_invalid_reason(
     if (!complex_sparse_view_is_valid(operator_view->a_phiq)) {
         return "floquet_shared_domain_a_phiq_csr_is_invalid";
     }
+    if (operator_view->positive_tangent_mass == nullptr) {
+        return "floquet_shared_domain_positive_tangent_mass_missing";
+    }
+    if (!complex_sparse_view_is_valid(operator_view->positive_tangent_mass) ||
+        operator_view->positive_tangent_mass->values.empty()) {
+        return "floquet_shared_domain_positive_tangent_mass_csr_is_invalid";
+    }
     const std::uint64_t q = operator_view->q_complex_dof_count;
     const std::uint64_t phi = operator_view->phi_dof_count;
     if (operator_view->a_qq->row_count != q ||
@@ -270,6 +345,13 @@ const char *floquet_shared_operator_invalid_reason(
     if (operator_view->a_phiq->row_count != phi ||
         operator_view->a_phiq->column_count != q) {
         return "floquet_shared_domain_a_phiq_dimension_mismatch";
+    }
+    if (operator_view->positive_tangent_mass->row_count != q ||
+        operator_view->positive_tangent_mass->column_count != q) {
+        return "floquet_shared_domain_positive_tangent_mass_dimension_mismatch";
+    }
+    if (!complex_sparse_view_is_hermitian(operator_view->positive_tangent_mass)) {
+        return "floquet_shared_domain_positive_tangent_mass_not_hermitian";
     }
     return nullptr;
 }
@@ -368,6 +450,59 @@ std::vector<Complex> complex_csr_matvec(
         result[static_cast<std::size_t>(row)] = value;
     }
     return result;
+}
+
+bool apply_positive_tangent_mass_action(
+    const void *context,
+    const std::complex<double> *input,
+    std::complex<double> *output,
+    std::size_t dof_count) noexcept
+{
+    const auto *matrix = static_cast<
+        const PoissonAirboxSharedDomainComplexCsrMatrix *>(context);
+    if (matrix == nullptr || input == nullptr || output == nullptr ||
+        matrix->row_count != dof_count || matrix->column_count != dof_count) {
+        return false;
+    }
+
+    for (std::uint64_t row = 0u; row < matrix->row_count; ++row) {
+        std::complex<double> value{};
+        const std::uint32_t begin =
+            matrix->row_offsets[static_cast<std::size_t>(row)];
+        const std::uint32_t end =
+            matrix->row_offsets[static_cast<std::size_t>(row + 1u)];
+        for (std::uint32_t entry = begin; entry < end; ++entry) {
+            const std::complex<double> term = matrix->values[entry] *
+                input[static_cast<std::size_t>(matrix->column_indices[entry])];
+            if (!std::isfinite(term.real()) || !std::isfinite(term.imag())) {
+                return false;
+            }
+            value += term;
+            if (!std::isfinite(value.real()) || !std::isfinite(value.imag())) {
+                return false;
+            }
+        }
+        output[static_cast<std::size_t>(row)] = value;
+    }
+    return true;
+}
+
+const char *floquet_mass_deduplication_failure_reason(
+    ModalDeduplicationStatus status) noexcept
+{
+    switch (status) {
+    case ModalDeduplicationStatus::success:
+        return "";
+    case ModalDeduplicationStatus::invalid_metric:
+        return "floquet_positive_tangent_mass_metric_invalid";
+    case ModalDeduplicationStatus::mass_action_failed:
+        return "floquet_positive_tangent_mass_action_failed";
+    case ModalDeduplicationStatus::invalid_candidate:
+        return "floquet_mass_overlap_candidate_invalid";
+    case ModalDeduplicationStatus::invalid_parameters:
+        return "floquet_mass_overlap_parameters_invalid";
+    }
+    return "floquet_mass_overlap_failed";
 }
 
 double complex_vector_norm(const std::vector<Complex> &values) noexcept
@@ -2975,6 +3110,124 @@ bool run_floquet_dense_original_oracle(
 
 } // namespace
 
+namespace detail {
+
+FloquetModalCandidateFinalization finalize_certified_floquet_candidates(
+    std::vector<CertifiedFloquetModalCandidate> candidates,
+    std::uint64_t q_complex_dof_count,
+    const PoissonAirboxSharedDomainComplexCsrMatrix *positive_tangent_mass,
+    std::size_t requested_mode_count)
+{
+    FloquetModalCandidateFinalization result{};
+    if (q_complex_dof_count == 0u ||
+        q_complex_dof_count > std::numeric_limits<std::size_t>::max()) {
+        result.failure_reason = "floquet_mass_overlap_parameters_invalid";
+        return result;
+    }
+    if (positive_tangent_mass == nullptr) {
+        result.failure_reason = "floquet_shared_domain_positive_tangent_mass_missing";
+        return result;
+    }
+    if (!complex_sparse_view_is_valid(positive_tangent_mass) ||
+        positive_tangent_mass->values.empty()) {
+        result.failure_reason =
+            "floquet_shared_domain_positive_tangent_mass_csr_is_invalid";
+        return result;
+    }
+    if (positive_tangent_mass->row_count != q_complex_dof_count ||
+        positive_tangent_mass->column_count != q_complex_dof_count) {
+        result.failure_reason =
+            "floquet_shared_domain_positive_tangent_mass_dimension_mismatch";
+        return result;
+    }
+    if (!complex_sparse_view_is_hermitian(positive_tangent_mass)) {
+        result.failure_reason =
+            "floquet_shared_domain_positive_tangent_mass_not_hermitian";
+        return result;
+    }
+
+    std::vector<ModalCandidate> metric_candidates;
+    metric_candidates.reserve(candidates.size());
+    for (std::size_t index = 0u; index < candidates.size(); ++index) {
+        const CertifiedFloquetModalCandidate &candidate = candidates[index];
+        if (index >= static_cast<std::size_t>(std::numeric_limits<int>::max()) ||
+            !std::isfinite(candidate.target_distance) ||
+            candidate.target_distance < 0.0) {
+            result.failure_reason =
+                "floquet_mass_overlap_candidate_invalid";
+            return result;
+        }
+        ModalCandidate metric_candidate{};
+        metric_candidate.frequency_hz = candidate.mode.frequency_hz;
+        metric_candidate.relative_residual = candidate.mode.relative_residual;
+        metric_candidate.source_index = static_cast<int>(index);
+        metric_candidate.mode = candidate.mode.mode_vector;
+        metric_candidates.push_back(std::move(metric_candidate));
+    }
+
+    const ModalDeduplicationResult mass_deduplication =
+        deduplicate_modes_by_frequency_and_overlap_with_mass_action(
+            metric_candidates,
+            static_cast<std::size_t>(q_complex_dof_count),
+            apply_positive_tangent_mass_action,
+            positive_tangent_mass,
+            kFloquetDedupFrequencyRelativeTolerance,
+            kFloquetDedupFrequencyAbsoluteToleranceHz,
+            kFloquetDedupOverlapThreshold);
+    if (mass_deduplication.status != ModalDeduplicationStatus::success) {
+        result.failure_reason =
+            floquet_mass_deduplication_failure_reason(mass_deduplication.status);
+        return result;
+    }
+
+    result.accepted_candidates.reserve(mass_deduplication.modes.size());
+    for (const ModalCandidate &survivor : mass_deduplication.modes) {
+        if (survivor.source_index < 0 ||
+            static_cast<std::size_t>(survivor.source_index) >= candidates.size()) {
+            result.accepted_candidates.clear();
+            result.failure_reason = "floquet_mass_overlap_source_index_invalid";
+            return result;
+        }
+        result.accepted_candidates.push_back(
+            std::move(candidates[static_cast<std::size_t>(survivor.source_index)]));
+    }
+
+    // Deduplicate all already-certified candidates before target ranking or
+    // the requested publication cap. Keep the original accepted mode attached
+    // to its candidate so the comparison-only normalization cannot alter q,
+    // phi, residual certificates, or eigenpair provenance.
+    std::stable_sort(
+        result.accepted_candidates.begin(),
+        result.accepted_candidates.end(),
+        [](const CertifiedFloquetModalCandidate &left,
+           const CertifiedFloquetModalCandidate &right) {
+            if (left.target_distance == right.target_distance) {
+                return left.mode.frequency_hz < right.mode.frequency_hz;
+            }
+            return left.target_distance < right.target_distance;
+        });
+    const std::size_t accepted_limit = std::min<std::size_t>(
+        result.accepted_candidates.size(),
+        std::max<std::size_t>(1u, requested_mode_count));
+    result.accepted_candidates.resize(accepted_limit);
+    std::stable_sort(
+        result.accepted_candidates.begin(),
+        result.accepted_candidates.end(),
+        [](const CertifiedFloquetModalCandidate &left,
+           const CertifiedFloquetModalCandidate &right) {
+            return left.mode.frequency_hz < right.mode.frequency_hz;
+        });
+    for (std::size_t index = 0u; index < result.accepted_candidates.size(); ++index) {
+        result.accepted_candidates[index].mode.positive_frequency_pair_index =
+            static_cast<int>(index);
+    }
+    result.success = true;
+    result.failure_reason = nullptr;
+    return result;
+}
+
+} // namespace detail
+
 FloquetSharedDomainSparseModalSolveContext::FloquetSharedDomainSparseModalSolveContext() noexcept = default;
 
 FloquetSharedDomainSparseModalSolveContext::
@@ -4016,10 +4269,7 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
     result.eps_converged_reason = static_cast<int>(converged_reason);
     result.converged_eigenpair_count = static_cast<int>(converged_eigenpair_count);
 
-    struct Candidate {
-        SLEPcModalAcceptedMode mode{};
-        double target_distance = 0.0;
-    };
+    using Candidate = detail::CertifiedFloquetModalCandidate;
     std::vector<Candidate> candidates;
     candidates.reserve(static_cast<std::size_t>(
         std::max(1, spectral_request.requested_mode_count)));
@@ -4288,32 +4538,25 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
         }
         return result;
     }
-    std::sort(
-        candidates.begin(),
-        candidates.end(),
-        [](const Candidate &left, const Candidate &right) {
-            if (left.target_distance == right.target_distance) {
-                return left.mode.frequency_hz < right.mode.frequency_hz;
-            }
-            return left.target_distance < right.target_distance;
-        });
-    const std::size_t accepted_limit = std::min<std::size_t>(
-        candidates.size(),
-        static_cast<std::size_t>(std::max(1, spectral_request.requested_mode_count)));
-    candidates.resize(accepted_limit);
-    std::sort(
-        candidates.begin(),
-        candidates.end(),
-        [](const Candidate &left, const Candidate &right) {
-            return left.mode.frequency_hz < right.mode.frequency_hz;
-        });
-    result.accepted_modes.reserve(candidates.size());
-    for (std::size_t index = 0u; index < candidates.size(); ++index) {
-        candidates[index].mode.positive_frequency_pair_index = static_cast<int>(index);
+    detail::FloquetModalCandidateFinalization finalization =
+        detail::finalize_certified_floquet_candidates(
+            std::move(candidates),
+            operator_view.q_complex_dof_count,
+            operator_view.positive_tangent_mass,
+            static_cast<std::size_t>(std::max(
+                1, spectral_request.requested_mode_count)));
+    if (!finalization.success) {
+        result.status = "solve_error";
+        result.unsupported_reason = finalization.failure_reason;
+        return result;
+    }
+
+    result.accepted_modes.reserve(finalization.accepted_candidates.size());
+    for (Candidate &candidate : finalization.accepted_candidates) {
         result.max_relative_residual = std::max(
             result.max_relative_residual,
-            candidates[index].mode.relative_residual);
-        result.accepted_modes.push_back(std::move(candidates[index].mode));
+            candidate.mode.relative_residual);
+        result.accepted_modes.push_back(std::move(candidate.mode));
     }
     result.accepted_mode_count = static_cast<int>(result.accepted_modes.size());
     const SLEPcModalAcceptedMode &first = result.accepted_modes.front();

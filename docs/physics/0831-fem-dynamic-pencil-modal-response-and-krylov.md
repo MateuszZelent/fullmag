@@ -2505,17 +2505,43 @@ $C_q(\mathbf k)^\mathsf H M_\mathrm{tan,full} C_q(\mathbf k)$. Metryka nie
 jest blokiem żyromagnetycznym $B_{qq}$ i nie ma wag $M_s$ ani $\gamma_0$.
 
 Ten przyrost dodaje właściciela full/reduced CSR i przekazuje wskaźnik do
-wewnętrznego DTO operatora. Solver, pencyl, normalizacja modów, wybór
-kandydatów i deduplikacja jeszcze nie konsumują tej masy. Regresja
-assembly porównuje full i reduced CSR z niezależną analityczną masą tet4 /
-prism6 oraz ręcznie zbudowanym ograniczeniem fazy i ram stycznych. Źródło i
-test są niekompilowane; managed runtime i użycie metryki przez overlap
-pozostają **NOT VERIFIED**.
+wewnętrznego DTO operatora. W jednym wywołaniu native Floquet solver
+`solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context` używa
+reduced CSR wyłącznie do deduplikacji kandydatów, którzy przeszli istniejącą
+bramkę original-block residual. Aplikacja metryki jest callbackiem na owned
+complex CSR; nie materializuje macierzy dense i nie używa gyrotropic `B_qq`.
+Normalizowane kopie służą tylko porównaniu overlap; zaakceptowany mod jest odtwarzany z
+`source_index`, aby zachować oryginalną amplitudę $q$, potencjał, residual i
+identyfikator pary własnej. Wewnętrzny `detail::finalize_certified_floquet_candidates`
+wykonuje deduplikację, sortowanie względem żądanej częstotliwości i lokalny
+limit liczby modów. Używa względnej tolerancji częstotliwości $10^{-8}$ ($1$),
+absolutnej tolerancji $10^{-12}\,\mathrm{Hz}$ i progu mass-overlap $0.90$ ($1$).
+
+To jest deduplikacja w pojedynczym wywołaniu Floquet/SLEPc, a nie ukończone
+scalanie całego frequency window. `production_cpu_modal_eigen.cpp` nadal
+scala wyniki sąsiednich subwindow osobnym `deduplicate_slepc_modes_by_overlap`;
+ta outer deduplication nie otrzymuje jeszcze sparse tangent-mass action dla
+native shared-domain Floquet i wymaga oddzielnej korekty. Nie uznajemy jej za
+zastąpioną przez lokalny etap.
+
+Regresja assembly porównuje full i reduced CSR z niezależną analityczną masą
+tet4 / prism6 oraz ręcznie zbudowanym ograniczeniem fazy i ram stycznych.
+Deterministyczna regresja finalizatora przekazuje jawny zestaw już
+residual-certified kandydatów bezpośrednio do tej samej funkcji, którą wywołuje
+solver; sprawdza duplikat, odrębny mass-orthogonal mode i cap po deduplikacji.
+Omija EPS celowo, więc nie dowodzi, że SLEPc dostarczy te kandydaty, ani nie
+weryfikuje ich certyfikacji lub refill/NEV. Kod/test nie były kompilowane ani
+uruchomione; managed runtime, rzeczywiste wykorzystanie metryki i naukowa
+kwalifikacja pozostają **NOT VERIFIED**.
 
 | Source ID | Path | Symbol | Responsibility |
 |---|---|---|---|
-| `source-floquet-tangent-mass-assembly` | `backends/fem/cpu/frequency_domain/operators/poisson_airbox_shared_domain.cpp` | `assemble_poisson_airbox_shared_domain` | Full geometric P1 tangent mass on physical magnetic nodes and phase-reduced complex CSR; not consumed by solve/dedup |
+| `source-floquet-tangent-mass-assembly` | `backends/fem/cpu/frequency_domain/operators/poisson_airbox_shared_domain.cpp` | `assemble_poisson_airbox_shared_domain` | Full geometric P1 tangent mass on physical magnetic nodes and phase-reduced complex CSR |
 | `source-floquet-tangent-mass-regression` | `backends/fem/tests/frequency_domain/poisson_airbox_shared_domain_test.cpp` | `floquet_positive_tangent_mass_matches_independent_phase_reduction` | Independent tet4/prism6 mass and $C_q^\mathsf H M C_q$ oracle with phase copies and nonuniform tangent frames; authored, uncompiled |
+| `source-floquet-tangent-mass-overlap-owner` | `backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp` | `detail::finalize_certified_floquet_candidates` | Apply the positive reduced CSR mass action to already residual-certified candidates, retain original modes by source index, then target-rank and cap |
+| `source-floquet-tangent-mass-overlap-seam` | `backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.hpp` | `detail::CertifiedFloquetModalCandidate` | Internal data seam shared by production and deterministic finalizer regression |
+| `source-floquet-tangent-mass-overlap-regression` | `backends/fem/tests/frequency_domain/floquet_modal_solver_test.cpp` | `finalizes_certified_candidates_by_tangent_mass_before_nearest_cap` | Directly tests the production finalizer with explicitly supplied candidates; bypasses EPS and does not prove candidate supply, residual certification or refill/NEV; authored, uncompiled |
+| `source-floquet-window-cross-subwindow-dedup-followup` | `backends/fem/cpu/frequency_domain/production_cpu_modal_eigen.cpp` | `solve_sparse_production_modal_window_payload` | Outer native Floquet subwindow merge still uses generic overlap dedup without sparse tangent-mass action; follow-up required |
 
 
 ## Rzeczywisty parametr żyromagnetyczny w wynikach (S07/S10, źródła WIP)

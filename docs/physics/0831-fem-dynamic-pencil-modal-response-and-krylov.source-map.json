@@ -1448,13 +1448,37 @@
       "id": "source-floquet-tangent-mass-assembly",
       "path": "backends/fem/cpu/frequency_domain/operators/poisson_airbox_shared_domain.cpp",
       "symbol": "assemble_poisson_airbox_shared_domain",
-      "responsibility": "Full geometric P1 tangent mass on physical magnetic nodes and phase-reduced complex CSR; not consumed by solve or deduplication"
+      "responsibility": "Full geometric P1 tangent mass on physical magnetic nodes and phase-reduced complex CSR"
     },
     {
       "id": "source-floquet-tangent-mass-regression",
       "path": "backends/fem/tests/frequency_domain/poisson_airbox_shared_domain_test.cpp",
       "symbol": "floquet_positive_tangent_mass_matches_independent_phase_reduction",
       "responsibility": "Independent tet4/prism6 mass and phase-reduction oracle with periodic copies and nonuniform tangent frames; source regression authored, uncompiled"
+    },
+    {
+      "id": "source-floquet-tangent-mass-overlap-owner",
+      "path": "backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp",
+      "symbol": "detail::finalize_certified_floquet_candidates",
+      "responsibility": "Apply positive reduced CSR mass action to already residual-certified candidates, retain original mode data by source index, then target-rank and cap without dense mass materialization"
+    },
+    {
+      "id": "source-floquet-tangent-mass-overlap-seam",
+      "path": "backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.hpp",
+      "symbol": "detail::CertifiedFloquetModalCandidate",
+      "responsibility": "Internal seam shared by production and deterministic finalizer regression; contains original accepted mode and target distance"
+    },
+    {
+      "id": "source-floquet-tangent-mass-overlap-regression",
+      "path": "backends/fem/tests/frequency_domain/floquet_modal_solver_test.cpp",
+      "symbol": "finalizes_certified_candidates_by_tangent_mass_before_nearest_cap",
+      "responsibility": "Directly tests the production finalizer with explicitly supplied certified candidates; bypasses EPS and does not prove candidate supply, residual certification, or refill/NEV; authored, uncompiled"
+    },
+    {
+      "id": "source-floquet-window-cross-subwindow-dedup-followup",
+      "path": "backends/fem/cpu/frequency_domain/production_cpu_modal_eigen.cpp",
+      "symbol": "solve_sparse_production_modal_window_payload",
+      "responsibility": "Outer native Floquet subwindow merge still uses generic overlap dedup without sparse tangent-mass action; follow-up required"
     },
     {
       "id": "source-tracking-consistent-pair",

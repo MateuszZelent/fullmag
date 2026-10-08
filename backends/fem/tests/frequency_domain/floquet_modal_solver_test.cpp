@@ -319,12 +319,14 @@ void admits_certified_shared_domain_sparse_operator()
 {
     const auto a_qq = diagonal_complex_csr(2u, {2.0, 3.0});
     const auto b_qq = diagonal_complex_csr(2u, {1.0, 1.0});
+    const auto positive_tangent_mass = diagonal_complex_csr(2u, {1.0, 1.0});
     const auto p = diagonal_complex_csr(1u, {1.0});
     const auto a_qphi = q_to_phi_complex_csr(2u, 0.25);
     const auto a_phiq = phi_to_q_complex_csr(2u, 0.25);
     fd::FloquetSharedDomainSparseModalOperator operator_view{};
     operator_view.a_qq = &a_qq;
     operator_view.b_qq = &b_qq;
+    operator_view.positive_tangent_mass = &positive_tangent_mass;
     operator_view.p = &p;
     operator_view.a_qphi = &a_qphi;
     operator_view.a_phiq = &a_phiq;
@@ -345,6 +347,66 @@ void admits_certified_shared_domain_sparse_operator()
           "certified shared-domain Floquet operator reaches sparse SLEPc admission");
     check(admission.dynamic_demag_k,
           "shared-domain Floquet admission retains dynamic demag-k");
+
+    auto invalid_metric_operator = operator_view;
+    invalid_metric_operator.positive_tangent_mass = nullptr;
+    auto invalid_metric_spectral = spectral;
+    invalid_metric_spectral.floquet_shared_domain_operator =
+        &invalid_metric_operator;
+    admission = fd::admit_floquet_modal_sparse_request(
+        request, invalid_metric_spectral);
+    check(!admission.accepted &&
+              std::strcmp(
+                  admission.reason,
+                  "floquet_shared_domain_positive_tangent_mass_missing") == 0,
+          "shared-domain Floquet rejects a missing positive tangent mass");
+
+    const auto wrong_shape_mass = diagonal_complex_csr(1u, {1.0});
+    invalid_metric_operator = operator_view;
+    invalid_metric_operator.positive_tangent_mass = &wrong_shape_mass;
+    invalid_metric_spectral.floquet_shared_domain_operator =
+        &invalid_metric_operator;
+    admission = fd::admit_floquet_modal_sparse_request(
+        request, invalid_metric_spectral);
+    check(!admission.accepted &&
+              std::strcmp(
+                  admission.reason,
+                  "floquet_shared_domain_positive_tangent_mass_dimension_mismatch") == 0,
+          "shared-domain Floquet rejects a positive tangent mass with the wrong shape");
+
+    fd::PoissonAirboxSharedDomainComplexCsrMatrix nonhermitian_mass{};
+    nonhermitian_mass.row_count = 2u;
+    nonhermitian_mass.column_count = 2u;
+    nonhermitian_mass.row_offsets = {0u, 2u, 3u};
+    nonhermitian_mass.column_indices = {0u, 1u, 1u};
+    nonhermitian_mass.values = {{1.0, 0.0}, {0.25, 0.0}, {1.0, 0.0}};
+    invalid_metric_operator = operator_view;
+    invalid_metric_operator.positive_tangent_mass = &nonhermitian_mass;
+    invalid_metric_spectral.floquet_shared_domain_operator =
+        &invalid_metric_operator;
+    admission = fd::admit_floquet_modal_sparse_request(
+        request, invalid_metric_spectral);
+    check(!admission.accepted &&
+              std::strcmp(
+                  admission.reason,
+                  "floquet_shared_domain_positive_tangent_mass_not_hermitian") == 0,
+          "shared-domain Floquet rejects a non-Hermitian positive tangent mass");
+
+    const auto nonfinite_mass = diagonal_complex_csr(
+        2u,
+        {std::complex<double>(std::numeric_limits<double>::quiet_NaN(), 0.0),
+         std::complex<double>(1.0, 0.0)});
+    invalid_metric_operator = operator_view;
+    invalid_metric_operator.positive_tangent_mass = &nonfinite_mass;
+    invalid_metric_spectral.floquet_shared_domain_operator =
+        &invalid_metric_operator;
+    admission = fd::admit_floquet_modal_sparse_request(
+        request, invalid_metric_spectral);
+    check(!admission.accepted &&
+              std::strcmp(
+                  admission.reason,
+                  "floquet_shared_domain_positive_tangent_mass_csr_is_invalid") == 0,
+          "shared-domain Floquet rejects a non-finite positive tangent mass CSR");
 
     request.operator_request.operator_diagnostics_json =
         "{\"payload_kind\":\"bloch_floquet_tangent_operator\"}";
@@ -442,6 +504,10 @@ void executes_native_sparse_matshell_above_dense_bound(bool force_inner_failure 
 
     const auto a_qq = diagonal_complex_csr(q_dimension, a_diagonal);
     const auto b_qq = diagonal_complex_csr(q_dimension, b_diagonal);
+    const auto positive_tangent_mass = diagonal_complex_csr(
+        q_dimension,
+        std::vector<std::complex<double>>(
+            q_dimension, std::complex<double>(1.0, 0.0)));
     const auto p = diagonal_complex_csr(1u, {std::complex<double>(1.0, 0.0)});
     const auto a_qphi = q_to_phi_complex_csr(q_dimension, q_phi_coupling);
     const auto a_phiq = phi_to_q_complex_csr(q_dimension, phi_q_coupling);
@@ -449,6 +515,7 @@ void executes_native_sparse_matshell_above_dense_bound(bool force_inner_failure 
     fd::FloquetSharedDomainSparseModalOperator operator_view{};
     operator_view.a_qq = &a_qq;
     operator_view.b_qq = &b_qq;
+    operator_view.positive_tangent_mass = &positive_tangent_mass;
     operator_view.p = &p;
     operator_view.a_qphi = &a_qphi;
     operator_view.a_phiq = &a_phiq;
@@ -628,6 +695,99 @@ void executes_native_sparse_matshell_above_dense_bound(bool force_inner_failure 
 #endif
 }
 
+void finalizes_certified_candidates_by_tangent_mass_before_nearest_cap()
+{
+    constexpr std::size_t q_dimension = 4u;
+    constexpr double base_frequency_hz = 1.0e6;
+    const fd::PoissonAirboxSharedDomainComplexCsrMatrix positive_tangent_mass{
+        4u,
+        4u,
+        {0u, 2u, 4u, 5u, 6u},
+        {0u, 1u, 0u, 1u, 2u, 3u},
+        {{1.0, 0.0}, {0.99, 0.0}, {0.99, 0.0},
+         {1.0, 0.0}, {1.0, 0.0}, {1.0, 0.0}},
+    };
+
+    const auto make_candidate = [q_dimension](
+        int eigenpair_index,
+        double frequency_hz,
+        double target_distance,
+        double residual,
+        std::complex<double> amplitude,
+        std::size_t component) {
+        fd::detail::CertifiedFloquetModalCandidate candidate{};
+        candidate.mode.floquet_descriptor_certified = true;
+        candidate.mode.floquet_seam_frame_certified = true;
+        candidate.mode.floquet_gauge_policy_satisfied = true;
+        candidate.mode.floquet_mode_vector_physical_complex = true;
+        candidate.mode.floquet_magnetic_residual = residual;
+        candidate.mode.floquet_potential_residual = residual * 2.0;
+        candidate.mode.floquet_potential_real_split = {
+            std::complex<double>(static_cast<double>(eigenpair_index), 0.5)};
+        candidate.mode.eigenpair_index = eigenpair_index;
+        candidate.mode.lambda_real = -static_cast<double>(eigenpair_index);
+        candidate.mode.lambda_imag = static_cast<double>(eigenpair_index) * 3.0;
+        candidate.mode.frequency_hz = frequency_hz;
+        candidate.mode.relative_residual = residual;
+        candidate.mode.mode_vector.assign(q_dimension, std::complex<double>{});
+        candidate.mode.mode_vector[component] = amplitude;
+        candidate.target_distance = target_distance;
+        return candidate;
+    };
+
+    std::vector<fd::detail::CertifiedFloquetModalCandidate> certified_candidates;
+    certified_candidates.push_back(make_candidate(
+        101, base_frequency_hz, 0.0005, 1.0e-6, {2.0, 0.5}, 0u));
+    certified_candidates.push_back(make_candidate(
+        202, base_frequency_hz + 0.001, 0.0005, 2.0e-6, {5.0, -1.0}, 1u));
+    certified_candidates.push_back(make_candidate(
+        303, base_frequency_hz + 0.002, 0.0015, 3.0e-6, {7.0, 0.25}, 2u));
+    certified_candidates.push_back(make_candidate(
+        404, base_frequency_hz + 400.0, 399.9995, 4.0e-6, {11.0, 0.0}, 3u));
+
+    const auto finalization = fd::detail::finalize_certified_floquet_candidates(
+        certified_candidates,
+        q_dimension,
+        &positive_tangent_mass,
+        2u);
+    check(finalization.success && finalization.failure_reason == nullptr,
+          "certified candidate finalizer accepts a valid positive tangent mass");
+    check(finalization.accepted_candidates.size() == 2u,
+          "mass deduplication precedes the requested nearest-mode publication cap");
+
+    const auto &first = finalization.accepted_candidates[0].mode;
+    const auto &second = finalization.accepted_candidates[1].mode;
+    check(first.eigenpair_index == 101 && second.eigenpair_index == 303,
+          "mass overlap collapses the duplicate cluster, preserves the mass-orthogonal mode, and caps out the farther mode");
+    check(first.mode_vector[0] == std::complex<double>(2.0, 0.5) &&
+              second.mode_vector[2] == std::complex<double>(7.0, 0.25) &&
+              first.mode_vector[1] == std::complex<double>{} &&
+              second.mode_vector[0] == std::complex<double>{},
+          "comparison normalization does not alter original candidate amplitudes or vectors");
+    check(first.floquet_potential_real_split[0] ==
+                  std::complex<double>(101.0, 0.5) &&
+              second.floquet_potential_real_split[0] ==
+                  std::complex<double>(303.0, 0.5) &&
+              first.floquet_magnetic_residual == 1.0e-6 &&
+              second.floquet_magnetic_residual == 3.0e-6 &&
+              first.floquet_descriptor_certified &&
+              second.floquet_seam_frame_certified &&
+              first.lambda_real == -101.0 && second.lambda_imag == 909.0,
+          "finalization preserves each source mode's phi, certificates, residuals, and eigenpair provenance");
+    check(first.positive_frequency_pair_index == 0 &&
+              second.positive_frequency_pair_index == 1 &&
+              first.frequency_hz < second.frequency_hz,
+          "survivors receive local indices after nearest selection and frequency ordering");
+
+    const auto missing_metric = fd::detail::finalize_certified_floquet_candidates(
+        certified_candidates, q_dimension, nullptr, 2u);
+    check(!missing_metric.success &&
+              std::strcmp(
+                  missing_metric.failure_reason,
+                  "floquet_shared_domain_positive_tangent_mass_missing") == 0,
+          "finalizer fails closed when the positive tangent mass is missing");
+}
+
 void normalizes_si_scale_floquet_pencil()
 {
 #if FULLMAG_FEM_WITH_SLEPC
@@ -643,12 +803,17 @@ void normalizes_si_scale_floquet_pencil()
     }
     const auto a_qq = diagonal_complex_csr(q_dimension, a_diagonal);
     const auto b_qq = diagonal_complex_csr(q_dimension, b_diagonal);
+    const auto positive_tangent_mass = diagonal_complex_csr(
+        q_dimension,
+        std::vector<std::complex<double>>(
+            q_dimension, std::complex<double>(1.0, 0.0)));
     const auto p = diagonal_complex_csr(1u, {1.0});
     const auto a_qphi = q_to_phi_complex_csr(q_dimension, 0.0);
     const auto a_phiq = phi_to_q_complex_csr(q_dimension, 0.0);
     fd::FloquetSharedDomainSparseModalOperator operator_view{};
     operator_view.a_qq = &a_qq;
     operator_view.b_qq = &b_qq;
+    operator_view.positive_tangent_mass = &positive_tangent_mass;
     operator_view.p = &p;
     operator_view.a_qphi = &a_qphi;
     operator_view.a_phiq = &a_phiq;
@@ -758,6 +923,7 @@ int main()
     admits_certified_shared_domain_sparse_operator();
     reports_opt_in_action_diagnostic_unavailable_before_setup();
     executes_native_sparse_matshell_above_dense_bound();
+    finalizes_certified_candidates_by_tangent_mass_before_nearest_cap();
     normalizes_si_scale_floquet_pencil();
     executes_native_sparse_matshell_above_dense_bound(true);
     return 0;
