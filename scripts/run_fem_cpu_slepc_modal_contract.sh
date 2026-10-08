@@ -52,6 +52,7 @@ runtime_attestation="$report_dir/runtime-attestation.json"
 dependency_attestation="$report_dir/dependency-attestation.json"
 resolution_attestation="$report_dir/resolution-attestation.json"
 junit_attestation="$report_dir/ctest-junit-attestation.json"
+library_identity="$report_dir/library-identity-attestation.json"
 runtime_fem_lib=""
 CTEST_COMPLETED=0
 
@@ -66,6 +67,7 @@ write_result() {
   DEPENDENCY_ATTESTATION="$dependency_attestation" \
   RESOLUTION_ATTESTATION="$resolution_attestation" \
   JUNIT_ATTESTATION="$junit_attestation" \
+  LIBRARY_IDENTITY="$library_identity" \
   RUNTIME_LIBRARY="$runtime_fem_lib" \
   CTEST_COMPLETED="$CTEST_COMPLETED" \
   python3 -c '
@@ -89,6 +91,7 @@ runtime = load(os.environ.get("RUNTIME_ATTESTATION", ""))
 dependency = load(os.environ.get("DEPENDENCY_ATTESTATION", ""))
 resolution = load(os.environ.get("RESOLUTION_ATTESTATION", ""))
 junit = load(os.environ.get("JUNIT_ATTESTATION", ""))
+library_identity = load(os.environ.get("LIBRARY_IDENTITY", ""))
 status = os.environ["STATUS"]
 resolved = {
     "backend": None,
@@ -164,6 +167,7 @@ payload = {
         "dependency": dependency,
         "resolution": resolution,
         "ctest_junit": junit,
+        "library_identity": library_identity,
     },
 }
 path = Path(os.environ["RESULT_PATH"])
@@ -234,11 +238,15 @@ if [[ ! -x "$runtime_bin" ]]; then
   echo "managed fullmag-bin is missing or not executable: $runtime_bin" >&2
   exit 1
 fi
-runtime_fem_lib="$(find "$runtime_lib_dir" -maxdepth 1 -type f -name 'libfullmag_fem.so*' -print -quit 2>/dev/null || true)"
-if [[ -z "$runtime_fem_lib" ]]; then
-  echo "managed runtime FEM library is missing below: $runtime_lib_dir" >&2
-  exit 1
-fi
+identity_args=(
+  --manifest "$build_dir/backends/fem/fullmag-fem-library-path.txt"
+  --runtime-directory "$runtime_lib_dir"
+  --output "$library_identity"
+  --runtime-binary "$runtime_bin"
+)
+for target in "${targets[@]}"; do
+  identity_args+=(--binary "$build_dir/backends/fem/$target")
+done
 
 export FULLMAG_REPO_ROOT="$repo_root"
 # This is the CPU/SLEPc qualification lane.  The image may contain CUDA
@@ -250,7 +258,9 @@ export FULLMAG_SKIP_GPU_TESTS=1
 # libCEED in the managed image has a CUDA-driver dependency even for this
 # CPU/SLEPc contract.  Use the image's compatibility driver at runtime; this
 # keeps the CPU lane explicit while avoiding a host-driver fallback.
-export LD_LIBRARY_PATH="$runtime_lib_dir:$build_dir/backends/fem:/usr/local/cuda/compat:/opt/fullmag-deps/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+export LD_LIBRARY_PATH="$build_dir/backends/fem:$runtime_lib_dir:/usr/local/cuda/compat:/opt/fullmag-deps/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+python3 scripts/fem_modal_library_identity.py pre "${identity_args[@]}"
+runtime_fem_lib="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["pre"]["runtime"]["path"])' "$library_identity")"
 if ! "$runtime_bin" runtime fem-availability --json \
   >"$runtime_probe" 2>"$runtime_stderr"; then
   echo 'managed fullmag-bin FEM availability probe failed' >&2
@@ -411,17 +421,22 @@ output = {
 output_path.write_text(json.dumps(output, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 PY
 
+python3 scripts/fem_modal_library_identity.py post "${identity_args[@]}"
+
 export CTEST_COMPLETED=1
 
-python3 - "$runtime_attestation" "$dependency_attestation" "$junit_attestation" "$resolution_attestation" <<'PY'
+python3 - "$runtime_attestation" "$dependency_attestation" "$junit_attestation" "$resolution_attestation" "$library_identity" <<'PY'
 import json
 from pathlib import Path
 import sys
 
-runtime_path, dependency_path, junit_path, output_path = map(Path, sys.argv[1:])
+runtime_path, dependency_path, junit_path, output_path, identity_path = map(Path, sys.argv[1:])
 runtime = json.loads(runtime_path.read_text(encoding="utf-8"))
 dependency = json.loads(dependency_path.read_text(encoding="utf-8"))
 junit = json.loads(junit_path.read_text(encoding="utf-8"))
+library_identity = json.loads(identity_path.read_text(encoding="utf-8"))
+if library_identity.get("status") != "pass":
+    raise SystemExit("private/runtime FEM library identity is not verified")
 if runtime.get("status") != "pass" or dependency.get("status") != "pass" or junit.get("status") != "pass":
     raise SystemExit("runtime/dependency attestations are not complete")
 availability = runtime.get("availability")
@@ -451,6 +466,7 @@ output = {
         "fem_gpu_disabled_by_cmake": True,
         "runtime_cpu_available": True,
         "slepc_dependency_attested": True,
+        "tested_runtime_library_identity": str(identity_path),
     },
 }
 output_path.write_text(json.dumps(output, indent=2, sort_keys=True) + "\n", encoding="utf-8")

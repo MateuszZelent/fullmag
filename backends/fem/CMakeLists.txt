@@ -448,6 +448,10 @@ set_target_properties(fullmag_fem PROPERTIES
     PUBLIC_HEADER "${FEM_PUBLIC_HEADERS}"
 )
 
+# Record the exact target selected by this configure, including its SONAME links.
+file(GENERATE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/fullmag-fem-library-path.txt"
+    CONTENT "$<TARGET_FILE:fullmag_fem>\n")
+
 # ── Tests ──
 enable_testing()
 
