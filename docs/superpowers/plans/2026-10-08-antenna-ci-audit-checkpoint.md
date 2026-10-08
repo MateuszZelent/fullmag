@@ -621,3 +621,80 @@ nie oznacza to zielonego całego PR ani kwalifikacji runtime anten.
 Następny krok: odebrać nowe fazy CI i wyciągnąć przyczynę z konkretnego
 nieudanego etapu, następnie wymagane native/current→field→basis→LLG/FFT,
 trwałość i cztery lanes. T00–T18 aktywne, PR Draft, bez restartu i merge.
+
+## Odbiór poprawki typowania i otwarta rekonstrukcja źródła Γ
+
+Opublikowany HEAD `38d5460646f0946efadff27a60ad69c077dd7ca1` poprawia
+dwa błędy CI fixture: nullable kernel oraz niepełny rekord rewizji statusu.
+Pełny lokalny TypeScript `--noEmit --incremental false`, projekt
+`tsconfig.typecheck.json`: exit 0 (sesja 76602). Scoped ESLint i whitespace
+PASS. Jest to kontrola typów, nie wykonanie React/Vitest. Odebrany job
+`control-room-contracts` 113162095043 zakończył się FAILURE; migracja zasobów,
+architecture hygiene i idle performance zakończyły się SUCCESS. CI dotarło
+do Vitest: 765 plików PASS, 7 FAIL, 1 skipped. Fazowa regresja preparation
+przeszła inicjalny błąd i retry A oraz rozdzielone żądania identity B,
+ale odmówiła w fazie `confirmed session B initial failure` (linia 394).
+To zawęża przyczynę do przejścia B; nie dowodzi jeszcze błędu backoffu.
+Panele anten ujawniły niepełny mock `resources.getRevision`; inne błędy
+obejmują kontrakt CSS, test normalnych geometrii i typ `until_seconds`.
+Pełne logi oraz poszczególne granice wymagają dalszej diagnozy; build
+frontendu i compute performance w tym jobie zostały pominięte. Dokumentacja
+poprzedniego HEAD `f999cf221b3ab1fc1ea6409e91c15010ac6a2b45` przeszła
+strict Sphinx i rendered HTML (job 113159750296); nie przenosi się wyniku
+całego CI na nowy HEAD.
+
+To poniżej jest wewnętrzną diagnozą i kontraktem dalszej naprawy, nie nową
+publikacją fizyki ani kwalifikacją runtime anten. Kanonicznym właścicielem
+fizyki regionalnego pobudzenia pozostaje
+`docs/physics/0920-regional-time-domain-field-drive.md`.
+
+Sprawdzona rozbieżność właścicieli:
+
+- `crates/fullmag-plan/src/regional_field_drive.rs`,
+  `resolve_fdm_regional_field_drives`: baza FDM mnoży amplitudę przez
+  każdą składową `drive.direction`.
+- `backends/fem/cpu/mfem/interactions/zeeman_regional_field.cpp`,
+  `project_regional_field_drive_bases`: globalna baza FEM również zachowuje
+  kierunek, a dla lokalnej bazy również wagę przestrzenną.
+- `crates/fullmag-runner/src/spin_wave_response.rs`,
+  `append_requested_spin_wave_artifacts`: źródło Γ sumuje
+  `amplitude_b_t / MU0 * waveform`, pomijając kierunki. Filtr aktywacji,
+  globalnego targetu, jednolitego profilu i clock origin istnieje; problem
+  dotyczy rekonstrukcji polaryzacji, nie ich usunięcia.
+- `packages/fullmag-py/src/fullmag/model/study.py`,
+  `GammaResponseAnalysis.to_runtime_metadata`, oraz
+  `packages/fullmag-py/src/fullmag/world.py`,
+  `StudyStagesBuilder.fft_response`: request nie określa osi źródła,
+  jedynie składową odpowiedzi `my` lub `mz`.
+- `apps/control-room/src/modules/analysis-plots/spinWaveGammaModel.ts`,
+  `spinWaveGammaSourceTraceSeries`: wykres używa gotowego `source_trace`
+  pod etykietą `Drive H(t)`; UI nie odzyskuje zgubionego kierunku.
+
+Wykonano bieżący publiczny konstruktor `RegionalFieldDrive` i `to_ir()`
+dla dwóch globalnych uniform drives po 1 mT, sinus 1 GHz, kierunki
+`(0,1,0)` i `(0,-1,0)`. Przy czasie 0,25 ns niezależna suma wektorowa
+wynosi dokładnie `[0,0,0] A/m`; skalarna formuła obecnego collectora daje
+`1591.5494309189535 A/m`. Exit 0; bez zapisu bytecode i bez uruchomienia
+solvera. Wykonano też `GammaResponseAnalysis.to_runtime_metadata()`:
+brak pola osi źródła potwierdzony w rzeczywistym lowering. To dowód
+poprawnego authoringu kontrprzykładu i arytmetycznej rozbieżności z
+odczytaną formułą; nie wykonano collectora Rust, native LLG ani FFT.
+
+Wymagany następny przyrost nie może polegać na mnożeniu przez
+`direction[response_component]`: odpowiedź `my` na źródło `Hz` jest
+poprawną podatnością krzyżową. Potrzebne są oddzielne kontrakty źródła
+i odpowiedzi oraz kierunkowa suma **przed** FFT. Jawna oś/projekcja źródła
+powinna przejść przez Python, metadata ProblemIR, export/reimport,
+collector, artifact/API i opis wykresu. Alternatywa inferencji wspólnej
+osi musi zachować znak, publikować wybraną oś i jawnie odmówić konfiguracji
+niekolinearnych; nie zastępuje pełnego kontraktu wieloosiowego.
+Projekcja jednego wieloosiowego eksperymentu nie identyfikuje tensorowej
+podatności: trzeba rozróżnić widmo odpowiedzi, iloraz względem wybranego
+źródła i rzeczywistą identyfikację tensoru z niezależnych pobudzeń.
+
+Regresje wymagane przed uznaniem naprawy: przeciwne źródła i maskowanie
+ilorazu przy zerowym źródle; signed projekcja skośna; `my` przy `Hz`;
+niekolinearne źródła z różnymi waveformami; nieaktywne drives;
+stage-local/absolute oraz resumed waveform origin; wspólna konwencja
+FFT obu składowych transverse. Następnie numeryczne wykonanie collectora
+i runtime, nie tylko kontrola source-layout. T00–T18 pozostaje otwarte.
