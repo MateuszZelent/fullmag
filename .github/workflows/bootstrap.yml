@@ -18,6 +18,9 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Check FEM CUDA driver library selection
+        run: python -B scripts/ci/test_fem_cuda_driver_selection.py
+
       - name: Compile and run dependency-free native modal ABI contract
         run: python -B scripts/ci/run_modal_cabi_contract.py
 

@@ -815,3 +815,21 @@ więc _compose_command nie zapisuje override do wskazanego istniejącego folderu
 Dodano regresje braku zapisów/rejestracji, foreign/existing rejection i odmowy
 przed compose plan. Suite włączono do dispersion-artifact-consumers GHA.
 Source/diff review PASS; wykonanie CI oczekiwane. Nie wykonano lokalnych testów.
+
+### Review4060116361 — CUDA driver selection
+
+Usunięto stubs hint z source-facade contracts. Wspólny selektor sprawdza
+istniejący bezwzględny plik oraz segment stubs w supplied path i REALPATH,
+także dla cache. Real compat/system driver i import libraries poza stubs
+pozostają legalne. Configure fixture wywołuje rzeczywisty moduł produkcyjny;
+sprawdza odmowy, cached/symlink stubs i wybrany INTERFACE_LINK_LIBRARIES.
+CMake minimum3.18, jawny generator/build-tool path, brak narzędzi jest błędem.
+Source review i AST/diff PASS. GHA configure, real driver link/load i managed
+runtime nie są jeszcze potwierdzone. Nie wykonano lokalnych testów/buildów.
+
+Bootstrap37774275871: typed field availability i trzy regresje retained scalar
+PASS w job113301126219. Job dalej FAILURE przez stale catalog count53 vs56;
+poprawka cdb018997 porównuje pełne canonical IDs i unikalność zamiast stałej.
+Dry-run suite37775759392: 77PASS37subtests, jeden starszy lifecycle fixtureFAIL
+przed scientific gate przez brak modelu/runtime binding. Fixture uzupełniono
+w053e5e869; production gates nie zmieniono, mock nie stanowi physics proof.

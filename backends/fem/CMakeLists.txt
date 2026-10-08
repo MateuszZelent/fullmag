@@ -21,6 +21,7 @@ endif()
 option(FULLMAG_OET0_TSAN "Instrument the OE-T0 serial contract with ThreadSanitizer" OFF)
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
+include(FullmagCudaDriverLibrary)
 
 set(FEM_PUBLIC_HEADERS
     ${CMAKE_SOURCE_DIR}/include/fullmag_fem.h
@@ -892,26 +893,11 @@ function(add_fem_source_facade_contract target source)
         # The managed CPU image carries libCEED with CUDA-driver symbols.
         # Every source-facade contract links fullmag_fem, whose CUDA-enabled
         # shared library keeps those symbols in its dependency closure. Resolve
-        # them for every contract target, not only the modal target; otherwise
-        # the first target can link while the next contract fails with an
-        # unresolved cu* symbol. The contract launcher supplies the same
-        # compatibility directory at runtime. Linking the stub target would
-        # leave an unresolvable libcuda.so.1 SONAME in the CPU image, so prefer
-        # the compatibility driver path explicitly.
-        find_library(FULLMAG_CUDA_DRIVER_LIBRARY
-            NAMES cuda
-            HINTS
-                "${CMAKE_CUDA_COMPILER_TOOLKIT_ROOT}/compat"
-                "${CUDAToolkit_LIBRARY_ROOT}/../compat"
-                "${CMAKE_CUDA_COMPILER_TOOLKIT_ROOT}/targets/x86_64-linux/lib/stubs"
-        )
-        if(FULLMAG_CUDA_DRIVER_LIBRARY)
-            target_link_libraries(${target} PRIVATE ${FULLMAG_CUDA_DRIVER_LIBRARY})
-        else()
-            message(FATAL_ERROR
-                "CUDA-enabled FEM contract requires a CUDA driver/compatibility "
-                "library to resolve libCEED's driver symbols")
-        endif()
+        # the real driver for every contract target, not only the modal target;
+        # the helper rejects toolkit stubs through both the supplied path and
+        # its canonical REALPATH, including a seeded CMake cache value.
+        fullmag_find_cuda_driver_library(FULLMAG_CUDA_DRIVER_LIBRARY)
+        target_link_libraries(${target} PRIVATE ${FULLMAG_CUDA_DRIVER_LIBRARY})
     endif()
     target_include_directories(${target} PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}
