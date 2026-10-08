@@ -1485,7 +1485,7 @@ impl ProblemIR {
                             | OutputIR::Snapshot { .. }
                     ) {
                         errors.push(
-                            "eigenmodes outputs must be eigen_spectrum/eigen_mode/dispersion_curve requests"
+                            "eigenmodes outputs must be eigen_spectrum/eigen_mode/dispersion_curve/eigen_diagnostics requests"
                                 .to_string(),
                         );
                     }

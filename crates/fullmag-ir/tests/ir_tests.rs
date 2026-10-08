@@ -6175,7 +6175,7 @@ fn problem_ir_validation_bubbles_mesh_semantics_errors_with_prefix() {
 }
 
 #[test]
-fn eigenmodes_accept_dispersion_or_diagnostics_output_without_redundant_spectrum() {
+fn eigenmodes_accept_and_retain_diagnostics_only_and_mixed_outputs() {
     let mut ir = ProblemIR::bootstrap_example();
     let dynamics = ir.study.dynamics().clone();
     ir.study = StudyIR::Eigenmodes {
@@ -6207,19 +6207,58 @@ fn eigenmodes_accept_dispersion_or_diagnostics_output_without_redundant_spectrum
     ir.validate()
         .expect("dispersion-only eigen study is a complete public output request");
 
+    let diagnostics = OutputIR::EigenDiagnostics {
+        include_tracking: true,
+        include_residuals: false,
+        include_overlaps: true,
+        include_tangent_leakage: false,
+        include_orthogonality: true,
+    };
     if let StudyIR::Eigenmodes { sampling, .. } = &mut ir.study {
-        sampling.outputs = vec![OutputIR::EigenDiagnostics {
-            include_tracking: true,
-            include_residuals: true,
-            include_overlaps: true,
-            include_tangent_leakage: true,
-            include_orthogonality: true,
-        }];
+        sampling.outputs = vec![diagnostics.clone()];
     } else {
         unreachable!();
     }
     ir.validate()
         .expect("diagnostics-only eigen study is a complete public output request");
+    assert_eq!(ir.study.sampling().outputs, vec![diagnostics.clone()]);
+
+    let mixed_outputs = vec![
+        diagnostics.clone(),
+        OutputIR::EigenSpectrum {
+            quantity: "eigenfrequency".to_string(),
+        },
+    ];
+    if let StudyIR::Eigenmodes { sampling, .. } = &mut ir.study {
+        sampling.outputs = mixed_outputs.clone();
+    } else {
+        unreachable!();
+    }
+    ir.validate()
+        .expect("diagnostics and spectrum outputs are both retained");
+    assert_eq!(ir.study.sampling().outputs, mixed_outputs);
+
+    let illegal_mixed_outputs = vec![
+        diagnostics,
+        OutputIR::Field {
+            name: "M".to_string(),
+            every_seconds: 1.0e-9,
+        },
+    ];
+    if let StudyIR::Eigenmodes { sampling, .. } = &mut ir.study {
+        sampling.outputs = illegal_mixed_outputs.clone();
+    } else {
+        unreachable!();
+    }
+    let errors = ir
+        .validate()
+        .expect_err("diagnostics must not make unrelated outputs legal");
+    assert!(errors.iter().any(|error| {
+        error.contains(
+            "eigenmodes outputs must be eigen_spectrum/eigen_mode/dispersion_curve/eigen_diagnostics requests"
+        )
+    }));
+    assert_eq!(ir.study.sampling().outputs, illegal_mixed_outputs);
 }
 
 #[test]
