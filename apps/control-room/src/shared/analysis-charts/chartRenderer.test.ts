@@ -50,6 +50,10 @@ describe("chart renderer owner", () => {
     expect(option.dataZoom).toEqual([{ filterMode: "none", type: "inside", zoomOnMouseWheel: "ctrl" }]);
     expect(option.xAxis).toMatchObject({ name: "time [s]" });
     expect(option.yAxis).toEqual(expect.arrayContaining([expect.objectContaining({ name: "magnetization" })]));
+    expect(option.series).toEqual(expect.arrayContaining([expect.objectContaining({ symbolSize: 4 })]));
+    const defaultYAxis = (option.yAxis as Array<Record<string, unknown>>)[0];
+    expect(defaultYAxis).not.toHaveProperty("min");
+    expect(defaultYAxis).not.toHaveProperty("max");
     const formatter = (option.tooltip as { formatter: (params: unknown) => string }).formatter;
     expect(formatter([{
       axisValue: 1,
@@ -60,6 +64,28 @@ describe("chart renderer owner", () => {
     expect(JSON.stringify(option)).not.toContain("var(--fm-");
   });
 
+  it("applies explicit data-range overrides and keeps selected markers easier to hit", () => {
+    const frequencyModel: ChartRenderModel = {
+      ...model,
+      series: [{
+        id: "frequency",
+        kind: "scatter",
+        label: "Frequency",
+        points: [{ rowIndex: 2, x: 1, y: 12, selected: true }],
+        symbolSize: 7,
+        unit: "GHz",
+        yAxis: 0,
+      }],
+      yAxes: [{ label: "Frequency", unit: "GHz", dataRange: [9.09, 13.71] }],
+    };
+    const option = chartRenderModelToEChartsOption(frequencyModel);
+    const axis = (option.yAxis as Array<{ min?: number; max?: number; scale?: boolean }>)[0];
+    expect(axis).toMatchObject({ max: 13.71, min: 9.09, scale: true });
+    expect(option.series).toEqual([expect.objectContaining({
+      data: [expect.objectContaining({ value: [1, 12, 2], symbolSize: 10 })],
+      symbolSize: 7,
+    })]);
+  });
   it("uses a compatible persisted display unit in the rendered y-axis", () => {
     const option = chartRenderModelToEChartsOption({
       ...model,

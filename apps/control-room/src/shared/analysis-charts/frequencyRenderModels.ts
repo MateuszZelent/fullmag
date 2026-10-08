@@ -1,4 +1,9 @@
 import type { ChartRenderModel } from "./chartRenderer";
+import {
+  FREQUENCY_CHART_POINT_SYMBOL_SIZE,
+  frequencyAxisDataRange,
+  isFrequencyValueSeries,
+} from "./frequencyAxisPresentation";
 import type {
   FrequencyDomainChartBuildResult,
   FrequencyDomainChartPoint,
@@ -35,6 +40,7 @@ export function frequencySpectrumRenderModel<
         id: "modes",
         kind: "scatter" as const,
         label: "Modes",
+        symbolSize: FREQUENCY_CHART_POINT_SYMBOL_SIZE,
         points: data.map((point) => ({ rowIndex: point.rowIndex, x: point.frequencyValue, y: 1 })),
         unit: "a.u.",
         yAxis: 0,
@@ -92,6 +98,7 @@ export function frequencySeriesRenderModel(
   const compatible = compatibleFrequencySeries(series);
   const xUnit = compatible[0]?.xUnit ?? "";
   const yUnit = compatible[0]?.unit ?? "";
+  const dataRange = frequencyAxisDataRange(compatible);
   return {
     ariaLabel: title,
     key: JSON.stringify([title, ...compatible.map((entry) => [entry.id, entry.points.length, entry.points.at(-1)?.rowIndex])]),
@@ -106,12 +113,18 @@ export function frequencySeriesRenderModel(
       kind: entry.kind ?? "line",
       label: entry.label,
       points: entry.points,
+      ...(isFrequencyValueSeries(entry)
+        ? { symbolSize: FREQUENCY_CHART_POINT_SYMBOL_SIZE }
+        : {}),
+      ...(entry.quantity === "analytic_frequency"
+        ? { analyticReference: true, showSymbols: true }
+        : {}),
       unit: entry.unit,
       yAxis: 0,
     })),
     status: compatible.some((entry) => entry.points.length > 0) ? "ready" : "empty",
     xAxis: { label: resolveFrequencyXAxisLabel(compatible, xLabel), unit: xUnit },
-    yAxes: [{ label: frequencyYAxisLabel(compatible), unit: yUnit }],
+    yAxes: [{ label: frequencyYAxisLabel(compatible), unit: yUnit, ...(dataRange ? { dataRange } : {}) }],
   };
 }
 
@@ -149,6 +162,7 @@ function isAnalyticFrequencyOverlayPair(
 export function frequencyYAxisLabel(series: readonly FrequencyDomainChartSeries[]): string {
   const first = series[0];
   if (!first) return "response";
+  if (series.every(isFrequencyValueSeries)) return first.unit ? `Frequency [${first.unit}]` : "Frequency";
   return first.unit ? `${first.label} [${first.unit}]` : first.label;
 }
 

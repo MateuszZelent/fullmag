@@ -10,6 +10,11 @@ import { EChartsCanvasSurface } from "./EChartsCanvasSurface";
 import { PointsTableDialog } from "./PointsTableDialog";
 import type { ChartRendererInstance, ChartRendererOwner, ChartRenderModel } from "./chartRenderer";
 import type { ChartSeries } from "@/shared/domain/analysis/chartSeries";
+import {
+  FREQUENCY_CHART_POINT_SYMBOL_SIZE,
+  frequencyAxisDataRange,
+  isFrequencyValueSeries,
+} from "./frequencyAxisPresentation";
 
 export interface ChartInteractionCallbacks {
   onExportRequested?: (format: "csv" | "tsv" | "png") => void;
@@ -206,7 +211,8 @@ export function chartSeriesRenderModel(
         colorIndex: colorIndexBySeriesId.get(item.id) ?? visibleIndex,
         id: item.id,
         kind: item.kind ?? "line",
-        showSymbols: item.showSymbols,
+        showSymbols: item.showSymbols || item.quantity === "analytic_frequency",
+        ...(isFrequencyValueSeries(item) ? { symbolSize: FREQUENCY_CHART_POINT_SYMBOL_SIZE } : {}),
         analyticReference: item.quantity === "analytic_frequency",
         label: item.label || item.quantity,
         points: item.points,
@@ -223,10 +229,14 @@ export function chartSeriesRenderModel(
       surface.presentationCopy,
     ),
     xAxis: { label: xAxisLabel ?? "x", unit: xUnit },
-    yAxes: (units.length > 0 ? units : [""]).map((unit) => ({
-      label: quantityLabelForUnit(unit, allSeries),
-      unit,
-    })),
+    yAxes: (units.length > 0 ? units : [""]).map((unit) => {
+      const dataRange = frequencyAxisDataRange(series.filter((item) => item.unit === unit));
+      return {
+        ...(dataRange ? { dataRange } : {}),
+        label: quantityLabelForUnit(unit, allSeries),
+        unit,
+      };
+    }),
   };
 }
 
@@ -325,6 +335,7 @@ function quantityLabelForUnit(unit: string, series: readonly ChartSeries[]): str
   if (!match) return "Value";
   const sameUnit = series.filter((entry) => entry.unit === unit);
   const labels = sameUnit.map((entry) => entry.quantity.toLowerCase());
+  if (sameUnit.every(isFrequencyValueSeries)) return "Frequency";
   if (unit === "1" && labels.every((label) => ["mx", "my", "mz", "m"].includes(label))) return "Normalized magnetization m";
   if (sameUnit.length === 1) return match.label || match.quantity;
   if (labels.every((label) => label.includes("torque"))) return "Torque";

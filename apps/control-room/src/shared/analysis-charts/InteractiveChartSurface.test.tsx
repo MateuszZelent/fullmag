@@ -1,6 +1,8 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
+import { chartRenderModelToEChartsOption } from "./chartRenderer";
+
 import {
   InteractiveChartSurface,
   chartPointFromEChartsClick,
@@ -48,6 +50,24 @@ describe("InteractiveChartSurface", () => {
       statusMessage: "Loading live samples",
       xAxis: { label: "time [s]", unit: "s" },
     });
+  });
+
+  it("leaves time-domain axes and symbols on their shared defaults", () => {
+    const surface = {
+      ariaLabel: "Live magnetization",
+      chartId: "live:magnetization",
+      presentationCopy: { empty: "No live samples", error: "Live data unavailable", loading: "Loading live samples" },
+      provenance: { dataRevision: 7, decimation: "tail", query: "tail=100", resourceKey: "live/magnetization" },
+    };
+    const model = chartSeriesRenderModel(series, series, surface, "time [s]");
+
+    expect(model.yAxes[0]?.dataRange).toBeUndefined();
+    expect(model.series[0]?.symbolSize).toBeUndefined();
+    const option = chartRenderModelToEChartsOption(model);
+    expect(option.series).toEqual(expect.arrayContaining([expect.objectContaining({ symbolSize: 4 })]));
+    const axis = (option.yAxis as Array<Record<string, unknown>>)[0];
+    expect(axis).not.toHaveProperty("min");
+    expect(axis).not.toHaveProperty("max");
   });
 
   it("maps a click after an inserted gap to the source point identity", () => {
@@ -111,6 +131,73 @@ describe("InteractiveChartSurface", () => {
 
     expect(chartSeriesRenderModel(scatterSeries, scatterSeries, surface).series[0]?.kind).toBe("scatter");
     expect(chartSeriesRenderModel(series, series, surface).series[0]?.kind).toBe("line");
+  });
+
+  it("ranges frequency axes to plotted values and preserves analytic styling", () => {
+    const numerical = {
+      ...series[0]!,
+      id: "numerical",
+      kind: "scatter" as const,
+      label: "Branch acoustic",
+      points: [
+        { rowIndex: 0, x: 0, y: 9.3 },
+        { rowIndex: 1, x: 1, y: 13.5 },
+      ],
+      quantity: "frequency",
+      unit: "GHz",
+      xUnit: "rad/m",
+    };
+    const analytic = {
+      ...numerical,
+      id: "analytic",
+      kind: "line" as const,
+      label: "Branch acoustic analytic",
+      points: [
+        { rowIndex: 0, x: 0, y: 8 },
+        { rowIndex: 1, x: 1, y: 14 },
+      ],
+      quantity: "analytic_frequency",
+    };
+    const surface = {
+      ariaLabel: "Dispersion modes",
+      chartId: "dispersion:modes",
+      presentationCopy: { empty: "No modes", error: "Mode data unavailable", loading: "Loading modes" },
+      provenance: { dataRevision: 1, decimation: "none", query: "k-path", resourceKey: "eigen/dispersion" },
+    };
+
+    const numericalOnly = chartSeriesRenderModel([numerical], [numerical, analytic], surface);
+    const numericalRange = numericalOnly.yAxes[0]?.dataRange;
+    if (!numericalRange) throw new Error("Missing visible frequency range");
+    expect(numericalOnly.yAxes[0]?.label).toBe("Frequency");
+    expect(numericalRange[0]).toBeCloseTo(9.09);
+    expect(numericalRange[1]).toBeCloseTo(13.71);
+    expect(numericalOnly.series[0]).toMatchObject({ symbolSize: 7 });
+    const numericalOption = chartRenderModelToEChartsOption(numericalOnly);
+    const numericalYAxis = (numericalOption.yAxis as Array<{ min?: number; max?: number; name?: string }>)[0];
+    expect(numericalYAxis?.min).toBeCloseTo(9.09);
+    expect(numericalYAxis?.max).toBeCloseTo(13.71);
+    expect(numericalYAxis?.name).toBe("Frequency [GHz]");
+    expect(numericalOption.series).toEqual(expect.arrayContaining([expect.objectContaining({ name: "Branch acoustic [GHz]" })]));
+
+    const combined = chartSeriesRenderModel([numerical, analytic], [numerical, analytic], surface);
+    const analyticModel = combined.series.find((entry) => entry.id === "analytic");
+    expect(analyticModel).toMatchObject({
+      analyticReference: true,
+      showSymbols: true,
+      symbolSize: 7,
+    });
+    const combinedOption = chartRenderModelToEChartsOption(combined);
+    expect(combinedOption.series).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        lineStyle: expect.objectContaining({ type: "dashed" }),
+        showSymbol: true,
+        symbol: "diamond",
+        symbolSize: 7,
+      }),
+    ]));
+    const combinedYAxis = (combinedOption.yAxis as Array<{ min?: number; max?: number }>)[0];
+    expect(combinedYAxis?.min).toBeCloseTo(7.7);
+    expect(combinedYAxis?.max).toBeCloseTo(14.3);
   });
 
   it("keeps a visible series in its all-series color slot when an earlier series is hidden", () => {

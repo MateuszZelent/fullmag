@@ -63,11 +63,19 @@ export interface ChartRenderSeries {
   id: string;
   kind: "line" | "scatter";
   showSymbols?: boolean;
+  symbolSize?: number;
   analyticReference?: boolean;
   label: string;
   points: readonly ChartRenderPoint[];
   unit: string;
   yAxis: number;
+}
+
+export interface ChartRenderYAxis {
+  /** Raw plotted y-value range, in the same units as its series data. */
+  dataRange?: readonly [min: number, max: number];
+  label: string;
+  unit: string;
 }
 
 export interface ChartRenderModel {
@@ -104,7 +112,7 @@ export interface ChartRenderModel {
   status: ChartRenderStatus;
   statusMessage?: string;
   xAxis: { label: string; unit: string };
-  yAxes: readonly { label: string; unit: string }[];
+  yAxes: readonly ChartRenderYAxis[];
 }
 
 export type ChartResultExportContext = Pick<
@@ -338,6 +346,7 @@ export function chartRenderModelToEChartsOption(
 
     series: model.series.map((series, visibleIndex) => {
       const color = chartSeriesColor(series, visibleIndex, palette);
+      const symbolSize = series.symbolSize ?? 4;
       return {
         // NOTE: No `sampling` property — data is already server-decimated.
         connectNulls: false,
@@ -346,7 +355,7 @@ export function chartRenderModelToEChartsOption(
             ? [[point.x, null, null]]
             : []),
           point.selected
-            ? { value: [point.x, point.y, point.rowIndex], symbol: "circle", symbolSize: 10, itemStyle: { borderColor: textPrimary, borderWidth: 2 } }
+            ? { value: [point.x, point.y, point.rowIndex], symbol: series.analyticReference ? "diamond" : "circle", symbolSize: Math.max(symbolSize, 10), itemStyle: { borderColor: textPrimary, borderWidth: 2 } }
             : [point.x, point.y, point.rowIndex],
         ]),
         emphasis: {
@@ -357,9 +366,9 @@ export function chartRenderModelToEChartsOption(
         lineStyle: { color, width: 1.5, ...(series.analyticReference ? { type: "dashed" } : {}) },
         name: seriesDisplayName(series, yScales),
         progressive: 0,
-        showSymbol: series.kind === "scatter" || series.showSymbols || series.points.some((point) => point.selected),
+        showSymbol: series.analyticReference || series.kind === "scatter" || series.showSymbols || series.points.some((point) => point.selected),
         symbol: series.analyticReference ? "diamond" : series.kind === "scatter" || series.showSymbols ? "circle" : "none",
-        symbolSize: 4,
+        symbolSize,
         type: series.kind,
         yAxisIndex: series.yAxis,
       };
@@ -463,6 +472,9 @@ export function chartRenderModelToEChartsOption(
     yAxis: yAxes.slice(0, yAxisCount).map((axis, index) => {
       const yScale = yScales[index] ?? createChartDisplayTransform(axis.unit, null);
       return {
+        ...(axis.dataRange
+          ? { max: axis.dataRange[1], min: axis.dataRange[0], scale: true }
+          : {}),
         axisLabel: {
           color: textMuted,
           fontFamily,

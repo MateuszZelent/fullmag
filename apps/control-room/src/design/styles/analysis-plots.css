@@ -555,6 +555,30 @@
   flex-shrink: 0;
 }
 
+.fm-analysis-plots__subchart--frequency-domain > .fm-chart-section__header {
+  flex-wrap: wrap;
+}
+
+.fm-analysis-plots__subchart--frequency-domain > .fm-chart-section__header > .fm-chart-section__title-group {
+  flex-basis: 230px;
+}
+
+.fm-analysis-plots__subchart--frequency-domain > .fm-chart-section__header > .fm-chart-section__toolbar {
+  flex: 1 0 100%;
+  flex-wrap: wrap;
+  justify-content: space-between;
+}
+
+.fm-analysis-plots__status--frequency-domain-workflow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--fm-space-1) var(--fm-space-3);
+  padding: 0;
+  border: 0;
+  min-width: 0;
+  flex: 1;
+}
+
 .fm-chart-section__legend {
   border-bottom: 1px solid var(--fm-border-subtle);
   background: var(--fm-bg-surface);
