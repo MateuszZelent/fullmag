@@ -603,3 +603,39 @@ stary offset body[48..] przy phase view). Inspector przeszedł do wyboru child,
 lecz ten węzeł nie jest odnajdywany; aktualny routing fixture nadal wymaga naprawy.
 Zerowa anizotropia ma jeszcze blockers w equilibrium identity/descriptor;
 przygotowanego planner/scope diffu nie przedstawia się jako pełnej poprawki.
+## Checkpoint 2026-10-08 — naprawy kolejnych błędów CI
+
+Przebieg 37761924863 na 3bfff74df potwierdził cały job control-room-contracts
+113260177928, w tym regresje zachowania przerw po decymacji. Dowód browser dla
+przekroczenia budżetu punktów nadal wymagany. PR97 jest OPEN; PR102 CLOSED,
+closedAt=2026-10-07T09:51:33Z. Nie scalono tych PR do master.
+
+Commit e956338dc972ac209816e0127502432584114584 koryguje wcześniej nieprawidłowy
+wybór child w fixture: rzeczywisty Explorer ma tylko zbiorczy leaf branches.
+Użyto istniejącego przycisku tabeli dyspersji do prawdziwej selekcji branch-0,
+z kontrolą owner/surface/h3. Asercje stale ownership są zachowane. Source review
+PASS; nie uznaje się tej poprawki za potwierdzoną w przeglądarce bez wyniku CI.
+
+Commit e231d17b3c238686b3e6f1e1c41cb723b3c4cacd poprawia offset wartości FMVP v5
+w fixture response oraz usuwa powiązanie pojedynczego globalnego sample z obcą
+czterowęzłową siatką. Oczekiwane wartości fazy/statusy pozostają niezmienione.
+Native boundary diagnostics zapisano w 843b5e7447079e34355572da920463470cb6f9d5:
+wartości macierzy odczytywane są dopiero po rzeczywistym błędzie singular mass,
+żeby nie dereferencjonować nieużywanego bufora przed walidacją. Run37762594311
+sprawdza wspólnie te źródła; wynik pozostaje pending.
+
+Ponownie pobrano wszystkie 257 inline comments PR97. Trzy wpisy spoza dotychczasowego
+rejestru Codex pochodzą od Copilot/React Doctor, zapisane osobno w dodatkowym rejestrze:
+4060016735 (zasadny, sanitizer stringów JSON nadal wymaga poprawki), 4206086548
+(przygotowano guardy find w skrypcie envelope), 4206086557 (sugestia dev/HMR bez
+potwierdzonego błędu produkcyjnego, odłożona). Dodatkowych rekomendacji nie przedstawia
+się jako nowych uwag Codex ani jako ukończonej walidacji.
+
+Poprawka 4207786279 pozostaje WIP: identity i descriptor rozróżniają dokładne zero,
+ale regresje rzeczywistego payload buildera i cloud execution są nadal wymagane.
+Historyczne uniform-Ms Ku=0 preimages pozostają V2; nie przeprowadzono cichej migracji
+podpisów istniejących artefaktów. Niezerowy K0 Ku zachowuje wcześniejsze wymagania.
+Run37762594311 zatrzymał kompilację CABI na błędnej nazwie bufora dodanej do
+probe fixture. Commit185ce9be37b67e1d8a031bdd75869077287e3df4 koryguje sześć odwołań
+do istniejącego gyrotropic_mass_row_major. Run37763186739 sprawdza zmienione źródło.
+Brak wykonania diagnostyki w pierwszym runie nie jest dowodem niepoprawnego ABI.

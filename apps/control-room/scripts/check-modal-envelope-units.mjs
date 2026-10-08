@@ -10,9 +10,12 @@ const curves = units.map(([unit, scale]) => {
   ], unit);
   assert.equal(model.status, "ready");
   const curve = model.series.find((series) => series.id === "spectral-envelope");
+  assert.ok(curve, "A damped mode must publish the spectral-envelope series.");
   assert.equal(curve.points.length, 501);
   assert.equal(curve.label, "Illustrative modal envelope");
-  assert.deepEqual(model.series.find((series) => series.id === "modes").points,
+  const modes = model.series.find((series) => series.id === "modes");
+  assert.ok(modes, "A damped mode must retain the modes series.");
+  assert.deepEqual(modes.points,
     [{ rowIndex: 7, x: 10e9 / scale, y: 1 }]);
   return curve.points.map((point) => ({ xHz: point.x * scale, y: point.y }));
 });
