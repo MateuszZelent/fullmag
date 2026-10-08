@@ -2,6 +2,12 @@ name: FEM positive tangent-mass source contract
 
 on:
   workflow_call:
+    inputs:
+      contract_profile:
+        description: Bounded CPU MFEM source-contract profile.
+        required: false
+        type: string
+        default: positive-mass
   pull_request:
     paths:
       - '.github/workflows/fem-positive-mass-contract.yml'
@@ -18,6 +24,15 @@ on:
       - 'scripts/ci/run_fem_positive_mass_contract.py'
       - 'scripts/fullmag_storage.py'
   workflow_dispatch:
+    inputs:
+      contract_profile:
+        description: Bounded CPU MFEM source-contract profile.
+        type: choice
+        required: true
+        default: positive-mass
+        options:
+          - positive-mass
+          - floquet-modal-slepc
 
 permissions:
   contents: read
@@ -25,21 +40,21 @@ permissions:
 jobs:
   fem-positive-mass-contract:
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    timeout-minutes: ${{ inputs.contract_profile == 'floquet-modal-slepc' && 240 || 180 }}
     env:
       FULLMAG_STORAGE_PROFILE: linux-host
     steps:
       - uses: actions/checkout@v7
 
-      - name: Build pinned CPU MFEM image and run the single assembly contract
+      - name: Build pinned CPU MFEM image and run the selected source contract
         id: contract
-        run: python3 scripts/ci/run_fem_positive_mass_contract.py
+        run: python3 scripts/ci/run_fem_positive_mass_contract.py --contract-profile "${{ inputs.contract_profile || 'positive-mass' }}"
 
       - name: Upload contract receipt and logs
         if: always() && steps.contract.outputs.evidence_dir != ''
         uses: actions/upload-artifact@v7
         with:
-          name: fem-positive-mass-contract-${{ github.run_id }}-${{ github.run_attempt }}
+          name: fem-cpu-source-contract-${{ inputs.contract_profile || 'positive-mass' }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ steps.contract.outputs.evidence_dir }}/**
           if-no-files-found: warn
           compression-level: 6

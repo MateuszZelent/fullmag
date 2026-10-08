@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Run the MFEM CPU positive tangent-mass source contract in GitHub Actions.
+"""Run bounded CPU MFEM source-contract profiles in GitHub Actions.
 
-This is a bounded CI container route for one CTest target. It does not build or
+This is a bounded CI container route for explicitly selected CTest targets. It does not build or
 publish a Fullmag runtime and is not production FEM qualification.
 """
 
@@ -13,6 +13,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shlex
 import subprocess
 import sys
 import time
@@ -29,19 +30,119 @@ NATIVE_BUILD_JOBS = 2
 WORKFLOW_TIMEOUT_MINUTES = 180
 ORCHESTRATION_TIMEOUT_MINUTES = 160
 BUILD_EXECUTION_TIMEOUT_MINUTES = 150
-FINALIZATION_RESERVE_MINUTES = ORCHESTRATION_TIMEOUT_MINUTES - BUILD_EXECUTION_TIMEOUT_MINUTES
-RECEIPT_RESERVE_MINUTES = WORKFLOW_TIMEOUT_MINUTES - ORCHESTRATION_TIMEOUT_MINUTES
 METADATA_TIMEOUT_SECONDS = 120
 DOCKER_PULL_TIMEOUT_SECONDS = 600
 DEPENDENCY_BUILD_TIMEOUT_SECONDS = 5400
 NATIVE_BUILD_TEST_TIMEOUT_SECONDS = 3600
 IMAGE_BASE = "ubuntu:22.04"
+INSTALL_PREFIX = "/opt/fullmag-deps"
 IMAGE_BUILD_INPUTS = "/opt/fullmag-deps/share/fullmag/fem-cpu-build-inputs.json"
-TEST_SOURCE_SUFFIX = "backends/fem/tests/frequency_domain/poisson_airbox_shared_domain_test.cpp"
-TEST_MARKER = "PASS: floquet_positive_tangent_mass_matches_independent_phase_reduction"
-TEST_NAME = "fem_poisson_airbox_shared_domain_contract"
-SCHEMA = "fullmag.ci.fem.positive_tangent_mass_contract.v1"
+SLEPC_IMAGE_BUILD_INPUTS = "/opt/fullmag-deps/share/fullmag/fem-cpu-slepc-build-inputs.json"
+COMMON_CACHE_OPTIONS = {
+    "CMAKE_BUILD_TYPE": "Release",
+    "CMAKE_GENERATOR": "Unix Makefiles",
+    "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+    "FULLMAG_ENABLE_CUDA": "OFF",
+    "FULLMAG_ENABLE_FEM_GPU": "OFF",
+    "FULLMAG_USE_MFEM_STACK": "ON",
+}
+CONTRACT_PROFILES: dict[str, dict[str, Any]] = {
+    "positive-mass": {
+        "slug": "fem-positive-mass-contract",
+        "schema": "fullmag.ci.fem.positive_tangent_mass_contract.v1",
+        "preflight_schema": "fullmag.ci.fem.positive_tangent_mass_preflight.v1",
+        "qualification_scope": "mfem_cpu_assembly_source_contract_only",
+        "route_kind": "github_hosted_cpu_mfem_container_contract",
+        "tests": [
+            {
+                "name": "fem_poisson_airbox_shared_domain_contract",
+                "source_suffix": "backends/fem/tests/frequency_domain/poisson_airbox_shared_domain_test.cpp",
+                "marker": "PASS: floquet_positive_tangent_mass_matches_independent_phase_reduction",
+                "compile_definitions": ["-DFULLMAG_HAS_MFEM_STACK=1"],
+            },
+        ],
+        "uses_slepc": False,
+        "timeout": {
+            "workflow_minutes": WORKFLOW_TIMEOUT_MINUTES,
+            "orchestration_minutes": ORCHESTRATION_TIMEOUT_MINUTES,
+            "execution_minutes": BUILD_EXECUTION_TIMEOUT_MINUTES,
+            "dependency_build_seconds": DEPENDENCY_BUILD_TIMEOUT_SECONDS,
+            "native_build_test_seconds": NATIVE_BUILD_TEST_TIMEOUT_SECONDS,
+        },
+    },
+    "floquet-modal-slepc": {
+        "slug": "fem-floquet-modal-slepc-contract",
+        "schema": "fullmag.ci.fem.floquet_modal_slepc_contract.v1",
+        "preflight_schema": "fullmag.ci.fem.floquet_modal_slepc_preflight.v1",
+        "qualification_scope": "mfem_cpu_slepc_modal_solver_source_contract_only",
+        "route_kind": "github_hosted_cpu_mfem_slepc_container_contract",
+        "tests": [
+            {
+                "name": "fem_modal_eigen_contract",
+                "source_suffix": "backends/fem/tests/frequency_domain/modal_eigen_contract_test.cpp",
+                "marker": "PASS: native_floquet_production_window_positive_mass_merge",
+                "compile_definitions": [
+                    "-DFULLMAG_HAS_MFEM_STACK=1",
+                    "-DFULLMAG_FEM_WITH_SLEPC=1",
+                    "-DFULLMAG_HAS_CUDA_RUNTIME=0",
+                ],
+            },
+            {
+                "name": "fem_floquet_modal_solver_contract",
+                "source_suffix": "backends/fem/tests/frequency_domain/floquet_modal_solver_test.cpp",
+                "marker": "PASS: fem_floquet_modal_solver_contract",
+                "compile_definitions": [
+                    "-DFULLMAG_HAS_MFEM_STACK=1",
+                    "-DFULLMAG_FEM_WITH_SLEPC=1",
+                    "-DFULLMAG_HAS_CUDA_RUNTIME=0",
+                ],
+            },
+        ],
+        "uses_slepc": True,
+        "timeout": {
+            "workflow_minutes": 240,
+            "orchestration_minutes": 220,
+            "execution_minutes": 210,
+            "dependency_build_seconds": 7200,
+            "native_build_test_seconds": 3600,
+        },
+    },
+}
 _ORCHESTRATION_DEADLINE: float | None = None
+
+
+def _contract_profile(profile_id: str) -> dict[str, Any]:
+    try:
+        return CONTRACT_PROFILES[profile_id]
+    except KeyError as error:
+        raise ContractRunError(f"Unsupported CPU FEM source-contract profile: {profile_id}") from error
+
+
+def _ctest_regex(profile: dict[str, Any]) -> str:
+    names = [test["name"] for test in profile["tests"]]
+    if len(names) == 1:
+        return f"^{names[0]}$"
+    return "^(" + "|".join(names) + ")$"
+
+
+def _test_targets(profile: dict[str, Any]) -> list[str]:
+    return [test["name"] for test in profile["tests"]]
+
+
+def _timeout_receipt(profile: dict[str, Any]) -> dict[str, int]:
+    timeout = profile["timeout"]
+    orchestration = timeout["orchestration_minutes"]
+    execution = timeout["execution_minutes"]
+    workflow = timeout["workflow_minutes"]
+    return {
+        "dependency_build_seconds": timeout["dependency_build_seconds"],
+        "native_build_test_seconds": timeout["native_build_test_seconds"],
+        "build_execution_minutes": execution,
+        "finalization_reserve_minutes": orchestration - execution,
+        "orchestration_minutes": orchestration,
+        "receipt_reserve_minutes": workflow - orchestration,
+        "workflow_minutes": workflow,
+    }
 
 
 class ContractRunError(RuntimeError):
@@ -215,7 +316,16 @@ def _assert_source_identity(
 def _dockerfile_values() -> dict[str, str]:
     text = DOCKERFILE.read_text(encoding="utf-8")
     values: dict[str, str] = {}
-    for name in ("MFEM_REF", "MFEM_SOURCE_COMMIT", "HYPRE_REF", "CMAKE_VERSION"):
+    for name in (
+        "MFEM_REF",
+        "MFEM_SOURCE_COMMIT",
+        "HYPRE_REF",
+        "CMAKE_VERSION",
+        "PETSC_REF",
+        "PETSC_SOURCE_COMMIT",
+        "SLEPC_REF",
+        "SLEPC_SOURCE_COMMIT",
+    ):
         match = re.search(rf"(?m)^ENV\s+{re.escape(name)}=([^\s]+)\s*$", text)
         if match is None:
             raise ContractRunError(f"CPU FEM Dockerfile no longer declares {name}")
@@ -224,6 +334,11 @@ def _dockerfile_values() -> dict[str, str]:
         raise ContractRunError("MFEM_SOURCE_COMMIT is not a full lowercase Git SHA")
     if not values["MFEM_REF"].startswith("v"):
         raise ContractRunError("MFEM_REF must remain an explicit version tag")
+    if not values["PETSC_REF"].startswith("v") or not values["SLEPC_REF"].startswith("v"):
+        raise ContractRunError("PETSc and SLEPc refs must remain explicit version tags")
+    for name in ("PETSC_SOURCE_COMMIT", "SLEPC_SOURCE_COMMIT"):
+        if not re.fullmatch(r"[0-9a-f]{40}", values[name]):
+            raise ContractRunError(f"{name} is not a full lowercase Git SHA")
     return values
 
 
@@ -325,34 +440,103 @@ def _parse_cache(path: Path) -> dict[str, str]:
     return values
 
 
-def _verify_mfem_compile_gate(compile_commands: Path) -> bool:
+def _parse_petscconf_macros(contents: str) -> dict[str, list[str]]:
+    names = (
+        "PETSC_USE_REAL_DOUBLE",
+        "PETSC_USE_COMPLEX",
+        "PETSC_HAVE_CUDA",
+        "PETSC_HAVE_HIP",
+        "PETSC_HAVE_SYCL",
+        "PETSC_HAVE_OPENCL",
+    )
+    parsed: dict[str, list[str]] = {name: [] for name in names}
+    for match in re.finditer(
+        r"^[ \t]*#[ \t]*define[ \t]+([A-Za-z_][A-Za-z0-9_]*)\b([^\n]*)",
+        contents,
+        re.MULTILINE,
+    ):
+        name = match.group(1)
+        if name not in parsed:
+            continue
+        value = re.sub(r"/\*.*?\*/", "", match.group(2).split("//", 1)[0]).strip()
+        parsed[name].append(value)
+    if parsed["PETSC_USE_REAL_DOUBLE"] != ["1"]:
+        raise ContractRunError("PETSc config header does not declare real double precision")
+    if parsed["PETSC_USE_COMPLEX"]:
+        raise ContractRunError("PETSc config header declares complex scalar support")
+    for name in ("PETSC_HAVE_CUDA", "PETSC_HAVE_HIP", "PETSC_HAVE_SYCL", "PETSC_HAVE_OPENCL"):
+        if any(value != "0" for value in parsed[name]):
+            raise ContractRunError(f"CPU PETSc config header advertises accelerator support: {name}")
+    return parsed
+
+
+def _verify_compile_gates(
+    compile_commands: Path,
+    *,
+    tests: list[dict[str, Any]],
+) -> dict[str, bool]:
     try:
         commands = json.loads(compile_commands.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as error:
         raise ContractRunError("CMake compile_commands.json is unavailable or invalid") from error
-    matches = []
-    for entry in commands:
-        file_name = str(entry.get("file", "")).replace("\\", "/")
-        if file_name.endswith(TEST_SOURCE_SUFFIX):
-            command = entry.get("command", "")
-            if not command and isinstance(entry.get("arguments"), list):
-                command = " ".join(str(part) for part in entry["arguments"])
-            matches.append("-DFULLMAG_HAS_MFEM_STACK=1" in str(command))
-    if not matches:
-        raise ContractRunError("Compile database has no command for the MFEM assembly test source")
-    return all(matches)
+    results: dict[str, bool] = {}
+    for test in tests:
+        source_suffix = test["source_suffix"]
+        matches = []
+        for entry in commands:
+            file_name = str(entry.get("file", "")).replace("\\", "/")
+            if file_name.endswith(source_suffix):
+                command = entry.get("command", "")
+                if not command and isinstance(entry.get("arguments"), list):
+                    command = " ".join(str(part) for part in entry["arguments"])
+                command_text = str(command)
+                matches.append(
+                    all(definition in command_text for definition in test["compile_definitions"])
+                )
+        if not matches:
+            raise ContractRunError(f"Compile database has no command for {source_suffix}")
+        results[test["name"]] = all(matches)
+    return results
+
+
+def _disk_observation(
+    *,
+    stage: str,
+    storage_root: Path,
+    env: dict[str, str],
+) -> dict[str, str]:
+    docker_root = _capture(
+        ["docker", "info", "--format", "{{.DockerRootDir}}"],
+        cwd=REPO_ROOT,
+        env=env,
+    )
+    usage = _capture(
+        ["df", "-P", "-B1", str(storage_root), docker_root],
+        cwd=REPO_ROOT,
+        env=env,
+    )
+    return {
+        "stage": stage,
+        "storage_root": str(storage_root),
+        "docker_root": docker_root,
+        "df_p_b1_output": usage,
+    }
 
 
 def _execute_contract(args: Any) -> int:
+    profile = _contract_profile(args.contract_profile)
+    timeouts = profile["timeout"]
+    reserve = _timeout_receipt(profile)
     run_dir = Path(args.run_dir)
     build_dir = Path(args.build_dir)
     temp_dir = Path(args.temp_dir)
     storage_root = Path(args.storage_root)
     receipt_path = run_dir / "receipt.json"
     receipt: dict[str, Any] = {
-        "schema": SCHEMA,
+        "schema": profile["schema"],
+        "contract_profile": args.contract_profile,
         "status": "running",
-        "qualification_scope": "mfem_cpu_assembly_source_contract_only",
+        "qualification_scope": profile["qualification_scope"],
         "qualification_claimed": False,
         "source": {
             "git_head": args.git_head,
@@ -371,29 +555,39 @@ def _execute_contract(args: Any) -> int:
             "temp_dir": str(temp_dir),
         },
         "route": {
-            "kind": "github_hosted_cpu_mfem_container_contract",
+            "kind": profile["route_kind"],
             "managed_runtime": False,
+            "cpu_only": True,
             "cuda": False,
-            "slepc": False,
+            "slepc": profile["uses_slepc"],
             "docker_dependency_build_jobs": DOCKER_BUILD_JOBS,
             "native_build_jobs": NATIVE_BUILD_JOBS,
             "metadata_timeout_seconds": METADATA_TIMEOUT_SECONDS,
             "docker_pull_timeout_seconds": DOCKER_PULL_TIMEOUT_SECONDS,
-            "dependency_build_timeout_seconds": DEPENDENCY_BUILD_TIMEOUT_SECONDS,
-            "native_build_test_timeout_seconds": NATIVE_BUILD_TEST_TIMEOUT_SECONDS,
-            "build_execution_timeout_minutes": BUILD_EXECUTION_TIMEOUT_MINUTES,
-            "finalization_reserve_minutes": FINALIZATION_RESERVE_MINUTES,
-            "orchestration_timeout_minutes": ORCHESTRATION_TIMEOUT_MINUTES,
-            "receipt_reserve_minutes": RECEIPT_RESERVE_MINUTES,
-            "workflow_timeout_minutes": WORKFLOW_TIMEOUT_MINUTES,
+            "dependency_build_timeout_seconds": timeouts["dependency_build_seconds"],
+            "native_build_test_timeout_seconds": timeouts["native_build_test_seconds"],
+            "build_execution_timeout_minutes": timeouts["execution_minutes"],
+            "finalization_reserve_minutes": reserve["finalization_reserve_minutes"],
+            "orchestration_timeout_minutes": timeouts["orchestration_minutes"],
+            "receipt_reserve_minutes": reserve["receipt_reserve_minutes"],
+            "workflow_timeout_minutes": timeouts["workflow_minutes"],
         },
         "test": {
-            "target": TEST_NAME,
-            "ctest_regex": f"^{TEST_NAME}$",
-            "assertion_marker": TEST_MARKER,
+            "target": _test_targets(profile)[0]
+            if len(profile["tests"]) == 1
+            else _test_targets(profile),
+            "ctest_regex": _ctest_regex(profile),
+            "assertion_marker": profile["tests"][0]["marker"]
+            if len(profile["tests"]) == 1
+            else None,
+            "assertion_markers": [test["marker"] for test in profile["tests"]],
+            "expected_test_count": len(profile["tests"]),
             "assertion_marker_observed": False,
             "mfem_compile_gate_observed": False,
+            "slepc_compile_gate_observed": False,
+            "compile_gates_observed": {},
         },
+        "disk_observations": [],
     }
     _write_json(receipt_path, receipt)
 
@@ -406,6 +600,10 @@ def _execute_contract(args: Any) -> int:
         if env.get("GITHUB_ACTIONS") != "true":
             raise ContractRunError("Inner contract executor is not running in GitHub Actions")
         _storage_command("assert-lock", [], env=env)
+        receipt["disk_observations"].append(
+            _disk_observation(stage="before_image_build", storage_root=storage_root, env=env)
+        )
+        _write_json(receipt_path, receipt)
         for path in (build_dir, temp_dir):
             _validated_path(path, env=env)
         if build_dir.exists():
@@ -421,8 +619,10 @@ def _execute_contract(args: Any) -> int:
         run_id = env["GITHUB_RUN_ID"]
         attempt = env["GITHUB_RUN_ATTEMPT"]
         image_tag = f"fullmag/fem-cpu-ci:{run_id}-{attempt}"
+        slepc_build_arg = "ON" if profile["uses_slepc"] else "OFF"
         image_iid_path = build_dir / "image.iid"
         image_input_path = run_dir / "fem-cpu-image-build-inputs.json"
+        slepc_image_input_path = run_dir / "fem-cpu-slepc-build-inputs.json"
         base_image_path = run_dir / "base-image.json"
         library_hash_path = run_dir / "dependency-library-hashes.txt"
         dockerfile_hash = _sha256_file(DOCKERFILE)
@@ -464,6 +664,8 @@ def _execute_contract(args: Any) -> int:
                 "--platform=linux/amd64",
                 "--build-arg",
                 f"FULLMAG_FEM_CPU_BUILD_JOBS={DOCKER_BUILD_JOBS}",
+                "--build-arg",
+                f"FULLMAG_FEM_CPU_WITH_SLEPC={slepc_build_arg}",
                 "--iidfile",
                 str(image_iid_path),
                 "--file",
@@ -475,8 +677,12 @@ def _execute_contract(args: Any) -> int:
             cwd=REPO_ROOT,
             env=env,
             log_path=run_dir / "docker-image-build.log",
-                timeout_seconds=DEPENDENCY_BUILD_TIMEOUT_SECONDS,
+            timeout_seconds=timeouts["dependency_build_seconds"],
         )
+        receipt["disk_observations"].append(
+            _disk_observation(stage="after_image_build", storage_root=storage_root, env=env)
+        )
+        _write_json(receipt_path, receipt)
         image_id = image_iid_path.read_text(encoding="utf-8").strip()
         if not re.fullmatch(r"sha256:[0-9a-f]{64}", image_id):
             raise ContractRunError("Docker did not produce a canonical image ID")
@@ -511,6 +717,112 @@ def _execute_contract(args: Any) -> int:
         ):
             raise ContractRunError("Built CPU image dependency receipt does not match its declared pins")
 
+        slepc_inputs: dict[str, Any] | None = None
+        if profile["uses_slepc"]:
+            slepc_inputs_raw = _capture(
+                [
+                    "docker",
+                    "run",
+                    "--rm",
+                    "--platform",
+                    "linux/amd64",
+                    "--entrypoint",
+                    "cat",
+                    image_tag,
+                    SLEPC_IMAGE_BUILD_INPUTS,
+                ],
+                cwd=REPO_ROOT,
+                env=env,
+            )
+            try:
+                slepc_inputs = json.loads(slepc_inputs_raw)
+            except json.JSONDecodeError as error:
+                raise ContractRunError("CPU PETSc/SLEPc image receipt is invalid JSON") from error
+            _write_json(slepc_image_input_path, slepc_inputs)
+            expected_petsc_flags = [
+                "--with-cc=mpicc",
+                "--with-cxx=mpicxx",
+                "--with-fc=mpifort",
+                "COPTFLAGS=-O3",
+                "CXXOPTFLAGS=-O3",
+                "FOPTFLAGS=-O3",
+                "--with-debugging=0",
+                "--with-shared-libraries=1",
+                "--with-scalar-type=real",
+                "--with-precision=double",
+                "--with-cuda=0",
+                "--with-hip=0",
+                "--with-sycl=0",
+                "--with-opencl=0",
+                "--with-blaslapack-lib=-llapack -lblas",
+                "--with-hypre=1",
+                f"--with-hypre-dir={INSTALL_PREFIX}",
+            ]
+            expected_accelerators = {"cuda": False, "hip": False, "sycl": False, "opencl": False}
+            if (
+                slepc_inputs.get("schema") != "fullmag.fem.cpu_slepc_build_inputs.v1"
+                or slepc_inputs.get("petsc_ref") != dockerfile_pins["PETSC_REF"]
+                or slepc_inputs.get("petsc_source_commit_expected")
+                != dockerfile_pins["PETSC_SOURCE_COMMIT"]
+                or slepc_inputs.get("petsc_source_commit_observed")
+                != dockerfile_pins["PETSC_SOURCE_COMMIT"]
+                or slepc_inputs.get("petsc_version") != dockerfile_pins["PETSC_REF"][1:]
+                or slepc_inputs.get("petsc_arch") != "arch-linux-cpu"
+                or slepc_inputs.get("petsc_prefix") != INSTALL_PREFIX
+                or slepc_inputs.get("petsc_configure_flags") != expected_petsc_flags
+                or slepc_inputs.get("petsc_scalar_type") != "real"
+                or slepc_inputs.get("petsc_precision") != "double"
+                or slepc_inputs.get("petsc_accelerators") != expected_accelerators
+                or slepc_inputs.get("petsc_use_real_double_macro") is not True
+                or slepc_inputs.get("petsc_use_complex_macro") is not False
+                or not re.fullmatch(r"[0-9a-f]{64}", str(slepc_inputs.get("petscconf_sha256", "")))
+                or not str(slepc_inputs.get("petsc_pkgconfig_dir", "")).startswith(INSTALL_PREFIX + "/")
+                or slepc_inputs.get("slepc_ref") != dockerfile_pins["SLEPC_REF"]
+                or slepc_inputs.get("slepc_source_commit_expected")
+                != dockerfile_pins["SLEPC_SOURCE_COMMIT"]
+                or slepc_inputs.get("slepc_source_commit_observed")
+                != dockerfile_pins["SLEPC_SOURCE_COMMIT"]
+                or slepc_inputs.get("slepc_version") != dockerfile_pins["SLEPC_REF"][1:]
+                or slepc_inputs.get("slepc_prefix") != INSTALL_PREFIX
+                or slepc_inputs.get("slepc_petsc_dir") != INSTALL_PREFIX
+                or slepc_inputs.get("slepc_petsc_arch") != ""
+                or slepc_inputs.get("slepc_configure_flags") != [f"--prefix={INSTALL_PREFIX}"]
+                or not str(slepc_inputs.get("slepc_pkgconfig_dir", "")).startswith(INSTALL_PREFIX + "/")
+                or slepc_inputs.get("hypre_ref") != dockerfile_pins["HYPRE_REF"]
+                or slepc_inputs.get("hypre_source_commit_observed")
+                != image_inputs.get("hypre_source_commit_observed")
+                or slepc_inputs.get("dependency_build_jobs") != DOCKER_BUILD_JOBS
+            ):
+                raise ContractRunError("CPU PETSc/SLEPc receipt differs from the pinned real-scalar profile")
+            petscconf_text = _capture(
+                [
+                    "docker",
+                    "run",
+                    "--rm",
+                    "--platform",
+                    "linux/amd64",
+                    "--entrypoint",
+                    "cat",
+                    image_tag,
+                    f"{INSTALL_PREFIX}/include/petscconf.h",
+                ],
+                cwd=REPO_ROOT,
+                env=env,
+            )
+            petscconf_macros = _parse_petscconf_macros(petscconf_text)
+
+        library_paths = [
+            "/opt/fullmag-deps/lib/libmfem.so",
+            "/opt/fullmag-deps/lib/libHYPRE.so",
+        ]
+        if profile["uses_slepc"]:
+            library_paths.extend(
+                [
+                    "/opt/fullmag-deps/lib/libpetsc.so",
+                    "/opt/fullmag-deps/lib/libslepc.so",
+                    "/opt/fullmag-deps/include/petscconf.h",
+                ]
+            )
         library_hashes = _capture(
             [
                 "docker",
@@ -521,8 +833,7 @@ def _execute_contract(args: Any) -> int:
                 "--entrypoint",
                 "sha256sum",
                 image_tag,
-                "/opt/fullmag-deps/lib/libmfem.so",
-                "/opt/fullmag-deps/lib/libHYPRE.so",
+                *library_paths,
             ],
             cwd=REPO_ROOT,
             env=env,
@@ -532,6 +843,17 @@ def _execute_contract(args: Any) -> int:
             raise ContractRunError("MFEM library SHA-256 was not observed")
         if not re.search(r"(?m)^[0-9a-f]{64}\s+.+libHYPRE\.so$", library_hashes):
             raise ContractRunError("HYPRE library SHA-256 was not observed")
+        if profile["uses_slepc"]:
+            for library_name in ("libpetsc.so", "libslepc.so"):
+                if not re.search(rf"(?m)^[0-9a-f]{{64}}\s+.+{re.escape(library_name)}$", library_hashes):
+                    raise ContractRunError(f"{library_name} SHA-256 was not observed")
+            petscconf_sha = next(
+                line.split()[0]
+                for line in library_hashes.splitlines()
+                if line.rstrip().endswith("petscconf.h")
+            )
+            if petscconf_sha != slepc_inputs["petscconf_sha256"]:
+                raise ContractRunError("PETSc config-header hash differs from the image build receipt")
 
         receipt["container"] = {
             "image_tag": image_tag,
@@ -560,6 +882,21 @@ def _execute_contract(args: Any) -> int:
             "dependency_build_jobs": DOCKER_BUILD_JOBS,
             "image_build_output": "Image ID and dependency hashes are recorded in canonical Fullmag storage",
         }
+        if profile["uses_slepc"]:
+            if slepc_inputs is None:
+                raise ContractRunError("CPU PETSc/SLEPc provider receipt was not captured")
+            receipt["container"]["cpu_modal_provider"] = {
+                **slepc_inputs,
+                "petsc_config_macros": petscconf_macros,
+                "library_sha256": {
+                    library_name: next(
+                        line.split()[0]
+                        for line in library_hashes.splitlines()
+                        if line.rstrip().endswith(library_name)
+                    )
+                    for library_name in ("libpetsc.so", "libslepc.so")
+                },
+            }
         _write_json(receipt_path, receipt)
 
         storage_relative_build = build_dir.relative_to(storage_root).as_posix()
@@ -567,84 +904,125 @@ def _execute_contract(args: Any) -> int:
         container_build_dir = f"/fullmag-storage/{storage_relative_build}/native"
         container_temp_dir = f"/fullmag-storage/{storage_relative_temp}"
         native_build_dir = build_dir / "native"
-        inner_script = r"""set -euo pipefail
-mkdir -p "$FM_BUILD_DIR" "$FM_TEMP_DIR"
-export TMPDIR="$FM_TEMP_DIR" TEMP="$FM_TEMP_DIR" TMP="$FM_TEMP_DIR"
-cmake -S /workspace/native -B "$FM_BUILD_DIR" -G "Unix Makefiles" \
-  -DCMAKE_BUILD_TYPE=Release \
-  -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
-  -DFULLMAG_ENABLE_CUDA=OFF \
-  -DFULLMAG_ENABLE_FEM_GPU=OFF \
-  -DFULLMAG_USE_MFEM_STACK=ON \
-  -DFULLMAG_FEM_WITH_SLEPC=OFF
-cmake --build "$FM_BUILD_DIR" \
-  --target fem_poisson_airbox_shared_domain_contract \
-  --parallel 2
-export LD_LIBRARY_PATH="$FM_BUILD_DIR/backends/fem:/opt/fullmag-deps/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-ctest --test-dir "$FM_BUILD_DIR/backends/fem" \
-  --output-on-failure --verbose --no-tests=error \
-  -R '^fem_poisson_airbox_shared_domain_contract$'
-"""
-        _run_logged(
+        slepc_enabled = "ON" if profile["uses_slepc"] else "OFF"
+        cmake_flags = [
+            "-DCMAKE_BUILD_TYPE=Release",
+            "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON",
+            "-DFULLMAG_ENABLE_CUDA=OFF",
+            "-DFULLMAG_ENABLE_FEM_GPU=OFF",
+            "-DFULLMAG_USE_MFEM_STACK=ON",
+            f"-DFULLMAG_FEM_WITH_SLEPC={slepc_enabled}",
+        ]
+        if profile["uses_slepc"]:
+            cmake_flags.append(f"-DCMAKE_PREFIX_PATH={INSTALL_PREFIX}")
+        test_targets = _test_targets(profile)
+        test_regex = _ctest_regex(profile)
+        target_arguments = " ".join(shlex.quote(target) for target in test_targets)
+        cmake_command = "cmake -S /workspace/native -B \"$FM_BUILD_DIR\" -G \"Unix Makefiles\" \\\n" + " \\\n".join(
+            f"  {shlex.quote(flag)}" for flag in cmake_flags
+        )
+        provider_environment: list[str] = []
+        container_environment = [
+            ("FM_BUILD_DIR", container_build_dir),
+            ("FM_TEMP_DIR", container_temp_dir),
+            ("CMAKE_BUILD_PARALLEL_LEVEL", str(NATIVE_BUILD_JOBS)),
+            ("FULLMAG_USE_MFEM_STACK", "ON"),
+            ("FULLMAG_MANAGED_FEM_DEVICE", "cpu"),
+            ("FULLMAG_FEM_REQUIRE_GPU", "0"),
+            ("FULLMAG_FEM_REQUIRE_CEED", "0"),
+            ("FULLMAG_FEM_WITH_SLEPC", slepc_enabled),
+        ]
+        library_dir = f"{INSTALL_PREFIX}/lib"
+        if profile["uses_slepc"]:
+            provider_environment = [
+                f"export PETSC_DIR={INSTALL_PREFIX} SLEPC_DIR={INSTALL_PREFIX} PETSC_ARCH=",
+                f"export PKG_CONFIG_PATH={INSTALL_PREFIX}/lib/pkgconfig:{INSTALL_PREFIX}/lib64/pkgconfig",
+            ]
+            container_environment.extend(
+                [
+                    ("PETSC_DIR", INSTALL_PREFIX),
+                    ("SLEPC_DIR", INSTALL_PREFIX),
+                    ("PETSC_ARCH", ""),
+                    ("PKG_CONFIG_PATH", f"{INSTALL_PREFIX}/lib/pkgconfig:{INSTALL_PREFIX}/lib64/pkgconfig"),
+                ]
+            )
+            library_dir += f":{INSTALL_PREFIX}/lib64"
+        inner_script = "\n".join(
             [
-                "docker",
-                "run",
-                "--rm",
-                "--platform",
-                "linux/amd64",
-                "--cpus=2",
-                "--mount",
-                f"type=bind,source={REPO_ROOT},target=/workspace,readonly",
-                "--mount",
-                f"type=bind,source={storage_root},target=/fullmag-storage",
-                "--workdir",
-                "/workspace",
-                "--env",
-                f"FM_BUILD_DIR={container_build_dir}",
-                "--env",
-                f"FM_TEMP_DIR={container_temp_dir}",
-                "--env",
-                "CMAKE_BUILD_PARALLEL_LEVEL=2",
-                "--env",
-                "FULLMAG_USE_MFEM_STACK=ON",
-                "--env",
-                "FULLMAG_FEM_WITH_SLEPC=OFF",
-                image_tag,
-                "bash",
-                "-lc",
-                inner_script,
-            ],
+                "set -euo pipefail",
+                'mkdir -p "$FM_BUILD_DIR" "$FM_TEMP_DIR"',
+                'export TMPDIR="$FM_TEMP_DIR" TEMP="$FM_TEMP_DIR" TMP="$FM_TEMP_DIR"',
+                *provider_environment,
+                cmake_command,
+                f'cmake --build "$FM_BUILD_DIR" --target {target_arguments} --parallel {NATIVE_BUILD_JOBS}',
+                f'export LD_LIBRARY_PATH="$FM_BUILD_DIR/backends/fem:{library_dir}${{LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}}"',
+                f'ctest --test-dir "$FM_BUILD_DIR/backends/fem" --output-on-failure --verbose --no-tests=error -R {shlex.quote(test_regex)}',
+                "",
+            ]
+        )
+        docker_run_command = [
+            "docker",
+            "run",
+            "--rm",
+            "--platform",
+            "linux/amd64",
+            "--cpus=2",
+            "--mount",
+            f"type=bind,source={REPO_ROOT},target=/workspace,readonly",
+            "--mount",
+            f"type=bind,source={storage_root},target=/fullmag-storage",
+            "--workdir",
+            "/workspace",
+        ]
+        for name, value in container_environment:
+            docker_run_command.extend(["--env", f"{name}={value}"])
+        docker_run_command.extend([image_tag, "bash", "-lc", inner_script])
+        _run_logged(
+            docker_run_command,
             cwd=REPO_ROOT,
             env=env,
             log_path=run_dir / "native-build-and-ctest.log",
-            timeout_seconds=NATIVE_BUILD_TEST_TIMEOUT_SECONDS,
+            timeout_seconds=timeouts["native_build_test_seconds"],
         )
+        receipt["disk_observations"].append(
+            _disk_observation(stage="after_native_build_and_ctest", storage_root=storage_root, env=env)
+        )
+        _write_json(receipt_path, receipt)
 
         cache = _parse_cache(native_build_dir / "CMakeCache.txt")
-        expected_cache = {
-            "CMAKE_BUILD_TYPE": "Release",
-            "CMAKE_GENERATOR": "Unix Makefiles",
-            "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
-            "FULLMAG_ENABLE_CUDA": "OFF",
-            "FULLMAG_ENABLE_FEM_GPU": "OFF",
-            "FULLMAG_USE_MFEM_STACK": "ON",
-            "FULLMAG_FEM_WITH_SLEPC": "OFF",
-        }
+        expected_cache = dict(COMMON_CACHE_OPTIONS)
+        expected_cache["FULLMAG_FEM_WITH_SLEPC"] = slepc_enabled
+        if profile["uses_slepc"]:
+            expected_cache["CMAKE_PREFIX_PATH"] = INSTALL_PREFIX
         observed_cache = {name: cache.get(name) for name in expected_cache}
         if observed_cache != expected_cache:
-            raise ContractRunError(f"CMake cache differs from the CPU test contract: {observed_cache}")
-        compile_gate = _verify_mfem_compile_gate(
-            native_build_dir / "compile_commands.json"
+            raise ContractRunError(f"CMake cache differs from {args.contract_profile}: {observed_cache}")
+        compile_gates = _verify_compile_gates(
+            native_build_dir / "compile_commands.json",
+            tests=profile["tests"],
         )
-        if not compile_gate:
-            raise ContractRunError("MFEM-only test source was compiled without FULLMAG_HAS_MFEM_STACK=1")
+        if not all(compile_gates.values()):
+            raise ContractRunError("Contract test source lacks required CPU MFEM/SLEPc compile definitions")
         test_log = (run_dir / "native-build-and-ctest.log").read_text(
             encoding="utf-8", errors="replace"
         )
-        if TEST_MARKER not in test_log:
-            raise ContractRunError("CTest passed without the positive tangent-mass assertion marker")
-        if not re.search(r"(?m)100% tests passed, 0 tests failed out of 1", test_log):
-            raise ContractRunError("CTest output does not report exactly one passing contract")
+        missing_markers = [
+            test["marker"]
+            for test in profile["tests"]
+            if test["marker"] not in test_log
+        ]
+        if missing_markers:
+            raise ContractRunError(
+                "CTest passed without all post-assertion markers: " + ", ".join(missing_markers)
+            )
+        expected_test_count = len(profile["tests"])
+        if not re.search(
+            rf"(?m)100% tests passed, 0 tests failed out of {expected_test_count}",
+            test_log,
+        ):
+            raise ContractRunError(
+                f"CTest output does not report exactly {expected_test_count} passing contracts"
+            )
         _assert_source_identity(
             args.git_head, args.github_sha, env=env, stage="after native build and CTest"
         )
@@ -654,18 +1032,23 @@ ctest --test-dir "$FM_BUILD_DIR/backends/fem" \
             run_dir / "cmake-configuration.json",
             {
                 "cache_options": observed_cache,
-                "fullmag_has_mfem_stack_compile_definition": True,
-                "target": TEST_NAME,
+                "compile_definitions_observed": compile_gates,
+                "targets": test_targets,
                 "native_build_jobs": NATIVE_BUILD_JOBS,
-                "ctest_regex": f"^{TEST_NAME}$",
-                "assertion_marker_observed": True,
+                "ctest_regex": test_regex,
+                "assertion_markers_observed": [test["marker"] for test in profile["tests"]],
+                "slepc_provider_profile": profile["uses_slepc"],
             },
         )
         receipt["test"].update(
             status="passed",
             assertion_marker_observed=True,
             mfem_compile_gate_observed=True,
+            slepc_compile_gate_observed=profile["uses_slepc"],
+            compile_gates_observed=compile_gates,
+            assertion_markers_observed=[test["marker"] for test in profile["tests"]],
             ctest_exit_code=0,
+            ctest_passed_count=expected_test_count,
             cmake_options=observed_cache,
         )
         status = "passed"
@@ -679,7 +1062,7 @@ ctest --test-dir "$FM_BUILD_DIR/backends/fem" \
                 "timeout_seconds": error.timeout_seconds,
                 "log_path": str(error.log_path) if error.log_path else None,
             }
-        print(f"[fem-positive-mass-contract] {failure}", file=sys.stderr, flush=True)
+        print(f"[{profile['slug']}] {failure}", file=sys.stderr, flush=True)
     finally:
         receipt["status"] = status
         if failure:
@@ -688,11 +1071,15 @@ ctest --test-dir "$FM_BUILD_DIR/backends/fem" \
     return 0 if status == "passed" else 1
 
 
-def _orchestrate() -> int:
+def _orchestrate(contract_profile: str) -> int:
     global _ORCHESTRATION_DEADLINE
+    profile = _contract_profile(contract_profile)
+    timeouts = profile["timeout"]
+    reserve = _timeout_receipt(profile)
+    slug = profile["slug"]
     started_at = time.monotonic()
-    _ORCHESTRATION_DEADLINE = started_at + ORCHESTRATION_TIMEOUT_MINUTES * 60
-    execution_deadline = started_at + BUILD_EXECUTION_TIMEOUT_MINUTES * 60
+    _ORCHESTRATION_DEADLINE = started_at + timeouts["orchestration_minutes"] * 60
+    execution_deadline = started_at + timeouts["execution_minutes"] * 60
     env = _require_github_host()
     head = _git("-C", str(REPO_ROOT), "rev-parse", "HEAD")
     github_sha = env.get("GITHUB_SHA", "")
@@ -700,13 +1087,13 @@ def _orchestrate() -> int:
     repository = env.get("GITHUB_REPOSITORY", "")
     run_id = env["GITHUB_RUN_ID"]
     attempt = env["GITHUB_RUN_ATTEMPT"]
-    task_id = f"fem-positive-mass-contract-{run_id}-{attempt}"
+    task_id = f"{slug}-{run_id}-{attempt}"
     owner = f"github-actions:{repository}:{run_id}.{attempt}"
     layout, env = _prepare_storage(env)
     storage_root = Path(layout["storage_root"])
-    build_dir = Path(layout["build_root"]) / f"fem-positive-mass-contract-{run_id}-{attempt}"
-    run_dir = Path(layout["runs_root"]) / "fem-positive-mass-contract" / f"{run_id}-{attempt}"
-    temp_dir = Path(layout["temp_root"]) / f"fem-positive-mass-contract-{run_id}-{attempt}"
+    build_dir = Path(layout["build_root"]) / f"{slug}-{run_id}-{attempt}"
+    run_dir = Path(layout["runs_root"]) / slug / f"{run_id}-{attempt}"
+    temp_dir = Path(layout["temp_root"]) / f"{slug}-{run_id}-{attempt}"
     for path in (build_dir, run_dir, temp_dir):
         _validated_path(path, env=env)
 
@@ -716,7 +1103,7 @@ def _orchestrate() -> int:
         task_id=task_id,
         owner=owner,
         purpose=(
-            "Run the GitHub-hosted MFEM CPU positive tangent-mass source contract; "
+            f"Run the GitHub-hosted {contract_profile} source contract; "
             "next step: upload the receipt and review the single-target result."
         ),
     )
@@ -739,7 +1126,7 @@ def _orchestrate() -> int:
                 owner_finished[0] = True
             except Exception as error:
                 print(
-                    f"[fem-positive-mass-contract] could not finish storage owner: {error}",
+                    f"[{slug}] could not finish storage owner: {error}",
                     file=sys.stderr,
                     flush=True,
                 )
@@ -772,7 +1159,7 @@ def _orchestrate() -> int:
                     _write_json(receipt_path, receipt)
                 except Exception as error:
                     print(
-                        f"[fem-positive-mass-contract] could not finalize receipt: {error}",
+                        f"[{slug}] could not finalize receipt: {error}",
                         file=sys.stderr,
                         flush=True,
                     )
@@ -781,9 +1168,10 @@ def _orchestrate() -> int:
     run_dir.mkdir(parents=True, exist_ok=False)
     _append_github_file("GITHUB_OUTPUT", f"evidence_dir={run_dir}")
     output = {
-        "schema": SCHEMA,
+        "schema": profile["schema"],
+        "contract_profile": contract_profile,
         "status": "queued",
-        "qualification_scope": "mfem_cpu_assembly_source_contract_only",
+        "qualification_scope": profile["qualification_scope"],
         "qualification_claimed": False,
         "source": {
             "git_head": head,
@@ -796,9 +1184,11 @@ def _orchestrate() -> int:
         "timeouts": {
             "orchestration_started_monotonic": started_at,
             "orchestration_deadline_monotonic": _ORCHESTRATION_DEADLINE,
-            "orchestration_timeout_minutes": ORCHESTRATION_TIMEOUT_MINUTES,
-            "receipt_reserve_minutes": RECEIPT_RESERVE_MINUTES,
-            "workflow_timeout_minutes": WORKFLOW_TIMEOUT_MINUTES,
+            "orchestration_timeout_minutes": timeouts["orchestration_minutes"],
+            "execution_timeout_minutes": timeouts["execution_minutes"],
+            "finalization_reserve_minutes": reserve["finalization_reserve_minutes"],
+            "receipt_reserve_minutes": reserve["receipt_reserve_minutes"],
+            "workflow_timeout_minutes": timeouts["workflow_minutes"],
         },
         "storage": {
             "profile": STORAGE_PROFILE,
@@ -816,7 +1206,8 @@ def _orchestrate() -> int:
     _write_json(
         run_dir / "preflight.json",
         {
-            "schema": "fullmag.ci.fem.positive_tangent_mass_preflight.v1",
+            "schema": profile["preflight_schema"],
+            "contract_profile": contract_profile,
             "resolver_profile": layout["profile"],
             "project_root": layout["project_root"],
             "storage_root": layout["storage_root"],
@@ -837,6 +1228,8 @@ def _orchestrate() -> int:
         sys.executable,
         str(Path(__file__).resolve()),
         "--execute",
+        "--contract-profile",
+        contract_profile,
         "--run-dir",
         str(run_dir),
         "--build-dir",
@@ -979,13 +1372,13 @@ def _orchestrate() -> int:
         receipt["error"] = finish_error or post_run_identity_error or "Contract execution did not pass"
     receipt.setdefault("timeouts", {}).update(
         elapsed_seconds=time.monotonic() - started_at,
-        build_execution_timeout_minutes=BUILD_EXECUTION_TIMEOUT_MINUTES,
-        finalization_reserve_minutes=FINALIZATION_RESERVE_MINUTES,
+        build_execution_timeout_minutes=timeouts["execution_minutes"],
+        finalization_reserve_minutes=reserve["finalization_reserve_minutes"],
         orchestration_deadline_monotonic=_ORCHESTRATION_DEADLINE,
-        receipt_reserve_minutes=RECEIPT_RESERVE_MINUTES,
+        receipt_reserve_minutes=reserve["receipt_reserve_minutes"],
     )
     _write_json(receipt_path, receipt)
-    print(f"MFEM CPU assembly contract evidence: {run_dir}", flush=True)
+    print(f"MFEM CPU {contract_profile} contract evidence: {run_dir}", flush=True)
     return 0 if passed else 1
 
 
@@ -994,6 +1387,11 @@ def _parse_args(argv: list[str] | None = None) -> Any:
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--execute", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument(
+        "--contract-profile",
+        choices=tuple(CONTRACT_PROFILES),
+        default="positive-mass",
+    )
     parser.add_argument("--run-dir")
     parser.add_argument("--build-dir")
     parser.add_argument("--temp-dir")
@@ -1024,13 +1422,13 @@ def main(argv: list[str] | None = None) -> int:
             "repository",
         )
         if any(not getattr(args, name) for name in required) or args.deadline_monotonic is None:
-            print("[fem-positive-mass-contract] incomplete managed execution context", file=sys.stderr)
+            print(f"[{_contract_profile(args.contract_profile)['slug']}] incomplete managed execution context", file=sys.stderr)
             return 2
         return _execute_contract(args)
     try:
-        return _orchestrate()
+        return _orchestrate(args.contract_profile)
     except Exception as error:
-        print(f"[fem-positive-mass-contract] {type(error).__name__}: {error}", file=sys.stderr)
+        print(f"[{_contract_profile(args.contract_profile)['slug']}] {type(error).__name__}: {error}", file=sys.stderr)
         return 1
 
 

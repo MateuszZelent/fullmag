@@ -1454,7 +1454,7 @@
       "id": "source-floquet-tangent-mass-regression",
       "path": "backends/fem/tests/frequency_domain/poisson_airbox_shared_domain_test.cpp",
       "symbol": "floquet_positive_tangent_mass_matches_independent_phase_reduction",
-      "responsibility": "Independent tet4/prism6 mass and phase-reduction oracle with periodic copies and nonuniform tangent frames; source regression authored, uncompiled"
+      "responsibility": "Independent tet4/prism6 mass and phase-reduction oracle with periodic copies and nonuniform tangent frames; MFEM CPU GHA 37797035215 passed"
     },
     {
       "id": "source-floquet-tangent-mass-overlap-owner",

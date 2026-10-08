@@ -1057,3 +1057,25 @@ nieistniejącym snapshot.binaryResourceKey oraz raw nodal complex arrays użytyc
 dla face-expanded/averaged projections. Poprawka zachowa canonical resource key
 i projekcje surface_faces/thickness_average_z wraz z matching Re/Im mapping.
 Nie opublikowano patcha GUI z tymi blockerami.
+
+Native merge opublikowany jakoe0baa35bafe94813d8cc9d5db5aeb84ee1bf5594.
+GHA run37798318950 SUCCESS na tym SHA potwierdza kompilację gałęzi i istniejące
+no-provider kontrakty. Guarded MFEM+SLEPc window ABI regression nie wykonał się
+w tym profilu; dlatego nie jest to dowód integracji SLEPc ani zamknięcia finding.
+Nowy positive-mass run37797035215/job113379085747 nadal IN_PROGRESS na poprawionej
+fixture count. PR97 OPEN, mergeState DIRTY; inline inventory nadal257 wpisów.
+
+### MFEM provider gate zakończony — przygotowana trasa SLEPc
+
+Run37797035215/job113379085747 SUCCESS na e570d4c957674724be7cb7990ca0de25aee1c156.
+Receipt passed, source fencing before/after=true, MFEM compile macro observed,
+assertion marker observed, CTest1/1PASS, owner completed. Jest dowód assembly i
+niezależnej redukcji phase/frame mass. Nie jest to EPS/window/runtime proof.
+
+Zreviewowany opt-in profil CPU-SLEPc używa istniejących pełnych pinów PETSc3.24.6
+/SLEPc3.24.3, real double i CPU HYPRE prefix; CUDA/FEM GPU OFF. Wspólna orkiestracja
+zachowuje storage/fencing/lease/terminal receipt, wybiera dokładnie dwa targety
+modal_eigen i floquet_modal_solver z wymaganymi markerami/macros. Domyślna trasa
+positive-mass pozostaje bez SLEPc; browser scope obejmuje teraz także pełny gate
+Control Room dla nowych źródeł GUI. Nowy profil wymaga rzeczywistego GHA przed
+jakimkolwiek twierdzeniem o build/link/solver/provider qualification.

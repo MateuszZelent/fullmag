@@ -926,5 +926,6 @@ int main()
     finalizes_certified_candidates_by_tangent_mass_before_nearest_cap();
     normalizes_si_scale_floquet_pencil();
     executes_native_sparse_matshell_above_dense_bound(true);
+    std::printf("PASS: fem_floquet_modal_solver_contract\n");
     return 0;
 }

@@ -2542,10 +2542,17 @@ skompilowane oraz uruchomione w no-provider GHA run `37795426460`, job
 dowodzone przez ten run; managed runtime, rzeczywiste wykorzystanie metryki
 w EPS i naukowa kwalifikacja pozostają **NOT VERIFIED**.
 
+Provider assembly proof: GHA `37797035215`, job `113379085747`, source
+`e570d4c957674724be7cb7990ca0de25aee1c156` wykonał MFEM CPU v4.10 oracle oraz
+cały `fem_poisson_airbox_shared_domain_contract`: 1/1 PASS. Receipt wymagał
+`FULLMAG_HAS_MFEM_STACK=1`, observed assertion marker, zgodnego SHA i owner
+finish. To dowód assembly/phase-reduction, nie wykonania EPS, convergence ani
+produkcji całej dyspersji.
+
 | Source ID | Path | Symbol | Responsibility |
 |---|---|---|---|
 | `source-floquet-tangent-mass-assembly` | `backends/fem/cpu/frequency_domain/operators/poisson_airbox_shared_domain.cpp` | `assemble_poisson_airbox_shared_domain` | Full geometric P1 tangent mass on physical magnetic nodes and phase-reduced complex CSR |
-| `source-floquet-tangent-mass-regression` | `backends/fem/tests/frequency_domain/poisson_airbox_shared_domain_test.cpp` | `floquet_positive_tangent_mass_matches_independent_phase_reduction` | Independent tet4/prism6 mass and $C_q^\mathsf H M C_q$ oracle with phase copies and nonuniform tangent frames; authored, uncompiled |
+| `source-floquet-tangent-mass-regression` | `backends/fem/tests/frequency_domain/poisson_airbox_shared_domain_test.cpp` | `floquet_positive_tangent_mass_matches_independent_phase_reduction` | Independent tet4/prism6 mass and $C_q^\mathsf H M C_q$ oracle with phase copies and nonuniform tangent frames; MFEM CPU GHA 37797035215 passed |
 | `source-floquet-tangent-mass-overlap-owner` | `backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp` | `detail::finalize_certified_floquet_candidates` | Apply the positive reduced CSR mass action to already residual-certified candidates, retain original modes by source index, then target-rank and cap |
 | `source-floquet-tangent-mass-overlap-seam` | `backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.hpp` | `detail::CertifiedFloquetModalCandidate` | Internal data seam shared by production and deterministic finalizer regression |
 | `source-floquet-tangent-mass-overlap-regression` | `backends/fem/tests/frequency_domain/floquet_modal_solver_test.cpp` | `finalizes_certified_candidates_by_tangent_mass_before_nearest_cap` | Directly tests the production finalizer with explicitly supplied candidates; bypasses EPS and does not prove candidate supply, residual certification or refill/NEV; no-provider GHA 37795426460 passed |
