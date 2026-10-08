@@ -229,20 +229,101 @@ void rejects_zero_k_and_missing_pairs()
           "missing seam-pair rejection reason is stable");
 }
 
-void rejects_conflicting_k_payloads()
+void accepts_raw_or_fixed_k_vectors()
 {
-    fd::ModalEigenRequest request = valid_request();
-    static double operator_k[3] = {1.0, 0.0, 0.0};
-    request.has_floquet_k_vector = true;
-    request.floquet_k_vector_rad_per_m[0] = 2.0;
-    request.floquet_k_vector_rad_per_m[1] = 0.0;
-    request.floquet_k_vector_rad_per_m[2] = 0.0;
-    request.operator_request.k_vector_rad_m = operator_k;
-    request.operator_request.k_vector_len = 3;
-    const auto admission = fd::admit_floquet_modal_request(request, spectral_request());
-    check(!admission.accepted, "conflicting Floquet k payloads are rejected");
-    check(std::strcmp(admission.reason, "floquet_modal_k_vector_payload_mismatch") == 0,
-          "conflicting Floquet k reason is stable");
+    const auto set_fixed_vector = [](fd::ModalEigenRequest &request,
+                                     double kx,
+                                     double ky,
+                                     double kz) {
+        request.has_floquet_k_vector = true;
+        request.floquet_k_vector_rad_per_m[0] = kx;
+        request.floquet_k_vector_rad_per_m[1] = ky;
+        request.floquet_k_vector_rad_per_m[2] = kz;
+    };
+    const auto check_both_admissions = [](
+        fd::ModalEigenRequest request,
+        bool expected,
+        const char *expected_reason,
+        const char *message) {
+        const auto dense_admission =
+            fd::admit_floquet_modal_request(request, spectral_request());
+        check(dense_admission.accepted == expected &&
+                  (expected || std::strcmp(dense_admission.reason, expected_reason) == 0),
+              message);
+
+        request.operator_request.include_demag = 0;
+        const auto sparse_admission = fd::admit_floquet_modal_sparse_request(
+            request, sparse_spectral_request());
+        check(sparse_admission.accepted == expected &&
+                  (expected || std::strcmp(sparse_admission.reason, expected_reason) == 0),
+              message);
+    };
+
+    fd::ModalEigenRequest null_raw_with_length = valid_request();
+    null_raw_with_length.operator_request.k_vector_rad_m = nullptr;
+    null_raw_with_length.operator_request.k_vector_len = 3;
+    set_fixed_vector(null_raw_with_length, 1.0, 0.0, 0.0);
+    check_both_admissions(
+        null_raw_with_length,
+        true,
+        nullptr,
+        "a null raw pointer selects the valid fixed vector even with a positive raw length");
+
+    const double ignored_raw = std::numeric_limits<double>::quiet_NaN();
+    const int empty_raw_lengths[] = {0, -1};
+    for (const int raw_length : empty_raw_lengths) {
+        fd::ModalEigenRequest empty_raw_with_fixed = valid_request();
+        empty_raw_with_fixed.operator_request.k_vector_rad_m = &ignored_raw;
+        empty_raw_with_fixed.operator_request.k_vector_len = raw_length;
+        set_fixed_vector(empty_raw_with_fixed, 2.0, 0.0, 0.0);
+        check_both_admissions(
+            empty_raw_with_fixed,
+            true,
+            nullptr,
+            "a nonpositive raw length selects the fixed vector without reading raw storage");
+    }
+
+    fd::ModalEigenRequest raw_vector_wins = valid_request();
+    set_fixed_vector(raw_vector_wins, 0.0, 0.0, 0.0);
+    check_both_admissions(
+        raw_vector_wins,
+        true,
+        nullptr,
+        "a selected raw vector takes precedence over the unused fixed fallback");
+
+    fd::ModalEigenRequest invalid_raw_with_fixed = valid_request();
+    static double short_raw_vector[2] = {1.0, 0.0};
+    invalid_raw_with_fixed.operator_request.k_vector_rad_m = short_raw_vector;
+    invalid_raw_with_fixed.operator_request.k_vector_len = 2;
+    set_fixed_vector(invalid_raw_with_fixed, 2.0, 0.0, 0.0);
+    check_both_admissions(
+        invalid_raw_with_fixed,
+        false,
+        "floquet_modal_k_vector_payload_mismatch",
+        "a malformed selected raw vector cannot be masked by a valid fixed fallback");
+
+    fd::ModalEigenRequest invalid_fixed_fallback = valid_request();
+    invalid_fixed_fallback.operator_request.k_vector_rad_m = nullptr;
+    invalid_fixed_fallback.operator_request.k_vector_len = 0;
+    set_fixed_vector(
+        invalid_fixed_fallback,
+        std::numeric_limits<double>::quiet_NaN(),
+        0.0,
+        0.0);
+    check_both_admissions(
+        invalid_fixed_fallback,
+        false,
+        "floquet_modal_requires_finite_nonzero_three_vector",
+        "a selected non-finite fixed fallback is still rejected");
+
+    fd::ModalEigenRequest no_vector = valid_request();
+    no_vector.operator_request.k_vector_rad_m = nullptr;
+    no_vector.operator_request.k_vector_len = 0;
+    check_both_admissions(
+        no_vector,
+        false,
+        "floquet_modal_requires_finite_nonzero_three_vector",
+        "a request with neither a raw vector nor a declared fixed fallback is rejected");
 }
 
 void rejects_invalid_frequency_windows()
@@ -1196,7 +1277,7 @@ int main()
     accepts_finite_nonzero_k_cpu_contract();
     rejects_missing_dynamic_payload_and_gpu();
     rejects_zero_k_and_missing_pairs();
-    rejects_conflicting_k_payloads();
+    accepts_raw_or_fixed_k_vectors();
     rejects_invalid_frequency_windows();
     admits_sparse_bloch_operator_without_demag();
     admits_certified_shared_domain_sparse_operator();

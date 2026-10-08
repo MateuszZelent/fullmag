@@ -91,19 +91,15 @@ bool floquet_k_payload_is_consistent(const ModalEigenRequest &request) noexcept
     }
     const double *operator_values = request.operator_request.k_vector_rad_m;
     const int operator_length = request.operator_request.k_vector_len;
-    if (operator_values == nullptr && operator_length <= 0) {
+    // The fixed-size vector is a fallback, not a second copy that must match
+    // a selected raw vector. Match modal_request_floquet_k_vector(): a raw
+    // vector is selected only when it has both a pointer and a positive
+    // length. If selected, a malformed positive-length shape remains an
+    // error instead of being hidden by the fallback.
+    if (operator_values == nullptr || operator_length <= 0) {
         return true;
     }
-    if (operator_values == nullptr || operator_length != 3) {
-        return false;
-    }
-    for (int index = 0; index < 3; ++index) {
-        if (!std::isfinite(operator_values[index]) ||
-            operator_values[index] != request.floquet_k_vector_rad_per_m[index]) {
-            return false;
-        }
-    }
-    return true;
+    return operator_length == 3;
 }
 
 bool has_floquet_payload_marker(const ModalEigenRequest &request) noexcept
