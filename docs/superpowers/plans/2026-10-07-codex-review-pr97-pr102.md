@@ -1091,3 +1091,12 @@ Regresje używają rzeczywistego target surface resolvera, sprawdzają długośc
 średnie, phase/k/owner identity oraz zachowanie non-modal baseline. Source review
 PASS, parser Node PASS; types/Vitest/browser/WebGL wymagają świeżego GHA.
 CPU-SLEPc run37800314609/job113390449283 potwierdzony IN_PROGRESS; nie ponowiono.
+
+GUI57bf6f566 run37800829433 zakończony FAILURE przed browser runtime: dwa TS
+błędy nullable phase w per-target attachment. Dodano phase!==null guard zgodny
+z globalnym attachComplexShaderValuesByMode; nie wybrano arbitralnej fazy0.
+Source review PASS. Types/Vitest/browser wymagają nowego GHA na poprawionym SHA.
+Hook React Doctor79/100 zgłosił dwa await-in-loop; sourceHEAD~1 potwierdza, że są
+to istniejące yieldToMain pętle chunking/cancellation, bez nowego await w patchu.
+Nie usuwano yieldów ani nie tłumiono diagnostyki.
+CPU-SLEPc run37800314609/job113390449283 nadal IN_PROGRESS; nie restartowano go.

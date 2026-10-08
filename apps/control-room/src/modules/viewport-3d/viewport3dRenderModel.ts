@@ -1017,6 +1017,7 @@ export function buildViewport3DFieldRenderModel(
         if (
           options.analysisFieldIntentActive &&
           options.complexFieldVector &&
+          visualizationPhaseRad !== null &&
           scalarColorsWithIdentity
         ) {
           const complexNodeIndices = fullFieldVector
