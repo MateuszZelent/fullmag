@@ -33,6 +33,7 @@ on:
         options:
           - positive-mass
           - floquet-modal-slepc
+          - generic-modal-slepc
 
 permissions:
   contents: read
@@ -40,7 +41,7 @@ permissions:
 jobs:
   fem-positive-mass-contract:
     runs-on: ubuntu-latest
-    timeout-minutes: ${{ inputs.contract_profile == 'floquet-modal-slepc' && 240 || 180 }}
+    timeout-minutes: ${{ (inputs.contract_profile == 'floquet-modal-slepc' || inputs.contract_profile == 'generic-modal-slepc') && 240 || 180 }}
     env:
       FULLMAG_STORAGE_PROFILE: linux-host
     steps:

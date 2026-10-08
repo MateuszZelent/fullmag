@@ -3444,6 +3444,204 @@ void modal_shift_invert_sparse_payload_can_be_assembled_from_mfem_operator()
                     "\"ksp_monitor_progress\":"),
           "generic k=0 nearest-frequency diagnostics omit Floquet-only monitor telemetry");
     fullmag_fem_frequency_domain_result_destroy(&nearest_result);
+
+    FullmagFemModalEigenRequest missing_mass_request = request;
+    missing_mass_request.mfem_sparse_mass_csr = FullmagFemCsrMatrixView{};
+    FullmagFemFrequencyDomainResult missing_mass_result =
+        fullmag_fem_modal_eigen_solve(&missing_mass_request);
+    check(missing_mass_result.status == FULLMAG_FEM_FD_VALIDATION_ERROR &&
+              contains(missing_mass_result.diagnostics_json,
+                       "invalid_tangent_mass_metric"),
+          "generic sparse nearest solve rejects a missing geometric tangent mass");
+    fullmag_fem_frequency_domain_result_destroy(&missing_mass_result);
+
+    const double invalid_mass_values[] = {-2.0, 2.0};
+    FullmagFemModalEigenRequest invalid_mass_request = request;
+    invalid_mass_request.mfem_sparse_mass_csr.values = invalid_mass_values;
+    FullmagFemFrequencyDomainResult invalid_mass_result =
+        fullmag_fem_modal_eigen_solve(&invalid_mass_request);
+    check(invalid_mass_result.status == FULLMAG_FEM_FD_VALIDATION_ERROR &&
+              contains(invalid_mass_result.diagnostics_json,
+                       "invalid_tangent_mass_metric"),
+          "generic sparse nearest solve rejects a non-positive geometric mass");
+    fullmag_fem_frequency_domain_result_destroy(&invalid_mass_result);
+#endif
+}
+
+void generic_dense_window_refills_after_search_filtering()
+{
+    constexpr int tangent_dof_count = 10;
+    std::vector<double> stiffness(
+        static_cast<std::size_t>(tangent_dof_count * tangent_dof_count), 0.0);
+    std::vector<double> gyrotropic(stiffness.size(), 0.0);
+    std::vector<double> tangent_mass(stiffness.size(), 0.0);
+    for (int block = 0; block < tangent_dof_count / 2; ++block) {
+        const int row = 2 * block;
+        const double omega = 2.0 * M_PI * static_cast<double>(block + 1);
+        stiffness[static_cast<std::size_t>(row * tangent_dof_count + row)] = omega;
+        stiffness[static_cast<std::size_t>((row + 1) * tangent_dof_count + row + 1)] = omega;
+        gyrotropic[static_cast<std::size_t>(row * tangent_dof_count + row + 1)] = 1.0;
+        gyrotropic[static_cast<std::size_t>((row + 1) * tangent_dof_count + row)] = -1.0;
+        tangent_mass[static_cast<std::size_t>(row * tangent_dof_count + row)] = 1.0;
+        tangent_mass[static_cast<std::size_t>((row + 1) * tangent_dof_count + row + 1)] = 1.0;
+    }
+
+    FullmagFemModalEigenRequest request = base_request();
+    request.target_kind = "frequency_window";
+    request.target_frequency_hz = 1.0;
+    request.frequency_min_hz = 0.99;
+    request.frequency_max_hz = 1.01;
+    request.requested_mode_count = 1;
+    request.completeness_policy = 0;
+    request.residual_tolerance = 1.0e-10;
+    request.max_outer_iterations = 256;
+    request.max_linear_iterations = 256;
+    request.eigensolver_family = 1;
+    request.mfem_operator_enabled = 1;
+    request.mfem_tangent_dof_count = tangent_dof_count;
+    request.mfem_stiffness_matrix_row_major = stiffness.data();
+    request.mfem_gyrotropic_matrix_row_major = gyrotropic.data();
+    request.mfem_mass_matrix_row_major = tangent_mass.data();
+    request.operator_request.operator_diagnostics_json =
+        "{\"operator_family\":\"generic_mass_refill_fixture\","
+        "\"payload_kind\":\"dense_linearized_mfem_operator\"}";
+
+    FullmagFemFrequencyDomainResult result = fullmag_fem_modal_eigen_solve(&request);
+#if FULLMAG_FEM_WITH_SLEPC
+    check(result.status == FULLMAG_FEM_FD_OK,
+          "best-effort generic dense window retains a certified dimension-limited mode");
+    check(contains(result.diagnostics_json,
+                   "\"deduplication_mass_matrix\":\"provided_dense_row_major\""),
+          "generic dense window uses the provided geometric tangent mass");
+    check(contains(result.diagnostics_json, "\"complete\":false") &&
+              contains(result.diagnostics_json,
+                       "\"window_completeness\":{\"policy\":\"best_effort\",\"status\":\"partial_convergence\""),
+          "best-effort dimension-limited window reports partial, incomplete coverage");
+    const int refill_attempts = static_cast<int>(extract_json_number(
+        result.diagnostics_json,
+        "\"attempt_count\":",
+        "generic_dense_window_refills_after_search_filtering"));
+    const int solved_attempts = static_cast<int>(extract_json_number(
+        result.diagnostics_json,
+        "\"solved_attempt_count\":",
+        "generic_dense_window_refills_after_search_filtering"));
+    const int initial_nev = static_cast<int>(extract_json_number(
+        result.diagnostics_json,
+        "\"initial_nev\":",
+        "generic_dense_window_refills_after_search_filtering"));
+    const int last_nev = static_cast<int>(extract_json_number(
+        result.diagnostics_json,
+        "\"last_attempt_nev\":",
+        "generic_dense_window_refills_after_search_filtering"));
+    const int initial_ncv = static_cast<int>(extract_json_number(
+        result.diagnostics_json,
+        "\"initial_resolved_ncv\":",
+        "generic_dense_window_refills_after_search_filtering"));
+    const int initial_mpd = static_cast<int>(extract_json_number(
+        result.diagnostics_json,
+        "\"initial_resolved_mpd\":",
+        "generic_dense_window_refills_after_search_filtering"));
+    const int last_ncv = static_cast<int>(extract_json_number(
+        result.diagnostics_json,
+        "\"last_attempt_ncv\":",
+        "generic_dense_window_refills_after_search_filtering"));
+    const int last_mpd = static_cast<int>(extract_json_number(
+        result.diagnostics_json,
+        "\"last_attempt_mpd\":",
+        "generic_dense_window_refills_after_search_filtering"));
+    const int last_finalized_attempt = static_cast<int>(extract_json_number(
+        result.diagnostics_json,
+        "\"last_finalized_attempt\":",
+        "generic_dense_window_refills_after_search_filtering"));
+    const int outer_iteration_budget = static_cast<int>(extract_json_number(
+        result.diagnostics_json,
+        "\"outer_iteration_budget\":",
+        "generic_dense_window_refills_after_search_filtering"));
+    const int cumulative_outer_iterations = static_cast<int>(extract_json_number(
+        result.diagnostics_json,
+        "\"cumulative_outer_iterations\":",
+        "generic_dense_window_refills_after_search_filtering"));
+    check(refill_attempts >= 2 && solved_attempts >= 2,
+          "generic provider performs another solved EPS attempt after search-window filtering");
+    check(initial_nev > 0 && last_nev > initial_nev,
+          "generic provider increases NEV after the first solved attempt");
+    check(initial_ncv > 0 && initial_mpd > 0 &&
+              last_ncv == initial_ncv && last_mpd == initial_mpd,
+          "generic provider preserves the initially resolved NCV and MPD across refill");
+    check(last_finalized_attempt == refill_attempts,
+          "generic provider publishes only the final attempt's certified pool");
+    check(outer_iteration_budget > 0 && cumulative_outer_iterations >= 0 &&
+              cumulative_outer_iterations <= outer_iteration_budget,
+          "generic provider reports cumulative iterations within the first-attempt budget");
+    check(contains(result.result_json, "\"accepted_mode_count\":1") &&
+              contains(result.result_json, "\"modes\":["),
+          "best-effort partial result retains the certified window mode");
+#else
+    check(result.status == FULLMAG_FEM_FD_UNAVAILABLE,
+          "generic dense refill fixture remains unavailable without SLEPc");
+#endif
+    fullmag_fem_frequency_domain_result_destroy(&result);
+
+#if FULLMAG_FEM_WITH_SLEPC
+    FullmagFemModalEigenRequest missing_mass_request = request;
+    missing_mass_request.mfem_mass_matrix_row_major = nullptr;
+    FullmagFemFrequencyDomainResult missing_mass =
+        fullmag_fem_modal_eigen_solve(&missing_mass_request);
+    check(missing_mass.status == FULLMAG_FEM_FD_VALIDATION_ERROR &&
+              contains(missing_mass.diagnostics_json,
+                       "invalid_tangent_mass_metric"),
+          "generic dense window rejects a missing geometric tangent mass");
+    fullmag_fem_frequency_domain_result_destroy(&missing_mass);
+
+    std::vector<double> asymmetric_mass = tangent_mass;
+    asymmetric_mass[1] = 0.25;
+    FullmagFemModalEigenRequest invalid_mass_request = request;
+    invalid_mass_request.mfem_mass_matrix_row_major = asymmetric_mass.data();
+    FullmagFemFrequencyDomainResult invalid_mass =
+        fullmag_fem_modal_eigen_solve(&invalid_mass_request);
+    check(invalid_mass.status == FULLMAG_FEM_FD_VALIDATION_ERROR &&
+              contains(invalid_mass.diagnostics_json,
+                       "invalid_tangent_mass_metric"),
+          "generic dense window rejects an asymmetric geometric tangent mass");
+    fullmag_fem_frequency_domain_result_destroy(&invalid_mass);
+
+    FullmagFemModalEigenRequest nearest_underfill_request = request;
+    nearest_underfill_request.target_kind = "nearest_frequency";
+    nearest_underfill_request.target_frequency_hz = 2.5;
+    nearest_underfill_request.frequency_min_hz = 0.0;
+    nearest_underfill_request.frequency_max_hz = 0.0;
+    nearest_underfill_request.requested_mode_count = 6;
+    FullmagFemFrequencyDomainResult nearest_underfill =
+        fullmag_fem_modal_eigen_solve(&nearest_underfill_request);
+    check(nearest_underfill.status == FULLMAG_FEM_FD_SOLVE_ERROR,
+          "generic nearest request fails closed when the physical pool is smaller than the requested count");
+    check(contains(nearest_underfill.diagnostics_json,
+                   "\"certified_partial_candidate_count\":"),
+          "generic nearest underfill retains certified candidates as diagnostics");
+    check(!contains(nearest_underfill.result_json, "\"modes\":[") &&
+              contains(nearest_underfill.result_json, "\"solve_complete\":false"),
+          "generic nearest underfill does not publish partial candidates as canonical modes");
+    fullmag_fem_frequency_domain_result_destroy(&nearest_underfill);
+
+    FullmagFemModalEigenRequest budget_request = request;
+    budget_request.target_kind = "nearest_frequency";
+    budget_request.target_frequency_hz = 1.0;
+    budget_request.frequency_min_hz = 0.0;
+    budget_request.frequency_max_hz = 0.0;
+    budget_request.requested_mode_count = 1;
+    budget_request.residual_tolerance = 1.0e-30;
+    budget_request.max_outer_iterations = 1;
+    FullmagFemFrequencyDomainResult budget_result =
+        fullmag_fem_modal_eigen_solve(&budget_request);
+    check(budget_result.status == FULLMAG_FEM_FD_SOLVE_ERROR &&
+              contains(budget_result.diagnostics_json,
+                       "\"outer_iteration_budget\":1"),
+          "generic nearest solve fails closed and records a one-iteration EPS budget");
+    check(contains(budget_result.diagnostics_json,
+                   "\"outer_iteration_budget_exhausted\":true") &&
+              !contains(budget_result.result_json, "\"modes\":["),
+          "generic budget exhaustion remains explicit and does not publish a canonical partial mode");
+    fullmag_fem_frequency_domain_result_destroy(&budget_result);
 #endif
 }
 
@@ -4921,8 +5119,18 @@ void modal_poisson_airbox_tail_gpu_shift_invert_action_writes_artifact()
 
 } // namespace
 
-int main()
+int main(int argc, char **argv)
 {
+    if (argc > 1) {
+        if (argc == 2 && std::strcmp(argv[1], "--generic-mass-refill") == 0) {
+            modal_shift_invert_sparse_payload_can_be_assembled_from_mfem_operator();
+            generic_dense_window_refills_after_search_filtering();
+            std::printf("PASS: generic_modal_mass_refill_contract\n");
+            return 0;
+        }
+        std::fprintf(stderr, "FAIL: unknown modal eigen contract test argument\n");
+        return 2;
+    }
     nonfinite_json_sanitizer_has_bounded_fail_closed_semantics();
     FullmagFemFrequencyDomainResult zeroed{};
     fullmag_fem_frequency_domain_result_destroy(&zeroed);
@@ -4957,6 +5165,7 @@ int main()
     modal_dynamic_demag_materialization_preserves_legacy_s_sign();
     modal_shift_invert_dense_full_2x2_payload_accepts_k0_kittel_macrospin();
     modal_shift_invert_sparse_payload_can_be_assembled_from_mfem_operator();
+    generic_dense_window_refills_after_search_filtering();
     modal_without_validation_problem_stays_unavailable();
     modal_sparse_validation_error_preserves_explicit_k_vector();
     modal_diagnostics_preserve_explicit_k_vector();

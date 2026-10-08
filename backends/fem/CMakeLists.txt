@@ -991,6 +991,12 @@ add_fem_source_facade_contract(
     fem_modal_eigen_contract
     tests/frequency_domain/modal_eigen_contract_test.cpp
 )
+# Isolate the generic provider contract while preserving the full modal suite.
+add_custom_target(fem_modal_eigen_generic_mass_refill_contract
+    DEPENDS fem_modal_eigen_contract)
+add_test(NAME fem_modal_eigen_generic_mass_refill_contract
+    COMMAND $<TARGET_FILE:fem_modal_eigen_contract> --generic-mass-refill)
+
 add_fem_source_facade_contract(
     fem_poisson_airbox_eigen_oracle_contract
     tests/frequency_domain/poisson_airbox_eigen_oracle_test.cpp

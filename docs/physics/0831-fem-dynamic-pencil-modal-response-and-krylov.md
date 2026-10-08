@@ -140,6 +140,8 @@ algebraic realization of this complex contract, not another convention.
 | $\mathbf m$, $\mathbf m_0$, $\delta\mathbf m$ | normalized magnetization, accepted equilibrium and tangent perturbation | $1$ |
 | $T$, $T_{\mathrm{src}}$, $T_{\mathrm{dst}}$ | tangent-frame maps from local coefficients to physical perturbations | $1$ |
 | $q$, $q_r$, $q_{\mathrm{src}}$, $q_{\mathrm{dst}}$ | full and reduced tangent-plane coefficient vectors | $1$ |
+| $\mathbf M_T$ | positive geometric tangent-space FEM mass matrix used for modal overlap and candidate deduplication | $\mathrm{m^3}$ |
+| $\eta_M$ | normalized absolute overlap in the geometric tangent-mass metric | $1$ |
 | $\mathbf H_{\mathrm{eff},0}$, $\delta\mathbf h$ | static effective field and RF field phasor | $\mathrm{A\,m^{-1}}$ |
 | $M_s$ | saturation magnetization | $\mathrm{A\,m^{-1}}$ |
 | $K_u$ | first-order uniaxial anisotropy energy density | $\mathrm{J\,m^{-3}}$ |
@@ -1057,6 +1059,92 @@ shared-domain assembly and Schur solver are source-visible through
 `backends/fem/cpu/frequency_domain/poisson_airbox_schur_matshell.hpp` +
 `solve_poisson_airbox_modal_eigen_cpu_schur`; managed qualification remains
 open and blocks production Poisson-airbox modal qualification.
+
+#### Generic production SLEPc modal candidate pool
+
+Generic production CPU modal requests use the geometric tangent mass already
+carried by `ModalEigenRequest::mfem_mass_matrix_row_major` or
+`ModalEigenRequest::mfem_sparse_mass_csr`. This matrix is distinct from the
+gyrotropic generalized-pencil block $B_{qq}$: $B_{qq}$ participates in the
+dynamics and is not a positive candidate-overlap metric. For two tangent
+coefficient vectors, the dimensionless overlap is
+
+```{math}
+:label: eq-generic-modal-mass-overlap
+\eta_M(q_a,q_b)=
+\frac{|q_a^{\mathsf H}\mathbf M_T q_b|}
+{\sqrt{(q_a^{\mathsf H}\mathbf M_T q_a)
+\,(q_b^{\mathsf H}\mathbf M_T q_b)}}.
+```
+
+Dense and CSR payloads must apply this same geometric metric. The CSR
+production path applies CSR directly; converting a sparse mass to dense, using
+$B_{qq}$, or substituting identity when production mass is absent or invalid
+is not an acceptable fallback. The separate `tiny_validation_*` fields remain
+an explicit bounded reference request and do not make a missing production
+mass valid.
+
+Within each SLEPc attempt, only positive-frequency modes that pass the
+configured original-pencil residual gate enter the raw candidate pool. Strict
+mass-action deduplication operates on normalized comparison copies while
+retaining each original eigenvector scale, residual, eigenpair index and
+provenance. For a nearest-frequency request, candidates are ranked by distance
+to the requested target before the public count cap; a frequency window
+preserves its existing low-to-high presentation order after cross-subwindow
+deduplication and capping. Realification/conjugate copies cannot consume the
+public cap before the geometric mass test.
+
+If the current certified EPS pool contains fewer unique modes than the
+subwindow asks for, the generic adapter may monotonically increase NEV only up
+to the ceiling fixed by the initially admitted NCV and real-split dimension.
+The actual initial NCV and MPD stay fixed, and all attempts share the original
+outer-iteration budget; a retry cannot repeat a hard shifted-KSP, descriptor,
+or mass-action failure. Dimension or iteration exhaustion retains only the
+last safely solved and residual-certified pool and reports an explicit partial
+result. An absent or invalid geometric mass is a hard failure, not an empty
+window or a successful identity-metric result.
+
+Before overlap-based deduplication, the generic finalizer also checks the
+Hermitian Gram matrix of the residual-certified candidate vectors in this
+declared mass. It applies the dense or CSR mass directly to those vectors and
+forms only a candidate-count-sized Gram matrix; the geometric CSR operator is
+never densified. The normalized Gram must satisfy finite, Hermitian,
+Cauchy-consistent, positive-semidefinite checks using a pivoted semidefinite
+factorization. Its roundoff tolerance scales with machine precision and the
+vector and candidate dimensions, not with an SI-unit floor. Exact phase copies
+and other rank-deficient candidate spans remain admissible. This establishes
+metric positivity only on the checked candidate span; it does not prove that
+an arbitrary supplied mass is globally positive definite outside that span.
+
+The generic SLEPc attempt owns its EPS, work vectors, rotated matrices and
+input-matrix handles for the duration of a call. A hard `EPSSolve`, status-query,
+or matrix-operation error stops further calls on that graph and quarantines its
+remaining handles until process exit. Any borrowed array or matrix-row view
+acquired before the error remains attached to that quarantined graph; cleanup
+does not issue a follow-up PETSc call to restore or destroy it. If ordinary
+object destruction fails, cleanup also stops, quarantines the remaining
+handles, and makes the attempt terminal: it cannot be retried or published as
+a canonical solve.
+This path creates no application-owned MatShell callbacks. The quarantine is
+per-call protection only; safety of `SlepcFinalize` and of cross-entrypoint
+finalization remains **NOT VERIFIED** pending a process-wide runtime owner.
+
+This is a numerical-method contract update with no new Python, ProblemIR or
+public C ABI field. The source now validates the supplied dense or CSR
+geometric mass, certifies the residual-approved candidate span, applies it
+directly in the strict finalizer, and maps selected comparison copies back to
+original SLEPc candidates. Generic windows merge
+residual-certified candidates across subwindows before applying the public
+output cap; sparse mass remains CSR throughout. The generic nearest/window
+adapter performs bounded NEV refill with the first resolved NCV/MPD and one
+cumulative outer-iteration budget. A nearest request that cannot certify its
+requested count fails without publishing partial candidates as canonical
+modes. A nonempty best-effort window may return a dimension-limited certified
+pool with `complete=false`; budget exhaustion, strict underfill, missing or
+invalid mass, an empty pool, and solver errors fail closed. The change has no
+new Python, ProblemIR, or public C ABI field. The focused source regressions
+exist but have not been run locally; provider-backed GHA, managed runtime, and
+scientific qualification remain **NOT VERIFIED**.
 
 For the nonzero-$k$ shared-domain Floquet route, the scalar potential is
 eliminated with the original equation
@@ -2206,6 +2294,13 @@ Repository-owned related contracts:
 |---|---|---|
 | backends/fem/cpu/frequency_domain/modal/shifted_ksp_true_convergence.hpp | floquet_shifted_true_convergence_test | Preserve the default convergence result and iteration budget; apply the unchanged reconstructed true-residual gate and retain scalar callback observations for a hard-error-only probe. |
 | backends/fem/cpu/frequency_domain/slepc_modal_eigen.hpp | solve_slepc_sparse_gyrotropic_modal_eigen | Return the internal result carrying `FloquetShiftedKspFailureProbe`, separate from completed post-solve KSP telemetry and with the attempted EPS NEV/NCV. |
+| backends/fem/cpu/frequency_domain/mode_deduplication.cpp | deduplicate_modes_by_frequency_and_overlap_with_mass_action | Strict comparison-only normalization using an explicit caller-owned geometric mass action; rejects a missing or invalid metric and retains original candidate data. |
+| backends/fem/cpu/frequency_domain/slepc_modal_eigen.cpp | solve_slepc_tiny_gyrotropic_modal_eigen | Generic dense and sparse requests apply the supplied geometric mass after residual screening, then refill with fixed resolved NCV/MPD and a cumulative outer-iteration budget. |
+| backends/fem/cpu/frequency_domain/production_cpu_modal_eigen.cpp | solve_sparse_production_modal_window_payload | Generic sparse window applies the CSR mass directly across subwindows, performs global mass-aware deduplication before the public cap, and reports incomplete outcomes explicitly. |
+| backends/fem/tests/frequency_domain/mode_deduplication_test.cpp | main | The test entrypoint calls `slepc_hard_solve_error_prevents_followup_queries_and_cleanup`, `slepc_vector_query_error_leaves_acquired_views_in_quarantine`, `slepc_destroy_sequence_stops_and_retains_remaining_handles_on_failure`, and `generic_candidate_span_gram_rejects_indefinite_dense_and_csr_mass`, alongside the finalizer fixture; injected callbacks verify the shared operation/destroy gates only, not PETSc runtime failures. The other cases cover phase-copy rank deficiency, mass-orthogonal modes, candidate-span PSD rejection, and missing/invalid mass. |
+| backends/fem/tests/frequency_domain/modal_eigen_contract_test.cpp | main | The test entrypoint calls `generic_dense_window_refills_after_search_filtering`, covering provider-backed dense refill, partial output, nearest underfill, mass rejection, and budget telemetry; GHA execution pending. |
+| backends/fem/cpu/frequency_domain/slepc_modal_eigen.cpp | SLEPcModalCandidateFinalization finalize_slepc_modal_candidates_with_mass | Before overlap deduplication, form and certify only the residual-approved candidate-span Gram matrix using the declared dense or CSR mass action. |
+| backends/fem/cpu/frequency_domain/slepc_modal_eigen.cpp | bool destroy_slepc_modal_objects | Stop after hard PETSc/SLEPc operation errors, check each destructor, and quarantine remaining per-call handles without further graph calls, retrying, or publishing canonical output. |
 | backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp | solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context | Copy callback-owned scalar telemetry before releasing an unsafe failed EPS/KSP graph; do not query PETSc objects after a hard solve error. |
 | backends/fem/cpu/frequency_domain/production_cpu_modal_eigen.cpp | floquet_shifted_ksp_diagnostics_json_fields | Publish `shifted_ksp_failure_probe.v1` only for a hard inner SLEPc solve failure in both nearest and window diagnostics. |
 | backends/fem/tests/frequency_domain/shifted_ksp_true_convergence_test.cpp | main | Exercise callback capture and same-event threshold arithmetic, including explicit unavailable ratio at zero threshold; provider-backed execution pending. |

@@ -605,6 +605,19 @@
         "source-native-floquet-modal",
         "source-floquet-shifted-true-convergence"
       ]
+    },
+    {
+      "id": "eq-generic-modal-mass-overlap",
+      "symbols": [
+        "q",
+        "modal_tangent_mass",
+        "modal_mass_overlap"
+      ],
+      "sources": [
+        "source-generic-modal-mass-action",
+        "source-generic-slepc-mass-pool",
+        "source-generic-candidate-span-gram"
+      ]
     }
   ],
   "symbols": [
@@ -1267,6 +1280,18 @@
       "latex": "$\\mathrm{atol}$",
       "meaning": "Requested shifted-solve absolute tolerance in the same normalized algebraic units as the RHS norm",
       "si_unit": "$1$ (normalized solver equation)"
+    },
+    {
+      "id": "modal_tangent_mass",
+      "latex": "$\\mathbf M_T$",
+      "meaning": "positive geometric tangent-space FEM mass matrix used for modal overlap and candidate deduplication",
+      "si_unit": "$\\mathrm{m^3}$"
+    },
+    {
+      "id": "modal_mass_overlap",
+      "latex": "$\\eta_M$",
+      "meaning": "normalized absolute overlap in the geometric tangent-mass metric",
+      "si_unit": "$1$"
     }
   ],
   "sources": [
@@ -1363,8 +1388,50 @@
     {
       "id": "source-coupled-mode-window-dedup",
       "path": "backends/fem/cpu/frequency_domain/production_cpu_modal_eigen.cpp",
-      "symbol": "std::vector<SLEPcModalAcceptedMode> deduplicate_slepc_modes_by_overlap",
-      "responsibility": "Preserve original coupled q/phi scale while normalized copies serve overlap selection"
+      "symbol": "solve_sparse_production_modal_payload",
+      "responsibility": "Generic sparse dispatcher validates geometric CSR mass and sends windows through strict cross-subwindow mass finalization before the public output cap."
+    },
+    {
+      "id": "source-generic-modal-mass-action",
+      "path": "backends/fem/cpu/frequency_domain/mode_deduplication.cpp",
+      "symbol": "deduplicate_modes_by_frequency_and_overlap_with_mass_action",
+      "responsibility": "Strict comparison-only mass action validates candidate norms and retains original mode amplitudes, residuals and source indices."
+    },
+    {
+      "id": "source-generic-slepc-mass-pool",
+      "path": "backends/fem/cpu/frequency_domain/slepc_modal_eigen.cpp",
+      "symbol": "solve_slepc_tiny_gyrotropic_modal_eigen",
+      "responsibility": "Generic dense and sparse requests residual-screen candidates, use the declared geometric mass for deduplication, and expose only the last safely solved pool after bounded fixed-NCV/MPD refill."
+    },
+    {
+      "id": "source-generic-candidate-span-gram",
+      "path": "backends/fem/cpu/frequency_domain/slepc_modal_eigen.cpp",
+      "symbol": "SLEPcModalCandidateFinalization finalize_slepc_modal_candidates_with_mass",
+      "responsibility": "Before overlap deduplication, apply the declared dense or CSR mass to each residual-certified candidate, form only the candidate-sized normalized Hermitian Gram matrix, and require candidate-span positive semidefiniteness without densifying CSR mass. This does not establish global positive definiteness."
+    },
+    {
+      "id": "source-generic-slepc-object-quarantine",
+      "path": "backends/fem/cpu/frequency_domain/slepc_modal_eigen.cpp",
+      "symbol": "bool destroy_slepc_modal_objects",
+      "responsibility": "Check each per-call PETSc/SLEPc destroy result and quarantine remaining handles after a hard solve, query, matrix-operation, or cleanup error; stop refill and canonical publication without follow-up calls on the poisoned graph. This is not process-wide SlepcFinalize proof."
+    },
+    {
+      "id": "source-generic-window-mass-finalizer",
+      "path": "backends/fem/cpu/frequency_domain/production_cpu_modal_eigen.cpp",
+      "symbol": "solve_sparse_production_modal_payload",
+      "responsibility": "Unique generic sparse dispatcher validates CSR mass and routes frequency windows through global mass-aware deduplication before the requested output cap."
+    },
+    {
+      "id": "test-generic-modal-mass-pool",
+      "path": "backends/fem/tests/frequency_domain/mode_deduplication_test.cpp",
+      "symbol": "main",
+      "responsibility": "Unique test entrypoint calls slepc_hard_solve_error_prevents_followup_queries_and_cleanup, slepc_vector_query_error_leaves_acquired_views_in_quarantine, slepc_destroy_sequence_stops_and_retains_remaining_handles_on_failure, and generic_candidate_span_gram_rejects_indefinite_dense_and_csr_mass, alongside generic_slepc_finalizer_uses_dense_and_csr_tangent_mass_before_capping; injected callbacks verify the shared operation/destroy gates only, not PETSc runtime failures. The other cases cover phase-copy rank deficiency, mass-orthogonal modes, indefinite dense/CSR candidate-span rejection, selection before cap, and missing/invalid metric rejection; local execution is prohibited."
+    },
+    {
+      "id": "test-generic-modal-provider-refill",
+      "path": "backends/fem/tests/frequency_domain/modal_eigen_contract_test.cpp",
+      "symbol": "main",
+      "responsibility": "Unique C ABI test entrypoint calls generic_dense_window_refills_after_search_filtering for actual dense refill, best-effort incomplete output, nearest underfill, missing/asymmetric mass and budget telemetry; provider GHA pending."
     },
     {
       "id": "source-archived-potential-gradient",

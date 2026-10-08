@@ -108,6 +108,32 @@ CONTRACT_PROFILES: dict[str, dict[str, Any]] = {
         },
     },
 }
+
+CONTRACT_PROFILES["generic-modal-slepc"] = {
+    "slug": "fem-generic-modal-slepc-contract",
+    "schema": "fullmag.ci.fem.generic_modal_slepc_contract.v1",
+    "preflight_schema": "fullmag.ci.fem.generic_modal_slepc_preflight.v1",
+    "qualification_scope": "mfem_cpu_generic_mass_dedup_refill_source_contract_only",
+    "route_kind": "github_hosted_cpu_mfem_slepc_container_contract",
+    "tests": [
+        {
+            "name": "fem_mode_deduplication_contract",
+            "source_suffix": "backends/fem/tests/frequency_domain/mode_deduplication_test.cpp",
+            "marker": "PASS: generic_slepc_mass_action_finalizer_contract",
+            "compile_definitions": ["-DFULLMAG_FEM_WITH_SLEPC=1"],
+        },
+        {
+            "name": "fem_modal_eigen_generic_mass_refill_contract",
+            "source_suffix": "backends/fem/tests/frequency_domain/modal_eigen_contract_test.cpp",
+            "marker": "PASS: generic_modal_mass_refill_contract",
+            "compile_definitions": ["-DFULLMAG_HAS_MFEM_STACK=1", "-DFULLMAG_FEM_WITH_SLEPC=1",
+                                    "-DFULLMAG_HAS_CUDA_RUNTIME=0"],
+        },
+    ],
+    "uses_slepc": True,
+    "timeout": dict(CONTRACT_PROFILES["floquet-modal-slepc"]["timeout"]),
+}
+
 _ORCHESTRATION_DEADLINE: float | None = None
 
 

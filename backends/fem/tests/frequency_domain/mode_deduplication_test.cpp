@@ -1,10 +1,13 @@
 #include "cpu/frequency_domain/mode_deduplication.hpp"
 #include "cpu/frequency_domain/mode_filter.hpp"
+#include "cpu/frequency_domain/slepc_modal_eigen.hpp"
 
+#include <array>
 #include <complex>
 #include <cstddef>
 #include <cstdio>
 #include <cstdlib>
+#include <utility>
 #include <vector>
 
 namespace fd = fullmag::fem::frequency_domain;
@@ -17,6 +20,150 @@ void check(bool condition, const char *message)
         std::fprintf(stderr, "FAIL: %s\n", message);
         std::exit(1);
     }
+}
+
+struct FakeSlepcHandle {
+    bool live = true;
+};
+
+struct FakeSlepcDestroyFixture {
+    std::array<FakeSlepcHandle, 5> handles{};
+    std::array<int, 4> destroy_calls{};
+    std::array<bool, 5> quarantined{};
+    int fail_operation = 2;
+    int quarantine_calls = 0;
+};
+
+struct FakeSlepcDestroyContext {
+    FakeSlepcDestroyFixture *fixture = nullptr;
+    std::size_t handle_index = 0;
+    std::size_t operation_index = 0;
+};
+
+bool fake_slepc_destroy(void *context)
+{
+    auto *operation = static_cast<FakeSlepcDestroyContext *>(context);
+    if (operation == nullptr || operation->fixture == nullptr ||
+        operation->handle_index >= operation->fixture->handles.size() ||
+        operation->operation_index >= operation->fixture->destroy_calls.size()) {
+        return false;
+    }
+    FakeSlepcDestroyFixture &fixture = *operation->fixture;
+    ++fixture.destroy_calls[operation->operation_index];
+    if (static_cast<int>(operation->operation_index) == fixture.fail_operation) {
+        return false;
+    }
+    fixture.handles[operation->handle_index].live = false;
+    return true;
+}
+
+void quarantine_fake_slepc_handles(void *context)
+{
+    auto *fixture = static_cast<FakeSlepcDestroyFixture *>(context);
+    if (fixture == nullptr) {
+        return;
+    }
+    ++fixture->quarantine_calls;
+    for (std::size_t index = 0; index < fixture->handles.size(); ++index) {
+        fixture->quarantined[index] = fixture->handles[index].live;
+    }
+}
+
+void slepc_destroy_sequence_stops_and_retains_remaining_handles_on_failure()
+{
+    FakeSlepcDestroyFixture fixture{};
+    std::array<FakeSlepcDestroyContext, 4> contexts{};
+    std::array<fd::SLEPcModalDestroyOperation, 4> operations{};
+    for (std::size_t index = 0; index < contexts.size(); ++index) {
+        contexts[index] = FakeSlepcDestroyContext{&fixture, index, index};
+        operations[index] = fd::SLEPcModalDestroyOperation{
+            &contexts[index], fake_slepc_destroy};
+    }
+
+    const bool destroyed = fd::run_slepc_modal_destroy_sequence(
+        operations.data(),
+        operations.size(),
+        quarantine_fake_slepc_handles,
+        &fixture);
+    check(!destroyed, "a failed destroy callback must terminate the sequence");
+    check(fixture.destroy_calls == std::array<int, 4>{1, 1, 1, 0},
+          "no later EPS or matrix destructor may run after the injected EPS failure");
+    check(fixture.quarantine_calls == 1,
+          "the failure path must quarantine remaining object handles exactly once");
+    check(!fixture.handles[0].live && !fixture.handles[1].live,
+          "objects destroyed before the failure remain released");
+    check(fixture.quarantined[2] && fixture.quarantined[3] && fixture.quarantined[4],
+          "the failed EPS, later rotated matrix and wrapper-owned input matrix remain retained");
+}
+
+void slepc_hard_solve_error_prevents_followup_queries_and_cleanup()
+{
+    bool graph_healthy = true;
+    std::array<int, 3> operation_calls{};
+    const bool solve_succeeded = fd::run_slepc_modal_graph_operation(
+        &graph_healthy,
+        [&]() {
+            ++operation_calls[0];
+            return false;
+        });
+    const bool status_query_succeeded = fd::run_slepc_modal_graph_operation(
+        &graph_healthy,
+        [&]() {
+            ++operation_calls[1];
+            return true;
+        });
+    const bool cleanup_succeeded = fd::run_slepc_modal_graph_operation(
+        &graph_healthy,
+        [&]() {
+            ++operation_calls[2];
+            return true;
+        });
+
+    check(!solve_succeeded && !status_query_succeeded && !cleanup_succeeded,
+          "a hard solve error keeps later graph operations disabled");
+    check(operation_calls == std::array<int, 3>{1, 0, 0},
+          "no EPS status query or destructor may run after the injected solve failure");
+    check(!graph_healthy, "a failed solve permanently poisons this attempt's graph gate");
+}
+
+void slepc_vector_query_error_leaves_acquired_views_in_quarantine()
+{
+    bool graph_healthy = true;
+    bool real_array_view_acquired = false;
+    std::array<int, 4> operation_calls{};
+    const bool real_get_succeeded = fd::run_slepc_modal_graph_operation(
+        &graph_healthy,
+        [&]() {
+            ++operation_calls[0];
+            real_array_view_acquired = true;
+            return true;
+        });
+    const bool imaginary_get_succeeded = fd::run_slepc_modal_graph_operation(
+        &graph_healthy,
+        [&]() {
+            ++operation_calls[1];
+            return false;
+        });
+    const bool real_restore_succeeded = fd::run_slepc_modal_graph_operation(
+        &graph_healthy,
+        [&]() {
+            ++operation_calls[2];
+            real_array_view_acquired = false;
+            return true;
+        });
+    const bool imaginary_restore_succeeded = fd::run_slepc_modal_graph_operation(
+        &graph_healthy,
+        [&]() {
+            ++operation_calls[3];
+            return true;
+        });
+
+    check(real_get_succeeded && !imaginary_get_succeeded &&
+              !real_restore_succeeded && !imaginary_restore_succeeded,
+          "a failed second array query quarantines instead of issuing restores");
+    check(operation_calls == std::array<int, 4>{1, 1, 0, 0} &&
+              real_array_view_acquired && !graph_healthy,
+          "the acquired view remains attached and no PETSc operation follows the failed query");
 }
 
 fd::ModalCandidate candidate(
@@ -377,10 +524,209 @@ void strict_mode_deduplication_fails_without_a_valid_mass_action()
     check(action_failure.modes.empty(), "action failure must return no partial modes");
 }
 
+fd::SLEPcModalAcceptedMode slepc_mode(
+    int eigenpair_index,
+    double frequency_hz,
+    double residual,
+    std::vector<std::complex<double>> vector)
+{
+    fd::SLEPcModalAcceptedMode mode{};
+    mode.eigenpair_index = eigenpair_index;
+    mode.frequency_hz = frequency_hz;
+    mode.relative_residual = residual;
+    mode.mode_vector = std::move(vector);
+    return mode;
+}
+
+void generic_slepc_finalizer_uses_dense_and_csr_tangent_mass_before_capping()
+{
+    const std::vector<fd::SLEPcModalAcceptedMode> candidates{
+        slepc_mode(11, 100.0, 1.0e-6, {{1.0, 0.0}, {1.0e-3, 0.0}, {0.0, 0.0}}),
+        slepc_mode(12, 100.0 + 1.0e-10, 1.0e-9,
+                   {{0.0, 1.0}, {0.0, 1.0e-3}, {0.0, 0.0}}),
+        slepc_mode(13, 100.0 - 1.0e-10, 2.0e-8,
+                   {{1.0, 0.0}, {-1.0e-3, 0.0}, {0.0, 0.0}}),
+        slepc_mode(14, 101.0, 1.0e-10, {{0.0, 0.0}, {0.0, 0.0}, {1.0, 0.0}}),
+    };
+    const double dense_mass[] = {
+        1.0, 0.0, 0.0,
+        0.0, 1.0e6, 0.0,
+        0.0, 0.0, 1.0,
+    };
+
+    const fd::SLEPcModalCandidateFinalization nearest =
+        fd::finalize_slepc_modal_candidates_with_dense_mass(
+            candidates,
+            3,
+            dense_mass,
+            1.0e-8,
+            1.0e-12,
+            0.90,
+            100.95,
+            2,
+            fd::SLEPcModalCandidateSelection::nearest_target);
+    check(nearest.success, "generic dense finalizer accepts a valid geometric tangent mass");
+    check(nearest.unique_candidate_count_before_cap == 3 &&
+              nearest.truncated_by_requested_count,
+          "phase duplicates are removed before the public candidate cap");
+    check(nearest.accepted_modes.size() == 2 &&
+              nearest.accepted_modes[0].eigenpair_index == 12 &&
+              nearest.accepted_modes[1].eigenpair_index == 14,
+          "nearest-target selection keeps the lower-residual phase representative and nearest distinct mode");
+    check(nearest.accepted_modes[0].mode_vector == candidates[1].mode_vector &&
+              nearest.accepted_modes[0].relative_residual == candidates[1].relative_residual,
+          "generic finalizer maps selected comparison copies back to raw amplitudes and residuals");
+
+    const std::uint32_t row_offsets[] = {0, 1, 2, 3};
+    const std::uint32_t columns[] = {0, 1, 2};
+    const double values[] = {1.0, 1.0e6, 1.0};
+    const fd::CsrMatrixView csr_mass{
+        3, 3, row_offsets, 4, columns, 3, values, 3};
+    const fd::SLEPcModalCandidateFinalization lowest =
+        fd::finalize_slepc_modal_candidates_with_csr_mass(
+            candidates,
+            3,
+            csr_mass,
+            1.0e-8,
+            1.0e-12,
+            0.90,
+            100.95,
+            2,
+            fd::SLEPcModalCandidateSelection::lowest_frequency);
+    check(lowest.success && lowest.accepted_modes.size() == 2,
+          "generic CSR finalizer accepts the same geometric mass without densifying it");
+    check(lowest.accepted_modes[0].eigenpair_index == 13 &&
+              lowest.accepted_modes[1].eigenpair_index == 12,
+          "mass-orthogonal degenerate mode survives while lowest-frequency selection precedes the cap");
+    check(lowest.accepted_modes[1].mode_vector == candidates[1].mode_vector,
+          "CSR finalizer preserves the original unnormalized phase representative");
+
+    const fd::SLEPcModalCandidateFinalization missing_mass =
+        fd::finalize_slepc_modal_candidates_with_dense_mass(
+            candidates,
+            3,
+            nullptr,
+            1.0e-8,
+            1.0e-12,
+            0.90,
+            100.95,
+            2,
+            fd::SLEPcModalCandidateSelection::nearest_target);
+    check(!missing_mass.success &&
+              missing_mass.deduplication_status == fd::ModalDeduplicationStatus::invalid_metric,
+          "generic finalizer rejects missing mass instead of assuming identity");
+
+    const std::uint32_t asymmetric_row_offsets[] = {0, 2, 3, 4};
+    const std::uint32_t asymmetric_columns[] = {0, 1, 1, 2};
+    const double asymmetric_values[] = {1.0, 0.25, 1.0e6, 1.0};
+    const fd::CsrMatrixView asymmetric_mass{
+        3, 3, asymmetric_row_offsets, 4,
+        asymmetric_columns, 4, asymmetric_values, 4};
+    const fd::SLEPcModalCandidateFinalization invalid_mass =
+        fd::finalize_slepc_modal_candidates_with_csr_mass(
+            candidates,
+            3,
+            asymmetric_mass,
+            1.0e-8,
+            1.0e-12,
+            0.90,
+            100.95,
+            2,
+            fd::SLEPcModalCandidateSelection::nearest_target);
+    check(!invalid_mass.success &&
+              invalid_mass.deduplication_status == fd::ModalDeduplicationStatus::invalid_metric,
+          "generic CSR finalizer rejects an asymmetric tangent mass explicitly");
+}
+
+void generic_candidate_span_gram_rejects_indefinite_dense_and_csr_mass()
+{
+    const std::vector<fd::SLEPcModalAcceptedMode> two_axis_candidates{
+        slepc_mode(51, 100.0, 1.0e-10, {{1.0, 0.0}, {0.0, 0.0}}),
+        slepc_mode(52, 100.0, 1.0e-10, {{0.0, 0.0}, {1.0, 0.0}}),
+    };
+    const double indefinite_dense_mass[] = {
+        1.0, 2.0,
+        2.0, 1.0,
+    };
+    const auto dense_result =
+        fd::finalize_slepc_modal_candidates_with_dense_mass(
+            two_axis_candidates,
+            2,
+            indefinite_dense_mass,
+            1.0e-8,
+            1.0e-12,
+            0.90,
+            100.0,
+            2,
+            fd::SLEPcModalCandidateSelection::nearest_target);
+    check(!dense_result.success &&
+              dense_result.deduplication_status ==
+                  fd::ModalDeduplicationStatus::invalid_metric &&
+              dense_result.accepted_modes.empty(),
+          "indefinite dense mass with positive diagonals must fail the candidate Gram check");
+
+    const std::uint32_t row_offsets[] = {0, 2, 4};
+    const std::uint32_t columns[] = {0, 1, 0, 1};
+    const double indefinite_values[] = {1.0, 2.0, 2.0, 1.0};
+    const fd::CsrMatrixView indefinite_csr_mass{
+        2, 2, row_offsets, 3, columns, 4, indefinite_values, 4};
+    const auto csr_result =
+        fd::finalize_slepc_modal_candidates_with_csr_mass(
+            two_axis_candidates,
+            2,
+            indefinite_csr_mass,
+            1.0e-8,
+            1.0e-12,
+            0.90,
+            100.0,
+            2,
+            fd::SLEPcModalCandidateSelection::nearest_target);
+    check(!csr_result.success &&
+              csr_result.deduplication_status ==
+                  fd::ModalDeduplicationStatus::invalid_metric &&
+              csr_result.accepted_modes.empty(),
+          "indefinite CSR mass must fail without materializing the sparse operator");
+
+    // Pairwise Cauchy bounds alone are insufficient: all three normalized
+    // cross-overlaps are 0.9, but this candidate Gram matrix is indefinite.
+    const std::vector<fd::SLEPcModalAcceptedMode> three_axis_candidates{
+        slepc_mode(61, 100.0, 1.0e-10,
+                   {{1.0, 0.0}, {0.0, 0.0}, {0.0, 0.0}}),
+        slepc_mode(62, 100.0, 1.0e-10,
+                   {{0.0, 0.0}, {1.0, 0.0}, {0.0, 0.0}}),
+        slepc_mode(63, 100.0, 1.0e-10,
+                   {{0.0, 0.0}, {0.0, 0.0}, {1.0, 0.0}}),
+    };
+    const double pairwise_bounded_indefinite_mass[] = {
+        1.0, 0.9, 0.9,
+        0.9, 1.0, -0.9,
+        0.9, -0.9, 1.0,
+    };
+    const auto pivoted_psd_result =
+        fd::finalize_slepc_modal_candidates_with_dense_mass(
+            three_axis_candidates,
+            3,
+            pairwise_bounded_indefinite_mass,
+            1.0e-8,
+            1.0e-12,
+            0.90,
+            100.0,
+            3,
+            fd::SLEPcModalCandidateSelection::nearest_target);
+    check(!pivoted_psd_result.success &&
+              pivoted_psd_result.deduplication_status ==
+                  fd::ModalDeduplicationStatus::invalid_metric &&
+              pivoted_psd_result.accepted_modes.empty(),
+          "pivoted candidate Gram PSD check must reject global indefiniteness after pairwise Cauchy passes");
+}
+
 } // namespace
 
 int main()
 {
+    slepc_destroy_sequence_stops_and_retains_remaining_handles_on_failure();
+    slepc_hard_solve_error_prevents_followup_queries_and_cleanup();
+    slepc_vector_query_error_leaves_acquired_views_in_quarantine();
     mode_filter_keeps_boundary_modes_inclusive();
     mode_deduplication_keeps_lower_residual_duplicate();
     strict_mode_deduplication_removes_phase_duplicates_without_rescaling_output();
@@ -388,5 +734,8 @@ int main()
     strict_mode_deduplication_keeps_mass_orthogonal_degenerate_modes();
     strict_mode_deduplication_dense_and_csr_mass_actions_are_equivalent();
     strict_mode_deduplication_fails_without_a_valid_mass_action();
+    generic_slepc_finalizer_uses_dense_and_csr_tangent_mass_before_capping();
+    generic_candidate_span_gram_rejects_indefinite_dense_and_csr_mass();
+    std::printf("PASS: generic_slepc_mass_action_finalizer_contract\n");
     return 0;
 }

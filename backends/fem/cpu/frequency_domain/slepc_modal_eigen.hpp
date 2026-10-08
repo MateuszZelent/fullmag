@@ -1,8 +1,10 @@
 #pragma once
 
+#include "cpu/frequency_domain/mode_deduplication.hpp"
 #include "frequency_domain/modal_eigen_request.hpp"
 
 #include <array>
+#include <cstddef>
 #include <complex>
 #include <cstdint>
 #include <limits>
@@ -76,10 +78,27 @@ struct SLEPcModalEigenAdapterStatus {
 
 SLEPcModalEigenAdapterStatus slepc_modal_eigen_adapter_status() noexcept;
 
+struct SLEPcTangentMassActionContext {
+    std::size_t dimension = 0;
+    const double *dense_row_major = nullptr;
+    CsrMatrixView csr{};
+    bool sparse = false;
+    bool validated = false;
+};
+
+bool create_slepc_tangent_mass_action_context(
+    int tangent_dof_count,
+    const double *dense_mass_row_major,
+    const CsrMatrixView &csr_mass,
+    SLEPcTangentMassActionContext *out_context) noexcept;
+
 struct SLEPcTinyGyrotropicModalEigenRequest {
     int tangent_dof_count = 0;
     const double *stiffness_matrix_row_major = nullptr;
     const double *gyrotropic_matrix_row_major = nullptr;
+    const double *tangent_mass_matrix_row_major = nullptr;
+    CsrMatrixView tangent_mass_csr{};
+    const SLEPcTangentMassActionContext *tangent_mass_action_context = nullptr;
     int requested_mode_count = 1;
     double target_frequency_hz = 0.0;
     double frequency_min_hz = 0.0;
@@ -121,6 +140,106 @@ struct SLEPcModalAcceptedMode {
     double relative_residual = 0.0;
     std::vector<std::complex<double>> mode_vector{};
 };
+
+enum class SLEPcModalCandidateSelection {
+    nearest_target,
+    lowest_frequency,
+};
+
+struct SLEPcModalCandidateFinalization {
+    bool success = false;
+    ModalDeduplicationStatus deduplication_status =
+        ModalDeduplicationStatus::invalid_parameters;
+    std::size_t unique_candidate_count_before_cap = 0;
+    bool truncated_by_requested_count = false;
+    std::vector<SLEPcModalAcceptedMode> accepted_modes;
+};
+
+// Private fail-closed sequencing primitive used by PETSc object teardown.
+// The callbacks are typed adapters supplied by the owner; the test exercises
+// sequencing with inert handles and never fabricates or dereferences PETSc
+// objects. This is an internal C++ contract, not a public C ABI.
+struct SLEPcModalDestroyOperation {
+    void *context = nullptr;
+    bool (*destroy)(void *context) = nullptr;
+};
+using SLEPcModalDestroyFailureHandler = void (*)(void *context);
+
+// A hard PETSc/SLEPc operation error makes the current graph unsafe to touch.
+// This per-attempt gate lets the source regression prove that later queries or
+// teardown operations are not called after the first failure.
+template <typename Operation>
+bool run_slepc_modal_graph_operation(
+    bool *graph_healthy,
+    Operation operation) noexcept
+{
+    if (graph_healthy == nullptr || !*graph_healthy) {
+        return false;
+    }
+    if (!operation()) {
+        *graph_healthy = false;
+        return false;
+    }
+    return true;
+}
+
+bool run_slepc_modal_destroy_sequence(
+    const SLEPcModalDestroyOperation *operations,
+    std::size_t operation_count,
+    SLEPcModalDestroyFailureHandler on_failure,
+    void *failure_context) noexcept;
+
+constexpr double kSLEPcModalDedupFrequencyRelativeTolerance = 1.0e-8;
+constexpr double kSLEPcModalDedupFrequencyAbsoluteToleranceHz = 1.0e-12;
+constexpr double kSLEPcModalDedupOverlapThreshold = 0.90;
+
+// Shared generic CPU modal finalizer. It applies the declared geometric mass
+// action to comparison copies, maps selected indices back to the untouched
+// accepted modes, chooses nearest/lowest candidates, caps, then restores
+// frequency presentation order.
+SLEPcModalCandidateFinalization finalize_slepc_modal_candidates_with_mass(
+    const std::vector<SLEPcModalAcceptedMode> &candidates,
+    std::size_t tangent_dof_count,
+    ModalMassAction mass_action,
+    const void *mass_action_context,
+    double frequency_relative_tolerance,
+    double frequency_absolute_tolerance_hz,
+    double overlap_threshold,
+    double target_frequency_hz,
+    int requested_mode_count,
+    SLEPcModalCandidateSelection selection) noexcept;
+
+SLEPcModalCandidateFinalization finalize_slepc_modal_candidates_with_context(
+    const std::vector<SLEPcModalAcceptedMode> &candidates,
+    const SLEPcTangentMassActionContext &mass_action_context,
+    double frequency_relative_tolerance,
+    double frequency_absolute_tolerance_hz,
+    double overlap_threshold,
+    double target_frequency_hz,
+    int requested_mode_count,
+    SLEPcModalCandidateSelection selection) noexcept;
+
+SLEPcModalCandidateFinalization finalize_slepc_modal_candidates_with_dense_mass(
+    const std::vector<SLEPcModalAcceptedMode> &candidates,
+    std::size_t tangent_dof_count,
+    const double *mass_matrix_row_major,
+    double frequency_relative_tolerance,
+    double frequency_absolute_tolerance_hz,
+    double overlap_threshold,
+    double target_frequency_hz,
+    int requested_mode_count,
+    SLEPcModalCandidateSelection selection) noexcept;
+
+SLEPcModalCandidateFinalization finalize_slepc_modal_candidates_with_csr_mass(
+    const std::vector<SLEPcModalAcceptedMode> &candidates,
+    std::size_t tangent_dof_count,
+    const CsrMatrixView &mass_csr,
+    double frequency_relative_tolerance,
+    double frequency_absolute_tolerance_hz,
+    double overlap_threshold,
+    double target_frequency_hz,
+    int requested_mode_count,
+    SLEPcModalCandidateSelection selection) noexcept;
 
 struct FloquetDemagOperatorProbeSample {
     bool attempted = false;
@@ -240,6 +359,9 @@ struct FloquetSchurActionDiagnostic {
 
 struct SLEPcTinyGyrotropicModalEigenResult {
     bool ok = false;
+    // Internal terminal-state marker. A quarantined PETSc graph must not be
+    // queried, destroyed again, retried, or published as canonical output.
+    bool slepc_graph_quarantined = false;
     const char *status = "unavailable";
     const char *solver_adapter = "slepc_modal_eigen";
     // The current native modal adapter uses sequential PETSc objects. Keep
@@ -291,9 +413,12 @@ struct SLEPcTinyGyrotropicModalEigenResult {
     int eps_initial_nev = 0;
     int eps_attempt_count = 0;
     int eps_solved_attempt_count = 0;
+    int eps_initial_ncv = 0;
+    int eps_initial_mpd = 0;
     int eps_finalized_attempt_number = 0;
     int eps_finalized_nev = 0;
     int eps_unique_certified_mode_count = 0;
+    bool eps_outer_iteration_budget_exhausted = false;
     FloquetShiftedKspFailureProbe shifted_ksp_failure_probe{};
     bool eps_iteration_budget_available = false;
     bool eps_cumulative_iterations_available = false;
@@ -386,6 +511,8 @@ struct SLEPcSparseGyrotropicModalEigenRequest {
     int tangent_dof_count = 0;
     CsrMatrixView stiffness_csr{};
     CsrMatrixView gyrotropic_csr{};
+    CsrMatrixView tangent_mass_csr{};
+    const SLEPcTangentMassActionContext *tangent_mass_action_context = nullptr;
     int requested_mode_count = 1;
     double target_frequency_hz = 0.0;
     double frequency_min_hz = 0.0;
