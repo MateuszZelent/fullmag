@@ -969,3 +969,17 @@ MFEM, dokładnie jednego passing CTest oraz znacznika po oracle. Receipt wiąże
 SHA, obraz i biblioteki. Review wymagało porównania HEAD z GITHUB_SHA, ponownej
 kontroli źródeł oraz overall failed po błędzie finalizacji ownera. Wykonanie tej
 trasy i kwalifikacja fizyki pozostają NOT VERIFIED; nie jest to SLEPc/runtime proof.
+
+### Wynik browser replay i poprawka transportu sesji
+
+Browser113361219462: główny smoke i negative control PASS, ale Inspector modal
+handoff FAIL. Trace ma już hasTopology=true i identityComplete=true, ownership
+compatible; actual controller error: Headers Invalid value. Potwierdzona przyczyna:
+modeFieldOverlayResources używał sessionResourceIdentityKey z separatorami NUL
+jako x-fullmag-session-scope. Zastosowano istniejący sessionRequestScopeKey,
+który zachowuje sessionId/epoch/request_scope_epoch w formacie transportowym.
+Nie zmieniono bramek ownership ani metadanych; existing Inspector browser gate
+jest regresją tego rzeczywistego błędu. Pozytywny modal handoff nadal NOT VERIFIED.
+
+Trasa MFEM source contract zapisana i wysłana jako
+0f6da649a40cc863600e78825bc6c472053e7269. Wykonanie oracle oczekiwane w GHA.
