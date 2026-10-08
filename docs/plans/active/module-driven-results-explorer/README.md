@@ -149,6 +149,13 @@ są zarejestrowane, dopóki backend nie publikuje ich `product_kind`.
 
 ### Etap 2 — generyczny builder drzewa
 
+Stan: **część 2a wdrożona w źródłach.** `buildPhysicsFirstResultsTree` nie tworzy
+już pustych rodzin: Dynamics, Resonance & FMR i Dispersion pojawiają się
+tylko z opublikowanymi danymi (Dynamics także w trakcie ładowania), a stała
+pusta gałąź Hysteresis zniknęła. Rodziny niosą `analysisModuleId` modułu
+właściciela. Część 2b (węzły z katalogu zbiorów × szablony manifestów, aliasy
+`results.dispersion.*`) pozostaje do zrobienia.
+
 - `buildPhysicsFirstResultsTree` zastąpiony przez builder: zbiory ×
   manifesty × definicje. Istniejące rodzaje `results.dispersion.*`
   przechodzą do szablonów `analysis.dispersion`, z zachowaniem dedykowanych

@@ -1,3 +1,4 @@
+import type { AnalysisModuleId } from "@/kernel/analysis-modules/analysisModuleContract";
 import type { CommandId } from "@/kernel/commands/commandTypes";
 import type {
   ResourceAvailability,
@@ -311,6 +312,8 @@ export interface ExplorerNode {
   parentId: string | null;
   activeAnalysisField?: boolean;
   analysisFieldRepresentation?: "complex-vector-xyz";
+  /** Analysis feature module that owns this Results node (ADR 0054). */
+  analysisModuleId?: AnalysisModuleId;
   normalization?: string;
   observationFrame?: ObservationFrameResource;
   badge?: string;

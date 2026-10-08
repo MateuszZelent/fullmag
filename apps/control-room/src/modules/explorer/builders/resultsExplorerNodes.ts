@@ -1,3 +1,4 @@
+import type { AnalysisModuleId } from "@/kernel/analysis-modules/analysisModuleContract";
 import {
   classifyFrequencyDomainResult,
   type FrequencyDomainResultEvidence,
@@ -871,6 +872,23 @@ function kResolvedStage(
   );
 }
 
+/** Keeps an analysis family only when it has published children, tagged with its owning module. */
+function publishedAnalysisRoot(
+  root: ExplorerNode | null,
+  analysisModuleId?: AnalysisModuleId,
+): ExplorerNode[] {
+  if (!root || (root.children?.length ?? 0) === 0) return [];
+  return [analysisModuleId ? { ...root, analysisModuleId } : root];
+}
+
+/** Snapshots are shown while loading or failed so the state stays visible; an empty ready catalog is omitted. */
+function observationFramesPublished(snapshot: PhysicsFirstResultsSnapshot): boolean {
+  const resource = snapshot.observationFrames;
+  if (!resource) return false;
+  if (resource.status !== "ready") return true;
+  return (resource.data?.frames.length ?? 0) > 0;
+}
+
 function rootWithChildren(
   id: string,
   kind: ExplorerNodeKind,
@@ -1121,22 +1139,33 @@ export function buildPhysicsFirstResultsTree(snapshot: PhysicsFirstResultsSnapsh
           }
         : {}),
       children: [
-        rootWithChildren(
-          `${resultsId}:dynamics`,
-          "results.dynamics.root",
-          "Dynamics",
-          resultsId,
-          [observationFramesRoot(`${resultsId}:dynamics`, snapshot)],
+        // Analysis families exist only for what this run published (ADR 0054);
+        // there is no placeholder family for analyses that did not run.
+        ...publishedAnalysisRoot(
+          observationFramesPublished(snapshot)
+            ? rootWithChildren(
+                `${resultsId}:dynamics`,
+                "results.dynamics.root",
+                "Dynamics",
+                resultsId,
+                [observationFramesRoot(`${resultsId}:dynamics`, snapshot)],
+              )
+            : null,
         ),
-        rootWithChildren(resonanceId, "results.resonance.root", "Resonance & FMR", resultsId, resonanceStages),
-        rootWithChildren(
-          dispersionId,
-          "results.dispersion.root",
-          "Dispersion & k-resolved response",
-          resultsId,
-          dispersionStages,
+        ...publishedAnalysisRoot(
+          rootWithChildren(resonanceId, "results.resonance.root", "Resonance & FMR", resultsId, resonanceStages),
+          "analysis.resonance",
         ),
-        rootWithChildren(`${resultsId}:hysteresis`, "results.hysteresis.root", "Hysteresis", resultsId, []),
+        ...publishedAnalysisRoot(
+          rootWithChildren(
+            dispersionId,
+            "results.dispersion.root",
+            "Dispersion & k-resolved response",
+            resultsId,
+            dispersionStages,
+          ),
+          "analysis.dispersion",
+        ),
         postprocessingRootWithChildren(
           `${resultsId}:analysis-views`,
           "results.analysis_views.root",

@@ -63,7 +63,6 @@ describe("buildPhysicsFirstResultsTree", () => {
     expect(tree[0]?.label).toBe("Results");
     expect(nodes.map((node) => node.label)).toEqual(
       expect.arrayContaining([
-        "Dynamics",
         "Resonance & FMR",
         "Linear eigenmodes · Modal",
         "Eigenfrequency Spectrum",
@@ -73,7 +72,6 @@ describe("buildPhysicsFirstResultsTree", () => {
         "Resonance Peaks",
         "Frequency Points",
         "Response Fields",
-        "Hysteresis",
         "Analysis Views",
         "Derived Values",
         "Tables",
@@ -81,6 +79,42 @@ describe("buildPhysicsFirstResultsTree", () => {
       ]),
     );
     expect(nodes.map((node) => node.label)).not.toContain("RF Coupling / FMR Activity");
+    // Families that published nothing in this run are not shown as placeholders.
+    expect(nodes.map((node) => node.label)).not.toContain("Dispersion & k-resolved response");
+    expect(nodes.map((node) => node.label)).not.toContain("Hysteresis");
+    expect(nodes.map((node) => node.label)).not.toContain("Dynamics");
+  });
+
+  it("tags analysis families with the module that owns them", () => {
+    const kPath = { kind: "path", label: "Γ–X", sampleCount: 8 } as const;
+    const families = buildPhysicsFirstResultsTree({
+      entries: [modalFinite, { ...modalFinite, kSampling: kPath, boundaryContext: "floquet_periodic", stageId: "k-path" }],
+      resultContextRunId: modalFinite.runId,
+    })[0]?.children;
+
+    expect(families?.find((node) => node.kind === "results.resonance.root")?.analysisModuleId).toBe(
+      "analysis.resonance",
+    );
+    expect(families?.find((node) => node.kind === "results.dispersion.root")?.analysisModuleId).toBe(
+      "analysis.dispersion",
+    );
+  });
+
+  it("keeps Dynamics while snapshots load and omits it once the catalog is empty", () => {
+    const labels = (status: "loading" | "ready", frames: number) =>
+      flattenExplorerNodes(
+        buildPhysicsFirstResultsTree({
+          entries: [],
+          observationFrames: {
+            data: status === "ready" ? ({ frames: new Array(frames).fill(null) } as never) : null,
+            status,
+          } as never,
+          resultContextRunId: "run:frames",
+        }),
+      ).map((node) => node.label);
+
+    expect(labels("loading", 0)).toContain("Dynamics");
+    expect(labels("ready", 0)).not.toContain("Dynamics");
   });
 
   it("keeps fixed nonzero-k separate from a dispersion relation", () => {
@@ -244,29 +278,20 @@ describe("buildPhysicsFirstResultsTree", () => {
     });
   });
 
-  it("marks empty result families unavailable instead of presenting them as ready", () => {
+  it("omits empty analysis families and keeps empty postprocessing roots unavailable", () => {
     const nodes = flattenExplorerNodes(
       buildPhysicsFirstResultsTree({
         entries: [],
         resultContextRunId: "run:empty",
       }),
     );
+    const labels = nodes.map((candidate) => candidate.label);
 
-    // Dynamics always owns the "State snapshots" observation-frame root, so
-    // the family itself is a container; its only child carries the empty state.
-    const snapshots = nodes.find((candidate) => candidate.label === "State snapshots");
-    expect(snapshots).toMatchObject({
-      availability: "unavailable",
-      executionState: "not_started",
-      status: "unavailable",
-    });
-    expect(nodes.find((candidate) => candidate.label === "Dynamics")?.children)
-      .toEqual([expect.objectContaining({ id: snapshots?.id })]);
+    for (const label of ["Dynamics", "Resonance & FMR", "Dispersion & k-resolved response", "Hysteresis"]) {
+      expect(labels).not.toContain(label);
+    }
 
     for (const label of [
-      "Resonance & FMR",
-      "Dispersion & k-resolved response",
-      "Hysteresis",
       "Analysis Views",
       "Derived Values",
       "Tables",
