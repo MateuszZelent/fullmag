@@ -95,9 +95,11 @@ describe("buildPhysicsFirstResultsTree", () => {
     expect(families?.find((node) => node.kind === "results.resonance.root")?.analysisModuleId).toBe(
       "analysis.resonance",
     );
-    expect(families?.find((node) => node.kind === "results.dispersion.root")?.analysisModuleId).toBe(
-      "analysis.dispersion",
-    );
+    const dispersion = families?.find((node) => node.kind === "results.dispersion.root");
+    expect(dispersion?.analysisModuleId).toBe("analysis.dispersion");
+    for (const descendant of flattenExplorerNodes(dispersion?.children ?? [])) {
+      expect(descendant.analysisModuleId).toBe("analysis.dispersion");
+    }
   });
 
   it("keeps Dynamics while snapshots load and omits it once the catalog is empty", () => {

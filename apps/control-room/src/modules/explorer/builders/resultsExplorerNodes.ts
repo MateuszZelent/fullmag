@@ -878,7 +878,18 @@ function publishedAnalysisRoot(
   analysisModuleId?: AnalysisModuleId,
 ): ExplorerNode[] {
   if (!root || (root.children?.length ?? 0) === 0) return [];
-  return [analysisModuleId ? { ...root, analysisModuleId } : root];
+  return [analysisModuleId ? withAnalysisModule(root, analysisModuleId) : root];
+}
+
+/** Every node of a module-owned family records its owner so view, Inspector and ribbon hosts can resolve it. */
+function withAnalysisModule(node: ExplorerNode, analysisModuleId: AnalysisModuleId): ExplorerNode {
+  return {
+    ...node,
+    analysisModuleId,
+    ...(node.children
+      ? { children: node.children.map((child) => withAnalysisModule(child, analysisModuleId)) }
+      : {}),
+  };
 }
 
 /** Snapshots are shown while loading or failed so the state stays visible; an empty ready catalog is omitted. */
