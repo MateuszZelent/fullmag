@@ -126,6 +126,7 @@ import {
   viewport3DVectorLayersEnabledFromBrowserConfig,
 } from "@/kernel/browserFullmagConfig";
 import {
+  useAnalysisFieldOverlayContext,
   useRenderableAnalysisFieldOverlay,
   type AnalysisFieldOverlayAppearanceState,
 } from "@/kernel/visualization/AnalysisFieldOverlayController";
@@ -2915,7 +2916,8 @@ export function useViewport3DSceneModel({
     savedViewportResourceHasFreshData(savedViewportResources.topology) &&
     savedViewportResourceHasFreshData(savedViewportResources.field);
   const primitiveDraftOverlay = usePrimitiveDraftOverlay();
-  const { analysisFieldOverlay } = useKernel();
+  const { analysisFieldOverlay, diagnosticRecorder } = useKernel();
+  const analysisOverlayContext = useAnalysisFieldOverlayContext(analysisFieldOverlay);
   const analysisOverlaySnapshot =
     useRenderableAnalysisFieldOverlay(analysisFieldOverlay);
   const analysisOverlay = useMemo(
@@ -3496,17 +3498,65 @@ export function useViewport3DSceneModel({
     fieldCompatibleTopologyRenderModel,
     sharedDomainManifest.data?.mesh_id,
   ]);
-  const modeFieldOverlay = useModeFieldOverlayIntentResource({
-    enabled: Boolean(
-      liveViewportResourcesEnabled &&
-        (analysisOverlay?.analysisResultFieldIntent ?? analysisOverlay?.modeIntent),
-    ),
-    intent:
-      analysisOverlay?.analysisResultFieldIntent ?? analysisOverlay?.modeIntent,
-    topology: modeFieldOverlayTopology,
-  });
   const analysisFieldIntent =
     analysisOverlay?.analysisResultFieldIntent ?? analysisOverlay?.modeIntent;
+  const modeFieldOverlayHasIntent = Boolean(analysisFieldIntent);
+  const modeFieldOverlayEnabled = Boolean(
+    liveViewportResourcesEnabled && modeFieldOverlayHasIntent,
+  );
+  const modeFieldOverlay = useModeFieldOverlayIntentResource({
+    enabled: modeFieldOverlayEnabled,
+    intent: analysisFieldIntent,
+    topology: modeFieldOverlayTopology,
+  });
+  const modeFieldOverlayTopologyIdentityComplete = Boolean(
+    modeFieldOverlayTopology?.domainGenerationId &&
+      modeFieldOverlayTopology.meshTopologyHash &&
+      modeFieldOverlayTopology.meshTopologyRevision !== null &&
+      Number.isInteger(modeFieldOverlayTopology.pointCount) &&
+      modeFieldOverlayTopology.pointCount > 0,
+  );
+  const modeFieldOwnerReason = analysisOverlayContext.reason?.slice(0, 160) ?? null;
+  const modeFieldOwnerResultRunId =
+    analysisOverlayContext.resultRunId?.slice(0, 120) ?? null;
+  const modeFieldOwnerStatus = analysisOverlayContext.status;
+  const hasModeFieldTopology = modeFieldOverlayTopology !== null;
+  const hasModeFieldSession = sessionIdentity !== null;
+  const modeFieldOwnerDiagnostic = useMemo(
+    () => ({
+      enabled: modeFieldOverlayEnabled,
+      hasIntent: modeFieldOverlayHasIntent,
+      hasSession: hasModeFieldSession,
+      hasTopology: hasModeFieldTopology,
+      ownerReason: modeFieldOwnerReason,
+      ownerResultRunId: modeFieldOwnerResultRunId,
+      ownerStatus: modeFieldOwnerStatus,
+      topologyCurrent,
+      topologyIdentityComplete: modeFieldOverlayTopologyIdentityComplete,
+    }),
+    [
+      hasModeFieldSession,
+      hasModeFieldTopology,
+      modeFieldOverlayEnabled,
+      modeFieldOverlayHasIntent,
+      modeFieldOverlayTopologyIdentityComplete,
+      modeFieldOwnerReason,
+      modeFieldOwnerResultRunId,
+      modeFieldOwnerStatus,
+      topologyCurrent,
+    ],
+  );
+  const modeFieldOwnerDiagnosticRef = useRef<string | null>(null);
+  useEffect(() => {
+    const diagnosticKey = JSON.stringify(modeFieldOwnerDiagnostic);
+    if (modeFieldOwnerDiagnosticRef.current === diagnosticKey) return;
+    modeFieldOwnerDiagnosticRef.current = diagnosticKey;
+    diagnosticRecorder.mark(
+      "viewport-3d.mode-field-overlay.owner-gate",
+      modeFieldOwnerDiagnostic,
+      "viewport-3d",
+    );
+  }, [diagnosticRecorder, modeFieldOwnerDiagnostic]);
   const clipCrossSectionQuery = useMemo(() => {
     const query = resolveCrossSectionQueryFromVisualizationState(renderingState);
     return {

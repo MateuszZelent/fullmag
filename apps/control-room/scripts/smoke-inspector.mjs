@@ -148,6 +148,7 @@ await page.addInitScript((baseUrl) => {
     allowMissingSessionSmoke: true,
     controlRoomApiBase: baseUrl,
     disableRealtime: true,
+    enableDiagnosticRecorder: true,
   };
 }, new URL(workspaceUrl).origin);
 await page.addInitScript(() => {
@@ -1848,26 +1849,111 @@ async function inspectorModalFieldFailureDetails(page, fixture, networkEvents, e
     .slice(-32);
   let ui = null;
   try {
-    ui = await page.evaluate(() => ({
-      alerts: Array.from(document.querySelectorAll('[role="alert"]'))
-        .map((element) => element.textContent?.trim() ?? "")
-        .filter(Boolean)
-        .map((text) => text.slice(0, 400))
-        .slice(-8),
-      statuses: Array.from(document.querySelectorAll('[role="status"]'))
-        .map((element) => element.textContent?.trim() ?? "")
-        .filter(Boolean)
-        .map((text) => text.slice(0, 400))
-        .slice(-8),
-      selectedExplorerNodeIds: Array.from(
-        document.querySelectorAll('[role="treeitem"][aria-selected="true"][data-node-id]'),
+    ui = await page.evaluate(() => {
+      const artifact = window.__FULLMAG_DIAGNOSTIC_RECORDER_EXPORT__?.();
+      const relevantNames = new Set([
+        "viewport-3d.mode-field-overlay.owner-gate",
+        "viewport-3d.mode-field-overlay.resource-state",
+      ]);
+      const modeFieldEvents = Object.values(artifact?.streams ?? {})
+        .flat()
+        .filter((event) => relevantNames.has(event?.name))
+        .slice(-16)
+        .map((event) => {
+          const detail = event?.detail ?? {};
+          return {
+            timestampMs: Number.isFinite(event?.timestampMs)
+              ? event.timestampMs
+              : null,
+            name: event?.name ?? null,
+            detail: {
+              controllerHasError:
+                typeof detail.controllerHasError === "boolean"
+                  ? detail.controllerHasError
+                  : null,
+              controllerErrorName:
+                typeof detail.controllerErrorName === "string"
+                  ? detail.controllerErrorName.slice(0, 80)
+                  : null,
+              controllerErrorMessage:
+                typeof detail.controllerErrorMessage === "string"
+                  ? detail.controllerErrorMessage.slice(0, 160)
+                  : null,
+              controllerStatus:
+                typeof detail.controllerStatus === "string"
+                  ? detail.controllerStatus.slice(0, 24)
+                  : null,
+              enabled:
+                typeof detail.enabled === "boolean" ? detail.enabled : null,
+              hasIntent:
+                typeof detail.hasIntent === "boolean" ? detail.hasIntent : null,
+              hasSession:
+                typeof detail.hasSession === "boolean" ? detail.hasSession : null,
+              hasTopology:
+                typeof detail.hasTopology === "boolean" ? detail.hasTopology : null,
+              ownerReason:
+                typeof detail.ownerReason === "string"
+                  ? detail.ownerReason.slice(0, 160)
+                  : null,
+              ownerResultRunId:
+                typeof detail.ownerResultRunId === "string"
+                  ? detail.ownerResultRunId.slice(0, 120)
+                  : null,
+              ownerStatus:
+                typeof detail.ownerStatus === "string"
+                  ? detail.ownerStatus.slice(0, 24)
+                  : null,
+              topologyCurrent:
+                typeof detail.topologyCurrent === "boolean"
+                  ? detail.topologyCurrent
+                  : null,
+              topologyIdentityComplete:
+                typeof detail.topologyIdentityComplete === "boolean"
+                  ? detail.topologyIdentityComplete
+                  : null,
+            },
+          };
+        });
+      const analysisOverlayOwnership = Array.from(
+        document.querySelectorAll(".fm-analysis-overlay-context-notice"),
       )
-        .map((element) => element.getAttribute("data-node-id"))
-        .filter((nodeId) => typeof nodeId === "string")
-        .slice(-16),
-      wavevectorUniforms:
-        window.__FULLMAG_INSPECTOR_WAVEVECTOR_UNIFORMS__?.slice(-8) ?? [],
-    }));
+        .slice(-4)
+        .map((element) => ({
+          reason:
+            element
+              .querySelector(".fm-analysis-overlay-context-notice__reason")
+              ?.textContent?.trim()
+              .slice(0, 240) ?? null,
+          rebindReason:
+            element
+              .querySelector(".fm-analysis-overlay-context-notice__rebind-reason")
+              ?.textContent?.trim()
+              .slice(0, 240) ?? null,
+          text: element.textContent?.trim().slice(0, 400) ?? "",
+        }));
+      return {
+        alerts: Array.from(document.querySelectorAll('[role="alert"]'))
+          .map((element) => element.textContent?.trim() ?? "")
+          .filter(Boolean)
+          .map((text) => text.slice(0, 400))
+          .slice(-8),
+        statuses: Array.from(document.querySelectorAll('[role="status"]'))
+          .map((element) => element.textContent?.trim() ?? "")
+          .filter(Boolean)
+          .map((text) => text.slice(0, 400))
+          .slice(-8),
+        selectedExplorerNodeIds: Array.from(
+          document.querySelectorAll('[role="treeitem"][aria-selected="true"][data-node-id]'),
+        )
+          .map((element) => element.getAttribute("data-node-id"))
+          .filter((nodeId) => typeof nodeId === "string")
+          .slice(-16),
+        wavevectorUniforms:
+          window.__FULLMAG_INSPECTOR_WAVEVECTOR_UNIFORMS__?.slice(-8) ?? [],
+        analysisOverlayOwnership,
+        modeFieldEvents,
+      };
+    });
   } catch {
     ui = null;
   }

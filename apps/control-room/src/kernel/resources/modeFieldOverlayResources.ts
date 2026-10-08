@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 
 import type { FrequencyDomainFieldResource } from "../api/apiTypes";
 import { useKernel } from "../KernelContext";
@@ -142,7 +142,7 @@ export function useModeFieldOverlayIntentResource({
   intent: ModeFieldOverlayIntent | null | undefined;
   topology: ModeFieldOverlayTopologyIdentity | null;
 }): ModeFieldOverlayIntentSnapshot {
-  const { api } = useKernel();
+  const { api, diagnosticRecorder } = useKernel();
   const sessionIdentity = useSessionResourceIdentity();
   const sessionScope = sessionIdentity
     ? sessionResourceIdentityKey(sessionIdentity)
@@ -154,6 +154,78 @@ export function useModeFieldOverlayIntentResource({
   );
   const getSnapshot = useCallback(() => controller.getSnapshot(), [controller]);
   const snapshot = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+  const hasIntent = Boolean(intent);
+  const hasSession = Boolean(sessionScope);
+  const hasTopology = topology !== null;
+  const topologyIdentityComplete = Boolean(
+    topology?.domainGenerationId &&
+      topology.meshTopologyHash &&
+      topology.meshTopologyRevision !== null &&
+      Number.isInteger(topology.pointCount) &&
+      topology.pointCount > 0,
+  );
+  const controllerHasError = snapshot.error !== null;
+  const controllerErrorName = snapshot.error?.name
+    ? snapshot.error.name.slice(0, 80)
+    : null;
+  const controllerErrorMessage = snapshot.error?.message?.slice(0, 160) ?? null;
+  const lastDiagnosticRef = useRef<{
+    controllerHasError: boolean;
+    controllerErrorName: string | null;
+    controllerErrorMessage: string | null;
+    controllerStatus: ModeFieldOverlayIntentSnapshot["status"];
+    enabled: boolean;
+    hasIntent: boolean;
+    hasSession: boolean;
+    hasTopology: boolean;
+    topologyIdentityComplete: boolean;
+  } | null>(null);
+
+  useEffect(() => {
+    const next = {
+      controllerHasError,
+      controllerErrorName,
+      controllerErrorMessage,
+      controllerStatus: snapshot.status,
+      enabled,
+      hasIntent,
+      hasSession,
+      hasTopology,
+      topologyIdentityComplete,
+    };
+    const previous = lastDiagnosticRef.current;
+    if (
+      previous &&
+      previous.controllerErrorName === next.controllerErrorName &&
+      previous.controllerErrorMessage === next.controllerErrorMessage &&
+      previous.controllerHasError === next.controllerHasError &&
+      previous.controllerStatus === next.controllerStatus &&
+      previous.enabled === next.enabled &&
+      previous.hasIntent === next.hasIntent &&
+      previous.hasSession === next.hasSession &&
+      previous.hasTopology === next.hasTopology &&
+      previous.topologyIdentityComplete === next.topologyIdentityComplete
+    ) {
+      return;
+    }
+    lastDiagnosticRef.current = next;
+    diagnosticRecorder.mark(
+      "viewport-3d.mode-field-overlay.resource-state",
+      next,
+      "viewport-3d",
+    );
+  }, [
+    controllerErrorName,
+    controllerErrorMessage,
+    controllerHasError,
+    diagnosticRecorder,
+    enabled,
+    hasIntent,
+    hasSession,
+    hasTopology,
+    snapshot.status,
+    topologyIdentityComplete,
+  ]);
 
   useEffect(() => {
     if (!enabled || !intent || !topology || !sessionScope) {
