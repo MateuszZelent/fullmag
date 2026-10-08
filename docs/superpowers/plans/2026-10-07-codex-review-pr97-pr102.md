@@ -6,7 +6,7 @@ Pełny rejestr obejmuje 254 komentarzy liniowych Codex oraz jedną dodatkową uw
 
 PR #102 zamknięto 2026-10-07, zachowując remote branch `codex/launcher-instance-isolation-20261002` przy `954ba797307c4cc773772d380123893210cfa447`. PR #97 pozostaje otwarty do ukończenia rozpatrzenia i uzasadnionych poprawek. Merge ani usuwanie branchy nie są częścią polecenia zamknięcia PR-ów. Wcześniejszy WIP meshing zachowany osobno.
 
-Stan rejestru: `already_fixed`: 22, `duplicate`: 89, `implemented`: 36, `implemented_pending_browser`: 8, `implemented_pending_ci`: 3, `not_actionable`: 2, `unsupported_recommendation`: 3, `valid_unfixed`: 92. Łącznie 255 wpisów; wszystkie wpisy oceniono; zasadnych nienaprawionych i brakujących bramek nie uznaje się za zakończone.
+Stan rejestru: `already_fixed`: 22, `duplicate`: 89, `implemented`: 37, `implemented_pending_browser`: 8, `implemented_pending_ci`: 3, `not_actionable`: 2, `unsupported_recommendation`: 3, `valid_unfixed`: 91. Łącznie 255 wpisów; wszystkie wpisy oceniono; zasadnych nienaprawionych i brakujących bramek nie uznaje się za zakończone.
 
 Legenda: `pending` — nierozpatrzona; `valid_unfixed` — zasadna, nie naprawiona; `already_fixed` — poprawka potwierdzona aktualnym kodem; `duplicate` — powtórzenie; `unsupported_recommendation` — konkretna rekomendacja nie odpowiada kontraktowi; `implemented` — poprawka z potwierdzoną regresją CI; `implemented_pending_ci` — poprawka przygotowana, regresja oczekuje CI; `implemented_pending_browser` — pokrywające CI przeszło, nadal wymaga celowanego dowodu z przeglądarki; `not_actionable` — uwaga zastąpiona późniejszą jawną decyzją użytkownika.
 
@@ -52,7 +52,7 @@ Legenda: `pending` — nierozpatrzona; `valid_unfixed` — zasadna, nie naprawio
 | [4061061308](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4061061308) / #97 | `backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp` | valid_unfixed | To odrębny entrypoint od generic SLEPc, ten sam mechanizm utraty gałęzi. |
 | [4061061315](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4061061315) / #97 | `crates/fullmag-runner/src/eigen/output_selection.rs` | valid_unfixed | Quantity walidowane tylko jako niepusty string; selektor scala EigenSpectrum w bool. |
 | [4061061322](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4061061322) / #97 | `apps/runner-console/src/api.js` | valid_unfixed | createRetentionPlan dziedziczy globalny 15s timeout; długi serwerowy scan może kontynuować po abort klienta, a ręczne ponowienie może utworzyć kolejny plan. |
-| [4061061326](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4061061326) / #97 | `crates/fullmag-runner/src/fem/eigen_path_manifest.rs` | valid_unfixed | Native production bez validation wpada do analytic_comparison tokenu. |
+| [4061061326](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4061061326) / #97 | `crates/fullmag-runner/src/fem/eigen_path_manifest.rs` | implemented | Native production bez validation wpada do analytic_comparison tokenu. |
 | [4061343690](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4061343690) / #97 | `apps/control-room/src/shared/domain/analysis/frequencyDomainChartModels.ts` | implemented_pending_browser | Zwykły wynik free_modes/frequency_response odrzucany jest przez odpowiadający mu subview mimo zgodnej rodziny wykresu. Powtórzenie 4060116236. |
 | [4061343698](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4061343698) / #97 | `backends/fem/include/frequency_domain/mode_kinematics.hpp` | valid_unfixed | Założenie benchmarku o najmniejszej interesującej częstotliwości nie jest kontraktem publicznego eigensolvera. |
 | [4061343703](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4061343703) / #97 | `packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py` | valid_unfixed | Nodes i translacje periodyczne są przeskalowane z µm do SI, ale periodic_mesh_certificate jest zwracany bez zmian. Fingerprint topologii wiąże certyfikat z reprezentacją węzłów sprzed skalowania, a więc nie opisuje zwróconej MeshData. |
@@ -914,3 +914,11 @@ phase copies, prawdziwą degenerację masowo ortogonalną, CSR/dense i skale1e±
 Source review PASS; cloud C++ contract wykonanie oczekiwane. Legacy API pozostaje
 bez zmian. To nie zamyka review4060116218/4061061308/4060687822: jeszcze trzeba
 podłączyć owned mass, finalizer przed cap, target selection i bounded refill.
+
+Provenance producer proof: bootstrap37779798714 Rust job113319727666 SUCCESS.
+Log potwierdza actual_path_manifest_distinguishes_numeric_solve_from_comparison
+oraz native_modal_manifest_distinguishes_numeric_solve_from_comparison PASS.
+Review4061061326 implemented (producer+consumer contracts), nie physics qualification.
+GUI f614 trace potwierdza wybrany mode-visualization, a timeout przeszedł z expand
+na wait-wavevector-uniform. SVG event fix rozwiązał tę część; admission viewportu
+przed binary nadal wymaga diagnozy. Pełny browser gate pozostaje NOT VERIFIED.
