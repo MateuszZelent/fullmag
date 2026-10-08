@@ -45734,8 +45734,18 @@ async fn frequency_domain_dispersion_resource_rejects_invalid_single_k_vector() 
         ),
     ] {
         write_frequency_domain_dispersion_fixture(&artifact_dir, csv_content, &path_metadata);
+        let published_metadata = fs::read(artifact_dir.join("eigen/dispersion/path.json"))
+            .expect("invalid fixture metadata should remain readable before the request");
+        let published_metadata: serde_json::Value = serde_json::from_slice(&published_metadata)
+            .expect("invalid fixture should still be valid JSON");
+        assert_eq!(published_metadata, path_metadata);
         let (status, payload) = request_frequency_domain_dispersion_resource(app.clone()).await;
-        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(
+            status,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "invalid single-k fixture at {}: {published_metadata}, response {payload}",
+            artifact_dir.display()
+        );
         assert!(payload["error"]
             .as_str()
             .expect("error should be present")

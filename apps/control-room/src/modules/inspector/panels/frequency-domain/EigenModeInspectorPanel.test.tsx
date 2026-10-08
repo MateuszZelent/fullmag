@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { AnalysisFieldOverlayState } from "@/kernel/visualization/AnalysisFieldOverlayController";
+import { createModeFieldOverlayIntent } from "@/kernel/visualization/ModeFieldOverlayIntent";
 
 import {
   buildEigenModeIdentityViewModel,
@@ -115,6 +116,28 @@ describe("EigenModeInspectorPanel identity model", () => {
       ),
     ).toBe(false);
     expect(isCurrentEigenModeOverlay(null, selectedMode)).toBe(false);
+  });
+
+  it("recognizes a kernel-created overlay for a fixed-k chart mode selection", () => {
+    const modeIntent = createModeFieldOverlayIntent({
+      analysisRunId: selectedMode.analysisRunId!,
+      analysisStageId: selectedMode.analysisStageId!,
+      artifactRevision: selectedMode.artifactRevision!,
+      fieldId: selectedMode.fieldId!,
+      kind: "results.dispersion.modal.mode_at_k",
+      modeId: selectedMode.modeId!,
+      modeIndex: selectedMode.modeIndex!,
+      nodeId: selectedMode.nodeId!,
+      sampleId: selectedMode.sampleId!,
+      sampleIndex: selectedMode.sampleIndex!,
+      type: "frequency-domain",
+    });
+
+    expect(modeIntent).not.toBeNull();
+    expect(isCurrentEigenModeOverlay({
+      ...activeEigenOverlay(),
+      modeIntent: modeIntent!,
+    }, selectedMode)).toBe(true);
   });
 
   it("preserves the selected mode phase when changing its view", () => {

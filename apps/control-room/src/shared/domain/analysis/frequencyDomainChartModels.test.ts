@@ -2168,6 +2168,51 @@ describe("frequencyDomainChartModels", () => {
       .toEqual(expect.objectContaining({ primaryChart: "dispersion", status: "available" }));
   });
 
+  it("infers the fixed-k modal route from typed Floquet physics without a calculation mode", () => {
+    const route = routeFrequencyDomainCalculationMode({
+      artifacts: {
+        dispersion_csv_path: "frequency_domain/dispersion.csv",
+        spectrum_v2_path: "frequency_domain/spectrum.v2.json",
+      },
+      boundary_context: "floquet_periodic",
+      k_sampling: { kind: "single", vector_rad_per_m: [0, -1e7, 0] },
+      stage_kind: "eigenmodes",
+      study_product: "modal_eigen",
+    });
+
+    expect(route).toMatchObject({
+      mode: "dispersion_modal",
+      primaryChart: "modal-spectrum",
+      status: "available",
+    });
+  });
+
+  it("preserves explicit modes and keeps finite-open modal stages on the spectrum route", () => {
+    const typedFixedKManifest = {
+      artifacts: { spectrum_v2_path: "frequency_domain/spectrum.v2.json" },
+      boundary_context: "floquet_periodic",
+      k_sampling: { kind: "single", vector_rad_per_m: [0, -1e7, 0] },
+      stage_kind: "eigenmodes",
+      study_product: "modal_eigen",
+    };
+
+    expect(routeFrequencyDomainCalculationMode({
+      ...typedFixedKManifest,
+      requested_execution: { calculation_mode: "free_modes" },
+    }).mode).toBe("free_modes");
+
+    expect(routeFrequencyDomainCalculationMode({
+      artifacts: { spectrum_v2_path: "eigen/spectrum.v2.json" },
+      requested_execution: { boundary_context: "finite_open" },
+      stage_kind: "eigenmodes",
+      study_product: "modal_eigen",
+    })).toMatchObject({
+      mode: "free_modes",
+      primaryChart: "modal-spectrum",
+      status: "available",
+    });
+  });
+
   it("routes dispersion_modal manifests to path_s dispersion charts", () => {
     const route = routeFrequencyDomainCalculationMode({
       artifacts: {
@@ -2189,7 +2234,7 @@ describe("frequencyDomainChartModels", () => {
 
   it("falls back to free mode spectrum routing for modal stages without explicit mode", () => {
     const route = routeFrequencyDomainCalculationMode({
-      artifacts: {},
+      artifacts: { dispersion_csv_path: "frequency_domain/dispersion.csv" },
       stage_kind: "eigenmodes",
     });
 

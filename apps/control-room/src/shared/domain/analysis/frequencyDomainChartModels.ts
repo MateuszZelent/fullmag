@@ -709,8 +709,10 @@ export function routeFrequencyDomainCalculationMode(
   const requested = record(manifest?.requested_execution);
   const physics = record(manifest?.physics);
   const artifacts = record(manifest?.artifacts);
+  const explicitMode = stringValue(requested?.calculation_mode);
   const rawMode =
-    stringValue(requested?.calculation_mode) ??
+    explicitMode ??
+    calculationModeFromPublishedPhysics(manifest, requested) ??
     calculationModeFromStageKind(stringValue(manifest?.stage_kind));
   const mode = normalizeCalculationMode(rawMode);
 
@@ -872,6 +874,28 @@ function artifactStatus(
 function calculationModeFromStageKind(stageKind: string | null): string | null {
   if (stageKind === "frequency_response") return "frequency_response";
   if (stageKind === "eigenmodes") return "free_modes";
+  return null;
+}
+
+function calculationModeFromPublishedPhysics(
+  manifest: JsonRecord | null,
+  requested: JsonRecord | null,
+): FrequencyDomainCalculationMode | null {
+  const physics = record(manifest?.physics);
+  const studyProduct =
+    manifest?.study_product ?? physics?.study_product ?? requested?.study_product;
+  const boundaryContext =
+    requested?.boundary_context ?? manifest?.boundary_context;
+  const sampling = typedKSampling(
+    manifest?.k_sampling ?? requested?.k_sampling,
+  );
+  if (
+    studyProduct === "modal_eigen" &&
+    boundaryContext === "floquet_periodic" &&
+    sampling !== null
+  ) {
+    return "dispersion_modal";
+  }
   return null;
 }
 

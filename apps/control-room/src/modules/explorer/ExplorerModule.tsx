@@ -1027,6 +1027,17 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
             type="button"
             onClick={() => {
               setExplorerFilterText("");
+              if (activeTab === "results") {
+                resultsRun.refetch();
+                artifacts.refetch();
+                tableCatalog.refetch();
+                observationFrames.refetch();
+                frequencyDomainManifest.refetch();
+                frequencyDomainSpectrum.refetch();
+                frequencyDomainBranches.refetch();
+                frequencyDomainDispersion.refetch();
+                frequencyDomainResponseSweep.refetch();
+              }
               expandExplorerNodes(activeTab, collectExplorerNodeIds(nodes));
             }}
           >

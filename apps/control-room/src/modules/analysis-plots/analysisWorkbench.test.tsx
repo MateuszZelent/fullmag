@@ -11,6 +11,7 @@ import {
 import type { KernelApi } from "@/kernel/types";
 import type { AnalysisSubview } from "@/kernel/workspace/analysisViewPreferences";
 import { chartTableWindowFromBinary } from "@/shared/domain/analysis/chartDataPlan";
+import type { FrequencyDomainResultContext } from "@/shared/domain/analysis/frequencyDomainChartModels";
 import type { AnalysisResultProjectionSurfaceProps } from "./components/AnalysisResultProjectionSurface";
 import type { DynamicStructureFactorPointSelection } from "./dynamicStructureFactorModel";
 import type { SpinWaveGammaFeatureSelection } from "./spinWaveGammaModel";
@@ -365,8 +366,19 @@ describe("Analysis workbench", () => {
         frequencyDomainPresentation={{
           kind: "ready",
           physicalContext: {
-            kSampling: { kind: "single", vectorRadPerM: [0, 1e7, 0] },
-          } as never,
+            boundaryContext: "floquet_periodic",
+            classification: null,
+            contractGaps: [],
+            equilibriumId: "eq-fixed-k",
+            evidence: null,
+            geometryId: "geometry-fixed-k",
+            kSampling: { kind: "single", vectorRadPerM: [0, 1e7, 0] as const },
+            meshId: "mesh-fixed-k",
+            observables: [],
+            runId: "run-fixed-k",
+            stageId: "stage-fixed-k",
+            studyProduct: "modal_eigen",
+          } satisfies FrequencyDomainResultContext,
           revision: "sha256:fixed-k-spectrum",
         }}
         frequencyDomainRoute={{

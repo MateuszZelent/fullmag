@@ -6,6 +6,7 @@ import type { SelectionRef } from "../selection/selectionTypes";
 
 import {
   createModeFieldOverlayIntent,
+  isEigenModeFrequencyDomainSelectionKind,
   resolveModeFieldOverlayMetadata,
   validateModeFieldOverlayBinary,
 } from "./ModeFieldOverlayIntent";
@@ -88,6 +89,30 @@ describe("ModeFieldOverlayIntent", () => {
       sampleId: "sample-k0",
     });
     expect(Object.isFrozen(intent)).toBe(true);
+  });
+
+  it.each([
+    "results.dispersion.modal.mode_at_k",
+    "results.resonance.modal.mode",
+  ])("creates a mode intent for the published %s route", (kind) => {
+    const intent = createModeFieldOverlayIntent({ ...selection, kind });
+
+    expect(intent).toMatchObject({
+      analysisRunId: selection.analysisRunId,
+      analysisStageId: selection.analysisStageId,
+      artifactRevision: selection.artifactRevision,
+      fieldId: selection.fieldId,
+      modeId: selection.modeId,
+      nodeId: selection.nodeId,
+      sampleId: selection.sampleId,
+    });
+    expect(isEigenModeFrequencyDomainSelectionKind(kind)).toBe(true);
+  });
+
+  it("does not treat modal result groups as a selected eigen mode", () => {
+    expect(isEigenModeFrequencyDomainSelectionKind("results.dispersion.modal.modes_at_k")).toBe(false);
+    expect(isEigenModeFrequencyDomainSelectionKind("results.resonance.modal.modes")).toBe(false);
+    expect(isEigenModeFrequencyDomainSelectionKind("results.eigen.root")).toBe(false);
   });
 
   it("accepts only canonical ready global XYZ complex field metadata", () => {

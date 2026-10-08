@@ -1,4 +1,5 @@
 import type { AnalysisFieldOverlayState } from "@/kernel/visualization/AnalysisFieldOverlayController";
+import { isEigenModeFrequencyDomainSelectionKind } from "@/kernel/visualization/ModeFieldOverlayIntent";
 
 export interface EigenModeIdentityViewModel {
   branchId: string | null;
@@ -77,11 +78,8 @@ export function isEigenModeInspectorSelection(
   kind: string | null | undefined,
   target: EigenModeOverlayIdentity,
 ): boolean {
-  const isModeSelection =
-    kind === "results.eigen.mode" ||
-    kind === "results.dispersion.modal.mode_at_k" ||
-    kind === "results.resonance.modal.mode";
-  return isModeSelection && hasCompleteEigenModeOverlayIdentity(target);
+  return isEigenModeFrequencyDomainSelectionKind(kind) &&
+    hasCompleteEigenModeOverlayIdentity(target);
 }
 
 export function isCurrentEigenModeOverlay(

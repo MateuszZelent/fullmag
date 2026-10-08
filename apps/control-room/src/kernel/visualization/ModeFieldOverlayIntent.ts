@@ -61,6 +61,14 @@ export interface ValidatedModeFieldOverlayBinary {
   readonly phasorAmplitudeMax: number;
 }
 
+export function isEigenModeFrequencyDomainSelectionKind(
+  kind: string | null | undefined,
+): boolean {
+  return kind === "results.eigen.mode" ||
+    kind === "results.dispersion.modal.mode_at_k" ||
+    kind === "results.resonance.modal.mode";
+}
+
 /**
  * Creates the kernel-owned identity for an eigenmode handoff. Presentation
  * indices remain only the temporary generated-API lookup bridge; cache and
@@ -69,7 +77,7 @@ export interface ValidatedModeFieldOverlayBinary {
 export function createModeFieldOverlayIntent(
   selection: FrequencyDomainSelectionRef | null | undefined,
 ): ModeFieldOverlayIntent | null {
-  if (!selection || !selection.kind.startsWith("results.eigen")) return null;
+  if (!selection || !isEigenModeFrequencyDomainSelectionKind(selection.kind)) return null;
   const analysisRunId = requiredString(selection.analysisRunId);
   const analysisStageId = requiredString(selection.analysisStageId);
   const artifactRevision = requiredString(selection.artifactRevision);
