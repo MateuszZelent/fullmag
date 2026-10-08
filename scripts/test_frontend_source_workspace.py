@@ -363,7 +363,10 @@ class FrontendSourceWorkspaceTests(unittest.TestCase):
         with self.assertRaises(SourceWorkspaceError):
             validate_dependency_workspace(self.repo, self.layout, workspace)
 
-        workspace.rmdir()
+        if workspace.is_symlink():
+            workspace.unlink()
+        else:
+            workspace.rmdir()
         real_workspace.rename(workspace)
         outside_node_modules = self.root / "redirected-node-modules"
         outside_node_modules.mkdir()

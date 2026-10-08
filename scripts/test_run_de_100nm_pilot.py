@@ -187,6 +187,46 @@ def _schur_action_fixture(*, status="measured"):
     return diagnostic
 
 
+def _build_context_for_container_cleanup(root: Path) -> pilot.managed.BuildContext:
+    root = Path(root)
+    job_id = "a" * 32
+    worktree_id = "worktree-a"
+    run_root = root / "runs" / worktree_id / job_id
+    artifacts = run_root / "artifacts"
+    capsule = run_root / "source"
+    source_tree = capsule / "tree"
+    runtime_root = artifacts / "outputs" / ".fullmag" / "local"
+    repo_root = root / "repo"
+    source_tree.mkdir(parents=True, exist_ok=True)
+    runtime_root.mkdir(parents=True, exist_ok=True)
+    repo_root.mkdir(parents=True, exist_ok=True)
+
+    job = {
+        "job_id": job_id,
+        "worktree_id": worktree_id,
+        "profile": "fem-cpu-slepc-runtime-v1",
+        "source_digest": "b" * 64,
+        "payload": {"capsule_relative": f"runs/{worktree_id}/{job_id}/source"},
+    }
+    native_identity = {
+        "schema": "fullmag.source-snapshot.v2",
+        "head_commit_full": "d" * 40,
+        "source_snapshot_sha256": "e" * 64,
+    }
+    return pilot.managed.BuildContext(
+        layout={"storage_root": str(root), "repo_root": str(repo_root), "env": {}},
+        job=job,
+        manifest={"resolved_commit": native_identity["head_commit_full"], "files": []},
+        native_identity=native_identity,
+        receipt={"artifact_hashes": {}},
+        run_root=run_root,
+        artifacts=artifacts,
+        capsule=capsule,
+        source_tree=source_tree,
+        runtime_root=runtime_root,
+    )
+
+
 class PilotTests(unittest.TestCase):
     def test_requires_pilot_from_build_capsule(self):
         with TemporaryDirectory() as tmp:
@@ -209,10 +249,7 @@ class PilotTests(unittest.TestCase):
     def test_successful_execution_remains_scientifically_unqualified(self):
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
-            context = SimpleNamespace(
-                layout={"repo_root": str(root)}, image_digest="sha256:test",
-                job={"job_id": "a" * 32, "profile": "fem-cpu-slepc-runtime-v1"}
-            )
+            context = _build_context_for_container_cleanup(root)
             request = {"source": {}, "job": {}, "runtime": {}}
             with patch.object(pilot.managed, "_run_request", return_value=request), \
                  patch.object(pilot.managed, "_compose_environment", return_value={}) as compose_env, \
@@ -293,10 +330,7 @@ class PilotTests(unittest.TestCase):
     def test_smoke_receipt_and_artifacts_remain_separate(self):
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
-            context = SimpleNamespace(
-                layout={"repo_root": str(root)}, image_digest="sha256:test",
-                job={"job_id": "a" * 32, "profile": "fem-cpu-slepc-runtime-v1"}
-            )
+            context = _build_context_for_container_cleanup(root)
             with patch.object(pilot.managed, "_run_request", return_value={"source": {}, "job": {}, "runtime": {}}), \
                  patch.object(pilot.managed, "_compose_environment", return_value={}), \
                  patch.object(pilot.subprocess, "run", return_value=SimpleNamespace(returncode=0)), \
@@ -322,10 +356,7 @@ class PilotTests(unittest.TestCase):
     def test_smoke_invalid_rows_cannot_be_completed(self):
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
-            context = SimpleNamespace(
-                layout={"repo_root": str(root)}, image_digest="sha256:test",
-                job={"job_id": "a" * 32, "profile": "fem-cpu-slepc-runtime-v1"}
-            )
+            context = _build_context_for_container_cleanup(root)
             with patch.object(pilot.managed, "_run_request", return_value={"source": {}, "job": {}, "runtime": {}}), \
                  patch.object(pilot.managed, "_compose_environment", return_value={}), \
                  patch.object(pilot.subprocess, "run", return_value=SimpleNamespace(returncode=0)), \
@@ -430,10 +461,7 @@ class PilotTests(unittest.TestCase):
     def test_smoke_inconsistent_field_cannot_be_completed_after_exit_zero(self):
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
-            context = SimpleNamespace(
-                layout={"repo_root": str(root)}, image_digest="sha256:test",
-                job={"job_id": "a" * 32, "profile": "fem-cpu-slepc-runtime-v1"}
-            )
+            context = _build_context_for_container_cleanup(root)
             with patch.object(pilot.managed, "_run_request", return_value={"source": {}, "job": {}, "runtime": {}}), \
                  patch.object(pilot.managed, "_compose_environment", return_value={}), \
                  patch.object(pilot.subprocess, "run", return_value=SimpleNamespace(returncode=0)), \
@@ -617,10 +645,7 @@ class PilotTests(unittest.TestCase):
             (case / "solver.v1.json").write_text(json.dumps({
                 "floquet_schur_action_diagnostic": _schur_action_fixture(status="failed"),
             }), encoding="utf-8")
-            context = SimpleNamespace(
-                layout={"repo_root": str(root)}, image_digest="sha256:test",
-                job={"job_id": "a" * 32, "profile": "fem-cpu-slepc-runtime-v1"}
-            )
+            context = _build_context_for_container_cleanup(root)
             request = {"source": {}, "job": {}, "runtime": {}}
             with patch.object(pilot.managed, "_run_request", return_value=request), \
                  patch.object(pilot.managed, "_compose_environment", return_value={}), \
