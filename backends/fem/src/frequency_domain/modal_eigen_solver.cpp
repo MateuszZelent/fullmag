@@ -1,5 +1,6 @@
 #include "frequency_domain/floquet_dynamic_demag_k.hpp"
 #include "frequency_domain/modal_eigen_solver.hpp"
+#include "frequency_domain/mode_kinematics.hpp"
 
 #include "cpu/frequency_domain/contour_interval_solver.hpp"
 #include "cpu/frequency_domain/mode_deduplication.hpp"
@@ -1941,6 +1942,8 @@ FrequencyDomainContractResult solve_tiny_validation_modal_problem(
         std::to_string(candidate_mode_count) +
         ",\"shift_frequency_hz\":" +
         format_double(shift_frequency_hz) +
+        ",\"shift_omega_rad_s\":" +
+        format_double(omega_rad_s_from_frequency_hz(shift_frequency_hz)) +
         ",\"outer_iteration\":1,"
         "\"linear_iteration\":1,"
         "\"relative_residual_max\":" +
@@ -1972,7 +1975,9 @@ FrequencyDomainContractResult solve_tiny_validation_modal_problem(
         "\"relative_residual\":" +
         format_double(relative_residual) +
         ",\"shift_frequency_hz\":" +
-        format_double(shift_frequency_hz);
+        format_double(shift_frequency_hz) +
+        ",\"shift_omega_rad_s\":" +
+        format_double(omega_rad_s_from_frequency_hz(shift_frequency_hz));
     if (is_frequency_window(request)) {
         result.result_json += ",\"window_completeness\":\"";
         result.result_json += completeness_status;
