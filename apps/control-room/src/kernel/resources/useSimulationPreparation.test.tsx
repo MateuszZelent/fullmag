@@ -125,7 +125,7 @@ function makeKernel(
         config: { enabled: false },
       }),
       resources,
-    } as React.ComponentProps<typeof KernelContext.Provider>["value"],
+    } as NonNullable<React.ComponentProps<typeof KernelContext.Provider>["value"]>,
     bus,
     resources,
   };
@@ -376,7 +376,7 @@ describe("useSimulationPreparation", () => {
       await act(async () => {
         nextStatus.resolve({
           ...statusFixture(),
-          resources: { simulation_preparation_revision: 7 },
+          resources: { ...statusFixture().resources, simulation_preparation_revision: 7 },
           session: { ...statusFixture().session, session_id: sessionId, session_epoch: `${sessionId}@1700000000000` },
         });
         await nextStatus.promise;
