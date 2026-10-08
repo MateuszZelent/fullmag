@@ -1562,6 +1562,35 @@ async function qualifyModalArtifactOwnershipRace(
   assertBranchCsvHasNoK(mismatchedCsv, "A completed run A CSV must not enrich run B branch rows.");
 
   fixture.modalDispersionRace.phase = "run-b-matched";
+  const matchedModalFieldNetworkTrace = captureInspectorModalFieldNetwork(page);
+  try {
+    await qualifyMatchedRunBModalArtifact(
+      page,
+      inspector,
+      fixture,
+      { dispersionRootId, modalStageId, resultRootId },
+    );
+  } catch (error) {
+    const details = await inspectorModalFieldFailureDetails(
+      page,
+      fixture,
+      matchedModalFieldNetworkTrace.events,
+      error,
+    );
+    throw new Error(
+      `Matched run B modal-field handoff failed. Diagnostics: ${JSON.stringify(details)}`,
+    );
+  } finally {
+    matchedModalFieldNetworkTrace.dispose();
+  }
+}
+
+async function qualifyMatchedRunBModalArtifact(
+  page,
+  inspector,
+  fixture,
+  { dispersionRootId, modalStageId, resultRootId },
+) {
   const runBResponse = page.waitForResponse((response) =>
     new URL(response.url()).pathname ===
       "/v2/sessions/current/analysis/frequency-domain/eigen/dispersion" &&
@@ -1575,6 +1604,9 @@ async function qualifyModalArtifactOwnershipRace(
   const resultsTab = page
     .locator(".fm-explorer .fm-tabs-trigger")
     .filter({ hasText: /^Results$/ });
+  const modelTab = page
+    .locator(".fm-explorer .fm-tabs-trigger")
+    .filter({ hasText: /^Model$/ });
   if ((await resultsTab.getAttribute("aria-selected")) !== "true") {
     await resultsTab.click();
   }
@@ -1592,17 +1624,21 @@ async function qualifyModalArtifactOwnershipRace(
   const matchedCaptureStart = await page.evaluate(
     () => window.__FULLMAG_INSPECTOR_WAVEVECTOR_UNIFORMS__?.length ?? 0,
   );
-  const matchedModeFieldMetadataResponse = page.waitForResponse((response) =>
-    new URL(response.url()).pathname ===
-      "/v2/sessions/current/analysis/frequency-domain/eigen/mode-field/1/2/meta" &&
-    response.status() === 200,
-    { timeout: 60_000 },
+  const matchedModeFieldMetadataResponse = observeInspectorResponse(
+    page.waitForResponse((response) =>
+      new URL(response.url()).pathname ===
+        "/v2/sessions/current/analysis/frequency-domain/eigen/mode-field/1/2/meta" &&
+      response.status() === 200,
+      { timeout: 60_000 },
+    ),
   );
-  const matchedModeFieldVectorResponse = page.waitForResponse((response) =>
-    new URL(response.url()).pathname ===
-      `/v2/sessions/current/data/fields/${encodeURIComponent(INSPECTOR_MODAL_FIELD_ID)}/samples/vector` &&
-    response.status() === 200,
-    { timeout: 60_000 },
+  const matchedModeFieldVectorResponse = observeInspectorResponse(
+    page.waitForResponse((response) =>
+      new URL(response.url()).pathname ===
+        `/v2/sessions/current/data/fields/${encodeURIComponent(INSPECTOR_MODAL_FIELD_ID)}/samples/vector` &&
+      response.status() === 200,
+      { timeout: 60_000 },
+    ),
   );
   await inspector.getByRole("button", { name: "Plot sample 1 mode 2 in 3D" }).click();
   await modelTab.click();
@@ -1611,7 +1647,11 @@ async function qualifyModalArtifactOwnershipRace(
     label: "Matched run B mode field",
   });
   await assertHealthyViewportCanvas(page, "matched run B nonzero-k modal handoff");
-  const modeFieldMetadata = await (await matchedModeFieldMetadataResponse).json();
+  const modeFieldMetadataResponse = await requireInspectorResponse(
+    matchedModeFieldMetadataResponse,
+    "matched run B mode-field metadata",
+  );
+  const modeFieldMetadata = await modeFieldMetadataResponse.json();
   assertInspectorModalModeFieldMetadata(modeFieldMetadata);
   await page.waitForFunction(
     ({ start, expected }) =>
@@ -1625,7 +1665,10 @@ async function qualifyModalArtifactOwnershipRace(
     { timeout: 30_000 },
   );
   await assertInspectorModalModeFieldVectorResponse(
-    await matchedModeFieldVectorResponse,
+    await requireInspectorResponse(
+      matchedModeFieldVectorResponse,
+      "matched run B mode-field vector",
+    ),
     fixture,
   );
   assert(
@@ -1689,6 +1732,113 @@ async function exportBranchSampleCsv(page, inspector, sampleIndex, rawModeIndex)
 function inspectorModeFieldVectorRequestCount(fixture) {
   const path = `/v2/sessions/current/data/fields/${encodeURIComponent(INSPECTOR_MODAL_FIELD_ID)}/samples/vector`;
   return fixture.requests.filter((request) => request.includes(path)).length;
+}
+
+function inspectorModalFieldPath(urlValue) {
+  try {
+    const path = new URL(urlValue, "http://fullmag.invalid").pathname;
+    if (path.includes("/analysis/frequency-domain/eigen/mode-field/")) {
+      return path.endsWith("/meta") ? path : null;
+    }
+    const encodedFieldId = path.split("/data/fields/")[1]?.split("/")[0];
+    if (!encodedFieldId) return null;
+    if (decodeURIComponent(encodedFieldId) !== INSPECTOR_MODAL_FIELD_ID) return null;
+    return path.endsWith("/meta") || path.endsWith("/samples/vector")
+      ? path
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function captureInspectorModalFieldNetwork(page) {
+  const events = [];
+  const record = (event) => {
+    events.push(event);
+    if (events.length > 16) events.splice(0, events.length - 16);
+  };
+  const onResponse = (response) => {
+    const path = inspectorModalFieldPath(response.url());
+    if (path) {
+      record({
+        kind: "response",
+        method: response.request().method(),
+        path,
+        status: response.status(),
+      });
+    }
+  };
+  const onRequestFailed = (request) => {
+    const path = inspectorModalFieldPath(request.url());
+    if (!path) return;
+    const failure = request.failure();
+    record({
+      failure:
+        typeof failure === "string"
+          ? failure.slice(0, 160)
+          : failure?.errorText?.slice(0, 160) ?? null,
+      kind: "requestfailed",
+      method: request.method(),
+      path,
+    });
+  };
+  page.on("response", onResponse);
+  page.on("requestfailed", onRequestFailed);
+  return {
+    dispose() {
+      page.off("response", onResponse);
+      page.off("requestfailed", onRequestFailed);
+    },
+    events,
+  };
+}
+
+async function inspectorModalFieldFailureDetails(page, fixture, networkEvents, error) {
+  const fixturePaths = fixture.requests
+    .map((entry) => entry.split(/\s+/, 2)[1]?.split("?")[0])
+    .filter((path) => path && inspectorModalFieldPath(path))
+    .slice(-16);
+  let ui = null;
+  try {
+    ui = await page.evaluate(() => ({
+      alerts: Array.from(document.querySelectorAll('[role="alert"]'))
+        .map((element) => element.textContent?.trim() ?? "")
+        .filter(Boolean)
+        .map((text) => text.slice(0, 400))
+        .slice(-8),
+      statuses: Array.from(document.querySelectorAll('[role="status"]'))
+        .map((element) => element.textContent?.trim() ?? "")
+        .filter(Boolean)
+        .map((text) => text.slice(0, 400))
+        .slice(-8),
+      wavevectorUniforms:
+        window.__FULLMAG_INSPECTOR_WAVEVECTOR_UNIFORMS__?.slice(-8) ?? [],
+    }));
+  } catch {
+    ui = null;
+  }
+  const errorMessage = error instanceof Error ? error.message : String(error);
+  return {
+    error: `${error instanceof Error ? error.name : "Error"}: ${errorMessage.split("?")[0].slice(0, 400)}`,
+    fixturePaths,
+    networkEvents: networkEvents.slice(-16),
+    ui,
+  };
+}
+
+function observeInspectorResponse(promise) {
+  return promise.then(
+    (response) => ({ response }),
+    (error) => ({ error }),
+  );
+}
+
+async function requireInspectorResponse(outcomePromise, label) {
+  const outcome = await outcomePromise;
+  if (outcome.error) {
+    throw new Error(`${label} response was not observed: ${outcome.error}`);
+  }
+  return outcome.response;
 }
 
 function branchCsvSampleRow(csv, sampleIndex, rawModeIndex) {
