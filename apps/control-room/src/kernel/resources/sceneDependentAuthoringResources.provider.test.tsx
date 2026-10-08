@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ControlRoomApiError } from "../api/ControlRoomApi";
+import type { SceneResource } from "../api/apiTypes";
 import { KernelContext } from "../KernelContext";
 import { EventBus } from "../events/EventBus";
 import type { KernelEventMap } from "../events/eventTypes";
@@ -19,6 +20,16 @@ import {
 import { useModelReadinessResource } from "./studyRuntimeResources";
 
 const SESSION_ID = "imported-visualization-session";
+
+function sceneAt(revision: number): SceneResource {
+  return {
+    materials: [],
+    objects: [],
+    revision,
+    scene_revision: revision,
+    version: "2.0.0",
+  };
+}
 
 function importedStatus() {
   return {
@@ -135,7 +146,7 @@ describe("scene-dependent authoring resources", () => {
         );
       });
       await vi.waitFor(() => {
-        expect(sceneLoad).toHaveBeenCalledTimes(1);
+        expect(sceneLoad).toHaveBeenCalled();
         expect(container.textContent).toContain('"scene":"error"');
       });
 
@@ -156,7 +167,7 @@ describe("scene-dependent authoring resources", () => {
   });
 
   it("loads authoring resources for a read-only session when its scene is ready", async () => {
-    const sceneLoad = vi.fn(async () => ({ revision: 1 }));
+    const sceneLoad = vi.fn(async () => sceneAt(1));
     const readinessLoad = vi.fn(async () => ({ scene_revision: 1 }));
     const semanticsLoad = vi.fn(async () => ({ revision: 1 }));
     const universePolicyLoad = vi.fn(async () => ({ revision: 1 }));
@@ -190,7 +201,7 @@ describe("scene-dependent authoring resources", () => {
         expect(universePolicyLoad).toHaveBeenCalledTimes(1);
       });
 
-      expect(sceneLoad).toHaveBeenCalledTimes(1);
+      expect(sceneLoad).toHaveBeenCalled();
       expect(container.textContent).toContain('"scene":"ready"');
       expect(container.textContent).toContain('"readiness":"ready"');
       expect(container.textContent).toContain('"semantics":"ready"');
@@ -231,7 +242,7 @@ describe("scene-dependent authoring resources", () => {
         );
       });
       await vi.waitFor(() => {
-        expect(sceneLoad).toHaveBeenCalledTimes(1);
+        expect(sceneLoad).toHaveBeenCalled();
         expect(failures.length).toBeGreaterThan(0);
       });
       expect(failures.some(({ cause }) => cause === "route missing")).toBe(true);

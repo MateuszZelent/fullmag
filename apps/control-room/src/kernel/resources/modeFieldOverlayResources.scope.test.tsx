@@ -6,15 +6,22 @@ import { installSimulationPreparationTestDom } from "@/kernel/layout/simulationP
 import { createModeFieldOverlayIntent } from "@/kernel/visualization/ModeFieldOverlayIntent";
 import { useModeFieldOverlayIntentResource } from "./modeFieldOverlayResources";
 
-const fixture = vi.hoisted(() => ({
-  identity: { sessionId: "archive&1", sessionEpoch: "epoch=α", requestScopeEpoch: "incarnation%2" },
-  metadata: vi.fn(),
-  vector: vi.fn(),
-}));
-vi.mock("@/kernel/KernelContext", () => ({ useKernel: () => ({ api: {
-  analysis: { frequencyDomain: { eigenModeFieldMeta: fixture.metadata } },
-  data: { fields: { vector: fixture.vector } },
-} }) }));
+const fixture = vi.hoisted(() => {
+  const metadata = vi.fn();
+  const vector = vi.fn();
+  return {
+    identity: { sessionId: "archive&1", sessionEpoch: "epoch=α", requestScopeEpoch: "incarnation%2" },
+    metadata,
+    vector,
+    // Production Kernel owns one stable API; recreating it on render retriggers
+    // controller effects and tests a dependency loop instead of HTTP encoding.
+    api: {
+      analysis: { frequencyDomain: { eigenModeFieldMeta: metadata } },
+      data: { fields: { vector } },
+    },
+  };
+});
+vi.mock("@/kernel/KernelContext", () => ({ useKernel: () => ({ api: fixture.api }) }));
 vi.mock("@/kernel/resources/useSessionStatus", () => ({ useSessionResourceIdentity: () => fixture.identity }));
 vi.mock("@/kernel/resources/studyRuntimeResources", () => ({ useFrequencyDomainEigenModeFieldMetaResource: vi.fn() }));
 

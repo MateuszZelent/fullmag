@@ -8,6 +8,7 @@ import {
   MODEL_SCENE_PATH,
 } from "@/kernel/api/apiPaths";
 import { ControlRoomApiError } from "@/kernel/api/ControlRoomApi";
+import type { SceneResource } from "@/kernel/api/apiTypes";
 import { CommandRegistry } from "@/kernel/commands/CommandRegistry";
 import type { CommandContext } from "@/kernel/commands/commandTypes";
 import { KernelContext } from "@/kernel/KernelContext";
@@ -94,6 +95,16 @@ function readinessAt(sceneRevision: number) {
   };
 }
 
+function sceneAt(sceneRevision: number): SceneResource {
+  return {
+    materials: [],
+    objects: [],
+    revision: sceneRevision,
+    scene_revision: sceneRevision,
+    version: "2.0.0",
+  };
+}
+
 describe("production runtime command resource provider", () => {
   afterEach(() => {
     resetSharedResourceRuntimeStoreForTests();
@@ -114,11 +125,13 @@ describe("production runtime command resource provider", () => {
       scene_revision: 7,
     };
     const readinessLoad = vi.fn(async () => readiness);
+    const sceneLoad = vi.fn(async () => sceneAt(7));
     const bus = new EventBus<KernelEventMap>();
     const resources = new ResourceInvalidationController(bus);
     const kernel = {
       api: {
         model: {
+          scene: sceneLoad,
           geometry: {
             validation: async () => ({ diagnostics: [], revision: 7 }),
           },
@@ -163,6 +176,7 @@ describe("production runtime command resource provider", () => {
       await act(async () => {});
 
       await vi.waitFor(() => {
+        expect(sceneLoad).toHaveBeenCalled();
         expect(readinessLoad).toHaveBeenCalledTimes(1);
         expect(container.textContent).toBe("7");
       });
@@ -332,6 +346,10 @@ describe("production runtime command resource provider", () => {
       .fn()
       .mockResolvedValueOnce(readinessAt(5))
       .mockImplementationOnce(() => nextReadiness.promise);
+    const sceneLoad = vi
+      .fn()
+      .mockResolvedValueOnce(sceneAt(5))
+      .mockResolvedValue(sceneAt(finalRevision));
     const patchMagnetizationAsset = vi.fn(async () => ({
       asset: { id: "mag:body:region:body:uniform" },
       scene_revision: 6,
@@ -345,6 +363,7 @@ describe("production runtime command resource provider", () => {
     });
     const api = {
       model: {
+        scene: sceneLoad,
         geometry: {
           validation: async () => ({ diagnostics: [], revision: finalRevision }),
         },
@@ -418,7 +437,7 @@ describe("production runtime command resource provider", () => {
         api,
         resourceData: {
           ...latestResourceData,
-          [MODEL_SCENE_PATH]: { revision: 5 },
+          [MODEL_SCENE_PATH]: sceneAt(5),
         },
         resources,
         selection: {
@@ -438,6 +457,7 @@ describe("production runtime command resource provider", () => {
       await act(async () => {
         await presetCommand?.run(mutationContext);
         await vi.waitFor(() => {
+          expect(sceneLoad).toHaveBeenCalledTimes(2);
           expect(statusLoad).toHaveBeenCalledTimes(2);
           expect(readinessLoad).toHaveBeenCalledTimes(2);
         });
