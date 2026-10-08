@@ -110,9 +110,9 @@ export function resolvePrimitiveObjectRenderSettings(
 export function createPrimitiveObjectGeometry(
   object: Viewport3DPrimitiveObject,
 ): BufferGeometry {
-  if (object.kind === "microstrip") {
-    if (!object.microstripPreview) throw new Error("Microstrip requires an authored section preview.");
-    const preview = object.microstripPreview;
+  if (object.kind === "microstrip" || object.kind === "cpw") {
+    if (!object.antennaPreview) throw new Error("Antenna layout requires an authored section preview.");
+    const preview = object.antennaPreview;
     const geometry = new BufferGeometry();
     geometry.setAttribute("position", new BufferAttribute(Float32Array.from(
       preview.positions, (value, index) => value - object.bounds.center[index % 3],

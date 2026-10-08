@@ -9,7 +9,8 @@ import {
 import { resolveSceneRevision } from "@/kernel/visualization/visualizationDisplayResolution";
 import {
   buildAuthoredMicrostripGeometry,
-  type AuthoredMicrostripGeometry,
+  buildAuthoredCpwGeometry,
+  type AuthoredAntennaGeometry,
 } from "@/shared/domain/geometry/authoredMicrostripGeometry";
 
 import { magnetizationHslRgb } from "./orientation/magnetizationColor";
@@ -21,6 +22,7 @@ type Viewport3DPrimitiveKind =
   | "cylinder"
   | "sphere"
   | "microstrip"
+  | "cpw"
   | "unsupported";
 type Viewport3DPrimitiveMeshState =
   | "primitive-only"
@@ -37,7 +39,7 @@ export interface Viewport3DPrimitiveObject {
   label: string;
   magnetizationTexturePreview: Viewport3DMagnetizationTexturePreview | null;
   meshState: Viewport3DPrimitiveMeshState;
-  microstripPreview?: AuthoredMicrostripGeometry;
+  antennaPreview?: AuthoredAntennaGeometry;
   objectId: string;
   role?: string | null;
   sceneRevision: number;
@@ -297,7 +299,7 @@ function objectMeshState(
   }
   const geometry = asRecord(object?.geometry);
   const requiresCurrentScene = objectHasCsgPreview(object) ||
-    geometry?.geometry_kind === "MicrostripAntennaLayout";
+    geometry?.geometry_kind === "MicrostripAntennaLayout" || geometry?.geometry_kind === "CPWAntennaLayout";
   if (requiresCurrentScene && manifestSceneRevision(manifest) !== sceneRevision) {
     return "mesh-stale";
   }
@@ -494,10 +496,12 @@ export function buildViewport3DPrimitiveRenderModel(
     const state = objectMeshState(objectId, sceneRevision, manifest, object);
     const transform = asRecord(object.transform);
     const csgPreview = csgPreviewFromGeometry(geometry);
-    let microstripPreview: AuthoredMicrostripGeometry | undefined;
-    if (geometry.geometry_kind === "MicrostripAntennaLayout") {
+    let antennaPreview: AuthoredAntennaGeometry | undefined;
+    if (geometry.geometry_kind === "MicrostripAntennaLayout" || geometry.geometry_kind === "CPWAntennaLayout") {
       try {
-        microstripPreview = buildAuthoredMicrostripGeometry(geometry.geometry_params, object.transform);
+        antennaPreview = geometry.geometry_kind === "CPWAntennaLayout"
+          ? buildAuthoredCpwGeometry(geometry.geometry_params, object.transform)
+          : buildAuthoredMicrostripGeometry(geometry.geometry_params, object.transform);
       } catch (error) {
         diagnostics.push({ objectId, message: error instanceof Error ? error.message : String(error) });
         return [];
@@ -505,20 +509,20 @@ export function buildViewport3DPrimitiveRenderModel(
     }
     return [
       {
-        bounds: microstripPreview
-          ? boundsFromMinMax(microstripPreview.boundsMin, microstripPreview.boundsMax)
+        bounds: antennaPreview
+          ? boundsFromMinMax(antennaPreview.boundsMin, antennaPreview.boundsMax)
           : boundsFromGeometry(geometry, transform),
         csgPreview,
         fallbackLabel: fallbackLabel(state),
         geometryKey: geometryKey(objectId, geometry, transform),
-        kind: microstripPreview ? "microstrip" : primitiveKindFromGeometry(geometry),
+        kind: antennaPreview ? geometry.geometry_kind === "CPWAntennaLayout" ? "cpw" : "microstrip" : primitiveKindFromGeometry(geometry),
         label: asString(object.name) ?? objectId,
         magnetizationTexturePreview: magnetizationTexturePreview(
           sceneRecord,
           object,
         ),
         meshState: state,
-        microstripPreview,
+        antennaPreview,
         objectId,
         role: objectRole,
         sceneRevision,

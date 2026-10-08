@@ -1,5 +1,5 @@
 import type { GeometryRealizationResource, SceneResource } from "@/kernel/api/apiTypes";
-import { buildAuthoredMicrostripGeometry } from "@/shared/domain/geometry/authoredMicrostripGeometry";
+import { buildAuthoredCpwGeometry, buildAuthoredMicrostripGeometry } from "@/shared/domain/geometry/authoredMicrostripGeometry";
 import { calculateAntennaPlacement, type PlacementVector } from "@/shared/domain/geometry/antennaPlacement";
 
 function record(value: unknown): Record<string, unknown> {
@@ -35,7 +35,7 @@ export function resolveAntennaPlacement(
   if (!antenna || !target) throw new Error("Select an existing magnetic target by object ID.");
   if (antenna.locked) throw new Error("The antenna is locked.");
   const geometry = record(antenna.geometry);
-  if (geometry.geometry_kind !== "MicrostripAntennaLayout") throw new Error("Placement requires a canonical 3D MicrostripAntennaLayout.");
+  if (geometry.geometry_kind !== "MicrostripAntennaLayout" && geometry.geometry_kind !== "CPWAntennaLayout") throw new Error("Placement requires a canonical 3D MicrostripAntennaLayout or CPWAntennaLayout.");
   const transform = record(antenna.transform ?? {});
   const rotation = transform.rotation_quat ?? [0, 0, 0, 1];
   const scale = vector(transform.scale ?? [1, 1, 1]);
@@ -61,7 +61,9 @@ export function resolveAntennaPlacement(
       targetMax[axis] = Math.max(targetMax[axis], max[axis]);
     }
   }
-  const preview = buildAuthoredMicrostripGeometry(geometry.geometry_params, transform);
+  const preview = geometry.geometry_kind === "CPWAntennaLayout"
+    ? buildAuthoredCpwGeometry(geometry.geometry_params, transform)
+    : buildAuthoredMicrostripGeometry(geometry.geometry_params, transform);
   return calculateAntennaPlacement(
     { min: preview.boundsMin, max: preview.boundsMax },
     { min: targetMin, max: targetMax },

@@ -113,8 +113,8 @@ check("actual Three geometry recenters world vertices and retains conductor meta
   const result = geometry(carrier);
   assert.ok(result instanceof three.BufferGeometry);
   const positions = result.getAttribute("position");
-  for (let index = 0; index < positions.array.length; index++) close(positions.array[index] + carrier.bounds.center[index % 3], carrier.microstripPreview.positions[index], 1e-6);
-  assert.equal(result.index.count, carrier.microstripPreview.indices.length);
+  for (let index = 0; index < positions.array.length; index++) close(positions.array[index] + carrier.bounds.center[index % 3], carrier.antennaPreview.positions[index], 1e-6);
+  assert.equal(result.index.count, carrier.antennaPreview.indices.length);
   assert.deepEqual(Array.from(result.userData.conductorParts, (part) => part.id), ["signal-custom", "return-custom"]);
   let disposed = 0;
   result.addEventListener("dispose", () => disposed++);
@@ -187,6 +187,6 @@ if (liveIndex !== -1) {
     const carrier = liveModel.objects.find((candidate) => candidate.objectId === authored.id);
     assert.ok(carrier, JSON.stringify(liveModel.diagnostics));
     assert.equal(carrier.kind, "microstrip");
-    console.log(`LIVE scene=${scene.revision} object=${carrier.objectId} kind=${carrier.kind} size_m=${JSON.stringify(carrier.bounds.size)} parts=${JSON.stringify(carrier.microstripPreview.parts.map((part) => part.id))}`);
+    console.log(`LIVE scene=${scene.revision} object=${carrier.objectId} kind=${carrier.kind} size_m=${JSON.stringify(carrier.bounds.size)} parts=${JSON.stringify(carrier.antennaPreview.parts.map((part) => part.id))}`);
   }
 }
