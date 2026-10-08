@@ -11,6 +11,7 @@ from pathlib import Path
 import re
 import shutil
 import socket
+import stat
 import time
 import uuid
 
@@ -46,6 +47,33 @@ def _path_key(value):
     if not isinstance(value, str) or not value or '\x00' in value:
         raise CleanupBlocked('invalid_mount_path')
     return value.replace('\\', '/').rstrip('/').casefold()
+
+
+def _directory_identity(path, reason):
+    """Return stable metadata for a real directory, refusing links/reparse points."""
+    try:
+        info = os.lstat(path)
+    except OSError as error:
+        raise CleanupBlocked(reason) from error
+    if (
+        stat.S_ISLNK(info.st_mode)
+        or bool(getattr(info, 'st_file_attributes', 0) & 0x400)
+        or not stat.S_ISDIR(info.st_mode)
+        or info.st_dev in (None, 0)
+        or info.st_ino in (None, 0)
+    ):
+        raise CleanupBlocked(reason)
+    return {'device': info.st_dev, 'inode': info.st_ino}
+
+
+def _execution_identity_matches(expected, observed):
+    return (
+        expected.get('root_device') not in (None, 0)
+        and expected.get('root_inode') not in (None, 0)
+        and expected.get('root_device') == observed.get('root_device')
+        and expected.get('root_inode') == observed.get('root_inode')
+        and expected == observed
+    )
 
 
 def _overlap(left, right):
@@ -205,7 +233,18 @@ def apply_execution_plan(layout, plan, queue, *, owner, call, policy, now=None):
         if result_path.exists():
             previous = _json(result_path)
             if previous.get('status') == 'running':
-                previous.update(status='interrupted_unknown', error='Reconcile the remaining tree with a fresh plan')
+                previous.update(
+                    status='interrupted_unknown', applied=False,
+                    error='Reconcile the remaining tree with a fresh plan',
+                    finished_at=time.time(),
+                )
+                for previous_item in previous.get('items', []):
+                    if previous_item.get('status') == 'deleting':
+                        previous_item.update(
+                            status='interrupted_unknown',
+                            deletion_state='unknown_after_restart',
+                        )
+                atomic_json(result_path, previous)
             return previous
         if queue.active():
             raise CleanupBlocked('active_queue_lease')
@@ -247,8 +286,16 @@ def apply_execution_plan(layout, plan, queue, *, owner, call, policy, now=None):
                     for key in ('execution', 'container_id', 'source_digest', 'tree_identity'):
                         if current.get(key) != candidate.get(key) or current.get(key) is None:
                             raise CleanupBlocked('plan_stale:' + key)
-                    target = Path(current['execution'])
-                    run_root = target.parent
+                    run_parts = ('runs', worktree_id, jid)
+                    run_root = retention._checked_child(storage, run_parts, kind='directory')
+                    target = retention._checked_child(
+                        storage, run_parts + ('execution',), kind='directory',
+                    )
+                    if os.path.normcase(str(target)) != os.path.normcase(current['execution']):
+                        raise CleanupBlocked('plan_stale:execution_path')
+                    run_root_identity = _directory_identity(
+                        run_root, 'unsafe_run_root_before_quarantine',
+                    )
                     _guard_pins(storage, run_root, job)
                     journal = _json(run_root / 'coordinator.json')
                     _guard_archive_evidence(storage, job, run_root, journal)
@@ -258,15 +305,158 @@ def apply_execution_plan(layout, plan, queue, *, owner, call, policy, now=None):
                     if queue.get(jid)['state'] != job['state'] or queue.active():
                         raise CleanupBlocked('queue_state_changed')
                     _guard_pins(storage, run_root, job)
-                    retention._checked_child(storage, ('runs', worktree_id, jid, 'execution'), kind='directory')
-                    if retention.inspect_execution(target) != current['tree_identity']:
+                    checked_run_root = retention._checked_child(
+                        storage, run_parts, kind='directory',
+                    )
+                    if _directory_identity(
+                        checked_run_root, 'unsafe_run_root_during_validation',
+                    ) != run_root_identity:
+                        raise CleanupBlocked('run_root_changed_during_validation')
+                    target = retention._checked_child(
+                        storage, run_parts + ('execution',), kind='directory',
+                    )
+                    if os.path.normcase(str(target)) != os.path.normcase(current['execution']):
+                        raise CleanupBlocked('execution_path_changed_during_validation')
+                    if not _execution_identity_matches(
+                        current['tree_identity'], retention.inspect_execution(target),
+                    ):
                         raise CleanupBlocked('execution_changed_during_validation')
-                    item.update(status='deleting', path=str(target), tree_identity=current['tree_identity'])
+
+                    quarantine_name = '.retention-quarantine-' + plan_id
+                    quarantine_path = run_root / quarantine_name
+                    moved_path = quarantine_path / 'execution'
+                    if os.path.lexists(quarantine_path):
+                        raise CleanupBlocked('retention_quarantine_exists_requires_reconciliation')
+                    item.update(
+                        status='deleting', path=str(target),
+                        quarantine_path=str(quarantine_path), moved_path=str(moved_path),
+                        tree_identity=current['tree_identity'],
+                        run_root_identity=run_root_identity,
+                        deletion_state='rename_pending',
+                    )
                     atomic_json(result_path, result)
-                    shutil.rmtree(target)
+
+                    # The unique private directory makes the rename destination
+                    # exclusive and keeps it on the same filesystem/run root.
+                    os.mkdir(quarantine_path, 0o700)
+                    quarantine_identity = _directory_identity(
+                        retention._checked_child(
+                            storage, run_parts + (quarantine_name,), kind='directory',
+                        ),
+                        'unsafe_retention_quarantine',
+                    )
+                    if _directory_identity(
+                        retention._checked_child(storage, run_parts, kind='directory'),
+                        'unsafe_run_root_before_rename',
+                    ) != run_root_identity:
+                        raise CleanupBlocked('run_root_changed_before_quarantine')
+                    item.update(
+                        deletion_state='quarantine_created',
+                        quarantine_identity=quarantine_identity,
+                    )
+                    atomic_json(result_path, result)
+
+                    # Rebind the source immediately before the atomic move.
+                    target = retention._checked_child(
+                        storage, run_parts + ('execution',), kind='directory',
+                    )
+                    if not _execution_identity_matches(
+                        current['tree_identity'], retention.inspect_execution(target),
+                    ):
+                        raise CleanupBlocked('execution_changed_before_quarantine')
+                    if os.path.lexists(moved_path):
+                        raise CleanupBlocked('retention_quarantine_target_exists')
+                    try:
+                        os.rename(target, moved_path)
+                    except Exception:
+                        item.update(deletion_state='rename_outcome_unknown')
+                        atomic_json(result_path, result)
+                        raise
+                    item.update(deletion_state='moved_unverified')
+                    atomic_json(result_path, result)
+
+                    checked_run_root = retention._checked_child(
+                        storage, run_parts, kind='directory',
+                    )
+                    checked_quarantine = retention._checked_child(
+                        storage, run_parts + (quarantine_name,), kind='directory',
+                    )
+                    if _directory_identity(
+                        checked_run_root, 'unsafe_run_root_after_quarantine',
+                    ) != run_root_identity:
+                        raise CleanupBlocked('run_root_changed_after_quarantine')
+                    if _directory_identity(
+                        checked_quarantine, 'unsafe_retention_quarantine_after_move',
+                    ) != quarantine_identity:
+                        raise CleanupBlocked('retention_quarantine_changed_after_move')
                     if os.path.lexists(target):
+                        item.update(deletion_state='execution_path_reappeared')
+                        atomic_json(result_path, result)
+                        raise CleanupBlocked('execution_path_reappeared_after_quarantine')
+
+                    # Persist intent before the final identity check and
+                    # deletion; a restart records this exact moved path unknown.
+                    item.update(deletion_state='removal_started')
+                    atomic_json(result_path, result)
+                    checked_run_root = retention._checked_child(
+                        storage, run_parts, kind='directory',
+                    )
+                    checked_quarantine = retention._checked_child(
+                        storage, run_parts + (quarantine_name,), kind='directory',
+                    )
+                    if (_directory_identity(
+                            checked_run_root, 'unsafe_run_root_before_delete',
+                    ) != run_root_identity):
+                        raise CleanupBlocked('run_root_changed_before_delete')
+                    if (_directory_identity(
+                            checked_quarantine, 'unsafe_retention_quarantine_before_delete',
+                    ) != quarantine_identity):
+                        raise CleanupBlocked('retention_quarantine_changed_before_delete')
+                    if os.path.lexists(target):
+                        raise CleanupBlocked('execution_path_reappeared_before_delete')
+                    moved_target = retention._checked_child(
+                        storage, run_parts + (quarantine_name, 'execution'),
+                        kind='directory',
+                    )
+                    final_identity = retention.inspect_execution(moved_target)
+                    if not _execution_identity_matches(
+                        current['tree_identity'], final_identity,
+                    ):
+                        item.update(
+                            deletion_state='identity_mismatch',
+                            observed_tree_identity=final_identity,
+                        )
+                        atomic_json(result_path, result)
+                        raise CleanupBlocked('execution_identity_mismatch_after_quarantine')
+
+                    shutil.rmtree(moved_target)
+                    if os.path.lexists(moved_path):
                         raise CleanupBlocked('execution_removal_not_confirmed')
-                    item.update(status='deleted', removed_logical_bytes=current['bytes'])
+                    if os.path.lexists(target):
+                        raise CleanupBlocked('execution_path_reappeared_after_delete')
+                    item.update(deletion_state='tree_removed')
+                    atomic_json(result_path, result)
+                    checked_run_root = retention._checked_child(
+                        storage, run_parts, kind='directory',
+                    )
+                    if _directory_identity(
+                        checked_run_root, 'unsafe_run_root_after_delete',
+                    ) != run_root_identity:
+                        raise CleanupBlocked('run_root_changed_after_delete')
+                    checked_quarantine = retention._checked_child(
+                        storage, run_parts + (quarantine_name,), kind='directory',
+                    )
+                    if _directory_identity(
+                        checked_quarantine, 'unsafe_retention_quarantine_after_delete',
+                    ) != quarantine_identity:
+                        raise CleanupBlocked('retention_quarantine_changed_after_delete')
+                    os.rmdir(checked_quarantine)
+                    if os.path.lexists(quarantine_path):
+                        raise CleanupBlocked('retention_quarantine_removal_not_confirmed')
+                    item.update(
+                        status='deleted', deletion_state='deleted',
+                        removed_logical_bytes=current['bytes'],
+                    )
                     result['removed_logical_bytes'] += current['bytes']
             except Exception as error:
                 # Preserve exact failure and successful preceding items. No

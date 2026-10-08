@@ -7,7 +7,7 @@ import unittest
 from unittest.mock import patch
 
 from fullmag_storage import file_lock, StorageError
-from local_runner.retention import plan
+from local_runner.retention import inspect_execution, plan
 from local_runner.retention_executor import apply_execution_plan, CleanupBlocked
 from local_runner.worker_entrypoint import canonical, SCHEMA
 
@@ -141,6 +141,11 @@ class ExecutionCleanupTests(unittest.TestCase):
         result = self.apply()
         self.assertTrue(result['applied'])
         self.assertFalse(self.execution.exists())
+        item = result['items'][0]
+        self.assertEqual('deleted', item['deletion_state'])
+        self.assertTrue(item['moved_path'])
+        self.assertFalse(Path(item['moved_path']).exists())
+        self.assertFalse(Path(item['quarantine_path']).exists())
         self.assertEqual(5, result['removed_logical_bytes'])
         self.assertIsNone(result['reclaimed_bytes'])
         self.assertEqual(result['disk_free_after_bytes'] - result['disk_free_before_bytes'],
@@ -153,6 +158,95 @@ class ExecutionCleanupTests(unittest.TestCase):
         (self.execution / 'new-data').write_text('must survive old operation')
         self.assertEqual(result, self.apply())
         self.assertTrue((self.execution / 'new-data').exists())
+
+    def test_rename_time_replacement_preserves_both_unapproved_and_reviewed_trees(self):
+        expected_identity = self.plan['raw_engine_plan']['candidates'][0]['tree_identity']
+        approved_original = self.run / 'approved-original-preserved'
+        original_rename = os.rename
+
+        def replace_before_move(source, destination):
+            if Path(source) == self.execution:
+                original_rename(source, approved_original)
+                Path(source).mkdir()
+                (Path(source) / 'unapproved').write_bytes(b'unreviewed replacement')
+            original_rename(source, destination)
+
+        with patch(
+            'local_runner.retention_executor.os.rename',
+            side_effect=replace_before_move,
+        ):
+            result = self.apply()
+
+        item = result['items'][0]
+        moved_path = Path(item['moved_path'])
+        self.assertFalse(result['applied'])
+        self.assertEqual('partial_error', item['status'])
+        self.assertEqual('identity_mismatch', item['deletion_state'])
+        self.assertIn('execution_identity_mismatch_after_quarantine', item['reason'])
+        self.assertTrue(approved_original.is_dir())
+        self.assertEqual(b'12345', (approved_original / 'scratch').read_bytes())
+        approved_identity = inspect_execution(approved_original)
+        self.assertEqual(expected_identity['root_device'], approved_identity['root_device'])
+        self.assertEqual(expected_identity['root_inode'], approved_identity['root_inode'])
+        self.assertTrue(moved_path.is_dir())
+        self.assertEqual(b'unreviewed replacement', (moved_path / 'unapproved').read_bytes())
+        self.assertEqual(0, result['removed_logical_bytes'])
+
+    def test_postmove_identity_mismatch_preserves_quarantined_tree(self):
+        original_rename = os.rename
+
+        def mutate_after_move(source, destination):
+            original_rename(source, destination)
+            (Path(destination) / 'late-unreviewed-entry').write_bytes(b'preserve')
+
+        with patch(
+            'local_runner.retention_executor.os.rename',
+            side_effect=mutate_after_move,
+        ):
+            result = self.apply()
+
+        item = result['items'][0]
+        moved_path = Path(item['moved_path'])
+        self.assertFalse(result['applied'])
+        self.assertEqual('partial_error', item['status'])
+        self.assertEqual('identity_mismatch', item['deletion_state'])
+        self.assertIn('execution_identity_mismatch_after_quarantine', item['reason'])
+        self.assertTrue(moved_path.is_dir())
+        self.assertEqual(b'12345', (moved_path / 'scratch').read_bytes())
+        self.assertEqual(
+            b'preserve', (moved_path / 'late-unreviewed-entry').read_bytes(),
+        )
+        self.assertEqual(0, result['removed_logical_bytes'])
+
+    def test_restart_records_unknown_moved_path_without_retrying_deletion(self):
+        def interrupt_before_delete(_target):
+            raise KeyboardInterrupt('simulated process interruption')
+
+        with patch(
+            'local_runner.retention_executor.shutil.rmtree',
+            side_effect=interrupt_before_delete,
+        ):
+            with self.assertRaises(KeyboardInterrupt):
+                self.apply()
+
+        receipt_path = self.root / 'index' / 'retention-operations' / 'plan-1234abcd.json'
+        before_reconcile = json.loads(receipt_path.read_text())
+        moved_path = Path(before_reconcile['items'][0]['moved_path'])
+        self.assertEqual('running', before_reconcile['status'])
+        self.assertEqual('deleting', before_reconcile['items'][0]['status'])
+        self.assertEqual('removal_started', before_reconcile['items'][0]['deletion_state'])
+        self.assertTrue(moved_path.is_dir())
+        self.assertEqual(b'12345', (moved_path / 'scratch').read_bytes())
+
+        reconciled = self.apply()
+        self.assertEqual('interrupted_unknown', reconciled['status'])
+        self.assertFalse(reconciled['applied'])
+        self.assertIsInstance(reconciled['finished_at'], (int, float))
+        self.assertEqual('interrupted_unknown', reconciled['items'][0]['status'])
+        self.assertEqual('unknown_after_restart', reconciled['items'][0]['deletion_state'])
+        self.assertEqual(reconciled, json.loads(receipt_path.read_text()))
+        self.assertTrue(moved_path.is_dir())
+        self.assertEqual(b'12345', (moved_path / 'scratch').read_bytes())
 
     def test_link_target_outside_execution_survives(self):
         outside = self.root / 'outside'
@@ -275,6 +369,12 @@ class ExecutionCleanupTests(unittest.TestCase):
             result = self.apply()
         self.assertFalse(result['applied'])
         self.assertEqual('partial_error', result['items'][0]['status'])
+        self.assertEqual('removal_started', result['items'][0]['deletion_state'])
+        moved_path = Path(result['items'][0]['moved_path'])
+        self.assertTrue(moved_path.is_dir())
+        self.assertFalse((moved_path / 'scratch').exists())
+        receipt_path = self.root / 'index' / 'retention-operations' / 'plan-1234abcd.json'
+        self.assertEqual(result, json.loads(receipt_path.read_text()))
         self.assertEqual(0, result['removed_logical_bytes'])
         self.assertIsNone(result['reclaimed_bytes'])
         self.assertEqual(result, self.apply())
