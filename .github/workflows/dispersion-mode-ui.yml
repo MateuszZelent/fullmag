@@ -58,7 +58,12 @@ jobs:
           import hashlib, json, shutil, subprocess
           tracked = subprocess.check_output(["git", "ls-files", "-z"]).decode().split("\0")
           inventory = []
+          contract_prefixes = ("apps/", "packages/", "scripts/", "docs/", ".github/",
+                               "crates/", "backends/", "tests/", "examples/", "assets/")
           for relative in filter(None, tracked):
+              # Agent skill aliases are tracked symlinks, not frontend fixtures.
+              if "/" in relative and not relative.startswith(contract_prefixes):
+                  continue
               source, destination = Path.cwd() / relative, workspace / relative
               fullmag_storage.validate_path(destination, layout["build_root"])
               if source.is_symlink() or not source.is_file():
