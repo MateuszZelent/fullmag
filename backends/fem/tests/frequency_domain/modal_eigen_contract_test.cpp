@@ -1503,23 +1503,27 @@ struct FloquetContourSharedDomainFixture {
         scalar_expected_class_ids = bootstrap.scalar_canonical_class_ids;
         magnetic_expected_class_digest_strings = bootstrap.magnetic_class_digests;
         scalar_expected_class_digest_strings = bootstrap.scalar_class_digests;
-        /* Canonical IDs are dense and ordered by their first node. */
+        /* Class digests are ordered by canonical first-node IDs, which may have gaps. */
         const auto populate_expected_class_digests = [](
                                                         const std::vector<std::uint64_t> &ids,
                                                         const std::vector<std::string> &digests,
                                                         std::vector<FullmagFemModalCertificateV6ClassDigest> &out) {
+            std::vector<std::uint64_t> canonical_ids = ids;
+            std::sort(canonical_ids.begin(), canonical_ids.end());
+            canonical_ids.erase(
+                std::unique(canonical_ids.begin(), canonical_ids.end()),
+                canonical_ids.end());
+            check(canonical_ids.size() == digests.size(),
+                  "expanded certificate must have one digest per canonical class");
             out.clear();
             out.reserve(digests.size());
-            for (std::size_t class_id = 0u; class_id < digests.size(); ++class_id) {
-                const auto first = std::find(
-                    ids.begin(), ids.end(), static_cast<std::uint64_t>(class_id));
-                check(first != ids.end(),
-                      "each expanded certificate class must have a canonical first node");
-                const std::uint64_t first_node =
-                    static_cast<std::uint64_t>(std::distance(ids.begin(), first));
+            for (std::size_t index = 0u; index < canonical_ids.size(); ++index) {
+                const std::uint64_t canonical_id = canonical_ids[index];
+                check(canonical_id < ids.size() && ids[canonical_id] == canonical_id,
+                      "each expanded certificate class must identify its first node");
                 const std::uint64_t count = static_cast<std::uint64_t>(
-                    std::count(ids.begin(), ids.end(), static_cast<std::uint64_t>(class_id)));
-                out.push_back({first_node, count, digests[class_id].c_str()});
+                    std::count(ids.begin(), ids.end(), canonical_id));
+                out.push_back({canonical_id, count, digests[index].c_str()});
             }
         };
         populate_expected_class_digests(
