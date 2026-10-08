@@ -1,5 +1,6 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
+import { installInspectorCommitTrace } from "./lib/inspector-commit-trace.mjs";
 
 const workspaceUrl = process.env.CONTROL_ROOM_URL ?? "http://localhost:3100/workspace";
 const outputDir = resolve(
@@ -73,6 +74,9 @@ const browser = await playwright.chromium.launch({
     : {}),
 });
 const page = await browser.newPage({ viewport: { width: 1600, height: 900 } });
+if (process.env.CONTROL_ROOM_INSPECTOR_COMMIT_TRACE === "1") {
+  await installInspectorCommitTrace(page);
+}
 const consoleErrors = [];
 const notFoundResponses = [];
 const previewRequests = [];
@@ -910,6 +914,10 @@ async function qualifyMagneticTextureMutationStability(page, inspector, fixture)
       scrollTop: scroller?.scrollTop ?? 0,
     };
   }, identity);
+  await page.evaluate(() => {
+    const trace = window.__FULLMAG_INSPECTOR_COMMIT_TRACE__;
+    if (trace) { trace.commits = []; trace.dropped = 0; trace.errors = 0; }
+  });
   await page.waitForTimeout(1_100);
   const requestStart = fixture.requests.length;
   fixture.texturePatchDelayMs = 180;
@@ -995,6 +1003,7 @@ async function qualifyMagneticTextureMutationStability(page, inspector, fixture)
         .slice(-32)
         .map((entry) => ({ name: entry.name, startTime: entry.startTime, duration: entry.duration })),
       measuredAt: performance.now(),
+      commitTrace: window.__FULLMAG_INSPECTOR_COMMIT_TRACE__ ?? null,
       scrollTop: scroller?.scrollTop ?? 0,
     };
   });

@@ -249,3 +249,140 @@ nowa kontrola fixture active lane PASS; składnia Node/Python i scoped
 `4dd6288928fd47d9903e32e9a23c2de7`. Nie kompilowano testów jednostkowych.
 Zmiany diagnostyczne są gotowe do publikacji w roboczym PR, ale pełna
 kwalifikacja Inspectora i całego modułu pozostaje niezaliczona.
+
+## Dalsza diagnoza Inspectora — publikacja ACK
+
+Po publikacji `89177c627a85e860c6bf244010dc6b003fb69b29` wdrożono lokalnie
+publikację `committed_scene` w save/clear tekstury, z istniejącym fence
+session/history oraz ponownym sprawdzeniem po script sync. Nie zmieniono
+pełnej listy invalidacji ani budżetów. Stan pozostaje WIP.
+
+Pełny smoke receipt `b7c514770f034f43b4522a391c0ad7ab` zakończył się FAIL;
+digest przed/po identyczny:
+`3fcbc9283a74e609d15a391d4196680d37a5e1c070034e0c2db15910dcc1cebd`.
+Zakończenie własnego serwera potwierdzone. Rzeczywisty browser evidence
+potwierdza usunięcie GET scene po ACK: liczba żądań spadła z 13 do 12,
+history-before GET pozostał, jeden transaction POST i jeden sync POST.
+To dowód optymalizacji zapytań, nie naprawy całego błędu.
+
+Nadal cztery próbki profilera: `update` przy 7894.7 i 9252.9 ms,
+`nested-update` przy 8281.1 i 9481.6 ms. Dwie ostatnie zagnieżdżone próbki
+mają duration 0; nie dowodzi to, że nie wykonano commitów. Panel, fokus,
+scroll i opacity pozostały stabilne. Następny krok: zidentyfikować właściciela
+`nested-update` i granice czasowe history/ACK/sync; sam brak ponownego GET
+nie wystarczył do budżetu renderów. Session/history fence nie zastępuje
+osobnej ochrony zmiany targetu lub nowszego szkicu. Nie zamknięto T01/T15/T18.
+
+Architecture hygiene PASS. Produkcyjny TypeScript source-check PASS, receipt
+`ec8afda728ff46c4936a162aab4ad429`; nie kompilowano testów jednostkowych.
+Pełny ESLint zakończył się PASS/exit 0, receipt
+`164e8eb835f747249afe5e4dc0e7cc4b`. Sesja polecenia `73461` jest zakończona;
+nie pozostaje aktywny browser/source-check tej iteracji.
+
+Read-only review nie ustaliło właściciela `nested-update`. Konkretni kandydaci
+to resize/visibility state w Radix ScrollArea i rejestracja triggerów Tooltip.
+Tab store nie publikuje dla niezmienionego aktywnego tab; panel tekstury nie
+rejestruje edit-session. To hipotezy, nie potwierdzona przyczyna. Następna
+diagnostyka powinna zachować ograniczoną oś commitów gałęzi Inspector
+(nazwy komponentów i informację o zmianie hook-state, bez wartości stanu)
+wyłącznie w browser fixture; nie zmieniać produkcyjnych primitive bez dowodu.
+
+## Odbiór śladu commitów — Tooltip, nie ponowny GET
+
+Dodano opt-in `CONTROL_ROOM_INSPECTOR_COMMIT_TRACE=1` w pełnym smoke.
+Helper `scripts/lib/inspector-commit-trace.mjs` zachowuje callback hooka
+React, ogranicza przejście do 4096 fiberów, zapis do 128 zmian/commit,
+32 indeksów hooków i 64 commitów. Wynik zawiera metadane, bez wartości
+hook-state i bez serializacji fiberów. Mechanizm korzysta z
+[hooka React](https://github.com/facebook/react/blob/main/packages/react-reconciler/src/ReactFiberDevToolsHook.js);
+to diagnostyka zależna od wewnętrznej struktury, nie publiczny kontrakt produktu.
+
+Pierwszy receipt `e71087bdcce74768b334bec662b14fd3` i drugi
+`5382ea059d4e4e43aae690e83f2c746d` nie pozwalały ustalić właściciela:
+ucięte przejście nie obserwowało wszystkich ponownie użytych fiberów.
+Nie wykorzystano tych list jako dowodu przyczyny. Rozdzielono limit zapisu
+od limitu przejścia, dodano rozróżnienie ponownego użycia i puste commity.
+Kontrole interpretowanego helpera: chaining, bounded retention, brak danych
+stanu w JSON oraz zachowanie pustych commitów PASS; składnia i diff PASS.
+
+Receipt `108d67ba42404cbb9b8c3d116fa93920` nadal FAIL na budżecie 4/3,
+ale ma kompletny ślad (`traversalTruncated=false`, dropped=0, errors=0).
+Digest przed/po identyczny:
+`0c5ba9f655d6b674fba39b93a7e76bbec75ff18dc02a93d7e9bbd927e544042c`;
+własny serwer zakończony. Przy obu zachowanych próbkach `nested-update`
+(8243.9 oraz 9651.3 ms, duration 0) najbliższy commit (8245.7/9652.8 ms)
+wykazuje dokładnie cztery komponenty `Tooltip`, indeksy hooków
+4/10/11/13/19 i actualDuration 0. Nie jest to dowód kosztu renderu ani
+jeszcze dowód konkretnego wadliwego ref; wskazuje właścicieli do dalszej
+analizy. Nie wyłączono zerowych próbek ani nie podniesiono budżetu.
+
+Następny krok: zbadać toolbar `InspectorShell`, zależności/refy Radix Tooltip
+i odświeżenia całego shell. Nie przypisywać błędu ScrollArea bez dowodu.
+Pełne CI, browser gate, runtime/nauka i T00–T18 nadal pozostają otwarte.
+
+Read-only analiza zainstalowanych zależności wskazała
+`@radix-ui/react-slot@1.2.3::SlotClone`: w renderze tworzy nowy
+`composeRefs(forwardedRef, childrenRef)`. `TooltipTrigger` memoizuje własny
+ref, ale Slot przy `asChild` zmienia callback DOM, co wywołuje detach/attach
+i `Tooltip.setTrigger(null)` / ten sam element. To mechanizm zgodny ze
+śladem czterech Tooltipów; bez dodatkowego pomiaru par ref nie należy
+przedstawiać go jako pełnego dowodu każdej aktualizacji. Insertion effect
+w `useControllableState` aktualizuje ref callbacka, nie publikuje tam state.
+
+Wybrany następny krok: izolowany, memoizowany footer akcji Inspectora
+ze stabilnymi callbackami i istotnymi scalar props; zachować wszystkie
+tooltips, disabled/focus i aktualizacje Apply/Reset. Nie zmieniać zależności,
+nie ręcznie zastępować Radix i nie filtrować zerowych próbek.
+Pełny ESLint nowej diagnostyki pozostaje w aktywnej sesji `25092`;
+ostatni odczyt potwierdza działające polecenie. Kontynuacja musi odebrać
+ten sam handle przed edycją fingerprintowanych źródeł, bez ponownego startu.
+
+## Izolacja paska akcji — wdrożony WIP
+
+ESLint diagnostyki zakończony PASS/exit 0, receipt
+`ddc607e97977434fad5acfe86fbc061f`; sesja `25092` jest terminalna.
+
+`InspectorShell::InspectorActionBar` jest teraz memoizowaną granicą,
+która sama subskrybuje `useInspectorEditSession`. Shell nie posiada tej
+zbędnej subskrypcji. Zachowano cały markup footer, tooltipy, `useId`,
+aria-describedby, disabled, focus oraz Apply/Reset. `InspectorModule`
+stabilizuje callback Focus przez `useCallback`; kliknięcie nadal korzysta
+z żywego selection controller, a zmiana project-only aktualizuje callback.
+
+Niezależny review wszystkich zmienionych linii: brak Blocker/Required,
+niezmienione reguły dirty/valid/pending/lock. `git diff --check` PASS.
+Pełny smoke z diagnostyką jest uruchomiony w sesji `9352`; przed wynikiem
+nie wolno przedstawiać poprawki jako odbioru bramki renderów lub UI.
+Budżety render/request, profiler i timeouty pozostają bez zmian.
+
+Pełny smoke zakończył się PASS/exit 0, receipt
+`98a2589f3e8d45659035972eda026236`. Digest przed/po:
+`c4a81e45281b868967799cc7db20a4500a0477640d2358d38421b4424e45612a`;
+źródła niezmienione, własny serwer zakończony. Tekstura: render samples
+4 → 2 przy niezmienionym limicie 3, żądania 12 przy limicie 12;
+zero zachowanych `nested-update`. Wykonano pełny skrypt, w tym routing,
+Object/Airbox mutation stability, dirty-selection guard, wizualizacyjny
+Reset i konflikt zakresów fizyki w obu kierunkach. Raport zawiera jeden
+oczekiwany console error 409 z kontrolowanego konfliktu; brak nieoczekiwanych
+błędów według istniejącego guardu. Nie jest to smoke bez żadnego console error.
+
+Odebrano screenshot `visualization-overview-dark-416.png`: cztery akcje,
+układ, kolory i disabled styling zachowane. Nie zmieniono wizualnej jakości
+ani density. Produkcyjny TypeScript PASS, receipt
+`0463c01d56f64ac890199bc4b72fd8a6`; pełny ESLint tego snapshotu zakończony
+PASS/exit 0, receipt `79ba196b6b8940b18554ae65b6040965` (sesja `65728`).
+To odbiór konkretnego browser fixture, nie wykonanie anteny,
+LLG/FFT ani kwalifikacja czterech backendów. Całe T00–T18 nadal otwarte.
+
+Porównanie identycznego kadru `mode-visualization-phase-controls-416.png`
+przed/po izolacji paska: identyczny SHA256
+`FFD18C891B351911F7343D0CDE5E445422EA7024FBB684CBCCE9F5A8DB4C742A`.
+Dowód dotyczy tego kadru, nie wszystkich możliwych stanów UI.
+
+## Publikacja aktualizacji PR na żądanie użytkownika
+
+Ponowny `git fetch origin master` potwierdził HEAD mastera
+`2a3c6becb9c7e111ae1497ec0cd9ac9576acba95`; `HEAD..origin/master` = 0.
+Nie było nowych commitów mastera do scalenia. Publikacja obejmuje aktualny
+branch zadania w istniejącym PR #147 do `master`, bez merge i bez usuwania
+worktree. Lokalny odbiór Inspectora nie zastępuje wymaganych kontroli całego PR.
