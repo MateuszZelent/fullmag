@@ -2592,9 +2592,27 @@ int main()
               "\"rule_npoints\":" +
               std::to_string(tetra_order5.GetNPoints())) != std::string::npos,
           "quadrature provenance reports MFEM tetrahedron rule point count");
-    check(result.quadrature_provenance_json.find("\"element_count\":1") !=
+    const auto expected_magnetic_element_count = std::count(
+        magnetic_elements.begin(), magnetic_elements.end(), std::uint8_t{1u});
+    const std::string expected_global_count =
+        "\"element_count\":" + std::to_string(expected_magnetic_element_count) +
+        ",\"entries\":[";
+    check(result.quadrature_provenance_json.find(expected_global_count) !=
               std::string::npos,
-          "quadrature provenance reports the actual magnetic-element count");
+          "quadrature provenance reports the exact global magnetic-element count");
+    const std::size_t tet_entry_start = result.quadrature_provenance_json.find(
+        "{\"geometry\":\"tet4\"");
+    const std::size_t tet_entry_end = result.quadrature_provenance_json.find(
+        '}', tet_entry_start);
+    check(tet_entry_start != std::string::npos && tet_entry_end != std::string::npos,
+          "quadrature provenance contains a complete tet4 entry");
+    const std::string tet_entry = result.quadrature_provenance_json.substr(
+        tet_entry_start, tet_entry_end - tet_entry_start + 1u);
+    check(tet_entry.find(
+              "\"element_count\":" +
+              std::to_string(expected_magnetic_element_count) + "}") !=
+              std::string::npos,
+          "quadrature provenance reports the exact tet4 magnetic-element count");
 
     fd::PoissonAirboxSharedDomainAssemblyRequest pure_neumann = request;
     pure_neumann.boundary_kind = fd::PoissonAirboxBoundaryKind::pure_neumann;

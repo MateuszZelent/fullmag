@@ -1028,3 +1028,14 @@ pole time-domain. Poprawka obejmuje actual target surface routing i regresję ze
 scoped buffers; nie zmienia widoczności ani nie wymusza globalnie shaderów.
 CPU-SLEPc cloud route jest przygotowywana ze wspólną orkiestracją i istniejącymi
 pinami providerów; nie zastępuje ani nie restartuje aktywnego MFEM runa.
+
+### Provider MFEM — oracle PASS, starsza fixture count FAIL
+
+Run37793696182/job113367486128 zakończony FAILURE. Artefakt logu pokazuje
+PASS: floquet_positive_tangent_mass_matches_independent_phase_reduction,
+a później FAIL starszej asercji quadrature element_count. Producent liczy wszystkie
+aktywne elementy; fixture Cartesian tetrahedral cube ma maskę wszystkich mesh.GetNE(),
+ale test szukał hardcoded1. Poprawiono tylko test: expected=liczba jedynek maski,
+dokładny global count i dokładny count w tet4 entry (bez dopasowania prefiksu).
+Mixed fixture z jednym aktywnym prism pozostaje zachowana. Source review PASS;
+cały provider target wymaga ponownego wykonania na nowym SHA.
