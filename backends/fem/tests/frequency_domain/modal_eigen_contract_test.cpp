@@ -123,11 +123,22 @@ CsrOwned dense_to_csr(
     return csr;
 }
 
-double extract_json_number(const char *json, const char *key)
+double extract_json_number(
+    const char *json,
+    const char *key,
+    const char *test_context)
 {
     check(json != nullptr, "JSON buffer must be present");
     const char *start = std::strstr(json, key);
-    check(start != nullptr, "JSON key must be present");
+    if (start == nullptr) {
+        std::fprintf(
+            stderr,
+            "FAIL: JSON key must be present: test=%s key=%s\n",
+            test_context,
+            key);
+        std::fprintf(stderr, "JSON prefix: %.2048s\n", json);
+        std::exit(1);
+    }
     start += std::strlen(key);
     char *end = nullptr;
     const double value = std::strtod(start, &end);
@@ -2406,7 +2417,10 @@ void modal_shift_invert_finds_macrospin_mode()
               contains(result.resolved_fallback_reason, "none"),
           "tiny validation records that no fallback was used");
     const double frequency_hz =
-        extract_json_number(result.result_json, "\"frequency_hz\":");
+        extract_json_number(
+            result.result_json,
+            "\"frequency_hz\":",
+            "modal_shift_invert_finds_macrospin_mode");
     check(std::abs(frequency_hz - 0.15915494309189535) < 1.0e-12,
           "macrospin modal frequency matches 1/(2*pi)");
     fullmag_fem_frequency_domain_result_destroy(&result);
@@ -2426,7 +2440,10 @@ void modal_shift_invert_residual_below_tolerance()
     FullmagFemFrequencyDomainResult result = fullmag_fem_modal_eigen_solve(&request);
     check(result.status == FULLMAG_FEM_FD_OK, "macrospin residual validation should succeed");
     const double residual =
-        extract_json_number(result.result_json, "\"relative_residual\":");
+        extract_json_number(
+            result.result_json,
+            "\"relative_residual\":",
+            "modal_shift_invert_residual_below_tolerance");
     check(residual <= request.residual_tolerance,
           "macrospin modal residual must satisfy requested tolerance");
     fullmag_fem_frequency_domain_result_destroy(&result);
@@ -2478,19 +2495,31 @@ void modal_shift_invert_validation_reports_slepc_adapter_configuration()
           "non-SLEPc macrospin validation keeps the analytic validation family");
 #endif
     const double diagnostics_shift_frequency_hz =
-        extract_json_number(result.diagnostics_json, "\"shift_frequency_hz\":");
+        extract_json_number(
+            result.diagnostics_json,
+            "\"shift_frequency_hz\":",
+            "modal_shift_invert_validation_reports_slepc_adapter_configuration");
     check(std::abs(diagnostics_shift_frequency_hz - request.target_frequency_hz) < 1.0e-15,
           "macrospin validation diagnostics must report the requested shift frequency");
     const double diagnostics_shift_omega_rad_s =
-        extract_json_number(result.diagnostics_json, "\"shift_omega_rad_s\":");
+        extract_json_number(
+            result.diagnostics_json,
+            "\"shift_omega_rad_s\":",
+            "modal_shift_invert_validation_reports_slepc_adapter_configuration");
     check(std::abs(diagnostics_shift_omega_rad_s - 2.0 * M_PI * request.target_frequency_hz) < 1.0e-15,
           "macrospin validation diagnostics must report the angular shift");
     const double result_shift_frequency_hz =
-        extract_json_number(result.result_json, "\"shift_frequency_hz\":");
+        extract_json_number(
+            result.result_json,
+            "\"shift_frequency_hz\":",
+            "modal_shift_invert_validation_reports_slepc_adapter_configuration");
     check(std::abs(result_shift_frequency_hz - request.target_frequency_hz) < 1.0e-15,
           "macrospin validation result must report the requested shift frequency");
     const double result_shift_omega_rad_s =
-        extract_json_number(result.result_json, "\"shift_omega_rad_s\":");
+        extract_json_number(
+            result.result_json,
+            "\"shift_omega_rad_s\":",
+            "modal_shift_invert_validation_reports_slepc_adapter_configuration");
     check(std::abs(result_shift_omega_rad_s - 2.0 * M_PI * request.target_frequency_hz) < 1.0e-15,
           "macrospin validation result must report the angular shift");
     fullmag_fem_frequency_domain_result_destroy(&result);
@@ -2520,15 +2549,24 @@ void modal_shift_invert_reports_ksp_iterations()
     check(contains(g_last_progress_json, "\"accepted_mode_count\":1"),
           "modal progress reports accepted mode count");
     const double current_shift_hz =
-        extract_json_number(g_last_progress_json, "\"current_shift_hz\":");
+        extract_json_number(
+            g_last_progress_json,
+            "\"current_shift_hz\":",
+            "modal_shift_invert_reports_ksp_iterations");
     check(std::abs(current_shift_hz - request.target_frequency_hz) < 1.0e-15,
           "modal progress preserves the legacy current shift");
     const double shift_frequency_hz =
-        extract_json_number(g_last_progress_json, "\"shift_frequency_hz\":");
+        extract_json_number(
+            g_last_progress_json,
+            "\"shift_frequency_hz\":",
+            "modal_shift_invert_reports_ksp_iterations");
     check(std::abs(shift_frequency_hz - request.target_frequency_hz) < 1.0e-15,
           "modal progress reports shift frequency provenance");
     const double shift_omega_rad_s =
-        extract_json_number(g_last_progress_json, "\"shift_omega_rad_s\":");
+        extract_json_number(
+            g_last_progress_json,
+            "\"shift_omega_rad_s\":",
+            "modal_shift_invert_reports_ksp_iterations");
     check(std::abs(shift_omega_rad_s - 2.0 * M_PI * request.target_frequency_hz) < 1.0e-15,
           "modal progress reports angular shift provenance");
     fullmag_fem_frequency_domain_result_destroy(&result);
@@ -2844,7 +2882,10 @@ void modal_shift_invert_payload_can_be_assembled_from_mfem_operator()
     check(contains(result.diagnostics_json, "\"deduplication_mass_matrix\":\"provided\""),
           "MFEM-assembled modal payload diagnostics report provided tangent mass");
     const double frequency_hz =
-        extract_json_number(result.result_json, "\"frequency_hz\":");
+        extract_json_number(
+            result.result_json,
+            "\"frequency_hz\":",
+            "modal_shift_invert_payload_can_be_assembled_from_mfem_operator");
     check(std::abs(frequency_hz - 0.15915494309189535) < 1.0e-10,
           "MFEM-assembled modal payload frequency matches one radian per second");
 #else
@@ -2986,7 +3027,10 @@ void modal_shift_invert_dense_full_2x2_payload_accepts_k0_kittel_macrospin()
     check(contains(result.result_json, "\"accepted_mode_count\":1"),
           "full_2x2 Kittel dense payload accepts one positive-frequency mode");
     const double frequency_hz =
-        extract_json_number(result.result_json, "\"frequency_hz\":");
+        extract_json_number(
+            result.result_json,
+            "\"frequency_hz\":",
+            "modal_shift_invert_dense_full_2x2_payload_accepts_k0_kittel_macrospin");
     check(std::abs(frequency_hz - expected_frequency_hz) / expected_frequency_hz < 1.0e-10,
           "full_2x2 Kittel dense payload frequency matches gamma0 H/(2*pi)");
 #else
