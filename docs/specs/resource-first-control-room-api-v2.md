@@ -1296,3 +1296,21 @@ uszkodzony CAS albo niepoprawny scalar 500.
 Status implementacji: backend source i rejestracja OpenAPI. Managed export,
 generated transport, facade/hook i UI pozostają NOT VERIFIED; nie edytujemy
 ręcznie wygenerowanego kontraktu przed odbiorem buildu.
+
+
+## Proponowane rozszerzenie FMVP v5: pelna tozsamosc pola
+
+Status: implementacja w toku, runtime/browser NOT VERIFIED. Decyzja i dokladny
+layout: [ADR0053](../adr/0053-fmvp-full-field-identity.md). FMVPv5/FMMIv4
+zachowuje48-bajtowy header oraztopology/indexing/scope;88-bajtowa stala czesc
+metadata rozszerza FMMIv3 o dlugosc pelnego UTF-8quantityID podoffsetem80.
+Pelne ID pochodzi z binarnego payloadu;prefix16bajtow zheadera jest sprawdzany
+bajtowo, nie nadpisywany HTTP. Reader v2/v3/v4 pozostaje zgodny.
+
+Brak topologii dla headless artifact reads jest jawny: LegacyCountOnly,
+puste indices, revision0/hashzero, decoder null topologyidentity. Taki payload
+nie spelnia wymagania full_domain dla overlay. Sourcequalification pozostaje
+odrebna: calkowicie nieobecna albo kompletna jak w v4; nigdy fikcyjne live.
+
+Rollout producer/codec/overlay jest jednym etapem; standardowe modalne i
+response field IDs musza przejsc API orazbrowserproof bezskracania nazw.

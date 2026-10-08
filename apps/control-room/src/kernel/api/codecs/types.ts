@@ -20,7 +20,7 @@ export interface DecodedFieldVector {
   dtype: "float64";
   domainGenerationId?: string | null;
   fieldGenerationId?: string | null;
-  formatVersion?: 2 | 3 | 4;
+  formatVersion?: 2 | 3 | 4 | 5;
   grid: [number, number, number];
   indexing?: DecodedFieldVectorIndexing;
   meshTopologyHash?: string | null;
@@ -43,7 +43,7 @@ export interface DecodedComplexFieldVector {
   dtype: "complex128";
   domainGenerationId?: string | null;
   fieldGenerationId?: string | null;
-  formatVersion?: 2 | 3 | 4;
+  formatVersion?: 2 | 3 | 4 | 5;
   grid: [number, number, number];
   indexing?: DecodedFieldVectorIndexing;
   meshTopologyHash?: string | null;

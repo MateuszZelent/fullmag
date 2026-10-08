@@ -18,6 +18,16 @@ const INSPECTOR_REQUEST_TIMEOUT_MS = 5_000;
 // load so the budget detects request storms, not the number of loads in a run.
 const INSPECTOR_MAX_REQUESTS_PER_PATH = 8;
 const INSPECTOR_SCENE_TRACE_LIMIT = 20;
+const INSPECTOR_MODAL_FIELD_ID = "analysis:eigen:sample-0001:mode-0002";
+const INSPECTOR_MODAL_FIELD_ARRAY_PATH =
+  "eigen/mode_fields.zarr/sample_0001/mode_0002/vector_xyz_complex";
+const INSPECTOR_MODAL_FIELD_PAYLOAD_PATH =
+  `${INSPECTOR_MODAL_FIELD_ARRAY_PATH}/0.0.0`;
+const INSPECTOR_MODAL_DOMAIN_GENERATION_ID = "1";
+const INSPECTOR_MODAL_MESH_TOPOLOGY_REVISION = 7;
+const INSPECTOR_MODAL_TOPOLOGY_HASH = "0123456789abcdef".repeat(4);
+const INSPECTOR_MODAL_TOPOLOGY_HEADER_HASH =
+  `sha256:${INSPECTOR_MODAL_TOPOLOGY_HASH}`;
 const INSPECTOR_REQUEST_LIMITS = new Map([
   [
     "GET /v2/sessions/current/model/regions",
@@ -48,6 +58,42 @@ const INSPECTOR_REQUEST_LIMITS = new Map([
     32,
   ],
 ]);
+const INSPECTOR_MODAL_BRANCH_OWNER = {
+  artifact_set_id: "inspector-modal-artifact-set-run-b",
+  content_digest: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  mesh_generation_id: INSPECTOR_MODAL_DOMAIN_GENERATION_ID,
+  revision: "inspector-modal-branches-run-b-rev-4",
+  run_id: "inspector-run",
+  session_id: "inspector-routing-smoke",
+  stage_id: "eigen-dispersion",
+};
+const INSPECTOR_MODAL_RESULT_OWNER = {
+  artifact_set_id: INSPECTOR_MODAL_BRANCH_OWNER.artifact_set_id,
+  content_digest: "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+  mesh_generation_id: INSPECTOR_MODAL_DOMAIN_GENERATION_ID,
+  revision: "inspector-modal-result-manifest-run-b-rev-2",
+  run_id: INSPECTOR_MODAL_BRANCH_OWNER.run_id,
+  session_id: INSPECTOR_MODAL_BRANCH_OWNER.session_id,
+  stage_id: INSPECTOR_MODAL_BRANCH_OWNER.stage_id,
+};
+const INSPECTOR_MODAL_DISPERSION_OWNER_A = {
+  artifact_set_id: "inspector-modal-artifact-set-run-a",
+  content_digest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  mesh_generation_id: INSPECTOR_MODAL_DOMAIN_GENERATION_ID,
+  revision: "inspector-modal-dispersion-run-a-rev-8",
+  run_id: "inspector-run-a",
+  session_id: "inspector-routing-smoke",
+  stage_id: "eigen-dispersion",
+};
+const INSPECTOR_MODAL_DISPERSION_OWNER_B = {
+  artifact_set_id: "inspector-modal-artifact-set-run-b",
+  content_digest: "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+  mesh_generation_id: INSPECTOR_MODAL_DOMAIN_GENERATION_ID,
+  revision: "inspector-modal-dispersion-run-b-rev-11",
+  run_id: "inspector-run",
+  session_id: "inspector-routing-smoke",
+  stage_id: "eigen-dispersion",
+};
 const fixture = createInspectorFixture();
 
 async function loadPlaywright() {
@@ -104,6 +150,56 @@ await page.addInitScript((baseUrl) => {
     disableRealtime: true,
   };
 }, new URL(workspaceUrl).origin);
+await page.addInitScript(() => {
+  const wavevectorUniforms = [];
+  const uniformNames = new WeakMap();
+  window.__FULLMAG_INSPECTOR_WAVEVECTOR_UNIFORMS__ = wavevectorUniforms;
+  const capture = (location, values, sourceOffset = 0, sourceLength = undefined) => {
+    if (!location || uniformNames.get(location) !== "fmWavevectorKf") return;
+    const source = Array.from(values);
+    const end = sourceLength === undefined ? undefined : sourceOffset + sourceLength;
+    wavevectorUniforms.push(source.slice(sourceOffset, end));
+    if (wavevectorUniforms.length > 1024) wavevectorUniforms.shift();
+  };
+  const prototypes = new Set([
+    globalThis.WebGLRenderingContext?.prototype,
+    globalThis.WebGL2RenderingContext?.prototype,
+  ]);
+  for (const prototype of prototypes) {
+    if (!prototype) continue;
+    const getUniformLocation = prototype.getUniformLocation;
+    if (typeof getUniformLocation === "function" &&
+        Object.prototype.hasOwnProperty.call(prototype, "getUniformLocation")) {
+      prototype.getUniformLocation = function (...args) {
+        const location = Reflect.apply(getUniformLocation, this, args);
+        const name = args[1];
+        if (location && (name === "fmWavevectorKf" || name === "fmWavevectorKf[0]")) {
+          uniformNames.set(location, "fmWavevectorKf");
+        }
+        return location;
+      };
+    }
+    const uniform3fv = prototype.uniform3fv;
+    if (typeof uniform3fv === "function" &&
+        Object.prototype.hasOwnProperty.call(prototype, "uniform3fv")) {
+      prototype.uniform3fv = function (...args) {
+        capture(args[0], args[1], args[2] ?? 0, args[3]);
+        return Reflect.apply(uniform3fv, this, args);
+      };
+    }
+    const uniform3f = prototype.uniform3f;
+    if (typeof uniform3f === "function" &&
+        Object.prototype.hasOwnProperty.call(prototype, "uniform3f")) {
+      prototype.uniform3f = function (...args) {
+        capture(args[0], args.slice(1, 4));
+        return Reflect.apply(uniform3f, this, args);
+      };
+    }
+  }
+});
+await page.context().grantPermissions(["clipboard-read", "clipboard-write"], {
+  origin: new URL(workspaceUrl).origin,
+});
 await installInspectorFixtureApi(page, fixture);
 
 if (process.env.CONTROL_ROOM_INSPECTOR_FDM_BUILD_GRID === "1") {
@@ -1309,6 +1405,17 @@ async function qualifyInspectorRoutingMatrix(page, inspector, screenshotFiles, f
 
 async function qualifyModalDispersionAndPostprocessing(page, inspector, screenshotFiles, fixture) {
   fixture.analysisProduct = "modal_eigen";
+  fixture.modalDispersionOwnershipRegression = true;
+  let releaseOldCsv;
+  const oldCsvGate = new Promise((resolve) => {
+    releaseOldCsv = resolve;
+  });
+  fixture.modalDispersionRace = {
+    oldCsvGate,
+    phase: "run-a-delayed",
+    runARequestCount: 0,
+    runAResponseCount: 0,
+  };
   await reloadInspectorDocument(page, fixture, {
     waitUntil: "domcontentloaded",
     timeout: 60_000,
@@ -1318,6 +1425,11 @@ async function qualifyModalDispersionAndPostprocessing(page, inspector, screensh
   const resultsTab = page
     .locator(".fm-explorer .fm-tabs-trigger")
     .filter({ hasText: /^Results$/ });
+  const runADispersionRequest = page.waitForRequest((request) =>
+    new URL(request.url()).pathname ===
+      "/v2/sessions/current/analysis/frequency-domain/eigen/dispersion",
+    { timeout: 60_000 },
+  );
   await resultsTab.click();
   const resultRootId = "results:run:inspector-run";
   const dispersionRootId = `${resultRootId}:k-resolved`;
@@ -1325,6 +1437,23 @@ async function qualifyModalDispersionAndPostprocessing(page, inspector, screensh
   await expandInspectorNode(page, resultRootId);
   await expandInspectorNode(page, dispersionRootId);
   await expandInspectorNode(page, modalStageId);
+  await selectResultInspectorNode(page, inspector, `${modalStageId}:branches`, {
+    owner: "frequency-domain-results-dispersion-modal-branches",
+    heading: "Mode Branches",
+    label: "Modal mode branches",
+  });
+  await runADispersionRequest;
+  assert(
+    fixture.modalDispersionRace.runARequestCount > 0,
+    "The old run A dispersion CSV request did not enter the delayed fixture route.",
+  );
+
+  await qualifyModalArtifactOwnershipRace(page, inspector, fixture, {
+    dispersionRootId,
+    modalStageId,
+    releaseOldCsv,
+    resultRootId,
+  });
 
   await selectResultInspectorNode(page, inspector, `${modalStageId}:dispersion`, {
     owner: "frequency-domain-results-dispersion-modal-relation",
@@ -1373,6 +1502,210 @@ async function qualifyModalDispersionAndPostprocessing(page, inspector, screensh
     state: "visible",
     timeout: 60_000,
   });
+}
+
+async function qualifyModalArtifactOwnershipRace(
+  page,
+  inspector,
+  fixture,
+  { dispersionRootId, modalStageId, releaseOldCsv, resultRootId },
+) {
+  const oldRunPlotButton = inspector.getByRole("button", {
+    name: "Plot sample 1 mode 2 in 3D",
+  });
+  await oldRunPlotButton.waitFor({ state: "visible", timeout: 60_000 });
+  assert(
+    !(await oldRunPlotButton.isEnabled()),
+    "A run A dispersion artifact must not enable the run B branch's 3D action.",
+  );
+  const staleCaptureStart = await page.evaluate(
+    () => window.__FULLMAG_INSPECTOR_WAVEVECTOR_UNIFORMS__?.length ?? 0,
+  );
+  const staleModeFieldRequestCount = inspectorModeFieldVectorRequestCount(fixture);
+
+  const modelTab = page
+    .locator(".fm-explorer .fm-tabs-trigger")
+    .filter({ hasText: /^Model$/ });
+  await modelTab.click();
+  await selectInspectorNode(page, inspector, "model:object:film:visualization:mode-visualization", {
+    owner: "object-mode-visualization-overview",
+    label: "Mode view with unmatched run A artifact",
+  });
+  await assertHealthyViewportCanvas(page, "unmatched run A modal artifacts");
+  const staleUniforms = await page.evaluate(
+    (start) => window.__FULLMAG_INSPECTOR_WAVEVECTOR_UNIFORMS__?.slice(start) ?? [],
+    staleCaptureStart,
+  );
+  assert(
+    !staleUniforms.some((vector) => closeVector(vector, [-2e7, 0, 0])),
+    `A run A wavevector reached the 3D shader while run B branches were selected: ${JSON.stringify(staleUniforms)}`,
+  );
+  assert(
+    inspectorModeFieldVectorRequestCount(fixture) === staleModeFieldRequestCount,
+    "A disabled stale branch action must not hand off or request the candidate modal field.",
+  );
+
+  await selectInspectorResultBranch(page, inspector, resultRootId, dispersionRootId, modalStageId);
+  const pendingCsv = await exportBranchSampleCsv(page, inspector, 1, 2);
+  assertBranchCsvHasNoK(pendingCsv, "A delayed run A CSV must not enrich run B branch rows while pending.");
+
+  const runAResponse = page.waitForResponse((response) =>
+    new URL(response.url()).pathname ===
+      "/v2/sessions/current/analysis/frequency-domain/eigen/dispersion" &&
+    response.status() === 200,
+    { timeout: 60_000 },
+  );
+  releaseOldCsv();
+  await runAResponse;
+  await waitForInspectorRequestQuiet(page, fixture);
+  assert(
+    fixture.modalDispersionRace.runAResponseCount > 0,
+    "The delayed run A CSV fixture response was not served.",
+  );
+  const mismatchedCsv = await exportBranchSampleCsv(page, inspector, 1, 2);
+  assertBranchCsvHasNoK(mismatchedCsv, "A completed run A CSV must not enrich run B branch rows.");
+
+  fixture.modalDispersionRace.phase = "run-b-matched";
+  const runBResponse = page.waitForResponse((response) =>
+    new URL(response.url()).pathname ===
+      "/v2/sessions/current/analysis/frequency-domain/eigen/dispersion" &&
+    response.status() === 200,
+    { timeout: 60_000 },
+  );
+  await reloadInspectorDocument(page, fixture, {
+    waitUntil: "domcontentloaded",
+    timeout: 60_000,
+  }, "modal-eigen-run-b-artifacts");
+  const resultsTab = page
+    .locator(".fm-explorer .fm-tabs-trigger")
+    .filter({ hasText: /^Results$/ });
+  if ((await resultsTab.getAttribute("aria-selected")) !== "true") {
+    await resultsTab.click();
+  }
+  await runBResponse;
+  await waitForInspectorRequestQuiet(page, fixture);
+  await selectInspectorResultBranch(page, inspector, resultRootId, dispersionRootId, modalStageId);
+  const matchedCsv = await exportBranchSampleCsv(page, inspector, 1, 2);
+  const matchedRow = branchCsvSampleRow(matchedCsv, 1, 2);
+  assert(
+    matchedRow?.[5] === "30000000" &&
+      matchedRow.slice(6, 9).join(",") === "0,0,30000000",
+    `Matched run B CSV did not supply its own nonzero path/k identity: ${JSON.stringify(matchedRow)}`,
+  );
+
+  const matchedCaptureStart = await page.evaluate(
+    () => window.__FULLMAG_INSPECTOR_WAVEVECTOR_UNIFORMS__?.length ?? 0,
+  );
+  const matchedModeFieldMetadataResponse = page.waitForResponse((response) =>
+    new URL(response.url()).pathname ===
+      "/v2/sessions/current/analysis/frequency-domain/eigen/mode-field/1/2/meta" &&
+    response.status() === 200,
+    { timeout: 60_000 },
+  );
+  const matchedModeFieldVectorResponse = page.waitForResponse((response) =>
+    new URL(response.url()).pathname ===
+      `/v2/sessions/current/data/fields/${encodeURIComponent(INSPECTOR_MODAL_FIELD_ID)}/samples/vector` &&
+    response.status() === 200,
+    { timeout: 60_000 },
+  );
+  await inspector.getByRole("button", { name: "Plot sample 1 mode 2 in 3D" }).click();
+  await modelTab.click();
+  await selectInspectorNode(page, inspector, "model:object:film:visualization:mode-visualization", {
+    owner: "object-mode-visualization-overview",
+    label: "Matched run B mode field",
+  });
+  await assertHealthyViewportCanvas(page, "matched run B nonzero-k modal handoff");
+  const modeFieldMetadata = await (await matchedModeFieldMetadataResponse).json();
+  assertInspectorModalModeFieldMetadata(modeFieldMetadata);
+  await page.waitForFunction(
+    ({ start, expected }) =>
+      (window.__FULLMAG_INSPECTOR_WAVEVECTOR_UNIFORMS__ ?? [])
+        .slice(start)
+        .some((vector) => Array.isArray(vector) && vector.length === 3 &&
+          expected.every((value, index) =>
+            Math.abs(vector[index] - value) <= Math.max(1e-3, Math.abs(value) * 1e-6),
+          )),
+    { start: matchedCaptureStart, expected: [0, 0, 3e7] },
+    { timeout: 30_000 },
+  );
+  await assertInspectorModalModeFieldVectorResponse(
+    await matchedModeFieldVectorResponse,
+    fixture,
+  );
+  assert(
+    await inspector.getByRole("alert", {
+      name: "Active Analysis Overlay context warning",
+    }).count() === 0,
+    "Matched run B branch handoff remains outside its valid 3D result context.",
+  );
+
+  if ((await resultsTab.getAttribute("aria-selected")) !== "true") {
+    await resultsTab.click();
+  }
+  await selectInspectorResultBranch(page, inspector, resultRootId, dispersionRootId, modalStageId);
+}
+
+async function selectInspectorResultBranch(
+  page,
+  inspector,
+  resultRootId,
+  dispersionRootId,
+  modalStageId,
+) {
+  const resultsTab = page
+    .locator(".fm-explorer .fm-tabs-trigger")
+    .filter({ hasText: /^Results$/ });
+  if ((await resultsTab.getAttribute("aria-selected")) !== "true") {
+    await resultsTab.click();
+  }
+  await expandInspectorNode(page, resultRootId);
+  await expandInspectorNode(page, dispersionRootId);
+  await expandInspectorNode(page, modalStageId);
+  await selectResultInspectorNode(page, inspector, `${modalStageId}:branches`, {
+    owner: "frequency-domain-results-dispersion-modal-branches",
+    heading: "Mode Branches",
+    label: "Modal mode branches",
+  });
+}
+
+async function exportBranchSampleCsv(page, inspector, sampleIndex, rawModeIndex) {
+  await page.evaluate(() => navigator.clipboard.writeText(""));
+  await inspector.getByRole("button", { name: "Export branch CSV" }).click();
+  await page.waitForFunction(
+    async ({ sampleIndex: expectedSampleIndex, rawModeIndex: expectedModeIndex }) =>
+      (await navigator.clipboard.readText()).includes(
+        `branch-0,${expectedSampleIndex},sample-${String(expectedSampleIndex).padStart(4, "0")},${expectedModeIndex},`,
+      ),
+    { sampleIndex, rawModeIndex },
+    { timeout: 10_000 },
+  );
+  return page.evaluate(() => navigator.clipboard.readText());
+}
+
+function inspectorModeFieldVectorRequestCount(fixture) {
+  const path = `/v2/sessions/current/data/fields/${encodeURIComponent(INSPECTOR_MODAL_FIELD_ID)}/samples/vector`;
+  return fixture.requests.filter((request) => request.includes(path)).length;
+}
+
+function branchCsvSampleRow(csv, sampleIndex, rawModeIndex) {
+  return csv.split(/\r?\n/)
+    .find((line) => line.startsWith(`branch-0,${sampleIndex},sample-${String(sampleIndex).padStart(4, "0")},${rawModeIndex},`))
+    ?.split(",");
+}
+
+function assertBranchCsvHasNoK(csv, message) {
+  const row = branchCsvSampleRow(csv, 1, 2);
+  assert(
+    row?.[5] === "" && row.slice(6, 9).every((value) => value === ""),
+    `${message} Exported row: ${JSON.stringify(row)}`,
+  );
+}
+
+function closeVector(actual, expected) {
+  return Array.isArray(actual) && actual.length === 3 &&
+    expected.every((value, index) =>
+      Math.abs(actual[index] - value) <= Math.max(1e-3, Math.abs(value) * 1e-6),
+    );
 }
 
 async function selectResultInspectorNode(page, inspector, nodeId, { owner, heading, label }) {
@@ -1661,7 +1994,7 @@ function createInspectorFixture() {
     fdmBuildGridMode,
     gridCommandBodies: [],
     manifest: {
-      generation_id: "1",
+      generation_id: INSPECTOR_MODAL_DOMAIN_GENERATION_ID,
       mesh_name: "Inspector fixture mesh",
       mesh_parts: [
         inspectorMeshPart("airbox", "airbox", null, 0),
@@ -1682,7 +2015,7 @@ function createInspectorFixture() {
       regions: [],
       revision: 7,
       source_scene_revision: revision,
-      topology_fingerprint: "inspector-routing-topology",
+      topology_fingerprint: INSPECTOR_MODAL_TOPOLOGY_HASH,
     },
     requests: [],
     visualizationMutationBodies: [],
@@ -1691,6 +2024,8 @@ function createInspectorFixture() {
     requestBudgetViolation: null,
     sceneResponseTrace: [],
     analysisProduct: "driven_response",
+    modalDispersionOwnershipRegression: false,
+    modalDispersionRace: null,
     unknownMutationPaths: [],
     unknownGetPaths: [],
     revision,
@@ -2273,7 +2608,28 @@ async function installInspectorFixtureApi(page, fixture) {
     if (path === "/v2/sessions/current/analysis/frequency-domain/manifest.v1") return fulfillJson(route, inspectorFrequencyManifest(fixture));
     if (path === "/v2/sessions/current/analysis/frequency-domain/eigen/spectrum.v2") return fulfillJson(route, inspectorFrequencySpectrum(fixture));
     if (path === "/v2/sessions/current/analysis/frequency-domain/eigen/branches.v2") return fulfillJson(route, inspectorFrequencyBranches(fixture));
-    if (path === "/v2/sessions/current/analysis/frequency-domain/eigen/dispersion") return fulfillJson(route, inspectorFrequencyDispersion(fixture));
+    if (path === "/v2/sessions/current/analysis/frequency-domain/eigen/dispersion") {
+      const race = fixture.modalDispersionRace;
+      if (fixture.analysisProduct === "modal_eigen" && race?.phase === "run-a-delayed") {
+        race.runARequestCount += 1;
+        const runAResponse = inspectorFrequencyDispersion(
+          fixture,
+          INSPECTOR_MODAL_DISPERSION_OWNER_A,
+        );
+        await race.oldCsvGate;
+        race.runAResponseCount += 1;
+        return fulfillJson(route, runAResponse);
+      }
+      return fulfillJson(
+        route,
+        inspectorFrequencyDispersion(
+          fixture,
+          fixture.analysisProduct === "modal_eigen"
+            ? INSPECTOR_MODAL_DISPERSION_OWNER_B
+            : null,
+        ),
+      );
+    }
     if (path === "/v2/sessions/current/analysis/frequency-domain/eigen/diagnostics.v2") return fulfillJson(route, inspectorFrequencyDiagnostics());
     if (path === "/v2/sessions/current/analysis/frequency-domain/response/magnetic-sweep") return fulfillJson(route, inspectorFrequencyResponseSweep());
     if (
@@ -2281,10 +2637,13 @@ async function installInspectorFixtureApi(page, fixture) {
       path === "/v2/sessions/current/analysis/frequency-domain/response/progress.v1"
     ) return fulfillEmpty(route, 204);
     if (path.includes("/analysis/frequency-domain/") && path.endsWith("/meta")) {
-      return fulfillJson(route, inspectorFieldMeta(path));
+      return fulfillJson(route, inspectorFieldMeta(path, fixture));
     }
-    if (path.includes("/data/fields/") && path.endsWith("/meta")) return fulfillJson(route, inspectorFieldMeta(path));
-    if (path.includes("/data/fields/") && path.endsWith("/samples/vector")) return fulfillBinary(route, inspectorFieldVector(path));
+    if (path.includes("/data/fields/") && path.endsWith("/meta")) return fulfillJson(route, inspectorFieldMeta(path, fixture));
+    if (path.includes("/data/fields/") && path.endsWith("/samples/vector")) {
+      const fieldVector = inspectorFieldVector(path, fixture);
+      return fulfillBinary(route, fieldVector.buffer, 200, fieldVector.headers);
+    }
     if (path === "/v2/sessions/current/data/domain/topology") return fulfillTopology(route, fixture.topology);
     fixture.unknownGetPaths.push(`${request.method()} ${path}${url.search}`);
     return fulfillJson(
@@ -2540,7 +2899,7 @@ function inspectorFieldCatalog(fixture) {
   };
 }
 
-function inspectorFieldMeta(path) {
+function inspectorFieldMeta(path, fixture = {}) {
   const encoded = path.split("/data/fields/")[1]?.split("/")[0] ?? "m";
   const eigenMatch = /\/eigen\/mode-field\/(\d+)\/(\d+)\/meta$/.exec(path);
   const responseMatch = /\/response\/field\/(\d+)\/meta$/.exec(path);
@@ -2549,6 +2908,45 @@ function inspectorFieldMeta(path) {
     : responseMatch
       ? `analysis:frequency-response:frequency-${responseMatch[1].padStart(4, "0")}`
       : decodeURIComponent(encoded);
+  if (fixture.modalDispersionOwnershipRegression && eigenMatch) {
+    return {
+      artifact_path: INSPECTOR_MODAL_FIELD_PAYLOAD_PATH,
+      available_views: [
+        "complex",
+        "real",
+        "imag",
+        "abs",
+        "amplitude",
+        "phase",
+        "phase_rotated_real",
+      ],
+      binary_layout: "complex_f64_pairs_little_endian",
+      component_basis: "global_xyz",
+      component_count: 3,
+      components: ["x", "y", "z"],
+      complex_pair_count: 36,
+      default_phase_rad: 0,
+      default_view: "phase_rotated_real",
+      field_id: fieldId,
+      missing_reason: null,
+      payload_encoding: "f64_interleaved_real_imag_xyz",
+      payload_value_count: 72,
+      quantity: "delta_m",
+      resource_key: `/v2/sessions/current/data/fields/${encodeURIComponent(fieldId)}/samples/vector?view=phase_rotated_real&phase_rad=0`,
+      schema_version: "frequency_domain_mode_field.v1",
+      source_family: "analysis/eigen",
+      status: "ready",
+      storage_format: "zarr",
+      value_kind: "complex_spatial_vector",
+      zarr_array_path: INSPECTOR_MODAL_FIELD_ARRAY_PATH,
+      zarr_chunk_path: INSPECTOR_MODAL_FIELD_PAYLOAD_PATH,
+      zarr_chunk_shape: [12, 3, 2],
+      zarr_compressor: null,
+      zarr_dtype: "<f8",
+      zarr_shape: [12, 3, 2],
+      zarr_store_path: "eigen/mode_fields.zarr",
+    };
+  }
   const resourceKey = `/v2/sessions/current/data/fields/${encodeURIComponent(fieldId)}/samples/vector?view=phase_rotated_real&phase_rad=0`;
   return {
     artifact_path: `${fieldId}.field.v2.bin`,
@@ -2575,9 +2973,31 @@ function inspectorFieldMeta(path) {
   };
 }
 
-function inspectorFieldVector(path) {
+function inspectorFieldVector(path, fixture = {}) {
   const encoded = path.split("/data/fields/")[1]?.split("/")[0] ?? "m";
   const quantityId = decodeURIComponent(encoded);
+  if (
+    fixture.modalDispersionOwnershipRegression &&
+    quantityId === INSPECTOR_MODAL_FIELD_ID
+  ) {
+    const modeField = makeInspectorModalModeFieldVector(quantityId);
+    return {
+      buffer: modeField.buffer,
+      headers: {
+        "x-fullmag-component": "full",
+        "x-fullmag-domain-generation-id": INSPECTOR_MODAL_DOMAIN_GENERATION_ID,
+        "x-fullmag-encoding": "FMVP;version=5",
+        "x-fullmag-field-indexing": "full_domain",
+        "x-fullmag-field-revision": modeField.fieldRevision,
+        "x-fullmag-mesh-topology-hash": INSPECTOR_MODAL_TOPOLOGY_HEADER_HASH,
+        "x-fullmag-n-comp": "6",
+        "x-fullmag-payload-state": "current",
+        "x-fullmag-point-count": "12",
+        "x-fullmag-quantity-id": quantityId,
+        "x-fullmag-value-count": "72",
+      },
+    };
+  }
   const grid = [8, 4, 1];
   const valueCount = grid[0] * grid[1] * grid[2] * 3;
   const buffer = new ArrayBuffer(48 + valueCount * Float64Array.BYTES_PER_ELEMENT);
@@ -2597,7 +3017,281 @@ function inspectorFieldVector(path) {
     values[index + 1] = 0.2;
     values[index + 2] = 0.1;
   }
-  return buffer;
+  return { buffer, headers: {} };
+}
+
+function makeInspectorModalModeFieldVector(quantityId) {
+  const encoder = new TextEncoder();
+  const scopeKindBytes = encoder.encode("full");
+  const domainGenerationIdBytes = encoder.encode(
+    INSPECTOR_MODAL_DOMAIN_GENERATION_ID,
+  );
+  const quantityIdBytes = encoder.encode(quantityId);
+  const metadataLength =
+    (88 + scopeKindBytes.byteLength + domainGenerationIdBytes.byteLength + quantityIdBytes.byteLength + 7) &
+    ~7;
+  const grid = [12, 1, 1];
+  const valueCount = 72;
+  const valuesOffset = 48 + metadataLength;
+  const buffer = new ArrayBuffer(
+    valuesOffset + valueCount * Float64Array.BYTES_PER_ELEMENT,
+  );
+  const header = new DataView(buffer);
+  for (const [index, code] of [..."FMVP"].entries()) {
+    header.setUint8(index, code.charCodeAt(0));
+  }
+  header.setUint8(4, 5);
+  header.setUint8(5, 1);
+  header.setUint8(6, 6);
+  header.setUint32(8, metadataLength, true);
+  header.setUint32(12, valueCount, true);
+  header.setUint32(16, grid[0], true);
+  header.setUint32(20, grid[1], true);
+  header.setUint32(24, grid[2], true);
+  new Uint8Array(buffer, 28, 16).set(quantityIdBytes.subarray(0, 16));
+
+  const metadata = new DataView(buffer, 48, metadataLength);
+  for (const [index, code] of [..."FMMI"].entries()) {
+    metadata.setUint8(index, code.charCodeAt(0));
+  }
+  metadata.setUint16(4, 4, true);
+  metadata.setUint16(8, domainGenerationIdBytes.byteLength, true);
+  metadata.setBigUint64(16, BigInt(INSPECTOR_MODAL_MESH_TOPOLOGY_REVISION), true);
+  const topologyHashBytes = new Uint8Array(32);
+  for (let index = 0; index < topologyHashBytes.length; index += 1) {
+    topologyHashBytes[index] = Number.parseInt(
+      INSPECTOR_MODAL_TOPOLOGY_HASH.slice(index * 2, index * 2 + 2),
+      16,
+    );
+  }
+  new Uint8Array(buffer, 48 + 24, 32).set(topologyHashBytes);
+  metadata.setUint32(56, 0, true);
+  metadata.setUint32(60, 0, true);
+  metadata.setUint16(64, scopeKindBytes.byteLength, true);
+  metadata.setBigUint64(68, BigInt(0), true);
+  metadata.setUint16(80, quantityIdBytes.byteLength, true);
+
+  let stringOffset = 48 + 88;
+  new Uint8Array(buffer, stringOffset, scopeKindBytes.byteLength).set(scopeKindBytes);
+  stringOffset += scopeKindBytes.byteLength;
+  // scope_id is intentionally empty for this full-domain field.
+  new Uint8Array(buffer, stringOffset, domainGenerationIdBytes.byteLength).set(
+    domainGenerationIdBytes,
+  );
+  stringOffset += domainGenerationIdBytes.byteLength;
+  // The optional source metadata group is wholly absent.
+  new Uint8Array(buffer, stringOffset, quantityIdBytes.byteLength).set(
+    quantityIdBytes,
+  );
+
+  const payloadView = new DataView(buffer, valuesOffset);
+  for (let point = 0; point < grid[0]; point += 1) {
+    const phase = (point / grid[0]) * Math.PI * 2;
+    const amplitude = 0.35 + point * 0.01;
+    for (let component = 0; component < 3; component += 1) {
+      const componentPhase = phase + component * 0.4;
+      const valueOffset = (point * 6 + component * 2) * Float64Array.BYTES_PER_ELEMENT;
+      payloadView.setFloat64(valueOffset, amplitude * Math.cos(componentPhase), true);
+      payloadView.setFloat64(
+        valueOffset + Float64Array.BYTES_PER_ELEMENT,
+        amplitude * Math.sin(componentPhase),
+        true,
+      );
+    }
+  }
+
+  return {
+    buffer,
+    fieldRevision: inspectorAnalysisPayloadRevision(
+      INSPECTOR_MODAL_FIELD_PAYLOAD_PATH,
+      valueCount * Float64Array.BYTES_PER_ELEMENT,
+    ),
+  };
+}
+
+function inspectorAnalysisPayloadRevision(relativePath, byteLength) {
+  const hashPrime = BigInt("1099511628211");
+  let domainRevision = BigInt("1469598103934665603");
+  for (const byte of new TextEncoder().encode(INSPECTOR_MODAL_DOMAIN_GENERATION_ID)) {
+    domainRevision ^= BigInt(byte);
+    domainRevision = BigInt.asUintN(64, domainRevision * hashPrime);
+  }
+  if (domainRevision === BigInt(0)) domainRevision = BigInt(1);
+
+  let hash = domainRevision ^ BigInt(byteLength);
+  for (const byte of new TextEncoder().encode(relativePath)) {
+    hash = BigInt.asUintN(64, hash * hashPrime + BigInt(byte));
+  }
+  return hash.toString();
+}
+
+function assertInspectorModalModeFieldMetadata(metadata) {
+  const requiredViews = [
+    "complex",
+    "real",
+    "imag",
+    "abs",
+    "amplitude",
+    "phase",
+    "phase_rotated_real",
+  ];
+  assert(
+    metadata.schema_version === "frequency_domain_mode_field.v1" &&
+      metadata.status === "ready" &&
+      metadata.field_id === INSPECTOR_MODAL_FIELD_ID &&
+      metadata.value_kind === "complex_spatial_vector" &&
+      metadata.component_basis === "global_xyz" &&
+      metadata.component_count === 3 &&
+      Array.isArray(metadata.components) &&
+      metadata.components.join(",") === "x,y,z" &&
+      metadata.payload_encoding === "f64_interleaved_real_imag_xyz" &&
+      metadata.binary_layout === "complex_f64_pairs_little_endian" &&
+      metadata.complex_pair_count === 36 &&
+      metadata.payload_value_count === 72 &&
+      Array.isArray(metadata.available_views) &&
+      requiredViews.every((view) => metadata.available_views.includes(view)),
+    `Matched mode-field metadata does not satisfy the canonical complex XYZ contract: ${JSON.stringify(metadata)}`,
+  );
+}
+
+async function assertInspectorModalModeFieldVectorResponse(response, fixture) {
+  assert(response.status() === 200, "Matched modal field vector response was not successful.");
+  const headers = response.headers();
+  const body = await response.body();
+  const view = new DataView(body.buffer, body.byteOffset, body.byteLength);
+  const expectedFieldRevision = inspectorAnalysisPayloadRevision(
+    INSPECTOR_MODAL_FIELD_PAYLOAD_PATH,
+    72 * Float64Array.BYTES_PER_ELEMENT,
+  );
+  const expectedHeaders = {
+    "x-fullmag-component": "full",
+    "x-fullmag-domain-generation-id": INSPECTOR_MODAL_DOMAIN_GENERATION_ID,
+    "x-fullmag-encoding": "FMVP;version=5",
+    "x-fullmag-field-indexing": "full_domain",
+    "x-fullmag-field-revision": expectedFieldRevision,
+    "x-fullmag-mesh-topology-hash": INSPECTOR_MODAL_TOPOLOGY_HEADER_HASH,
+    "x-fullmag-n-comp": "6",
+    "x-fullmag-payload-state": "current",
+    "x-fullmag-point-count": "12",
+    "x-fullmag-quantity-id": INSPECTOR_MODAL_FIELD_ID,
+    "x-fullmag-value-count": "72",
+  };
+  for (const [name, expected] of Object.entries(expectedHeaders)) {
+    assert(
+      headers[name] === expected,
+      `Matched modal field response header ${name} did not match ${expected}: ${headers[name]}`,
+    );
+  }
+
+  assert(body.byteLength >= 48, "Matched mode field must include the FMVP header.");
+  assert(
+    new TextDecoder().decode(body.subarray(0, 4)) === "FMVP" &&
+      view.getUint8(4) === 5 &&
+      view.getUint8(5) === 1 &&
+      view.getUint8(6) === 6 &&
+      view.getUint8(7) === 0,
+    "Matched mode field must be an FMVP v5 float64 six-component vector.",
+  );
+  const metadataLength = view.getUint32(8, true);
+  const valueCount = view.getUint32(12, true);
+  const grid = [view.getUint32(16, true), view.getUint32(20, true), view.getUint32(24, true)];
+  const valuesOffset = 48 + metadataLength;
+  assert(
+    grid.join(",") === "12,1,1" &&
+      valueCount === 72 &&
+      valueCount === grid[0] * grid[1] * grid[2] * 6 &&
+      valuesOffset + valueCount * Float64Array.BYTES_PER_ELEMENT === body.byteLength,
+    `Matched mode field dimensions/counts are inconsistent: ${JSON.stringify({ grid, valueCount, metadataLength, bytes: body.byteLength })}`,
+  );
+
+  const fullQuantityIdBytes = new TextEncoder().encode(INSPECTOR_MODAL_FIELD_ID);
+  assert(
+    body.subarray(28, 44).equals(Buffer.from(fullQuantityIdBytes.subarray(0, 16))),
+    "FMVP header’s legacy prefix must contain the first 16 bytes of the full quantity ID.",
+  );
+  const metadataStart = 48;
+  const metadataEnd = metadataStart + metadataLength;
+  assert(metadataEnd <= body.byteLength && metadataLength >= 88 && metadataLength % 8 === 0);
+  const metadata = new DataView(body.buffer, body.byteOffset + metadataStart, metadataLength);
+  assert(
+    new TextDecoder().decode(body.subarray(metadataStart, metadataStart + 4)) === "FMMI" &&
+      metadata.getUint16(4, true) === 4 &&
+      metadata.getUint16(6, true) === 0 &&
+      metadata.getBigUint64(16, true) === BigInt(INSPECTOR_MODAL_MESH_TOPOLOGY_REVISION) &&
+      metadata.getUint32(56, true) === 0 &&
+      metadata.getUint32(60, true) === 0 &&
+      metadata.getUint16(80, true) === fullQuantityIdBytes.byteLength,
+    "FMVP v5 metadata version, topology, indexing, or full quantity length is inconsistent.",
+  );
+  assert(
+    metadata.getUint16(10, true) === 0 &&
+      metadata.getUint16(12, true) === 0 &&
+      metadata.getUint16(14, true) === 0 &&
+      metadata.getBigUint64(68, true) === BigInt(0),
+    "The v5 source identity group must be wholly absent with revision zero.",
+  );
+  assert(
+    metadata.getUint16(64, true) === 4 &&
+      metadata.getUint16(66, true) === 0 &&
+      metadata.getUint16(8, true) === 1,
+    "Matched mode field scope/domain string lengths are inconsistent.",
+  );
+  const actualTopologyHash = Array.from(
+    new Uint8Array(body.buffer, body.byteOffset + metadataStart + 24, 32),
+    (byte) => byte.toString(16).padStart(2, "0"),
+  ).join("");
+  assert(
+    actualTopologyHash === INSPECTOR_MODAL_TOPOLOGY_HASH,
+    "FMVP metadata topology hash does not match the manifest hash.",
+  );
+
+  let stringOffset = 88;
+  const readMetadataString = (length) => {
+    const start = metadataStart + stringOffset;
+    stringOffset += length;
+    return new TextDecoder("utf-8", { fatal: true }).decode(body.subarray(start, start + length));
+  };
+  const scopeKind = readMetadataString(metadata.getUint16(64, true));
+  const scopeId = readMetadataString(metadata.getUint16(66, true));
+  const domainGenerationId = readMetadataString(metadata.getUint16(8, true));
+  const sourceKind = readMetadataString(metadata.getUint16(10, true));
+  const sourceId = readMetadataString(metadata.getUint16(12, true));
+  const fieldGenerationId = readMetadataString(metadata.getUint16(14, true));
+  const fullQuantityId = readMetadataString(metadata.getUint16(80, true));
+  assert(
+    scopeKind === "full" &&
+      scopeId === "" &&
+      domainGenerationId === INSPECTOR_MODAL_DOMAIN_GENERATION_ID &&
+      sourceKind === "" &&
+      sourceId === "" &&
+      fieldGenerationId === "" &&
+      fullQuantityId === INSPECTOR_MODAL_FIELD_ID,
+    "FMVP v5 variable strings do not match the field and topology identities.",
+  );
+  assert(
+    body.subarray(metadataStart + 76, metadataStart + 80).every((byte) => byte === 0) &&
+      body.subarray(metadataStart + 82, metadataStart + 88).every((byte) => byte === 0) &&
+      body.subarray(metadataStart + stringOffset, metadataEnd).every((byte) => byte === 0),
+    "FMVP v5 reserved bytes and alignment padding must be zero.",
+  );
+  const fieldValues = new DataView(body.buffer, body.byteOffset + valuesOffset, valueCount * 8);
+  let nonzeroValueFound = false;
+  for (let index = 0; index < valueCount; index += 1) {
+    const value = fieldValues.getFloat64(index * 8, true);
+    assert(Number.isFinite(value), `FMVP mode field value ${index} is not finite.`);
+    if (value !== 0) nonzeroValueFound = true;
+  }
+  assert(nonzeroValueFound, "Matched FMVP mode field should contain a nonzero complex XYZ vector.");
+
+  const topology = new DataView(fixture.topology);
+  assert(
+    new TextDecoder().decode(new Uint8Array(fixture.topology, 0, 4)) === "FMMT" &&
+      topology.getUint32(8, true) === 12 &&
+      fixture.manifest.generation_id === INSPECTOR_MODAL_DOMAIN_GENERATION_ID &&
+      fixture.manifest.revision === INSPECTOR_MODAL_MESH_TOPOLOGY_REVISION &&
+      fixture.manifest.topology_fingerprint === INSPECTOR_MODAL_TOPOLOGY_HASH,
+    "The active mesh fixture must contain 12 nodes and declare the same generation, revision, and 64-hex topology hash.",
+  );
 }
 
 async function fulfillJson(route, body, status = 200) {
@@ -2609,11 +3303,15 @@ async function fulfillJson(route, body, status = 200) {
   });
 }
 
-async function fulfillBinary(route, body, status = 200) {
+async function fulfillBinary(route, body, status = 200, extraHeaders = {}) {
   await route.fulfill({
     body: Buffer.from(body),
     contentType: "application/octet-stream",
-    headers: { "access-control-allow-origin": "*", "x-api-contract-version": "1.0.0" },
+    headers: {
+      "access-control-allow-origin": "*",
+      "x-api-contract-version": "1.0.0",
+      ...extraHeaders,
+    },
     status,
   });
 }
@@ -2692,9 +3390,10 @@ function inspectorFrequencyManifest(fixture = { analysisProduct: "driven_respons
         requested_execution: {
           boundary_context: "floquet_periodic",
           calculation_mode: "eigenmodes",
-          k_sampling: { kind: "path" },
+          k_sampling: { kind: "path", sample_count: 2 },
         },
         revision: "result-modal-7",
+        run_id: INSPECTOR_MODAL_BRANCH_OWNER.run_id,
         stage_id: "eigen-dispersion",
         stage_label: "Dispersion Eigenmodes",
         study_product: "modal_eigen",
@@ -2724,6 +3423,7 @@ function inspectorFrequencyManifest(fixture = { analysisProduct: "driven_respons
     eigenmodes: { modal_solver_available: true, reason: "", status: "ok", study_kind: "eigenmodes" },
     response: { driven_response_available: true, reason: "", status: "ok", study_kind: "frequency_response" },
     result_manifest: {
+      ...(modal ? INSPECTOR_MODAL_RESULT_OWNER : {}),
       artifact_path: "result-manifest.json",
       missing_reason: null,
       payload: resultPayload,
@@ -2770,25 +3470,46 @@ function inspectorFrequencySpectrum() {
   };
 }
 
-function inspectorFrequencyBranches() {
+function inspectorFrequencyBranches(fixture = {}) {
+  const owner = fixture.analysisProduct === "modal_eigen"
+    ? INSPECTOR_MODAL_BRANCH_OWNER
+    : null;
+  const point = fixture.modalDispersionOwnershipRegression
+    ? {
+        frequency_imag_hz: -13e6,
+        frequency_real_hz: 13e9,
+        mode_field_id: "analysis:eigen:sample-0001:mode-0002",
+        mode_id: "inspector-mode-1-2",
+        sample_id: "sample-0001",
+        mode_field_resource_key: "/v2/sessions/current/data/fields/analysis%3Aeigen%3Asample-0001%3Amode-0002/samples/vector?view=phase_rotated_real&phase_rad=0",
+        overlap_prev: 0.98,
+        raw_mode_index: 2,
+        residual_norm: 1e-8,
+        sample_index: 1,
+        tracking_confidence: 0.994,
+      }
+    : {
+        frequency_imag_hz: -12e6,
+        frequency_real_hz: 12.5e9,
+        mode_field_id: "analysis:eigen:sample-0000:mode-0002",
+        mode_id: "inspector-mode-0-2",
+        sample_id: "sample-0000",
+        mode_field_resource_key: "/v2/sessions/current/data/fields/analysis%3Aeigen%3Asample-0000%3Amode-0002/samples/vector?view=phase_rotated_real&phase_rad=0",
+        overlap_prev: 0.99,
+        raw_mode_index: 2,
+        residual_norm: 1e-8,
+        sample_index: 0,
+        tracking_confidence: 0.995,
+      };
   return {
+    ...(owner ?? {}),
     artifact_path: "eigen/branches.v2.json",
     missing_reason: null,
     payload: {
       branches: [{
         branch_id: "branch-0",
         label: "Acoustic branch",
-        points: [{
-          frequency_imag_hz: -12e6,
-          frequency_real_hz: 12.5e9,
-          mode_field_id: "analysis:eigen:sample-0000:mode-0002",
-          mode_field_resource_key: "/v2/sessions/current/data/fields/analysis%3Aeigen%3Asample-0000%3Amode-0002/samples/vector?view=phase_rotated_real&phase_rad=0",
-          overlap_prev: 0.99,
-          raw_mode_index: 2,
-          residual_norm: 1e-8,
-          sample_index: 0,
-          tracking_confidence: 0.995,
-        }],
+        points: [point],
       }],
       schema_version: "eigen_branches.v2",
       solver_model: "linearized_llg_reference",
@@ -2799,9 +3520,18 @@ function inspectorFrequencyBranches() {
   };
 }
 
-function inspectorFrequencyDispersion(fixture = { analysisProduct: "driven_response" }) {
+function inspectorFrequencyDispersion(
+  fixture = { analysisProduct: "driven_response" },
+  ownerOverride = null,
+) {
   const modal = fixture.analysisProduct === "modal_eigen";
+  const owner = modal
+    ? ownerOverride ?? INSPECTOR_MODAL_DISPERSION_OWNER_B
+    : null;
+  const regression = fixture.modalDispersionOwnershipRegression === true;
+  const isRunA = owner?.run_id === INSPECTOR_MODAL_DISPERSION_OWNER_A.run_id;
   return {
+    ...(owner ?? {}),
     artifact_path: "eigen/dispersion.csv",
     content_type: "text/csv",
     missing_reason: null,
@@ -2811,7 +3541,7 @@ function inspectorFrequencyDispersion(fixture = { analysisProduct: "driven_respo
             kind: "path",
             points: [
               { k_vector: [0, 0, 0], label: "Γ" },
-              { k_vector: [1e7, 0, 0], label: "X" },
+              { k_vector: isRunA ? [-2e7, 0, 0] : [0, 0, 3e7], label: "X" },
             ],
             samples_per_segment: [1],
           },
@@ -2821,7 +3551,11 @@ function inspectorFrequencyDispersion(fixture = { analysisProduct: "driven_respo
     schema_version: "frequency_domain_eigen_dispersion.csv",
     status: "ready",
     text: modal
-      ? "sample_index,raw_mode_index,branch_id,path_s_rad_per_m,frequency_hz,mode_field_id,mode_field_resource_key\n0,2,branch-0,0,12.5e9,analysis:eigen:sample-0000:mode-0002,/v2/sessions/current/data/fields/analysis%3Aeigen%3Asample-0000%3Amode-0002/samples/vector?view=phase_rotated_real&phase_rad=0\n1,2,branch-0,1e7,13e9,analysis:eigen:sample-0001:mode-0002,/v2/sessions/current/data/fields/analysis%3Aeigen%3Asample-0001%3Amode-0002/samples/vector?view=phase_rotated_real&phase_rad=0"
+      ? [
+          "sample_index,raw_mode_index,branch_id,path_s_rad_per_m,frequency_hz,mode_field_id,mode_field_resource_key",
+          "0,2,branch-0,0,12.5e9,analysis:eigen:sample-0000:mode-0002,/v2/sessions/current/data/fields/analysis%3Aeigen%3Asample-0000%3Amode-0002/samples/vector?view=phase_rotated_real&phase_rad=0",
+          `1,2,branch-0,${regression && isRunA ? "2e7" : "3e7"},13e9,analysis:eigen:sample-0001:mode-0002,/v2/sessions/current/data/fields/analysis%3Aeigen%3Asample-0001%3Amode-0002/samples/vector?view=phase_rotated_real&phase_rad=0`,
+        ].join("\n")
       : "sample_index,raw_mode_index,branch_id,path_s_rad_per_m,frequency_hz\n0,2,branch-0,0,12.5e9",
   };
 }

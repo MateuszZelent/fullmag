@@ -53,11 +53,11 @@ const topology = {
   pointCount: 2,
 };
 
-function validBinary(): DecodedFieldVector {
+function validBinary(formatVersion: 3 | 5 = 3): DecodedFieldVector {
   return {
     dtype: "float64",
     domainGenerationId: "generation-1",
-    formatVersion: 3,
+    formatVersion,
     grid: [1, 1, 2],
     indexing: "full_domain",
     meshTopologyHash: "sha256:topology-v1",
@@ -155,6 +155,9 @@ describe("AnalysisResultFieldOverlayIntent", () => {
     expect(
       validateAnalysisResultFieldOverlayBinary(metadata, validBinary(), topology),
     ).toMatchObject({ complex: { componentCount: 3, pointCount: 2 } });
+    expect(
+      validateAnalysisResultFieldOverlayBinary(metadata, validBinary(5), topology),
+    ).toMatchObject({ complex: { componentCount: 3, pointCount: 2 } });
   });
 
   it("requires a self-consistent binary response without conflating transport and source revisions", () => {
@@ -162,7 +165,7 @@ describe("AnalysisResultFieldOverlayIntent", () => {
     const responseMetadata: FieldVectorResponseMetadata = {
       component: "full",
       domainGenerationId: "generation-1",
-      encoding: "FMVP;version=3",
+      encoding: "FMVP;version=5",
       fieldIndexing: "full_domain",
       fieldRevision: "transport-revision-41",
       identityIssues: [],
@@ -179,6 +182,12 @@ describe("AnalysisResultFieldOverlayIntent", () => {
 
     expect(
       validateAnalysisResultFieldResponseMetadata(intent, responseMetadata),
+    ).toBe(true);
+    expect(
+      validateAnalysisResultFieldResponseMetadata(intent, {
+        ...responseMetadata,
+        encoding: "FMVP;version=3",
+      }),
     ).toBe(true);
     expect(
       validateAnalysisResultFieldResponseMetadata(intent, {
@@ -210,6 +219,24 @@ describe("AnalysisResultFieldOverlayIntent", () => {
         metadata,
         { ...validBinary(), ...binaryPatch },
         { ...topology, ...topologyPatch },
+      ),
+    ).toBeNull();
+  });
+
+  it("rejects an FMVP v5 no-topology sentinel for the full-domain overlay", () => {
+    const intent = createAnalysisResultFieldOverlayIntent(selection, fieldRef)!;
+    const metadata = resolveAnalysisResultFieldOverlayMetadata(intent)!;
+
+    expect(
+      validateAnalysisResultFieldOverlayBinary(
+        metadata,
+        {
+          ...validBinary(5),
+          indexing: "legacy_count_only",
+          meshTopologyHash: null,
+          meshTopologyRevision: null,
+        },
+        topology,
       ),
     ).toBeNull();
   });

@@ -11,10 +11,12 @@ const KIND_F64 = 1;
 const MAGIC = "FMVP";
 const METADATA_FIXED_LEN = 68;
 const METADATA_V4_FIXED_LEN = 80;
+const METADATA_V5_FIXED_LEN = 88;
 const METADATA_MAGIC = "FMMI";
 const SUPPORTED_METADATA_VERSION = 2;
 const SUPPORTED_METADATA_V4_VERSION = 3;
-const SUPPORTED_VERSIONS = new Set([2, 3, 4]);
+const SUPPORTED_METADATA_V5_VERSION = 4;
+const SUPPORTED_VERSIONS = new Set([2, 3, 4, 5]);
 
 function readMagic(view: DataView): string {
   return String.fromCharCode(
@@ -41,7 +43,7 @@ export function decodeFieldVector(buffer: ArrayBuffer): DecodedFieldVector {
   const version = view.getUint8(4);
   if (!SUPPORTED_VERSIONS.has(version)) {
     throw new Error(
-      `Unsupported FMVP version: expected 2, 3, or 4, got ${version}`,
+      `Unsupported FMVP version: expected 2, 3, 4, or 5, got ${version}`,
     );
   }
 
@@ -60,7 +62,12 @@ export function decodeFieldVector(buffer: ArrayBuffer): DecodedFieldVector {
   }
 
   const metadataLength = version >= 3 ? view.getUint32(8, true) : 0;
-  const minimumMetadataLength = version === 4 ? METADATA_V4_FIXED_LEN : METADATA_FIXED_LEN;
+  const minimumMetadataLength =
+    version === 5
+      ? METADATA_V5_FIXED_LEN
+      : version === 4
+        ? METADATA_V4_FIXED_LEN
+        : METADATA_FIXED_LEN;
   if (version >= 3 && metadataLength < minimumMetadataLength) {
     throw new Error(
       `FMVP metadata block too short: ${metadataLength} bytes, need at least ${minimumMetadataLength}`,
@@ -105,7 +112,7 @@ export function decodeFieldVector(buffer: ArrayBuffer): DecodedFieldVector {
     dtype: "float64",
     domainGenerationId: metadata.domainGenerationId,
     fieldGenerationId: metadata.fieldGenerationId,
-    formatVersion: version as 2 | 3 | 4,
+    formatVersion: version as 2 | 3 | 4 | 5,
     grid: [gridX, gridY, gridZ],
     indexing: metadata.indexing,
     meshTopologyHash: metadata.meshTopologyHash,
@@ -113,7 +120,8 @@ export function decodeFieldVector(buffer: ArrayBuffer): DecodedFieldVector {
     nComp,
     nodeIndices: metadata.nodeIndices,
     pointCount,
-    quantityId: new TextDecoder().decode(idBytes.subarray(0, idEnd)),
+    quantityId:
+      metadata.quantityId ?? new TextDecoder().decode(idBytes.subarray(0, idEnd)),
     scopeId: metadata.scopeId,
     scopeKind: metadata.scopeKind,
     sourceId: metadata.sourceId,
@@ -131,6 +139,7 @@ interface DecodedFieldVectorMetadata {
   meshTopologyHash: string | null;
   meshTopologyRevision: string | null;
   nodeIndices: Uint32Array | null;
+  quantityId: string | null;
   scopeId: string | null;
   scopeKind: DecodedFieldVectorScopeKind | null;
   sourceId: string | null;
@@ -146,6 +155,7 @@ function legacyFieldVectorMetadata(): DecodedFieldVectorMetadata {
     meshTopologyHash: null,
     meshTopologyRevision: null,
     nodeIndices: null,
+    quantityId: null,
     scopeId: null,
     scopeKind: null,
     sourceId: null,
@@ -160,7 +170,12 @@ function decodeFieldVectorMetadata(
   metadataLength: number,
   pointCount: number,
 ): DecodedFieldVectorMetadata {
-  const fixedLength = formatVersion === 4 ? METADATA_V4_FIXED_LEN : METADATA_FIXED_LEN;
+  const fixedLength =
+    formatVersion === 5
+      ? METADATA_V5_FIXED_LEN
+      : formatVersion === 4
+        ? METADATA_V4_FIXED_LEN
+        : METADATA_FIXED_LEN;
   if (metadataLength < fixedLength) {
     throw new Error(
       `FMVP metadata block too short: ${metadataLength} bytes, need at least ${fixedLength}`,
@@ -181,7 +196,11 @@ function decodeFieldVectorMetadata(
   }
   const metadataVersion = view.getUint16(metadataStart + 4, true);
   const expectedMetadataVersion =
-    formatVersion === 4 ? SUPPORTED_METADATA_V4_VERSION : SUPPORTED_METADATA_VERSION;
+    formatVersion === 5
+      ? SUPPORTED_METADATA_V5_VERSION
+      : formatVersion === 4
+        ? SUPPORTED_METADATA_V4_VERSION
+        : SUPPORTED_METADATA_VERSION;
   if (metadataVersion !== expectedMetadataVersion) {
     throw new Error(
       `Unsupported FMVP metadata version: expected ${expectedMetadataVersion}, got ${metadataVersion}`,
@@ -195,13 +214,24 @@ function decodeFieldVectorMetadata(
   if (domainGenerationIdLength === 0) {
     throw new Error("FMVP metadata domain generation identity must not be empty");
   }
-  const sourceKindLength = formatVersion === 4 ? view.getUint16(metadataStart + 10, true) : 0;
-  const sourceIdLength = formatVersion === 4 ? view.getUint16(metadataStart + 12, true) : 0;
+  const sourceKindLength = formatVersion >= 4 ? view.getUint16(metadataStart + 10, true) : 0;
+  const sourceIdLength = formatVersion >= 4 ? view.getUint16(metadataStart + 12, true) : 0;
   const fieldGenerationIdLength =
-    formatVersion === 4 ? view.getUint16(metadataStart + 14, true) : 0;
+    formatVersion >= 4 ? view.getUint16(metadataStart + 14, true) : 0;
+  const sourceRevisionValue =
+    formatVersion >= 4 ? view.getBigUint64(metadataStart + 68, true) : BigInt(0);
   if (formatVersion === 4) {
     if (sourceKindLength === 0 || sourceIdLength === 0 || fieldGenerationIdLength === 0) {
       throw new Error("FMVP v4 metadata source and field generation identities must not be empty");
+    }
+  } else if (formatVersion === 5) {
+    const sourceLengths = [sourceKindLength, sourceIdLength, fieldGenerationIdLength];
+    const allSourceStringsEmpty = sourceLengths.every((length) => length === 0);
+    if (!allSourceStringsEmpty && sourceLengths.some((length) => length === 0)) {
+      throw new Error("FMVP v5 metadata source identity must be wholly qualified or empty");
+    }
+    if (allSourceStringsEmpty && sourceRevisionValue !== BigInt(0)) {
+      throw new Error("FMVP v5 metadata unqualified source revision must be zero");
     }
   } else {
     for (let offset = metadataStart + 10; offset < metadataStart + 16; offset += 1) {
@@ -210,26 +240,55 @@ function decodeFieldVectorMetadata(
       }
     }
   }
-  const meshTopologyRevision = view
-    .getBigUint64(metadataStart + 16, true)
-    .toString();
-  const meshTopologyHash = hexFromBytes(
-    new Uint8Array(view.buffer, view.byteOffset + metadataStart + 24, 32),
+  const meshTopologyRevisionValue = view.getBigUint64(metadataStart + 16, true);
+  const meshTopologyHashBytes = new Uint8Array(
+    view.buffer,
+    view.byteOffset + metadataStart + 24,
+    32,
   );
+  let meshTopologyRevision: string | null = meshTopologyRevisionValue.toString();
+  let meshTopologyHash: string | null = hexFromBytes(meshTopologyHashBytes);
   const indexing = decodeFieldVectorIndexing(
     view.getUint32(metadataStart + 56, true),
   );
   const nodeIndexCount = view.getUint32(metadataStart + 60, true);
+  if (formatVersion === 5) {
+    const zeroTopologyHash = meshTopologyHashBytes.every((byte) => byte === 0);
+    const absentTopologySentinel =
+      indexing === "legacy_count_only" &&
+      nodeIndexCount === 0 &&
+      meshTopologyRevisionValue === BigInt(0) &&
+      zeroTopologyHash;
+    if (indexing === "legacy_count_only" && !absentTopologySentinel) {
+      throw new Error(
+        "FMVP v5 absent-topology sentinel must use legacy_count_only, zero nodes, and all-zero topology",
+      );
+    }
+    if (absentTopologySentinel) {
+      meshTopologyRevision = null;
+      meshTopologyHash = null;
+    }
+  }
   const scopeKindLength = view.getUint16(metadataStart + 64, true);
   const scopeIdLength = view.getUint16(metadataStart + 66, true);
   const sourceRevision =
-    formatVersion === 4
-      ? view.getBigUint64(metadataStart + 68, true).toString()
-      : null;
-  if (formatVersion === 4) {
+    formatVersion >= 4 ? sourceRevisionValue.toString() : null;
+  if (formatVersion >= 4) {
     for (let offset = metadataStart + 76; offset < metadataStart + 80; offset += 1) {
       if (view.getUint8(offset) !== 0) {
-        throw new Error("FMVP v4 metadata reserved bytes must be zero");
+        throw new Error(`FMVP v${formatVersion} metadata reserved bytes must be zero`);
+      }
+    }
+  }
+  const fullQuantityIdLength =
+    formatVersion === 5 ? view.getUint16(metadataStart + 80, true) : 0;
+  if (formatVersion === 5) {
+    if (fullQuantityIdLength === 0) {
+      throw new Error("FMVP v5 metadata full quantity identity must not be empty");
+    }
+    for (let offset = metadataStart + 82; offset < metadataStart + 88; offset += 1) {
+      if (view.getUint8(offset) !== 0) {
+        throw new Error("FMVP v5 metadata reserved bytes must be zero");
       }
     }
   }
@@ -239,7 +298,8 @@ function decodeFieldVectorMetadata(
   const sourceKindStart = domainGenerationIdStart + domainGenerationIdLength;
   const sourceIdStart = sourceKindStart + sourceKindLength;
   const fieldGenerationIdStart = sourceIdStart + sourceIdLength;
-  const nodeIndicesStart = fieldGenerationIdStart + fieldGenerationIdLength;
+  const fullQuantityIdStart = fieldGenerationIdStart + fieldGenerationIdLength;
+  const nodeIndicesStart = fullQuantityIdStart + fullQuantityIdLength;
   const nodeIndicesByteLength = nodeIndexCount * Uint32Array.BYTES_PER_ELEMENT;
   const metadataPayloadEnd = nodeIndicesStart + nodeIndicesByteLength;
   if (metadataPayloadEnd > metadataEnd) {
@@ -281,6 +341,34 @@ function decodeFieldVectorMetadata(
       fieldGenerationIdLength,
     ),
   );
+  const quantityId =
+    formatVersion === 5
+      ? decoder.decode(
+          new Uint8Array(
+            view.buffer,
+            view.byteOffset + fullQuantityIdStart,
+            fullQuantityIdLength,
+          ),
+        )
+      : null;
+  if (formatVersion === 5) {
+    if (!quantityId || /[\u0000-\u001f\u007f-\u009f]/u.test(quantityId)) {
+      throw new Error(
+        "FMVP v5 metadata full quantity identity is empty or contains control characters",
+      );
+    }
+    const encodedQuantityId = new TextEncoder().encode(quantityId);
+    const expectedPrefix = new Uint8Array(16);
+    expectedPrefix.set(encodedQuantityId.subarray(0, expectedPrefix.length));
+    const headerPrefix = new Uint8Array(view.buffer, view.byteOffset + 28, 16);
+    for (let index = 0; index < expectedPrefix.length; index += 1) {
+      if (headerPrefix[index] !== expectedPrefix[index]) {
+        throw new Error(
+          "FMVP v5 quantity prefix does not match full metadata quantity identity",
+        );
+      }
+    }
+  }
   const nodeIndices =
     nodeIndexCount > 0
       ? new Uint32Array(
@@ -307,6 +395,14 @@ function decodeFieldVectorMetadata(
     throw new Error(`FMVP metadata ${indexing} payload must not include node indices`);
   }
 
+  if (
+    formatVersion === 5 &&
+    sourceKindLength > 0 &&
+    (sourceId.length === 0 || fieldGenerationId.length === 0)
+  ) {
+    throw new Error("FMVP v5 metadata qualified source identities must not be empty");
+  }
+
   return {
     domainGenerationId,
     fieldGenerationId: fieldGenerationId.length > 0 ? fieldGenerationId : null,
@@ -314,11 +410,12 @@ function decodeFieldVectorMetadata(
     meshTopologyHash,
     meshTopologyRevision,
     nodeIndices,
+    quantityId,
     scopeId: rawScopeId.length > 0 ? rawScopeId : null,
     scopeKind: decodeFieldVectorScopeKind(rawScopeKind),
     sourceId: sourceId.length > 0 ? sourceId : null,
-    sourceKind: decodeFieldVectorSourceKind(rawSourceKind),
-    sourceRevision,
+    sourceKind: rawSourceKind.length > 0 ? decodeFieldVectorSourceKind(rawSourceKind) : null,
+    sourceRevision: rawSourceKind.length > 0 ? sourceRevision : null,
   };
 }
 

@@ -48,8 +48,8 @@ use crate::field_slice::{
     FieldSliceQuery, ProjectionResult, ResolvedProjectionQuery, SlicePlane,
 };
 use crate::field_store::{
-    serialize_field_vector_binary_v2, serialize_field_vector_binary_v3, FieldVectorBinaryMetadata,
-    FieldVectorIndexing,
+    serialize_field_vector_binary_v2, serialize_field_vector_binary_v3,
+    serialize_field_vector_binary_v5, FieldVectorBinaryMetadata, FieldVectorIndexing,
 };
 use crate::orientation_color::apply_magnetization_hsl_rgba;
 use crate::preview::{quantity_spatial_domain, quantity_unit};
@@ -4514,7 +4514,7 @@ fn sample_unscoped_field_values(
         FieldVectorQuery,
     ),
     responses(
-        (status = 200, description = "Binary FMVP field vector. Scoped FEM and FDM payloads use FMVP v3 metadata with domain_generation_id, carrier topology revision/hash, scope kind/id, indexing, and optional node_indices. Multilayer FDM layer/object scopes identify their native grid carrier. Full-domain regular-grid FDM uses FMVP v3 sampled indices when max_samples is supplied and may use FMVP v2 for an uncapped complete payload.", content_type = "application/octet-stream", headers(
+        (status = 200, description = "Binary FMVP field vector. Analysis response and eigen-mode vectors use FMVP v5 metadata with the full quantity ID and domain generation identity; when a mesh carrier is available they also include topology, scope, and indexing metadata. Analysis vectors without a mesh use the explicit legacy_count_only absent-topology sentinel and cannot establish topology-bound overlay compatibility. Other scoped FEM and FDM payloads use FMVP v3 metadata with domain_generation_id, carrier topology revision/hash, scope kind/id, indexing, and optional node_indices. Multilayer FDM layer/object scopes identify their native grid carrier. Full-domain regular-grid FDM uses FMVP v3 sampled indices when max_samples is supplied and may use FMVP v2 for an uncapped complete payload.", content_type = "application/octet-stream", headers(
             ("x-fullmag-field-revision" = String, description = "Field revision"),
             ("x-fullmag-domain-generation-id" = String, description = "Domain generation identity"),
             ("x-fullmag-quantity-id" = String, description = "Canonical quantity identifier"),
@@ -4526,10 +4526,10 @@ fn sample_unscoped_field_values(
             ("x-fullmag-scope-kind" = String, description = "Resolved scope kind"),
             ("x-fullmag-scope-id" = String, description = "Resolved optional scope identifier"),
             ("x-fullmag-snapshot-id" = String, description = "Optional persisted snapshot identifier"),
-            ("x-fullmag-mesh-topology-hash" = String, description = "Optional FMVP v3 mesh topology hash"),
-            ("x-fullmag-field-indexing" = String, description = "Optional FMVP v3 field indexing"),
-            ("x-fullmag-node-index-count" = usize, description = "Optional FMVP v3 node-index count"),
-            ("x-fullmag-payload-state" = String, description = "current for metadata-complete FMVP v3; legacy_unverified for FMVP v2")
+            ("x-fullmag-mesh-topology-hash" = String, description = "Optional FMVP v3/v5 mesh topology hash"),
+            ("x-fullmag-field-indexing" = String, description = "Optional FMVP v3/v5 field indexing"),
+            ("x-fullmag-node-index-count" = usize, description = "Optional FMVP v3/v5 node-index count"),
+            ("x-fullmag-payload-state" = String, description = "current for metadata-complete FMVP v3 through v5; legacy_unverified for FMVP v2")
         )),
         (status = 202, description = "Field vector materialization is pending. The JSON body contains a stable reason_code, retry_after_ms, requested quantity/scope, and domain generation; clients may retry this resource.", body = FieldVectorPendingResponse, content_type = "application/json"),
         (status = 204, description = "Recognized field quantity has no materialized source and no active pending materialization is reported (not requested or currently unavailable); no payload is returned."),
@@ -5176,18 +5176,24 @@ fn analysis_frequency_response_vector_response(
     let (out_n_comp, projected) = project_values(&raw_values, n_comp, &component)?;
     let point_count = raw_values.len() / n_comp;
     let out_grid = [point_count as u32, 1, 1];
-    let binary = serialize_analysis_field_vector_binary(
+    let AnalysisFieldVectorBinary {
+        bytes: binary,
+        topology_hash,
+        indexing,
+        node_index_count,
+    } = serialize_analysis_field_vector_binary(
         snapshot, field_id, out_n_comp, out_grid, &projected, None,
     )?;
     let revision = analysis_payload_revision(snapshot, &relative_path, bytes.len());
     let etag = crate::router_v2::handlers::shared::stable_strong_etag(&format!(
-        "{field_id}:{revision}:{}:{}:{}",
+        "fmvp5:{field_id}:{revision}:{}:{}:{}:{:x}",
         effective_view,
         query
             .component
             .as_deref()
             .unwrap_or(default_component.unwrap_or("full")),
-        effective_phase_rad
+        effective_phase_rad,
+        Sha256::digest(&binary)
     ));
     let mut resp =
         crate::router_v2::handlers::shared::conditional_binary_response(headers, &etag, binary);
@@ -5199,6 +5205,13 @@ fn analysis_frequency_response_vector_response(
         &domain_generation_id(snapshot),
         point_count,
         projected.len(),
+    );
+    insert_field_vector_binary_headers(
+        &mut resp,
+        5,
+        topology_hash.as_deref(),
+        Some(indexing),
+        node_index_count,
     );
     Ok(Some(resp))
 }
@@ -5287,6 +5300,13 @@ fn response_field_payload_path_from_point_artifact(
         })
 }
 
+struct AnalysisFieldVectorBinary {
+    bytes: Vec<u8>,
+    topology_hash: Option<String>,
+    indexing: FieldVectorIndexing,
+    node_index_count: Option<usize>,
+}
+
 fn serialize_analysis_field_vector_binary(
     snapshot: &SessionStateResponse,
     field_id: &str,
@@ -5294,25 +5314,50 @@ fn serialize_analysis_field_vector_binary(
     out_grid: [u32; 3],
     projected: &[f64],
     scope: Option<&ResolvedFieldScope>,
-) -> Result<Vec<u8>, ApiError> {
+) -> Result<AnalysisFieldVectorBinary, ApiError> {
+    if out_n_comp == 0 {
+        return Err(ApiError::internal(
+            "analysis field vector cannot serialize zero components",
+        ));
+    }
+    let domain_generation_id = domain_generation_id(snapshot);
+    let point_count = projected.len() / out_n_comp;
     let Some(mesh) = snapshot.fem_mesh.as_ref() else {
-        return serialize_field_vector_binary_v2(field_id, out_n_comp, out_grid, projected)
-            .map_err(ApiError::internal);
+        if scope.is_some() {
+            return Err(ApiError::conflict(
+                "analysis_field_node_mapping_unavailable: scoped fields require current mesh topology",
+            ));
+        }
+        let metadata = FieldVectorBinaryMetadata {
+            domain_generation_id: &domain_generation_id,
+            mesh_topology_revision: 0,
+            mesh_topology_hash: [0; 32],
+            scope_kind: "full",
+            scope_id: "",
+            indexing: FieldVectorIndexing::LegacyCountOnly,
+            node_indices: &[],
+        };
+        let bytes = serialize_field_vector_binary_v5(
+            field_id, out_n_comp, out_grid, projected, &metadata, None,
+        )
+        .map_err(ApiError::internal)?;
+        return Ok(AnalysisFieldVectorBinary {
+            bytes,
+            topology_hash: None,
+            indexing: FieldVectorIndexing::LegacyCountOnly,
+            node_index_count: Some(0),
+        });
     };
-    let point_count = if out_n_comp > 0 {
-        projected.len() / out_n_comp
-    } else {
-        projected.len()
-    };
+
     let full_node_count = mesh.nodes.len();
-    let node_indices = if let Some(scope) = scope {
+    let (node_indices, indexing) = if let Some(scope) = scope {
         if scope.node_indices.len() != point_count {
             return Err(ApiError::conflict(format!(
                 "mode_field_object_coverage_incomplete: object scope has {} nodes but the scoped mode payload has {point_count} points",
                 scope.node_indices.len()
             )));
         }
-        scope
+        let node_indices = scope
             .node_indices
             .iter()
             .map(|index| {
@@ -5322,16 +5367,18 @@ fn serialize_analysis_field_vector_binary(
                     ))
                 })
             })
-            .collect::<Result<Vec<_>, ApiError>>()?
+            .collect::<Result<Vec<_>, ApiError>>()?;
+        (node_indices, FieldVectorIndexing::ExplicitNodeIndices)
     } else if point_count == full_node_count {
-        Vec::new()
+        (Vec::new(), FieldVectorIndexing::FullDomain)
     } else {
         let indices = magnetic_node_index_set(mesh);
         if indices.len() != point_count {
-            return serialize_field_vector_binary_v2(field_id, out_n_comp, out_grid, projected)
-                .map_err(ApiError::internal);
+            return Err(ApiError::conflict(format!(
+                "analysis_field_node_mapping_unavailable: field has {point_count} points but current mesh cannot provide a matching node map"
+            )));
         }
-        indices
+        let node_indices = indices
             .into_iter()
             .map(|index| {
                 u32::try_from(index).map_err(|_| {
@@ -5340,32 +5387,37 @@ fn serialize_analysis_field_vector_binary(
                     ))
                 })
             })
-            .collect::<Result<Vec<_>, ApiError>>()?
+            .collect::<Result<Vec<_>, ApiError>>()?;
+        (node_indices, FieldVectorIndexing::ExplicitNodeIndices)
     };
+
     let topology_hash = fullmag_runner::fem_mesh_topology_fingerprint(mesh);
     let topology_hash_bytes = mesh_topology_hash_bytes(&topology_hash)?;
-    let indexing = if node_indices.is_empty() {
-        FieldVectorIndexing::FullDomain
-    } else {
-        FieldVectorIndexing::ExplicitNodeIndices
+    let (scope_kind, scope_id) = match scope {
+        Some(scope) => (scope.kind.as_str(), scope.id.as_deref().unwrap_or("")),
+        None if indexing == FieldVectorIndexing::FullDomain => ("full", ""),
+        None => ("magnetic_only", ""),
     };
     let metadata = FieldVectorBinaryMetadata {
-        domain_generation_id: &domain_generation_id(snapshot),
+        domain_generation_id: &domain_generation_id,
         mesh_topology_revision: snapshot.mesh_revision,
         mesh_topology_hash: topology_hash_bytes,
-        scope_kind: scope.map(|scope| scope.kind.as_str()).unwrap_or_else(|| {
-            if node_indices.is_empty() {
-                "full"
-            } else {
-                "magnetic_only"
-            }
-        }),
-        scope_id: scope.and_then(|scope| scope.id.as_deref()).unwrap_or(""),
+        scope_kind,
+        scope_id,
         indexing,
         node_indices: &node_indices,
     };
-    serialize_field_vector_binary_v3(field_id, out_n_comp, out_grid, projected, &metadata)
-        .map_err(ApiError::internal)
+    let bytes = serialize_field_vector_binary_v5(
+        field_id, out_n_comp, out_grid, projected, &metadata, None,
+    )
+    .map_err(ApiError::internal)?;
+    Ok(AnalysisFieldVectorBinary {
+        bytes,
+        topology_hash: Some(topology_hash),
+        indexing,
+        node_index_count: (indexing == FieldVectorIndexing::ExplicitNodeIndices)
+            .then_some(node_indices.len()),
+    })
 }
 
 struct ResponseFieldDataPlaneMetadata {
@@ -6036,7 +6088,12 @@ fn analysis_eigen_mode_vector_response(
         projected.len()
     };
     let out_grid = [scoped_point_count as u32, 1, 1];
-    let binary = serialize_analysis_field_vector_binary(
+    let AnalysisFieldVectorBinary {
+        bytes: binary,
+        topology_hash,
+        indexing,
+        node_index_count,
+    } = serialize_analysis_field_vector_binary(
         snapshot,
         field_id,
         out_n_comp,
@@ -6062,13 +6119,14 @@ fn analysis_eigen_mode_vector_response(
         })
         .unwrap_or_else(|| "none".to_string());
     let etag = crate::router_v2::handlers::shared::stable_strong_etag(&format!(
-        "{field_id}:{revision}:{}:{}:{}:{scope_token}:{node_indices_token}",
+        "fmvp5:{field_id}:{revision}:{}:{}:{}:{scope_token}:{node_indices_token}:{:x}",
         effective_view,
         query
             .component
             .as_deref()
             .unwrap_or(default_component.unwrap_or("full")),
-        effective_phase_rad
+        effective_phase_rad,
+        Sha256::digest(&binary)
     ));
     let mut resp =
         crate::router_v2::handlers::shared::conditional_binary_response(headers, &etag, binary);
@@ -6081,22 +6139,12 @@ fn analysis_eigen_mode_vector_response(
         scoped_point_count,
         projected.len(),
     );
-    let topology_hash = snapshot
-        .fem_mesh
-        .as_ref()
-        .map(fullmag_runner::fem_mesh_topology_fingerprint);
     insert_field_vector_binary_headers(
         &mut resp,
-        3,
+        5,
         topology_hash.as_deref(),
-        Some(if resolved_scope.is_some() {
-            FieldVectorIndexing::ExplicitNodeIndices
-        } else {
-            FieldVectorIndexing::FullDomain
-        }),
-        resolved_scope
-            .as_ref()
-            .map(|scope| scope.node_indices.len()),
+        Some(indexing),
+        node_index_count,
     );
     insert_scope_headers(&mut resp, resolved_scope.as_ref());
     Ok(Some(resp))
@@ -9986,7 +10034,7 @@ mod tests {
     }
 
     #[test]
-    fn analysis_field_vector_binary_uses_fmvp_v3_explicit_nodes_for_scoped_fem_payload() {
+    fn analysis_field_vector_binary_uses_fmvp_v5_explicit_nodes_for_analysis_payload() {
         let mut snapshot = default_current_live_state(&CurrentLiveSnapshotRequest {
             frozen_spins_runtime_status: None,
             session_id: "analysis-field-fem-scope".to_string(),
@@ -10053,7 +10101,7 @@ mod tests {
         });
         let values = vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0];
 
-        let binary = serialize_analysis_field_vector_binary(
+        let serialized = serialize_analysis_field_vector_binary(
             &snapshot,
             "analysis:frequency-response:frequency-0000",
             3,
@@ -10062,14 +10110,20 @@ mod tests {
             None,
         )
         .expect("analysis FEM field should serialize");
+        let binary = serialized.bytes;
 
         assert_eq!(&binary[0..4], b"FMVP");
-        assert_eq!(binary[4], 3);
+        assert_eq!(binary[4], 5);
+        assert_eq!(
+            serialized.indexing,
+            FieldVectorIndexing::ExplicitNodeIndices
+        );
+        assert!(serialized.topology_hash.is_some());
         assert_eq!(binary[6], 3);
         assert_eq!(u32::from_le_bytes(binary[12..16].try_into().unwrap()), 6);
         assert_eq!(u32::from_le_bytes(binary[16..20].try_into().unwrap()), 2);
         let metadata_len = u32::from_le_bytes(binary[8..12].try_into().unwrap()) as usize;
-        assert!(metadata_len >= 68);
+        assert!(metadata_len >= 88);
         let metadata_start = 48;
         assert_eq!(&binary[metadata_start..metadata_start + 4], b"FMMI");
         assert_eq!(
@@ -10103,8 +10157,33 @@ mod tests {
                 .try_into()
                 .unwrap(),
         ) as usize;
-        let node_indices_start =
-            metadata_start + 68 + scope_kind_len + scope_id_len + generation_id_len;
+        assert_eq!(
+            u16::from_le_bytes(
+                binary[metadata_start + 4..metadata_start + 6]
+                    .try_into()
+                    .unwrap()
+            ),
+            4
+        );
+        let source_lengths = [10usize, 12, 14].map(|offset| {
+            u16::from_le_bytes(
+                binary[metadata_start + offset..metadata_start + offset + 2]
+                    .try_into()
+                    .unwrap(),
+            ) as usize
+        });
+        let full_quantity_id_len = u16::from_le_bytes(
+            binary[metadata_start + 80..metadata_start + 82]
+                .try_into()
+                .unwrap(),
+        ) as usize;
+        let node_indices_start = metadata_start
+            + 88
+            + scope_kind_len
+            + scope_id_len
+            + generation_id_len
+            + source_lengths.iter().sum::<usize>()
+            + full_quantity_id_len;
         assert_eq!(
             u32::from_le_bytes(
                 binary[node_indices_start..node_indices_start + 4]
@@ -10121,6 +10200,23 @@ mod tests {
             ),
             3
         );
+
+        let unmappable_values = vec![0.0; 6 * 3];
+        let error = match serialize_analysis_field_vector_binary(
+            &snapshot,
+            "analysis:eigen:sample-0000:mode-0002",
+            3,
+            [6, 1, 1],
+            &unmappable_values,
+            None,
+        ) {
+            Err(error) => error,
+            Ok(_) => panic!("unmapped analysis points must not fall back to unverified binary"),
+        };
+        assert_eq!(error.status, axum::http::StatusCode::CONFLICT);
+        assert!(error
+            .message
+            .contains("analysis_field_node_mapping_unavailable"));
     }
 
     #[test]

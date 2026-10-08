@@ -2996,12 +2996,33 @@ fn fmvp_values_offset(bytes: &[u8]) -> usize {
         bytes.len() >= 48,
         "FMVP payload must include a 48 byte header"
     );
-    if bytes[4] == 3 {
+    if bytes[4] >= 3 {
         let metadata_len = u32::from_le_bytes(bytes[8..12].try_into().unwrap()) as usize;
         48 + metadata_len
     } else {
         48
     }
+}
+
+fn decode_fmvp_v5_full_quantity_id(bytes: &[u8]) -> String {
+    assert!(bytes.len() >= 48, "FMVP payload must include its header");
+    assert_eq!(&bytes[..4], b"FMVP");
+    assert_eq!(bytes[4], 5, "full quantity identity requires FMVP v5");
+    let metadata_len = u32::from_le_bytes(bytes[8..12].try_into().unwrap()) as usize;
+    assert!(metadata_len >= 88);
+    assert!(48 + metadata_len <= bytes.len());
+    let metadata = &bytes[48..48 + metadata_len];
+    assert_eq!(&metadata[..4], b"FMMI");
+    assert_eq!(u16::from_le_bytes(metadata[4..6].try_into().unwrap()), 4);
+
+    let string_lengths = [64usize, 66, 8, 10, 12, 14].map(|offset| {
+        u16::from_le_bytes(metadata[offset..offset + 2].try_into().unwrap()) as usize
+    });
+    let quantity_id_len = u16::from_le_bytes(metadata[80..82].try_into().unwrap()) as usize;
+    let quantity_id_start = 88 + string_lengths.iter().sum::<usize>();
+    assert!(quantity_id_start + quantity_id_len <= metadata.len());
+    String::from_utf8(metadata[quantity_id_start..quantity_id_start + quantity_id_len].to_vec())
+        .expect("FMVP v5 full quantity id should be valid UTF-8")
 }
 
 fn decode_fmvp_node_indices(bytes: &[u8]) -> Vec<u32> {
@@ -45891,6 +45912,7 @@ async fn frequency_domain_eigen_mode_field_prefers_zarr_payload_path() {
     assert_eq!(payload["artifact_path"], zarr_chunk_path);
 
     let response = app
+        .clone()
         .oneshot(
             Request::builder()
                 .method("GET")
@@ -45901,15 +45923,39 @@ async fn frequency_domain_eigen_mode_field_prefers_zarr_payload_path() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()["x-fullmag-encoding"], "FMVP;version=5");
     let body = body_bytes(response).await;
-    let metadata_length = u32::from_le_bytes(body[8..12].try_into().unwrap()) as usize;
-    let values: Vec<f64> = body[48 + metadata_length..]
-        .chunks_exact(8)
-        .map(|chunk| f64::from_le_bytes(chunk.try_into().unwrap()))
-        .collect();
+    let quantity_id = "analysis:eigen:sample-0000:mode-0003";
+    assert_eq!(body[4], 5);
+    assert_eq!(&body[28..44], &quantity_id.as_bytes()[..16]);
+    assert_eq!(decode_fmvp_v5_full_quantity_id(&body), quantity_id);
+    let values = decode_fmvp_payload_f64(&body);
     assert_eq!(
         values,
         vec![2.0, 0.0, 5.0, 3.0, 4.0, 6.0, 4.0, 5.0, 7.0, 5.0, 6.0, 8.0]
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/data/fields/analysis:eigen:sample-0000:mode-0003/samples/vector?view=complex")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()["x-fullmag-encoding"], "FMVP;version=5");
+    assert_eq!(response.headers()["x-fullmag-n-comp"], "6");
+    let body = body_bytes(response).await;
+    assert_eq!(decode_fmvp_v5_full_quantity_id(&body), quantity_id);
+    assert_eq!(
+        decode_fmvp_payload_f64(&body),
+        vec![
+            2.0, 0.0, 0.0, 2.0, 5.0, 12.0, 3.0, 0.0, 4.0, 0.0, 6.0, 0.0, 4.0, 0.0, 5.0, 0.0, 7.0,
+            0.0, 5.0, 0.0, 6.0, 0.0, 8.0, 0.0,
+        ]
     );
 }
 
@@ -46660,7 +46706,13 @@ async fn frequency_domain_response_field_fallback_uses_spatial_xyz_payload() {
 
 #[tokio::test]
 async fn frequency_domain_response_field_prefers_zarr_payload_path() {
-    let (app, artifact_dir) = test_router_with_session_and_artifact_dir().await;
+    let (app, state, artifact_dir) = test_router_with_session_state_and_artifact_dir().await;
+    let expected_domain_generation_id = {
+        let snapshot = state.current_live_state.read().await;
+        crate::router_v2::handlers::sessions::status::domain_generation_id(
+            snapshot.as_ref().expect("session snapshot should exist"),
+        )
+    };
     let response_dir = artifact_dir.join("response");
     let frequency_points_dir = response_dir.join("frequency_points");
     let zarr_array_dir = response_dir
@@ -46755,6 +46807,14 @@ async fn frequency_domain_response_field_prefers_zarr_payload_path() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()["x-fullmag-encoding"], "FMVP;version=5");
+    assert_eq!(
+        response.headers()["x-fullmag-field-indexing"],
+        "legacy_count_only"
+    );
+    assert!(!response
+        .headers()
+        .contains_key("x-fullmag-mesh-topology-hash"));
     assert_eq!(
         response
             .headers()
@@ -46770,11 +46830,40 @@ async fn frequency_domain_response_field_prefers_zarr_payload_path() {
         Some("3")
     );
     let body = body_bytes(response).await;
-    let values: Vec<f64> = body[48..]
-        .chunks_exact(8)
-        .map(|chunk| f64::from_le_bytes(chunk.try_into().unwrap()))
-        .collect();
-    assert_eq!(values, vec![9.0, 1.0, 8.0, 2.0, 7.0, 3.0]);
+    let quantity_id = "analysis:frequency-response:frequency-0001";
+    assert_eq!(body[4], 5);
+    assert_eq!(&body[28..44], &quantity_id.as_bytes()[..16]);
+    assert_eq!(decode_fmvp_v5_full_quantity_id(&body), quantity_id);
+    let metadata_len = u32::from_le_bytes(body[8..12].try_into().unwrap()) as usize;
+    let metadata = &body[48..48 + metadata_len];
+    assert_eq!(u16::from_le_bytes(metadata[4..6].try_into().unwrap()), 4);
+    assert_eq!(u64::from_le_bytes(metadata[16..24].try_into().unwrap()), 0);
+    assert!(metadata[24..56].iter().all(|byte| *byte == 0));
+    assert_eq!(u32::from_le_bytes(metadata[56..60].try_into().unwrap()), 3);
+    assert_eq!(u32::from_le_bytes(metadata[60..64].try_into().unwrap()), 0);
+    assert!(metadata[10..16].iter().all(|byte| *byte == 0));
+    assert_eq!(u64::from_le_bytes(metadata[68..76].try_into().unwrap()), 0);
+    assert!(metadata[76..80].iter().all(|byte| *byte == 0));
+    assert!(metadata[82..88].iter().all(|byte| *byte == 0));
+    let scope_kind_len = u16::from_le_bytes(metadata[64..66].try_into().unwrap()) as usize;
+    let scope_id_len = u16::from_le_bytes(metadata[66..68].try_into().unwrap()) as usize;
+    let domain_generation_id_len = u16::from_le_bytes(metadata[8..10].try_into().unwrap()) as usize;
+    let scope_kind_start = 88;
+    assert_eq!(
+        &metadata[scope_kind_start..scope_kind_start + scope_kind_len],
+        b"full"
+    );
+    let domain_generation_id_start = scope_kind_start + scope_kind_len + scope_id_len;
+    assert_eq!(
+        &metadata
+            [domain_generation_id_start..domain_generation_id_start + domain_generation_id_len],
+        expected_domain_generation_id.as_bytes()
+    );
+    assert_eq!(metadata_len % 8, 0);
+    assert_eq!(
+        decode_fmvp_payload_f64(&body),
+        vec![9.0, 1.0, 8.0, 2.0, 7.0, 3.0]
+    );
 }
 
 #[tokio::test]

@@ -21467,7 +21467,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Binary FMVP field vector. Scoped FEM and FDM payloads use FMVP v3 metadata with domain_generation_id, carrier topology revision/hash, scope kind/id, indexing, and optional node_indices. Multilayer FDM layer/object scopes identify their native grid carrier. Full-domain regular-grid FDM uses FMVP v3 sampled indices when max_samples is supplied and may use FMVP v2 for an uncapped complete payload. */
+            /** @description Binary FMVP field vector. Analysis response and eigen-mode vectors use FMVP v5 metadata with the full quantity ID and domain generation identity; when a mesh carrier is available they also include topology, scope, and indexing metadata. Analysis vectors without a mesh use the explicit legacy_count_only absent-topology sentinel and cannot establish topology-bound overlay compatibility. Other scoped FEM and FDM payloads use FMVP v3 metadata with domain_generation_id, carrier topology revision/hash, scope kind/id, indexing, and optional node_indices. Multilayer FDM layer/object scopes identify their native grid carrier. Full-domain regular-grid FDM uses FMVP v3 sampled indices when max_samples is supplied and may use FMVP v2 for an uncapped complete payload. */
             200: {
                 headers: {
                     /** @description Resolved component projection */
@@ -21476,17 +21476,17 @@ export interface operations {
                     "x-fullmag-domain-generation-id"?: string;
                     /** @description FMVP encoding and version */
                     "x-fullmag-encoding"?: string;
-                    /** @description Optional FMVP v3 field indexing */
+                    /** @description Optional FMVP v3/v5 field indexing */
                     "x-fullmag-field-indexing"?: string;
                     /** @description Field revision */
                     "x-fullmag-field-revision"?: string;
-                    /** @description Optional FMVP v3 mesh topology hash */
+                    /** @description Optional FMVP v3/v5 mesh topology hash */
                     "x-fullmag-mesh-topology-hash"?: string;
                     /** @description Components per point */
                     "x-fullmag-n-comp"?: number;
-                    /** @description Optional FMVP v3 node-index count */
+                    /** @description Optional FMVP v3/v5 node-index count */
                     "x-fullmag-node-index-count"?: number;
-                    /** @description current for metadata-complete FMVP v3; legacy_unverified for FMVP v2 */
+                    /** @description current for metadata-complete FMVP v3 through v5; legacy_unverified for FMVP v2 */
                     "x-fullmag-payload-state"?: string;
                     /** @description Decoded point count */
                     "x-fullmag-point-count"?: number;

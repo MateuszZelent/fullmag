@@ -237,7 +237,8 @@ export function validateAnalysisResultFieldResponseMetadata(
     metadata &&
       metadata.fieldRevision &&
       metadata.component === "full" &&
-      metadata.encoding === "FMVP;version=3" &&
+      (metadata.encoding === "FMVP;version=3" ||
+        metadata.encoding === "FMVP;version=5") &&
       metadata.fieldIndexing === "full_domain" &&
       metadata.nComp === 6 &&
       metadata.pointCount !== null &&
@@ -262,7 +263,7 @@ export function validateAnalysisResultFieldOverlayBinary(
     !complex ||
     !meshRef ||
     field.dtype !== "float64" ||
-    field.formatVersion !== 3 ||
+    (field.formatVersion !== 3 && field.formatVersion !== 5) ||
     field.nComp !== 6 ||
     complex.componentCount !== 3 ||
     field.quantityId !== metadata.fieldId ||

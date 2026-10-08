@@ -597,7 +597,11 @@ export function collectFieldVectorIdentityIssues(
   compare("pointCount", metadata.pointCount, payload.pointCount);
   compare("valueCount", metadata.valueCount, payload.valueCount);
   compare("nComp", metadata.nComp, payload.nComp);
-  if (payload.formatVersion === 3 || payload.formatVersion === 4) {
+  if (
+    payload.formatVersion === 3 ||
+    payload.formatVersion === 4 ||
+    payload.formatVersion === 5
+  ) {
     compare("scopeKind", metadata.scopeKind, payload.scopeKind ?? null);
     compare("scopeId", metadata.scopeId, payload.scopeId ?? null);
     const payloadMeshTopologyHash = payload.meshTopologyHash ?? null;
@@ -624,7 +628,7 @@ export function collectFieldVectorIdentityIssues(
       payload.domainGenerationId ?? null,
     );
   }
-  if (payload.formatVersion === 4) {
+  if (payload.formatVersion === 4 || payload.formatVersion === 5) {
     compare("sourceKind", metadata.sourceKind ?? null, payload.sourceKind ?? null);
     compare("sourceId", metadata.sourceId ?? null, payload.sourceId ?? null);
     compare(

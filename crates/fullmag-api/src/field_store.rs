@@ -4,12 +4,15 @@ const FIELD_VECTOR_BINARY_HEADER_LEN: usize = 48;
 const FIELD_VECTOR_BINARY_VERSION: u8 = 2;
 const FIELD_VECTOR_BINARY_VERSION_V3: u8 = 3;
 const FIELD_VECTOR_BINARY_VERSION_V4: u8 = 4;
+const FIELD_VECTOR_BINARY_VERSION_V5: u8 = 5;
 const FIELD_VECTOR_BINARY_KIND_F64: u8 = 1;
 const FIELD_VECTOR_BINARY_QUANTITY_ID_LEN: usize = 16;
 const FIELD_VECTOR_METADATA_FIXED_LEN: usize = 68;
 const FIELD_VECTOR_METADATA_VERSION: u16 = 2;
 const FIELD_VECTOR_METADATA_V4_FIXED_LEN: usize = 80;
 const FIELD_VECTOR_METADATA_V4_VERSION: u16 = 3;
+const FIELD_VECTOR_METADATA_V5_FIXED_LEN: usize = 88;
+const FIELD_VECTOR_METADATA_V5_VERSION: u16 = 4;
 const FEM_MESH_TOPOLOGY_BINARY_HEADER_LEN: usize = 32;
 const FEM_MESH_TOPOLOGY_BINARY_VERSION: u8 = 1;
 const FEM_MESH_TOPOLOGY_BINARY_V2_HEADER_LEN: usize = 64;
@@ -66,6 +69,14 @@ pub(crate) struct FieldVectorBinaryMetadataV4<'a> {
     pub scope_id: &'a str,
     pub indexing: FieldVectorIndexing,
     pub node_indices: &'a [u32],
+    pub source_kind: &'a str,
+    pub source_id: &'a str,
+    pub source_revision: u64,
+    pub field_generation_id: &'a str,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct FieldVectorSourceMetadata<'a> {
     pub source_kind: &'a str,
     pub source_id: &'a str,
     pub source_revision: u64,
@@ -166,6 +177,172 @@ pub(crate) fn serialize_field_vector_binary_v4(
         FIELD_VECTOR_BINARY_VERSION_V4,
         n_comp,
         metadata_block.len(),
+        values.len(),
+        grid,
+        quantity_id,
+    );
+    out.extend_from_slice(&metadata_block);
+    debug_assert_eq!(out.len() % 8, 0);
+    write_f64_values(&mut out, values);
+    Ok(out)
+}
+
+pub(crate) fn serialize_field_vector_binary_v5(
+    quantity_id: &str,
+    n_comp: usize,
+    grid: [u32; 3],
+    values: &[f64],
+    metadata: &FieldVectorBinaryMetadata<'_>,
+    source: Option<&FieldVectorSourceMetadata<'_>>,
+) -> Result<Vec<u8>, String> {
+    validate_field_vector_payload(n_comp, grid, values)?;
+    validate_indexing(
+        point_count(values, n_comp),
+        metadata.indexing,
+        metadata.node_indices,
+        FIELD_VECTOR_BINARY_VERSION_V5,
+    )?;
+
+    let quantity_id_bytes = quantity_id.as_bytes();
+    if quantity_id_bytes.is_empty()
+        || quantity_id_bytes.len() > u16::MAX as usize
+        || quantity_id.chars().any(char::is_control)
+    {
+        return Err(
+            "FMVP v5 full quantity id must be non-empty, contain no control characters, and fit u16 bytes"
+                .to_string(),
+        );
+    }
+    if values.len() > u32::MAX as usize {
+        return Err("FMVP v5 value count exceeds u32 header capacity".to_string());
+    }
+
+    let scope_kind = metadata.scope_kind.as_bytes();
+    let scope_id = metadata.scope_id.as_bytes();
+    let domain_generation_id = metadata.domain_generation_id.as_bytes();
+    for (value, label, required) in [
+        (scope_kind, "scope_kind", false),
+        (scope_id, "scope_id", false),
+        (domain_generation_id, "domain_generation_id", true),
+    ] {
+        if (required && value.is_empty()) || value.len() > u16::MAX as usize {
+            return Err(format!("FMVP v5 {label} must fit a non-empty u16 string"));
+        }
+    }
+
+    let (source_kind, source_id, source_revision, field_generation_id) =
+        if let Some(source) = source {
+            let source_kind = source.source_kind.as_bytes();
+            let source_id = source.source_id.as_bytes();
+            let field_generation_id = source.field_generation_id.as_bytes();
+            for (value, label) in [
+                (source_kind, "source_kind"),
+                (source_id, "source_id"),
+                (field_generation_id, "field_generation_id"),
+            ] {
+                if value.is_empty() || value.len() > u16::MAX as usize {
+                    return Err(format!("FMVP v5 {label} must fit a non-empty u16 string"));
+                }
+            }
+            if !matches!(source.source_kind, "live" | "observation_frame") {
+                return Err("FMVP v5 source_kind must be live or observation_frame".to_string());
+            }
+            (
+                source_kind,
+                source_id,
+                source.source_revision,
+                field_generation_id,
+            )
+        } else {
+            (&[][..], &[][..], 0, &[][..])
+        };
+
+    if metadata.node_indices.len() > u32::MAX as usize {
+        return Err("FMVP v5 node_indices exceeds u32 length".to_string());
+    }
+    if metadata.indexing == FieldVectorIndexing::LegacyCountOnly
+        && (metadata.mesh_topology_revision != 0
+            || metadata.mesh_topology_hash != [0; 32]
+            || !metadata.node_indices.is_empty())
+    {
+        return Err(
+            "FMVP v5 legacy_count_only requires absent topology (zero revision/hash) and no node indices"
+                .to_string(),
+        );
+    }
+
+    let node_indices_bytes = metadata
+        .node_indices
+        .len()
+        .checked_mul(std::mem::size_of::<u32>())
+        .ok_or_else(|| "FMVP v5 node_indices byte length overflows usize".to_string())?;
+    let raw_len = [
+        FIELD_VECTOR_METADATA_V5_FIXED_LEN,
+        scope_kind.len(),
+        scope_id.len(),
+        domain_generation_id.len(),
+        source_kind.len(),
+        source_id.len(),
+        field_generation_id.len(),
+        quantity_id_bytes.len(),
+        node_indices_bytes,
+    ]
+    .into_iter()
+    .try_fold(0usize, usize::checked_add)
+    .ok_or_else(|| "FMVP v5 metadata byte length overflows usize".to_string())?;
+    let metadata_len = raw_len
+        .checked_add(7)
+        .map(|value| value & !7)
+        .ok_or_else(|| "FMVP v5 aligned metadata byte length overflows usize".to_string())?;
+    let metadata_len_u32 = u32::try_from(metadata_len)
+        .map_err(|_| "FMVP v5 metadata byte length exceeds u32 capacity".to_string())?;
+    let output_capacity = FIELD_VECTOR_BINARY_HEADER_LEN
+        .checked_add(metadata_len)
+        .and_then(|length| {
+            values
+                .len()
+                .checked_mul(std::mem::size_of::<f64>())
+                .and_then(|value_bytes| length.checked_add(value_bytes))
+        })
+        .ok_or_else(|| "FMVP v5 output byte length overflows usize".to_string())?;
+
+    let mut metadata_block = Vec::with_capacity(metadata_len);
+    metadata_block.extend_from_slice(b"FMMI");
+    metadata_block.extend_from_slice(&FIELD_VECTOR_METADATA_V5_VERSION.to_le_bytes());
+    metadata_block.extend_from_slice(&0u16.to_le_bytes());
+    metadata_block.extend_from_slice(&(domain_generation_id.len() as u16).to_le_bytes());
+    metadata_block.extend_from_slice(&(source_kind.len() as u16).to_le_bytes());
+    metadata_block.extend_from_slice(&(source_id.len() as u16).to_le_bytes());
+    metadata_block.extend_from_slice(&(field_generation_id.len() as u16).to_le_bytes());
+    metadata_block.extend_from_slice(&metadata.mesh_topology_revision.to_le_bytes());
+    metadata_block.extend_from_slice(&metadata.mesh_topology_hash);
+    metadata_block.extend_from_slice(&metadata.indexing.code().to_le_bytes());
+    metadata_block.extend_from_slice(&(metadata.node_indices.len() as u32).to_le_bytes());
+    metadata_block.extend_from_slice(&(scope_kind.len() as u16).to_le_bytes());
+    metadata_block.extend_from_slice(&(scope_id.len() as u16).to_le_bytes());
+    metadata_block.extend_from_slice(&source_revision.to_le_bytes());
+    metadata_block.extend_from_slice(&[0u8; 4]);
+    metadata_block.extend_from_slice(&(quantity_id_bytes.len() as u16).to_le_bytes());
+    metadata_block.extend_from_slice(&[0u8; 6]);
+    debug_assert_eq!(metadata_block.len(), FIELD_VECTOR_METADATA_V5_FIXED_LEN);
+    metadata_block.extend_from_slice(scope_kind);
+    metadata_block.extend_from_slice(scope_id);
+    metadata_block.extend_from_slice(domain_generation_id);
+    metadata_block.extend_from_slice(source_kind);
+    metadata_block.extend_from_slice(source_id);
+    metadata_block.extend_from_slice(field_generation_id);
+    metadata_block.extend_from_slice(quantity_id_bytes);
+    for node_index in metadata.node_indices {
+        metadata_block.extend_from_slice(&node_index.to_le_bytes());
+    }
+    metadata_block.resize(metadata_len, 0);
+
+    let mut out = Vec::with_capacity(output_capacity);
+    write_field_vector_header(
+        &mut out,
+        FIELD_VECTOR_BINARY_VERSION_V5,
+        n_comp,
+        metadata_len_u32 as usize,
         values.len(),
         grid,
         quantity_id,
@@ -779,9 +956,56 @@ mod tests {
     use super::{
         checked_fem_mesh_topology_binary_v2_len, serialize_fem_mesh_topology_binary_v2,
         serialize_field_vector_binary_v2, serialize_field_vector_binary_v3,
-        serialize_field_vector_binary_v4, FieldVectorBinaryMetadata, FieldVectorBinaryMetadataV4,
-        FieldVectorIndexing,
+        serialize_field_vector_binary_v4, serialize_field_vector_binary_v5,
+        FieldVectorBinaryMetadata, FieldVectorBinaryMetadataV4, FieldVectorIndexing,
+        FieldVectorSourceMetadata,
     };
+
+    fn full_domain_v5_metadata() -> FieldVectorBinaryMetadata<'static> {
+        FieldVectorBinaryMetadata {
+            domain_generation_id: "sha256:domain",
+            mesh_topology_revision: 17,
+            mesh_topology_hash: [0xAB; 32],
+            scope_kind: "full",
+            scope_id: "",
+            indexing: FieldVectorIndexing::FullDomain,
+            node_indices: &[],
+        }
+    }
+
+    fn v5_metadata_block(binary: &[u8]) -> &[u8] {
+        assert_eq!(&binary[..4], b"FMVP");
+        assert_eq!(binary[4], 5);
+        let metadata_len = u32::from_le_bytes(binary[8..12].try_into().unwrap()) as usize;
+        assert!(metadata_len >= 88);
+        assert!(48 + metadata_len <= binary.len());
+        let metadata = &binary[48..48 + metadata_len];
+        assert_eq!(&metadata[..4], b"FMMI");
+        assert_eq!(u16::from_le_bytes(metadata[4..6].try_into().unwrap()), 4);
+        metadata
+    }
+
+    fn v5_full_quantity_id(binary: &[u8]) -> String {
+        let metadata = v5_metadata_block(binary);
+        let scope_kind_len = u16::from_le_bytes(metadata[64..66].try_into().unwrap()) as usize;
+        let scope_id_len = u16::from_le_bytes(metadata[66..68].try_into().unwrap()) as usize;
+        let domain_generation_id_len =
+            u16::from_le_bytes(metadata[8..10].try_into().unwrap()) as usize;
+        let source_kind_len = u16::from_le_bytes(metadata[10..12].try_into().unwrap()) as usize;
+        let source_id_len = u16::from_le_bytes(metadata[12..14].try_into().unwrap()) as usize;
+        let field_generation_id_len =
+            u16::from_le_bytes(metadata[14..16].try_into().unwrap()) as usize;
+        let quantity_id_len = u16::from_le_bytes(metadata[80..82].try_into().unwrap()) as usize;
+        let quantity_id_start = 88
+            + scope_kind_len
+            + scope_id_len
+            + domain_generation_id_len
+            + source_kind_len
+            + source_id_len
+            + field_generation_id_len;
+        String::from_utf8(metadata[quantity_id_start..quantity_id_start + quantity_id_len].to_vec())
+            .expect("FMVP v5 full quantity id should be valid UTF-8")
+    }
 
     fn mixed_topology_mesh() -> fullmag_runner::FemMeshPayload {
         fullmag_runner::FemMeshPayload {
@@ -1061,5 +1285,204 @@ mod tests {
             serialize_field_vector_binary_v3("m", 3, [1, 1, 1], &[1.0, 0.0, 0.0], &legacy)
                 .expect_err("legacy count-only payloads must not carry node indices");
         assert!(legacy_error.contains("must not include node_indices"));
+    }
+
+    #[test]
+    fn field_vector_v5_preserves_full_quantity_ids_with_colliding_legacy_prefixes() {
+        let first_id = "analysis:eigen:sample-0000:mode-0000";
+        let second_id = "analysis:eigen:sample-0000:mode-0001";
+        assert_eq!(&first_id.as_bytes()[..16], &second_id.as_bytes()[..16]);
+
+        let first = serialize_field_vector_binary_v5(
+            first_id,
+            1,
+            [1, 1, 1],
+            &[3.0],
+            &full_domain_v5_metadata(),
+            None,
+        )
+        .expect("FMVP v5 should preserve the first full quantity id");
+        let second = serialize_field_vector_binary_v5(
+            second_id,
+            1,
+            [1, 1, 1],
+            &[4.0],
+            &full_domain_v5_metadata(),
+            None,
+        )
+        .expect("FMVP v5 should preserve the second full quantity id");
+
+        assert_eq!(&first[28..44], &first_id.as_bytes()[..16]);
+        assert_eq!(&second[28..44], &second_id.as_bytes()[..16]);
+        assert_eq!(&first[28..44], &second[28..44]);
+        assert_eq!(v5_full_quantity_id(&first), first_id);
+        assert_eq!(v5_full_quantity_id(&second), second_id);
+
+        let metadata = v5_metadata_block(&first);
+        assert_eq!(u16::from_le_bytes(metadata[10..12].try_into().unwrap()), 0);
+        assert_eq!(u16::from_le_bytes(metadata[12..14].try_into().unwrap()), 0);
+        assert_eq!(u16::from_le_bytes(metadata[14..16].try_into().unwrap()), 0);
+        assert_eq!(u64::from_le_bytes(metadata[68..76].try_into().unwrap()), 0);
+        assert!(metadata[82..88].iter().all(|byte| *byte == 0));
+        assert_eq!(metadata.len() % 8, 0);
+    }
+
+    #[test]
+    fn field_vector_v5_keeps_full_utf8_identity_when_legacy_prefix_splits_codepoint() {
+        let quantity_id = "123456789012345é-eigen-mode";
+        let prefix = &quantity_id.as_bytes()[..16];
+        assert!(std::str::from_utf8(prefix).is_err());
+
+        let binary = serialize_field_vector_binary_v5(
+            quantity_id,
+            1,
+            [1, 1, 1],
+            &[1.0],
+            &full_domain_v5_metadata(),
+            None,
+        )
+        .expect("FMVP v5 should allow a raw legacy prefix to split UTF-8");
+        assert_eq!(&binary[28..44], prefix);
+        assert_eq!(v5_full_quantity_id(&binary), quantity_id);
+    }
+
+    #[test]
+    fn field_vector_v5_encodes_complete_source_identity_and_rejects_partial_groups() {
+        let source = FieldVectorSourceMetadata {
+            source_kind: "observation_frame",
+            source_id: "frame-123",
+            source_revision: 29,
+            field_generation_id: "field:frame-123:m:29",
+        };
+        let binary = serialize_field_vector_binary_v5(
+            "analysis:frequency-response:frequency-0001",
+            1,
+            [1, 1, 1],
+            &[2.0],
+            &full_domain_v5_metadata(),
+            Some(&source),
+        )
+        .expect("FMVP v5 should encode complete source provenance");
+        let metadata = v5_metadata_block(&binary);
+        assert_eq!(u16::from_le_bytes(metadata[10..12].try_into().unwrap()), 17);
+        assert_eq!(u16::from_le_bytes(metadata[12..14].try_into().unwrap()), 9);
+        assert_eq!(u16::from_le_bytes(metadata[14..16].try_into().unwrap()), 20);
+        assert_eq!(u64::from_le_bytes(metadata[68..76].try_into().unwrap()), 29);
+
+        let partial_source = FieldVectorSourceMetadata {
+            source_id: "",
+            ..source
+        };
+        let error = serialize_field_vector_binary_v5(
+            "analysis:frequency-response:frequency-0001",
+            1,
+            [1, 1, 1],
+            &[2.0],
+            &full_domain_v5_metadata(),
+            Some(&partial_source),
+        )
+        .expect_err("a partially qualified source group must be rejected");
+        assert!(error.contains("source_id"));
+
+        let unsupported_source = FieldVectorSourceMetadata {
+            source_kind: "analysis",
+            ..source
+        };
+        let error = serialize_field_vector_binary_v5(
+            "analysis:frequency-response:frequency-0001",
+            1,
+            [1, 1, 1],
+            &[2.0],
+            &full_domain_v5_metadata(),
+            Some(&unsupported_source),
+        )
+        .expect_err("FMVP v5 must retain the v4 source-kind vocabulary");
+        assert!(error.contains("source_kind"));
+    }
+
+    #[test]
+    fn field_vector_v5_requires_valid_full_quantity_identity_and_finite_values() {
+        let metadata = full_domain_v5_metadata();
+        for invalid_id in ["", "bad\0quantity", "bad\nquantity"] {
+            let error =
+                serialize_field_vector_binary_v5(invalid_id, 1, [1, 1, 1], &[1.0], &metadata, None)
+                    .expect_err("empty and control-containing full quantity ids must reject");
+            assert!(error.contains("full quantity id"));
+        }
+
+        let oversized_id = "q".repeat(u16::MAX as usize + 1);
+        let error =
+            serialize_field_vector_binary_v5(&oversized_id, 1, [1, 1, 1], &[1.0], &metadata, None)
+                .expect_err("full quantity id length must fit in u16 bytes");
+        assert!(error.contains("full quantity id"));
+
+        let error = serialize_field_vector_binary_v5(
+            "analysis:field",
+            1,
+            [1, 1, 1],
+            &[f64::NAN],
+            &metadata,
+            None,
+        )
+        .expect_err("FMVP v5 must reject non-finite values");
+        assert!(error.contains("non-finite"));
+    }
+
+    #[test]
+    fn field_vector_v5_legacy_count_only_is_an_explicit_absent_topology_sentinel() {
+        let absent_topology = FieldVectorBinaryMetadata {
+            domain_generation_id: "fdm-domain-generation",
+            mesh_topology_revision: 0,
+            mesh_topology_hash: [0; 32],
+            scope_kind: "full",
+            scope_id: "",
+            indexing: FieldVectorIndexing::LegacyCountOnly,
+            node_indices: &[],
+        };
+        let binary = serialize_field_vector_binary_v5(
+            "analysis:frequency-response:frequency-0001",
+            1,
+            [1, 1, 1],
+            &[1.0],
+            &absent_topology,
+            None,
+        )
+        .expect("the explicit absent-topology sentinel should serialize");
+        let metadata = v5_metadata_block(&binary);
+        assert_eq!(u64::from_le_bytes(metadata[16..24].try_into().unwrap()), 0);
+        assert!(metadata[24..56].iter().all(|byte| *byte == 0));
+        assert_eq!(u32::from_le_bytes(metadata[56..60].try_into().unwrap()), 3);
+        assert_eq!(u32::from_le_bytes(metadata[60..64].try_into().unwrap()), 0);
+        assert_eq!(u64::from_le_bytes(metadata[68..76].try_into().unwrap()), 0);
+
+        let fabricated_topology = FieldVectorBinaryMetadata {
+            mesh_topology_revision: 1,
+            ..absent_topology
+        };
+        let error = serialize_field_vector_binary_v5(
+            "analysis:frequency-response:frequency-0001",
+            1,
+            [1, 1, 1],
+            &[1.0],
+            &fabricated_topology,
+            None,
+        )
+        .expect_err("legacy count-only may not claim a topology revision");
+        assert!(error.contains("absent topology"));
+
+        let fabricated_hash = FieldVectorBinaryMetadata {
+            mesh_topology_hash: [1; 32],
+            ..absent_topology
+        };
+        let error = serialize_field_vector_binary_v5(
+            "analysis:frequency-response:frequency-0001",
+            1,
+            [1, 1, 1],
+            &[1.0],
+            &fabricated_hash,
+            None,
+        )
+        .expect_err("legacy count-only may not claim a topology hash");
+        assert!(error.contains("absent topology"));
     }
 }

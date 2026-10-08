@@ -2893,3 +2893,20 @@ polityka muszą być zgodne z v2; różnica schema/diagnostic envelope jest
 dozwolona dla zgodności historycznej. Obecne tracking_edge wymagają jawnego
 tracking_policy_availability. Predecessor nie może pomijać zachowanego
 punktu tej samej gałęzi.
+
+
+## Transport pelnego field ID - FMVP v5
+
+Status: implementacja przygotowana; testy GHA/browser i kwalifikacja runtime
+pozostaja otwarte. [ADR0053](../adr/0053-fmvp-full-field-identity.md) opisuje
+FMVPv5/FMMIv4 dla binarnych wektorow modalnych i response. Canonical field_id
+nie jest skrocony: payload zawiera pelny UTF-8 ID, a legacy16-byte prefix jest
+weryfikowany bajtowo. JSON metadata/field refs pozostaja bez zmiany schematu.
+
+Complex XYZ zachowuje nComp6, interleaved real/imag, finite values oraz
+wymagana zgodnosc carrier topology. Odczyt artefaktu bez aktualnej siatki jest
+jawnie legacy_count_only z absent-topology sentinel; nie daje prawa do3D
+renderowania. Niezgodne mapowanie punktow do istniejacej siatki zwraca409
+analysis_field_node_mapping_unavailable zamiast niezweryfikowanego v2fallback.
+ETag analizy uwzglednia wersje i SHA256 rzeczywistych bajtow odpowiedzi,
+aby zmiana encodingu/topologii/wartosci nie odzyskala starego cachedpayloadu.
