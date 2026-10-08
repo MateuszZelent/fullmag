@@ -24,6 +24,7 @@ from verify_control_room_sources import fingerprint, timestamp
 PROFILE = "windows-control-room-browser-fixture"
 BROWSER_CHANNEL = "chrome" if os.name == "nt" else None
 SCENARIOS = {
+    "antenna-cpw-viewport": ("smoke-antenna-cpw-viewport.mjs", "fullmag_antenna_cpw_viewport_browser_fixture_v1", "antenna-cpw-viewport", "FULLMAG_ANTENNA_CPW_VIEWPORT"),
     "pinned-dataset": ("smoke-pinned-materialized-dataset.mjs", "fullmag_pinned_dataset_browser_fixture_v1", None, "FULLMAG_PINNED_DATASET"),
     "project-document-handoff": ("smoke-project-document-handoff.mjs", "fullmag_project_document_browser_fixture_v1", "project-document-handoff", "FULLMAG_PROJECT_DOCUMENT"),
     "development-kernel-host": ("smoke-development-kernel-host.mjs", "fullmag_development_kernel_host_browser_fixture_v1", "development-kernel-host", "FULLMAG_PROJECT_DOCUMENT"),

@@ -1,5 +1,13 @@
 # CPW — podgląd przewodników i pozycjonowanie całego zespołu
 
+Aktualizacja: [wykonany test CPW WebGL](2026-10-08-antenna-cpw-webgl-checkpoint.md)
+uzupełnia brakującą poniżej historyczną bramkę renderowania w fixture.
+Nie zamyka transakcji API, pełnego workspace ani kwalifikacji solvera.
+Regresje tego checkpointu zapisano w
+`8cab4273821d4aea6344371974377cfb963d13a9`; końcowy ESLint ich fingerprintu
+`4f9af1c62c617b755ff706df22654cc0ac338b4225a5ebfe7e19d5a8a5db9ae8`
+przeszedł `passed/0`, receipt `6c4f2b8bf3764fffbc8197af51ba55e3`.
+
 ## Zakres przyrostu
 
 Kontynuacja T04/T15 planu `2026-09-08-microwave-antenna-refactoring-plan.md`.

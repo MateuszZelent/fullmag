@@ -6084,6 +6084,12 @@ Ich przygotowanie zależności i Cargo pozostaje zarządzane przez środowisko T
 
 ## T15. Zbudować spójne UI i naprawić utratę parametrów/draftu
 
+**Przyrost 2026-10-08 — podgląd CPW WebGL:** produkcyjna warstwa primitive
+przeszła Chrome smoke: widoczny canvas, aktywny WebGL, złote piksele,
+odstęp nad/pod targetem i cleanup śledzonych geometrii. Pełne dowody i granice:
+[checkpoint CPW WebGL](2026-10-08-antenna-cpw-webgl-checkpoint.md).
+To render fixture, nie API/ACK ani native solve; T04/T15 pozostają otwarte.
+
 **Przyrost 2026-10-08 — stacje CPW:** istniejący edytor obsługuje pięć
 wymiarów przekroju CPW, zachowując transakcje, parametry i nowsze szkice po ACK.
 Model: 4 interpretowane kontrole PASS; browser microstrip/CPW: 19/19 PASS.

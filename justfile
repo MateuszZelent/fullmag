@@ -509,7 +509,11 @@ verify-study-execution-profile-browser:
 verify-antenna-external-lead-inspection-browser:
     {{storage_python}} "{{repo_root}}/scripts/verify_pinned_dataset_browser.py" --repo-root "{{repo_root}}" --port 3252 --scenario antenna-external-lead-inspection
 
-# Production microstrip draft/transaction lifecycle in an isolated browser fixture.
+# Production CPW primitive layer, WebGL, placement and geometry lifecycle.
+verify-antenna-cpw-viewport-browser:
+    {{storage_python}} "{{repo_root}}/scripts/verify_pinned_dataset_browser.py" --repo-root "{{repo_root}}" --port 3260 --scenario antenna-cpw-viewport
+
+# Production microstrip/CPW draft transactions in an isolated browser fixture.
 verify-antenna-microstrip-stations-browser:
     {{storage_python}} "{{repo_root}}/scripts/verify_pinned_dataset_browser.py" --repo-root "{{repo_root}}" --port 3253 --scenario antenna-microstrip-stations
 
