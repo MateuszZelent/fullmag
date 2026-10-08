@@ -1011,3 +1011,20 @@ Review finalizera Floquet potwierdziło source_index i fizyczną kolejność sel
 ale wskazało niedeterministyczną fixture SLEPc: requested2/NEV4 może wyczerpać
 budżet na kopiach pierwszych modów. Regresja jest poprawiana przez deterministyczne
 wywołanie tego samego finalizera; nie zastępuje to brakującego bounded NEV refill.
+
+### Dowód wykonania finalizera — 08.10
+
+Commit082295567367c31d81b26e1904a8a627dc1d24cf opublikowany na branchu zadania.
+GHA run37795426460/job113373527111 SUCCESS: rzeczywiste CMake build i CTest
+wykonały fem_floquet_modal_solver_contract oraz modal_eigen i mode_kinematics;
+3/3 PASS. Nowa deterministyczna regresja jest bezwarunkowo zarejestrowana w main,
+poza guardem SLEPc. Jest dowód wykonania strict CSR mass finalizera i preserved
+q/phi/certificates; nie dowód wykonania EPS ani full-window merge/refill.
+Uwagi4060116218/4061061308/4060687822 nadal otwarte w całym swoim zakresie.
+
+Kolejny render defect: globalny modal buffer ma complex/k, lecz per-target surface
+wybiera part buffer bez tego attachment, potencjalnie zachowując starsze scoped
+pole time-domain. Poprawka obejmuje actual target surface routing i regresję ze
+scoped buffers; nie zmienia widoczności ani nie wymusza globalnie shaderów.
+CPU-SLEPc cloud route jest przygotowywana ze wspólną orkiestracją i istniejącymi
+pinami providerów; nie zastępuje ani nie restartuje aktywnego MFEM runa.
