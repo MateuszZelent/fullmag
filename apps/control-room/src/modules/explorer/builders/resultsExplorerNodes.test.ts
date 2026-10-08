@@ -1478,7 +1478,7 @@ describe("optional state snapshot availability", () => {
   it("shows an absent observation store as not recorded rather than loading or failed", () => {
     const nodes = flattenExplorerNodes(buildPhysicsFirstResultsTree({
       entries: [modalFinite],
-      observationFrames: { data: null, status: "ready" },
+      observationFrames: { data: null, error: null, missing: true, revision: null, status: "ready" },
     }));
     const snapshots = nodes.find((entry) => entry.kind === "results.observation_frames.root");
     expect(snapshots).toMatchObject({
