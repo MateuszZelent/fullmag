@@ -124,14 +124,8 @@ describe("PrimitiveObjectLayer geometry resources", () => {
       fileURLToPath(new URL("./PrimitiveObjectLayer.tsx", import.meta.url)),
       "utf8",
     );
-    const modelSource = readFileSync(
-      fileURLToPath(new URL("./PrimitiveObjectLayerModel.ts", import.meta.url)),
-      "utf8",
-    );
-
     expect(source).toContain("<meshBasicMaterial");
     expect(source).not.toContain("<meshStandardMaterial");
-    expect(modelSource).not.toContain("computeVertexNormals");
   });
 
   it("keeps Primitive field-free and driven only by its monochrome local style", () => {

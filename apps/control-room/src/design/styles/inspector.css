@@ -992,7 +992,7 @@
   aspect-ratio: 1;
   min-height: 160px;
   max-height: 320px;
-  gap: 1px;
+  gap: var(--fm-chart-cell-separator-width);
   overflow: hidden;
   border: 1px solid var(--fm-border-subtle);
   border-radius: var(--fm-radius-sm);

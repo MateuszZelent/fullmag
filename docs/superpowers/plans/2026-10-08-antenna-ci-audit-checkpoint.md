@@ -734,3 +734,41 @@ React/Vitest. Pełny TypeScript noEmit bez incremental PASS, exit 0
 (sesja 2188); CI nowych fixtures wymaga odbioru.
 Pozostają błędy B, CSS i viewport source contracts oraz wszystkie
 niezakwalifikowane bramki T00–T18. Brak restartu, merge i cleanup.
+
+## Odbiór CI fixtures i korekta kontraktów prezentacji
+
+Dla `02eb70f054c55bbb3dfdb5d6724d695533657482` job
+`control-room-contracts` 113165615919 zakończył się failure:
+766 plików PASS, 6 FAIL, 1 SKIP; 7701 testów PASS, 5 FAIL, 13 SKIP.
+To nie pełny odbiór modułu. Diagnostyka fazy B pokazuje tylko dwa żądania
+preparation, oba w scope A; po potwierdzeniu B ostatni stan to loading,
+revision 7, bez danych. Nie ma dowodu wykonania trzeciego request ani
+błędu HTTP B. Nie zwiększono arbitralnie timeoutów i nie osłabiono asercji.
+
+W tym przyroście separator komórek heatmapy zachowuje szerokość 1 px,
+lecz konsumuje centralny `--fm-chart-cell-separator-width`. Nie jest to
+odstęp kontrolek ani zmiana rozdzielczości widma. Test materiałów primitive
+nadal wymaga `meshBasicMaterial` i odrzuca `meshStandardMaterial`; usunięto
+nieprawidłowy zakaz obliczania normalnych w geometrii. Normalne nie
+przełączają materiału na oświetlany. Produkcyjny renderer nie został zmieniony.
+
+Kontrola źródłowa separatora/unlit PASS, scoped ESLint PASS, whitespace
+PASS. Pełny TypeScript `--noEmit --incremental false` PASS/0 (sesja 62237).
+Nie kompilowano ani nie uruchamiano lokalnych testów jednostkowych.
+Wykonanie poprawionych regresji wymaga odbioru następnego CI.
+
+Odczyt przeglądarki localhost:3197 potwierdza błąd
+`Antenna layout requires an authored section preview.` i zero canvasów.
+WebGL smoke FAIL, nie kwalifikacja viewportu. Proces Next.js korzysta z
+utrwalonego `frontend-sources/ae9f4e3519c04fdcbf558e3a2eb3f018/workspace`
+w profilu `windows-native-fdm-cpu-dev`, nie bezpośrednio z bieżącego worktree.
+Nowego tokenu nie ma w załadowanym CSS; heatmapa nie jest wyrenderowana.
+Nie deklarujemy wizualnego odbioru tego przyrostu ani zgodności starej kopii
+UI z bieżącymi źródłami. Nie zatrzymano backendu i nie zmieniono sceny.
+
+Python CI 113165615830 odmawia oczekiwanego `conformal_occ` dla cylinder /
+waveguide: trzy próby OCC odrzucono za zdegenerowane tetraedry, wynik to
+`component_aware`. Nie poluzowano tolerancji ani wymagania testu.
+PR #147 pozostaje Draft. Dalej: źródłowo związany frontend i diagnostyka
+antennaPreview, przyczyna opóźnienia scope B, pozostałe błędy CI oraz pełne
+native/current→field→basis→LLG/FFT i kwalifikacja T00–T18.
