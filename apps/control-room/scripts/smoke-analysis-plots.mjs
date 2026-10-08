@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 const apiBase = (
@@ -735,6 +735,14 @@ function validateProof(proof, expectedDatasetRef) {
 
 async function verifyFrequencyDomainChartFixtures(browser, workspaceUrl, baseUrl) {
   const proofs = [];
+  const persistFixtureProof = (complete) => {
+    mkdirSync(acceptanceDirectory, { recursive: true });
+    writeFileSync(
+      path.join(acceptanceDirectory, "analysis-frequency-domain-fixture-proof.json"),
+      `${JSON.stringify({ complete, fixtureProofs: proofs }, null, 2)}\n`,
+      "utf8",
+    );
+  };
   for (const fixture of createFrequencyDomainChartFixtures()) {
     const page = await browser.newPage({ viewport: { height: 1000, width: 1440 } });
     const errors = [];
@@ -813,6 +821,7 @@ async function verifyFrequencyDomainChartFixtures(browser, workspaceUrl, baseUrl
           page,
           fixture.expectedSelection,
           fixture.id,
+          fixture,
         );
       }
       if (fixture.screenshot) {
@@ -826,10 +835,12 @@ async function verifyFrequencyDomainChartFixtures(browser, workspaceUrl, baseUrl
         throw new Error(`${fixture.id} frequency-domain responses failed: ${JSON.stringify(failedResponses)}`);
       }
       proofs.push(proof);
+      persistFixtureProof(false);
     } finally {
       await page.close();
     }
   }
+  persistFixtureProof(true);
   return proofs;
 }
 
@@ -991,12 +1002,8 @@ async function inspectFrequencyChartOption(page, fixture) {
   return evidence.series;
 }
 
-async function clickFrequencyDomainPoint(page, expected, fixtureId) {
-  const host = page.locator(".fm-analysis-plots__echarts").first();
-  await host.evaluate((element) => {
-    element.scrollIntoView({ behavior: "auto", block: "center", inline: "nearest" });
-  });
-  const coordinateTarget = await page.evaluate(({ rowId, seriesType }) => {
+async function inspectFrequencyDomainPointSpacing(page, expected) {
+  const evidence = await page.evaluate(({ rowId, seriesType }) => {
     const diagnostics = window.__FULLMAG_CHART_DIAGNOSTICS__;
     const option = diagnostics?.readRenderedOption?.();
     const series = Array.isArray(option?.series) ? option.series : [];
@@ -1005,37 +1012,237 @@ async function clickFrequencyDomainPoint(page, expected, fixtureId) {
       Array.isArray(entry.data) &&
       entry.data.some((row) => Array.isArray(row) && row[2] === rowId)
     );
-    if (seriesIndex < 0) return null;
-    const data = series[seriesIndex].data;
-    const dataIndex = data.findIndex((row) => Array.isArray(row) && row[2] === rowId);
-    const target = data[dataIndex];
     const resolvePoint = diagnostics?.resolveRenderedDataPoint;
-    if (dataIndex < 0 || typeof resolvePoint !== "function") return null;
-    const coordinate = resolvePoint(seriesIndex, dataIndex);
-    if (!coordinate) return null;
+    if (seriesIndex < 0 || typeof resolvePoint !== "function") {
+      return { available: false, reason: "target-series-or-reader-missing" };
+    }
+    const line = series[seriesIndex];
+    const data = line.data;
+    const dataIndex = data.findIndex((row) => Array.isArray(row) && row[2] === rowId);
+    const targetData = data[dataIndex];
+    const targetCoordinate = dataIndex < 0 ? null : resolvePoint(seriesIndex, dataIndex);
+    if (
+      !targetCoordinate ||
+      targetData?.[2] !== rowId ||
+      targetCoordinate.data?.[2] !== rowId ||
+      !Number.isFinite(targetCoordinate.x) ||
+      !Number.isFinite(targetCoordinate.y)
+    ) {
+      return { available: false, reason: "target-source-row-missing" };
+    }
+    const target = {
+      data: targetCoordinate.data,
+      dataIndex: targetCoordinate.dataIndex,
+      seriesIndex: targetCoordinate.seriesIndex,
+      targetData: targetData.slice(0, 3),
+      type: line.type,
+      x: targetCoordinate.x,
+      y: targetCoordinate.y,
+    };
+    const distance = (left, right) => Math.hypot(left.x - right.x, left.y - right.y);
+    const lineNeighbors = [];
+    for (const direction of [-1, 1]) {
+      for (let offset = 1; offset < data.length; offset += 1) {
+        const candidateIndex = dataIndex + direction * offset;
+        if (candidateIndex < 0 || candidateIndex >= data.length) break;
+        const candidate = data[candidateIndex];
+        if (
+          !Array.isArray(candidate) ||
+          typeof candidate[1] !== "number" ||
+          typeof candidate[2] !== "number"
+        ) {
+          continue;
+        }
+        const coordinate = resolvePoint(seriesIndex, candidateIndex);
+        if (coordinate) {
+          lineNeighbors.push({
+            dataIndex: candidateIndex,
+            distancePx: distance(target, coordinate),
+            sourceRowIndex: candidate[2],
+          });
+          break;
+        }
+      }
+    }
+
+    const scatterIndex = series.findIndex((entry) =>
+      entry?.type === "scatter" && Array.isArray(entry.data)
+    );
+    const scatter = scatterIndex < 0 ? [] : series[scatterIndex].data;
+    const scatterCandidates = scatter
+      .map((row, index) => ({
+        dataIndex: index,
+        row,
+        xDistance: Array.isArray(row) && typeof row[0] === "number"
+          ? Math.abs(row[0] - targetData[0])
+          : Number.POSITIVE_INFINITY,
+      }))
+      .filter((candidate) =>
+        Array.isArray(candidate.row) &&
+        typeof candidate.row[1] === "number" &&
+        typeof candidate.row[2] === "number" &&
+        Number.isFinite(candidate.xDistance)
+      )
+      .sort((left, right) => left.xDistance - right.xDistance)
+      .slice(0, 16)
+      .map((candidate) => {
+        const coordinate = resolvePoint(scatterIndex, candidate.dataIndex);
+        return coordinate
+          ? {
+              dataIndex: candidate.dataIndex,
+              distancePx: distance(target, coordinate),
+              sourceRowIndex: candidate.row[2],
+            }
+          : null;
+      })
+      .filter(Boolean);
+
+    const nearestLineNeighbor = lineNeighbors
+      .sort((left, right) => left.distancePx - right.distancePx)[0] ?? null;
+    const nearestScatter = scatterCandidates
+      .sort((left, right) => left.distancePx - right.distancePx)[0] ?? null;
+    const competitorDistances = [
+      nearestLineNeighbor?.distancePx,
+      nearestScatter?.distancePx,
+    ].filter((value) => typeof value === "number" && Number.isFinite(value));
+    const zoom = Array.isArray(option?.dataZoom) ? option.dataZoom[0] : null;
+    const start = Number(zoom?.start);
+    const end = Number(zoom?.end);
+    const zoomRange = Number.isFinite(start) && Number.isFinite(end) && end > start
+      ? { start, end, span: end - start }
+      : null;
+
     return {
-      data: coordinate.data,
-      dataIndex: coordinate.dataIndex,
-      seriesIndex: coordinate.seriesIndex,
-      targetData: target.slice(0, 3),
-      type: series[seriesIndex].type,
-      x: coordinate.x,
-      y: coordinate.y,
+      available: zoomRange !== null && competitorDistances.length > 0,
+      nearestCompetitorDistancePx: competitorDistances.length > 0
+        ? Math.min(...competitorDistances)
+        : null,
+      nearestLineNeighbor,
+      nearestScatter,
+      reason: zoomRange === null ? "applied-data-zoom-range-missing" : null,
+      target,
+      zoomRange,
     };
   }, { rowId: expected.rowId, seriesType: expected.seriesType });
-  if (
-    !coordinateTarget ||
-    coordinateTarget.dataIndex < 0 ||
-    coordinateTarget.data?.[2] !== expected.rowId ||
-    coordinateTarget.targetData?.[2] !== expected.rowId ||
-    coordinateTarget.type !== expected.seriesType ||
-    !Number.isFinite(coordinateTarget.x) ||
-    !Number.isFinite(coordinateTarget.y)
-  ) {
+
+  if (!evidence?.available) {
     throw new Error(
-      `Could not resolve rendered row ${expected.rowId} to its actual ECharts coordinate: ${JSON.stringify(coordinateTarget)}`,
+      "Could not measure actual chart point spacing for source row " +
+        expected.rowId + ": " + JSON.stringify(evidence),
     );
   }
+  return evidence;
+}
+
+async function zoomFrequencyDomainPoint(page, host, expected, fixture) {
+  const minimumCompetitorDistancePx = 14;
+  const maximumWheelSteps = 80;
+  const wheelDeltaY = -120;
+  let evidence = await inspectFrequencyDomainPointSpacing(page, expected);
+  const initialRange = evidence.zoomRange;
+  const wheelSteps = [];
+
+  while (
+    evidence.nearestCompetitorDistancePx < minimumCompetitorDistancePx &&
+    wheelSteps.length < maximumWheelSteps
+  ) {
+    const previousRange = evidence.zoomRange;
+    const target = evidence.target;
+    await page.mouse.move(target.x, target.y);
+    await page.keyboard.down("Control");
+    try {
+      await page.mouse.wheel(0, wheelDeltaY);
+      await page.waitForFunction(
+        (previousSpan) => {
+          const option = window.__FULLMAG_CHART_DIAGNOSTICS__?.readRenderedOption?.();
+          const zoom = Array.isArray(option?.dataZoom) ? option.dataZoom[0] : null;
+          const start = Number(zoom?.start);
+          const end = Number(zoom?.end);
+          return Number.isFinite(start) && Number.isFinite(end) &&
+            end - start < previousSpan - 0.001;
+        },
+        previousRange.span,
+        { timeout: 1_000 },
+      );
+    } finally {
+      await page.keyboard.up("Control");
+    }
+
+    await inspectFrequencyChartOption(page, fixture);
+    const nextEvidence = await inspectFrequencyDomainPointSpacing(page, expected);
+    if (nextEvidence.zoomRange.span >= previousRange.span - 0.001) {
+      throw new Error(
+        "Ctrl-wheel did not narrow the applied chart range for " + fixture.id +
+          ": " + JSON.stringify(nextEvidence),
+      );
+    }
+    const bounds = await host.boundingBox();
+    if (
+      !bounds ||
+      nextEvidence.target.x < bounds.x ||
+      nextEvidence.target.x > bounds.x + bounds.width ||
+      nextEvidence.target.y < bounds.y ||
+      nextEvidence.target.y > bounds.y + bounds.height
+    ) {
+      throw new Error(
+        "Ctrl-wheel moved the expected source point outside the chart viewport for " +
+          fixture.id + ": " + JSON.stringify(nextEvidence),
+      );
+    }
+    wheelSteps.push({
+      dataIndex: nextEvidence.target.dataIndex,
+      nearestCompetitorDistancePx: nextEvidence.nearestCompetitorDistancePx,
+      nearestLineNeighbor: nextEvidence.nearestLineNeighbor,
+      nearestScatter: nextEvidence.nearestScatter,
+      zoomRange: nextEvidence.zoomRange,
+    });
+    evidence = nextEvidence;
+  }
+
+  if (evidence.nearestCompetitorDistancePx < minimumCompetitorDistancePx) {
+    const screenshot = path.join(
+      acceptanceDirectory,
+      fixture.id + "-point-zoom-failure.png",
+    );
+    mkdirSync(acceptanceDirectory, { recursive: true });
+    await page.screenshot({ path: screenshot }).catch(() => undefined);
+    throw new Error(
+      "Could not isolate rendered source row " + expected.rowId +
+        " with real Ctrl-wheel zoom after " + wheelSteps.length +
+        " steps; screenshot=" + screenshot + "; evidence=" + JSON.stringify({
+          finalRange: evidence.zoomRange,
+          nearestCompetitorDistancePx: evidence.nearestCompetitorDistancePx,
+          nearestLineNeighbor: evidence.nearestLineNeighbor,
+          nearestScatter: evidence.nearestScatter,
+          target: evidence.target,
+          wheelSteps,
+        }),
+    );
+  }
+
+  return {
+    target: evidence.target,
+    evidence: {
+      finalRange: evidence.zoomRange,
+      initialRange,
+      maximumWheelSteps,
+      minimumCompetitorDistancePx,
+      nearestCompetitorDistancePx: evidence.nearestCompetitorDistancePx,
+      nearestLineNeighbor: evidence.nearestLineNeighbor,
+      nearestScatter: evidence.nearestScatter,
+      wheelDeltaY,
+      wheelSteps,
+    },
+  };
+}
+
+async function clickFrequencyDomainPoint(page, expected, fixtureId, fixture) {
+  const host = page.locator(".fm-analysis-plots__echarts").first();
+  await host.evaluate((element) => {
+    element.scrollIntoView({ behavior: "auto", block: "center", inline: "nearest" });
+  });
+  const { target: coordinateTarget, evidence: zoomEvidence } =
+    await zoomFrequencyDomainPoint(page, host, expected, fixture);
 
   const expectedModePath = `${FREQUENCY_DOMAIN_PATHS.modePrefix}${expected.sampleIndex}/${expected.modeIndex}`;
   await page.mouse.move(coordinateTarget.x, coordinateTarget.y);
@@ -1185,6 +1392,7 @@ async function clickFrequencyDomainPoint(page, expected, fixtureId) {
   }
   return {
     coordinateTarget,
+    zoomEvidence,
     expectedModePath,
     fieldId: expected.fieldId,
     modeId: expected.modeId,

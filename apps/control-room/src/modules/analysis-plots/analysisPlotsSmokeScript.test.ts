@@ -134,6 +134,24 @@ describe("analysis plots smoke script", () => {
     expect(smokeScript).toContain("inspectFrequencyChartOption");
     expect(smokeScript).toContain("readRenderedOption");
     expect(smokeScript).toContain("resolveRenderedDataPoint");
+    const zoomHelperStart = smokeScript.indexOf("async function zoomFrequencyDomainPoint(");
+    const zoomHelperEnd = smokeScript.indexOf(
+      "\nasync function clickFrequencyDomainPoint(",
+      zoomHelperStart,
+    );
+    expect(zoomHelperStart).toBeGreaterThanOrEqual(0);
+    expect(zoomHelperEnd).toBeGreaterThan(zoomHelperStart);
+    const zoomHelper = smokeScript.slice(zoomHelperStart, zoomHelperEnd);
+    expect(zoomHelper).toContain('await page.keyboard.down("Control")');
+    expect(zoomHelper).toContain("await page.mouse.wheel(0, wheelDeltaY)");
+    expect(zoomHelper).toContain("inspectFrequencyChartOption(page, fixture)");
+    expect(zoomHelper).toContain("inspectFrequencyDomainPointSpacing(page, expected)");
+    expect(zoomHelper).toContain("nearestCompetitorDistancePx");
+    expect(zoomHelper).not.toContain("dispatchAction");
+    expect(smokeScript).toContain("zoomEvidence");
+    expect(smokeScript).toContain("analysis-frequency-domain-fixture-proof.json");
+    expect(smokeScript).toMatch(/proofs\.push\(proof\);\s*persistFixtureProof\(false\);/);
+    expect(smokeScript).toContain("persistFixtureProof(true)");
     expect(smokeScript).toContain("lastRenderedClick");
     expect(smokeScript).toContain("requireDispersionRenderEvidence");
     expect(smokeScript).toContain("nonNullPointCount !== 5_000");
