@@ -303,7 +303,7 @@ mod tests {
                 "id": "magnet-1",
                 "name": "Film",
                 "geometry": {"geometry_kind": "box", "geometry_params": {"size": [1.0, 1.0, 1.0]}},
-                "material_ref": "missing-material"
+                "material_ref": ""
             }))
             .expect("typed draft object should deserialize"),
         );
@@ -314,6 +314,14 @@ mod tests {
 
         assert_eq!(snapshot.scene_document.as_ref(), Some(&original));
         assert!(snapshot.builder_adapter.is_none());
+
+        let mut dangling_reference = original;
+        dangling_reference.objects[0].material_ref = "missing-material".to_string();
+        let error = restore_authoring_snapshot(dangling_reference, "old-session-18")
+            .err()
+            .expect("an unassigned material is allowed, but a dangling reference is not");
+        assert_eq!(error.status, axum::http::StatusCode::BAD_REQUEST);
+        assert!(error.message.contains("references missing material"));
     }
 
     #[test]

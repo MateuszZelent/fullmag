@@ -27219,8 +27219,10 @@ async fn session_import_replace_project_reports_semantic_differences_without_com
         )
         .await
         .unwrap();
-    assert_eq!(export_response.status(), StatusCode::OK);
-    let fms_base64 = body_json(export_response).await["fms_base64"]
+    let export_status = export_response.status();
+    let export_json = body_json(export_response).await;
+    assert_eq!(export_status, StatusCode::OK, "{export_json}");
+    let fms_base64 = export_json["fms_base64"]
         .as_str()
         .expect("export must include fms payload")
         .to_string();
@@ -30016,6 +30018,7 @@ async fn artifacts_list_returns_304_when_etag_matches() {
 #[tokio::test]
 async fn antenna_result_resources_publish_metadata_and_etags() {
     let state = test_app_state_with_live_session().await;
+    let magnet_target_signature = format!("sha256:{}", "4".repeat(64));
     let artifact_dir = std::env::temp_dir().join(format!(
         "fullmag-antenna-result-resources-{}",
         uuid_v4_hex()
@@ -30072,11 +30075,11 @@ async fn antenna_result_resources_publish_metadata_and_etags() {
             "gauge_policy": "zero_mean",
             "solver_policy": {"linear": "cg"},
             "signatures": {
-                "current_solution_signature": "sha256:current",
-                "field_solution_signature": "sha256:field",
+                "current_solution_signature": format!("sha256:{}", "1".repeat(64)),
+                "field_solution_signature": format!("sha256:{}", "2".repeat(64)),
                 "target_projection_signatures": {
-                    "global": "sha256:global-target",
-                    "magnet": "sha256:magnet-target"
+                    "global": format!("sha256:{}", "3".repeat(64)),
+                    "magnet": magnet_target_signature
                 }
             },
             "conductor_positions": conductor_positions,
@@ -30098,7 +30101,11 @@ async fn antenna_result_resources_publish_metadata_and_etags() {
                 "electric_potential_per_ampere": potential,
                 "current_density_per_ampere": current,
                 "magnetic_field_per_ampere": magnetic,
-                "quadrature_diagnostics": {"order": 2}
+                "oersted_operator_version": fullmag_ir::ANTENNA_VECTOR_POTENTIAL_OPERATOR_VERSION,
+                "quadrature_diagnostics": {
+                    "order": 2,
+                    "operator_version": fullmag_ir::ANTENNA_VECTOR_POTENTIAL_OPERATOR_VERSION
+                }
             }]
         });
     field_manifest["content_digest"] = serde_json::json!(format!(
@@ -30189,7 +30196,7 @@ async fn antenna_result_resources_publish_metadata_and_etags() {
     assert!(field_json["target_projection_signature"].is_null());
     assert_eq!(
         field_json["signatures"]["target_projection_signatures"]["magnet"],
-        "sha256:magnet-target"
+        magnet_target_signature
     );
 
     let field_not_modified = app
@@ -30283,10 +30290,42 @@ async fn antenna_result_resources_publish_metadata_and_etags() {
         fs::write(&field_manifest_path, serde_json::to_vec(&manifest).unwrap())
             .expect("write rehashed field solution manifest");
     };
+    let mut missing_operator = field_manifest.clone();
+    missing_operator["bases"][0].as_object_mut().unwrap().remove("oersted_operator_version");
+    write_rehashed_field_manifest(missing_operator);
+    let response = app.clone().oneshot(
+        Request::builder().uri(field_payload_uri)
+            .header("if-none-match", field_payload_etag.clone())
+            .body(Body::empty()).unwrap(),
+    ).await.unwrap();
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+    let mut mismatched_operator = field_manifest.clone();
+    mismatched_operator["bases"][0]["quadrature_diagnostics"]["operator_version"] =
+        serde_json::json!(fullmag_ir::ANTENNA_DIRECT_OERSTED_OPERATOR_VERSION);
+    write_rehashed_field_manifest(mismatched_operator);
+    let response = app.clone().oneshot(
+        Request::builder().uri(field_payload_uri)
+            .header("if-none-match", field_payload_etag.clone())
+            .body(Body::empty()).unwrap(),
+    ).await.unwrap();
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
     let mut legacy_manifest = field_manifest.clone();
+    let mut invalid_signature = field_manifest.clone();
+    invalid_signature["signatures"]["current_solution_signature"] =
+        serde_json::json!("sha256:current");
+    write_rehashed_field_manifest(invalid_signature);
+    let response = app.clone().oneshot(
+        Request::builder().uri(field_payload_uri)
+            .header("if-none-match", field_payload_etag.clone())
+            .body(Body::empty()).unwrap(),
+    ).await.unwrap();
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
     let mut single_target_manifest = field_manifest.clone();
     single_target_manifest["signatures"]["target_projection_signatures"] =
-        serde_json::json!({"magnet": "sha256:magnet-target"});
+        serde_json::json!({"magnet": magnet_target_signature});
     write_rehashed_field_manifest(single_target_manifest);
     let single_target_response = app.clone().oneshot(
         Request::builder()
@@ -30296,7 +30335,7 @@ async fn antenna_result_resources_publish_metadata_and_etags() {
     assert_eq!(single_target_response.status(), StatusCode::OK);
     let single_target_json = body_json(single_target_response).await;
     assert!(single_target_json["target_projection_signature"].is_null());
-    assert_eq!(single_target_json["signatures"]["target_projection_signatures"]["magnet"], "sha256:magnet-target");
+    assert_eq!(single_target_json["signatures"]["target_projection_signatures"]["magnet"], magnet_target_signature);
     legacy_manifest.as_object_mut().unwrap().remove("sample_carrier");
     write_rehashed_field_manifest(legacy_manifest);
     let legacy_response = app.clone().oneshot(

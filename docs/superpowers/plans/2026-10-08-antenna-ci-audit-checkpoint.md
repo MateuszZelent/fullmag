@@ -906,3 +906,43 @@ hosta i nie wykonano lokalnej kompilacji testów Rust. Whitespace PASS.
 Następny krok: odebrać CI nowego HEAD i siedem rzeczywistych regresji API;
 diagnozować trzy pozostałe błędy osobno. Pełne current→field→basis→LLG/FFT,
 WebGL, kierunkowy kontrakt Gamma oraz T00–T18 pozostają otwarte.
+
+## T01/T14 — fixture zgodne z aktualną walidacją
+
+Baza `191a170c5eb356afde3bf0a4942c30cd1725977f`. Job frontendu
+113176097395 zakończył się SUCCESS. Rust 113176097997 pozostaje
+`in_progress` przy ostatnim odczycie; nie zastępujemy jego wyniku
+lokalnym source check ani nie restartujemy joba na podstawie czasu.
+
+Fixture development restore używa teraz nieprzypisanego materiału
+(`material_ref=""`) zamiast dangling ID. Aktualny authoring validator
+pozwala na brak assignment, lecz odrzuca istniejącą referencję do brakującego
+assetu. Dodano asercję BAD_REQUEST dla dangling ID; produkcyjny walidator
+i restore pozostają bez zmian.
+
+Fixture field metadata/ETag podaje pełne 64-znakowe podpisy SHA-256,
+wersję operatora vector-potential i odpowiadające diagnostics. To syntetyczny
+test API, nie dowód wykonania OE-F2 ani kwalifikacji direct v3. Dodano trzy
+odmowy kompletnie przehashowanego manifestu: brak operatora, niezgodny
+operator diagnostics i niepoprawny podpis. Każda wysyła conditional request
+z ETag; brak kwalifikacji nie może skończyć się 304. Pozostałe asercje
+shape, unit, normalizacji, payloadów i provenance zachowano.
+Test eksportu/importu zachowuje status 200, ale drukuje treść błędu przy
+odmowie, aby następne CI ujawniło przyczynę dotychczasowego 500.
+
+Weryfikacja źródłowa: baseline RED → aktualny GREEN dla danych fixture;
+liczność asercji field testu wzrosła z 44 do 47. Rustfmt `--emit stdout`
+parsuje oba pliki (exit 0) bez ich przepisywania. Whitespace PASS.
+Testów Rust nie kompilowano ani nie uruchamiano lokalnie; wymagany odbiór CI.
+
+Niezależny audyt źródeł wskazuje, że publikacja raw snapshot/evidence i
+dołączanie bazy do interactive observation już istnieją. Następna rzeczywista
+bramka T06/T12 wymaga wykonania regular publish → cold load → reuse,
+nie ponownej implementacji tych funkcji. Main potwierdził w kodzie:
+`direct_quadrature.rs::DirectOerstedSnapshot::validate` używa hostowego
+`hypot`/`mul_add` i dokładnej równości bitów tolerancji; matched-libm reader
+Python jawnie zapisuje `producer_math_qualified=False`. Zgodność producenta,
+Rust cold readera i niezależnego czytnika pozostaje niewykazana. Nie zmieniano
+progów, nie dodano ULP slack i nie promowano RAM inspection do qualified basis.
+Po odbiorze CI potrzebny jest przypięty managed runtime i regularny asset,
+a potem compute_fields, Run oraz FFT na tym samym assetcie, osobno dla lanes.
