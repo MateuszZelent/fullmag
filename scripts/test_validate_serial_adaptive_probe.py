@@ -380,7 +380,11 @@ class SerialAdaptiveProbeTests(unittest.TestCase):
                 for root in (serial, adaptive):
                     path = _artifact_dir(root) / relative
                     path.write_bytes(path.read_bytes() + b" ")
-                with self.assertRaisesRegex(ValidationError, "receipt-bound artifact failed"):
+                # Metadata also binds the managed output location; that earlier
+                # integrity gate rejects it before the numeric catalog is read.
+                rejection = ("runtime_output_binding differs" if relative == "metadata.json"
+                             else "receipt-bound artifact failed")
+                with self.assertRaisesRegex(ValidationError, rejection):
                     validate_serial_adaptive_probe(serial, adaptive)
 
     def test_missing_numeric_artifact_binding_is_not_verified(self) -> None:
