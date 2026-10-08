@@ -133,6 +133,15 @@ Actions (lokalny zakaz kompilacji testów obowiązuje).
 
 ### Etap 1 — rejestr modułów analizy (bez zmian w UI)
 
+Stan: **wdrożone w źródłach** (`apps/control-room/src/kernel/analysis-modules/`,
+`modules/analysis-{dispersion,resonance,time-domain}/`). Dopasowanie korzysta z
+ról osi, które backend już publikuje (`wavevector`, `spectral`,
+`outer_sweep`) i z ich liczebności: ścieżka k (≥ 2 wartości osi
+`wavevector`) → dyspersja; brak osi k lub jedna wartość → rezonans. Testy:
+`analysisDatasetMatching.test.ts`, uruchamiane w GitHub Actions. Lokalnie:
+typecheck nowych plików i ESLint bez uwag. Moduły histerezy i transmisji nie
+są zarejestrowane, dopóki backend nie publikuje ich `product_kind`.
+
 - Typy z spec 32 §2–4, rejestr manifestów obok `REGISTERED_MODULES`,
   funkcja dopasowania zbiorów.
 - Odbiór: testy dopasowania dla zbiorów pasujących, niepasujących i bez
