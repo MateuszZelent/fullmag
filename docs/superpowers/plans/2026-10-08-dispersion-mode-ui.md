@@ -9,7 +9,7 @@
 | U3 — punkt → mod | Zrealizowane dla demonstratora | Browser PASS dla ujemnego k, Gamma i dodatniego k |
 | U4 — pola zespolone | Zrealizowane dla demonstratora | Browser real/imag/abs/phase, faza, animacja, Focus, WebGL PASS |
 | U5 — małe obliczenie | Zrealizowane w zakresie UI | 7/7 FEM, 38,3 s; bez certyfikacji kompletności okna i zbieżności |
-| U6 — weryfikacja | Weryfikacja końcowa | CI `37832383619` SUCCESS; browser trzech próbek PASS; regresje ostatniego fragmentu skali wymagają końcowego CI |
+| U6 — weryfikacja | Zrealizowane dla demonstratora UI | Końcowe CI `37837018916` SUCCESS; realny browser −25/Gamma/+25 PASS; source/types/lint/Doctor PASS |
 | U7 — dostarczenie/integracja | Review / częściowo zrealizowane | Commity/push wykonane; merge całego odziedziczonego solvera do mastera pozostaje zablokowany jego szerszym zakresem i bramkami S00–S12 |
 
 Wynik jest przeznaczony do demonstracji UI. Brak `geometry_identity` jest
@@ -354,3 +354,22 @@ frontend types/contracts/lint/Doctor PASS; pojedynczy stary assert konsumenta
 nowego range. Uaktualniono oczekiwanie Frequency/Hz i range 2.95–4.05e9;
 pozostawiono asercję niezmienionych danych SI 3e9/4e9. To korekta testu,
 bez zmiany produkcji; browser/source dowody zachowują ważność.
+
+## Końcowy odbiór etapu UI — 08.10.2026
+
+Kod i regresje zapisane/pushed w `ecdb05b9121b136055298e161eda2f9976bf9b31`
+(po produkcyjnym fragmencie `2c4c419b77d3b0a4b2817091b53ce22ca0e28ff8`).
+[CI 37837018916](https://github.com/MateuszZelent/fullmag/actions/runs/37837018916)
+**SUCCESS**: frontend, capture-contract i native-resource-contracts.
+Typy, kontrakty, lint, React Doctor i regresje przeszły; nie uruchamiano unit tests lokalnie.
+Końcowy checkpoint dokumentacyjny nie zmienia źródeł produkcyjnych/testów;
+korzysta z tych nadal ważnych dowodów, bez powtarzania niezmienionych testów.
+
+U1–U6 odebrane **w zakresie demonstratora UI**, zgodnie z tabelą bieżącego
+stanu. Pozostałe bramki nauki i S00–S12 nie są przez to uznane za ukończone.
+U7/cały cykl integracji pozostaje blocked z opisanymi zależnościami; brak merge do mastera.
+Worktree zachowane, bez cudzych zmian. Własny native workspace nadal running,
+UI [3199](http://localhost:3199/workspace?fullmag_api_instance=04b93eba-4173-4940-a873-b71b5844de49),
+API 8081, session `session-1791485157444-190`, completed/read_only, 2669 komórek.
+Rejestr `storage/index/dispersion-mode-ui-20261008-9aae306a4b5f5e7d.json`
+przechowuje tożsamość brancha/HEAD, powód retencji i kolejny krok.
