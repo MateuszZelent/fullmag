@@ -164,7 +164,10 @@ describe("chart renderer owner", () => {
 
     expect(option.series).toEqual([
       expect.objectContaining({
-        itemStyle: { color: "green" },
+        emphasis: expect.objectContaining({
+          itemStyle: { color: "green" },
+        }),
+        itemStyle: { color: "transparent" },
         lineStyle: { color: "green", width: 1.5 },
       }),
     ]);

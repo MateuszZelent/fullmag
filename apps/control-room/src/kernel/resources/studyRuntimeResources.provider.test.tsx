@@ -271,9 +271,9 @@ describe("production runtime command resource provider", () => {
         expect(container.textContent).toBe("run-a|run-a");
       });
 
+      await act(async () => refetchStatus());
+      await vi.waitFor(() => expect(statusLoad).toHaveBeenCalledTimes(2));
       await act(async () => {
-        refetchStatus();
-        await vi.waitFor(() => expect(statusLoad).toHaveBeenCalledTimes(2));
         nextRunStatus.resolve(statusAt(2, { run_id: "run-b" }));
         await nextRunStatus.promise;
       });
@@ -380,10 +380,8 @@ describe("production runtime command resource provider", () => {
         expect(latestStageExecution?.data?.run_id).toBe("run-a");
       });
 
-      await act(async () => {
-        refetchStatus();
-        await vi.waitFor(() => expect(statusLoad).toHaveBeenCalledTimes(2));
-      });
+      await act(async () => refetchStatus());
+      await vi.waitFor(() => expect(statusLoad).toHaveBeenCalledTimes(2));
       await vi.waitFor(() => {
         expect(latestStatusState).toBe("stale");
         expect(latestStatusRefreshError).toBe(statusFailure);
@@ -391,9 +389,9 @@ describe("production runtime command resource provider", () => {
         expect(container.textContent).toBe("run-a");
       });
 
+      await act(async () => refetchStatus());
+      await vi.waitFor(() => expect(statusLoad).toHaveBeenCalledTimes(3));
       await act(async () => {
-        refetchStatus();
-        await vi.waitFor(() => expect(statusLoad).toHaveBeenCalledTimes(3));
         nextRunStatus.resolve(statusAt(2, { run_id: "run-b" }));
         await nextRunStatus.promise;
       });
