@@ -20,6 +20,7 @@ import {
 import {
   resetSharedResourceRuntimeStoreForTests,
   sharedResourceRuntimeStore,
+  type ResourceRetryPolicy,
 } from "@/kernel/resources/ResourceRuntimeStore";
 import {
   useResource,
@@ -31,6 +32,64 @@ const useResourceSource = readFileSync(
   join(process.cwd(), "src/kernel/resources/useResource.ts"),
   "utf8",
 );
+
+type DeadlineTestResource = { source: string };
+type DeadlineTestLoad = (context: { signal: AbortSignal }) =>
+  Promise<DeadlineTestResource>;
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
+async function mountDeadlineTestResource({
+  load,
+  resourceKey,
+  retryPolicy,
+}: {
+  load: DeadlineTestLoad;
+  resourceKey: string;
+  retryPolicy?: ResourceRetryPolicy | null;
+}) {
+  const dom = installSimulationPreparationTestDom();
+  const container = dom.document.createElement("div");
+  dom.document.body.appendChild(container);
+  const bus = new EventBus<KernelEventMap>();
+  const resources = new ResourceInvalidationController(bus);
+  const kernel = {
+    api: {},
+    bus,
+    diagnosticRecorder: new DiagnosticRecorderController({ config: { enabled: false } }),
+    resources,
+  } as unknown as KernelApi;
+  const root = createRoot(container as unknown as Element);
+
+  function Harness() {
+    const resource = useResource({ load, resourceKey, retryPolicy });
+    return <div>{`${resource.status}:${resource.data?.source ?? ""}`}</div>;
+  }
+
+  await act(async () => {
+    root.render(
+      <KernelContext.Provider value={kernel}>
+        <Harness />
+      </KernelContext.Provider>,
+    );
+  });
+
+  return {
+    container,
+    async unmount() {
+      await act(async () => root.unmount());
+      dom.restore();
+    },
+  };
+}
 
 describe("useResource loader callback", () => {
   afterEach(() => {
@@ -372,6 +431,157 @@ describe("useResource loader callback", () => {
     } finally {
       await act(async () => root.unmount());
       dom.restore();
+    }
+  });
+
+  it("keeps the default resource load active after 5 seconds and accepts success before 30", async () => {
+    vi.useFakeTimers();
+    const pending = deferred<DeadlineTestResource>();
+    const signals: AbortSignal[] = [];
+    const load = vi.fn(({ signal }: { signal: AbortSignal }) => {
+      signals.push(signal);
+      signal.addEventListener(
+        "abort",
+        () => pending.reject(new DOMException("deadline", "AbortError")),
+        { once: true },
+      );
+      return pending.promise;
+    });
+    const mounted = await mountDeadlineTestResource({
+      load,
+      resourceKey: "test:default-deadline-success",
+    });
+
+    try {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(load).toHaveBeenCalledTimes(1);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5_000);
+      });
+      expect(signals[0]?.aborted).toBe(false);
+      expect(mounted.container.textContent).toContain("loading:");
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10_000);
+      });
+      expect(signals[0]?.aborted).toBe(false);
+
+      await act(async () => {
+        pending.resolve({ source: "ready" });
+        await pending.promise;
+      });
+      expect(mounted.container.textContent).toContain("ready:ready");
+    } finally {
+      await mounted.unmount();
+    }
+  });
+
+  it("aborts a default resource load at the 30-second deadline", async () => {
+    vi.useFakeTimers();
+    const pending = deferred<DeadlineTestResource>();
+    const signals: AbortSignal[] = [];
+    const load = vi.fn(({ signal }: { signal: AbortSignal }) => {
+      signals.push(signal);
+      signal.addEventListener(
+        "abort",
+        () => pending.reject(new DOMException("deadline", "AbortError")),
+        { once: true },
+      );
+      return pending.promise;
+    });
+    const mounted = await mountDeadlineTestResource({
+      load,
+      resourceKey: "test:default-deadline-abort",
+    });
+
+    try {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(29_999);
+      });
+      expect(signals[0]?.aborted).toBe(false);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1);
+      });
+      expect(signals[0]?.aborted).toBe(true);
+      expect(mounted.container.textContent).toContain("error:");
+    } finally {
+      await mounted.unmount();
+    }
+  });
+
+  it("preserves explicit short and disabled retry deadlines", async () => {
+    vi.useFakeTimers();
+
+    const shortPending = deferred<DeadlineTestResource>();
+    const shortSignals: AbortSignal[] = [];
+    const shortLoad = vi.fn(({ signal }: { signal: AbortSignal }) => {
+      shortSignals.push(signal);
+      signal.addEventListener(
+        "abort",
+        () => shortPending.reject(new DOMException("deadline", "AbortError")),
+        { once: true },
+      );
+      return shortPending.promise;
+    });
+    const shortMounted = await mountDeadlineTestResource({
+      load: shortLoad,
+      resourceKey: "test:explicit-short-deadline",
+      retryPolicy: {
+        deadlineMs: 200,
+        maxAttempts: 3,
+        retryAfterMs: 1_000,
+        retryableReasonCodes: ["field_pending"],
+      },
+    });
+
+    try {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(199);
+      });
+      expect(shortSignals[0]?.aborted).toBe(false);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1);
+      });
+      expect(shortSignals[0]?.aborted).toBe(true);
+    } finally {
+      await shortMounted.unmount();
+    }
+
+    const noDeadlinePending = deferred<DeadlineTestResource>();
+    const noDeadlineSignals: AbortSignal[] = [];
+    const noDeadlineLoad = vi.fn(({ signal }: { signal: AbortSignal }) => {
+      noDeadlineSignals.push(signal);
+      signal.addEventListener(
+        "abort",
+        () => noDeadlinePending.reject(new DOMException("unmounted", "AbortError")),
+        { once: true },
+      );
+      return noDeadlinePending.promise;
+    });
+    const noDeadlineMounted = await mountDeadlineTestResource({
+      load: noDeadlineLoad,
+      resourceKey: "test:disabled-deadline",
+      retryPolicy: null,
+    });
+
+    try {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(30_000);
+      });
+      expect(noDeadlineSignals[0]?.aborted).toBe(false);
+      expect(noDeadlineMounted.container.textContent).toContain("loading:");
+
+      await act(async () => {
+        noDeadlinePending.resolve({ source: "ready" });
+        await noDeadlinePending.promise;
+      });
+      expect(noDeadlineMounted.container.textContent).toContain("ready:ready");
+    } finally {
+      await noDeadlineMounted.unmount();
     }
   });
 

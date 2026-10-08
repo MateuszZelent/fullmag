@@ -162,6 +162,20 @@ const objectMetrics: ObjectMetricsResource = {
 };
 
 describe("FooterTelemetry", () => {
+  it("distinguishes unavailable energy observables from a measured zero", () => {
+    const missing = buildFooterTelemetryModel(null, null);
+    for (const metric of missing.metrics.filter((entry) => entry.id.startsWith("energy-"))) {
+      expect(metric.value).toBe("—");
+    }
+    const measured = buildFooterTelemetryModel(null, {
+      ...objectMetrics,
+      energies: { ...objectMetrics.energies, exchange: 0, total: 0 },
+    });
+    const byId = Object.fromEntries(measured.metrics.map((metric) => [metric.id, metric]));
+    expect(byId["energy-exchange"]?.value).toBe("0.000000e+0");
+    expect(byId["energy-total"]?.value).toBe("0.000000e+0");
+  });
+
   it("builds a responsive metric model from live status and object metrics", () => {
     const telemetryStatus = selectFooterTelemetryStatus({
       data: status,

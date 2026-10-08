@@ -1041,6 +1041,7 @@ export function buildEigenSpectrumChartModel(
     series: [
       {
         id: "analysis.frequency-domain:eigen:spectrum:frequency",
+        kind: "scatter",
         label: "Eigen frequency",
         points: points.map((point, rowIndex) => ({
           rowIndex,

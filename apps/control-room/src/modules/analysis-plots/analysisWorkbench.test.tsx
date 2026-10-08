@@ -178,9 +178,39 @@ describe("Analysis workbench", () => {
   it("renders each selected workbench surface", () => {
     for (const activeSurface of ["dynamics", "resonance-fmr", "dispersion", "hysteresis", "comparison"] as const) {
       const html = renderToStaticMarkup(<AnalysisPlotsView {...props} activeSurface={activeSurface} />);
-      if (activeSurface === "comparison") expect(html).not.toContain('aria-label="Analysis dataset"');
-      else expect(html).toContain('aria-label="Analysis dataset"');
+      if (activeSurface === "comparison" || activeSurface === "resonance-fmr" || activeSurface === "dispersion") {
+        expect(html).not.toContain('aria-label="Analysis dataset"');
+      } else {
+        expect(html).toContain('aria-label="Analysis dataset"');
+      }
     }
+  });
+
+  it("uses the published frequency artifact without a duplicate table picker or dataset provenance header", () => {
+    const frequencyHtml = renderToStaticMarkup(
+      <AnalysisPlotsView
+        {...props}
+        activeSurface="dispersion"
+        activeSubview="dispersion.modal"
+        frequencyDomainProvenance="eigen/spectrum.v2 · revision undefined"
+        selectedDatasetRef="table-a"
+      />,
+    );
+    const tableHtml = renderToStaticMarkup(
+      <AnalysisPlotsView
+        {...props}
+        activeSurface="dynamics"
+        activeSubview="dynamics.time-traces"
+        selectedDatasetRef="table-a"
+        table={tableFixture("table-a", 7)}
+      />,
+    );
+
+    expect(frequencyHtml).not.toContain('aria-label="Analysis dataset"');
+    expect(frequencyHtml).not.toContain("Dataset provenance:");
+    expect(frequencyHtml).toContain('data-analysis-subview="dispersion.modal"');
+    expect(tableHtml).toContain('aria-label="Analysis dataset"');
+    expect(tableHtml).toContain("Dataset provenance: table-a · revision 7");
   });
 
   it("renders the controlled subview instead of deriving a decorative value from calculation mode", () => {
@@ -545,7 +575,7 @@ describe("Analysis workbench", () => {
     expect(html).not.toContain("Compatibility verdict: Compatible");
   });
 
-  it("renders surface-specific provenance for all five surfaces", () => {
+  it("keeps dataset provenance in the header only for non-frequency surfaces", () => {
     const expected: Record<string, string | null> = {
       comparison: null, dynamics: "table-a · revision 7",
       dispersion: "dynamic-structure-factor",
@@ -553,7 +583,8 @@ describe("Analysis workbench", () => {
     };
     for (const [surface, provenance] of Object.entries(expected)) {
       const html = renderToStaticMarkup(<AnalysisPlotsView {...props} activeSurface={surface as never} selectedDatasetRef="table-a" table={tableFixture("table-a", 7)} frequencyDomainProvenance={provenance} surfaceProvenance={{ dispersion: provenance!, hysteresis: provenance! }} /> as never);
-      if (provenance) expect(html).toContain(provenance);
+      if (provenance && surface !== "dispersion" && surface !== "resonance-fmr") expect(html).toContain(provenance);
+      if (surface === "dispersion" || surface === "resonance-fmr") expect(html).not.toContain("Dataset provenance:");
       if (surface !== "dynamics") expect(html).not.toContain("Dataset provenance: table-a");
     }
   });

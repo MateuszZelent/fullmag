@@ -16,6 +16,8 @@ export interface ChartSectionStatus {
   primary: string;
   /** Whether this status is an error/alert condition */
   isAlert?: boolean;
+  /** Show visible/requested resource revisions beside the status (default: true). */
+  showRevision?: boolean;
   /** Scientific qualification carried by the analysis resource. */
   trust?: ChartScientificTrust;
   /** Revision or cursor position */
@@ -121,12 +123,12 @@ export function ChartSection({
                 {status.pointSummary}
               </span>
             ) : null}
-            {displayedStatus.revision != null ? (
+            {status?.showRevision !== false && displayedStatus.revision != null ? (
               <span className="fm-chart-section__revision">
                 rev {displayedStatus.revision}
               </span>
             ) : null}
-            {displayedStatus.requestedRevision != null ? (
+            {status?.showRevision !== false && displayedStatus.requestedRevision != null ? (
               <span className="fm-chart-section__revision">
                 → {displayedStatus.requestedRevision}
               </span>

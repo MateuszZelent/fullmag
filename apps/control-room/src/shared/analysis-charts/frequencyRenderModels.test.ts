@@ -87,6 +87,31 @@ describe("frequency render models", () => {
     expect(model.yAxes[0]?.label).toBe("Amplitude [a.u.]");
   });
 
+  it("keeps discrete fixed-k modes as visible, selectable scatter marks", () => {
+    const modeSeries: FrequencyDomainChartSeries = {
+      id: "modal-spectrum",
+      kind: "scatter",
+      label: "Eigen frequency",
+      points: [{ rowIndex: 0, x: 0, y: 11.194 }],
+      quantity: "frequency",
+      source,
+      status: "ready",
+      unit: "GHz",
+      xUnit: "1",
+    };
+    const option = chartRenderModelToEChartsOption(
+      frequencySeriesRenderModel([modeSeries], "Eigenfrequencies at fixed k", "mode index"),
+    );
+    expect(option.series).toEqual([
+      expect.objectContaining({
+        data: [[0, 11.194, 0]],
+        showSymbol: true,
+        symbol: "circle",
+        type: "scatter",
+      }),
+    ]);
+  });
+
   it("keeps an analytic dispersion overlay with the numerical frequency series", () => {
     const pointMetadata = {
       branchId: "acoustic",

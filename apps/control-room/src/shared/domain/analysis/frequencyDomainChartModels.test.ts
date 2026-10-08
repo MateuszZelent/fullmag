@@ -104,6 +104,7 @@ describe("frequencyDomainChartModels", () => {
     expect(model.series[0]?.points).toEqual([
       { rowIndex: 0, x: 3, y: 2.5 },
     ]);
+    expect(model.series[0]?.kind).toBe("scatter");
     expect(model.series[0]?.unit).toBe("GHz");
     expect(model.series[0]?.xUnit).toBe("1");
   });
@@ -575,6 +576,8 @@ describe("frequencyDomainChartModels", () => {
     );
     const numerical = tracked.series.find((series) => series.quantity === "frequency");
     const analytic = tracked.series.find((series) => series.quantity === "analytic_frequency");
+    expect(numerical?.kind).toBe("line");
+    expect(analytic?.kind).toBe("line");
     expect(numerical?.points[1]?.breakBefore).toBe(true);
     expect(analytic?.points[1]?.breakBefore).toBe(true);
 

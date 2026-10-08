@@ -555,7 +555,7 @@ export function buildFooterTelemetryModel(
         label: "Energy",
         subdetail: energySource,
         unit: "J",
-        value: formatScientific(totalEnergy, "0.000000e+0"),
+        value: formatScientific(totalEnergy, "—"),
       },
       {
         detail: "Exchange",
@@ -568,7 +568,7 @@ export function buildFooterTelemetryModel(
           scalarEnergy.exchange ??
             objectMetrics?.energies.exchange ??
             status?.energies?.exchange,
-          "0.000000e+0",
+          "—",
         ),
       },
       {
@@ -582,7 +582,7 @@ export function buildFooterTelemetryModel(
           scalarEnergy.demag ??
             objectMetrics?.energies.demag ??
             status?.energies?.demag,
-          "0.000000e+0",
+          "—",
         ),
       },
       {
@@ -596,7 +596,7 @@ export function buildFooterTelemetryModel(
           scalarEnergy.zeeman ??
             objectMetrics?.energies.zeeman ??
             status?.energies?.zeeman,
-          "0.000000e+0",
+          "—",
         ),
       },
       {
@@ -610,7 +610,7 @@ export function buildFooterTelemetryModel(
           scalarEnergy.anisotropy ??
             objectMetrics?.energies.anisotropy ??
             status?.energies?.anisotropy,
-          "0.000000e+0",
+          "—",
         ),
       },
       {
@@ -624,7 +624,7 @@ export function buildFooterTelemetryModel(
           scalarEnergy.dmi ??
             objectMetrics?.energies.dmi ??
             status?.energies?.dmi,
-          "0.000000e+0",
+          "—",
         ),
       },
     ] satisfies FooterTelemetryMetric[],

@@ -184,8 +184,8 @@ export const AnalysisPlotsView = memo(function AnalysisPlotsView(props: Analysis
       data-analysis-surface={surfaceDescriptor.surface}
     >
       <header className="fm-analysis-plots__header">
-        <div><h3>{surfaceDescriptor.title}</h3>{provenance ? <span>Dataset provenance: {provenance}</span> : null}</div>
-        {surface !== "comparison" ? <Select value={selectedDatasetRef ?? ""} onValueChange={(value) => onDatasetRefChange(value || null)}>
+        <div><h3>{surfaceDescriptor.title}</h3>{!isFrequencySubview && provenance ? <span>Dataset provenance: {provenance}</span> : null}</div>
+        {surface !== "comparison" && !isFrequencySubview ? <Select value={selectedDatasetRef ?? ""} onValueChange={(value) => onDatasetRefChange(value || null)}>
           <SelectTrigger aria-label="Analysis dataset"><SelectValue placeholder="Select a dataset" /></SelectTrigger>
           <SelectContent>{datasetRefs.map((ref) => <SelectItem key={ref} value={ref}>{ref}</SelectItem>)}</SelectContent>
         </Select> : null}

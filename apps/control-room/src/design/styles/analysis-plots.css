@@ -92,9 +92,7 @@
 }
 
 .fm-analysis-plots__physical-context {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  gap: var(--fm-space-1) var(--fm-space-3);
+  display: block;
   min-width: 0;
   padding: var(--fm-space-2) var(--fm-space-3);
   border-bottom: 1px solid var(--fm-border-subtle);
@@ -102,7 +100,22 @@
   font-size: var(--fm-font-size-xs);
 }
 
-.fm-analysis-plots__physical-context > * {
+.fm-analysis-plots__physical-context > summary {
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+
+.fm-analysis-plots__physical-context[open] > summary {
+  margin-bottom: var(--fm-space-2);
+}
+
+.fm-analysis-plots__physical-context-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: var(--fm-space-1) var(--fm-space-3);
+}
+
+.fm-analysis-plots__physical-context-grid > * {
   min-width: 0;
   overflow-wrap: anywhere;
 }
@@ -449,6 +462,15 @@
   flex-shrink: 0;
 }
 
+.fm-chart-section.fm-analysis-plots__subchart--frequency-domain {
+  grid-template-rows:
+    max-content
+    max-content
+    minmax(var(--fm-chart-height-analysis, 360px), max-content)
+    max-content;
+  min-height: max-content;
+}
+
 .fm-chart-section__header {
   display: flex;
   align-items: center;
@@ -543,6 +565,10 @@
   min-width: 0;
   min-height: var(--fm-chart-height-analysis, 360px);
   overflow: hidden;
+}
+
+.fm-chart-section.fm-analysis-plots__subchart--frequency-domain > .fm-chart-section__body {
+  min-height: var(--fm-chart-height-analysis, 360px);
 }
 
 .fm-chart-section__footer {

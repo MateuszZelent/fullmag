@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 
+import { ControlRoomApiError } from "../api/ControlRoomApi";
+
 import type { ObservationFrameResource } from "../api/apiTypes";
 import {
   DATA_OBSERVATION_FRAMES_PATH,
@@ -8,6 +10,7 @@ import {
 } from "../api/apiPaths";
 
 import {
+  handleAbsentObservationFrameStore,
   observationFrameListQuery,
   observationFrameListResourceKey,
   observationFrameListRevision,
@@ -130,5 +133,22 @@ describe("observation frame resource identity", () => {
         status: "ready",
       }),
     ).toBe("field:frame-a:m:29");
+  });
+});
+
+
+describe("optional observation store absence", () => {
+  it("allows only the exact published optional store absence", () => {
+    expect(handleAbsentObservationFrameStore(new ControlRoomApiError(
+      "durable observation run storage was not found", 404, null, "not_found",
+    ))).toBeNull();
+  });
+  it("retains generic missing frames and real storage failures", () => {
+    for (const error of [
+      new ControlRoomApiError("frame was not found", 404, null, "not_found"),
+      new ControlRoomApiError("durable observation run storage was not found", 500, null, "not_found"),
+      new ControlRoomApiError("permission denied", 500, null, "internal_error"),
+      new ControlRoomApiError("corrupt store", 500, null, "internal_error"),
+    ]) expect(() => handleAbsentObservationFrameStore(error)).toThrow(error);
   });
 });

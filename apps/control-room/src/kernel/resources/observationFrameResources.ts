@@ -17,6 +17,7 @@ import type {
 } from "../api/apiTypes";
 import type { DecodedFieldVector } from "../api/codecs/types";
 import { useKernel } from "../KernelContext";
+import { ControlRoomApiError } from "../api/ControlRoomApi";
 
 import { useResource } from "./useResource";
 import { useSessionScopedResourceKey } from "./useSessionScopedResourceKey";
@@ -119,6 +120,18 @@ export function observationFrameMagnetizationRevision(
   );
 }
 
+// Legacy API identifies this optional store absence with an exact message.
+// Other not-found resources and all storage failures remain errors.
+export function handleAbsentObservationFrameStore(error: unknown): null {
+  if (
+    error instanceof ControlRoomApiError &&
+    error.status === 404 &&
+    error.code === "not_found" &&
+    error.message === "durable observation run storage was not found"
+  ) return null;
+  throw error;
+}
+
 export function useObservationFrameListResource({
   cursor = null,
   enabled = true,
@@ -140,11 +153,12 @@ export function useObservationFrameListResource({
   );
   const load = useCallback(
     ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) =>
-      api.data.observationFrames.list(query, { sessionScopeKey, signal }),
+      api.data.observationFrames.list(query, { sessionScopeKey, signal })
+        .catch(handleAbsentObservationFrameStore),
     [api, query],
   );
 
-  return useResource<ObservationFrameListResource>({
+  return useResource<ObservationFrameListResource | null>({
     abortStaleInflight: true,
     enabled: enabled && sessionIdentity !== null,
     load,

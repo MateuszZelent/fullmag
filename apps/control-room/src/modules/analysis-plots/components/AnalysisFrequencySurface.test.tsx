@@ -201,6 +201,17 @@ describe("AnalysisFrequencySurface", () => {
     expect(html).toContain("SI axes: frequency [Hz] → response [1]");
     expect(html).toContain("Display units: frequency [GHz]; response [%]");
     expect(html).toContain("Workflow: Frequency response");
+    expect(html).toContain('<details aria-label="Frequency-domain physical context"');
     expect(html).not.toContain("FMR driven");
+
+    const chartBody = html.match(
+      /<div class="fm-chart-section__body">([\s\S]*?)<\/div><div class="fm-chart-section__footer">/,
+    )?.[1] ?? "";
+    expect(chartBody).toContain('data-testid="chart"');
+    expect(chartBody).not.toContain("Frequency-domain physical context");
+    expect(chartBody).not.toContain("Frequency-domain workbench");
+    expect(html.indexOf('data-testid="chart"')).toBeLessThan(
+      html.indexOf("Frequency-domain physical context"),
+    );
   });
 });

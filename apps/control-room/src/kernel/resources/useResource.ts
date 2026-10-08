@@ -532,7 +532,7 @@ function resolveResourceRetryPolicy(
   if (policy === null) return undefined;
   return (
     policy ?? {
-      deadlineMs: 5_000,
+      deadlineMs: 30_000,
       maxAttempts: 3,
       retryAfterMs: errorRetryDelayMs(),
       retryableReasonCodes: DEFAULT_RESOURCE_RETRYABLE_REASON_CODES,

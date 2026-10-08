@@ -137,6 +137,7 @@ export function AnalysisFrequencySurface({
     descriptor,
     displayUnits ?? {},
     series,
+    presentation,
   );
 
   if (series.length === 0) {
@@ -149,10 +150,10 @@ export function AnalysisFrequencySurface({
       };
       return (
         <ChartSection
+          footer={physicalMetadata}
           title={surfaceTitle}
           status={{ presentation, primary: status, trust: "unknown" }}
         >
-          {physicalMetadata}
           <div
             aria-label="Modal-driven comparison"
             className="fm-analysis-plots__empty fm-analysis-plots__comparison"
@@ -174,15 +175,14 @@ export function AnalysisFrequencySurface({
     }
     return (
       <ChartSection
+        footer={physicalMetadata}
         title={surfaceTitle}
         status={{
           presentation,
           primary: status,
-          sourceIdentity: UNKNOWN_FREQUENCY_SOURCE_IDENTITY,
           trust: "unknown",
         }}
       >
-        {physicalMetadata}
         <div className="fm-analysis-plots__empty" role="status">
           {unavailableReason ?? formatFrequencyDomainEmptyState(status)}
         </div>
@@ -271,6 +271,28 @@ export function AnalysisFrequencySurface({
     </div>
   ) : undefined;
 
+  const workbenchContent = (
+    <div
+      data-analysis-handoff={descriptor.handoff}
+      data-analysis-inspector-route={descriptor.inspectorRouteId}
+      aria-label="Frequency-domain workbench"
+      className="fm-analysis-plots__status fm-analysis-plots__status--frequency-domain-workbench"
+    >
+      <span>{workbench.chartKind}</span>
+      <span>{workbench.pointCount}</span>
+      <span>{workbench.frequencyRange}</span>
+      <span>{workbench.fieldHandoff}</span>
+      <span>{workbench.status}</span>
+    </div>
+  );
+  const footer = (
+    <>
+      {footerContent}
+      {workbenchContent}
+      {physicalMetadata}
+    </>
+  );
+
   // Workflow summary uses qualified physical evidence for any FMR wording.
   const workflowToolbar = workflow ? (
     <div
@@ -296,14 +318,12 @@ export function AnalysisFrequencySurface({
   return (
     <ChartSection
       className="fm-analysis-plots__subchart--frequency-domain"
-      footer={footerContent}
+      footer={footer}
       legend={legend}
       status={{
         presentation,
         primary: status === "ready" ? "Ready" : status,
-        revision: series[0]?.dataRevision ?? null,
-        sourceIdentity:
-          series[0]?.sourceIdentity ?? UNKNOWN_FREQUENCY_SOURCE_IDENTITY,
+        showRevision: false,
         // Trust remains unknown until a dedicated validation resource is published.
         trust: "unknown",
         pointSummary: formatSeriesCount(series.length),
@@ -312,20 +332,6 @@ export function AnalysisFrequencySurface({
       title={surfaceTitle}
       toolbar={toolbar}
     >
-      {physicalMetadata}
-      {/* Workbench summary row (mirrors old Frequency-domain workbench pill row) */}
-      <div
-        data-analysis-handoff={descriptor.handoff}
-        data-analysis-inspector-route={descriptor.inspectorRouteId}
-        aria-label="Frequency-domain workbench"
-        className="fm-analysis-plots__status fm-analysis-plots__status--frequency-domain-workbench"
-      >
-        <span>{workbench.chartKind}</span>
-        <span>{workbench.pointCount}</span>
-        <span>{workbench.frequencyRange}</span>
-        <span>{workbench.fieldHandoff}</span>
-        <span>{workbench.status}</span>
-      </div>
       <div
         className="fm-analysis-plots__chart-frame"
         data-resource-key={series[0]?.source.resourceKey}
@@ -378,10 +384,12 @@ function frequencyPhysicalMetadata(
   descriptor: ReturnType<typeof descriptorForFrequencyTable>,
   displayUnits: Readonly<Record<string, string>>,
   series: readonly ChartSeries[],
+  presentation?: AnalysisFrequencyPresentationState,
 ) {
-  if (!context) return null;
   const first = series[0];
-  const observable = context.observables.length
+  const sourceIdentity = first?.sourceIdentity ?? UNKNOWN_FREQUENCY_SOURCE_IDENTITY;
+  if (!context && !first?.sourceIdentity && !first?.dataRevision) return null;
+  const observable = context?.observables.length
     ? context.observables.map((entry) => `${entry.identity} (${entry.kind}, ${entry.unit})`).join(", ")
     : "unavailable";
   const yQuantities = series.length
@@ -390,23 +398,54 @@ function frequencyPhysicalMetadata(
   const display = Object.entries(displayUnits).length
     ? Object.entries(displayUnits).map(([quantity, unit]) => `${quantity} [${unit}]`).join(", ")
     : "automatic SI scaling";
+  const presentationRevision = presentation?.kind === "ready" || presentation?.kind === "empty"
+    ? presentation.revision
+    : presentation && "visibleRevision" in presentation
+      ? presentation.visibleRevision
+      : null;
+  const requestedRevision = presentation?.kind === "refreshing"
+    ? presentation.requestedRevision
+    : presentation?.kind === "paused"
+      ? presentation.latestKnownRevision
+      : null;
+  const runId = context?.runId ?? sourceIdentity.runId;
+  const stageId = context?.stageId ?? sourceIdentity.stageId;
+  const summary = [
+    "Physical context and provenance",
+    context ? frequencyKContextLabel(context) : "Context unavailable",
+    context?.boundaryContext ?? null,
+    context?.contractGaps.length ? "Validation incomplete" : `Qualification ${sourceIdentity.qualification}`,
+  ].filter(Boolean).join(" · ");
   return (
-    <div aria-label="Frequency-domain physical context" className="fm-analysis-plots__physical-context">
-      <span>Run: {context.runId ?? "unavailable"}</span>
-      <span>Stage: {context.stageId ?? "unavailable"}</span>
-      <span>Equilibrium: {context.equilibriumId ?? "unavailable"}</span>
-      <span>Geometry: {context.geometryId ?? "unavailable"}</span>
-      <span>Mesh: {context.meshId ?? "unavailable"}</span>
-      <span>Boundary: {context.boundaryContext ?? "unavailable"}</span>
-      <span>Normalization: {context.normalization ?? "unavailable"}</span>
-      <span>k: {frequencyKContextLabel(context)}</span>
-      <span>Observable: {observable}</span>
-      <span>SI axes: {descriptor.xAxis.label} [{descriptor.xAxis.unit}] → {yQuantities}</span>
-      <span>Display units: {descriptor.xAxis.label} [{first?.xUnit ?? descriptor.xAxis.unit}]; {display}</span>
-      {context.contractGaps.length > 0
-        ? <span>Contract gap: {context.contractGaps.join("; ")}</span>
-        : null}
-    </div>
+    <details aria-label="Frequency-domain physical context" className="fm-analysis-plots__physical-context">
+      <summary>{summary}</summary>
+      <div className="fm-analysis-plots__physical-context-grid">
+        <span>Run: {runId ?? "unavailable"}</span>
+        <span>Stage: {stageId ?? "unavailable"}</span>
+        <span>Equilibrium: {context?.equilibriumId ?? "unavailable"}</span>
+        <span>Geometry: {context?.geometryId ?? "unavailable"}</span>
+        <span>Mesh: {context?.meshId ?? "unavailable"}</span>
+        <span>Boundary: {context?.boundaryContext ?? "unavailable"}</span>
+        <span>Normalization: {context?.normalization ?? "unavailable"}</span>
+        <span>k: {context ? frequencyKContextLabel(context) : "unavailable"}</span>
+        <span>Observable: {observable}</span>
+        <span>SI axes: {descriptor.xAxis.label} [{descriptor.xAxis.unit}] → {yQuantities}</span>
+        <span>Display units: {descriptor.xAxis.label} [{first?.xUnit ?? descriptor.xAxis.unit}]; {display}</span>
+        {context?.contractGaps.length
+          ? <span>Contract gap: {context.contractGaps.join("; ")}</span>
+          : null}
+        <span>Artifact: {sourceIdentity.artifactPath ?? "unknown"}</span>
+        <span>Schema: {sourceIdentity.schemaVersion ?? "unknown"}</span>
+        <span>Digest: {sourceIdentity.contentDigest ?? "unknown"}</span>
+        <span>Backend: {sourceIdentity.backend ?? "unknown"}</span>
+        <span>Device: {sourceIdentity.device ?? "unknown"}</span>
+        <span>Precision: {sourceIdentity.precision ?? "unknown"}</span>
+        <span>Qualification: {sourceIdentity.qualification}</span>
+        <span>Provenance: {sourceIdentity.provenance ?? "unknown"}</span>
+        <span>Data revision: {presentationRevision ?? first?.dataRevision ?? "unavailable"}</span>
+        {requestedRevision != null ? <span>Requested revision: {requestedRevision}</span> : null}
+      </div>
+    </details>
   );
 }
 

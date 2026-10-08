@@ -644,7 +644,8 @@ function observationFramesRoot(
   });
   return node(id, "results.observation_frames.root", "State snapshots", parentId, {
     availability: resourceReady ? "available" : "unavailable",
-    badge: resourceReady ? String(frames.length) : resourceFailed ? "error" : "loading",
+    badge: resourceReady ? String(frames.length) : resourceFailed ? "error"
+      : resource?.status === "ready" ? "not recorded" : "loading",
     children,
     executionState: resourceReady ? "completed" : "not_started",
     resourceState: resource?.status ?? "idle",
