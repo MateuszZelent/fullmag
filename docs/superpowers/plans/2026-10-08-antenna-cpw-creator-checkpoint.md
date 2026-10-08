@@ -6,6 +6,10 @@ Praca w `D:/git/fullmag/worktrees/microwave-antenna-latest-20260909`, branch
 `codex/microwave-antenna-latest-20260909`, baza
 `28c9cea2eccf675df0e297118d6deec6bfbd5c12`. To przyrost authoringu,
 nie kwalifikacja obliczeń pola ani ukończenie T00–T18.
+Implementację i regresje zapisano w commicie
+`3bd70357362e09de45f9d7b98f40bb3cb3ad9d94`.
+Bramka changed scientific docs od wskazanej bazy do commita: exit 0;
+checkpoint jest wewnętrznym raportem wdrożenia, nie nową notą fizyczną.
 
 `apps/control-room/src/kernel/authoring/geometryLifecycleCommandContributions.ts::GEOMETRY_LIFECYCLE_COMMANDS`
 rejestruje `geometry.add-cpw-antenna` obok microstrip. Obie komendy zachowują
