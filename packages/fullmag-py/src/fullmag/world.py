@@ -8316,6 +8316,15 @@ def _build_explicit_mesh_assets(
     assets = build_geometry_assets_for_request(
         requested_backend=BackendTarget.FEM,
         geometries=resolved_geometries,
+        geometry_object_ids={
+            **_state._auxiliary_geometry_object_ids,
+            **{
+                handle._resolved_geometry().geometry_name: (
+                    handle._name if handle.object_id is None else handle.object_id
+                )
+                for handle in _state._magnets
+            },
+        },
         discretization=DiscretizationHints(**discretization_kwargs),
         study_universe=(
             _state._study_universe.to_ir()

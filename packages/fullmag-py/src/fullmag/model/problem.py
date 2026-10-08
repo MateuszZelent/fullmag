@@ -700,10 +700,12 @@ def _fem_mesh_cache_key(
     study_universe: dict[str, object] | None = None,
     mesh_workflow: dict[str, object] | None = None,
     per_object_recipes: Mapping[str, PerObjectMeshRecipe] | None = None,
+    object_id: str | None = None,
 ) -> str:
     payload = {
         "version": _FEM_MESH_CACHE_VERSION,
         "geometry": _geometry_cache_fingerprint(geometry),
+        "object_id": object_id,
         "fem": hints.to_ir(),
         "study_universe": study_universe,
         "mesh_workflow": mesh_workflow,
@@ -859,6 +861,7 @@ def build_geometry_assets_for_request(
     mesh_workflow: dict[str, object] | None = None,
     per_object_recipes: Mapping[str, PerObjectMeshRecipe] | None = None,
     object_regions: Sequence[dict[str, object]] | None = None,
+    geometry_object_ids: Mapping[str, str] | None = None,
     asset_cache: dict[str, dict[str, Any] | None] | None = None,
     _copy_cached_assets: bool = True,
     _include_domain_mesh_ir: bool = True,
@@ -882,6 +885,7 @@ def build_geometry_assets_for_request(
         mesh_workflow=mesh_workflow,
         per_object_recipes=per_object_recipes,
         object_regions=object_regions,
+        geometry_object_ids=geometry_object_ids,
         fdm_only=fdm_only,
     )
     if asset_cache is not None and asset_cache_key in asset_cache:
@@ -1044,6 +1048,7 @@ def build_geometry_assets_for_request(
                         study_universe=study_universe,
                         mesh_workflow=mesh_workflow,
                         per_object_recipes=per_object_recipes,
+                        object_id=(geometry_object_ids or {}).get(geometry.geometry_name),
                     )
                     cache_path = (
                         fem_mesh_cache_dir.joinpath(f"{mesh_cache_key}.npz")
@@ -1082,6 +1087,7 @@ def build_geometry_assets_for_request(
                             study_universe=study_universe,
                             mesh_workflow=mesh_workflow,
                             per_object_recipes=dict(per_object_recipes or {}),
+                            object_id=(geometry_object_ids or {}).get(geometry.geometry_name),
                         )
                         mesh = _drop_degenerate_tetrahedra(
                             mesh,
@@ -1499,6 +1505,7 @@ def _geometry_asset_cache_key(
     per_object_recipes: Mapping[str, PerObjectMeshRecipe] | None,
     object_regions: Sequence[dict[str, object]] | None,
     fdm_only: bool,
+    geometry_object_ids: Mapping[str, str] | None = None,
 ) -> str:
     """Build a cache identity for the products actually realized.
 
@@ -1513,6 +1520,7 @@ def _geometry_asset_cache_key(
         "study_universe": study_universe,
     }
     if not fdm_only:
+        payload["geometry_object_ids"] = dict(geometry_object_ids or {})
         payload["mesh_workflow"] = mesh_workflow
         payload["per_object_recipes"] = {
             str(name): recipe.to_ir()
@@ -2841,6 +2849,7 @@ class Problem:
                 mesh_workflow=mesh_workflow,
                 per_object_recipes=per_object_recipes,
                 object_regions=object_region_mesh_specs,
+                geometry_object_ids=self._geometry_object_ids(),
                 asset_cache=effective_asset_cache,
                 _copy_cached_assets=_copy_cached_geometry_assets,
             )
@@ -3201,6 +3210,17 @@ class Problem:
                 )
             seen[geometry_name] = geometry_name
 
+    def _geometry_object_ids(self) -> dict[str, str]:
+        return {
+            **self.auxiliary_geometry_object_ids,
+            **{
+                magnet.geometry.geometry_name: (
+                    magnet.name if magnet.object_id is None else magnet.object_id
+                )
+                for magnet in self.magnets
+            },
+        }
+
     def _build_geometry_assets(
         self,
         *,
@@ -3213,6 +3233,7 @@ class Problem:
             requested_backend=requested_backend,
             geometries=geometries,
             discretization=discretization,
+            geometry_object_ids=self._geometry_object_ids(),
             per_object_recipes={
                 magnet.geometry.geometry_name: magnet.mesh
                 for magnet in self.magnets

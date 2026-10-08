@@ -183,6 +183,7 @@ def add_antenna_layout_terminal_physical_groups(
     part_tags_by_id: dict[str, list[tuple[int, int]]],
     *,
     scale: float = 1.0,
+    object_id: str | None = None,
 ) -> dict[tuple[str, str], int]:
     """Publish volume and inlet/outlet physical groups for a conductor mesh.
 
@@ -278,7 +279,7 @@ def add_antenna_layout_terminal_physical_groups(
     seen_markers: dict[int, tuple[str, str]] = {}
     for (part_id, selector), surfaces in sorted(terminal_tags.items()):
         marker = antenna_terminal_marker(
-            geometry.geometry_name,
+            geometry.geometry_name if object_id is None else object_id,
             part_id,
             selector,
         )

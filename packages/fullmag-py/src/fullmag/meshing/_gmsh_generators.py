@@ -278,6 +278,7 @@ def generate_mesh(
     airbox: AirboxOptions | None = None,
     options: MeshOptions | None = None,
     maximum_element_size: float | None = None,
+    object_id: str | None = None,
 ) -> MeshData:
     """Generate a tetrahedral mesh for the given geometry.
 
@@ -290,6 +291,8 @@ def generate_mesh(
         airbox: Structured airbox configuration. When given, takes precedence
                 over *air_padding*.
         options: Advanced Gmsh options (algorithms, quality, size fields).
+        object_id: Immutable owner for antenna terminal markers. Geometry-name
+                markers remain the compatibility default for unowned callers.
     """
     resolved_hmax = maximum_element_size if maximum_element_size is not None else hmax
     if resolved_hmax is None:
@@ -367,7 +370,7 @@ def generate_mesh(
                     shift = np.array([ox, oy, oz], dtype=np.float64)
                     mesh = _dc_replace(mesh, nodes=mesh.nodes + shift)
                 return mesh
-        return _generate_csg_mesh(geometry, hmax=resolved_hmax, order=order, airbox=resolved_airbox, options=opts)
+        return _generate_csg_mesh(geometry, hmax=resolved_hmax, order=order, airbox=resolved_airbox, options=opts, object_id=object_id)
     if isinstance(geometry, ImportedGeometry):
         return generate_mesh_from_file(
             geometry.source,
@@ -587,6 +590,7 @@ def _generate_csg_mesh(
     order: int = 1,
     airbox: AirboxOptions | None = None,
     options: MeshOptions | None = None,
+    object_id: str | None = None,
 ) -> MeshData:
     """Mesh any geometry type via the generic OCC pipeline.
 
@@ -650,6 +654,7 @@ def _generate_csg_mesh(
                 geometry,
                 antenna_part_tags,
                 scale=SCALE,
+                object_id=object_id,
             )
         periodic_pair_specs = _configure_axis_periodic_surfaces(
             gmsh,
