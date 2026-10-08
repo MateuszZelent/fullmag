@@ -902,3 +902,15 @@ Nie uznaje się source fix za dowód zamknięcia błędu przeglądarkowego.
 Provenance consumers37779797737 job113319716629 SUCCESS na64bced443:
 5 targeted verifier testsPASS, 85artifact/mesher tests37subtestsPASS. Actual Rust
 producer regresje w bootstrap37779798714 nadal oczekują wykonania.
+
+### Fundament deduplikacji — ścisła akcja masy
+
+Dodano wewnętrzne API z callbackiem geometrycznej masy i jawnymi statusami błędu.
+Porównanie używa normowanych kopii, publikowany kandydat zachowuje oryginalną
+amplitudę/residual/source index. Brak lub zła metryka nie daje identity fallback.
+Self norm jest positive/finite, Hermitian roundoff względny bez progu jednostek SI.
+Review usunęło odtwarzanie surowej normy (overflow/underflow); regresje obejmują
+phase copies, prawdziwą degenerację masowo ortogonalną, CSR/dense i skale1e±300.
+Source review PASS; cloud C++ contract wykonanie oczekiwane. Legacy API pozostaje
+bez zmian. To nie zamyka review4060116218/4061061308/4060687822: jeszcze trzeba
+podłączyć owned mass, finalizer przed cap, target selection i bounded refill.

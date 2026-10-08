@@ -21,6 +21,11 @@ jobs:
       - name: Check FEM CUDA driver library selection
         run: python -B scripts/ci/test_fem_cuda_driver_selection.py
 
+      - name: Compile and run strict modal mass deduplication contract
+        run: |
+          g++ -std=c++17 -UNDEBUG -Ibackends/fem backends/fem/tests/frequency_domain/mode_deduplication_test.cpp backends/fem/cpu/frequency_domain/mode_deduplication.cpp backends/fem/cpu/frequency_domain/mode_filter.cpp -o "$RUNNER_TEMP/fullmag-modal-mass-dedup-test"
+          "$RUNNER_TEMP/fullmag-modal-mass-dedup-test"
+
       - name: Compile and run dependency-free native modal ABI contract
         run: python -B scripts/ci/run_modal_cabi_contract.py
 
