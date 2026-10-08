@@ -45319,8 +45319,7 @@ async fn frequency_domain_artifact_resources_report_ready_and_missing_states() {
         Some("3")
     );
     let body = body_bytes(response).await;
-    let metadata_length = u32::from_le_bytes(body[8..12].try_into().unwrap()) as usize;
-    let values: Vec<f64> = body[48 + metadata_length..]
+    let values: Vec<f64> = body[fmvp_values_offset(&body)..]
         .chunks_exact(8)
         .map(|chunk| f64::from_le_bytes(chunk.try_into().unwrap()))
         .collect();
@@ -45371,6 +45370,17 @@ async fn frequency_domain_artifact_resources_report_ready_and_missing_states() {
         .as_str()
         .expect("error should be present")
         .contains("payload"));
+
+    // The response artifact carries a single global vector sample without a
+    // source-mesh identity. Exercise the declared v5 no-topology sentinel
+    // instead of asking the API to infer a node mapping for this payload.
+    {
+        let mut snapshot = state.current_live_state.write().await;
+        snapshot
+            .as_mut()
+            .expect("session snapshot should exist")
+            .fem_mesh = None;
+    }
 
     let response = app
         .clone()
@@ -45459,7 +45469,10 @@ async fn frequency_domain_artifact_resources_report_ready_and_missing_states() {
         Some("6")
     );
     let body = body_bytes(response).await;
-    assert_eq!(body.len(), 48 + 6 * std::mem::size_of::<f64>());
+    assert_eq!(
+        body.len(),
+        fmvp_values_offset(&body) + 6 * std::mem::size_of::<f64>()
+    );
 }
 
 #[tokio::test]
@@ -47961,7 +47974,7 @@ async fn frequency_domain_response_data_plane_uses_point_default_view_and_phase(
         Some("3")
     );
     let body = body_bytes(response).await;
-    let values: Vec<f64> = body[48..]
+    let values: Vec<f64> = body[fmvp_values_offset(&body)..]
         .chunks_exact(8)
         .map(|chunk| f64::from_le_bytes(chunk.try_into().unwrap()))
         .collect();
