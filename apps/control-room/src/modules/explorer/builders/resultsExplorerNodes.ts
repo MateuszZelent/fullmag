@@ -95,7 +95,11 @@ interface ResultResourceLike {
 }
 
 interface ResultManifestLike extends ResultResourceLike {
+  mesh_generation_id?: string | null;
   payload?: unknown;
+  revision?: number | string | null;
+  run_id?: string | null;
+  stage_id?: string | null;
 }
 
 export interface PhysicsFirstResultResourceInput {
@@ -211,24 +215,6 @@ function samplingFromRecord(
 
 function kSamplingFromMetadata(value: unknown): FrequencyDomainResultEvidence["kSampling"] | null {
   return samplingFromRecord(record(record(value)?.sampling));
-}
-
-function kSamplingFromRequestedExecution(
-  requested: Record<string, unknown> | null,
-): FrequencyDomainResultEvidence["kSampling"] | null {
-  const requestedSampling = requested?.k_sampling;
-  const sampling = record(requestedSampling);
-  const structuredSampling = samplingFromRecord(sampling);
-  if (requestedSampling !== undefined) {
-    if (structuredSampling) return structuredSampling;
-    return null;
-  }
-  const vector = vector3(
-    requested?.k_vector_rad_per_m ??
-      requested?.k_vector ??
-      requested?.wavevector_kf,
-  );
-  return vector ? { kind: "single", vectorRadPerM: vector } : null;
 }
 
 function pathWavevectorAtSample(
@@ -423,9 +409,16 @@ function observablesFromPayload(value: unknown): FrequencyDomainResultEvidence["
 export function physicsFirstResultsSnapshotFromResources(
   input: PhysicsFirstResultResourceInput,
 ): PhysicsFirstResultAdaptation {
-  const runId = input.currentRun?.run_id ?? "";
   const resultManifest = input.manifest?.result_manifest;
-  const payload = ready(resultManifest) ? record(resultManifest?.payload) : null;
+  const resultManifestReady = ready(resultManifest);
+  const payload = resultManifestReady ? record(resultManifest?.payload) : null;
+  const payloadRunId = nonEmptyString(payload?.run_id);
+  const envelopeRunId = resultManifestReady ? nonEmptyString(resultManifest?.run_id) : null;
+  const currentRunId = nonEmptyString(input.currentRun?.run_id);
+  const runIds = [payloadRunId, envelopeRunId, currentRunId]
+    .filter((runId): runId is string => runId !== null);
+  const runIdentityMismatch = runIds.some((runId) => runId !== runIds[0]);
+  const runId = currentRunId ?? envelopeRunId ?? payloadRunId ?? "";
   const contractGaps: string[] = [...(input.contractGaps ?? [])];
   const contractGapSet = new Set(contractGaps);
   const addContractGap = (gap: string) => {
@@ -450,31 +443,51 @@ export function physicsFirstResultsSnapshotFromResources(
     ...(postprocessing ? { postprocessing } : {}),
     resultContextRunId: runId,
   };
-  if (!runId || !payload) return { contractGaps, snapshot: emptySnapshot };
+  const selectedRunContextMismatch = contractGaps.some((gap) =>
+    gap.startsWith("Selected run is not the current session run") ||
+    gap.startsWith("Selected run result resources") ||
+    gap.startsWith("Selected result run "),
+  );
+  if (selectedRunContextMismatch) return { contractGaps, snapshot: emptySnapshot };
+  if (runIdentityMismatch) {
+    addContractGap("Frequency-domain artifact run identity does not match its owner");
+    return { contractGaps, snapshot: emptySnapshot };
+  }
+  if (!payload) return { contractGaps, snapshot: emptySnapshot };
 
-  const studyProduct = nonEmptyString(payload.study_product);
-  const stageId = nonEmptyString(payload.stage_id);
-  const equilibriumId = nonEmptyString(payload.equilibrium_identity);
-  const requested = record(payload.requested_execution);
-  const boundaryContext = nonEmptyString(requested?.boundary_context);
-  if (!equilibriumId) {
-    addContractGap("Frequency-domain artifact does not publish equilibrium_identity");
+  const metadataKSampling = kSamplingFromMetadata(input.dispersion?.path_metadata);
+  const contextPayload = metadataKSampling
+    ? { ...payload, k_sampling: kSamplingForFrequencyContext(metadataKSampling) }
+    : payload;
+  const frequencyContext = frequencyDomainResultContextFromManifest(contextPayload, {
+    meshGenerationId: resultManifestReady
+      ? nonEmptyString(resultManifest?.mesh_generation_id)
+      : null,
+    runId: envelopeRunId ?? currentRunId,
+    stageId: resultManifestReady ? nonEmptyString(resultManifest?.stage_id) : null,
+  });
+  const resultRunId = frequencyContext.runId;
+  const stageId = frequencyContext.stageId;
+  const equilibriumId = frequencyContext.equilibriumId;
+  const studyProduct = frequencyContext.studyProduct;
+  const boundaryContext = frequencyContext.boundaryContext;
+  const kSampling = metadataKSampling ?? frequencyContext.kSampling;
+
+  const requiredGaps: Readonly<Record<string, string>> = {
+    "boundary context unavailable": "Frequency-domain artifact does not publish boundary_context",
+    "equilibrium identity unavailable": "Frequency-domain artifact does not publish equilibrium_identity",
+    "run identity unavailable": "Frequency-domain artifact does not publish run identity",
+    "stage identity unavailable": "Frequency-domain artifact does not publish stage_id",
+    "study product unavailable": "Frequency-domain artifact does not publish study_product",
+  };
+  for (const gap of frequencyContext.contractGaps) {
+    const mappedGap = requiredGaps[gap];
+    if (mappedGap) addContractGap(mappedGap);
   }
-  if (boundaryContext !== "finite_open" && boundaryContext !== "floquet_periodic") {
-    addContractGap("Frequency-domain artifact does not publish boundary_context");
-  }
-  if (
-    !stageId ||
-    !equilibriumId ||
-    (studyProduct !== "modal_eigen" && studyProduct !== "driven_response") ||
-    (boundaryContext !== "finite_open" && boundaryContext !== "floquet_periodic")
-  ) {
+  if (!resultRunId || !stageId || !equilibriumId || !studyProduct || !boundaryContext) {
     return { contractGaps, snapshot: emptySnapshot };
   }
 
-  const kSampling =
-    kSamplingFromMetadata(input.dispersion?.path_metadata) ??
-    kSamplingFromRequestedExecution(requested);
   if (boundaryContext === "floquet_periodic" && !kSampling) {
     addContractGap("Periodic/Floquet artifact does not publish a supported k sampling resource");
     return {
@@ -482,16 +495,16 @@ export function physicsFirstResultsSnapshotFromResources(
       snapshot: { ...emptySnapshot, contractGaps: [...contractGaps] },
     };
   }
-  const frequencyContext = frequencyDomainResultContextFromManifest({
-    ...payload,
-    ...(kSampling ? { k_sampling: kSamplingForFrequencyContext(kSampling) } : {}),
-    run_id: runId,
-  });
   for (const gap of frequencyContext.contractGaps) {
-    addContractGap(gap);
+    if (!(gap in requiredGaps) && gap !== "k context unavailable") {
+      addContractGap(gap);
+    }
   }
   const artifactRevision =
-    nonEmptyString(payload.revision) ?? input.currentRun?.revision ?? "unknown";
+    nonEmptyString(payload.revision) ??
+    (resultManifestReady ? resultManifest?.revision : null) ??
+    input.currentRun?.revision ??
+    "unknown";
   const products: PhysicsFirstResultProducts =
     studyProduct === "modal_eigen"
       ? {
@@ -526,7 +539,7 @@ export function physicsFirstResultsSnapshotFromResources(
     observables: observablesFromPayload(payload.observables),
     ...(frequencyContext.normalization ? { normalization: frequencyContext.normalization } : {}),
     products,
-    runId,
+    runId: resultRunId,
     stageId,
     stageLabel: nonEmptyString(payload.stage_label) ?? stageId,
     studyProduct,
@@ -542,7 +555,7 @@ export function physicsFirstResultsSnapshotFromResources(
         ? { pinnedObservationFrameId: input.pinnedObservationFrameId }
         : {}),
       ...(postprocessing ? { postprocessing } : {}),
-      resultContextRunId: runId,
+      resultContextRunId: resultRunId,
     },
   };
 }

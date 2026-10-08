@@ -27,6 +27,7 @@ def _nearest_contract():
     return {
         "status": "ok",
         "solve_complete": True,
+        "requested_mode_count": 1,
         "target_kind": "nearest_frequency",
         "target_frequency_hz": TARGET_HZ,
         "spectrum_completeness": "selected_only",

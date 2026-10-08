@@ -1150,4 +1150,199 @@ describe("physicsFirstResultsSnapshotFromResources", () => {
     expect(flattenExplorerNodes(buildPhysicsFirstResultsTree(adapted.snapshot)).map((node) => node.kContextKind))
       .toContain("gamma");
   });
+
+  it("uses top-level periodic boundary and single-k metadata with an explicit stage", () => {
+    const adapted = physicsFirstResultsSnapshotFromResources({
+      currentRun: { revision: 31, run_id: "run-imported-31" },
+      manifest: {
+        result_manifest: {
+          mesh_generation_id: "mesh-generation-31",
+          run_id: "run-imported-31",
+          stage_id: null,
+          payload: {
+            boundary_context: "floquet_periodic",
+            equilibrium_identity: "eq-imported-31",
+            geometry_identity: "geometry-31",
+            k_sampling: { kind: "single", vector_rad_per_m: [0, 1e7, 0] },
+            mesh_identity: "mesh-31",
+            requested_execution: { calculation_mode: "dispersion_modal" },
+            revision: "eigen-imported-31",
+            stage_id: "stage-imported-31",
+            study_product: "modal_eigen",
+          },
+          status: "ready",
+        },
+      },
+      spectrum: { status: "ready" },
+    });
+
+    expect(adapted.contractGaps).toEqual([]);
+    expect(adapted.snapshot.entries[0]).toMatchObject({
+      boundaryContext: "floquet_periodic",
+      kSampling: { kind: "single", vectorRadPerM: [0, 1e7, 0] },
+      runId: "run-imported-31",
+      stageId: "stage-imported-31",
+    });
+  });
+
+  it("uses the artifact envelope stage only when the payload stage is absent", () => {
+    const adapted = physicsFirstResultsSnapshotFromResources({
+      currentRun: { revision: 32, run_id: "run-envelope-32" },
+      manifest: {
+        result_manifest: {
+          run_id: "run-envelope-32",
+          stage_id: "stage-envelope-32",
+          payload: {
+            boundary_context: "finite_open",
+            equilibrium_identity: "eq-envelope-32",
+            geometry_identity: "geometry-32",
+            mesh_identity: "mesh-32",
+            requested_execution: {},
+            stage_id: null,
+            study_product: "modal_eigen",
+          },
+          status: "ready",
+        },
+      },
+      spectrum: { status: "ready" },
+    });
+
+    expect(adapted.contractGaps).toEqual([]);
+    expect(adapted.snapshot.entries[0]?.stageId).toBe("stage-envelope-32");
+  });
+
+  it("keeps results unavailable when neither payload nor envelope publishes a stage", () => {
+    const adapted = physicsFirstResultsSnapshotFromResources({
+      currentRun: { revision: 33, run_id: "run-no-stage-33" },
+      manifest: {
+        result_manifest: {
+          run_id: "run-no-stage-33",
+          stage_id: null,
+          payload: {
+            boundary_context: "finite_open",
+            equilibrium_identity: "eq-no-stage-33",
+            geometry_identity: "geometry-33",
+            mesh_identity: "mesh-33",
+            requested_execution: {},
+            stage_id: null,
+            study_product: "modal_eigen",
+          },
+          status: "ready",
+        },
+      },
+      spectrum: { status: "ready" },
+    });
+
+    expect(adapted.snapshot.entries).toEqual([]);
+    expect(adapted.contractGaps).toContain("Frequency-domain artifact does not publish stage_id");
+  });
+
+  it("fails closed when the artifact owner disagrees with payload or current-run identity", () => {
+    const adapt = (currentRunId: string, ownerRunId: string, payloadRunId?: string) =>
+      physicsFirstResultsSnapshotFromResources({
+        currentRun: { revision: 34, run_id: currentRunId },
+        manifest: {
+          result_manifest: {
+            run_id: ownerRunId,
+            stage_id: "stage-run-mismatch",
+            payload: {
+              boundary_context: "finite_open",
+              equilibrium_identity: "eq-run-mismatch",
+              geometry_identity: "geometry-run-mismatch",
+              mesh_identity: "mesh-run-mismatch",
+              requested_execution: {},
+              ...(payloadRunId ? { run_id: payloadRunId } : {}),
+              stage_id: "stage-run-mismatch",
+              study_product: "modal_eigen",
+            },
+            status: "ready",
+          },
+        },
+        spectrum: { status: "ready" },
+      });
+
+    const payloadOwnerMismatch = adapt("run-current-34", "run-owner-34", "run-payload-34");
+    const currentOwnerMismatch = adapt("run-current-34", "run-other-owner-34");
+
+    expect(payloadOwnerMismatch.snapshot.entries).toEqual([]);
+    expect(currentOwnerMismatch.snapshot.entries).toEqual([]);
+    expect(payloadOwnerMismatch.contractGaps).toContain(
+      "Frequency-domain artifact run identity does not match its owner",
+    );
+    expect(currentOwnerMismatch.contractGaps).toContain(
+      "Frequency-domain artifact run identity does not match its owner",
+    );
+  });
+
+  it("does not publish ready current artifacts for a selected-run context gap", () => {
+    const adapted = physicsFirstResultsSnapshotFromResources({
+      contractGaps: [
+        "Selected run is not the current session run; run-scoped result resources are not published.",
+      ],
+      currentRun: { revision: 35, run_id: "run-current-35" },
+      manifest: {
+        result_manifest: {
+          run_id: "run-current-35",
+          stage_id: "stage-current-35",
+          payload: {
+            boundary_context: "finite_open",
+            equilibrium_identity: "eq-current-35",
+            geometry_identity: "geometry-current-35",
+            mesh_identity: "mesh-current-35",
+            requested_execution: {},
+            stage_id: "stage-current-35",
+            study_product: "modal_eigen",
+          },
+          status: "ready",
+        },
+      },
+      spectrum: { status: "ready" },
+    });
+
+    expect(adapted.snapshot.entries).toEqual([]);
+    expect(adapted.contractGaps).toContain(
+      "Selected run is not the current session run; run-scoped result resources are not published.",
+    );
+  });
+
+  it("keeps published frequency results available when observation frames fail", () => {
+    const adapted = physicsFirstResultsSnapshotFromResources({
+      currentRun: { revision: 36, run_id: "run-observation-error-36" },
+      manifest: {
+        result_manifest: {
+          run_id: "run-observation-error-36",
+          stage_id: "stage-observation-error-36",
+          payload: {
+            boundary_context: "finite_open",
+            equilibrium_identity: "eq-observation-error-36",
+            geometry_identity: "geometry-observation-error-36",
+            mesh_identity: "mesh-observation-error-36",
+            requested_execution: {},
+            stage_id: "stage-observation-error-36",
+            study_product: "modal_eigen",
+          },
+          status: "ready",
+        },
+      },
+      observationFrames: {
+        data: null,
+        error: "Managed observation storage is absent",
+        missing: false,
+        revision: null,
+        status: "error",
+      },
+      spectrum: { status: "ready" },
+    });
+    const nodes = flattenExplorerNodes(buildPhysicsFirstResultsTree(adapted.snapshot));
+
+    expect(nodes.find((node) => node.kind === "results.root")).toMatchObject({
+      resourceState: "ready",
+      status: "ready",
+    });
+    expect(nodes.find((node) => node.kind === "results.observation_frames.root")).toMatchObject({
+      resourceState: "error",
+      status: "failed",
+    });
+    expect(nodes.map((node) => node.label)).toContain("Mode Shapes");
+  });
 });

@@ -88,11 +88,23 @@ describe("frequency render models", () => {
   });
 
   it("keeps an analytic dispersion overlay with the numerical frequency series", () => {
+    const pointMetadata = {
+      branchId: "acoustic",
+      itemId: "sample-0001/mode-0002",
+      modeFieldAvailable: false,
+      modeIndex: 2,
+      residualNorm: 3e-12,
+      sampleId: "k-path-sample-0001",
+      sampleIndex: 1,
+      wavevectorRadPerM: [0, 1, 0] as const,
+    };
+    const numericalPoint = { ...pointMetadata, rowIndex: 4, x: 1, y: 2 };
+    const analyticPoint = { ...pointMetadata, rowIndex: 4, x: 1, y: 2.1 };
     const series: FrequencyDomainChartSeries[] = [
       {
         id: "numerical",
         label: "Branch acoustic",
-        points: [{ rowIndex: 0, x: 1, y: 2 }],
+        points: [numericalPoint],
         quantity: "frequency",
         source,
         status: "ready",
@@ -102,7 +114,7 @@ describe("frequency render models", () => {
       {
         id: "analytic",
         label: "Branch acoustic analytic",
-        points: [{ rowIndex: 0, x: 1, y: 2.1 }],
+        points: [analyticPoint],
         quantity: "analytic_frequency",
         source,
         status: "ready",
@@ -124,6 +136,10 @@ describe("frequency render models", () => {
     const model = frequencySeriesRenderModel(series, "Dispersion", "k-path s");
 
     expect(model.series.map((entry) => entry.id)).toEqual(["numerical", "analytic"]);
+    expect(model.series.map((entry) => entry.points)).toEqual([
+      [numericalPoint],
+      [analyticPoint],
+    ]);
     expect(model.yAxes).toEqual([{ label: "Branch acoustic [GHz]", unit: "GHz" }]);
   });
 });

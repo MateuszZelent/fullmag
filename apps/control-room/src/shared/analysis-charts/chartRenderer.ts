@@ -354,7 +354,7 @@ export function chartRenderModelToEChartsOption(
           scale: false,
         },
         itemStyle: color ? { color } : undefined,
-        lineStyle: { color, width: 1.5, type: series.analyticReference ? "dashed" : "solid" },
+        lineStyle: { color, width: 1.5, ...(series.analyticReference ? { type: "dashed" } : {}) },
         name: seriesDisplayName(series, yScales),
         progressive: 0,
         showSymbol: series.kind === "scatter" || series.showSymbols || series.points.some((point) => point.selected),
@@ -378,7 +378,7 @@ export function chartRenderModelToEChartsOption(
           ? xScale.formatValue(rawXVal)
           : sanitizeLabelText(String(first.axisValue ?? ""));
         const lines: string[] = [
-          `${sanitizeLabelText(parseLabelAndUnit(model.xAxis.label || "x", model.xAxis.unit).baseLabel)}: ${xVal}`,
+          `${sanitizeLabelText(model.xAxis.unit === "rad/m" ? parseLabelAndUnit(model.xAxis.label || "x", model.xAxis.unit).baseLabel : model.xAxis.label || "x")}: ${xVal}`,
         ];
         for (const p of params as Array<{
           seriesName?: string;

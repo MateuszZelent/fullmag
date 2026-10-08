@@ -482,7 +482,19 @@ describe("frequencyDomainChartModels", () => {
       "analysis.frequency-domain:eigen:dispersion:optical",
     ]);
     expect(model.series[1]?.points).toEqual([
-      { rowIndex: 1, x: 3.14e7, y: 2.4 },
+      {
+        branchId: "optical",
+        itemId: null,
+        modeFieldAvailable: false,
+        modeIndex: 2,
+        residualNorm: 2e-6,
+        rowIndex: 1,
+        sampleId: null,
+        sampleIndex: 1,
+        wavevectorRadPerM: null,
+        x: 3.14e7,
+        y: 2.4,
+      },
     ]);
   });
 
@@ -526,7 +538,19 @@ describe("frequencyDomainChartModels", () => {
       }),
     );
     expect(model.series[0]?.points).toEqual([
-      { rowIndex: 0, x: 78539816.33974482, y: 1.2 },
+      {
+        branchId: "acoustic",
+        itemId: null,
+        modeFieldAvailable: false,
+        modeIndex: 1,
+        residualNorm: null,
+        rowIndex: 0,
+        sampleId: null,
+        sampleIndex: 0,
+        wavevectorRadPerM: null,
+        x: 78539816.33974482,
+        y: 1.2,
+      },
     ]);
   });
 
@@ -591,7 +615,19 @@ describe("frequencyDomainChartModels", () => {
       "analysis.frequency-domain:eigen:dispersion:acoustic:analytic",
     ]);
     expect(model.series[1]?.points).toEqual([
-      { rowIndex: 0, x: 25000000, y: 1.4 },
+      {
+        branchId: "acoustic",
+        itemId: null,
+        modeFieldAvailable: false,
+        modeIndex: 0,
+        residualNorm: null,
+        rowIndex: 0,
+        sampleId: null,
+        sampleIndex: 1,
+        wavevectorRadPerM: null,
+        x: 25000000,
+        y: 1.4,
+      },
     ]);
   });
 
@@ -608,8 +644,34 @@ describe("frequencyDomainChartModels", () => {
 
     expect(model.points.map((point) => point.sampleLabel)).toEqual(["G", "X"]);
     expect(model.series[0]?.points).toEqual([
-      { label: "G", rowIndex: 0, x: 0, y: 1.2 },
-      { label: "X", rowIndex: 1, x: 78539816.33974482, y: 1.4 },
+      {
+        branchId: "acoustic",
+        itemId: null,
+        label: "G",
+        modeFieldAvailable: false,
+        modeIndex: 1,
+        residualNorm: null,
+        rowIndex: 0,
+        sampleId: null,
+        sampleIndex: 0,
+        wavevectorRadPerM: null,
+        x: 0,
+        y: 1.2,
+      },
+      {
+        branchId: "acoustic",
+        itemId: null,
+        label: "X",
+        modeFieldAvailable: false,
+        modeIndex: 1,
+        residualNorm: null,
+        rowIndex: 1,
+        sampleId: null,
+        sampleIndex: 1,
+        wavevectorRadPerM: null,
+        x: 78539816.33974482,
+        y: 1.4,
+      },
     ]);
   });
 
@@ -812,8 +874,32 @@ describe("frequencyDomainChartModels", () => {
       "Branch acoustic",
     ]);
     expect(model.series[0]?.points).toEqual([
-      { rowIndex: 0, x: 0, y: 1.2 },
-      { rowIndex: 1, x: 3.14e7, y: 1.4 },
+      {
+        branchId: "acoustic",
+        itemId: null,
+        modeFieldAvailable: false,
+        modeIndex: 1,
+        residualNorm: null,
+        rowIndex: 0,
+        sampleId: null,
+        sampleIndex: 0,
+        wavevectorRadPerM: null,
+        x: 0,
+        y: 1.2,
+      },
+      {
+        branchId: "acoustic",
+        itemId: null,
+        modeFieldAvailable: false,
+        modeIndex: 2,
+        residualNorm: null,
+        rowIndex: 1,
+        sampleId: null,
+        sampleIndex: 1,
+        wavevectorRadPerM: null,
+        x: 3.14e7,
+        y: 1.4,
+      },
     ]);
   });
 
@@ -1197,22 +1283,45 @@ describe("frequencyDomainChartModels", () => {
           sampleIndex: 0,
           trackingConfidence: 1,
         },
-        { analysisStageId: "stage-branch-point" },
+        {
+          analysisRunId: "run-branch-point",
+          analysisStageId: "stage-branch-point",
+          artifactRevision: 17,
+          artifactPath: "eigen/branches.v2.json",
+          equilibriumId: "equilibrium-branch-point",
+          kContextKind: "k_path",
+          normalization: "unit_l2",
+          representation: "complex-vector-xyz",
+          resourceRef: fieldVectorResourceKey(
+            "analysis:eigen:sample-0000:mode-0002",
+          ),
+          source: "eigen-mode",
+          studyProduct: "modal_eigen",
+        },
       ),
     ).toEqual({
       analysisStageId: "stage-branch-point",
+      analysisRunId: "run-branch-point",
+      artifactRevision: "17",
+      artifactPath: "eigen/branches.v2.json",
       branchId: "acoustic",
       calculationMode: "dispersion_modal",
+      equilibriumId: "equilibrium-branch-point",
       fieldId: "analysis:eigen:sample-0000:mode-0002",
       kind: "results.eigen.mode",
+      kContextKind: "k_path",
+      normalization: "unit_l2",
       modeId: "sample-0000/mode-0002",
       modeIndex: 2,
       nodeId: "results:eigen:sample:0:mode:2",
+      representation: "complex-vector-xyz",
       resourceRef: fieldVectorResourceKey(
         "analysis:eigen:sample-0000:mode-0002",
       ),
       sampleId: "k-path-sample-0000",
       sampleIndex: 0,
+      source: "eigen-mode",
+      studyProduct: "modal_eigen",
       type: "frequency-domain",
     });
   });

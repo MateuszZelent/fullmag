@@ -1651,7 +1651,7 @@ class PilotTests(unittest.TestCase):
             result = json.loads((output / "run-result.json").read_text())
             self.assertEqual(stored_request["selection_scope"], "selected_only")
             self.assertIs(stored_request["window_complete"], False)
-            self.assertEqual(stored_request["qualification"], "NOT VERIFIED")
+            self.assertEqual(stored_request["scientific_gate"]["qualification"], "NOT VERIFIED")
             self.assertEqual(stored_request["purpose"], "ui_diagnostic")
             self.assertEqual(stored_request["branch_continuity"], "NOT VERIFIED")
             self.assertEqual(result["status"], "completed_unqualified")

@@ -551,6 +551,7 @@ export interface FrequencyDomainSelectionContext {
   calculationMode?: FrequencyDomainCalculationMode | null;
   equilibriumId?: string | null;
   kContextKind?: AnalysisFieldOverlayKContextKind | null;
+  normalization?: string | null;
   nodeId?: string | null;
   representation?: AnalysisFieldOverlayRepresentation | null;
   resourceRef?: string | null;
@@ -1250,14 +1251,21 @@ export function buildEigenBranchPointModeSelectionRef(
   return cleanFrequencyDomainSelectionRef({
     analysisRunId: context.analysisRunId ?? undefined,
     analysisStageId: context.analysisStageId ?? undefined,
+    artifactRevision: context.artifactRevision == null
+      ? undefined
+      : String(context.artifactRevision),
     artifactPath: context.artifactPath ?? undefined,
     branchId,
     calculationMode: context.calculationMode ?? "dispersion_modal",
+    equilibriumId: context.equilibriumId ?? undefined,
     fieldId: fieldAvailable ? point.modeFieldId ?? undefined : undefined,
     kind: "results.eigen.mode",
+    kContextKind: context.kContextKind ?? undefined,
     kPathCoordinateRadPerM: point.pathS ?? undefined,
     modeIndex: point.rawModeIndex,
     nodeId: context.nodeId ?? frequencyDomainBranchPointModeNodeId(point),
+    normalization: context.normalization ?? undefined,
+    representation: context.representation ?? undefined,
     resourceRef: fieldAvailable
       ? context.resourceRef ??
         point.modeFieldResourceKey ?? undefined
@@ -1265,6 +1273,8 @@ export function buildEigenBranchPointModeSelectionRef(
     modeId: point.modeId ?? undefined,
     sampleId: point.sampleId ?? undefined,
     sampleIndex: point.sampleIndex,
+    source: context.source ?? undefined,
+    studyProduct: context.studyProduct ?? undefined,
     type: "frequency-domain",
     wavevectorKf: point.wavevectorKf ?? context.wavevectorKf ?? undefined,
   });
