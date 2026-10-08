@@ -168,7 +168,8 @@ For a new object, Apply commits the create transaction, selects the committed ob
 Object selections expose required authoring panels:
 
 - `object.regions`: reads `model/scene` and `model/regions`, patches `/v2/sessions/current/model/regions/{region_id}`, and invalidates scene, regions, geometry diagnostics, and mesh build resources.
-- `object.magnetic-parameters`: reads the selected object from `model/scene`, reads the assigned material asset through `/v2/sessions/current/model/materials/{material_id}`, patches object `material_ref` through `/model/objects/{object_id}`, and patches material scalar parameters through `/model/materials/{material_id}`.
+- `object.magnetic-parameters`: odczytuje wybrany obiekt z `model/scene` i przypisany materiał, zmienia `material_ref` przez `/model/objects/{object_id}` oraz obsługuje tworzenie i przypisanie materiału i authoring anizotropii jednoosiowej. Ten węzeł nie renderuje pól scalars materiału.
+- `object.material`: odczytuje przypisany materiał przez `/v2/sessions/current/model/materials/{material_id}` i zmienia jego parametry skalarne przez `/model/materials/{material_id}`. Przypisanie oraz tworzenie materiału pozostają w osobnym węźle `object.magnetic-parameters`.
 - `object.physics`: reads and patches `/v2/sessions/current/model/objects/{object_id}/interactions/{interaction_kind}` for required and optional interaction entries.
 - `object.magnetic-texture`: reads the object `magnetization_ref` and referenced `magnetization_assets` from `model/scene`, patches the object reference through `/model/objects/{object_id}`, and treats texture asset editing as deferred until a typed magnetization-asset endpoint exists.
 

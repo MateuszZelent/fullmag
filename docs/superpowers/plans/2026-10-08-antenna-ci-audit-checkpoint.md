@@ -561,3 +561,32 @@ nadal wymagają odbioru. Dla bazowego HEAD kontrola GitHub potwierdziła
 control-room-contracts 113155821640 i dokumentację 113155821560 in_progress,
 managed-fem queued; nie przypisuje się ich przyszłemu commitowi.
 T00–T18 nadal aktywne; bez merge, cleanup i restartu workspace.
+
+## Inspector — regresja scalars we właściwym węźle
+
+Baza `41bdedfd883e0d18da9786a78b933daf1b9176ab`. Produkcyjna funkcja
+materialInspectorSections celowo wyłącza material-parameters dla
+object.magnetic-parameters, a włącza ją dla object.material. Test nie jest
+dowodem znikania Ms/Aex po ACK: szukał pól niewystępujących w wybranym węźle.
+
+Zachowano wybór magnetic-parameters, oba ACK, root/focus/scroll, szkic Ku1,
+limity listeners i invalidacji oraz kontrolę braku opacity. Dodano asercję
+nieobecności scalars w tym węźle; następnie jawną nawigację do Material
+tego samego obiektu i niezmienione asercje Ms=1100000 A/m, Aex=1.3e-11 J/m.
+Po nawigacji sprawdzany jest również ten sam root panelu. Uzgodniono dwa
+frontendowe opisy specyfikacji z istniejącym podziałem odpowiedzialności.
+Nie zmieniano komponentów, zasobów, fizyki ani wartości materiału.
+
+Kontrola inspector-material-child-contract-20261008.cjs w task storage:
+baseline FAIL (brak jawnej nawigacji), working PASS. Wykonuje rzeczywisty
+czysto-JS switch sekcji i parsuje kolejność asercji fixture bez emitowania
+TypeScript ani uruchamiania React/Vitest. Scoped ESLint --max-warnings=0
+PASS exit0; scoped whitespace PASS. Scoped review bez osłabienia istniejących
+wartości scalars i kontroli ACK. Pełne wykonanie React/CI pozostaje do odbioru.
+
+Potwierdzone bieżące CI bazowego HEAD: control-room-contracts 113157050180
+oraz documentation build 113157050031 in_progress, managed-fem queued.
+Nie przypisuje się tych obserwacji przyszłemu commitowi. Następny krok:
+odebrać fixtures CI i zdiagnozować retry nowej potwierdzonej sesji fazami,
+bez zmniejszenia oczekiwań 3/4. Następnie kwalifikacja native/LLG/FFT oraz
+pełne T00–T18. PR Draft; bez merge, cleanup i restartu workspace.
