@@ -590,3 +590,34 @@ Nie przypisuje się tych obserwacji przyszłemu commitowi. Następny krok:
 odebrać fixtures CI i zdiagnozować retry nowej potwierdzonej sesji fazami,
 bez zmniejszenia oczekiwań 3/4. Następnie kwalifikacja native/LLG/FFT oraz
 pełne T00–T18. PR Draft; bez merge, cleanup i restartu workspace.
+
+## Preparation — fazowa regresja retry dwóch sesji
+
+Baza `ca40b06b0c8a07565728a1ef4d266697dbf22f89`. Poprzedni test oczekiwał
+rozpoczęcia B po sześciu tickach, lecz nie sprawdzał zakończenia retry A ani
+osobnych stanów kolekcji i statusu B. Log expected3/actual2 nie dowodzi
+udziału produkcyjnego errorCountRef. Nie zmieniano backoffu ani hooków.
+
+Fixture czeka teraz na błąd A i gotowy wynik retry A. Oddzielne deferred
+status/collection B pozwalają sprawdzić brak żądania przy starym current=A
+i nowym status=B. Po zgodnej kolekcji B test oczekuje trzeciego żądania
+z błędem, a potem czwartego po retry. Każde żądanie ma sprawdzany pełny
+sessionScopeKey: dwa A i dwa B, przy tej samej rewizji preparation 7.
+Zachowano limit sześciu ticków po 1 ms dla każdej fazy oraz dotychczasowe
+advance11ms dla retry; nie zwiększano czasu ani nie obniżano counts 3/4.
+
+preparation-session-phase-contract-20261008.cjs w task storage:
+baseline FAIL (brak scope assertions), working PASS; wykonane rzeczywiste
+plain-JS funkcje confirmedSessionResourceIdentity i sessionRequestScopeKey,
+kontrola AST faz i limitów. To dowód kontraktu fixture i funkcji czystych,
+nie wykonanie React/Vitest ani udowodniona naprawa przyczyny starego CI.
+Scoped ESLint --max-warnings=0 oraz whitespace PASS. Pełne wykonanie nowej
+regresji i TypeScript pozostaje do odbioru w CI; lokalnie testów nie kompilowano.
+
+GitHub dla bazowego HEAD: documentation build 113158350447 SUCCESS;
+control-room-contracts 113158350536, Python/Rust/browser/generated-api
+in_progress; managed-fem queued. Dokumentacja przeszła swój pełny job,
+nie oznacza to zielonego całego PR ani kwalifikacji runtime anten.
+Następny krok: odebrać nowe fazy CI i wyciągnąć przyczynę z konkretnego
+nieudanego etapu, następnie wymagane native/current→field→basis→LLG/FFT,
+trwałość i cztery lanes. T00–T18 aktywne, PR Draft, bez restartu i merge.

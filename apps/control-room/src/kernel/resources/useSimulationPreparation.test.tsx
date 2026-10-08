@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { SESSIONS_PATH, SIMULATION_PREPARATION_PATH } from "../api/apiPaths";
 import type {
   LiveStatusResource,
+  SessionListResource,
   SimulationPreparationResource,
 } from "../api/apiTypes";
 import { ControlRoomApiError } from "../api/ControlRoomApi";
@@ -333,7 +334,7 @@ describe("useSimulationPreparation", () => {
     vi.useFakeTimers();
     updateRealtimeCommunicationPolicy({ status_refresh_ms: 1, error_retry_ms: 10 });
     let sessionId = "session-1";
-    const statusLoad = vi.fn(async () => ({
+    const statusLoad = vi.fn(async (): Promise<LiveStatusResource> => ({
       ...statusFixture(),
       resources: { ...statusFixture().resources, simulation_preparation_revision: 7 },
       session: {
@@ -355,26 +356,63 @@ describe("useSimulationPreparation", () => {
       await act(async () => root.render(<KernelContext.Provider value={kernel}>
         <Probe observations={observations} />
       </KernelContext.Provider>));
-      for (let index = 0; index < 6; index += 1) {
-        await act(async () => vi.advanceTimersByTimeAsync(1));
-      }
+      await waitForPhase(() => load.mock.calls.length === 1 && observations.at(-1)?.status === "error", "session A initial failure");
       expect(load).toHaveBeenCalledTimes(1);
       await act(async () => vi.advanceTimersByTimeAsync(11));
+      await waitForPhase(() => observations.at(-1)?.status === "ready", "session A retry completion");
       expect(load).toHaveBeenCalledTimes(2);
+      const nextStatus = deferred<LiveStatusResource>();
+      const nextCollection = deferred<SessionListResource>();
+      statusLoad.mockImplementationOnce(() => nextStatus.promise);
+      const collectionLoad = vi.spyOn(kernel.api.sessions, "list")
+        .mockImplementationOnce(() => nextCollection.promise);
       sessionId = "session-2";
       await act(async () => {
         resources.invalidate(SESSIONS_PATH, "session:next");
         resources.invalidate(SESSION_STATUS_RESOURCE_KEY, "session:next");
       });
-      for (let index = 0; index < 6; index += 1) {
-        await act(async () => vi.advanceTimersByTimeAsync(1));
-      }
+      await waitForPhase(() => collectionLoad.mock.calls.length === 1 && statusLoad.mock.calls.length === 2, "session B identity requests");
+      expect(load).toHaveBeenCalledTimes(2);
+      await act(async () => {
+        nextStatus.resolve({
+          ...statusFixture(),
+          resources: { simulation_preparation_revision: 7 },
+          session: { ...statusFixture().session, session_id: sessionId, session_epoch: `${sessionId}@1700000000000` },
+        });
+        await nextStatus.promise;
+        await vi.advanceTimersByTimeAsync(1);
+      });
+      // Status B cannot authorize preparation while the collection still names A.
+      expect(load).toHaveBeenCalledTimes(2);
+      await act(async () => {
+        nextCollection.resolve({
+          schema_version: "2.0.0",
+          sessions: [{ current: true, name: sessionId, session_id: sessionId, status: "running" }],
+        });
+        await nextCollection.promise;
+      });
+      await waitForPhase(() => load.mock.calls.length === 3 && observations.at(-1)?.status === "error", "confirmed session B initial failure");
       expect(load).toHaveBeenCalledTimes(3);
       await act(async () => vi.advanceTimersByTimeAsync(11));
+      await waitForPhase(() => observations.at(-1)?.status === "ready", "session B retry completion");
       expect(load).toHaveBeenCalledTimes(4);
+      expect(load.mock.calls.map(([options]) => options.sessionScopeKey)).toEqual([
+        "session=session-1&epoch=session-1%401700000000000&request_scope_epoch=api-instance%3A1",
+        "session=session-1&epoch=session-1%401700000000000&request_scope_epoch=api-instance%3A1",
+        "session=session-2&epoch=session-2%401700000000000&request_scope_epoch=api-instance%3A1",
+        "session=session-2&epoch=session-2%401700000000000&request_scope_epoch=api-instance%3A1",
+      ]);
     } finally {
       await act(async () => root.unmount());
       dom.restore();
+    }
+
+    async function waitForPhase(predicate: () => boolean, phase: string): Promise<void> {
+      for (let tick = 0; tick < 6; tick += 1) {
+        if (predicate()) return;
+        await act(async () => vi.advanceTimersByTimeAsync(1));
+      }
+      expect(predicate(), phase).toBe(true);
     }
   });
 
