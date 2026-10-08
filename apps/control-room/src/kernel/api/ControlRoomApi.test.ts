@@ -6399,6 +6399,88 @@ describe("API instance fence", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 
+  it("preserves a headerless server error without invalidating the pinned API instance", async () => {
+    const pin = "12345678-1234-4234-8234-123456789abc";
+    const fetchImpl = vi.fn()
+      .mockResolvedValueOnce(new Response("Internal Server Error", { status: 500 }))
+      .mockResolvedValueOnce(new Response("{}", {
+        status: 200,
+        headers: { ...contractHeaders, "x-fullmag-api-instance": pin },
+      }));
+    const api = new ControlRoomApi({ expectedApiInstance: pin, fetchImpl });
+
+    await expect(api.sessions.current.status()).rejects.toMatchObject({
+      message: "Internal Server Error",
+      status: 500,
+    });
+    await expect(api.sessions.current.status()).resolves.toEqual({});
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it("still rejects an explicit contract version mismatch on a headerless server error", async () => {
+    const pin = "12345678-1234-4234-8234-123456789abc";
+    const api = new ControlRoomApi({
+      expectedApiInstance: pin,
+      fetchImpl: async () => new Response("Internal Server Error", {
+        status: 500,
+        headers: { "x-api-contract-version": "0.9.0" },
+      }),
+    });
+
+    await expect(api.sessions.current.status()).rejects.toMatchObject({
+      message: "API contract version mismatch: expected 1.0.0, got 0.9.0",
+      status: 0,
+    });
+  });
+
+  it("still fences a server error that explicitly reports a different API instance", async () => {
+    const pin = "12345678-1234-4234-8234-123456789abc";
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ message: "proxy error" }), {
+      status: 500,
+      headers: {
+        ...contractHeaders,
+        "content-type": "application/json",
+        "x-fullmag-api-instance": "87654321-1234-4234-8234-123456789abc",
+      },
+    }));
+    const api = new ControlRoomApi({ expectedApiInstance: pin, fetchImpl });
+
+    await expect(api.sessions.current.status()).rejects.toMatchObject({
+      code: "API_INSTANCE_MISMATCH",
+      status: 409,
+    });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("still fences a successful response without an API instance header", async () => {
+    const pin = "12345678-1234-4234-8234-123456789abc";
+    const fetchImpl = vi.fn(async () => new Response("{}", {
+      status: 200,
+      headers: contractHeaders,
+    }));
+    const api = new ControlRoomApi({ expectedApiInstance: pin, fetchImpl });
+
+    await expect(api.sessions.current.status()).rejects.toMatchObject({
+      code: "API_INSTANCE_MISMATCH",
+      status: 409,
+    });
+  });
+
+  it("keeps missing API instance headers fenced on 304 and 4xx responses", async () => {
+    const pin = "12345678-1234-4234-8234-123456789abc";
+
+    for (const status of [304, 404]) {
+      const api = new ControlRoomApi({
+        expectedApiInstance: pin,
+        fetchImpl: async () => new Response(null, { status, headers: contractHeaders }),
+      });
+
+      await expect(api.sessions.current.status()).rejects.toMatchObject({
+        code: "API_INSTANCE_MISMATCH",
+        status: 409,
+      });
+    }
+  });
   it("pins requests and permanently refuses a replacement without retries", async () => {
     const pin = "12345678-1234-4234-8234-123456789abc";
     const fetchImpl = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {

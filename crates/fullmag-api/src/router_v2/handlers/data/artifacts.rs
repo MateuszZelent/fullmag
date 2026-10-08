@@ -6,6 +6,7 @@ use axum::extract::{Path as AxumPath, State};
 use axum::http::header::CONTENT_TYPE;
 use axum::http::HeaderMap;
 use axum::response::IntoResponse;
+use sha2::{Digest, Sha256};
 
 use crate::artifacts::{
     read_stage_autosave_metadata, sanitize_artifact_relative_path, try_resolve_artifact_path,
@@ -96,15 +97,12 @@ pub async fn list_artifacts(
             artifact.stage_autosave = Some(metadata);
         }
     }
-    let artifact_fingerprint = body
-        .iter()
-        .map(|entry| format!("{}:{}:{:?}", entry.kind, entry.path, entry.stage_autosave))
-        .collect::<Vec<_>>()
-        .join("|");
+    let serialized_body = serde_json::to_vec(&body).map_err(|error| {
+        ApiError::internal(format!("failed to serialize artifact list for ETag: {error}"))
+    })?;
     let etag = crate::router_v2::handlers::shared::stable_strong_etag(&format!(
-        "artifacts:{}:{}",
-        body.len(),
-        artifact_fingerprint
+        "artifacts:sha256:{:x}",
+        Sha256::digest(&serialized_body)
     ));
     Ok(crate::router_v2::handlers::shared::conditional_json_response(&headers, &etag, &body))
 }

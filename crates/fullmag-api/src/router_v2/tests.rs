@@ -30039,6 +30039,159 @@ async fn artifacts_list_returns_304_when_etag_matches() {
 }
 
 #[tokio::test]
+async fn artifacts_list_etag_hashes_large_body_and_invalidates_for_body_and_provenance_changes() {
+    let (app, state, artifact_dir) = test_router_with_session_state_and_artifact_dir().await;
+    let provenance = crate::types::RegionOwnedArtifactProvenance {
+        scene_revision: 1,
+        region_topology_revision: 2,
+        region_membership_revision: 3,
+        region_coefficients_revision: 4,
+        region_initial_state_revision: 5,
+        authored_region_count: 6,
+        material_parameter_field_count: 7,
+        coupling_count: 8,
+        blocked_diagnostic_count: 9,
+        deferred_diagnostic_count: 10,
+    };
+    let artifacts = (0..256)
+        .map(|index| crate::types::ArtifactEntry {
+            path: format!("results/{index:04}-{}.ovf", "x".repeat(96)),
+            kind: "field".into(),
+            region_owned_provenance: (index == 0).then(|| provenance.clone()),
+        })
+        .collect::<Vec<_>>();
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.artifacts = artifacts;
+    }
+
+    let first = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/artifacts")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(first.status(), StatusCode::OK);
+    assert_eq!(
+        first
+            .headers()
+            .get("cache-control")
+            .and_then(|value| value.to_str().ok()),
+        Some("no-cache")
+    );
+    let first_etag = first
+        .headers()
+        .get("etag")
+        .and_then(|value| value.to_str().ok())
+        .expect("missing artifact-list ETag")
+        .to_string();
+    assert!(first_etag.starts_with("\"artifacts:sha256:"));
+    assert!(first_etag.len() <= 96, "ETag was {} bytes", first_etag.len());
+    let first_body = body_bytes(first).await;
+    assert!(first_body.len() > 16 * 1024, "catalog should exceed 16 KiB");
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&first_body)
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .len(),
+        256
+    );
+
+    let repeated = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/artifacts")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(repeated.status(), StatusCode::OK);
+    assert_eq!(
+        repeated
+            .headers()
+            .get("etag")
+            .and_then(|value| value.to_str().ok()),
+        Some(first_etag.as_str())
+    );
+    assert_eq!(body_bytes(repeated).await, first_body);
+
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.artifacts[0].kind = "table".into();
+    }
+    let body_changed = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/artifacts")
+                .header("if-none-match", first_etag.as_str())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(body_changed.status(), StatusCode::OK);
+    let body_changed_etag = body_changed
+        .headers()
+        .get("etag")
+        .and_then(|value| value.to_str().ok())
+        .expect("missing changed artifact-list ETag")
+        .to_string();
+    assert_ne!(body_changed_etag, first_etag);
+    assert_eq!(body_json(body_changed).await[0]["kind"], "table");
+
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.artifacts[0]
+            .region_owned_provenance
+            .as_mut()
+            .expect("fixture provenance")
+            .scene_revision = 2;
+    }
+    let provenance_changed = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/artifacts")
+                .header("if-none-match", body_changed_etag.as_str())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(provenance_changed.status(), StatusCode::OK);
+    let provenance_changed_etag = provenance_changed
+        .headers()
+        .get("etag")
+        .and_then(|value| value.to_str().ok())
+        .expect("missing provenance-changed artifact-list ETag")
+        .to_string();
+    assert_ne!(provenance_changed_etag, body_changed_etag);
+    assert_eq!(
+        body_json(provenance_changed).await[0]["region_owned_provenance"]["scene_revision"],
+        2
+    );
+
+    let not_modified = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/artifacts")
+                .header("if-none-match", provenance_changed_etag.as_str())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(not_modified.status(), StatusCode::NOT_MODIFIED);
+    assert!(body_bytes(not_modified).await.is_empty());
+    let _ = fs::remove_dir_all(&artifact_dir);
+}
+
+#[tokio::test]
 async fn artifacts_list_exposes_stage_autosave_progress_completion_and_failure() {
     let (app, state, artifact_dir) = test_router_with_session_state_and_artifact_dir().await;
     fs::write(
@@ -30073,6 +30226,7 @@ async fn artifacts_list_exposes_stage_autosave_progress_completion_and_failure()
     }
 
     let response = app
+        .clone()
         .oneshot(
             Request::builder()
                 .uri("/v2/sessions/current/data/artifacts")
@@ -30082,6 +30236,12 @@ async fn artifacts_list_exposes_stage_autosave_progress_completion_and_failure()
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
+    let running_etag = response
+        .headers()
+        .get("etag")
+        .and_then(|value| value.to_str().ok())
+        .expect("missing running artifact-list ETag")
+        .to_string();
     let json = body_json(response).await;
     let autosave = json
         .as_array()
@@ -30100,6 +30260,67 @@ async fn artifacts_list_exposes_stage_autosave_progress_completion_and_failure()
     );
     assert_eq!(autosave["stage_autosave"]["stages"][1]["status"], "running");
     assert_eq!(autosave["stage_autosave"]["stages"][2]["status"], "failed");
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.stage_execution = Some(
+            serde_json::from_value(serde_json::json!({
+                "total_stages": 3,
+                "stages": [
+                    {"stage_id":"done","status":"completed"},
+                    {"stage_id":"active","status":"paused"},
+                    {"stage_id":"broken","status":"failed"}
+                ],
+                "runtime_state": "failed"
+            }))
+            .unwrap(),
+        );
+    }
+    let paused = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/artifacts")
+                .header("if-none-match", running_etag.as_str())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(paused.status(), StatusCode::OK);
+    let paused_etag = paused
+        .headers()
+        .get("etag")
+        .and_then(|value| value.to_str().ok())
+        .expect("missing paused artifact-list ETag")
+        .to_string();
+    assert_ne!(paused_etag, running_etag);
+    let paused_json = body_json(paused).await;
+    let paused_autosave = paused_json
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|artifact| artifact["kind"] == "stage_autosave")
+        .expect("stage autosave artifact metadata");
+    assert_eq!(paused_autosave["stage_autosave"]["stages"][1]["status"], "paused");
+
+    let not_modified = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/artifacts")
+                .header("if-none-match", paused_etag.as_str())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(not_modified.status(), StatusCode::NOT_MODIFIED);
+    assert_eq!(
+        not_modified
+            .headers()
+            .get("cache-control")
+            .and_then(|value| value.to_str().ok()),
+        Some("no-cache")
+    );
+    assert!(body_bytes(not_modified).await.is_empty());
     let _ = fs::remove_dir_all(&artifact_dir);
 }
 

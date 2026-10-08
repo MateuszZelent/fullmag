@@ -117,6 +117,7 @@ jobs:
           cargo test -p fullmag-api --bin fullmag-api frequency_domain_dispersion_resource --no-fail-fast
           cargo test -p fullmag-api --bin fullmag-api observation_store_tests --no-fail-fast
           cargo test -p fullmag-api --bin fullmag-api frequency_domain_owner --no-fail-fast
+          cargo test -p fullmag-api --bin fullmag-api artifacts_list_ --no-fail-fast
           cargo test -p fullmag-runner --lib frequency_domain_owner --no-fail-fast
           cargo test -p fullmag-runner --lib eigen_path_native_mode_provenance --no-fail-fast
           cargo test -p fullmag-runner --lib eigen_path_manifest_typed_context_preserves_floquet_and_per_sample_identity --no-fail-fast

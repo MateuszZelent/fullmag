@@ -76,6 +76,21 @@ tożsamości równowagi. Różne hashe artefaktów nie dowodzą różnicy fizycz
 stanu magnetyzacji; mogą obejmować różny kontekst liniaryzacji lub więzów.
 Brakujące, sprzeczne albo niekompletne dowody pozostają błędem kontraktu.
 
+### Katalog artefaktów i błąd pośrednika HTTP
+
+ETag katalogu `/v2/sessions/current/data/artifacts` jest nieprzezroczystym,
+stałej długości walidatorem: SHA-256 dokładnie serializowanej odpowiedzi.
+Zawiera również zmiany provenance i stanu autosave. Pełna lista ścieżek
+pozostaje w body; nie trafia do nagłówka. `If-None-Match` nadal zwraca 304
+wyłącznie przy niezmienionej reprezentacji.
+
+Odpowiedź pośrednika 5xx bez nagłówków protokołu nie dowodzi zmiany instancji
+API. Klient zachowuje pierwotny błąd HTTP i nie akceptuje jego body jako danych.
+Nie odrzuca ostatniej potwierdzonej instancji tylko wskutek takiej awarii.
+Jawnie inny identyfikator instancji albo jawnie błędna wersja kontraktu nadal
+blokują odpowiedź. Brak nagłówka instancji dla 2xx/304/4xx zachowuje wcześniejsze
+zachowanie fail-closed.
+
 ## A1S — typed server-side analysis artifacts (schema freeze)
 
 Poniższy kontrakt jest właścicielem serwerowych danych używanych przez późniejszą

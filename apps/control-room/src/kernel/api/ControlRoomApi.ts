@@ -5022,15 +5022,27 @@ export class ControlRoomApi {
           method,
         });
 
-        if (enforceApiInstancePin && (this.apiInstanceMismatch || (this.expectedApiInstance && response.headers.get(API_INSTANCE_HEADER) !== this.expectedApiInstance))) {
+        const responseApiInstance = response.headers.get(API_INSTANCE_HEADER);
+        const missingInstanceOnServerError =
+          enforceApiInstancePin &&
+          this.expectedApiInstance !== null &&
+          responseApiInstance === null &&
+          response.status >= 500 &&
+          response.status < 600;
+        const responseInstanceMismatch =
+          this.expectedApiInstance !== null &&
+          responseApiInstance !== this.expectedApiInstance &&
+          !missingInstanceOnServerError;
+        if (enforceApiInstancePin && (this.apiInstanceMismatch || responseInstanceMismatch)) {
           this.apiInstanceMismatch = true;
           throw new ControlRoomApiError("API instance changed; reopen Fullmag", 409, response.headers.get("x-request-id"), "API_INSTANCE_MISMATCH");
         }
 
         const contractVersionError = resolveContractVersionError(response, {
-          allowMissing: allowMissingContractVersion,
+          allowMissing: allowMissingContractVersion || missingInstanceOnServerError,
         });
         const accepted =
+          !missingInstanceOnServerError &&
           (response.ok || acceptedStatuses.has(response.status)) &&
           !contractVersionError;
         const responseDetail = await resolveResponseDiagnosticDetail({

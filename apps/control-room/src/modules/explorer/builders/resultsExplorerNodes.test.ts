@@ -226,7 +226,8 @@ describe("buildPhysicsFirstResultsTree", () => {
       node.kind === "results.dispersion.modal.mode_at_k" && node.sampleIndex === 3,
     );
 
-    expect(aggregateRelation?.equilibriumId).toBeNull();
+    expect(aggregateRelation).toBeDefined();
+    expect(aggregateRelation?.equilibriumId).toBeUndefined();
     expect(modeLeaf).toMatchObject({
       equilibriumId: "eq-gamma",
       modeIndex: 1,
@@ -1236,7 +1237,7 @@ describe("physicsFirstResultsSnapshotFromResources", () => {
 
     expect(adapted.snapshot.entries).toEqual([]);
     expect(adapted.contractGaps).toEqual([
-      "Frequency-domain artifact does not publish equilibrium_identity",
+      "Frequency-domain artifact does not publish equilibrium_identity or native_provenance_by_sample",
       "Frequency-domain artifact does not publish boundary_context",
     ]);
   });
