@@ -1169,3 +1169,66 @@ tej bramki. Hook React Doctor zgłosił tylko istniejące dwa await-in-loop w
 chunking/yieldToMain; nie usuwano mechanizmu responsywności i cancellation.
 CPU-SLEPc run 37806509470 / job 113412099816 potwierdzony IN_PROGRESS; pozostaje
 na c51e55fab i nie dowodzi jeszcze niecommitowanego NEV refill.
+
+### NEV refill i rzeczywista bramka PETSc/SLEPc — kolejny checkpoint
+
+Commit 6650b04c6da9b6b5c8410be025aa7223c9b05392 opublikowano po ponownym review
+dokładnie ośmiu plików źródeł, regresji i noty naukowej.
+Cleanup blokuje retry przy nieudanym teardown; cancellation jest sticky.
+Pula modów jest deduplikowana przed cap, retry zachowuje początkowe NCV/MPD
+oraz kumulowany budżet EPS. Publiczne regresje nearest/window wymagają
+niepustych certyfikowanych modów i jawnego statusu niekompletności.
+Provider execution nowych regresji: NOT VERIFIED.
+
+GUI 37809144683: types/lint PASS, Vitest 7625 PASS i 1 FAIL w nowym fixture,
+który odczytywał nodeIndices zamiast zachowanego DTO node_indices. Korekta
+wyłącznie dwóch asercji jest w 39586339b; nowy GUI run 37810228086 na 6650b04c6.
+Browser 37809144683 / job 113421163150 SUCCESS; zakres nie obejmuje jeszcze wszystkich ośmiu chart findings.
+
+CPU-SLEPc 37806509470 zakończył się FAILURE po poprawnym zbudowaniu image:
+MFEM 4.10, PETSc 3.24.6 i SLEPc 3.24.3 mają manifesty i obserwowane hashe.
+Native compile zatrzymało się na KSPConvergedDefaultDestroy/KSPSetConvergenceTest:
+PetscCtxDestroyFn wymaga void**, helper używa void*. Regresji nie wykonano.
+Artefakt: ci-37806509470-slepc-artifact/receipt.json i native-build-and-ctest.log.
+Nowy run 37810232766 na 6650b04c6 potwierdzono jako żywy z tym samym helperem,
+a następnie zażądano anulowania, żeby nie powtarzać znanej awarii kompilacji.
+Trwa korekta zgodności API i własności kontekstu; ponowienie wymaga nowego SHA.
+
+Uwaga 4208794592: commit 39031966898336419f4753ac97f654c9451b0508 wymusza LF
+kontrolera przez .gitattributes i dodaje exact-byte regression do istniejącego
+python-contracts. Nie normalizowano hashy i nie osłabiono kapsuły. Zastosowano LF
+również do istniejącego checkoutu: hash-object --no-filters oraz HEAD blob mają
+identyczny hash 6f3b9ee6aaf35dd994e3a077282c6c35ebbc164d; git diff kontrolera pusty.
+GHA 37810672320 / Python job 113426385921 potwierdzony IN_PROGRESS; wynik regresji
+jest NOT VERIFIED do odczytu terminalnego logu. Run 37810232766 ma już terminalny
+status cancelled, zgodnie z żądaniem po potwierdzeniu wspólnego compile defect.
+
+GUI 37810228086 / jobs 113424868456 i 113424868811 zakończone SUCCESS na
+6650b04c6. Nowa regresja target membership przeszła razem z typecheck/lint
+oraz rzeczywistym browser smoke. Ten dowód nie rozszerza coverage o osiem
+jeszcze niewykonanych szczegółowych przypadków chart aliases/gaps/scatter.
+
+Poprawka PETSc ABI: bde903d77df77a6208fe00b07373a31e9415b1d8 opublikowana po
+review dwóch plików. Wersje przed 3.24 używają void*, od 3.24 void**; wrapper
+czyści slot callbacku bez usunięcia zewnętrznego ownera. Próg potwierdzono w
+oficjalnych nagłówkach PETSc 3.23 i 3.24. Uruchomiono provider 37811157641 oraz
+automatyczny Shifted KSP test 37811150333. Wyniki pozostają NOT VERIFIED.
+
+Python job 113426385921 w 37810672320 zakończył się FAILURE przed nowym
+controller regression: audit_fem_cpu_only_runtime.py odrzuca samo --with-cuda,
+więc jawne PETSc --with-cuda=0 daje fałszywy alarm accelerator-enabled.
+Trwa korekta parsera z pozytywnym disabled i negatywnymi enabled przypadkami;
+nie zmieniamy konfiguracji CPU i nie usuwamy bramki zakazu CUDA.
+
+Shifted KSP 37811150333 / job 113428012006 SUCCESS na bde903d77: kompilacja
+regresji z systemowym real PETSc oraz wykonanie PASS: shifted KSP
+true-convergence regression. Pełny pinned PETSc 3.24/SLEPc provider nadal jest
+oddzielnym dowodem oczekującym. CPU audit false-positive naprawiono w
+89b9ca3c3 (exact --with-cuda=0 dopuszczone; bare/1/yes wciąż odrzucone).
+
+Odświeżony pełny inventory PR97 nadal ma 257 inline comments, ostatni
+4208794719 z 2026-10-07T15:34:45Z; nie znaleziono nowego feedbacku do dopisania.
+PR97 OPEN, PR102 CLOSED. Chart browser draft po review nie ma jeszcze dowodu
+raw scatter/cap/null gap: jego pierwotne counter minima i screenshot były
+niewystarczające. Nie zmieniono statusów ośmiu pending_browser na podstawie
+tego draftu. Doprecyzowanie rzeczywistych asercji i fidelity schemas trwa.
