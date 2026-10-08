@@ -8613,7 +8613,8 @@ mod tests {
         parse_component, preview_cache_is_fresher, project_values, push_field_descriptor,
         resolve_field_scope, resolve_target_field_availability, resolve_transport_spatial_field,
         serialize_analysis_field_vector_binary, FieldFreshness, FieldMaterializationState,
-        FieldVectorQuery, ResolvedFieldScopeDomain, TargetFieldAvailabilityQuery,
+        FieldVectorIndexing, FieldVectorQuery, ResolvedFieldScopeDomain,
+        TargetFieldAvailabilityQuery,
     };
     use crate::router_v2::handlers::data::resolved_spatial_field::{
         resolve_current_spatial_field, ResolvedSpatialField, SpatialFieldSourceKind,

@@ -3301,6 +3301,20 @@ void modal_floquet_wavevector_validation_precedes_tiny_dispatch()
               "invalid Floquet wavevector must be rejected before tiny validation");
         fullmag_fem_frequency_domain_result_destroy(&result);
     };
+    const auto report_unexpected_success_status = [](
+        const char *case_name,
+        const FullmagFemFrequencyDomainResult &result) {
+        if (result.status == FULLMAG_FEM_FD_OK) {
+            return;
+        }
+        std::fprintf(
+            stderr,
+            "INFO: modal C ABI case=%s status=%u error=%.512s diagnostics=%.2048s\n",
+            case_name,
+            static_cast<unsigned int>(result.status),
+            result.error_message != nullptr ? result.error_message : "",
+            result.diagnostics_json != nullptr ? result.diagnostics_json : "");
+    };
 
     const double nonfinite_components[] = {
         std::numeric_limits<double>::quiet_NaN(),
@@ -3353,6 +3367,7 @@ void modal_floquet_wavevector_validation_precedes_tiny_dispatch()
         std::numeric_limits<double>::quiet_NaN();
     FullmagFemFrequencyDomainResult raw_vector_wins_result =
         fullmag_fem_modal_eigen_solve(&raw_vector_wins);
+    report_unexpected_success_status("raw_vector_wins", raw_vector_wins_result);
     check(raw_vector_wins_result.status == FULLMAG_FEM_FD_OK,
           "a finite raw vector must take precedence over a nonfinite fixed-array fallback");
     check(contains(raw_vector_wins_result.diagnostics_json,
@@ -3374,6 +3389,9 @@ void modal_floquet_wavevector_validation_precedes_tiny_dispatch()
     raw_empty_with_fallback.has_floquet_k_vector = 1;
     FullmagFemFrequencyDomainResult raw_empty_with_fallback_result =
         fullmag_fem_modal_eigen_solve(&raw_empty_with_fallback);
+    report_unexpected_success_status(
+        "raw_empty_with_fallback",
+        raw_empty_with_fallback_result);
     check(raw_empty_with_fallback_result.status == FULLMAG_FEM_FD_OK,
           "a nonnull zero-length raw vector must preserve the fixed-array fallback");
     check(contains(raw_empty_with_fallback_result.diagnostics_json,
@@ -3388,6 +3406,9 @@ void modal_floquet_wavevector_validation_precedes_tiny_dispatch()
     null_raw_with_fallback.has_floquet_k_vector = 1;
     FullmagFemFrequencyDomainResult null_raw_with_fallback_result =
         fullmag_fem_modal_eigen_solve(&null_raw_with_fallback);
+    report_unexpected_success_status(
+        "null_raw_with_fallback",
+        null_raw_with_fallback_result);
     check(null_raw_with_fallback_result.status == FULLMAG_FEM_FD_OK,
           "a declared fixed array must remain available when the raw pointer is null");
     check(contains(null_raw_with_fallback_result.diagnostics_json,
