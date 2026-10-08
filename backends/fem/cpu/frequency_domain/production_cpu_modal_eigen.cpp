@@ -3094,6 +3094,8 @@ FrequencyDomainContractResult solve_sparse_production_modal_window_payload(
     bool subwindow_hard_failure = false;
     bool cancellation_interrupted = false;
     bool native_floquet_refill_partial = false;
+    bool native_floquet_refill_dimension_limited = false;
+    bool native_floquet_refill_other_partial = false;
     const char *subwindow_failure_reason = nullptr;
     FloquetSharedDomainSparseModalSolveContext floquet_window_context{};
     FloquetSharedDomainSparseModalSolveContext *reuse_context =
@@ -3126,6 +3128,14 @@ FrequencyDomainContractResult solve_sparse_production_modal_window_payload(
         if (slepc_result.status != nullptr &&
             std::strcmp(slepc_result.status, "partial") == 0) {
             native_floquet_refill_partial = true;
+            if (slepc_result.unsupported_reason != nullptr &&
+                std::strcmp(
+                    slepc_result.unsupported_reason,
+                    "floquet_nev_refill_dimension_limit_reached") == 0) {
+                native_floquet_refill_dimension_limited = true;
+            } else {
+                native_floquet_refill_other_partial = true;
+            }
         }
         const char *stop_reason = subwindow_stop_reason(slepc_result);
         emit_production_shift_invert_progress(
@@ -3392,8 +3402,20 @@ FrequencyDomainContractResult solve_sparse_production_modal_window_payload(
             std::max(max_relative_residual, mode.relative_residual);
     }
     const SLEPcModalAcceptedMode &first_mode = accepted_modes.front();
+    // Internal NEV overfetch is not a public minimum mode count. A
+    // best_effort window may return a nonempty certified pool after only the
+    // legal dimension guard is exhausted, while its completeness stays partial.
+    const bool best_effort_dimension_limited_partial_with_modes =
+        native_floquet_sparse &&
+        request.completeness_policy == 0 &&
+        native_floquet_refill_partial &&
+        native_floquet_refill_dimension_limited &&
+        !native_floquet_refill_other_partial &&
+        !accepted_modes.empty();
     const bool refill_incomplete =
-        native_floquet_sparse && native_floquet_refill_partial;
+        native_floquet_sparse &&
+        native_floquet_refill_partial &&
+        !best_effort_dimension_limited_partial_with_modes;
     result.status = cancellation_interrupted
         ? FrequencyDomainStatus::interrupted
         : refill_incomplete ? FrequencyDomainStatus::solve_error
@@ -3401,7 +3423,9 @@ FrequencyDomainContractResult solve_sparse_production_modal_window_payload(
     result.error_message = cancellation_interrupted
         ? std::string("native FEM modal_eigen production CPU sparse CSR multi-shift solve was cancelled")
         : refill_incomplete
-            ? std::string("native FEM modal_eigen production CPU sparse CSR multi-shift solve did not certify the requested mode count; certified partial modes are retained")
+            ? std::string(
+                  "native FEM modal_eigen production CPU Floquet window remained "
+                  "incomplete after bounded refill; certified partial modes are retained")
             : std::string();
     const char *deduplication_inner_product =
         native_floquet_sparse ? "floquet_positive_tangent_mass" :

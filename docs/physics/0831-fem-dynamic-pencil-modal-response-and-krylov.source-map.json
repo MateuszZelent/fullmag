@@ -1484,7 +1484,13 @@
       "id": "source-floquet-nev-refill-adapter",
       "path": "backends/fem/cpu/frequency_domain/production_cpu_modal_eigen.cpp",
       "symbol": "solve_sparse_production_modal_payload",
-      "responsibility": "Unique production dispatcher routes frequency-window requests into solve_sparse_production_modal_window_payload, which propagates cancellation and reports attempted versus solved/finalized pools and cumulative EPS budget; certified underfill/cancellation remain incomplete window outcomes; runtime pending"
+      "responsibility": "Keep public Eigenmodes.count as an output cap and the internal per-subwindow NEV guard as overfetch. For best_effort, dimension-limited refill with a nonempty certified post-filter/deduplicated pool may return status ok while window completeness remains partial and incomplete; preserve the internal stop reason. Empty pools, certified_count, EPS budget exhaustion, cancellation, and hard failures remain fail-closed; runtime pending"
+    },
+    {
+      "id": "source-floquet-window-count-cap-public-regression",
+      "path": "backends/fem/tests/frequency_domain/modal_eigen_contract_test.cpp",
+      "symbol": "modal_nonzero_k_floquet_shared_domain_nearest_reports_shifted_ksp_diagnostics",
+      "responsibility": "Exercise the public production frequency-window adapter with a narrow dimension-limited band: best_effort returns the nonempty certified pool under the public count cap with partial window metadata; certified_count remains fail-closed; provider-backed runtime pending"
     },
     {
       "id": "source-floquet-nev-refill-regression",

@@ -1507,7 +1507,7 @@ FullmagFemModalEigenRequest make_floquet_contour_request(
 
 #endif
 
-void modal_floquet_contour_original_descriptor_certification_is_fail_closed()
+void modal_floquet_shared_domain_original_descriptor_certification_is_fail_closed()
 {
 #if FULLMAG_HAS_MFEM_STACK && FULLMAG_FEM_WITH_SLEPC
     FloquetContourSharedDomainFixture fixture{};
@@ -1515,13 +1515,40 @@ void modal_floquet_contour_original_descriptor_certification_is_fail_closed()
 
     constexpr double stiffness[] = {1.0, 0.0, 0.0, 1.0};
     constexpr double gyrotropic[] = {0.0, -1.0, 1.0, 0.0};
+    // Keep a positive synthetic total A_qq in the minimal payload so the
+    // shared-domain sparse Floquet pencil has a spectrum. The descriptor
+    // declares no Ku/anisotropy term; the production owner separately
+    // assembles geometric tangent mass from this mesh and its periodic classes.
+    CsrOwned magnetic_stiffness{};
+    magnetic_stiffness.rows = 10u;
+    magnetic_stiffness.columns = 10u;
+    magnetic_stiffness.row_offsets.push_back(0u);
+    for (std::uint32_t row = 0u; row < 10u; ++row) {
+        magnetic_stiffness.column_indices.push_back(row);
+        magnetic_stiffness.values.push_back(1.0);
+        magnetic_stiffness.row_offsets.push_back(
+            static_cast<std::uint32_t>(magnetic_stiffness.values.size()));
+    }
+    fixture.payload.magnetic_a_qq_csr = magnetic_stiffness.view();
 
     reset_progress_capture();
     FullmagFemModalEigenRequest request =
-        make_floquet_contour_request(fixture, stiffness, gyrotropic);
+        make_floquet_contour_request(fixture, nullptr, nullptr);
+    request.target_frequency_hz = 0.16;
+    request.eigensolver_family = 1;
+    request.completeness_policy = 0;
+    request.mfem_operator_enabled = 0;
+    request.mfem_tangent_dof_count = 0u;
+    request.mfem_stiffness_matrix_row_major = nullptr;
+    request.mfem_gyrotropic_matrix_row_major = nullptr;
     static constexpr char kNestedOperatorDiagnostics[] =
-        "{\"operator_diagnostics\":{\"shared_domain_operator_provenance\":"
+        "{\"operator_family\":\"mfem_linearized_llg\","
+        "\"payload_kind\":\"certified_shared_domain\","
+        "\"operator_diagnostics\":{\"shared_domain_operator_provenance\":"
         "{\"scope\":\"nested-only\"}}}";
+    static constexpr char kContourOperatorDiagnostics[] =
+        "{\"operator_family\":\"mfem_linearized_llg\","
+        "\"payload_kind\":\"bloch_floquet_tangent_operator\"}";
 
     fd::ModalEigenRequest native_request{};
     native_request.abi_version = fd::kFrequencyDomainAbiVersion;
@@ -1538,18 +1565,19 @@ void modal_floquet_contour_original_descriptor_certification_is_fail_closed()
         kNestedOperatorDiagnostics;
     native_request.requested_mode_count = 1;
     native_request.target_kind = "frequency_window";
+    native_request.target_frequency_hz = 0.16;
     native_request.frequency_min_hz = 0.01;
     native_request.frequency_max_hz = 1.0;
     native_request.residual_tolerance = 1.0e-10;
     native_request.max_outer_iterations = 32;
     native_request.max_linear_iterations = 128;
-    native_request.eigensolver_family = 2;
-    native_request.completeness_policy = 1;
+    native_request.eigensolver_family = 1;
+    native_request.completeness_policy = 0;
     native_request.execution_target = fd::ModalExecutionTarget::production_cpu;
-    native_request.mfem_operator_enabled = 1;
-    native_request.mfem_tangent_dof_count = 2u;
-    native_request.mfem_stiffness_matrix_row_major = stiffness;
-    native_request.mfem_gyrotropic_matrix_row_major = gyrotropic;
+    native_request.mfem_operator_enabled = 0;
+    native_request.mfem_tangent_dof_count = 0u;
+    native_request.mfem_stiffness_matrix_row_major = nullptr;
+    native_request.mfem_gyrotropic_matrix_row_major = nullptr;
     native_request.has_floquet_k_vector = true;
     native_request.floquet_k_vector_rad_per_m[0] = fixture.k_vector[0];
     native_request.floquet_k_vector_rad_per_m[1] = fixture.k_vector[1];
@@ -1565,12 +1593,51 @@ void modal_floquet_contour_original_descriptor_certification_is_fail_closed()
     native_request.poisson_airbox_shared_domain_payload = &fixture.payload;
     const fd::FrequencyDomainContractResult native_result =
         fd::solve_modal_eigen_contract(native_request);
+    if (native_result.status != fd::FrequencyDomainStatus::ok) {
+        std::fprintf(
+            stderr,
+            "INFO: native Floquet provenance fixture status=%u error=%.512s "
+            "diagnostics=%.2048s\n",
+            static_cast<unsigned int>(native_result.status),
+            native_result.error_message.c_str(),
+            native_result.diagnostics_json.c_str());
+    }
     check(native_result.status == fd::FrequencyDomainStatus::ok,
-          "native modal contract provenance fixture must reach the Floquet solver");
+          "native shared-domain modal contract provenance fixture must reach the Floquet solver");
+    const bool native_window_partial =
+        native_result.diagnostics_json.find(
+            "\"window_completeness\":{\"policy\":\"best_effort\",\"status\":\"partial_convergence\"") !=
+        std::string::npos;
+    const bool native_window_truncated =
+        native_result.diagnostics_json.find(
+            "\"window_completeness\":{\"policy\":\"best_effort\",\"status\":\"truncated_by_requested_count\"") !=
+        std::string::npos;
+    check(native_result.diagnostics_json.find("\"complete\":false") !=
+                  std::string::npos &&
+              native_result.diagnostics_json.find(
+                  "\"unsupported_reason\":\"floquet_nev_refill_dimension_limit_reached\"") !=
+                  std::string::npos &&
+              (native_window_partial || native_window_truncated) &&
+              (native_result.result_json.find(
+                   "\"window_completeness\":\"partial_convergence\"") !=
+                   std::string::npos ||
+               native_result.result_json.find(
+                   "\"window_completeness\":\"truncated_by_requested_count\"") !=
+                   std::string::npos),
+          "native best_effort result preserves incomplete coverage and the actual refill reason");
     check(native_result.diagnostics_json.find(
-              "\"operator_diagnostics\":{\"operator_diagnostics\":{\"shared_domain_operator_provenance\":"
+              "\"operator_diagnostics\":{\"operator_family\":\"mfem_linearized_llg\","
+              "\"payload_kind\":\"certified_shared_domain\","
+              "\"operator_diagnostics\":{\"shared_domain_operator_provenance\":"
               "{\"scope\":\"nested-only\"}}}") != std::string::npos,
           "native modal contract must retain nested operator diagnostics");
+    check(native_result.diagnostics_json.find(
+              "\"deduplication_inner_product\":\"floquet_positive_tangent_mass\"") !=
+                  std::string::npos &&
+              native_result.diagnostics_json.find(
+                  "\"deduplication_mass_matrix\":\"provided_complex_csr\"") !=
+                  std::string::npos,
+          "native shared-domain Floquet provenance must use the producer-owned geometric tangent mass");
     check(native_result.diagnostics_json.find(
               ",\"shared_domain_operator_provenance\":{\"schema_version\":\"poisson_airbox_shared_domain_operator_provenance.v1\"") !=
               std::string::npos,
@@ -1583,22 +1650,54 @@ void modal_floquet_contour_original_descriptor_certification_is_fail_closed()
         kNestedOperatorDiagnostics;
     request.progress_callback = capture_progress;
     FullmagFemFrequencyDomainResult result = fullmag_fem_modal_eigen_solve(&request);
+    if (result.status != FULLMAG_FEM_FD_OK) {
+        std::fprintf(
+            stderr,
+            "INFO: C ABI shared-domain Floquet fixture status=%u error=%.512s "
+            "diagnostics=%.2048s\n",
+            static_cast<unsigned int>(result.status),
+            result.error_message != nullptr ? result.error_message : "",
+            result.diagnostics_json != nullptr ? result.diagnostics_json : "");
+    }
     check(result.status == FULLMAG_FEM_FD_OK,
-          "Floquet contour production adapter must certify the original descriptor");
+          "shared-domain Floquet production adapter must certify the original descriptor");
+    const bool cabi_window_partial =
+        contains(result.diagnostics_json,
+                 "\"window_completeness\":{\"policy\":\"best_effort\",\"status\":\"partial_convergence\"");
+    const bool cabi_window_truncated =
+        contains(result.diagnostics_json,
+                 "\"window_completeness\":{\"policy\":\"best_effort\",\"status\":\"truncated_by_requested_count\"");
+    check(contains(result.diagnostics_json, "\"complete\":false") &&
+              contains(result.diagnostics_json, "\"window_complete\":false") &&
+              contains(result.diagnostics_json,
+                       "\"unsupported_reason\":\"floquet_nev_refill_dimension_limit_reached\"") &&
+              (cabi_window_partial || cabi_window_truncated) &&
+              (contains(result.result_json,
+                        "\"window_completeness\":\"partial_convergence\"") ||
+               contains(result.result_json,
+                        "\"window_completeness\":\"truncated_by_requested_count\"")),
+          "best_effort C ABI result preserves incomplete coverage and its refill reason");
+    check(contains(result.diagnostics_json,
+                   "\"deduplication_inner_product\":\"floquet_positive_tangent_mass\"") &&
+              contains(result.diagnostics_json,
+                       "\"deduplication_mass_matrix\":\"provided_complex_csr\""),
+          "shared-domain Floquet production must deduplicate with its producer-owned geometric mass");
     check(contains(result.result_json, "\"accepted_mode_count\":1"),
-          "Floquet contour result must publish one accepted mode");
+          "shared-domain Floquet window must publish one accepted mode");
     check(contains(result.result_json, "\"floquet_descriptor_certified\":true"),
-          "Floquet contour result must publish the descriptor certificate");
+          "shared-domain Floquet window must publish the descriptor certificate");
     check(contains(result.result_json, "\"floquet_geometric_bc_certified\":false"),
-          "Floquet contour result must preserve the geometric-BC certificate distinction");
+          "shared-domain Floquet window must preserve the geometric-BC certificate distinction");
     check(contains(result.result_json,
                    "\"potential_representation\":\"doubled_real_split_complex_coefficients\""),
-          "Floquet contour result must publish the reconstructed potential representation");
+          "shared-domain Floquet window must publish the reconstructed potential representation");
     check(contains(result.result_json, "\"magnetic_relative_residual\":"),
-          "Floquet contour result must publish the original magnetic residual");
+          "shared-domain Floquet window must publish the original magnetic residual");
     check(contains(
               result.diagnostics_json,
-              "\"operator_diagnostics\":{\"operator_diagnostics\":{\"shared_domain_operator_provenance\":"
+              "\"operator_diagnostics\":{\"operator_family\":\"mfem_linearized_llg\","
+              "\"payload_kind\":\"certified_shared_domain\","
+              "\"operator_diagnostics\":{\"shared_domain_operator_provenance\":"
               "{\"scope\":\"nested-only\"}}}"),
           "nested operator provenance fixture must remain nested under operator diagnostics");
     check(contains(
@@ -1610,20 +1709,25 @@ void modal_floquet_contour_original_descriptor_certification_is_fail_closed()
               ",\"shared_domain_operator_provenance\":{\"schema_version\":\"poisson_airbox_shared_domain_operator_provenance.v1\""),
           "modal solver must append assembled provenance at the result top level");
     check(contains(result.result_json, "\"potential_relative_residual\":"),
-          "Floquet contour result must publish the original potential residual");
+          "shared-domain Floquet window must publish the original potential residual");
     check(contains(result.result_json, "\"potential_vector_real\":[") &&
               contains(result.result_json, "\"potential_vector_imag\":["),
-          "Floquet contour result must publish both potential components");
+          "shared-domain Floquet window must publish both potential components");
     check(contains(result.diagnostics_json, "\"floquet_potential_certificate\":"),
-          "Floquet contour diagnostics must retain the provider potential certificate");
+          "shared-domain Floquet diagnostics must retain the provider potential certificate");
     check(g_progress_event_count == 16,
-          "Floquet contour progress must be emitted only after descriptor certification");
+          "shared-domain Floquet window progress must follow descriptor certification");
     fullmag_fem_frequency_domain_result_destroy(&result);
 
-    request.phase_convention =
+    FullmagFemModalEigenRequest contour_phase_request =
+        make_floquet_contour_request(fixture, stiffness, gyrotropic);
+    contour_phase_request.operator_request.operator_diagnostics_json =
+        kContourOperatorDiagnostics;
+    contour_phase_request.phase_convention =
         FULLMAG_FEM_FREQUENCY_DOMAIN_PHASE_EXP_MINUS_I_OMEGA_T;
     reset_progress_capture();
-    result = fullmag_fem_modal_eigen_solve(&request);
+    contour_phase_request.progress_callback = capture_progress;
+    result = fullmag_fem_modal_eigen_solve(&contour_phase_request);
     check(result.status == FULLMAG_FEM_FD_VALIDATION_ERROR,
           "Floquet contour must reject the unsupported negative-i omega phase convention");
     check(contains(result.diagnostics_json,
@@ -4258,10 +4362,59 @@ void modal_nonzero_k_floquet_shared_domain_nearest_reports_shifted_ksp_diagnosti
     fullmag_fem_frequency_domain_result_destroy(&window_result);
     std::printf("PASS: native_floquet_production_window_positive_mass_merge\n");
 
-    // Request substantially more modes than this bounded fixture's tangent
-    // dimension can provide inside a single narrow band. The public ABI must
-    // preserve the modes that passed descriptor certification while reporting
-    // the underfilled native refill as incomplete.
+    // The public count is a maximum publication cap. The per-subwindow NEV
+    // guard is internal overfetch and can exceed the real-split dimension, so
+    // best_effort must retain a certified in-window pool when that guard alone
+    // reaches its legal dimension limit.
+    FullmagFemModalEigenRequest dimension_limited_one_request = request;
+    dimension_limited_one_request.target_kind = "frequency_window";
+    dimension_limited_one_request.frequency_min_hz = 0.15;
+    dimension_limited_one_request.frequency_max_hz = 0.17;
+    dimension_limited_one_request.requested_mode_count = 1;
+    dimension_limited_one_request.completeness_policy = 0;
+    FullmagFemFrequencyDomainResult dimension_limited_one_result =
+        fullmag_fem_modal_eigen_solve(&dimension_limited_one_request);
+    check(dimension_limited_one_result.status == FULLMAG_FEM_FD_OK,
+          "best_effort window returns a certified mode when only the internal NEV guard hits the dimension limit");
+    const double dimension_limited_one_count =
+        extract_json_number(
+            dimension_limited_one_result.result_json,
+            "\"accepted_mode_count\":",
+            "public_native_floquet_window_dimension_limited_one_mode");
+    check(dimension_limited_one_count == 1.0 &&
+              dimension_limited_one_count <=
+                  dimension_limited_one_request.requested_mode_count,
+          "best_effort window keeps the public mode count as an upper cap");
+    check(contains(dimension_limited_one_result.result_json,
+                   "\"status\":\"ok\"") &&
+              contains(dimension_limited_one_result.result_json, "\"modes\":[{"),
+          "best_effort dimension-limited window publishes its certified mode");
+    const bool dimension_limited_one_partial =
+        contains(dimension_limited_one_result.diagnostics_json,
+                 "\"window_completeness\":{\"policy\":\"best_effort\",\"status\":\"partial_convergence\"");
+    const bool dimension_limited_one_truncated =
+        contains(dimension_limited_one_result.diagnostics_json,
+                 "\"window_completeness\":{\"policy\":\"best_effort\",\"status\":\"truncated_by_requested_count\"");
+    check(contains(dimension_limited_one_result.diagnostics_json,
+                   "\"complete\":false") &&
+              contains(dimension_limited_one_result.diagnostics_json,
+                       "\"window_complete\":false") &&
+              contains(dimension_limited_one_result.diagnostics_json,
+                       "\"unsupported_reason\":\"floquet_nev_refill_dimension_limit_reached\"") &&
+              (dimension_limited_one_partial || dimension_limited_one_truncated),
+          "dimension-limited best_effort diagnostics retain incomplete-window and exact internal-limit evidence");
+    if (dimension_limited_one_truncated) {
+        check(contains(dimension_limited_one_result.diagnostics_json,
+                       "\"result_truncated\":true") &&
+                  contains(dimension_limited_one_result.diagnostics_json,
+                           "\"truncation_reason\":\"requested_mode_cap\""),
+              "actual public-cap truncation keeps its existing completeness classification");
+    }
+    fullmag_fem_frequency_domain_result_destroy(&dimension_limited_one_result);
+    std::printf("PASS: public_native_floquet_window_dimension_limited_best_effort\n");
+
+    // A larger public cap is still only an upper bound: the solver does not
+    // claim that the requested count exists in the band or certify coverage.
     FullmagFemModalEigenRequest underfilled_request = request;
     underfilled_request.target_kind = "frequency_window";
     underfilled_request.frequency_min_hz = 0.15;
@@ -4270,32 +4423,54 @@ void modal_nonzero_k_floquet_shared_domain_nearest_reports_shifted_ksp_diagnosti
     underfilled_request.completeness_policy = 0;
     FullmagFemFrequencyDomainResult underfilled_result =
         fullmag_fem_modal_eigen_solve(&underfilled_request);
-    check(underfilled_result.status == FULLMAG_FEM_FD_SOLVE_ERROR,
-          "native underfilled requested mode count is not reported as successful completion");
-    check(contains(underfilled_result.result_json,
-                   "\"accepted_mode_count\":") &&
-              !contains(underfilled_result.result_json,
-                        "\"accepted_mode_count\":0") &&
-              !contains(underfilled_result.result_json,
-                        "\"accepted_mode_count\":100") &&
+    check(underfilled_result.status == FULLMAG_FEM_FD_OK,
+          "best_effort window may return fewer certified modes than its public output cap");
+    const double underfilled_mode_count =
+        extract_json_number(
+            underfilled_result.result_json,
+            "\"accepted_mode_count\":",
+            "public_native_floquet_window_cap_is_not_a_minimum");
+    check(underfilled_mode_count > 0.0 &&
+              underfilled_mode_count < underfilled_request.requested_mode_count &&
               contains(underfilled_result.result_json, "\"modes\":[{"),
-          "public native window result retains its certified partial modes below the requested count");
+          "best_effort result retains a nonempty certified pool below the public cap");
     check(contains(underfilled_result.diagnostics_json,
                    "\"requested_mode_count\":100") &&
+              contains(underfilled_result.diagnostics_json,
+                       "\"status\":\"ok\"") &&
               contains(underfilled_result.diagnostics_json,
                        "\"complete\":false") &&
               contains(underfilled_result.diagnostics_json,
                        "\"window_complete\":false") &&
               contains(underfilled_result.diagnostics_json,
-                       "\"stop_reason\":\"partial_convergence\""),
-          "public native diagnostics explain the underfilled request without claiming window completion");
+                       "\"window_completeness\":{\"policy\":\"best_effort\",\"status\":\"partial_convergence\"") &&
+              contains(underfilled_result.diagnostics_json,
+                       "\"additional_modes_may_exist\":true") &&
+              contains(underfilled_result.diagnostics_json,
+                       "\"unsupported_reason\":\"floquet_nev_refill_dimension_limit_reached\""),
+          "public diagnostics preserve the incomplete window and dimension-limited refill reason");
     check(contains(underfilled_result.result_json,
-                   "\"status\":\"solve_error\"") &&
+                   "\"status\":\"ok\"") &&
               contains(underfilled_result.result_json,
                        "\"window_completeness\":\"partial_convergence\""),
-          "public result JSON keeps the underfilled request terminal and explicitly partial");
+          "public result distinguishes usable partial modes from complete window coverage");
     fullmag_fem_frequency_domain_result_destroy(&underfilled_result);
-    std::printf("PASS: public_native_floquet_window_underfill_retains_certified_modes\n");
+    std::printf("PASS: public_native_floquet_window_count_is_upper_cap\n");
+
+    FullmagFemModalEigenRequest strict_count_request = underfilled_request;
+    strict_count_request.completeness_policy = 1;
+    FullmagFemFrequencyDomainResult strict_count_result =
+        fullmag_fem_modal_eigen_solve(&strict_count_request);
+    check(strict_count_result.status == FULLMAG_FEM_FD_SOLVE_ERROR,
+          "certified_count policy remains fail-closed when dimension-limited refill leaves the window incomplete");
+    check(contains(strict_count_result.result_json, "\"modes\":[{") &&
+              contains(strict_count_result.diagnostics_json,
+                       "\"window_complete\":false") &&
+              contains(strict_count_result.diagnostics_json,
+                       "\"unsupported_reason\":\"floquet_nev_refill_dimension_limit_reached\""),
+          "strict policy preserves certified partial modes and explicit refill evidence without claiming completion");
+    fullmag_fem_frequency_domain_result_destroy(&strict_count_result);
+    std::printf("PASS: public_native_floquet_window_certified_count_remains_strict\n");
 
     request.residual_tolerance = 0.0;
     FullmagFemFrequencyDomainResult default_tolerance_result =
@@ -4674,7 +4849,7 @@ int main()
     frequency_window_reports_unresolved_subwindow();
     frequency_window_wide_auto_selects_contour_interval_solver();
     modal_frequency_window_production_payload_contour_accepts_multiple_modes();
-    modal_floquet_contour_original_descriptor_certification_is_fail_closed();
+    modal_floquet_shared_domain_original_descriptor_certification_is_fail_closed();
     modal_shift_invert_payload_can_be_assembled_from_mfem_operator();
     modal_dynamic_demag_materialization_preserves_legacy_s_sign();
     modal_shift_invert_dense_full_2x2_payload_accepts_k0_kittel_macrospin();

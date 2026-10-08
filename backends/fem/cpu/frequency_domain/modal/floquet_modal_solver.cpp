@@ -4157,6 +4157,7 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
     // Copy configuration while ST/KSP are safe to inspect. A hard EPS error
     // can leave borrowed DS views alive, so failure reporting must not query
     // those objects. This is pre-setup configuration, not convergence proof.
+    result.shifted_ksp_configuration_before_eps_available = false;
     PCSide configured_pc_side = PC_SIDE_DEFAULT;
     KSPNormType configured_norm_type = KSP_NORM_DEFAULT;
     if (KSPGetPCSide(shifted_ksp, &configured_pc_side) == 0 &&
@@ -4315,7 +4316,6 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
     result.ksp_last_rhs_norm = std::numeric_limits<double>::quiet_NaN();
     result.ksp_last_true_relative_residual =
         std::numeric_limits<double>::quiet_NaN();
-    result.shifted_ksp_configuration_before_eps_available = false;
     const PetscErrorCode eps_solve_error = EPSSolve(eps);
     // A KSP error can unwind through Krylov--Schur while SLEPc owns a
     // DSGetMat() view.  SLEPc 3.24 then cannot safely destroy that EPS because

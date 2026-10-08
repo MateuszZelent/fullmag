@@ -2543,11 +2543,21 @@ Pierwsze EPSSetUp rozstrzyga całkowity budżet max_outer_iterations.
 Każde kolejne EPSSolve otrzymuje wyłącznie pozostałe iteracje, a wynik sumuje
 faktycznie zaraportowane iteracje wszystkich prób. Budżet iteracji liniowych KSP
 pozostaje niezmieniony dla każdej próby. Osiągnięcie limitu wymiaru lub iteracji
-zwraca status partial i tylko certyfikowane mody; adapter frequency-window mapuje
-ten stan na partial_convergence, nie deklaruje kompletnego okna i zachowuje
-dostępne mody. Anulowanie jest sprawdzane przed próbą, przez standardowe
-EPSStoppingBasic z EPS_CONVERGED_USER oraz przed następnym retry; wynik ma status
-interrupted, nie zbieżność.
+zwraca subwindow status partial i tylko certyfikowane mody. Wewnętrzny guard NEV jest
+nadmiarem kandydatów na subwindow, a nie minimalną liczbą modów obiecaną przez
+publiczny parametr count. Dla polityki best_effort ograniczenie wymiaru może
+zakończyć solve statusem ok, jeśli po filtracji pasma i deduplikacji metryką
+pozostaje co najmniej jeden certyfikowany mod. Taki wynik zachowuje
+window_completeness.status=partial_convergence, complete=false i informację o
+wewnętrznej przyczynie; nie certyfikuje ani nie wyczerpuje pasma, a liczba
+zwróconych modów może być mniejsza od publicznego limitu. Jeśli pula przekracza
+limit publikacji, istniejąca klasyfikacja truncated_by_requested_count pozostaje
+właściwa. Status ok oznacza dostępny wynik runtime; nie zastępuje odrębnej
+kwalifikacji naukowej 8-band. Pusta pula, wyczerpanie budżetu EPS, anulowanie
+lub błąd solvera oraz polityka certified_count pozostają fail-closed. Anulowanie
+jest sprawdzane przed
+próbą, przez standardowe EPSStoppingBasic z EPS_CONVERGED_USER oraz przed
+następnym retry; wynik ma status interrupted, nie zbieżność.
 
 Jest to wewnętrzna polityka solvera. Nie zmienia równań, residuów, SI, publicznego
 Python/ProblemIR, liczby żądanych modów ani wejściowego limitu pamięci. Źródło i
