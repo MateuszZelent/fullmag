@@ -133,25 +133,44 @@ PetscErrorCode inject_tiny_recursive_norm_into_true_callback(
     return 0;
 }
 
-PetscErrorCode destroy_injected_true_convergence_probe(void *raw_probe)
+PetscErrorCode destroy_injected_true_convergence_probe_value(
+    InjectedTrueConvergenceProbe *probe)
 {
-    if (raw_probe == nullptr) {
+    if (probe == nullptr) {
         return 0;
     }
-    auto *probe = static_cast<InjectedTrueConvergenceProbe *>(raw_probe);
     PetscErrorCode first_error =
         detail::clear_floquet_shifted_ksp_true_convergence_context(
             probe->context);
     if (probe->default_context != nullptr) {
         const PetscErrorCode error =
-            KSPConvergedDefaultDestroy(probe->default_context);
-        probe->default_context = nullptr;
+            detail::destroy_floquet_ksp_default_convergence_context(
+                &probe->default_context);
         if (first_error == 0) {
             first_error = error;
         }
     }
     return first_error;
 }
+
+#if PETSC_VERSION_LT(3, 24, 0)
+PetscErrorCode destroy_injected_true_convergence_probe(void *raw_probe)
+{
+    return destroy_injected_true_convergence_probe_value(
+        static_cast<InjectedTrueConvergenceProbe *>(raw_probe));
+}
+#else
+PetscErrorCode destroy_injected_true_convergence_probe(void **raw_probe)
+{
+    if (raw_probe == nullptr) {
+        return 0;
+    }
+    const PetscErrorCode error = destroy_injected_true_convergence_probe_value(
+        static_cast<InjectedTrueConvergenceProbe *>(*raw_probe));
+    *raw_probe = nullptr;
+    return error;
+}
+#endif
 bool exercise_recursive_gap_gate()
 {
     KSP ksp = nullptr;
@@ -241,8 +260,10 @@ bool exercise_recursive_gap_gate()
                      "negative PETSc reasons remain final");
 
     if (default_context != nullptr) {
-        ok = check_petsc(KSPConvergedDefaultDestroy(default_context),
-                         "destroy synthetic PETSc default context") && ok;
+        ok = check_petsc(
+                 detail::destroy_floquet_ksp_default_convergence_context(
+                     &default_context),
+                 "destroy synthetic PETSc default context") && ok;
     }
     if (ksp != nullptr) {
         ok = check_petsc(KSPDestroy(&ksp), "destroy synthetic KSP") && ok;
@@ -277,8 +298,8 @@ bool run_ksp_case(
             context = nullptr;
         }
         if (probe.default_context != nullptr) {
-            (void)KSPConvergedDefaultDestroy(probe.default_context);
-            probe.default_context = nullptr;
+            (void)detail::destroy_floquet_ksp_default_convergence_context(
+                &probe.default_context);
         }
         if (true_residual != nullptr) {
             (void)VecDestroy(&true_residual);
@@ -450,11 +471,11 @@ bool run_ksp_case(
             }
 
             // Reuse the same KSP and callback workspace with a different RHS.
-            error = KSPConvergedDefaultDestroy(probe.default_context);
+            error = detail::destroy_floquet_ksp_default_convergence_context(
+                &probe.default_context);
             if (error != 0) {
                 return fail("reset oracle convergence context", error);
             }
-            probe.default_context = nullptr;
             error = KSPConvergedDefaultCreate(&probe.default_context);
             if (error != 0) {
                 return fail("recreate oracle convergence context", error);

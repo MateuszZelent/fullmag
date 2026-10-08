@@ -17,6 +17,25 @@ struct FloquetShiftedKspTrueConvergenceContext {
     PetscInt max_iterations = 0;
 };
 
+inline PetscErrorCode destroy_floquet_ksp_default_convergence_context(
+    void **default_context)
+{
+    if (default_context == nullptr || *default_context == nullptr) {
+        return 0;
+    }
+// PETSc 3.24 changed context destroy callbacks from a value pointer to the
+// address of the context pointer. Keep the default-convergence resource helper
+// compatible with the older runtime toolchain as well.
+#if PETSC_VERSION_LT(3, 24, 0)
+    const PetscErrorCode error =
+        KSPConvergedDefaultDestroy(*default_context);
+#else
+    const PetscErrorCode error = KSPConvergedDefaultDestroy(default_context);
+#endif
+    *default_context = nullptr;
+    return error;
+}
+
 inline PetscErrorCode clear_floquet_shifted_ksp_true_convergence_context(
     FloquetShiftedKspTrueConvergenceContext *context)
 {
@@ -41,8 +60,8 @@ inline PetscErrorCode clear_floquet_shifted_ksp_true_convergence_context(
     }
     if (context->default_context != nullptr) {
         const PetscErrorCode error =
-            KSPConvergedDefaultDestroy(context->default_context);
-        context->default_context = nullptr;
+            destroy_floquet_ksp_default_convergence_context(
+                &context->default_context);
         if (first_error == 0) {
             first_error = error;
         }
@@ -50,12 +69,33 @@ inline PetscErrorCode clear_floquet_shifted_ksp_true_convergence_context(
     return first_error;
 }
 
+inline PetscErrorCode destroy_floquet_shifted_ksp_true_convergence_context_value(
+    FloquetShiftedKspTrueConvergenceContext *context)
+{
+    return clear_floquet_shifted_ksp_true_convergence_context(context);
+}
+
+#if PETSC_VERSION_LT(3, 24, 0)
 inline PetscErrorCode destroy_floquet_shifted_ksp_true_convergence_context(
     void *raw_context)
 {
-    return clear_floquet_shifted_ksp_true_convergence_context(
+    return destroy_floquet_shifted_ksp_true_convergence_context_value(
         static_cast<FloquetShiftedKspTrueConvergenceContext *>(raw_context));
 }
+#else
+inline PetscErrorCode destroy_floquet_shifted_ksp_true_convergence_context(
+    void **raw_context)
+{
+    if (raw_context == nullptr) {
+        return 0;
+    }
+    const PetscErrorCode error =
+        destroy_floquet_shifted_ksp_true_convergence_context_value(
+            static_cast<FloquetShiftedKspTrueConvergenceContext *>(*raw_context));
+    *raw_context = nullptr;
+    return error;
+}
+#endif
 
 inline PetscErrorCode create_floquet_shifted_ksp_true_convergence_context(
     KSP ksp,
