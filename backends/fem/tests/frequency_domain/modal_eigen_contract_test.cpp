@@ -10,6 +10,7 @@
 #include "frequency_domain/nonfinite_json_sanitizer.hpp"
 #include "fullmag_fem.h"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdint>
@@ -20,6 +21,7 @@
 #include <fstream>
 #include <limits>
 #include <string>
+#include <string_view>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -133,6 +135,31 @@ void nonfinite_json_sanitizer_has_bounded_fail_closed_semantics()
 bool contains(const char *haystack, const char *needle)
 {
     return haystack != nullptr && std::strstr(haystack, needle) != nullptr;
+}
+
+void print_shifted_ksp_failure_probe_if_present(std::string_view diagnostics)
+{
+    constexpr std::string_view key = "\"shifted_ksp_failure_probe\":";
+    constexpr std::size_t maximum_printed_bytes = 4096u;
+    const std::size_t key_position = diagnostics.find(key);
+    if (key_position == std::string_view::npos) {
+        return;
+    }
+    const std::size_t object_start = key_position + key.size();
+    if (object_start >= diagnostics.size() || diagnostics[object_start] != '{') {
+        return;
+    }
+    const std::size_t closing_brace = diagnostics.find('}', object_start);
+    if (closing_brace == std::string_view::npos) {
+        return;
+    }
+    const std::size_t object_size = closing_brace - object_start + 1u;
+    const std::size_t printed_size = std::min(object_size, maximum_printed_bytes);
+    std::fprintf(
+        stderr,
+        "INFO: shifted_ksp_failure_probe=%.*s\n",
+        static_cast<int>(printed_size),
+        diagnostics.data() + object_start);
 }
 
 std::size_t count_occurrences(const char *haystack, const char *needle)
@@ -1606,6 +1633,8 @@ void modal_floquet_shared_domain_original_descriptor_certification_is_fail_close
             static_cast<unsigned int>(native_result.status),
             native_result.error_message.c_str(),
             native_result.diagnostics_json.c_str());
+        print_shifted_ksp_failure_probe_if_present(
+            std::string_view(native_result.diagnostics_json));
     }
     check(native_result.status == fd::FrequencyDomainStatus::ok,
           "native shared-domain modal contract provenance fixture must reach the Floquet solver");
@@ -1663,6 +1692,10 @@ void modal_floquet_shared_domain_original_descriptor_certification_is_fail_close
             static_cast<unsigned int>(result.status),
             result.error_message != nullptr ? result.error_message : "",
             result.diagnostics_json != nullptr ? result.diagnostics_json : "");
+        if (result.diagnostics_json != nullptr) {
+            print_shifted_ksp_failure_probe_if_present(
+                std::string_view(result.diagnostics_json));
+        }
     }
     check(result.status == FULLMAG_FEM_FD_OK,
           "shared-domain Floquet production adapter must certify the original descriptor");

@@ -1134,10 +1134,51 @@ void refills_native_floquet_nev_before_tangent_mass_cap()
         operator_view, refill_request);
     check(refill_result.ok && refill_result.accepted_mode_count == 2,
           "native Floquet refill publishes the requested certified mode count");
-    check(refill_result.eps_attempt_count >= 2 &&
-              refill_result.eps_solved_attempt_count >= 2 &&
-              refill_result.eps_finalized_attempt_number ==
-                  refill_result.eps_solved_attempt_count,
+    const bool refill_attempt_telemetry_consistent =
+        refill_result.eps_attempt_count >= 2 &&
+        refill_result.eps_solved_attempt_count >= 2 &&
+        refill_result.eps_finalized_attempt_number ==
+            refill_result.eps_solved_attempt_count;
+    if (!refill_attempt_telemetry_consistent) {
+        const auto &probe = refill_result.shifted_ksp_failure_probe;
+        std::fprintf(
+            stderr,
+            "DIAG: refill telemetry ok=%d status=%s reason=%s attempts=%d "
+            "solved=%d finalized_attempt=%d initial_nev=%d current_nev=%d "
+            "finalized_nev=%d ncv=%d mpd=%d unique=%d probe_attempt=%d "
+            "probe_nev=%lld probe_ncv=%lld callback_count=%llu "
+            "callback_available=%d callback_iteration=%lld default_reason="
+            "%d:%d post_gate_reason=%d:%d probe_attempts=%llu probes=%llu "
+            "probe_measurement_failures=%llu\n",
+            refill_result.ok ? 1 : 0,
+            refill_result.status != nullptr ? refill_result.status : "",
+            refill_result.unsupported_reason != nullptr
+                ? refill_result.unsupported_reason : "",
+            refill_result.eps_attempt_count,
+            refill_result.eps_solved_attempt_count,
+            refill_result.eps_finalized_attempt_number,
+            refill_result.eps_initial_nev,
+            refill_result.eps_nev,
+            refill_result.eps_finalized_nev,
+            refill_result.eps_ncv,
+            refill_result.eps_mpd,
+            refill_result.eps_unique_certified_mode_count,
+            probe.eps_attempt_number,
+            static_cast<long long>(probe.eps_nev_argument),
+            static_cast<long long>(probe.eps_ncv_argument),
+            static_cast<unsigned long long>(probe.callback_count),
+            probe.callback_observation_available ? 1 : 0,
+            static_cast<long long>(probe.last_callback_iteration),
+            probe.last_default_reason_available ? 1 : 0,
+            probe.last_default_reason,
+            probe.last_reason_after_gate_available ? 1 : 0,
+            probe.last_reason_after_gate,
+            static_cast<unsigned long long>(probe.true_probe_attempt_count),
+            static_cast<unsigned long long>(probe.true_probe_count),
+            static_cast<unsigned long long>(
+                probe.true_probe_measurement_failure_count));
+    }
+    check(refill_attempt_telemetry_consistent,
           "native Floquet refill records attempts, safe solves, and the finalized pool identity");
     check(refill_result.eps_initial_nev == 4 &&
               refill_result.eps_nev > refill_result.eps_initial_nev &&
