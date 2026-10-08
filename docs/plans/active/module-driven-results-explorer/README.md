@@ -166,6 +166,13 @@ właściciela. Część 2b (węzły z katalogu zbiorów × szablony manifestów,
 
 ### Etap 3 — widok węzła zamiast podzakładek
 
+Stan: **część 3a wdrożona w źródłach.** Zaznaczenie węzła wyników wybiera
+widok Analysis modułu-właściciela (`kernel/analysis-modules/analysisSurfaceRouting.ts`,
+przez aliasy z etapu 2b): dyspersja → Dispersion, rezonans → Resonance & FMR,
+migawki → Dynamics. Podzakładki zostają przejściowo jako nawigacja
+pomocnicza. Część 3b (usunięcie podzakładek i widoki dostarczane przez moduły)
+wymaga równoległej zmiany smoke testów przeglądarkowych.
+
 - Karta Analysis renderuje widok zaznaczonego węzła; `AnalysisSurfaceTabs`
   wycofane; widoki modułu dyspersji jako pierwsze.
 - Odbiór: zaznaczenie węzła ładuje moduł raz; zmiana zaznaczenia usuwa

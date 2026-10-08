@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import { analysisSurfaceForSelectionKind } from "@/kernel/analysis-modules/analysisSurfaceRouting";
 import { useDynamicStructureFactorResource, useSpinWaveGammaResource } from "@/kernel/resources/spinWaveResources";
 import { useSelectionSelector } from "@/kernel/selection/useSelection";
 import type { Selection } from "@/kernel/selection/selectionTypes";
@@ -172,6 +173,14 @@ export function useAnalysisPlotsController(kernel: KernelApi) {
     setPreferenceActiveSurface(surface);
     analysisWorkspaceStore.setActiveSurface(surface);
   }, [setPreferenceActiveSurface]);
+  // Analysis follows the Results Explorer: selecting a node owned by an
+  // analysis module shows that module's surface (ADR 0054, plan stage 3).
+  const selectionSurface = useSelectionSelector(selectionAnalysisSurface);
+  useEffect(() => {
+    if (selectionSurface && selectionSurface !== analysisWorkspaceStore.getSnapshot().activeSurface) {
+      setActiveSurface(selectionSurface);
+    }
+  }, [selectionSurface, setActiveSurface]);
   const onSubviewChange = useCallback(
     (subview: AnalysisSubview) => setPreferenceActiveSubview(activeSurface, subview),
     [activeSurface, setPreferenceActiveSubview],
@@ -277,6 +286,10 @@ export function useAnalysisPlotsController(kernel: KernelApi) {
     visibleDatasetRevision: dataset.visibleRevision,
     xAxisId,
   };
+}
+
+function selectionAnalysisSurface(selection: Selection) {
+  return analysisSurfaceForSelectionKind(selection.kind);
 }
 
 export function selectedHysteresisStageIdFromSelection(selection: Selection | null): string | null {
