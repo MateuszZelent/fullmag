@@ -227,6 +227,19 @@ def _build_context_for_container_cleanup(root: Path) -> pilot.managed.BuildConte
     )
 
 
+_real_container_cleanup = pilot.managed._cleanup_benchmark_container
+
+
+def _fixture_container_cleanup(context, output, **kwargs):
+    # Exercise real ownership/mount validation with an absent fixture container.
+    docker_absent = lambda *args, **kw: SimpleNamespace(
+        returncode=1, stdout="", stderr="Error: No such object: fixture-container"
+    )
+    return _real_container_cleanup(
+        context, output, run=docker_absent, **kwargs
+    )
+
+
 class PilotTests(unittest.TestCase):
     def test_requires_pilot_from_build_capsule(self):
         with TemporaryDirectory() as tmp:
@@ -255,6 +268,7 @@ class PilotTests(unittest.TestCase):
                  patch.object(pilot.managed, "_compose_environment", return_value={}) as compose_env, \
                  patch.object(pilot.subprocess, "run", return_value=SimpleNamespace(returncode=0)), \
                  patch.object(pilot.managed, "_validate_case_artifacts", return_value={"case": "c1"}), \
+                 patch.object(pilot.managed, "_cleanup_benchmark_container", side_effect=_fixture_container_cleanup), \
                  patch("builtins.print"):
                 self.assertEqual(pilot.execute(context, root, ["docker"], "abc"), 0)
             compose_env.assert_called_once_with(context.layout, context.image_digest)
@@ -337,6 +351,7 @@ class PilotTests(unittest.TestCase):
                  patch.object(pilot.managed, "_validate_case_artifacts", return_value={}) as validate, \
                  patch.object(pilot, "validate_rows", return_value={"qualification": "NOT VERIFIED", "sample_count": 2}) as row_check, \
                  patch.object(pilot, "validate_smoke_potential_fields", return_value={"qualification": "NOT VERIFIED"}) as field_check, \
+                 patch.object(pilot.managed, "_cleanup_benchmark_container", side_effect=_fixture_container_cleanup), \
                  patch("builtins.print"):
                 self.assertEqual(pilot.execute(context, root, ["docker"], "abc", pilot="de-smoke-two"), 0)
             validate.assert_called_once_with(root / "de-smoke-two", "c1")
@@ -362,6 +377,7 @@ class PilotTests(unittest.TestCase):
                  patch.object(pilot.subprocess, "run", return_value=SimpleNamespace(returncode=0)), \
                  patch.object(pilot.managed, "_validate_case_artifacts", return_value={}), \
                  patch.object(pilot, "validate_rows", side_effect=ValueError("missing DE-SMOKE samples")), \
+                 patch.object(pilot.managed, "_cleanup_benchmark_container", side_effect=_fixture_container_cleanup), \
                  patch("builtins.print"):
                 self.assertEqual(pilot.execute(context, root, ["docker"], "abc", pilot="de-smoke-two"), 1)
             result = json.loads((root / "run-result.json").read_text())
@@ -468,6 +484,7 @@ class PilotTests(unittest.TestCase):
                  patch.object(pilot.managed, "_validate_case_artifacts", return_value={}), \
                  patch.object(pilot, "validate_rows", return_value={"sample_count": 2}), \
                  patch.object(pilot, "validate_smoke_potential_fields", side_effect=ValueError("gradient mismatch")), \
+                 patch.object(pilot.managed, "_cleanup_benchmark_container", side_effect=_fixture_container_cleanup), \
                  patch("builtins.print"):
                 self.assertEqual(pilot.execute(context, root, ["docker"], "abc", pilot="de-smoke-two"), 1)
             result = json.loads((root / "run-result.json").read_text())
@@ -653,6 +670,7 @@ class PilotTests(unittest.TestCase):
                  patch.object(pilot.managed, "_validate_case_artifacts", return_value={}), \
                  patch.object(pilot, "validate_rows", return_value={"sample_count": 1}), \
                  patch.object(pilot, "validate_smoke_potential_fields", return_value={}), \
+                 patch.object(pilot.managed, "_cleanup_benchmark_container", side_effect=_fixture_container_cleanup), \
                  patch("builtins.print"):
                 self.assertEqual(pilot.execute(
                     context, root, ["docker"], "abc", pilot="de-smoke-k2",

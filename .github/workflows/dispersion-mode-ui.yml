@@ -37,28 +37,30 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: 24.18.0
-      - name: Prepare isolated managed frontend paths
+      - name: Prepare isolated managed frontend workspace
+        id: frontend-workspace
         run: |
-          python scripts/fullmag_storage.py prepare-links --repo-root . --profile control-room-ci --frontend
           python - <<'PY'
-          import sys
+          import os, sys
           from pathlib import Path
           sys.path.insert(0, "scripts")
           import fullmag_storage
+          from windows.stage_workspace_frontend import stage_workspace_frontend
           layout = fullmag_storage.resolve_layout(Path.cwd(), "control-room-ci")
-          for relative in ("node_modules", "apps/control-room/node_modules"):
-              target = Path(layout["frontend_root"]) / relative
-              fullmag_storage.validate_path(target, layout["storage_root"])
-              target.mkdir(parents=True, exist_ok=True)
+          fullmag_storage.initialize(layout)
+          staged = stage_workspace_frontend(Path.cwd(), layout["build_root"], mode="static")
+          workspace = staged["workspace_root"]
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"workspace={workspace}\n")
           PY
       - name: Install locked dependencies
-        run: pnpm install --frozen-lockfile --store-dir "$FULLMAG_PROJECT_STORAGE_ROOT/cache/pnpm"
+        run: pnpm --dir "${{ steps.frontend-workspace.outputs.workspace }}" install --frozen-lockfile --store-dir "$FULLMAG_PROJECT_STORAGE_ROOT/cache/pnpm"
       - name: Check types and module/resource contracts
         run: |
-          pnpm --dir apps/control-room typecheck
-          pnpm --dir apps/control-room check:architecture-hygiene
-          pnpm --dir apps/control-room check:api-hygiene
+          pnpm --dir "${{ steps.frontend-workspace.outputs.workspace }}/apps/control-room" typecheck
+          pnpm --dir "${{ steps.frontend-workspace.outputs.workspace }}/apps/control-room" check:architecture-hygiene
+          pnpm --dir "${{ steps.frontend-workspace.outputs.workspace }}/apps/control-room" check:api-hygiene
       - name: Lint
-        run: pnpm --dir apps/control-room lint
+        run: pnpm --dir "${{ steps.frontend-workspace.outputs.workspace }}/apps/control-room" lint
       - name: Run Control Room regressions
-        run: pnpm --dir apps/control-room test
+        run: pnpm --dir "${{ steps.frontend-workspace.outputs.workspace }}/apps/control-room" test
