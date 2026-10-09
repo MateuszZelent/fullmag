@@ -1787,3 +1787,18 @@ GHA [37863024787](https://github.com/MateuszZelent/fullmag/actions/runs/37863024
 
 
 Do fragmentu #4207587018 dołączono wymagane cache binding: `_fem_mesh_cache_key` hashuje pełny authoritative owner roster, ten sam co przekazany do standalone planera. Zmiana rosteru nie może trafić w stary per-object cache i ominąć walidacji. Starych plików cache nie usuwano. Regresja porównuje klucze oraz rzeczywisty builder przy istniejącym pliku pod poprzednim kluczem, sprawdzając brak `MeshData.load` i przebudowę obiektów. AST/diff/source review PASS; hosted wykonanie pending. N-OWN-HMAX pozostaje odrębnym wymaganym krokiem.
+
+
+### Nowy zestaw CI na checkpointcie749d116d5
+
+Sprawdzone live uchwyty na `749d116d54c9c81e65ee1a77949e6a620d31a5f4`:
+
+| Bramka | Run | Stan przy ostatniej obserwacji | Zakres |
+|---|---|---|---|
+| bootstrap | [37866128720](https://github.com/MateuszZelent/fullmag/actions/runs/37866128720) | in_progress | Poprawiony dependency assertion, startup v1/v2, tracking-only overlap, ordered script roundtrip, aktualne UI/planner tests |
+| generic SLEPc | [37866131831](https://github.com/MateuszZelent/fullmag/actions/runs/37866131831) | in_progress | Rzeczywisty sparse MFEM admission z failure diagnostics; mass/refill i helper contracts |
+| Floquet count | [37866135267](https://github.com/MateuszZelent/fullmag/actions/runs/37866135267) | in_progress | Guard count certificate z failure diagnostics; kalibracja fixture nadal wymaga wyjaśnienia |
+| Floquet full modal | [37866138366](https://github.com/MateuszZelent/fullmag/actions/runs/37866138366) | in_progress | Niezależne C ABI provider error-status fixtures przed starszym success baseline |
+| scoped mesh | [37866128032](https://github.com/MateuszZelent/fullmag/actions/runs/37866128032) | in_progress | Nowe owner/recipe/cache regression plus pełna paczka mesh; znany actual-density case może nadal blokować całość |
+
+Kolejny podpunkt N-OWN-HMAX jest wykonywany niezależnie od zamrożonego checkpointu CI. Przy ponownym pobraniu GitHub najnowsze cztery komentarze Codex nadal są4225198861/67/73/79; pełny rejestr264wpisów pozostaje aktualny. PR97OPEN, PR102CLOSED. Nie uznajemy celu za zakończony i nie zamykamy PR97 przed rozliczeniem remaining valid_unfixed oraz wymaganych dowodów. Lokalnie nie uruchamiano testów, Gmsh ani kompilacji.
