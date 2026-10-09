@@ -166,16 +166,27 @@ właściciela. Część 2b (węzły z katalogu zbiorów × szablony manifestów,
 
 ### Etap 3 — widok węzła zamiast podzakładek
 
-Stan: **część 3a wdrożona w źródłach.** Zaznaczenie węzła wyników wybiera
-widok Analysis modułu-właściciela (`kernel/analysis-modules/analysisSurfaceRouting.ts`,
-przez aliasy z etapu 2b): dyspersja → Dispersion, rezonans → Resonance & FMR,
-migawki → Dynamics. Podzakładki zostają przejściowo jako nawigacja
-pomocnicza. Część 3b (usunięcie podzakładek i widoki dostarczane przez moduły)
-wymaga równoległej zmiany smoke testów przeglądarkowych.
-Część 3b jest **zablokowana przez etap 8**: powierzchnie Comparison i
-Hysteresis nie mają jeszcze węzłów w drzewie wyników (Hysteresis dostanie je
-z modułem `analysis.hysteresis`, gdy backend opublikuje jego `product_kind`).
-Usunięcie podzakładek wcześniej odcięłoby te powierzchnie.
+Stan: **części 3a i 3b (usunięcie podzakładek) wdrożone w źródłach.**
+Zaznaczenie węzła wyników wybiera widok Analysis modułu-właściciela
+(`kernel/analysis-modules/analysisSurfaceRouting.ts`, przez aliasy z etapu 2b):
+dyspersja → Dispersion, rezonans → Resonance & FMR, migawki → Dynamics,
+`results.hysteresis.root` → Hysteresis, `results.frequency_domain.comparison`
+→ Comparison (oba węzły z `withCatalogAnalysisFamilies`). Pasek zakładek
+powierzchni został usunięty: `AnalysisSurfaceTabs` zastąpił
+`AnalysisSurfaceHeader` z tylko-do-odczytu tytułem
+(`.fm-analysis-plots__surface-title`, `data-analysis-surface-title`) i
+niezmienionym selektorem podwidoku. Powierzchnię przełącza wyłącznie
+Explorer. Smoke testy przeglądarkowe przepisane na wybór węzła rodziny
+wyników (`results:run:<id>:{dynamics,resonance,k-resolved,hysteresis,comparison}`)
+i oczekiwanie na `data-analysis-surface-title`: `scripts/smoke-inspector.mjs`,
+`scripts/smoke-analysis-plots.mjs`,
+`scripts/smoke-viewport-3d-explorer-inspector-targets.mjs`,
+`scripts/audit-chart-performance.mjs`. Fikstury bez bieżącego runu
+(`status.run: null`) nie mają węzłów rodzin; wtedy skrypty ustawiają
+powierzchnię przez zapisaną preferencję `fm:analysis-view-preferences:v2`
+(z przeładowaniem strony) i raportują użytą trasę. Przebieg przeglądarkowy
+tych skryptów: **NOT VERIFIED**. Widoki dostarczane przez moduły pozostają
+do zrobienia.
 
 - Karta Analysis renderuje widok zaznaczonego węzła; `AnalysisSurfaceTabs`
   wycofane; widoki modułu dyspersji jako pierwsze.

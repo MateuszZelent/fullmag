@@ -696,39 +696,92 @@ async function selectDynamicsAnalysisSurface(page) {
 }
 
 async function selectAnalysisSurface(page, surface) {
-  const tab = page
-    .locator(".fm-analysis-plots__tab")
-    .filter({ hasText: new RegExp(`^${escapeRegExp(surface.label)}$`) })
-    .first();
-  await tab.waitFor({ state: "visible", timeout: timeoutMs });
-  if ((await tab.getAttribute("data-state")) !== "active") {
-    await tab.click({ timeout: timeoutMs });
-  }
-  await page.waitForFunction(
-    (surfaceId) =>
-      Array.from(document.querySelectorAll(".fm-analysis-plots__tab")).some(
-        (tab) =>
-          tab.textContent?.trim() === surfaceId.label &&
-          tab.getAttribute("data-state") === "active",
-      ),
-    surface,
-    { timeout: timeoutMs },
-  );
+  const route = await selectAnalysisSurfaceFromExplorer(page, surface.id);
   await page
     .locator(`[data-analysis-surface="${surface.id}"]`)
     .waitFor({ state: "attached", timeout: timeoutMs });
+  return route;
+}
+
+// ADR 0054 stage 3b: Analysis has no surface tabs. The surface follows the
+// selected Explorer Results family node (results:run:<id>:<suffix>). Fixtures
+// without a current run expose no family nodes; then the surface is reached
+// through the persisted analysis-view preference and a reload, and the proof
+// records which route was used.
+const ANALYSIS_SURFACE_RESULTS_NODE_SUFFIX = Object.freeze({
+  comparison: "comparison",
+  dispersion: "k-resolved",
+  dynamics: "dynamics",
+  hysteresis: "hysteresis",
+  "resonance-fmr": "resonance",
+});
+
+async function analysisSurfaceTitle(page) {
+  return page.evaluate(() =>
+    document
+      .querySelector(".fm-analysis-plots__surface-title")
+      ?.getAttribute("data-analysis-surface-title") ?? null,
+  );
+}
+
+async function selectAnalysisSurfaceFromExplorer(page, surfaceId) {
+  const suffix = ANALYSIS_SURFACE_RESULTS_NODE_SUFFIX[surfaceId];
+  if (!suffix) throw new Error(`Unknown Analysis surface: ${surfaceId}`);
+  if ((await page.locator(".fm-analysis-plots [role='tablist']").count()) !== 0) {
+    throw new Error("Analysis must not render surface tabs; Explorer selection owns the surface.");
+  }
+  await page.locator(".fm-analysis-plots__surface-title").waitFor({ state: "visible", timeout: timeoutMs });
+  if ((await analysisSurfaceTitle(page)) === surfaceId) return "already-active";
+  const resultsTab = page.locator(".fm-explorer .fm-tabs-trigger").filter({ hasText: /^Results$/ }).first();
+  let route = "stored-preference-reload";
+  if (await resultsTab.count()) {
+    if ((await resultsTab.getAttribute("aria-selected")) !== "true") await resultsTab.click({ timeout: timeoutMs });
+    const resultsRoot = page.locator('.fm-explorer [role="treeitem"][data-node-id^="results:run:"]').first();
+    if (await resultsRoot.count()) {
+      const rootId = await resultsRoot.getAttribute("data-node-id");
+      if ((await resultsRoot.getAttribute("aria-expanded")) === "false") {
+        const branch = resultsRoot.locator(".fm-explorer-tree-row__branch");
+        if (await branch.count()) await branch.click({ timeout: timeoutMs });
+        else await resultsRoot.dblclick({ timeout: timeoutMs });
+      }
+      const familyNode = page.locator(`.fm-explorer [data-node-id="${rootId}:${suffix}"]`);
+      if (await familyNode.count()) {
+        await familyNode.click({ timeout: timeoutMs });
+        route = "explorer";
+      }
+    }
+  }
+  if (route !== "explorer") {
+    await page.evaluate(({ key, activeSurface }) => {
+      window.localStorage.setItem(key, JSON.stringify({ schemaVersion: 2, activeSurface }));
+    }, { key: "fm:analysis-view-preferences:v2", activeSurface: surfaceId });
+    await page.reload({ waitUntil: "domcontentloaded", timeout: timeoutMs });
+    const analysis = page.locator(".fm-viewport-tabs__trigger").filter({ hasText: /^Analysis$/ }).first();
+    await analysis.click({ timeout: timeoutMs });
+  }
+  await page.waitForFunction(
+    (expected) =>
+      document
+        .querySelector(".fm-analysis-plots__surface-title")
+        ?.getAttribute("data-analysis-surface-title") === expected,
+    surfaceId,
+    { timeout: timeoutMs },
+  );
+  return route;
 }
 
 async function verifyAnalysisSurfaceCycle(page, sessionRequests) {
   const proofs = [];
   for (const surface of buildChartAuditSurfacePlan()) {
     const requestStart = sessionRequests.length;
-    await selectAnalysisSurface(page, surface);
+    const selectionRoute = await selectAnalysisSurface(page, surface);
     await waitForSessionRequestQuiet(page, sessionRequests);
     const panel = page.locator(`[data-analysis-surface="${surface.id}"]`);
     proofs.push({
       id: surface.id,
       label: surface.label,
+      // "stored-preference-reload" counts a full page reload, not a surface switch.
+      selectionRoute,
       requests: sessionRequests.length - requestStart,
       hasEmptyState: (await panel.locator('[role="status"]').count()) > 0,
     });
@@ -2596,10 +2649,6 @@ function numericEnv(name, fallback) {
 
 function safeArtifactName(value) {
   return value.toLowerCase().replace(/[^a-z0-9._-]+/g, "-");
-}
-
-function escapeRegExp(value) {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 if (

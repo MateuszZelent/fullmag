@@ -1575,6 +1575,16 @@ async function qualifyInspectorResonanceLeafRouting(browser, workspaceUrl, outpu
           controlRoomApiBase: baseUrl,
           disableRealtime: true,
         };
+        // Analysis has no surface tabs (ADR 0054 stage 3b): start from a stored
+        // Dispersion preference so the Results leaf selection must reroute it.
+        try {
+          window.localStorage.setItem(
+            "fm:analysis-view-preferences:v2",
+            JSON.stringify({ schemaVersion: 2, activeSurface: "dispersion" }),
+          );
+        } catch {
+          // Storage unavailable: the "before" assertion below reports it.
+        }
       }, new URL(workspaceUrl).origin);
       await installInspectorFixtureApi(page, fixture);
       await gotoInspectorDocument(
@@ -1588,15 +1598,15 @@ async function qualifyInspectorResonanceLeafRouting(browser, workspaceUrl, outpu
       await inspector.waitFor({ state: "visible", timeout: 30_000 });
       await openAnalysisPlotsForResonanceLeafProof(page);
 
-      const analysisTabs = page.locator(".fm-analysis-plots__tabs");
-      const dispersionTab = analysisTabs.getByRole("tab", {
-        exact: true,
-        name: "Dispersion",
-      });
-      await dispersionTab.waitFor({ state: "visible", timeout: 60_000 });
-      await dispersionTab.click();
+      assert(
+        (await page.locator(".fm-analysis-plots [role='tablist']").count()) === 0,
+        `${resultCase.label}: Analysis must not render surface tabs; Explorer selection owns the surface`,
+      );
       await page.waitForFunction(
         () =>
+          document
+            .querySelector(".fm-analysis-plots__surface-title")
+            ?.getAttribute("data-analysis-surface-title") === "dispersion" &&
           document
             .querySelector(".fm-analysis-plots [data-analysis-surface]")
             ?.getAttribute("data-analysis-surface") === "dispersion",
@@ -1817,11 +1827,9 @@ async function inspectorResonanceLeafRoutingState(page, expectedNodeId = null) {
     const surface = document.querySelector(
       ".fm-analysis-plots [data-analysis-surface]",
     );
-    const analysisTabs = document.querySelector(".fm-analysis-plots__tabs");
-    const tabSelected = (label) =>
-      [...(analysisTabs?.querySelectorAll('[role="tab"]') ?? [])].find(
-        (tab) => tab.textContent?.trim() === label,
-      )?.getAttribute("aria-selected") === "true";
+    const surfaceTitle = document
+      .querySelector(".fm-analysis-plots__surface-title")
+      ?.getAttribute("data-analysis-surface-title") ?? null;
     const ribbon = document.querySelector("#fm-ribbon-tab-analysis-context");
     const selectedNode = expectedNodeId
       ? document.querySelector(`[data-node-id="${expectedNodeId}"]`)
@@ -1833,8 +1841,9 @@ async function inspectorResonanceLeafRoutingState(page, expectedNodeId = null) {
     return {
       activeViewportModule: viewport?.getAttribute("data-active-module-id") ?? null,
       analysisSurface: surface?.getAttribute("data-analysis-surface") ?? null,
-      resonanceSelected: tabSelected("Resonance & FMR"),
-      dispersionSelected: tabSelected("Dispersion"),
+      surfaceTitle,
+      resonanceSelected: surfaceTitle === "resonance-fmr",
+      dispersionSelected: surfaceTitle === "dispersion",
       ribbonContextual: ribbon?.getAttribute("data-contextual") ?? null,
       ribbonSelected: ribbon?.getAttribute("aria-selected") ?? null,
       ribbonLabel: ribbon?.textContent?.trim() ?? null,

@@ -134,7 +134,7 @@ import { useAnalysisPlotsController } from "./useAnalysisPlotsController";
 
 const props = {
   datasetRefs: [], dynamicStructureFactor: null, dynamicStructureFactorStatus: "idle", frequencyDomainSeries: [], frequencyDomainStatus: "idle", frequencyDomainTitle: "Frequency domain", frequencyDomainUnavailableReason: null,
-  kernel: {} as KernelApi, onDatasetRefChange: vi.fn(), onSurfaceChange: vi.fn(), selectedDatasetRef: null, selectedStageId: null, spinWaveGamma: null, spinWaveGammaStatus: "idle", table: null, tableStatus: "idle", tableUnsupportedReason: null,
+  kernel: {} as KernelApi, onDatasetRefChange: vi.fn(), selectedDatasetRef: null, selectedStageId: null, spinWaveGamma: null, spinWaveGammaStatus: "idle", table: null, tableStatus: "idle", tableUnsupportedReason: null,
 };
 
 const dynamicStructureFactor = { schema_version: "dynamic_structure_factor.1d.v1:sha256:dsf-1" } as DynamicStructureFactorResource;

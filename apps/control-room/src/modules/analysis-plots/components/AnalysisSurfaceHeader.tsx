@@ -1,5 +1,4 @@
 import type { AnalysisSubview, AnalysisSurface } from "@/kernel/workspace/analysisViewPreferences";
-import { Tabs, TabsList, TabsTrigger } from "@/shared/ui/Tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/shared/ui/Select";
 
 const SURFACES: readonly { id: AnalysisSurface; label: string }[] = [
@@ -23,26 +22,25 @@ const SUBVIEW_LABELS: Readonly<Record<AnalysisSubview, string>> = {
   "resonance.modal-driven": "Modal–Driven",
 };
 
-export function AnalysisSurfaceTabs({
+/**
+ * Read-only header of the active Analysis surface. Surfaces are switched only
+ * from the Explorer Results tree (ADR 0054); this header names the surface and
+ * exposes the contextual subview control.
+ */
+export function AnalysisSurfaceHeader({
   active,
   activeSubview,
-  onChange,
   onSubviewChange = () => undefined,
   subviews = [],
 }: {
   active: AnalysisSurface;
   activeSubview?: AnalysisSubview;
-  onChange: (surface: AnalysisSurface) => void;
   onSubviewChange?: (subview: AnalysisSubview) => void;
   subviews?: readonly AnalysisSubview[];
 }) {
   const surfaceLabel = SURFACES.find((surface) => surface.id === active)?.label ?? "Analysis";
   return <div className="fm-analysis-plots__navigation">
-    <div className="fm-analysis-plots__tabs-scroll">
-      <Tabs aria-label="Analysis workbench surfaces" className="fm-analysis-plots__tabs" onValueChange={(value) => onChange(value as AnalysisSurface)} value={active}>
-        <TabsList aria-label="Analysis workbench surfaces" presentation="segmented">{SURFACES.map((surface) => <TabsTrigger className="fm-analysis-plots__tab" key={surface.id} value={surface.id}>{surface.label}</TabsTrigger>)}</TabsList>
-      </Tabs>
-    </div>
+    <h2 className="fm-analysis-plots__surface-title" data-analysis-surface-title={active}>{surfaceLabel}</h2>
     {activeSubview && subviews.length > 0 ? <Select onValueChange={(value) => onSubviewChange(value as AnalysisSubview)} value={activeSubview}>
       <SelectTrigger aria-label={`${surfaceLabel} subview`} className="fm-analysis-plots__subview" data-analysis-subview={activeSubview} density="compact">
         <SelectValue>{SUBVIEW_LABELS[activeSubview]}</SelectValue>

@@ -26,9 +26,12 @@ const acceptanceDirectory =
   process.env.CONTROL_ROOM_ACCEPTANCE_DIR ??
   path.resolve(".fullmag/reports/live-charts-analysis-acceptance/latest");
 
-const ANALYSIS_SURFACES = [
-  "Dynamics", "Resonance & FMR", "Dispersion", "Hysteresis", "Comparison",
-];
+// ADR 0054 stage 3b: Analysis has no surface tabs; the selected Explorer
+// Results node owns the surface. This fixture publishes no current run
+// (status.run is null), so the Results tree has no analysis family nodes and
+// each page starts from the persisted analysis-view preference instead.
+const ANALYSIS_VIEW_PREFERENCES_STORAGE_KEY = "fm:analysis-view-preferences:v2";
+const DEFAULT_ANALYSIS_SURFACE = "dynamics";
 const SESSION_COLLECTION_PATH = "/v2/sessions";
 const DEVELOPMENT_BACKEND_FIXTURE_PATH = "/v2/platform/development-backend";
 const FIXTURE_SESSION_ID = "analysis-plots-fixture";
@@ -116,7 +119,7 @@ async function main() {
     });
     await page.locator("main.fm-workspace-shell").waitFor({ state: "visible", timeout: timeoutMs });
     await openAnalysisPlots(page);
-    await verifyAnalysisSurfaceContract(page);
+    await verifyAnalysisSurfaceContract(page, DEFAULT_ANALYSIS_SURFACE);
     const selectedDatasetRef = await selectPublishedDataset(page);
     await waitForAnalysisRowsAndCanvas(page);
     await verifyPinnedDatasetProvenance(page, selectedDatasetRef);
@@ -387,15 +390,38 @@ async function openAnalysisPlots(page) {
     .waitFor({ state: "visible", timeout: timeoutMs });
 }
 
-async function verifyAnalysisSurfaceContract(page) {
-  const tabs = page.locator(".fm-analysis-plots__tabs .fm-analysis-plots__tab");
-  await tabs.first().waitFor({ state: "visible", timeout: timeoutMs });
-  const labels = (await tabs.allTextContents()).map((label) => label.trim());
-  if (JSON.stringify(labels) !== JSON.stringify(ANALYSIS_SURFACES)) {
+async function verifyAnalysisSurfaceContract(page, expectedSurface) {
+  const title = page.locator(".fm-analysis-plots__surface-title");
+  await title.waitFor({ state: "visible", timeout: timeoutMs });
+  await page.waitForFunction(
+    (surface) =>
+      document
+        .querySelector(".fm-analysis-plots__surface-title")
+        ?.getAttribute("data-analysis-surface-title") === surface,
+    expectedSurface,
+    { timeout: timeoutMs },
+  );
+  const tabCount = await page
+    .locator(".fm-analysis-plots [role='tablist'], .fm-analysis-plots__tab, .fm-analysis-plots__tabs")
+    .count();
+  if (tabCount !== 0) {
     throw new Error(
-      `Analysis workbench surfaces differ from the dataset-driven contract: ${JSON.stringify(labels)}`,
+      `Analysis must not render surface tabs; the Explorer selection owns the surface (found ${tabCount})`,
     );
   }
+}
+
+async function seedAnalysisSurfacePreference(page, surface) {
+  await page.addInitScript(
+    ({ key, activeSurface }) => {
+      try {
+        window.localStorage.setItem(key, JSON.stringify({ schemaVersion: 2, activeSurface }));
+      } catch {
+        // Storage unavailable: verifyAnalysisSurfaceContract reports the surface mismatch.
+      }
+    },
+    { key: ANALYSIS_VIEW_PREFERENCES_STORAGE_KEY, activeSurface: surface },
+  );
 }
 
 async function selectPublishedDataset(page) {
@@ -613,9 +639,10 @@ async function collectAnalysisPlotProof(page) {
       root?.querySelector('[aria-label="Analysis dataset"]')?.textContent?.trim() ?? "";
     const provenance =
       root?.querySelector(".fm-analysis-plots__header span")?.textContent?.trim() ?? "";
-    const surfaceLabels = Array.from(
-      root?.querySelectorAll(".fm-analysis-plots__tab") ?? [],
-    ).map((element) => element.textContent?.trim() ?? "");
+    const surfaceTitle =
+      root?.querySelector(".fm-analysis-plots__surface-title")?.getAttribute("data-analysis-surface-title") ?? null;
+    const surfaceTabCount =
+      root?.querySelectorAll("[role='tablist'], .fm-analysis-plots__tab, .fm-analysis-plots__tabs").length ?? 0;
     const pointSummary =
       root?.querySelector(".fm-chart-section__point-count")?.textContent?.trim() ?? "";
     const cursor =
@@ -673,7 +700,8 @@ async function collectAnalysisPlotProof(page) {
       retainedRefresh: root?.querySelector(".fm-analysis-chart-surface")?.getAttribute("data-status") === "refreshing",
       rootRect: rootRect ? { height: rootRect.height, width: rootRect.width } : null,
       selectedDatasetRef,
-      surfaceLabels,
+      surfaceTabCount,
+      surfaceTitle,
     };
   });
 }
@@ -711,8 +739,11 @@ function validateProof(proof, expectedDatasetRef) {
   if (!proof.provenance.includes(expectedDatasetRef) || !/\brevision\s+\d+\b/.test(proof.provenance)) {
     failures.push(`analysis provenance is incomplete: ${proof.provenance}`);
   }
-  if (JSON.stringify(proof.surfaceLabels) !== JSON.stringify(ANALYSIS_SURFACES)) {
-    failures.push(`analysis workbench surfaces changed: ${JSON.stringify(proof.surfaceLabels)}`);
+  if (proof.surfaceTabCount !== 0) {
+    failures.push(`analysis renders surface tabs (${proof.surfaceTabCount}); Explorer owns surface switching`);
+  }
+  if (proof.surfaceTitle !== DEFAULT_ANALYSIS_SURFACE) {
+    failures.push(`analysis surface title changed: ${proof.surfaceTitle} != ${DEFAULT_ANALYSIS_SURFACE}`);
   }
   if (!/[1-9]\d*(?:\s*\/\s*[1-9]\d*)?\s+rows/.test(proof.pointSummary)) {
     failures.push(`analysis point summary is missing: ${proof.pointSummary}`);
@@ -766,6 +797,7 @@ async function verifyFrequencyDomainChartFixtures(browser, workspaceUrl, baseUrl
         setOptionCalls: 0,
       };
     }, { apiBase: baseUrl });
+    await seedAnalysisSurfacePreference(page, fixture.surfaceId);
     await installAnalysisDatasetFixtureRoutes(page, fixture);
     page.on("console", (message) => {
       if (message.type() !== "error") return;
@@ -793,7 +825,7 @@ async function verifyFrequencyDomainChartFixtures(browser, workspaceUrl, baseUrl
       await page.goto(workspaceUrl, { timeout: timeoutMs, waitUntil: "domcontentloaded" });
       await page.locator("main.fm-workspace-shell").waitFor({ state: "visible", timeout: timeoutMs });
       await openAnalysisPlots(page);
-      await selectFrequencyDomainSubview(page, fixture.surfaceLabel, fixture.subviewId, fixture.subviewLabel);
+      await selectFrequencyDomainSubview(page, fixture);
 
       const legend = await waitForFrequencyChart(page, fixture);
       const renderedSeries = await inspectFrequencyChartOption(page, fixture);
@@ -846,12 +878,8 @@ async function verifyFrequencyDomainChartFixtures(browser, workspaceUrl, baseUrl
   return proofs;
 }
 
-async function selectFrequencyDomainSubview(page, surfaceLabel, subviewId, subviewLabel) {
-  const surfaceTab = page
-    .locator(".fm-analysis-plots__tab")
-    .filter({ hasText: surfaceLabel });
-  await surfaceTab.first().waitFor({ state: "visible", timeout: timeoutMs });
-  await surfaceTab.first().click({ timeout: timeoutMs });
+async function selectFrequencyDomainSubview(page, { subviewId, subviewLabel, surfaceId, surfaceLabel }) {
+  await verifyAnalysisSurfaceContract(page, surfaceId);
 
   const subviewTrigger = page.getByRole("combobox", { name: `${surfaceLabel} subview` });
   await subviewTrigger.waitFor({ state: "visible", timeout: timeoutMs });
@@ -1709,6 +1737,7 @@ function createFrequencyDomainChartFixtures() {
       },
       subviewId: "resonance.eigenmodes",
       subviewLabel: "Eigenmodes",
+      surfaceId: "resonance-fmr",
       surfaceLabel: "Resonance & FMR",
     },
     {
@@ -1727,6 +1756,7 @@ function createFrequencyDomainChartFixtures() {
       },
       subviewId: "resonance.frequency-response",
       subviewLabel: "Frequency Response",
+      surfaceId: "resonance-fmr",
       surfaceLabel: "Resonance & FMR",
     },
     {
@@ -1742,6 +1772,7 @@ function createFrequencyDomainChartFixtures() {
       dispersionText: dispersionGap.text,
       subviewId: "dispersion.modal",
       subviewLabel: "Modal fₙ(k)",
+      surfaceId: "dispersion",
       surfaceLabel: "Dispersion",
     },
   ];

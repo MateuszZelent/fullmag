@@ -26,9 +26,9 @@ vi.mock("@/shared/ui/Select", () => ({
   SelectValue: () => null,
 }));
 
-import { AnalysisSurfaceTabs } from "./AnalysisSurfaceTabs";
+import { AnalysisSurfaceHeader } from "./AnalysisSurfaceHeader";
 
-describe("AnalysisSurfaceTabs interaction", () => {
+describe("AnalysisSurfaceHeader interaction", () => {
   it("forwards a keyboard-driven contextual subview change", async () => {
     const dom = installSimulationPreparationTestDom();
     const container = dom.document.createElement("div");
@@ -36,10 +36,9 @@ describe("AnalysisSurfaceTabs interaction", () => {
     const onSubviewChange = vi.fn();
     try {
       await act(async () => root.render(
-        <AnalysisSurfaceTabs
+        <AnalysisSurfaceHeader
           active="dynamics"
           activeSubview="dynamics.time-traces"
-          onChange={() => undefined}
           onSubviewChange={onSubviewChange}
           subviews={["dynamics.time-traces", "dynamics.temporal-fft", "dynamics.s-k-f"]}
         />,
