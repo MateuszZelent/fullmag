@@ -6,7 +6,7 @@ Pełny rejestr obejmuje 263 komentarzy liniowych Codex oraz jedną dodatkową uw
 
 PR #102 zamknięto 2026-10-07, zachowując remote branch `codex/launcher-instance-isolation-20261002` przy `954ba797307c4cc773772d380123893210cfa447`. PR #97 pozostaje otwarty do ukończenia rozpatrzenia i uzasadnionych poprawek. Merge ani usuwanie branchy nie są częścią polecenia zamknięcia PR-ów. Wcześniejszy WIP meshing zachowany osobno.
 
-Stan rejestru: `already_fixed`: 23, `duplicate`: 90, `implemented`: 66, `implemented_pending_ci`: 16, `not_actionable`: 2, `unsupported_recommendation`: 3, `valid_unfixed`: 64. Łącznie 264 wpisów; wszystkie wpisy oceniono; zasadnych nienaprawionych i brakujących bramek nie uznaje się za zakończone.
+Stan rejestru: `already_fixed`: 23, `duplicate`: 90, `implemented`: 67, `implemented_pending_ci`: 15, `not_actionable`: 2, `unsupported_recommendation`: 3, `valid_unfixed`: 64. Łącznie 264 wpisów; wszystkie wpisy oceniono; zasadnych nienaprawionych i brakujących bramek nie uznaje się za zakończone.
 
 Legenda: `pending` — nierozpatrzona; `valid_unfixed` — zasadna, nie naprawiona; `already_fixed` — poprawka potwierdzona aktualnym kodem; `duplicate` — powtórzenie; `unsupported_recommendation` — konkretna rekomendacja nie odpowiada kontraktowi; `implemented` — poprawka z potwierdzoną regresją CI; `implemented_pending_ci` — poprawka przygotowana, regresja oczekuje CI; `implemented_pending_browser` — pokrywające CI przeszło, nadal wymaga celowanego dowodu z przeglądarki; `not_actionable` — uwaga zastąpiona późniejszą jawną decyzją użytkownika.
 
@@ -277,7 +277,7 @@ Legenda: `pending` — nierozpatrzona; `valid_unfixed` — zasadna, nie naprawio
 | [4225198879](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4225198879) / #97 | `apps/control-room/src/kernel/analysis-modules/analysisNodeKindAliases.ts` | implemented_pending_ci | Pięć wybieralnych liści Resonance ma jawne aliasy istniejących zarejestrowanych templates. Wspólny routing surface i contextual ribbon zachowuje właściciela Resonance; Inspector kind nie zmienia się. |
 | [4225198873](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4225198873) / #97 | `crates/fullmag-api/src/router_v2/handlers/analysis/frequency_domain.rs` | valid_unfixed | artifact_set_id hash canonical directory path nie wykrywa mieszanych generacji plików. Wymagany spójny kontrakt producenta i czytelnika. |
 | [4225198867](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4225198867) / #97 | `apps/runner-console/src/views/StorageView.js` | duplicate | Ten sam ograniczony timeout pełnego skanu storage. Dirty StorageView nadal7000ms; wcześniej odrzucony zapis konsoli nie jest uznany za gotowy. Powtórzenie 4061898648. |
-| [4225198861](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4225198861) / #97 | `crates/fullmag-plan/src/fem.rs` | implemented_pending_ci | Scalar DMI guard dopuszcza dokładne +0/-0, zachowując Some w requested plan; każdy niezerowy coefficient oraz pola węzłowe pozostają unsupported. Bez epsilon i bez zmiany legalności rzeczywistego DMI. |
+| [4225198861](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4225198861) / #97 | `crates/fullmag-plan/src/fem.rs` | implemented | Scalar DMI guard dopuszcza dokładne +0/-0, zachowując Some w requested plan; każdy niezerowy coefficient oraz pola węzłowe pozostają unsupported. Bez epsilon i bez zmiany legalności rzeczywistego DMI. |
 
 ## Przygotowane przyrosty
 
@@ -1772,3 +1772,8 @@ GHA [37863024787](https://github.com/MateuszZelent/fullmag/actions/runs/37863024
 ### Terminalne statusy shared-domain providera
 
 #4069106611: oba providerowe callsite’y tworzą failure envelope z resolved terminal status, zachowując spójne diagnostics/result JSON i enum. Provider `ok` bez ready/niepustego operatora jest `operator_error`, nigdy OK. Wewnętrzny production-used resolver ma test wszystkich nie-OK statusów i ok+missing. Sparse/dense public C ABI fixtures wymuszają rzeczywisty unavailable provider przez nieobsługiwaną kardynalność anisotropy, sprawdzają branch reason oraz top-level status i wykonują się przed dotychczasową baseline sukcesu. Source review/diff PASS; hosted `floquet-modal-slepc` pending. Native bez MFEM/SLEPc emituje jawny SKIP, nie providerPASS. Brak zmian progów, fizyki, C ABI request/schema lub DSL/IR.
+
+
+### Potwierdzenie kontraktu zerowego DMI
+
+GHA [37863024787](https://github.com/MateuszZelent/fullmag/actions/runs/37863024787), Rust113603051409 SUCCESS: dokładny planner test `fem_eigen_floquet_dynamic_demag_requires_explicit_airbox_cpu_path` PASS, w tym +0/-0 scalar admission, nonzero rejection i nodal-field rejection. #4225198861 zmieniono na implemented. Dowód nie deklaruje obsługi operatora niezerowego DMI ani kwalifikacji fizyki. Cały bootstrap nadal wymaga poprawionego Python joba; jego poprzedni FAIL nie unieważnia osobnego zielonego joba Rust.
