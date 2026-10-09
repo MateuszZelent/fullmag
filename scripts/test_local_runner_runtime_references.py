@@ -161,6 +161,59 @@ class RuntimeReferencePlanTests(unittest.TestCase):
         self.assertIn(("build-a", "frontend.job_id"), refs)
         self.assertIn(("build-c", "job_id"), refs)
 
+    def test_absolute_artifact_root_metadata_protects_old_build(self):
+        package = (
+            self.root / "runs" / "wt" / "build-a" / "artifacts" /
+            "outputs" / ".fullmag" / "local"
+        )
+        metadata = (
+            self.root / "runs" / "wt" / "scientific-batches" /
+            "artifact-root-consumer" / "run-request.json"
+        )
+        document = {"runtime": {"artifact_root": str(package)}}
+        self.assertEqual(set(document["runtime"]), {"artifact_root"})
+        self._write_json(metadata, document)
+
+        plan = self._plan(min_artifacts_to_keep=1)
+
+        self.assertTrue(plan["complete"], plan["errors"])
+        self.assertEqual(self._candidate_ids(plan), {"build-b"})
+        artifact_refs = [
+            ref for ref in plan["references"]
+            if ref["job_id"] == "build-a" and ref["kind"] == "artifact_root"
+        ]
+        self.assertEqual(len(artifact_refs), 1)
+        self.assertTrue(artifact_refs[0]["source"].startswith(str(metadata) + ":"))
+        retained = {item["job_id"]: item["reason"] for item in plan["retained"]}
+        self.assertEqual(retained["build-a"], "reference:artifact_root")
+
+    def test_active_queue_artifact_root_protects_referenced_build(self):
+        package = (
+            self.root / "runs" / "wt" / "build-b" / "artifacts" /
+            "outputs" / ".fullmag" / "local"
+        )
+        active_consumer = {
+            "job_id": "queued-consumer",
+            "worktree_id": "wt",
+            "profile": "fem-cpu-v1",
+            "operation": "run",
+            "state": "queued",
+            "payload": {"runtime": {"artifact_root": str(package)}},
+        }
+
+        plan = self._plan(jobs=self.jobs + [active_consumer], min_artifacts_to_keep=1)
+
+        self.assertTrue(plan["complete"], plan["errors"])
+        self.assertEqual(self._candidate_ids(plan), {"build-a"})
+        artifact_refs = [
+            ref for ref in plan["references"]
+            if ref["job_id"] == "build-b" and ref["kind"] == "artifact_root"
+        ]
+        self.assertEqual(len(artifact_refs), 1)
+        self.assertTrue(artifact_refs[0]["source"].startswith("queue:queued-consumer:"))
+        retained = {item["job_id"]: item["reason"] for item in plan["retained"]}
+        self.assertEqual(retained["build-b"], "active_reference:artifact_root")
+
     def test_active_queue_reference_and_stopped_parent_mount_protect_package(self):
         self._add_build("build-d", updated=40)
         active = {

@@ -695,26 +695,27 @@ def _resolve_artifact_root(
     refs: list[dict[str, str]], candidates: Mapping[str, dict[str, Any]],
     jobs_by_id: Mapping[str, Mapping[str, Any]], storage: Path,
     errors: list[dict[str, str]], scope: str,
-) -> None:
+) -> str | None:
     try:
         target = _artifact_root_target(value, candidates, storage)
     except _PathProblem as issue:
         errors.append(_error(scope, issue.reason, document_source))
-        return
+        return None
     if target is None:
         if any(ref["source"] == document_source for ref in refs):
-            return
+            return None
         errors.append(_error(scope, "ambiguous_artifact_root", document_source))
-        return
+        return None
     if target not in jobs_by_id:
         errors.append(_error("global", "artifact_root_job_not_in_inventory", document_source))
-        return
+        return None
     refs.append({
         "job_id": target,
         "worktree_id": str(jobs_by_id[target].get("worktree_id", "")),
         "kind": "artifact_root",
         "source": document_source + ":" + location,
     })
+    return target
 
 
 def _package_manifest_identity(artifacts: object) -> str:
@@ -1129,10 +1130,12 @@ def plan_runtime_references(
             })
             protect(target_id, "active_reference:" + kind)
         for value, location in raw_roots:
-            _resolve_artifact_root(
+            target_id = _resolve_artifact_root(
                 value, "queue:" + job["job_id"], location, references,
                 package_records, jobs_by_id, root, errors, "global",
             )
+            if target_id is not None:
+                protect(target_id, "active_reference:artifact_root")
 
     # Consume supplied inspection results only; do not contact Docker here.
     try:
@@ -1233,10 +1236,12 @@ def plan_runtime_references(
             protect(target_id, "reference:" + kind)
         for value, location in raw_roots:
             scope = default_scope if default_scope.startswith("job:") else "global"
-            _resolve_artifact_root(
+            target_id = _resolve_artifact_root(
                 value, str(path), location, references, package_records,
                 jobs_by_id, root, errors, scope,
             )
+            if target_id is not None:
+                protect(target_id, "reference:artifact_root")
             if any(error.get("scope") == scope
                    and error.get("code") == "ambiguous_artifact_root"
                    and error.get("path") == str(path) for error in errors):
