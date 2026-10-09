@@ -2,12 +2,18 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import stat
+import subprocess
+import sys
 import tempfile
+import threading
 import unittest
 from unittest.mock import patch
 
 from fullmag_storage import file_lock, StorageError
+from local_runner import coordinator
 from local_runner.retention import inspect_execution, plan
+from local_runner import retention_executor
 from local_runner.retention_executor import apply_execution_plan, CleanupBlocked
 from local_runner.worker_entrypoint import canonical, SCHEMA
 
@@ -82,7 +88,47 @@ class ExecutionCleanupTests(unittest.TestCase):
 
     def apply(self, **kwargs):
         return apply_execution_plan(self.layout, self.plan, self.queue, owner='operator',
-                                    call=kwargs.get('call', self.docker), policy=self.policy, now=self.now)
+                                    call=kwargs.get('call', self.docker), policy=self.policy, now=self.now,
+                                    stream_logs=kwargs.get('stream_logs'))
+
+    def _prepare_attested_worker(self):
+        identifier = self.journal['container_id']
+        self.journal.update(image_digest='image', mounts=[])
+        for name in ('coordinator.json', 'receipt.json'):
+            (self.run / name).write_text(json.dumps(self.journal))
+        self.make_plan()
+        inspected = {
+            'Id': identifier,
+            'Image': 'image',
+            'Mounts': [],
+            'State': {'Status': 'exited', 'Running': False, 'ExitCode': 1},
+            'Config': {'User': '65532:65532'},
+            'HostConfig': {
+                'Privileged': False,
+                'ReadonlyRootfs': True,
+                'CapDrop': ['ALL'],
+                'SecurityOpt': ['no-new-privileges:true'],
+                'NetworkMode': 'bridge',
+            },
+        }
+        return identifier, inspected
+
+    def _worker_docker(self, identifier, inspected):
+        state = {'removed': False, 'calls': []}
+
+        def docker(argv):
+            state['calls'].append(argv)
+            if argv[0] == 'ps':
+                return '' if state['removed'] else identifier
+            if argv[0] == 'inspect':
+                return json.dumps([inspected])
+            if argv[0] == 'rm':
+                self.assertEqual(['rm', identifier], argv)
+                state['removed'] = True
+                return identifier
+            self.fail(str(argv))
+
+        return docker, state
 
     def assert_retained(self, reason):
         result = self.apply()
@@ -328,38 +374,476 @@ class ExecutionCleanupTests(unittest.TestCase):
         self.assertTrue(self.execution.exists())
 
     def test_complete_available_log_is_durable_before_own_worker_removal(self):
-        identifier = self.journal['container_id']
-        self.journal.update(image_digest='image', mounts=[])
-        for name in ('coordinator.json', 'receipt.json'):
-            (self.run / name).write_text(json.dumps(self.journal))
-        self.make_plan()
-        inspected = {'Id': identifier, 'Image': 'image', 'Mounts': [],
-            'State': {'Status': 'exited', 'Running': False, 'ExitCode': 1},
-            'Config': {'User': '65532:65532'},
-            'HostConfig': {'Privileged': False, 'ReadonlyRootfs': True,
-                          'CapDrop': ['ALL'], 'SecurityOpt': ['no-new-privileges:true'], 'NetworkMode': 'bridge'}}
-        full_log = ''.join(f'line {i}\n' for i in range(4001))
-        removed = False
+        identifier, inspected = self._prepare_attested_worker()
+        docker, state = self._worker_docker(identifier, inspected)
+        stdout_log = b'a' * 8191 + '€\n'.encode('utf-8')
+        stdout_log += ''.join(f'line {i}\n' for i in range(4001)).encode('utf-8')
+        stderr_log = b'worker stderr\n'
+        full_log = stdout_log + stderr_log
+
+        def stream_logs(container_id, emit, *, spool_directory):
+            self.assertEqual(identifier, container_id)
+            self.assertTrue(Path(spool_directory).is_dir())
+            emit('stdout', stdout_log[:8192])
+            emit('stdout', stdout_log[8192:])
+            emit('stderr', stderr_log)
+            return 'stdout_then_stderr'
+
+        def assert_archive_before_remove(argv):
+            if argv[0] == 'rm':
+                self.assertEqual(full_log, (self.run / 'worker-full.log').read_bytes())
+                metadata = json.loads((self.run / 'worker-full-log.json').read_text())
+                self.assertEqual(len(full_log), metadata['bytes'])
+                self.assertEqual(hashlib.sha256(full_log).hexdigest(), metadata['sha256'])
+                self.assertEqual('stdout_then_stderr', metadata['channel_order'])
+                self.assertEqual(['rm', identifier], argv)
+
+        original_docker = docker
+
+        def observed_docker(argv):
+            assert_archive_before_remove(argv)
+            return original_docker(argv)
+
+        result = self.apply(call=observed_docker, stream_logs=stream_logs)
+        if retention_executor._directory_sync_capability() != 'supported':
+            self.assertFalse(result['applied'])
+            self.assertIn('worker_full_log_directory_sync_unavailable', result['items'][0]['reason'])
+            self.assertEqual(full_log, (self.run / 'worker-full.log').read_bytes())
+            metadata = json.loads((self.run / 'worker-full-log.json').read_text())
+            self.assertEqual('unavailable', metadata['directory_sync_capability'])
+            self.assertTrue(metadata['directory_sync_required_for_success'])
+            self.assertIs(False, metadata['directory_entries_synced'])
+            self.assertEqual('not_qualified', metadata['power_loss_qualification'])
+            self.assertTrue(self.execution.is_dir())
+            self.assertFalse(state['removed'])
+            return
+        self.assertTrue(result['applied'], result)
+        self.assertTrue(state['removed'])
+        self.assertNotIn(['logs', identifier], state['calls'])
+        self.assertEqual(4003, (self.run / 'worker-full.log').read_bytes().count(b'\n'))
+
+    def test_run_root_directory_barrier_follows_both_publications_and_precedes_rm(self):
+        if retention_executor._directory_sync_capability() != 'supported':
+            self.skipTest('host has no checked directory fsync capability')
+        identifier, inspected = self._prepare_attested_worker()
+        docker, state = self._worker_docker(identifier, inspected)
+        events = []
+        original_fsync = os.fsync
+        original_publish = retention_executor._publish_exclusive_file
+        root_stat = self.run.stat()
+
+        def observe_fsync(descriptor):
+            info = os.fstat(descriptor)
+            if (stat.S_ISDIR(info.st_mode)
+                    and (info.st_dev, info.st_ino) == (root_stat.st_dev, root_stat.st_ino)):
+                events.append('run_root_directory_fsync')
+            return original_fsync(descriptor)
+
+        def observe_publish(source, destination):
+            result = original_publish(source, destination)
+            events.append(Path(destination).name)
+            return result
+
+        def docker_with_event(argv):
+            if argv[0] == 'rm':
+                self.assertEqual(
+                    ['worker-full.log', 'worker-full-log.json', 'run_root_directory_fsync'],
+                    events,
+                )
+            return docker(argv)
+
+        def stream_logs(_container_id, emit, *, spool_directory):
+            emit('stdout', b'complete logs')
+            return 'stdout_then_stderr'
+
+        with patch('local_runner.retention_executor.os.fsync', side_effect=observe_fsync), \
+                patch('local_runner.retention_executor._publish_exclusive_file',
+                      side_effect=observe_publish):
+            result = self.apply(call=docker_with_event, stream_logs=stream_logs)
+
+        self.assertTrue(result['applied'], result)
+        cleanup = result['items'][0]['container_cleanup']
+        self.assertEqual('supported', cleanup['directory_sync_capability'])
+        self.assertTrue(cleanup['directory_sync_required_for_success'])
+        self.assertIs(True, cleanup['directory_entries_synced'])
+        self.assertEqual('not_qualified', cleanup['power_loss_qualification'])
+        receipt = json.loads((self.run / 'worker-full-log.json').read_text())
+        self.assertIsNone(receipt['directory_entries_synced'])
+
+    def test_run_root_directory_fsync_failure_preserves_archive_worker_and_execution(self):
+        if retention_executor._directory_sync_capability() != 'supported':
+            self.skipTest('host has no checked directory fsync capability')
+        identifier, inspected = self._prepare_attested_worker()
+        docker, state = self._worker_docker(identifier, inspected)
+        original_fsync = os.fsync
+        root_stat = self.run.stat()
+
+        def fail_directory_fsync(descriptor):
+            info = os.fstat(descriptor)
+            if (stat.S_ISDIR(info.st_mode)
+                    and (info.st_dev, info.st_ino) == (root_stat.st_dev, root_stat.st_ino)):
+                raise OSError('injected run-root fsync failure')
+            return original_fsync(descriptor)
+
+        def stream_logs(_container_id, emit, *, spool_directory):
+            emit('stdout', b'complete logs')
+            return 'stdout_then_stderr'
+
+        with patch('local_runner.retention_executor.os.fsync', side_effect=fail_directory_fsync):
+            result = self.apply(call=docker, stream_logs=stream_logs)
+
+        self.assertFalse(result['applied'])
+        self.assertIn('worker_full_log_directory_sync_failed', result['items'][0]['reason'])
+        self.assertEqual(b'complete logs', (self.run / 'worker-full.log').read_bytes())
+        receipt = json.loads((self.run / 'worker-full-log.json').read_text())
+        self.assertEqual('supported', receipt['directory_sync_capability'])
+        self.assertTrue(receipt['directory_sync_required_for_success'])
+        self.assertIsNone(receipt['directory_entries_synced'])
+        self.assertNotIn(['rm', identifier], state['calls'])
+        self.assertTrue(self.execution.is_dir())
+
+    def test_unavailable_directory_barrier_publishes_explicit_receipt_then_blocks_rm(self):
+        identifier, inspected = self._prepare_attested_worker()
+        docker, state = self._worker_docker(identifier, inspected)
+
+        def stream_logs(_container_id, emit, *, spool_directory):
+            emit('stdout', b'complete logs')
+            return 'stdout_then_stderr'
+
+        with patch('local_runner.retention_executor._directory_sync_capability',
+                   return_value='unavailable'):
+            result = self.apply(call=docker, stream_logs=stream_logs)
+
+        self.assertFalse(result['applied'])
+        self.assertIn('worker_full_log_directory_sync_unavailable', result['items'][0]['reason'])
+        self.assertEqual(b'complete logs', (self.run / 'worker-full.log').read_bytes())
+        receipt = json.loads((self.run / 'worker-full-log.json').read_text())
+        self.assertEqual('unavailable', receipt['directory_sync_capability'])
+        self.assertTrue(receipt['directory_sync_required_for_success'])
+        self.assertIs(False, receipt['directory_entries_synced'])
+        self.assertEqual('not_qualified', receipt['power_loss_qualification'])
+        self.assertNotIn(['rm', identifier], state['calls'])
+        self.assertTrue(self.execution.is_dir())
+
+    def test_actual_large_subprocess_log_and_receipt_precede_exact_worker_remove(self):
+        identifier, inspected = self._prepare_attested_worker()
+        stdout_size = 16 * 1024**2 + 321
+        stderr_size = 128 * 1024 + 17
+        chunk_size = coordinator._LOG_STREAM_CHUNK_BYTES
+        child = (
+            'import os\n'
+            'stdout_size = ' + str(stdout_size) + '\n'
+            'stderr_size = ' + str(stderr_size) + '\n'
+            'def write_all(fd, value):\n'
+            '    view = memoryview(value)\n'
+            '    while view:\n'
+            '        count = os.write(fd, view)\n'
+            '        view = view[count:]\n'
+            'stdout_remaining = stdout_size\n'
+            'stderr_remaining = stderr_size\n'
+            'while stdout_remaining or stderr_remaining:\n'
+            '    if stdout_remaining:\n'
+            '        amount = min(65536, stdout_remaining)\n'
+            "        write_all(1, b'o' * amount)\n"
+            '        stdout_remaining -= amount\n'
+            '    if stderr_remaining:\n'
+            '        amount = min(65536, stderr_remaining)\n'
+            "        write_all(2, b'e' * amount)\n"
+            '        stderr_remaining -= amount\n'
+        )
+        expected_hash = hashlib.sha256()
+        for byte, total in ((b'o', stdout_size), (b'e', stderr_size)):
+            remaining = total
+            while remaining:
+                amount = min(chunk_size, remaining)
+                expected_hash.update(byte * amount)
+                remaining -= amount
+
+        state = {'removed': False, 'calls': []}
+
         def docker(argv):
-            nonlocal removed
+            state['calls'].append(argv)
             if argv[0] == 'ps':
-                return '' if removed else identifier
+                return '' if state['removed'] else identifier
             if argv[0] == 'inspect':
                 return json.dumps([inspected])
-            if argv[0] == 'logs':
-                self.assertEqual(['logs', identifier], argv)
-                return full_log
             if argv[0] == 'rm':
-                self.assertEqual(full_log, (self.run / 'worker-full.log').read_text())
-                metadata = json.loads((self.run / 'worker-full-log.json').read_text())
-                self.assertEqual(hashlib.sha256(full_log.encode()).hexdigest(), metadata['sha256'])
                 self.assertEqual(['rm', identifier], argv)
-                removed = True
+                metadata = json.loads((self.run / 'worker-full-log.json').read_text())
+                self.assertEqual(stdout_size + stderr_size, metadata['bytes'])
+                self.assertEqual(expected_hash.hexdigest(), metadata['sha256'])
+                self.assertEqual('stdout_then_stderr', metadata['channel_order'])
+                observed_hash = hashlib.sha256()
+                observed_bytes = 0
+                with (self.run / 'worker-full.log').open('rb') as stream:
+                    while True:
+                        chunk = stream.read(chunk_size)
+                        if not chunk:
+                            break
+                        observed_hash.update(chunk)
+                        observed_bytes += len(chunk)
+                self.assertEqual(stdout_size + stderr_size, observed_bytes)
+                self.assertEqual(expected_hash.hexdigest(), observed_hash.hexdigest())
+                state['removed'] = True
                 return identifier
             self.fail(str(argv))
-        self.assertTrue(self.apply(call=docker)['applied'])
-        self.assertTrue(removed)
-        self.assertEqual(4001, len((self.run / 'worker-full.log').read_text().splitlines()))
+
+        def stream_logs(container_id, emit, *, spool_directory):
+            self.assertEqual(identifier, container_id)
+            return coordinator._stream_process_logs(
+                [sys.executable, '-c', child],
+                emit,
+                spool_directory=spool_directory,
+                timeout_seconds=120,
+            )
+
+        result = self.apply(call=docker, stream_logs=stream_logs)
+
+        if retention_executor._directory_sync_capability() != 'supported':
+            self.assertFalse(result['applied'])
+            self.assertIn('worker_full_log_directory_sync_unavailable', result['items'][0]['reason'])
+            metadata = json.loads((self.run / 'worker-full-log.json').read_text())
+            self.assertEqual(stdout_size + stderr_size, metadata['bytes'])
+            self.assertEqual(expected_hash.hexdigest(), metadata['sha256'])
+            self.assertEqual('unavailable', metadata['directory_sync_capability'])
+            self.assertNotIn(['rm', identifier], state['calls'])
+            self.assertTrue(self.execution.is_dir())
+            return
+        self.assertTrue(result['applied'], result)
+        self.assertTrue(state['removed'])
+        self.assertNotIn(['logs', identifier], state['calls'])
+        self.assertFalse(self.execution.exists())
+
+    def test_missing_log_stream_capability_never_falls_back_to_buffered_logs(self):
+        identifier, inspected = self._prepare_attested_worker()
+        docker, state = self._worker_docker(identifier, inspected)
+
+        result = self.apply(call=docker)
+
+        self.assertFalse(result['applied'])
+        self.assertIn('complete_container_log_stream_unavailable', result['items'][0]['reason'])
+        self.assertNotIn(['logs', identifier], state['calls'])
+        self.assertNotIn(['rm', identifier], state['calls'])
+        self.assertTrue(self.execution.is_dir())
+        self.assertFalse((self.run / 'worker-full.log').exists())
+        self.assertFalse((self.run / 'worker-full-log.json').exists())
+
+    def test_invalid_utf8_stream_preserves_worker_and_execution(self):
+        identifier, inspected = self._prepare_attested_worker()
+        docker, state = self._worker_docker(identifier, inspected)
+
+        def invalid_stream(_container_id, emit, *, spool_directory):
+            emit('stdout', b'valid prefix')
+            emit('stderr', b'\xff')
+            return 'stdout_then_stderr'
+
+        result = self.apply(call=docker, stream_logs=invalid_stream)
+
+        self.assertFalse(result['applied'])
+        self.assertIn('worker_full_log_invalid_utf8', result['items'][0]['reason'])
+        self.assertNotIn(['rm', identifier], state['calls'])
+        self.assertTrue(self.execution.is_dir())
+        self.assertFalse((self.run / 'worker-full.log').exists())
+        self.assertFalse((self.run / 'worker-full-log.json').exists())
+
+    def test_incomplete_utf8_suffix_preserves_worker_and_execution(self):
+        identifier, inspected = self._prepare_attested_worker()
+        docker, state = self._worker_docker(identifier, inspected)
+
+        def incomplete_stream(_container_id, emit, *, spool_directory):
+            emit('stdout', b'valid prefix')
+            emit('stderr', b'\xe2\x82')
+            return 'stdout_then_stderr'
+
+        result = self.apply(call=docker, stream_logs=incomplete_stream)
+
+        self.assertFalse(result['applied'])
+        self.assertIn('worker_full_log_invalid_utf8', result['items'][0]['reason'])
+        self.assertNotIn(['rm', identifier], state['calls'])
+        self.assertTrue(self.execution.is_dir())
+        self.assertFalse((self.run / 'worker-full.log').exists())
+        self.assertFalse((self.run / 'worker-full-log.json').exists())
+
+    def test_stdout_stderr_boundary_cannot_complete_invalid_utf8_channel(self):
+        identifier, inspected = self._prepare_attested_worker()
+        docker, state = self._worker_docker(identifier, inspected)
+
+        def cross_channel_sequence(_container_id, emit, *, spool_directory):
+            # The concatenation would decode as U+00A9, but each independent
+            # Docker channel contains an incomplete UTF-8 sequence.
+            emit('stdout', b'\xc2')
+            emit('stderr', b'\xa9')
+            return 'stdout_then_stderr'
+
+        result = self.apply(call=docker, stream_logs=cross_channel_sequence)
+
+        self.assertFalse(result['applied'])
+        self.assertIn('worker_full_log_invalid_utf8', result['items'][0]['reason'])
+        self.assertNotIn(['rm', identifier], state['calls'])
+        self.assertTrue(self.execution.is_dir())
+        self.assertFalse((self.run / 'worker-full.log').exists())
+        self.assertFalse((self.run / 'worker-full-log.json').exists())
+
+    def test_existing_archive_and_receipt_are_preserved_without_stream_or_remove(self):
+        identifier, inspected = self._prepare_attested_worker()
+        docker, state = self._worker_docker(identifier, inspected)
+        old_log = b'previous archive must remain byte exact'
+        old_receipt = b'{"previous":true}\n'
+        (self.run / 'worker-full.log').write_bytes(old_log)
+        (self.run / 'worker-full-log.json').write_bytes(old_receipt)
+
+        def unused_stream(*_args, **_kwargs):
+            self.fail('a conflicting archive must reject before streaming')
+
+        result = self.apply(call=docker, stream_logs=unused_stream)
+
+        self.assertFalse(result['applied'])
+        self.assertIn('worker_full_log_archive_conflict', result['items'][0]['reason'])
+        self.assertEqual(old_log, (self.run / 'worker-full.log').read_bytes())
+        self.assertEqual(old_receipt, (self.run / 'worker-full-log.json').read_bytes())
+        self.assertNotIn(['rm', identifier], state['calls'])
+        self.assertTrue(self.execution.is_dir())
+
+    def test_receipt_publish_failure_keeps_log_container_and_execution(self):
+        identifier, inspected = self._prepare_attested_worker()
+        docker, state = self._worker_docker(identifier, inspected)
+        payload = b'complete stream before receipt failure\n'
+
+        def stream_logs(_container_id, emit, *, spool_directory):
+            emit('stdout', payload)
+            return 'engine_frame_arrival'
+
+        publish = retention_executor._publish_exclusive_file
+
+        def fail_receipt_publish(source, destination):
+            if Path(destination).name == 'worker-full-log.json':
+                raise OSError('injected receipt publication failure')
+            return publish(source, destination)
+
+        with patch('local_runner.retention_executor._publish_exclusive_file',
+                   side_effect=fail_receipt_publish):
+            result = self.apply(call=docker, stream_logs=stream_logs)
+
+        self.assertFalse(result['applied'])
+        self.assertTrue((self.run / 'worker-full.log').is_file())
+        self.assertEqual(payload, (self.run / 'worker-full.log').read_bytes())
+        self.assertFalse((self.run / 'worker-full-log.json').exists())
+        self.assertNotIn(['rm', identifier], state['calls'])
+        self.assertTrue(self.execution.is_dir())
+
+    def test_stream_failure_never_removes_worker_or_execution(self):
+        identifier, inspected = self._prepare_attested_worker()
+        docker, state = self._worker_docker(identifier, inspected)
+
+        def failed_stream(_container_id, emit, *, spool_directory):
+            emit('stdout', b'partial logs')
+            raise OSError('injected truncated stream')
+
+        result = self.apply(call=docker, stream_logs=failed_stream)
+
+        self.assertFalse(result['applied'])
+        self.assertNotIn(['rm', identifier], state['calls'])
+        self.assertTrue(self.execution.is_dir())
+        self.assertFalse((self.run / 'worker-full.log').exists())
+        self.assertFalse((self.run / 'worker-full-log.json').exists())
+
+    def test_second_log_reader_start_failure_never_removes_worker_or_execution(self):
+        identifier, inspected = self._prepare_attested_worker()
+        docker, state = self._worker_docker(identifier, inspected)
+        child = (
+            'import os\n'
+            'for _ in range(256):\n'
+            "    os.write(1, b'o' * 65536)\n"
+            "    os.write(2, b'e' * 65536)\n"
+        )
+        processes = []
+        opened_spools = []
+        emitted = []
+        starts = 0
+        original_start = threading.Thread.start
+        original_fdopen = os.fdopen
+
+        def popen_factory(command, **kwargs):
+            process = subprocess.Popen(command, **kwargs)
+            processes.append(process)
+            return process
+
+        def tracked_fdopen(descriptor, mode):
+            stream = original_fdopen(descriptor, mode)
+            opened_spools.append(stream)
+            return stream
+
+        def fail_second_start(thread):
+            nonlocal starts
+            starts += 1
+            if starts == 2:
+                raise RuntimeError('injected second reader start failure')
+            return original_start(thread)
+
+        def stream_logs(container_id, emit, *, spool_directory):
+            self.assertEqual(identifier, container_id)
+            def observed_emit(channel, payload):
+                emitted.append((channel, payload))
+                emit(channel, payload)
+            return coordinator._stream_process_logs(
+                [sys.executable, '-c', child],
+                observed_emit,
+                spool_directory=spool_directory,
+                timeout_seconds=30,
+                popen_factory=popen_factory,
+            )
+
+        with patch('local_runner.coordinator.os.fdopen', side_effect=tracked_fdopen), \
+                patch('local_runner.coordinator.threading.Thread.start', new=fail_second_start):
+            result = self.apply(call=docker, stream_logs=stream_logs)
+
+        self.assertFalse(result['applied'])
+        self.assertIn('injected second reader start failure', result['items'][0]['reason'])
+        self.assertEqual(2, starts)
+        self.assertEqual(1, len(processes))
+        self.assertIsNotNone(processes[0].poll())
+        self.assertTrue(processes[0].stdout.closed)
+        self.assertTrue(processes[0].stderr.closed)
+        self.assertTrue(all(stream.closed for stream in opened_spools))
+        self.assertEqual([], emitted)
+        self.assertNotIn(['rm', identifier], state['calls'])
+        self.assertTrue(self.execution.is_dir())
+        self.assertFalse((self.run / 'worker-full.log').exists())
+        self.assertFalse((self.run / 'worker-full-log.json').exists())
+
+    def test_preserved_live_reader_spool_blocks_a_blind_capture_retry(self):
+        identifier, inspected = self._prepare_attested_worker()
+        docker, state = self._worker_docker(identifier, inspected)
+        stream_calls = []
+
+        def preserve_live_reader(_container_id, _emit, *, spool_directory):
+            stream_calls.append(spool_directory)
+            (Path(spool_directory) / 'live-reader.spool').write_bytes(b'unknown partial')
+            raise coordinator._DockerLogSpoolsPreservedError(
+                'test live reader remains active',
+                spool_directory=spool_directory,
+            )
+
+        first = self.apply(call=docker, stream_logs=preserve_live_reader)
+        self.assertFalse(first['applied'])
+        self.assertEqual(1, len(stream_calls))
+        preserved = Path(stream_calls[0])
+        self.assertEqual(b'unknown partial', (preserved / 'live-reader.spool').read_bytes())
+        self.assertNotIn(['rm', identifier], state['calls'])
+        self.assertTrue(self.execution.is_dir())
+
+        self.make_plan()
+        self.plan['plan_id'] = 'plan-fedc5678'
+
+        def must_not_retry(*_args, **_kwargs):
+            self.fail('an unknown private spool requires reconciliation before retry')
+
+        second = self.apply(call=docker, stream_logs=must_not_retry)
+        self.assertFalse(second['applied'])
+        self.assertIn('worker_full_log_spool_outcome_unknown', second['items'][0]['reason'])
+        self.assertEqual(1, len(stream_calls))
+        self.assertNotIn(['rm', identifier], state['calls'])
+        self.assertTrue(self.execution.is_dir())
 
     def test_partial_delete_is_recorded_and_not_claimed_as_reclaim(self):
         def fail_after_file(target):

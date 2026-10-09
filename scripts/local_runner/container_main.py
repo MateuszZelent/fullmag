@@ -25,7 +25,10 @@ from local_runner.service import (
     read_stop_request,
     request_stop,
 )
-from local_runner.unix_docker import docker
+from local_runner.unix_docker import (
+    docker,
+    stream_container_logs as stream_docker_logs,
+)
 from local_runner.container_api import APIUnavailable
 from local_runner.observability import (
     ObservabilityHub,
@@ -152,7 +155,8 @@ class Application:
         self.paths = ServicePaths.from_storage(self.storage)
         self.hub = ObservabilityHub(self.storage, owner=self.owner)
         self.retention_service = RetentionService(self.hub, self.queue, self.layout,
-                                                  owner=self.owner, call=docker)
+                                                  owner=self.owner, call=docker,
+                                                  stream_logs=stream_docker_logs)
         if read_stop_request(self.paths) is not None:
             self.retention_service.drain()
         self._lifecycle_lock = threading.RLock()

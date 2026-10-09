@@ -27,8 +27,10 @@ class RetentionServiceTests(unittest.TestCase):
         (self.root / 'locks').mkdir()
         self.hub = ObservabilityHub(self.root)
         self.queue = Queue()
+        self.stream_logs = lambda *_args, **_kwargs: 'stdout_then_stderr'
         self.service = RetentionService(self.hub, self.queue, {'storage_root': str(self.root)},
-                                        owner='operator', call=lambda _: '')
+                                        owner='operator', call=lambda _: '',
+                                        stream_logs=self.stream_logs)
 
     def finish(self):
         self.service.thread.join(timeout=5)
@@ -178,6 +180,27 @@ class RetentionServiceTests(unittest.TestCase):
             self.finish()
         apply.assert_called_once()
         execution.assert_not_called()
+
+    def test_execution_apply_receives_explicit_log_stream_capability(self):
+        plan = {
+            'plan_id': 'plan-87654321',
+            'scope': 'execution',
+            'status': 'accepted',
+            'applied': False,
+        }
+        result = {
+            'plan_id': plan['plan_id'],
+            'scope': 'execution',
+            'status': 'succeeded',
+            'applied': True,
+        }
+
+        with patch('local_runner.retention_service.apply_execution_plan',
+                   return_value=result) as executor:
+            observed = self.service._execute(plan)
+
+        self.assertEqual('succeeded', observed['status'])
+        self.assertIs(executor.call_args.kwargs['stream_logs'], self.stream_logs)
 
     def test_execution_scope_filters_before_scan_and_persists_real_progress(self):
         selected = ['a' * 32]

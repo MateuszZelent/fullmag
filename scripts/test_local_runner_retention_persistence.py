@@ -11,6 +11,7 @@ from local_runner.retention_executor import apply_execution_plan
 from local_runner.retention_persistence import (
     INLINE_JSON_BYTES, MANIFEST_SCHEMA, MAX_ENTRY_BYTES, MAX_OPTIONAL_ERROR_JSON_BYTES,
     RetentionPersistenceError, failure_fields, maximum_failure_fields,
+    operation_outcome_template,
     read_document, write_document,
 )
 
@@ -242,8 +243,6 @@ class RetentionPersistenceTests(unittest.TestCase):
                 )
 
     def test_runtime_recovery_error_envelope_fits_maximal_dual_summary(self):
-        from local_runner.retention_persistence import operation_outcome_template
-
         type_name = 'T' * 510
         code = 'c' * 510
         error_type = type(type_name, (Exception,), {'reason_code': code})
@@ -279,6 +278,59 @@ class RetentionPersistenceTests(unittest.TestCase):
             len(self._canonical_bytes(actual_errors)),
             len(self._canonical_bytes(reserved_errors)),
         )
+
+    def test_actual_container_cleanup_envelope_preflights_and_roundtrips(self):
+        from local_runner import retention_executor
+        if retention_executor._directory_sync_capability() != 'supported':
+            self.skipTest('host has no checked run-root directory sync capability')
+
+        from test_local_runner_retention_executor import ExecutionCleanupTests
+
+        fixture = ExecutionCleanupTests(
+            'test_complete_available_log_is_durable_before_own_worker_removal',
+        )
+        fixture.setUp()
+        try:
+            container_id, inspected = fixture._prepare_attested_worker()
+            docker, state = fixture._worker_docker(container_id, inspected)
+
+            def stream_logs(_container_id, emit, *, spool_directory):
+                emit('stdout', b'actual producer payload')
+                return 'stdout_then_stderr'
+
+            result = fixture.apply(call=docker, stream_logs=stream_logs)
+
+            self.assertTrue(result['applied'], result)
+            self.assertTrue(state['removed'])
+            cleanup = result['items'][0]['container_cleanup']
+            candidate = fixture.plan['raw_engine_plan']['candidates'][0]
+            preflight_item = operation_outcome_template(
+                candidate,
+                plan_id=fixture.plan['plan_id'],
+                scope='execution',
+                storage_root=str(fixture.root),
+            )
+            self.assertEqual(set(preflight_item['container_cleanup']), set(cleanup))
+            self.assertEqual(container_id, cleanup['removed_worker_container_id'])
+            self.assertEqual('supported', cleanup['directory_sync_capability'])
+            self.assertIs(True, cleanup['directory_sync_required_for_success'])
+            self.assertIs(True, cleanup['directory_entries_synced'])
+            self.assertEqual('not_qualified', cleanup['power_loss_qualification'])
+
+            operation_path = (
+                fixture.root / 'index' / 'retention-operations'
+                / (fixture.plan['plan_id'] + '.json')
+            )
+            serialized = read_document(
+                fixture.root,
+                operation_path,
+                plan_id=fixture.plan['plan_id'],
+                kind='operation',
+                scope='execution',
+            )
+            self.assertEqual(result, serialized)
+        finally:
+            fixture.doCleanups()
 
     def test_plan_preview_exception_keeps_code_and_hashes_omitted_message(self):
         class _SourcePlanError(Exception):

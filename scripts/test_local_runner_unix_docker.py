@@ -1,6 +1,7 @@
 import unittest
 import struct
 from unittest.mock import patch
+from local_runner.coordinator import CoordinatorError
 from local_runner.unix_docker import create_payload, decode_logs
 from local_runner.container_main import desktop_daemon_root
 
@@ -9,22 +10,23 @@ class UnixDockerTests(unittest.TestCase):
     def test_retention_uses_complete_logs_and_exact_nonforced_container_delete(self):
         from local_runner.unix_docker import docker
         identifier = 'a' * 64
-        frame = b'\x01\0\0\0' + struct.pack('>I', 5) + b'hello'
-        with patch('local_runner.unix_docker.engine', return_value=frame) as engine:
-            self.assertEqual('hello', docker(['logs', identifier]))
-            self.assertIn('tail=all', engine.call_args.args[1])
+        with patch('local_runner.unix_docker.engine') as engine:
+            with self.assertRaisesRegex(CoordinatorError, 'require stream_container_logs'):
+                docker(['logs', identifier])
+            engine.assert_not_called()
         with patch('local_runner.unix_docker.engine', return_value=b'') as engine:
             self.assertEqual(identifier, docker(['rm', identifier]))
             engine.assert_called_once_with('DELETE', '/containers/' + identifier + '?force=false&v=false')
             with self.assertRaises(ValueError):
                 docker(['rm', '--force', identifier])
 
-    def test_retention_refuses_lossy_log_decode(self):
+    def test_lossy_decoder_is_separate_from_retention_stream_api(self):
         from local_runner.unix_docker import docker
         frame = b'\x01\0\0\0' + struct.pack('>I', 2) + b'\xff\n'
-        with patch('local_runner.unix_docker.engine', return_value=frame):
-            with self.assertRaises(UnicodeDecodeError):
+        with patch('local_runner.unix_docker.engine') as engine:
+            with self.assertRaisesRegex(CoordinatorError, 'require stream_container_logs'):
                 docker(['logs', 'a' * 64])
+            engine.assert_not_called()
         self.assertEqual('\ufffd\n', decode_logs(frame))
 
     def test_closed_create_options(self):

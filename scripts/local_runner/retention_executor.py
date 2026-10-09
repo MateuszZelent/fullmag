@@ -4,6 +4,7 @@ Only private execution trees are eligible here. Sources, results, receipts,
 artifact packages and shared build caches are never deletion targets.
 """
 from contextlib import ExitStack
+import codecs
 import hashlib
 import json
 import os
@@ -12,6 +13,7 @@ import re
 import shutil
 import socket
 import stat
+import tempfile
 import time
 import uuid
 
@@ -84,7 +86,242 @@ def _overlap(left, right):
     return left == right or left.startswith(right + '/') or right.startswith(left + '/')
 
 
-def guard_containers(layout, job, journal, target, call):
+def _publish_exclusive_file(source, destination):
+    """Publish a completed same-filesystem file without replacing prior evidence."""
+    try:
+        os.link(source, destination)
+    except FileExistsError as error:
+        raise CleanupBlocked('worker_full_log_archive_conflict') from error
+    except OSError as error:
+        raise CleanupBlocked('worker_full_log_publish_failed') from error
+
+
+def _directory_sync_capability():
+    """Report only the directory barrier this process can request and check."""
+    if os.name == 'nt':
+        return 'unavailable'
+    if not all(hasattr(os, name) for name in ('O_DIRECTORY', 'O_NOFOLLOW')):
+        return 'unavailable'
+    return 'supported'
+
+
+class _RunRootDirectoryOwner:
+    """Pin and revalidate the exact run directory before its entry barrier."""
+
+    def __init__(self, path, expected_identity):
+        self.path = Path(path)
+        self.expected_identity = dict(expected_identity)
+        self.fd = None
+        flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+        if hasattr(os, 'O_CLOEXEC'):
+            flags |= os.O_CLOEXEC
+        try:
+            self.fd = os.open(self.path, flags)
+        except OSError as error:
+            raise CleanupBlocked('worker_full_log_directory_open_failed') from error
+        try:
+            self.verify('opened')
+        except Exception as error:
+            try:
+                self.close()
+            except OSError as close_error:
+                raise CleanupBlocked(
+                    f'{type(error).__name__}: {error}; run-root directory owner close failed'
+                ) from error
+            raise
+
+    def _matches(self, info):
+        return (
+            stat.S_ISDIR(info.st_mode)
+            and info.st_dev == self.expected_identity.get('device')
+            and info.st_ino == self.expected_identity.get('inode')
+        )
+
+    def verify(self, phase):
+        try:
+            pinned = os.fstat(self.fd)
+            public = os.lstat(self.path)
+        except OSError as error:
+            raise CleanupBlocked('worker_full_log_directory_changed_' + phase) from error
+        if not self._matches(pinned) or not self._matches(public):
+            raise CleanupBlocked('worker_full_log_directory_changed_' + phase)
+
+    def sync_entries(self):
+        self.verify('before_sync')
+        try:
+            os.fsync(self.fd)
+        except OSError as error:
+            raise CleanupBlocked('worker_full_log_directory_sync_failed') from error
+        self.verify('after_sync')
+
+    def close(self):
+        if self.fd is not None:
+            descriptor = self.fd
+            self.fd = None
+            os.close(descriptor)
+
+
+def _remove_private_log_spool(path):
+    try:
+        shutil.rmtree(path)
+    except FileNotFoundError:
+        pass
+    except OSError as error:
+        raise CleanupBlocked('worker_full_log_capture_failed') from error
+
+
+def _capture_worker_logs(
+    storage,
+    run_root,
+    job,
+    container_id,
+    stream_logs,
+    *,
+    expected_run_root_identity,
+):
+    if not callable(stream_logs):
+        raise CleanupBlocked('complete_container_log_stream_unavailable')
+
+    log_path = validate_path(run_root / 'worker-full.log', storage)
+    receipt_path = validate_path(run_root / 'worker-full-log.json', storage)
+    if os.path.lexists(log_path) or os.path.lexists(receipt_path):
+        raise CleanupBlocked('worker_full_log_archive_conflict')
+    try:
+        if any(entry.name.startswith('.worker-full-log-') for entry in run_root.iterdir()):
+            raise CleanupBlocked('worker_full_log_spool_outcome_unknown')
+    except OSError as error:
+        raise CleanupBlocked('worker_full_log_capture_failed') from error
+
+    sync_capability = _directory_sync_capability()
+    try:
+        spool_directory = Path(tempfile.mkdtemp(
+            prefix='.worker-full-log-',
+            dir=str(run_root),
+        ))
+    except OSError as error:
+        raise CleanupBlocked('worker_full_log_capture_failed') from error
+    keep_spools = False
+    try:
+        spool_root = validate_path(spool_directory, storage)
+        temporary_log = validate_path(
+            spool_root / ('worker-full-log-' + uuid.uuid4().hex + '.tmp'),
+            storage,
+        )
+        digest = hashlib.sha256()
+        byte_count = 0
+        decoder_factory = codecs.getincrementaldecoder('utf-8')
+        decoder = decoder_factory('strict')
+        channel_decoders = {}
+        channel_names = {'stdout', 'stderr'}
+
+        with temporary_log.open('xb') as stream:
+            def emit(channel, payload):
+                nonlocal byte_count
+                if (not isinstance(channel, str) or channel not in channel_names
+                        or not isinstance(payload, bytes)):
+                    raise CleanupBlocked('invalid_worker_log_stream_chunk')
+                channel_decoder = channel_decoders.get(channel)
+                if channel_decoder is None:
+                    channel_decoder = decoder_factory('strict')
+                    channel_decoders[channel] = channel_decoder
+                try:
+                    channel_decoder.decode(payload, final=False)
+                    decoder.decode(payload, final=False)
+                except UnicodeDecodeError as error:
+                    raise CleanupBlocked('worker_full_log_invalid_utf8') from error
+                written = stream.write(payload)
+                if written != len(payload):
+                    raise OSError('short write while archiving worker logs')
+                digest.update(payload)
+                byte_count += len(payload)
+
+            channel_order = stream_logs(
+                container_id,
+                emit,
+                spool_directory=spool_root,
+            )
+            if channel_order not in ('engine_frame_arrival', 'stdout_then_stderr'):
+                raise CleanupBlocked('unknown_worker_log_channel_order')
+            try:
+                for channel_decoder in channel_decoders.values():
+                    channel_decoder.decode(b'', final=True)
+                decoder.decode(b'', final=True)
+            except UnicodeDecodeError as error:
+                raise CleanupBlocked('worker_full_log_invalid_utf8') from error
+            stream.flush()
+            os.fsync(stream.fileno())
+
+        _publish_exclusive_file(temporary_log, log_path)
+        receipt = {
+            'container_id': container_id,
+            'job_id': job['job_id'],
+            'bytes': byte_count,
+            'sha256': digest.hexdigest(),
+            'scope': 'all_available_container_logs',
+            'channel_order': channel_order,
+            'captured_at': time.time(),
+            'directory_sync_capability': sync_capability,
+            'directory_sync_required_for_success': True,
+            'directory_sync_policy': 'sync_run_root_before_worker_rm',
+            'directory_entries_synced': None if sync_capability == 'supported' else False,
+            'power_loss_qualification': 'not_qualified',
+        }
+        receipt_bytes = (
+            json.dumps(receipt, indent=2, ensure_ascii=False, allow_nan=False) + '\n'
+        ).encode('utf-8')
+        temporary_receipt = validate_path(
+            spool_root / ('worker-full-receipt-' + uuid.uuid4().hex + '.tmp'),
+            storage,
+        )
+        with temporary_receipt.open('xb') as stream:
+            written = stream.write(receipt_bytes)
+            if written != len(receipt_bytes):
+                raise OSError('short write while archiving worker log receipt')
+            stream.flush()
+            os.fsync(stream.fileno())
+        _publish_exclusive_file(temporary_receipt, receipt_path)
+    except BaseException as error:
+        if getattr(error, 'preserve_spools', False):
+            keep_spools = True
+        if not keep_spools:
+            try:
+                _remove_private_log_spool(spool_directory)
+            except CleanupBlocked:
+                raise CleanupBlocked(
+                    f'worker_full_log_capture_failed: {type(error).__name__}: {error}'
+                ) from error
+        if isinstance(error, (OSError, UnicodeError)):
+            raise CleanupBlocked('worker_full_log_capture_failed') from error
+        raise
+
+    # Remove private temp names before the containing directory barrier.
+    _remove_private_log_spool(spool_directory)
+    if sync_capability != 'supported':
+        raise CleanupBlocked('worker_full_log_directory_sync_unavailable')
+    owner = _RunRootDirectoryOwner(run_root, expected_run_root_identity)
+    try:
+        owner.sync_entries()
+    except Exception as error:
+        try:
+            owner.close()
+        except OSError as close_error:
+            raise CleanupBlocked(
+                f'{type(error).__name__}: {error}; run-root directory owner close failed'
+            ) from error
+        raise
+    return owner
+
+
+def guard_containers(
+    layout,
+    job,
+    journal,
+    target,
+    call,
+    *,
+    stream_logs=None,
+    run_root_identity,
+):
     """Remove only this exact exited worker, then reject every other mount user."""
     storage = Path(layout['storage_root'])
     suffix = target.relative_to(storage).as_posix()
@@ -125,30 +362,44 @@ def guard_containers(layout, job, journal, target, call):
             if any(_overlap(source, target_key) for target_key in targets):
                 raise CleanupBlocked('container_references_execution:' + item['Id'])
     if own is not None:
-        # Historical worker.log kept only a tail. Capture every log line still
-        # available from this attested exited container before destroying it.
-        log_path = validate_path(target.parent / 'worker-full.log', storage)
-        temporary = validate_path(target.parent / ('worker-full-' + uuid.uuid4().hex + '.tmp'), storage)
-        log_bytes = call(['logs', own['Id']]).encode('utf-8')
+        # A buffered call could truncate or exhaust memory. Keep deletion gated
+        # on the explicit streaming capability and a complete durable receipt.
+        directory_owner = _capture_worker_logs(
+            storage,
+            target.parent,
+            job,
+            own['Id'],
+            stream_logs,
+            expected_run_root_identity=run_root_identity,
+        )
         try:
-            with temporary.open('xb') as stream:
-                stream.write(log_bytes)
-                stream.flush()
-                os.fsync(stream.fileno())
-            os.replace(temporary, log_path)
-            atomic_json(validate_path(target.parent / 'worker-full-log.json', storage), {
-                'container_id': own['Id'], 'job_id': job['job_id'],
-                'bytes': len(log_bytes), 'sha256': hashlib.sha256(log_bytes).hexdigest(),
-                'scope': 'all_available_container_logs', 'captured_at': time.time(),
-            })
-        finally:
-            if temporary.exists():
-                temporary.unlink()
-        # No force, no volume deletion. Complete available logs are now durable.
-        call(['rm', own['Id']])
-        if own['Id'] in {item['Id'] for item in _containers(call)}:
-            raise CleanupBlocked('worker_removal_not_confirmed')
-    return {'removed_worker_container_id': own['Id'] if own is not None else None}
+            directory_owner.verify('before_worker_rm')
+            # No force, no volume deletion. The exact run-root entry barrier
+            # succeeded after both archives were published.
+            call(['rm', own['Id']])
+            if own['Id'] in {item['Id'] for item in _containers(call)}:
+                raise CleanupBlocked('worker_removal_not_confirmed')
+            directory_owner.verify('after_worker_rm')
+        except BaseException as error:
+            try:
+                directory_owner.close()
+            except OSError as close_error:
+                raise CleanupBlocked(
+                    f'{type(error).__name__}: {error}; run-root directory owner close failed'
+                ) from error
+            raise
+        try:
+            directory_owner.close()
+        except OSError as error:
+            raise CleanupBlocked('worker_full_log_directory_owner_close_failed') from error
+        return {
+            'removed_worker_container_id': own['Id'],
+            'directory_sync_capability': 'supported',
+            'directory_sync_required_for_success': True,
+            'directory_entries_synced': True,
+            'power_loss_qualification': 'not_qualified',
+        }
+    return {'removed_worker_container_id': None}
 
 
 def _guard_pins(storage, run_root, job):
@@ -210,7 +461,7 @@ def _guard_archive_evidence(storage, job, run_root, journal):
         validate_archive_receipt(artifacts, job, journal)
 
 
-def apply_execution_plan(layout, plan, queue, *, owner, call, policy, now=None):
+def apply_execution_plan(layout, plan, queue, *, owner, call, policy, now=None, stream_logs=None):
     """Revalidate exact candidates and persist terminal/partial outcomes.
 
     Replaying an operation ID returns its receipt, never expands its scope.
@@ -383,7 +634,15 @@ def apply_execution_plan(layout, plan, queue, *, owner, call, policy, now=None):
                     _guard_pins(storage, run_root, job)
                     journal = _json(run_root / 'coordinator.json')
                     _guard_archive_evidence(storage, job, run_root, journal)
-                    item['container_cleanup'] = guard_containers(layout, job, journal, target, call)
+                    item['container_cleanup'] = guard_containers(
+                        layout,
+                        job,
+                        journal,
+                        target,
+                        call,
+                        stream_logs=stream_logs,
+                        run_root_identity=run_root_identity,
+                    )
                     persist_result()
                     # Recheck after potentially slow hashing and Docker calls.
                     if queue.get(jid)['state'] != job['state'] or queue.active():

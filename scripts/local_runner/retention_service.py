@@ -13,9 +13,10 @@ from local_runner.retention_persistence import failure_fields, read_document, wr
 
 
 class RetentionService:
-    def __init__(self, hub, queue, layout, *, owner, call):
+    def __init__(self, hub, queue, layout, *, owner, call, stream_logs=None):
         self.hub, self.queue, self.layout = hub, queue, layout
         self.owner, self.call = owner, call
+        self.stream_logs = stream_logs
         self.storage = Path(layout['storage_root'])
         self.lock = threading.RLock()
         self.thread = None
@@ -253,7 +254,14 @@ class RetentionService:
                 executor = apply_execution_plan
             else:
                 raise ValueError('Unknown maintenance scope')
-            result = executor(self.layout, plan, self.queue, owner=self.owner, call=self.call, policy=policy)
+            executor_kwargs = {
+                'owner': self.owner,
+                'call': self.call,
+                'policy': policy,
+            }
+            if scope == 'execution':
+                executor_kwargs['stream_logs'] = self.stream_logs
+            result = executor(self.layout, plan, self.queue, **executor_kwargs)
         except Exception as error:
             operation_path = self._path(plan['plan_id'], operation=True)
             if operation_path.exists():

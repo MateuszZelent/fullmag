@@ -706,3 +706,7 @@ jobs:
         run: python -B scripts/test_local_runner_source_compaction.py -v
       - name: Run source store publication and lock recovery regressions
         run: python -B scripts/test_local_runner_source_store.py -v
+      - name: Run bounded Docker Engine protocol regressions
+        run: python -B scripts/test_local_runner_unix_docker.py -v
+      - name: Run actual subprocess Docker log streaming regressions
+        run: python -B scripts/test_local_runner_docker_logs.py -v

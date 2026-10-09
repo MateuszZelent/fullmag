@@ -9,6 +9,9 @@ from urllib.parse import urlencode, quote
 from local_runner.coordinator import CoordinatorError
 
 
+_LOG_STREAM_CHUNK_BYTES = 64 * 1024
+
+
 class UnixConnection(http.client.HTTPConnection):
     def connect(self):
         self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -97,6 +100,60 @@ def decode_logs(content, *, errors='replace'):
     return output.decode('utf-8', errors=errors)
 
 
+def stream_container_logs(container_id, emit, *, spool_directory, chunk_size=_LOG_STREAM_CHUNK_BYTES):
+    """Stream Docker's multiplexed stdout/stderr payloads without buffering them.
+
+    The returned channel order is the order of frames received from Docker.
+    The spool directory is accepted to share the retention stream capability
+    signature with the Windows CLI adapter; the Unix Engine response streams
+    directly to the caller and does not need intermediate spools.
+    """
+    if not isinstance(container_id, str) or re.fullmatch(r'[a-f0-9]{64}', container_id) is None:
+        raise ValueError('Expected a full Docker container ID')
+    if not callable(emit):
+        raise TypeError('Docker log stream consumer must be callable')
+    if type(chunk_size) is not int or chunk_size < 1:
+        raise ValueError('Docker log stream chunk size must be a positive integer')
+    del spool_directory
+
+    connection = UnixConnection('localhost', timeout=60)
+    try:
+        path = '/v1.41/containers/' + container_id + '/logs?stdout=1&stderr=1&tail=all'
+        connection.request('GET', path)
+        response = connection.getresponse()
+        if not 200 <= response.status < 300:
+            detail = response.read(501)
+            raise CoordinatorError(
+                'Docker API GET /containers/{}/logs failed: {} {}'.format(
+                    container_id, response.status, detail[:500].decode('utf-8', errors='replace'),
+                )
+            )
+
+        while True:
+            header = b''
+            while len(header) < 8:
+                part = response.read(8 - len(header))
+                if not part:
+                    if not header:
+                        return 'engine_frame_arrival'
+                    raise CoordinatorError('Truncated Docker log frame header')
+                header += part
+            if header[0] not in (1, 2) or header[1:4] != b'\0\0\0':
+                raise CoordinatorError('Unexpected Docker log framing')
+            remaining = struct.unpack('>I', header[4:8])[0]
+            channel = 'stdout' if header[0] == 1 else 'stderr'
+            while remaining:
+                payload = response.read(min(remaining, chunk_size))
+                if not payload:
+                    raise CoordinatorError('Truncated Docker log frame payload')
+                if len(payload) > remaining:
+                    raise CoordinatorError('Docker returned more log bytes than the frame declares')
+                emit(channel, payload)
+                remaining -= len(payload)
+    finally:
+        connection.close()
+
+
 def _stats_container_id(argv):
     """Parse the small, explicitly supported subset of ``docker stats``."""
     container_id = None
@@ -167,9 +224,7 @@ def docker(argv):
         engine('DELETE', '/containers/' + argv[1] + '?force=false&v=false')
         return argv[1]
     if argv[0] == 'logs' and len(argv) == 2 and re.fullmatch(r'[a-f0-9]{64}', argv[1]):
-        # The bound in engine still fails closed for oversized logs. Never
-        # silently keep a tail when retention is preserving complete logs.
-        return decode_logs(engine('GET', '/containers/' + argv[1] + '/logs?stdout=1&stderr=1&tail=all'), errors='strict')
+        raise CoordinatorError('Complete Docker logs require stream_container_logs')
     if argv[0] == 'logs' and argv[1] == '--tail' and len(argv) == 4 and argv[2].isdigit():
         return decode_logs(engine('GET', '/containers/' + quote(argv[3], safe='') + '/logs?' + urlencode({'stdout': 1, 'stderr': 1, 'tail': min(int(argv[2]), 3000)})))
     if argv[0] == 'info':
