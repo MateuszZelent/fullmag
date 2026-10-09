@@ -10,6 +10,17 @@ describe("Analysis surface routing from the selected Results node", () => {
     expect(analysisSurfaceForSelectionKind("results.observation_frame")).toBe("dynamics");
   });
 
+  it.each([
+    "results.resonance.modal.mode",
+    "results.resonance.driven.field",
+    "results.resonance.driven.frequency_points",
+    "results.resonance.driven.peaks",
+    "results.resonance.modal.coupling",
+  ])("routes the selectable Resonance leaf %s to its owner", (kind) => {
+    expect(analysisModuleIdForNodeKind(kind)).toBe("analysis.resonance");
+    expect(analysisSurfaceForSelectionKind(kind)).toBe("resonance-fmr");
+  });
+
   it("leaves Analysis unchanged for nodes that do not belong to an analysis", () => {
     expect(analysisSurfaceForSelectionKind("object.visualization")).toBeNull();
     expect(analysisSurfaceForSelectionKind("analysis-chart-point")).toBeNull();

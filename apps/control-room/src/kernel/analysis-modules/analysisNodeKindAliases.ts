@@ -26,6 +26,11 @@ export const LEGACY_RESULTS_NODE_KIND_ALIASES: Readonly<Record<string, AnalysisN
   "results.resonance.driven.spectrum": "analysis.resonance.spectrum",
   "results.resonance.modal.modes": "analysis.resonance.mode_visualizations",
   "results.resonance.driven.fields": "analysis.resonance.mode_visualizations",
+  "results.resonance.modal.mode": "analysis.resonance.mode_visualizations",
+  "results.resonance.driven.field": "analysis.resonance.mode_visualizations",
+  "results.resonance.driven.frequency_points": "analysis.resonance.spectrum",
+  "results.resonance.driven.peaks": "analysis.resonance.spectrum",
+  "results.resonance.modal.coupling": "analysis.resonance.spectrum",
   "results.resonance.modal.provenance": "analysis.resonance.quality",
   "results.resonance.driven.provenance": "analysis.resonance.quality",
 };
