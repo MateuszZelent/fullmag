@@ -12277,7 +12277,7 @@ fn fem_eigen_modal_solver_policy_rejects_each_control_on_reference_solver_famili
         ),
         (
             "projected scalar",
-            fullmag_ir::EigenOperatorIR::ProjectedScalar,
+            fullmag_ir::EigenOperatorIR::LinearizedLlg,
             window(),
             fullmag_ir::EigenDampingPolicyIR::Ignore,
         ),
