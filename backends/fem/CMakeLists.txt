@@ -1148,6 +1148,13 @@ if(FULLMAG_USE_MFEM_STACK AND FULLMAG_FEM_WITH_SLEPC)
     target_link_libraries(fem_petsc_process_runtime_concurrency_contract PRIVATE
         PETSC::petsc SLEPC::slepc MPI::MPI_CXX Threads::Threads
     )
+    # The fixture owns MFEM vectors; private shared-library linkage does not
+    # expose the inline MemoryManager symbols used by this executable.
+    if(TARGET MFEM::mfem)
+        target_link_libraries(fem_petsc_process_runtime_concurrency_contract PRIVATE MFEM::mfem)
+    else()
+        target_link_libraries(fem_petsc_process_runtime_concurrency_contract PRIVATE mfem)
+    endif()
     set_tests_properties(fem_petsc_process_runtime_concurrency_contract
         PROPERTIES TIMEOUT 120
     )
