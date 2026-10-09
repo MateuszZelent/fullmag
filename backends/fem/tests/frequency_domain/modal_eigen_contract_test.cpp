@@ -1254,6 +1254,10 @@ struct FloquetContourSharedDomainFixture {
     double reference_frequency_hz = 0.0;
     std::vector<double> static_reduced_poisson_matrix{};
     std::vector<std::uint32_t> static_scalar_class_representatives{};
+    std::vector<std::uint32_t> static_scalar_raw_ids_by_canonical{};
+    std::vector<std::uint32_t> static_scalar_raw_node_classes{};
+    int static_scalar_order = 0;
+    double static_robin_beta = 0.0;
 
     FullmagFemModalCertificateV6View make_c_view(
         std::uint32_t view_kind,
@@ -2109,6 +2113,9 @@ void initialize_native_count_fixture(FloquetContourSharedDomainFixture &fixture)
     }
     fixture.static_scalar_class_representatives =
         static_partition.class_representatives;
+    fixture.static_scalar_raw_ids_by_canonical =
+        static_partition.raw_class_ids_by_canonical;
+    fixture.static_scalar_raw_node_classes = context.mesh.periodic_reduced_node;
 
     std::unique_ptr<mfem::Mesh> native_mesh;
     check(
@@ -2209,6 +2216,8 @@ void initialize_native_count_fixture(FloquetContourSharedDomainFixture &fixture)
         std::fprintf(stderr, "FAIL: native static Poisson initialization: %s\n", error.c_str());
     }
     check(initialized, "native static Poisson owner initializes for the count mesh");
+    fixture.static_scalar_order = context.poisson_demag.potential_order;
+    fixture.static_robin_beta = context.poisson_demag.robin_effective_beta;
     check(context.poisson_demag.potential_order == 1 &&
               context.poisson_demag.periodic_reduced_ready &&
               std::abs(context.poisson_demag.robin_effective_beta - 1.0) <= 1.0e-14,
@@ -2658,6 +2667,45 @@ void verify_native_count_fixture_composed_operator(
                 fixture.static_reduced_poisson_matrix[row * scalar_class_count + column];
             poisson_scale = std::max(poisson_scale, std::abs(expected));
             poisson_error = std::max(poisson_error, std::abs(actual - expected));
+        }
+    }
+    if (!(poisson_scale > 0.0 && poisson_error <= 1.0e-10 * poisson_scale)) {
+        std::fprintf(stderr,
+                     "count Poisson mismatch: classes=%zu scale=%.17g max_error=%.17g "
+                     "static_scalar_order=%d static_beta=%.17g marker=1 "
+                     "dynamic_boundary=%s dynamic_gauge=%s\n",
+                     scalar_class_count, poisson_scale, poisson_error,
+                     fixture.static_scalar_order, fixture.static_robin_beta,
+                     assembled.boundary_kind, assembled.gauge_policy);
+        const auto print_class_map = [](const char *label,
+                                        const std::vector<std::uint32_t> &values) {
+            std::fprintf(stderr, "%s:", label);
+            for (std::uint32_t value : values) {
+                std::fprintf(stderr, " %u", static_cast<unsigned>(value));
+            }
+            std::fprintf(stderr, "\n");
+        };
+        print_class_map("static canonical_to_raw", fixture.static_scalar_raw_ids_by_canonical);
+        print_class_map("shared canonical_to_raw", payload_partition.raw_class_ids_by_canonical);
+        print_class_map("static representatives", fixture.static_scalar_class_representatives);
+        print_class_map("shared representatives", payload_partition.class_representatives);
+        print_class_map("static raw_node_classes", fixture.static_scalar_raw_node_classes);
+        print_class_map("shared raw_node_classes", fixture.scalar_classes);
+        for (std::size_t row = 0u; row < scalar_class_count; ++row) {
+            const std::uint32_t raw_row = payload_partition.raw_class_ids_by_canonical[row];
+            for (std::size_t column = 0u; column < scalar_class_count; ++column) {
+                const std::uint32_t raw_column = payload_partition.raw_class_ids_by_canonical[column];
+                const double actual = shared_p[
+                    static_cast<std::size_t>(raw_row) * scalar_class_count + raw_column];
+                const double expected = fixture.static_reduced_poisson_matrix[
+                    row * scalar_class_count + column];
+                std::fprintf(stderr,
+                             "count P[%zu,%zu] shared_raw=[%u,%u] static=%.17g "
+                             "shared=%.17g error=%.17g\n",
+                             row, column, static_cast<unsigned>(raw_row),
+                             static_cast<unsigned>(raw_column), expected, actual,
+                             actual - expected);
+            }
         }
     }
     check(poisson_scale > 0.0 && poisson_error <= 1.0e-10 * poisson_scale,
