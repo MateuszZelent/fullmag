@@ -109,6 +109,45 @@ async fn resolve_stage_artifact_path(
     }
 }
 
+/// Published `hysteresis_points.json` files of every hysteresis stage in the
+/// current run, keyed by the producing stage id (not the active stage).
+pub(crate) async fn hysteresis_stage_point_artifacts(
+    state: &Arc<AppState>,
+) -> Result<Vec<(String, PathBuf)>, ApiError> {
+    let stage_ids = {
+        let guard = state.current_live_state.read().await;
+        let Some(stage_exec) = guard.as_ref().and_then(|snapshot| snapshot.stage_execution.as_ref())
+        else {
+            return Ok(Vec::new());
+        };
+        stage_exec
+            .stages
+            .iter()
+            .enumerate()
+            .filter(|(index, record)| {
+                is_hysteresis_stage_kind(record.kind.as_deref())
+                    || is_hysteresis_stage_kind(stage_kind_for_index(stage_exec, *index).as_deref())
+            })
+            .map(|(index, record)| {
+                record
+                    .stage_id
+                    .clone()
+                    .unwrap_or_else(|| format!("stage-{index:03}"))
+            })
+            .collect::<Vec<_>>()
+    };
+    let mut artifacts = Vec::new();
+    for stage_id in stage_ids {
+        match resolve_stage_artifact_path(state, &stage_id, "hysteresis_points.json").await {
+            Ok(path) if path.is_file() => artifacts.push((stage_id, path)),
+            Ok(_) => {}
+            Err(error) if error.status == axum::http::StatusCode::NOT_FOUND => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(artifacts)
+}
+
 fn resolve_flat_hysteresis_artifact(artifact_dir: &FsPath, filename: &str) -> Option<PathBuf> {
     let direct = artifact_dir.join(filename);
     direct.is_file().then_some(direct)

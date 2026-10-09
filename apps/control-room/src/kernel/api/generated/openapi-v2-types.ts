@@ -4991,7 +4991,7 @@ export interface components {
             topology_fingerprint?: string | null;
         };
         /** @enum {string} */
-        AnalysisResultProductKind: "modal_eigen" | "driven_response" | "time_domain_spectrum" | "dynamic_structure_factor";
+        AnalysisResultProductKind: "modal_eigen" | "driven_response" | "time_domain_spectrum" | "dynamic_structure_factor" | "hysteresis_loop";
         AnalysisResultProjectionDescriptor: {
             kind: string;
             projection_id: string;

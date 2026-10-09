@@ -9,6 +9,7 @@ import type { MatchableDataset } from "./analysisModuleContract";
 import {
   ANALYSIS_FEATURE_MANIFESTS,
   DISPERSION_ANALYSIS_MANIFEST,
+  HYSTERESIS_ANALYSIS_MANIFEST,
   RESONANCE_ANALYSIS_MANIFEST,
   TIME_DOMAIN_ANALYSIS_MANIFEST,
 } from "./analysisModuleManifests";
@@ -65,6 +66,19 @@ describe("analysis module dataset matching", () => {
 
   it("routes time-domain spectra to the time-domain module only", () => {
     expect(matchedIds(timeDomain)).toEqual(["analysis.time-domain"]);
+  });
+
+  it("routes a hysteresis loop to the hysteresis module only", () => {
+    const loop = dataset({
+      product_kind: "hysteresis_loop",
+      item_kinds: [],
+      axes: [{ role: "outer_sweep", cardinality: 41 }],
+    });
+    expect(matchedIds(loop)).toEqual(["analysis.hysteresis"]);
+    expect(matchDataset(HYSTERESIS_ANALYSIS_MANIFEST, { ...loop, axes: [] })).toEqual({
+      matched: false,
+      reason: "no outer_sweep axis",
+    });
   });
 
   it("explains a mismatch from published fields", () => {

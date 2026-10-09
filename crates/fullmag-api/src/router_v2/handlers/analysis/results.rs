@@ -37,6 +37,7 @@ use crate::router_v2::handlers::analysis::spin_wave_response::{
     dynamic_structure_factor_axis_indices, DynamicStructureFactorResource, SpinWaveGammaResource,
     SpinWavePeakResource, MAX_DYNAMIC_STRUCTURE_FACTOR_CELLS,
 };
+use crate::schemas::hysteresis::HysteresisPointSchema;
 use crate::types::AppState;
 
 pub const ANALYSIS_RESULT_INDEX_SCHEMA_VERSION: &str = "fullmag.analysis.result_dataset_index.v1";
@@ -54,6 +55,7 @@ pub enum AnalysisResultProductKind {
     DrivenResponse,
     TimeDomainSpectrum,
     DynamicStructureFactor,
+    HysteresisLoop,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -1241,6 +1243,25 @@ async fn load_result_indices(state: &Arc<AppState>) -> Result<ResultIndexCollect
         )?);
     }
 
+    for (stage_id, path) in
+        super::hysteresis::hysteresis_stage_point_artifacts(state).await?
+    {
+        let file = std::fs::File::open(&path).map_err(|error| {
+            ApiError::internal(format!(
+                "failed to open hysteresis points of stage '{stage_id}': {error}"
+            ))
+        })?;
+        let (value, digest) = decode_result_artifact_snapshot(
+            file,
+            "hysteresis_points.json",
+            MAX_RESULT_ARTIFACT_BYTES,
+        )?;
+        let points = serde_json::from_value::<Vec<HysteresisPointSchema>>(value).map_err(
+            |error| ApiError::internal(format!("invalid hysteresis points artifact: {error}")),
+        )?;
+        datasets.push(build_hysteresis_index(&points, digest, &run_id, &stage_id));
+    }
+
     crate::validate_current_live_request_context(state, &request_context).await?;
     Ok(ResultIndexCollection { run_id, datasets })
 }
@@ -1994,6 +2015,102 @@ fn build_response_index(
         axis_values: BTreeMap::from([(String::from("drive-frequency"), values)]),
         projections,
     })
+}
+
+/// Hysteresis loops publish their applied-field sweep as an outer axis. The
+/// magnetization points stay on the dedicated hysteresis resources, so the
+/// dataset carries no spectral items.
+fn build_hysteresis_index(
+    points: &[HysteresisPointSchema],
+    source_digest: String,
+    run_id: &str,
+    stage_id: &str,
+) -> ResultDatasetIndex {
+    const MU0: f64 = 4.0e-7 * std::f64::consts::PI;
+    let dataset_id = format!("result:{run_id}:{stage_id}:hysteresis-loop");
+    let sample_id = "hysteresis-sample-0000".to_string();
+    let values = points
+        .iter()
+        .map(|point| {
+            let field_si = point.field_value_m_t * 1.0e-3 / MU0;
+            AnalysisResultAxisValueResource {
+                token: format!("point-{:05}", point.point_id),
+                scalar_si: Some(field_si),
+                vector3_si: point.field_vector_a_per_m,
+                category: point.branch_id.clone(),
+                entity_ref: None,
+                label: Some(format!("{:.3} mT", point.field_value_m_t)),
+                status: point.status.clone(),
+            }
+        })
+        .collect::<Vec<_>>();
+    let mut axis = axis_resource(
+        "applied-field",
+        "outer_sweep",
+        "scalar",
+        "applied_field_a_per_m".to_string(),
+        "A/m".to_string(),
+        vec!["mT".to_string()],
+        Vec::new(),
+    );
+    axis.label = "Applied field".to_string();
+    let axes = vec![finalize_axis(axis, values.clone(), 1)];
+    let status = status_facets(
+        "complete",
+        "published",
+        if points.is_empty() { "partial" } else { "complete" },
+        "legacy",
+        None,
+        None,
+    );
+    let sample = AnalysisResultSampleIndexEntry {
+        sample_id: sample_id.clone(),
+        sample_index: Some(0),
+        coordinates: Vec::new(),
+        status: status.clone(),
+        item_count: 0,
+        branch_count: None,
+        source_revision: source_digest.clone(),
+        equilibrium_ref: None,
+        linearization_ref: None,
+        mesh_ref: None,
+        items_resource: items_path(run_id, &dataset_id, &sample_id),
+    };
+    let source_artifacts = vec![AnalysisResultSourceArtifactRef {
+        artifact: "hysteresis_points.json".to_string(),
+        revision: source_digest.clone(),
+        relation: "adapter_source".to_string(),
+    }];
+    let dataset_revision =
+        derived_dataset_revision(&dataset_id, &source_digest, &axes, &source_artifacts);
+    let projections = BTreeMap::new();
+    let mut manifest = build_manifest(
+        dataset_id,
+        dataset_revision,
+        run_id,
+        stage_id,
+        AnalysisResultProductKind::HysteresisLoop,
+        "Hysteresis loop",
+        Some("Quasi-static applied-field sweep; M(H) points are served by the hysteresis resources"),
+        status,
+        source_artifacts,
+        axes,
+        Vec::new(),
+        &projections,
+        &[sample.clone()],
+        &[],
+        "shared_across_dataset",
+        "A/m",
+    );
+    manifest.capabilities.item_paging = false;
+    manifest.capabilities.live_partial_results = false;
+    ResultDatasetIndex {
+        manifest,
+        samples: vec![sample],
+        items: Vec::new(),
+        axis_values: BTreeMap::from([(String::from("applied-field"), values)]),
+        projections,
+    }
 }
 
 fn build_gamma_index(
@@ -4719,6 +4836,34 @@ mod tests {
         );
         let points = branch_points(&dataset);
         assert_eq!(points["branch/7"][0].item_id, "mode/1");
+    }
+
+    #[test]
+    fn hysteresis_loop_dataset_publishes_the_applied_field_sweep() {
+        let points: Vec<HysteresisPointSchema> = serde_json::from_value(serde_json::json!([
+            {"point_id": 0, "field_value_mT": 100.0, "m_parallel": 1.0, "m_oop": 0.0,
+             "m_ip": 1.0, "m_avg": [1.0, 0.0, 0.0], "status": "complete", "branch_id": "descending"},
+            {"point_id": 1, "field_value_mT": -100.0, "m_parallel": -1.0, "m_oop": 0.0,
+             "m_ip": -1.0, "m_avg": [-1.0, 0.0, 0.0], "status": "complete", "branch_id": "descending"}
+        ]))
+        .expect("hysteresis fixture");
+        let index = build_hysteresis_index(&points, "sha256:abc".to_string(), "run:1", "stage-002");
+        let manifest = &index.manifest;
+        assert_eq!(manifest.dataset_id, "result:run:1:stage-002:hysteresis-loop");
+        assert_eq!(manifest.stage_id, "stage-002");
+        assert_eq!(
+            serde_json::to_value(&manifest.product_kind).unwrap(),
+            serde_json::json!("hysteresis_loop")
+        );
+        assert_eq!(manifest.axes.len(), 1);
+        let axis = &manifest.axes[0];
+        assert_eq!((axis.axis_id.as_str(), axis.role.as_str()), ("applied-field", "outer_sweep"));
+        assert_eq!(axis.cardinality, 2);
+        let first = &index.axis_values["applied-field"][0];
+        let expected = 0.1 / (4.0e-7 * std::f64::consts::PI);
+        assert!((first.scalar_si.unwrap() - expected).abs() < 1e-6 * expected);
+        assert!(index.items.is_empty());
+        assert!(!manifest.capabilities.item_paging);
     }
 
     #[test]

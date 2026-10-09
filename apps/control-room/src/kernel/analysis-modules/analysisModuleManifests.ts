@@ -148,8 +148,23 @@ export const TIME_DOMAIN_ANALYSIS_MANIFEST: AnalysisFeatureManifest = {
   load: () => import("@/modules/analysis-time-domain/public"),
 };
 
+export const HYSTERESIS_ANALYSIS_MANIFEST: AnalysisFeatureManifest = {
+  id: "analysis.hysteresis",
+  version: "0.1.0",
+  title: "Hysteresis",
+  matches: [{ productKinds: ["hysteresis_loop"], requiredAxes: [{ role: "outer_sweep", minCardinality: 1 }] }],
+  nodeTemplates: [
+    { kind: "analysis.hysteresis.overview", parent: "dataset", role: "overview", title: "Overview", instantiation: "auto" },
+    { kind: "analysis.hysteresis.loop", parent: "dataset", role: "plot-1d", title: "M(H) loop", instantiation: "auto" },
+    { kind: "analysis.hysteresis.quality", parent: "dataset", role: "quality", title: "Quality & provenance", instantiation: "auto" },
+  ],
+  definitionSchemas: {},
+  load: () => import("@/modules/analysis-hysteresis/public"),
+};
+
 export const ANALYSIS_FEATURE_MANIFESTS: readonly AnalysisFeatureManifest[] = [
   DISPERSION_ANALYSIS_MANIFEST,
   RESONANCE_ANALYSIS_MANIFEST,
   TIME_DOMAIN_ANALYSIS_MANIFEST,
+  HYSTERESIS_ANALYSIS_MANIFEST,
 ];

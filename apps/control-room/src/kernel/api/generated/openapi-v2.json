@@ -1422,7 +1422,8 @@
           "modal_eigen",
           "driven_response",
           "time_domain_spectrum",
-          "dynamic_structure_factor"
+          "dynamic_structure_factor",
+          "hysteresis_loop"
         ],
         "type": "string"
       },

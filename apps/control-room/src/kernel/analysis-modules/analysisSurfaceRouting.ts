@@ -12,6 +12,7 @@ const MODULE_SURFACES: Readonly<Partial<Record<AnalysisModuleId, AnalysisSurface
   "analysis.dispersion": "dispersion",
   "analysis.resonance": "resonance-fmr",
   "analysis.time-domain": "dynamics",
+  "analysis.hysteresis": "hysteresis",
 };
 
 const KERNEL_RESULT_SURFACES: Readonly<Record<string, AnalysisSurface>> = {
