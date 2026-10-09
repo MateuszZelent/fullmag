@@ -1,10 +1,14 @@
 from __future__ import annotations
 
-import os
+import hashlib
 import json
+import os
 import subprocess
 import tempfile
 from pathlib import Path
+
+import pytest
+import yaml
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -14,6 +18,8 @@ GATE = REPO_ROOT / "scripts/ci/run_frontend3d_required_gate.sh"
 def run_gate(gate: str, *, inject_failure: str | None = None) -> subprocess.CompletedProcess[str]:
     environment = os.environ.copy()
     environment.pop("FULLMAG_MANAGED_FEM_RUNNER", None)
+    for name in ("GITHUB_RUN_ID", "GITHUB_SHA", "GITHUB_WORKFLOW", "GITHUB_JOB"):
+        environment.pop(name, None)
     if inject_failure is None:
         environment.pop("FULLMAG_CI_INJECT_FAILURE", None)
     else:
@@ -46,6 +52,8 @@ def test_browser_fixture_writer_records_github_execution_identity_in_its_own_fix
     with tempfile.TemporaryDirectory() as directory:
         artifact_root = Path(directory)
         (artifact_root / "audit.json").write_text('{"ok":true}\n')
+        adaptive_report = b'{"schema":"fullmag_study_adaptive_authoring_browser_v1"}\n'
+        (artifact_root / "study-adaptive-authoring.json").write_bytes(adaptive_report)
         source_snapshot_sha256 = "b" * 64
         (artifact_root / "source-snapshot.v2.json").write_text(
             json.dumps(
@@ -102,6 +110,11 @@ def test_browser_fixture_writer_records_github_execution_identity_in_its_own_fix
                 "sha256": manifest["artifacts"][1]["sha256"],
                 "mediaType": "application/json",
             },
+            {
+                "path": "study-adaptive-authoring.json",
+                "sha256": hashlib.sha256(adaptive_report).hexdigest(),
+                "mediaType": "application/json",
+            },
         ]
         assert manifest["source"]["implementationCommit"] == "a" * 40
         assert manifest["source"]["statusSha256"] == "c" * 64
@@ -124,6 +137,19 @@ def test_browser_fixture_writer_records_github_execution_identity_in_its_own_fix
         )
         assert validated.returncode == 0, validated.stderr
 
+        original_manifest = manifest_path.read_bytes()
+        repeated_write = subprocess.run(
+            ["node", "apps/control-room/scripts/write-browser-fixture-proof-manifest.mjs"],
+            cwd=REPO_ROOT,
+            env=environment,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        assert repeated_write.returncode != 0
+        assert "EEXIST" in repeated_write.stderr
+        assert manifest_path.read_bytes() == original_manifest
+
 
 def test_missing_managed_fem_runner_is_fail_closed_blocked_not_skipped() -> None:
     result = run_gate("managed-fem-qualification")
@@ -132,33 +158,123 @@ def test_missing_managed_fem_runner_is_fail_closed_blocked_not_skipped() -> None
     assert "BLOCKED managed-fem-runner-unavailable" in result.stderr
 
 
-def test_browser_fixture_source_snapshot_is_verified_after_manifest_write() -> None:
+def test_browser_fixture_preproof_and_standalone_manifest_order() -> None:
     dispatcher = GATE.read_text()
-    browser_smoke = dispatcher.split("    browser-fixture-smoke)", 1)[1].split(
+    preproof = dispatcher.split("    browser-fixture-pre-proof)", 1)[1].split(
         "      ;;", 1
     )[0]
-    ordered_steps = (
+    preproof_steps = (
+        "run_gate browser-fixture-proof-identity",
         "run_gate browser-fixture-source-snapshot",
         "pnpm --dir apps/control-room run audit:viewport-3d-memory-churn",
         "pnpm --dir apps/control-room run audit:viewport-3d-fem-topology-uploads",
         "run_gate browser-fixture-source-verify",
+    )
+    positions = [preproof.index(step) for step in preproof_steps]
+    assert positions == sorted(positions)
+    assert "browser-fixture-proof-manifest" not in preproof
+    assert "browser-fixture-source-verify-post-write" not in preproof
+
+    browser_smoke = dispatcher.split("    browser-fixture-smoke)", 1)[1].split(
+        "      ;;", 1
+    )[0]
+    ordered_steps = (
+        "run_gate browser-fixture-pre-proof",
         "run_gate browser-fixture-proof-manifest",
         "run_gate browser-fixture-source-verify-post-write",
     )
 
     positions = [browser_smoke.index(step) for step in ordered_steps]
     assert positions == sorted(positions)
+    assert browser_smoke.count("run_gate browser-fixture-proof-manifest") == 1
 
 
 def load_workflow(path: Path) -> dict:
-    result = subprocess.run(
-        ["ruby", "-rjson", "-ryaml", "-e", "puts JSON.generate(YAML.load_file(ARGV.fetch(0)))", str(path)],
-        cwd=REPO_ROOT,
-        text=True,
-        capture_output=True,
-        check=True,
+    return yaml.safe_load(path.read_text())
+
+
+CONTRACT_SCOPES = frozenset(
+    {
+        "bootstrap",
+        "browser",
+        "positive-mass",
+        "native-modal",
+        "floquet-modal-slepc",
+        "generic-modal-slepc",
+        "floquet-count-slepc",
+        "modal-phase-slepc",
+        "retention",
+    }
+)
+SCOPED_REQUIRED_JOB_EXCLUSIONS = {
+    "api-hygiene-rg13": CONTRACT_SCOPES - {"bootstrap"},
+    "control-room-contracts": CONTRACT_SCOPES - {"bootstrap", "browser"},
+    "browser-fixture-smoke": CONTRACT_SCOPES - {"bootstrap", "browser"},
+}
+
+
+def dispatch_scope_guard(exclusions: set[str] | frozenset[str]) -> str:
+    terms = sorted(exclusions)
+    return (
+        "${{ github.event_name != 'workflow_dispatch' || ("
+        + " && ".join(f"inputs.contract_scope != '{scope}'" for scope in terms)
+        + ") }}"
     )
-    return json.loads(result.stdout)
+
+
+def assert_dispatch_scope_guard(
+    condition: str,
+    *,
+    expected_exclusions: set[str] | frozenset[str] | None = None,
+) -> None:
+    prefix = "${{ github.event_name != 'workflow_dispatch' || "
+    assert condition.startswith(prefix)
+    assert condition.endswith("}}")
+    exclusions = condition[len(prefix) : -2].strip()
+    assert exclusions.startswith("(") and exclusions.endswith(")")
+    terms = exclusions[1:-1].split(" && ")
+    assert terms
+    scopes = []
+    for term in terms:
+        term_prefix = "inputs.contract_scope != '"
+        assert term.startswith(term_prefix) and term.endswith("'")
+        scope = term[len(term_prefix) : -1]
+        assert scope in CONTRACT_SCOPES
+        assert scope != "bootstrap"
+        scopes.append(scope)
+    assert len(scopes) == len(set(scopes))
+    if expected_exclusions is not None:
+        assert set(scopes) == set(expected_exclusions)
+
+
+def test_dispatch_scope_guards_reject_wrong_required_job_exclusions() -> None:
+    browser_exclusions = SCOPED_REQUIRED_JOB_EXCLUSIONS["browser-fixture-smoke"]
+    api_exclusions = SCOPED_REQUIRED_JOB_EXCLUSIONS["api-hygiene-rg13"]
+    for job_exclusions in SCOPED_REQUIRED_JOB_EXCLUSIONS.values():
+        assert_dispatch_scope_guard(
+            dispatch_scope_guard(job_exclusions),
+            expected_exclusions=job_exclusions,
+        )
+
+    invalid_cases = (
+        (browser_exclusions | {"browser"}, browser_exclusions),
+        (api_exclusions | {"all"}, api_exclusions),
+        (api_exclusions | {"brower"}, api_exclusions),
+        (api_exclusions | {"bootstrap"}, api_exclusions),
+        (api_exclusions - {"browser"}, api_exclusions),
+    )
+    for exclusions, expected_exclusions in invalid_cases:
+        with pytest.raises(AssertionError):
+            assert_dispatch_scope_guard(
+                dispatch_scope_guard(exclusions),
+                expected_exclusions=expected_exclusions,
+            )
+
+    with pytest.raises(AssertionError):
+        assert_dispatch_scope_guard(
+            dispatch_scope_guard(api_exclusions).replace(") }}", ") && !cancelled() }}"),
+            expected_exclusions=api_exclusions,
+        )
 
 
 def test_required_contexts_and_proof_output_are_fail_closed() -> None:
@@ -175,24 +291,70 @@ def test_required_contexts_and_proof_output_are_fail_closed() -> None:
     for job_id in required_jobs:
         serialized = json.dumps(jobs[job_id])
         assert "continue-on-error" not in serialized
-        assert jobs[job_id].get("if") is None
+        condition = jobs[job_id].get("if")
+        expected_exclusions = SCOPED_REQUIRED_JOB_EXCLUSIONS.get(job_id)
+        if expected_exclusions is not None:
+            assert condition is not None
+            assert_dispatch_scope_guard(
+                condition,
+                expected_exclusions=expected_exclusions,
+            )
+        elif condition is not None:
+            assert_dispatch_scope_guard(condition)
 
     browser_steps = jobs["browser-fixture-smoke"]["steps"]
-    browser_gate_steps = [
+    preproof_steps = [
+        step
+        for step in browser_steps
+        if "run_frontend3d_required_gate.sh browser-fixture-pre-proof" in step.get("run", "")
+    ]
+    assert len(preproof_steps) == 1
+    assert preproof_steps[0]["env"]["CONTROL_ROOM_AUDIT_ARTIFACTS_DIR"] == (
+        "${{ runner.temp }}/viewport-3d-browser-audit"
+    )
+    negative_controls = [
         step
         for step in browser_steps
         if "run_frontend3d_required_gate.sh browser-fixture-smoke" in step.get("run", "")
     ]
-    assert len(browser_gate_steps) == 2
-    assert all(
-        step["env"]["CONTROL_ROOM_AUDIT_ARTIFACTS_DIR"]
-        == "${{ runner.temp }}/viewport-3d-browser-audit"
-        for step in browser_gate_steps
+    assert len(negative_controls) == 1
+    assert "FULLMAG_CI_INJECT_FAILURE=browser-fixture-proof-identity" in negative_controls[0]["run"]
+    assert negative_controls[0]["env"]["CONTROL_ROOM_AUDIT_ARTIFACTS_DIR"] == (
+        "${{ runner.temp }}/viewport-3d-browser-audit"
     )
-    assert any(
-        step.get("run") == "./scripts/ci/run_frontend3d_required_gate.sh browser-fixture-smoke"
-        for step in browser_steps
+
+    inspector_index = next(
+        index
+        for index, step in enumerate(browser_steps)
+        if step.get("name") == "Run Inspector mutation and DMI authoring browser regressions"
     )
+    publication_steps = [
+        (index, step)
+        for index, step in enumerate(browser_steps)
+        if "run_frontend3d_required_gate.sh browser-fixture-proof-manifest"
+        in step.get("run", "")
+    ]
+    assert len(publication_steps) == 1
+    publication_index, publication_step = publication_steps[0]
+    publication_run = publication_step["run"]
+    assert publication_run.index("browser-fixture-proof-manifest") < publication_run.index(
+        "browser-fixture-source-verify-post-write"
+    )
+    assert "node apps/control-room/scripts/smoke-adaptive-study-authoring.mjs" in browser_steps[
+        inspector_index
+    ]["run"]
+    assert "pnpm --dir apps/control-room run smoke:inspector" in browser_steps[
+        inspector_index
+    ]["run"]
+    assert "smoke:analysis-plots" in browser_steps[inspector_index]["run"]
+    preproof_index = browser_steps.index(preproof_steps[0])
+    upload_index = next(
+        index
+        for index, step in enumerate(browser_steps)
+        if step.get("uses") == "actions/upload-artifact@v7"
+        and step["with"].get("name") == "viewport-3d-browser-audit"
+    )
+    assert preproof_index < inspector_index < publication_index < upload_index
     assert any(
         step.get("uses") == "actions/upload-artifact@v7"
         and step["with"].get("if-no-files-found") == "error"
@@ -208,6 +370,7 @@ def test_required_contexts_and_proof_output_are_fail_closed() -> None:
 
     dispatcher = (REPO_ROOT / "scripts/ci/run_frontend3d_required_gate.sh").read_text()
     assert "browser-fixture-proof-identity" in dispatcher
+    assert "browser-fixture-pre-proof" in dispatcher
     assert "browser-fixture-source-snapshot" in dispatcher
     assert "browser-fixture-source-verify" in dispatcher
     assert "browser-fixture-proof-manifest" in dispatcher

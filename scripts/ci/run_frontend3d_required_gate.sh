@@ -82,12 +82,15 @@ run_gate() {
     browser-fixture-proof-manifest)
       node apps/control-room/scripts/write-browser-fixture-proof-manifest.mjs
       ;;
-    browser-fixture-smoke)
+    browser-fixture-pre-proof)
       run_gate browser-fixture-proof-identity
       run_gate browser-fixture-source-snapshot
       pnpm --dir apps/control-room run audit:viewport-3d-memory-churn
       pnpm --dir apps/control-room run audit:viewport-3d-fem-topology-uploads
       run_gate browser-fixture-source-verify
+      ;;
+    browser-fixture-smoke)
+      run_gate browser-fixture-pre-proof
       run_gate browser-fixture-proof-manifest
       run_gate browser-fixture-source-verify-post-write
       ;;

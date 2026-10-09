@@ -378,6 +378,17 @@ jobs:
       - name: Install Chromium for browser fixture smoke
         run: pnpm --dir apps/control-room exec playwright install --with-deps chromium
 
+      - name: Setup Python for browser proof contract regressions
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+
+      - name: Install browser proof regression dependencies
+        run: python -m pip install 'pytest>=9,<10' PyYAML==6.0.3
+
+      - name: Verify browser proof gate and report binding contracts
+        run: python -m pytest -q scripts/test_frontend3d_required_checks.py
+
       - name: Run packaged Runner Console queue contracts
         env:
           FULLMAG_RUNNER_UI_ROOT: ${{ github.workspace }}
@@ -389,10 +400,10 @@ jobs:
           export FULLMAG_RUNNER_CHROMIUM="$(node -p "require('./apps/control-room/node_modules/playwright').chromium.executablePath()")"
           node apps/runner-console/browser-smoke.cjs
 
-      - name: Run browser fixture smoke
+      - name: Run browser fixture pre-proof gate
         env:
           CONTROL_ROOM_AUDIT_ARTIFACTS_DIR: ${{ runner.temp }}/viewport-3d-browser-audit
-        run: ./scripts/ci/run_frontend3d_required_gate.sh browser-fixture-smoke
+        run: ./scripts/ci/run_frontend3d_required_gate.sh browser-fixture-pre-proof
 
       - name: Verify browser fixture smoke negative control
         env:
@@ -438,13 +449,19 @@ jobs:
           CONTROL_ROOM_ANALYSIS_PLOTS_FIXTURE=1 \
             CONTROL_ROOM_ACCEPTANCE_DIR="$CONTROL_ROOM_AUDIT_ARTIFACTS_DIR/analysis-plots" \
             pnpm --dir apps/control-room run smoke:analysis-plots
-          ./scripts/ci/run_frontend3d_required_gate.sh browser-fixture-source-verify-post-write
 
       - name: Run start screen stylesheet browser check
         # Static CSS plus inline markup: no server and no audit build are needed.
         env:
           CONTROL_ROOM_BROWSER_CHANNEL: chromium
         run: pnpm --dir apps/control-room run check:start-screen-browser
+
+      - name: Publish canonical browser proof and verify final source
+        env:
+          CONTROL_ROOM_AUDIT_ARTIFACTS_DIR: ${{ runner.temp }}/viewport-3d-browser-audit
+        run: |
+          ./scripts/ci/run_frontend3d_required_gate.sh browser-fixture-proof-manifest
+          ./scripts/ci/run_frontend3d_required_gate.sh browser-fixture-source-verify-post-write
 
       - name: Upload browser fixture smoke artifacts
         if: always()
