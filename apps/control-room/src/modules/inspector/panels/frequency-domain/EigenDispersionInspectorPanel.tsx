@@ -98,6 +98,7 @@ export function EigenDispersionInspectorPanel({
         sections={[
           {
             id: "reference",
+            defaultOpen: true,
             title: "Reference & comparison",
             icon: <Scale size={16} strokeWidth={1.5} />,
             summary: summary.referenceComparisonStatus.replaceAll("_", " "),
@@ -111,6 +112,7 @@ export function EigenDispersionInspectorPanel({
           },
           {
             id: "selected-point",
+            defaultOpen: true,
             title: "Selected Dispersion Point",
             icon: <Target size={16} strokeWidth={1.5} />,
             summary: selectedPoint ? dispersionPointLabel(selectedPoint) : "not selected",
@@ -153,6 +155,7 @@ export function EigenDispersionInspectorPanel({
           },
           {
             id: "chart",
+            defaultOpen: true,
             title: "Dispersion Chart",
             icon: <LineChart size={16} strokeWidth={1.5} />,
             summary: summary.badge,
@@ -165,6 +168,7 @@ export function EigenDispersionInspectorPanel({
           },
           {
             id: "branches",
+            defaultOpen: true,
             title: "Dispersion Branch Table",
             icon: <GitBranch size={16} strokeWidth={1.5} />,
             summary: `${summary.branchCount} branch(es)`,
