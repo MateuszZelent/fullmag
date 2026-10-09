@@ -1952,3 +1952,8 @@ Count-only fixture używa rzeczywistego Context Poisson Hdemag/phi0, compensatio
 ### Runtime quarantine — dowód Linux i Windows
 
 37883220452 SUCCESS na632992424: Windows113667387477 iLinux113667387644 przeszły57execution/retention +14runtimequarantine +22references. Nowe source-pathswap before/afterrename, postmove identity mismatch, interruption/restart i normalpreservation cases wykonane. #4226154705 implemented w tym zakresie. Nie wykonano cleanupu hoststorage. WcześniejszyWindows baseline/progressfingerprint mismatch nie powtórzył się zexacthash-inputcapture; pozostaje NOT REPRODUCED, nie ustalono przyczyny i nie usunięto fingerprintguardów. Freshinline/reviewbody refresh7 nie zawiera nowych actionable uwag; rejestr269entry zachowany.
+
+
+### Driven fixture point7 — zgodność całego owner chain
+
+37882516810 FAIL na drivenfield po2modalPASS: unknownGET response/frequency-points/7, pozostałe route/Ribbon/Inspector assertionsPASS. Fixture udostępnia teraz owned FrequencyDomainJsonArtifactResource point7/frequency_response_point.v1, matchingartifactpath/session/run/stage/artifactset; sweep+point+fieldmetadata+leaf używają canonical analysis:frequency-response:frequency-0007. Progresscounts wyliczane z rzeczywiście dostępnego pointartifact, nie syntheticcomplete. Inneindices/products pozostają404/unknownguard. Source DTO/consumer review+nodesyntax+diff PASS; pełna5casebrowsermatrix i stalePlot3D actualtest nadalGHA pending.

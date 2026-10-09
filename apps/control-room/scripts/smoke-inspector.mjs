@@ -23,6 +23,16 @@ const INSPECTOR_MODAL_FIELD_ARRAY_PATH =
   "eigen/mode_fields.zarr/sample_0001/mode_0002/vector_xyz_complex";
 const INSPECTOR_MODAL_FIELD_PAYLOAD_PATH =
   `${INSPECTOR_MODAL_FIELD_ARRAY_PATH}/0.0.0`;
+const INSPECTOR_DRIVEN_RESPONSE_FIELD_ID =
+  "analysis:frequency-response:frequency-0007";
+const INSPECTOR_DRIVEN_RESPONSE_POINT_INDEX = 7;
+const INSPECTOR_DRIVEN_RESPONSE_ARTIFACT_OWNER = {
+  artifact_set_id: "inspector-driven-response-artifact-set-run-7",
+  mesh_generation_id: "1",
+  run_id: "inspector-run",
+  session_id: "inspector-routing-smoke",
+  stage_id: "frequency-response",
+};
 const INSPECTOR_MODAL_DOMAIN_GENERATION_ID = "1";
 const INSPECTOR_MODAL_MESH_TOPOLOGY_REVISION = 7;
 const INSPECTOR_MODAL_TOPOLOGY_HASH = "0123456789abcdef".repeat(4);
@@ -1454,7 +1464,7 @@ async function qualifyInspectorResonanceLeafRouting(browser, workspaceUrl, outpu
       suffix: "response-fields",
       childGroup: "response-fields",
       fieldSource: "frequency-response",
-      fieldId: "response-field-7",
+      fieldId: INSPECTOR_DRIVEN_RESPONSE_FIELD_ID,
       owner: "frequency-domain-results-resonance-driven-field",
       heading: "Response Field",
       label: "Driven response field",
@@ -3618,6 +3628,18 @@ async function installInspectorFixtureApi(page, fixture) {
     }
     if (path === "/v2/sessions/current/analysis/frequency-domain/eigen/diagnostics.v2") return fulfillJson(route, inspectorFrequencyDiagnostics());
     if (path === "/v2/sessions/current/analysis/frequency-domain/response/magnetic-sweep") return fulfillJson(route, inspectorFrequencyResponseSweep(fixture));
+    const responsePointMatch = /^\/v2\/sessions\/current\/analysis\/frequency-domain\/response\/frequency-points\/(\d+)$/.exec(path);
+    if (
+      fixture.analysisProduct === "driven_response" &&
+      responsePointMatch &&
+      String(Number(responsePointMatch[1])) === responsePointMatch[1]
+    ) {
+      const responsePoint = inspectorFrequencyResponsePointResource(
+        fixture,
+        Number(responsePointMatch[1]),
+      );
+      if (responsePoint) return fulfillJson(route, responsePoint);
+    }
     if (path === "/v2/sessions/current/analysis/frequency-domain/response/cancel-requested.v1") {
       return fulfillEmpty(route, 204);
     }
@@ -3893,6 +3915,11 @@ function inspectorFieldMeta(path, fixture = {}) {
   const encoded = path.split("/data/fields/")[1]?.split("/")[0] ?? "m";
   const eigenMatch = /\/eigen\/mode-field\/(\d+)\/(\d+)\/meta$/.exec(path);
   const responseMatch = /\/response\/field\/(\d+)\/meta$/.exec(path);
+  const responseField = responseMatch !== null;
+  const responseIndex = responseField ? Number(responseMatch[1]) : null;
+  const responseArrayPath = responseIndex == null
+    ? null
+    : `response/field_payloads.zarr/frequency_${String(responseIndex).padStart(4, "0")}/vector_xyz_complex`;
   const fieldId = eigenMatch
     ? `analysis:eigen:sample-${eigenMatch[1].padStart(4, "0")}:mode-${eigenMatch[2].padStart(4, "0")}`
     : responseMatch
@@ -3937,17 +3964,25 @@ function inspectorFieldMeta(path, fixture = {}) {
       zarr_store_path: "eigen/mode_fields.zarr",
     };
   }
-  const resourceKey = `/v2/sessions/current/data/fields/${encodeURIComponent(fieldId)}/samples/vector?view=phase_rotated_real&phase_rad=0`;
+  const resourceKey = `/v2/sessions/current/data/fields/${responseField ? fieldId : encodeURIComponent(fieldId)}/samples/vector?view=phase_rotated_real&phase_rad=0`;
   return {
-    artifact_path: `${fieldId}.field.v2.bin`,
-    available_views: ["complex", "real", "imag", "abs", "phase_rotated_real"],
+    artifact_path: responseIndex != null
+      ? inspectorFrequencyResponseFieldPayloadPath(responseIndex)
+      : `${fieldId}.field.v2.bin`,
+    available_views: responseField
+      ? ["complex", "real", "imag", "abs", "amplitude", "phase", "phase_rotated_real"]
+      : ["complex", "real", "imag", "abs", "phase_rotated_real"],
+    binary_layout: responseField ? "complex_f64_pairs_little_endian" : undefined,
     component_basis: "global_xyz",
     component_count: 3,
     components: ["x", "y", "z"],
+    complex_pair_count: responseField ? 96 : undefined,
     default_phase_rad: 0,
     default_view: "phase_rotated_real",
     field_id: fieldId,
     missing_reason: null,
+    payload_encoding: responseField ? "f64_interleaved_real_imag_xyz" : undefined,
+    payload_value_count: responseField ? 192 : undefined,
     quantity: "delta_m",
     resource_key: resourceKey,
     schema_version: eigenMatch
@@ -3958,8 +3993,18 @@ function inspectorFieldMeta(path, fixture = {}) {
       : "analysis/frequency-response",
     stats: { max: 1, min: 0 },
     status: "ready",
+    storage_format: responseField ? "zarr" : undefined,
     unit: "1",
-    value_kind: "complex_vector",
+    value_kind: responseField ? "complex_spatial_vector" : "complex_vector",
+    zarr_array_path: responseArrayPath ?? undefined,
+    zarr_chunk_path: responseIndex == null
+      ? undefined
+      : inspectorFrequencyResponseFieldPayloadPath(responseIndex),
+    zarr_chunk_shape: responseField ? [32, 3, 2] : undefined,
+    zarr_compressor: responseField ? null : undefined,
+    zarr_dtype: responseField ? "<f8" : undefined,
+    zarr_shape: responseField ? [32, 3, 2] : undefined,
+    zarr_store_path: responseField ? "response/field_payloads.zarr" : undefined,
   };
 }
 
@@ -4443,7 +4488,13 @@ function inspectorFrequencyManifest(fixture = { analysisProduct: "driven_respons
     eigenmodes: { modal_solver_available: true, reason: "", status: "ok", study_kind: "eigenmodes" },
     response: { driven_response_available: true, reason: "", status: "ok", study_kind: "frequency_response" },
     result_manifest: {
-      ...(modal ? INSPECTOR_MODAL_RESULT_OWNER : {}),
+      ...(modal
+        ? INSPECTOR_MODAL_RESULT_OWNER
+        : {
+            ...INSPECTOR_DRIVEN_RESPONSE_ARTIFACT_OWNER,
+            content_digest: `sha256:${"a".repeat(64)}`,
+            revision: `sha256:${"a".repeat(64)}`,
+          }),
       artifact_path: "frequency_domain/manifest.v1.json",
       missing_reason: null,
       payload: resultPayload,
@@ -4498,22 +4549,124 @@ function inspectorFrequencySpectrum() {
   };
 }
 
+function inspectorFrequencyResponsePointArtifactPath(frequencyIndex) {
+  return `response/frequency_points/frequency_${String(frequencyIndex).padStart(4, "0")}.json`;
+}
+
+function inspectorFrequencyResponseFieldPayloadPath(frequencyIndex) {
+  return `response/field_payloads.zarr/frequency_${String(frequencyIndex).padStart(4, "0")}/vector_xyz_complex/0.0.0`;
+}
+
+function inspectorFrequencyResponseFieldId(frequencyIndex) {
+  return frequencyIndex === INSPECTOR_DRIVEN_RESPONSE_POINT_INDEX
+    ? INSPECTOR_DRIVEN_RESPONSE_FIELD_ID
+    : `analysis:frequency-response:frequency-${String(frequencyIndex).padStart(4, "0")}`;
+}
+
+function inspectorAvailableResponseFrequencyPoints(fixture) {
+  if (fixture.analysisProduct !== "driven_response") return [];
+  const sweep = inspectorFrequencyResponseSweep(fixture);
+  return (sweep.payload?.points ?? []).filter((point) => {
+    const frequencyIndex = point.frequency_index;
+    return Number.isSafeInteger(frequencyIndex) &&
+      frequencyIndex >= 0 &&
+      point.frequency_point_artifact_path ===
+        inspectorFrequencyResponsePointArtifactPath(frequencyIndex) &&
+      point.field_id === inspectorFrequencyResponseFieldId(frequencyIndex) &&
+      point.response_field_payload_path ===
+        inspectorFrequencyResponseFieldPayloadPath(frequencyIndex);
+  });
+}
+
+function inspectorFrequencyResponsePointResource(fixture, frequencyIndex) {
+  const point = inspectorAvailableResponseFrequencyPoints(fixture).find(
+    (candidate) => candidate.frequency_index === frequencyIndex,
+  );
+  if (!point) return null;
+
+  const artifactPath = point.frequency_point_artifact_path;
+  const fieldMetadata = inspectorFieldMeta(
+    `/v2/sessions/current/analysis/frequency-domain/response/field/${frequencyIndex}/meta`,
+    fixture,
+  );
+  const contentDigest = `sha256:${"e".repeat(64)}`;
+  return {
+    ...INSPECTOR_DRIVEN_RESPONSE_ARTIFACT_OWNER,
+    artifact_path: artifactPath,
+    content_digest: contentDigest,
+    missing_reason: null,
+    payload: {
+      angular_frequency_rad_per_s: 2 * Math.PI * point.frequency_hz,
+      available_views: fieldMetadata.available_views,
+      binary_layout: fieldMetadata.binary_layout,
+      component_basis: fieldMetadata.component_basis,
+      component_count: fieldMetadata.component_count,
+      components: fieldMetadata.components,
+      complex_pair_count: fieldMetadata.complex_pair_count,
+      default_phase_rad: fieldMetadata.default_phase_rad,
+      default_view: fieldMetadata.default_view,
+      field_id: point.field_id,
+      field_payload_path: fieldMetadata.artifact_path,
+      frequency_hz: point.frequency_hz,
+      frequency_index: point.frequency_index,
+      payload_encoding: fieldMetadata.payload_encoding,
+      payload_value_count: fieldMetadata.payload_value_count,
+      point: {
+        absorbed_power_density: point.absorbed_power_density,
+        frequency_hz: point.frequency_hz,
+        angular_frequency_rad_per_s: 2 * Math.PI * point.frequency_hz,
+        point_id: point.point_id,
+        relative_residual_l2_norm: point.relative_residual_l2_norm,
+        residual_l2_norm: point.residual_l2_norm,
+        response_amplitude: [point.amplitude],
+        response_phase: [point.phase_rad],
+        susceptibility_tensor: point.susceptibility_tensor,
+        tangent_leakage: { kind: "not_evaluated_dense_validation", l2_norm: null },
+      },
+      point_id: point.point_id,
+      response_field_binary_layout: "complex_f64_pairs_little_endian",
+      response_field_payload_path: point.response_field_payload_path,
+      schema_version: "frequency_response_point.v1",
+      source_sweep_artifact: "response/magnetic_response_sweep.v1.json",
+      storage_format: fieldMetadata.storage_format,
+      value_kind: fieldMetadata.value_kind,
+      zarr_array_path: fieldMetadata.zarr_array_path,
+      zarr_chunk_path: fieldMetadata.zarr_chunk_path,
+      zarr_chunk_shape: fieldMetadata.zarr_chunk_shape,
+      zarr_compressor: fieldMetadata.zarr_compressor,
+      zarr_dtype: fieldMetadata.zarr_dtype,
+      zarr_shape: fieldMetadata.zarr_shape,
+      zarr_store_path: fieldMetadata.zarr_store_path,
+    },
+    resource_key: `/v2/sessions/current/analysis/frequency-domain/response/frequency-points/${frequencyIndex}`,
+    revision: contentDigest,
+    schema_version: "frequency_domain_response_frequency_point.v1",
+    status: "ready",
+  };
+}
+
 function inspectorFrequencyResponseProgress(
   fixture = { analysisProduct: "driven_response" },
 ) {
   const sweep = inspectorFrequencyResponseSweep(fixture);
   const sweepPayload = sweep.status === "ready" ? sweep.payload : null;
   const totalFrequencyPoints = sweepPayload?.points?.length ?? 0;
-  const completedFrequencyPoints = 0;
-  const writtenFrequencyPointArtifacts = completedFrequencyPoints;
+  const availableFrequencyPoints = inspectorAvailableResponseFrequencyPoints(fixture);
+  const completedFrequencyPoints = availableFrequencyPoints.length;
+  const writtenFrequencyPointArtifacts = availableFrequencyPoints.filter(
+    (point) => Boolean(point.frequency_point_artifact_path),
+  ).length;
   const complete = totalFrequencyPoints > 0 &&
     completedFrequencyPoints === totalFrequencyPoints;
-  const partialArtifactsAvailable = sweep.status === "ready";
+  const partialArtifactsAvailable = writtenFrequencyPointArtifacts > 0 ||
+    sweep.status === "ready";
   const frequencies = (sweepPayload?.points ?? [])
     .map((point) => point.frequency_hz)
     .filter((frequency) => Number.isFinite(frequency) && frequency > 0);
   const frequencyMinHz = frequencies.length > 0 ? Math.min(...frequencies) : null;
   const frequencyMaxHz = frequencies.length > 0 ? Math.max(...frequencies) : null;
+  const currentFrequencyHz =
+    availableFrequencyPoints.at(-1)?.frequency_hz ?? null;
   const state = complete
     ? "completed"
     : partialArtifactsAvailable
@@ -4528,7 +4681,7 @@ function inspectorFrequencyResponseProgress(
     total_frequency_points: totalFrequencyPoints,
     completed_frequency_points: completedFrequencyPoints,
     written_frequency_point_artifacts: writtenFrequencyPointArtifacts,
-    current_frequency_hz: null,
+    current_frequency_hz: currentFrequencyHz,
     frequency_min_hz: frequencyMinHz,
     frequency_max_hz: frequencyMaxHz,
     demag_mode: null,
@@ -4548,7 +4701,7 @@ function inspectorFrequencyResponseProgress(
       total_frequency_points: totalFrequencyPoints,
       completed_frequency_points: completedFrequencyPoints,
       written_frequency_point_artifacts: writtenFrequencyPointArtifacts,
-      current_frequency_hz: null,
+      current_frequency_hz: currentFrequencyHz,
       frequency_min_hz: frequencyMinHz,
       frequency_max_hz: frequencyMaxHz,
       partial_artifacts_available: partialArtifactsAvailable,
@@ -4692,26 +4845,50 @@ function inspectorFrequencyResponseSweep(
   fixture = { analysisProduct: "driven_response" },
 ) {
   const modal = fixture.analysisProduct === "modal_eigen";
+  const frequencyIndex = INSPECTOR_DRIVEN_RESPONSE_POINT_INDEX;
+  const pointArtifactPath = inspectorFrequencyResponsePointArtifactPath(frequencyIndex);
+  const fieldPayloadPath = inspectorFrequencyResponseFieldPayloadPath(frequencyIndex);
+  const fieldId = inspectorFrequencyResponseFieldId(frequencyIndex);
+  const pointId = `frequency-point-${String(frequencyIndex).padStart(4, "0")}`;
+  const sweepDigest = `sha256:${"b".repeat(64)}`;
   return {
+    ...(!modal ? INSPECTOR_DRIVEN_RESPONSE_ARTIFACT_OWNER : {}),
     artifact_path: "response/magnetic_response_sweep.v2.json",
+    content_digest: modal ? null : sweepDigest,
     missing_reason: modal ? "artifact is not present in the active workspace" : null,
     payload: modal
       ? null
       : {
+          complete: true,
+          completed_frequency_point_count: 1,
+          frequency_point_artifact_paths: [pointArtifactPath],
+          interrupted: false,
           points: [{
             absorbed_power_density: 4.5,
             amplitude: 0.75,
-            field_id: "response-field-7",
+            angular_frequency_rad_per_s: 2 * Math.PI * 12.5e9,
+            field_id: fieldId,
             frequency_hz: 12.5e9,
-            frequency_index: 7,
+            frequency_index: frequencyIndex,
+            frequency_point_artifact_path: pointArtifactPath,
+            max_response_amplitude: 0.75,
             observable_id: "mx",
             phase_rad: 1.25,
+            point_id: pointId,
+            relative_residual_l2_norm: 1e-5,
+            residual_l2_norm: 1e-5,
             residual_norm: 1e-5,
+            response_field_binary_layout: "complex_f64_pairs_little_endian",
+            response_field_payload_path: fieldPayloadPath,
             susceptibility_tensor: [[1, 2], [3, 4]],
           }],
+          requested_frequency_point_count: 1,
+          response_field_payload_paths: [fieldPayloadPath],
           schema_version: "magnetic_response_sweep.v2",
+          status: "completed",
         },
     resource_key: "/v2/sessions/current/analysis/frequency-domain/response/magnetic-sweep",
+    revision: modal ? null : sweepDigest,
     schema_version: "frequency_domain_response_sweep_resource.v1",
     status: modal ? "missing" : "ready",
   };
