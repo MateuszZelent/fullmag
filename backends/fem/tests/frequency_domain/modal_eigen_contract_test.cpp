@@ -3854,14 +3854,16 @@ void modal_shift_invert_sparse_payload_can_be_assembled_from_mfem_operator()
           "generic k=0 nearest-frequency diagnostics omit Floquet-only monitor telemetry");
     fullmag_fem_frequency_domain_result_destroy(&nearest_result);
 
+    std::printf("PASS: generic_sparse_mfem_window_and_nearest_certification\n");
+
     FullmagFemModalEigenRequest missing_mass_request = request;
     missing_mass_request.mfem_sparse_mass_csr = FullmagFemCsrMatrixView{};
     FullmagFemFrequencyDomainResult missing_mass_result =
         fullmag_fem_modal_eigen_solve(&missing_mass_request);
     check(missing_mass_result.status == FULLMAG_FEM_FD_VALIDATION_ERROR &&
               contains(missing_mass_result.diagnostics_json,
-                       "invalid_tangent_mass_metric"),
-          "generic sparse nearest solve rejects a missing geometric tangent mass");
+                       "invalid_sparse_csr_payload"),
+          "generic sparse nearest solve rejects a missing geometric mass CSR payload");
     fullmag_fem_frequency_domain_result_destroy(&missing_mass_result);
 
     const double invalid_mass_values[] = {-2.0, 2.0};

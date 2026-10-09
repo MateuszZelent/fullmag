@@ -1855,3 +1855,10 @@ Końcowy review N-OWN-HMAX wykrył redundantny późny stripper shared: usuwał 
 ### Błąd bramki ordered round-trip — świeże źródła
 
 Bootstrap37871452458 Python113630265322 FAIL przed frozen probe. Dwa fixture mismatch: copy-writer test porównywał katalog z absolutną listą bez pycache utworzonego wcześniej przez loader; teraz porównuje exact snapshot po load z jedynym dodanym exports (nie filtruje dowolnych nowych plików). Test build-run pipeline oczekiwał tylko until mimo rzeczywistego canonical payloadu integrator/fixed_dt/sampling i pustych kompatybilnych kontrolek relax. Teraz nadal wymaga dokładnej pełnej mapy, właściwych run wartości oraz pustych kontrolek innego etapu. Nie zmieniono produkcyjnej semantyki loadera/run. AST/diffPASS, hosted executionpending. Jawny frozen probe step przeniesiono przed ordered tests, aby uzyskać niezależny diagnostyczny wynik przed kolejnym niepowiązanym failure. Cała bramka nadal wymaga wszystkich testów.
+
+
+### Generic SLEPc po korekcie LU — postęp i następna negatywna bramka
+
+[37870357673](https://github.com/MateuszZelent/fullmag/actions/runs/37870357673), 95d1fcccd4df222f5d3c0c6445ad2b6eedb25e8b: FAIL później w negatywnym missing-mass fixture. Kolejność abort-on-failed-check dowodzi przejścia wcześniejszych real MFEM sparse window i nearest assertions z niezmienionymi bramkami oraz bez dense fallback. Nie dowodzi przejścia całego generic fixture. Deduplication CTest64 PASS.
+
+Źródłowa diagnoza i niezależne review: zeroed CSR mass słusznie odrzuca upfront sparse structure guard z reason invalid_sparse_csr_payload. Fixture błędnie oczekiwał deeper invalid_tangent_mass_metric. Zmieniono tylko dokładny reason oczekiwany dla brakującego CSR; enum VALIDATION_ERROR i oddzielny nonpositive metric test pozostają. Dodano exact PASS marker po wcześniejszych pozytywnych przypadkach, aby kolejny log jawnie pokazał tę bramkę. Żadnej zmiany produkcyjnego validate/physics/residual. Hosted reexecution pending.
