@@ -177,7 +177,7 @@ pub(super) fn build_eigen_path_frequency_domain_manifest(
     .or_else(|| {
         (!execution_provenance.requested_magnetostatic_bc_present).then(|| {
             if plan.operator.include_demag {
-                fem_eigen::eigen_native_window::planned_magnetostatic_bc(plan).to_string()
+                crate::fem::eigen_native_window::planned_magnetostatic_bc(plan).to_string()
             } else {
                 "not_applicable".to_string()
             }

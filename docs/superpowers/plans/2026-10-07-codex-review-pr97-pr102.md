@@ -2181,3 +2181,7 @@ Nie dodano nowego testu porównującego jedynie tekst implementacji panelu; mocn
 - Doc review usunęło niejednoznaczne twierdzenie o działającej naprawie. Konformny transition między owner cross-sections wymaga jeszcze oceny i implementacji; obejmuje adjacent tet4/facets/interface/PBC, exact-plane invariants i pointwise lower bounds. Nota i source-map validator PASS; nie jest to runtimefix ani scientificqualification.
 - Published provenance commit0d1e4b742b896e9b82c4c5e8c23c0c8ce4d3dc75 oraz fixture9d19d4a822d47cfc84b981af39962f090bdd83fb. Nowe joby: bootstrap37915870411 i pełny floquet-modal-slepc37915874849, oba na0d1e4b742; wymagają actual outcomes.
 - Następne niezależne fragmenty:4061061294 pełne publiczne flagi diagnostyki (selection/writers/defaults/availability) oraz4204615025 directory durability checkpointu; nie oznaczono tych uwag za naprawione.
+
+### Korekta namespace po CI provenance (2026-10-09)
+
+- Bootstrap37915870411/Rustjob113771783528 terminalFAIL E0433 przed wykonaniem nowych regresji: fem_eigen jest fasadą, nie ownerem eigen_native_window. Korekta używa istniejącego crate::fem::eigen_native_window::planned_magnetostatic_bc. Moduł pub(crate) i funkcja pub(super) pozostają bez zmian; source ownership sprawdzony. Nie zmieniono BC semantics ani request fallback. Nowe wykonanie GHA wymagane.
