@@ -21,3 +21,11 @@ GHA: legalny Relax/Eigen Path/Single/None; frequency response, nonempty bias sam
 Admission musi zachować raw stage types i presence przed stratną konwersją. Tylko canonical kind i jawne flat_ aliases; dowolny substring eigen/relax nie nadaje eligibility. Bias sweep malformed samples i nie-string change_device pozostają błędem, nie domyślnym CPU/brakiem continuation. Preview może używać typed draftów, ale raw canonical integrity jest zachowana; commit używa raw authoritative scene, a dopiero potem typed stage projection. add_field_drive jest jawnie dozwoloną akcją nieobliczeniową ustawiającą wejście, nie output-only ani solverem, i sama nie dowodzi eligibility. Nie rozszerzamy nią listy solverów.
 
 Ostatni Required: jawnie deklarowany sweep z samples=[] odrzucamy przed konwersją, zgodnie z canonical IR. Niezależne ponowne review trzech plików SOURCE PASS. Diff-check PASS; nie wykonano lokalnych testów/buildów/browser.
+
+## Rzeczywista hosted regresja Inspector — źródła gotowe
+
+Nowy `smoke-adaptive-study-authoring.mjs` używa produkcyjnego `/workspace`, wyboru `model:study`, istniejących v2 facade requests i zdarzenia `resource.batch_changed`. Pięć odmów bez POST: FrequencyResponse, run, unknown stage, puste bias samples, raw device=7. Relax CPU i EigenPath CPU klikają Save globals i sprawdzają rzeczywisty typed merge_patch POST, base_revision=1, adaptive/cpu oraz brak przepisywania stages.
+
+Zmiana authoritative scene na revision2/run po przygotowaniu draftu wymusza świeży GET, błąd i wyłączony Save, zachowując panel, CPU input, wartość/focus/opacity i zero POST. Ten reachable browser case nie wykonuje wyłączonego handlera; pozytywne cases wykonują handler. Dodatkowa ochrona fresh scene w commitGlobalDraft pozostaje potwierdzona źródłowo. Nie omijamy disabled UI ani prywatnych callbacków.
+
+Full niezależny SOURCE review PASS po Required: usunięto startup bypass, fixture dostarcza spójny sessions/status/scene kontrakt; preparation revision0 jest nieadvertised, bez preparation GET. Smoke czeka na rzeczywisty nagłówek Global Study Settings i odmontowanie overlay, następnie sprawdza tożsamość i odczyty. Raport zapisuje się exclusive wx. Node syntax check PASS. Jedno wywołanie w istniejącym browser job; lokalnego wykonania nie było. Hosted browser wynik pozostaje NOT VERIFIED do terminalnego CI i inspekcji raportu.

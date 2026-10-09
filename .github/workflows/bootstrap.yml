@@ -434,6 +434,7 @@ jobs:
           done
           test "$inspector_ready" = 1
           pnpm --dir apps/control-room run smoke:inspector
+          node apps/control-room/scripts/smoke-adaptive-study-authoring.mjs
           CONTROL_ROOM_ANALYSIS_PLOTS_FIXTURE=1 \
             CONTROL_ROOM_ACCEPTANCE_DIR="$CONTROL_ROOM_AUDIT_ARTIFACTS_DIR/analysis-plots" \
             pnpm --dir apps/control-room run smoke:analysis-plots
