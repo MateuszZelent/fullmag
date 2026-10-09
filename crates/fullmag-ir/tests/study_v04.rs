@@ -33,7 +33,13 @@ fn eigenmodes_v04(spatial_representation: Value, legacy_magnetostatic_bc: Option
         "normalization": "unit_l2",
         "damping_policy": "ignore",
         "magnetostatic_bc": "open",
-        "sampling": { "outputs": [] },
+        "sampling": {
+            "outputs": [{
+                "kind": "eigen_mode",
+                "field": "mode",
+                "all_modes": true
+            }]
+        },
         "spatial_representation": spatial_representation
     });
     if let Some(boundary_condition) = legacy_magnetostatic_bc {
@@ -66,7 +72,12 @@ fn frequency_response_v04(
             "phase_rad": 0.0
         },
         "frequencies_hz": { "values_hz": [1000000000.0, 2000000000.0] },
-        "sampling": { "outputs": [] },
+        "sampling": {
+            "outputs": [{
+                "kind": "frequency_response_output",
+                "observable": "response_amplitude"
+            }]
+        },
         "spatial_representation": spatial_representation
     });
     if let Some(boundary_condition) = legacy_magnetostatic_bc {
@@ -1101,6 +1112,109 @@ fn migration_rejects_unknown_material_intent_without_mutating_input() {
 
 fn spectral_v04_study_builders() -> [fn(Value, Option<Value>) -> Value; 2] {
     [eigenmodes_v04, frequency_response_v04]
+}
+
+fn assert_v04_study_rejected_by_standalone_and_problem(study: Value, expected: &str) {
+    let standalone: StudyIRV04 = serde_json::from_value(study.clone()).unwrap();
+    let standalone_errors = standalone.validate().unwrap_err();
+    assert!(
+        contains_error(&standalone_errors, expected),
+        "standalone {expected}: {standalone_errors:?}"
+    );
+
+    let problem: ProblemIRV04 = serde_json::from_value(problem_value_with_study(study)).unwrap();
+    let root_errors = problem.validate().unwrap_err();
+    assert!(
+        contains_error(&root_errors, expected),
+        "ProblemIRV04 {expected}: {root_errors:?}"
+    );
+}
+
+#[test]
+fn v04_problem_validation_uses_actual_root_context_for_bias_field_sweep() {
+    let mut study = eigenmodes_v04(full_3d(), Some(json!("periodic_airbox_k0")));
+    study["spin_wave_bc"] = json!({ "kind": "periodic", "pair_ids": [] });
+    study["bias_field_sweep"] = json!({
+        "samples_a_per_m": [[12500.0, 0.0, 0.0]],
+        "equilibrium_policy": "relax_each",
+        "ordering": "declared",
+        "continuation_seed": "initial_state"
+    });
+
+    let problem: ProblemIRV04 = serde_json::from_value(problem_value_with_study(study)).unwrap();
+    let errors = problem.validate().unwrap_err();
+    assert!(
+        contains_error(
+            &errors,
+            "eigenmodes.bias_field_sweep_requires_xy_periodic_open_z"
+        ),
+        "{errors:?}"
+    );
+}
+
+#[test]
+fn v04_full3d_all_study_variants_apply_shared_v03_local_contracts() {
+    for study in all_sampling_v04_studies() {
+        let kind = study["kind"].as_str().unwrap_or("unknown").to_string();
+        let standalone: StudyIRV04 = serde_json::from_value(study.clone()).unwrap();
+        assert!(
+            standalone.validate().is_ok(),
+            "standalone {kind}: {:?}",
+            standalone.validate()
+        );
+
+        let problem: ProblemIRV04 =
+            serde_json::from_value(problem_value_with_study(study)).unwrap();
+        assert!(
+            problem.validate().is_ok(),
+            "ProblemIRV04 {kind}: {:?}",
+            problem.validate()
+        );
+    }
+}
+
+#[test]
+fn v04_study_validation_matches_v03_count_target_dynamics_outputs_and_autosave() {
+    let mut zero_count = eigenmodes_v04(full_3d(), Some(json!("open")));
+    zero_count["count"] = json!(0);
+    assert_v04_study_rejected_by_standalone_and_problem(zero_count, "eigenmodes.count must be > 0");
+
+    let mut invalid_target = eigenmodes_v04(full_3d(), Some(json!("open")));
+    invalid_target["target"] = json!({ "kind": "nearest", "frequency_hz": 0.0 });
+    assert_v04_study_rejected_by_standalone_and_problem(
+        invalid_target,
+        "eigenmodes.target.frequency_hz must be positive",
+    );
+
+    let mut invalid_dynamics = eigenmodes_v04(full_3d(), Some(json!("open")));
+    invalid_dynamics["dynamics"]["gyromagnetic_ratio"] = json!(0.0);
+    assert_v04_study_rejected_by_standalone_and_problem(
+        invalid_dynamics,
+        "llg.gyromagnetic_ratio must be finite and positive",
+    );
+
+    let mut incompatible_outputs = eigenmodes_v04(full_3d(), Some(json!("open")));
+    incompatible_outputs["sampling"]["outputs"] = json!([{
+        "kind": "field",
+        "name": "m",
+        "every_seconds": 1e-9
+    }]);
+    assert_v04_study_rejected_by_standalone_and_problem(
+        incompatible_outputs,
+        "eigenmodes outputs must be",
+    );
+
+    let mut invalid_autosave = eigenmodes_v04(full_3d(), Some(json!("open")));
+    invalid_autosave["sampling"]["table_autosave"] = json!({
+        "kind": "table_autosave",
+        "table_id": "m",
+        "every_steps": 1,
+        "quantities": ["M"]
+    });
+    assert_v04_study_rejected_by_standalone_and_problem(
+        invalid_autosave,
+        "sampling.table_autosave.every_steps is only valid for relaxation studies",
+    );
 }
 
 fn all_sampling_v04_studies() -> Vec<Value> {

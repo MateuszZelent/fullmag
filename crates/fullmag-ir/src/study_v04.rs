@@ -274,6 +274,134 @@ impl StudyIRV04 {
         }
     }
 
+    /// Builds a validation-only V03 projection after V04 boundary guards; never serialized.
+    pub(crate) fn legacy_validation_view(&self) -> crate::StudyIR {
+        match self {
+            Self::TimeEvolution {
+                dynamics, sampling, ..
+            } => crate::StudyIR::TimeEvolution {
+                dynamics: dynamics.clone(),
+                sampling: sampling.clone(),
+            },
+            Self::Relaxation {
+                algorithm,
+                dynamics,
+                stop,
+                sampling,
+                ..
+            } => crate::StudyIR::Relaxation {
+                algorithm: algorithm.clone(),
+                dynamics: dynamics.clone(),
+                stop: stop.clone(),
+                sampling: sampling.clone(),
+            },
+            Self::Eigenmodes {
+                dynamics,
+                operator,
+                count,
+                target,
+                equilibrium,
+                k_sampling,
+                bias_field_sweep,
+                normalization,
+                damping_policy,
+                spin_wave_bc,
+                magnetostatic_bc,
+                mode_tracking,
+                sampling,
+                ..
+            } => crate::StudyIR::Eigenmodes {
+                dynamics: dynamics.clone(),
+                operator: operator.clone(),
+                count: *count,
+                target: target.clone(),
+                equilibrium: equilibrium.clone(),
+                k_sampling: k_sampling.clone(),
+                bias_field_sweep: bias_field_sweep.clone(),
+                normalization: normalization.clone(),
+                damping_policy: damping_policy.clone(),
+                spin_wave_bc: spin_wave_bc.clone(),
+                // Validation-only legacy view: the V04 boundary guard runs before
+                // this projection; this default is never serialized as V04 intent.
+                magnetostatic_bc: magnetostatic_bc.clone().unwrap_or_default(),
+                mode_tracking: mode_tracking.clone(),
+                sampling: sampling.clone(),
+            },
+            Self::FrequencyResponse {
+                dynamics,
+                operator,
+                equilibrium,
+                k_sampling,
+                normalization,
+                damping_policy,
+                spin_wave_bc,
+                magnetostatic_bc,
+                excitation,
+                frequencies_hz,
+                solver_policy,
+                sampling,
+                ..
+            } => crate::StudyIR::FrequencyResponse {
+                dynamics: dynamics.clone(),
+                operator: operator.clone(),
+                equilibrium: equilibrium.clone(),
+                k_sampling: k_sampling.clone(),
+                normalization: normalization.clone(),
+                damping_policy: damping_policy.clone(),
+                spin_wave_bc: spin_wave_bc.clone(),
+                magnetostatic_bc: magnetostatic_bc.clone().unwrap_or_default(),
+                excitation: excitation.clone(),
+                frequencies_hz: frequencies_hz.clone(),
+                solver_policy: solver_policy.clone(),
+                sampling: sampling.clone(),
+            },
+            Self::Hysteresis {
+                field_min_mT,
+                field_max_mT,
+                field_step_mT,
+                field_values_mT,
+                field_unit_provenance,
+                direction,
+                orientation,
+                measurement_axis,
+                angular_family,
+                initial_protocol,
+                initial_state_ref,
+                saturation,
+                branch_mode,
+                settle_pipeline,
+                storage,
+                field_schedule,
+                schedule_refinements,
+                adaptive_refinement,
+                minor_loops,
+                sampling,
+                ..
+            } => crate::StudyIR::Hysteresis {
+                field_min_mT: *field_min_mT,
+                field_max_mT: *field_max_mT,
+                field_step_mT: *field_step_mT,
+                field_values_mT: field_values_mT.clone(),
+                field_unit_provenance: field_unit_provenance.clone(),
+                direction: *direction,
+                orientation: orientation.clone(),
+                measurement_axis: measurement_axis.clone(),
+                angular_family: angular_family.clone(),
+                initial_protocol: initial_protocol.clone(),
+                initial_state_ref: initial_state_ref.clone(),
+                saturation: saturation.clone(),
+                branch_mode: branch_mode.clone(),
+                settle_pipeline: settle_pipeline.clone(),
+                storage: storage.clone(),
+                field_schedule: field_schedule.clone(),
+                schedule_refinements: schedule_refinements.clone(),
+                adaptive_refinement: adaptive_refinement.clone(),
+                minor_loops: minor_loops.clone(),
+                sampling: sampling.clone(),
+            },
+        }
+    }
+
     pub fn validate(&self) -> Result<(), Vec<String>> {
         let errors = self.validation_errors();
         if errors.is_empty() {
@@ -296,15 +424,6 @@ impl StudyIRV04 {
                     .to_string(),
             );
         }
-
-        let sampling = match self {
-            Self::TimeEvolution { sampling, .. }
-            | Self::Relaxation { sampling, .. }
-            | Self::Eigenmodes { sampling, .. }
-            | Self::FrequencyResponse { sampling, .. }
-            | Self::Hysteresis { sampling, .. } => sampling,
-        };
-        validate_v04_spectrum_quantities(sampling, &mut errors);
 
         let spectral_boundary = match self {
             Self::Eigenmodes {
@@ -329,35 +448,11 @@ impl StudyIRV04 {
             }
         }
 
-        let spectral_k_sampling = match self {
-            Self::Eigenmodes { k_sampling, .. } => {
-                k_sampling.as_ref().map(|sampling| ("eigenmodes", sampling))
-            }
-            Self::FrequencyResponse { k_sampling, .. } => k_sampling
-                .as_ref()
-                .map(|sampling| ("frequency_response", sampling)),
-            _ => None,
-        };
-        if let Some((prefix, sampling)) = spectral_k_sampling {
-            errors.extend(sampling.validation_errors(&format!("{prefix}.k_sampling")));
-        }
+        errors.extend(crate::validate_study_contracts(
+            &self.legacy_validation_view(),
+            None,
+        ));
         errors
-    }
-}
-
-fn validate_v04_spectrum_quantities(sampling: &SamplingIR, errors: &mut Vec<String>) {
-    for output in &sampling.outputs {
-        let crate::OutputIR::EigenSpectrum { quantity } = output else {
-            continue;
-        };
-        if quantity.trim().is_empty() {
-            errors.push("eigen_spectrum quantity must not be empty".to_string());
-        } else if !crate::is_supported_eigen_spectrum_quantity(quantity) {
-            errors.push(format!(
-                "eigen_spectrum quantity '{quantity}' is unsupported; supported quantity is '{}'",
-                crate::CANONICAL_EIGEN_SPECTRUM_QUANTITY
-            ));
-        }
     }
 }
 

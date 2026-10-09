@@ -453,7 +453,25 @@ impl ProblemIRV04 {
     }
 
     pub fn validate(&self) -> Result<(), Vec<String>> {
-        crate::validate_physics_object_problem(self)
+        let mut errors = crate::validate_physics_object_problem(self)
+            .err()
+            .unwrap_or_default();
+        let study = self.study.legacy_validation_view();
+        errors.extend(crate::validate_study_root_context_contracts(
+            &study,
+            &crate::StudyRootValidationContext {
+                energy_terms: &self.energy_terms,
+                materials: &self.materials,
+                backend_policy: &self.backend_policy,
+                validation_profile: &self.validation_profile,
+                pbc: self.pbc.as_ref(),
+            },
+        ));
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
     }
 
     /// The only mesh-policy source used by the typed V04 execution contract.
