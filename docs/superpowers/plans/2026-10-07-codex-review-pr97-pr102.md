@@ -2246,3 +2246,8 @@ Nie dodano nowego testu porównującego jedynie tekst implementacji panelu; mocn
 
 - Bootstrap37926111349/Rust113805342238 terminalFAIL: testoutput_selection brakował importu EigenDiagnosticsRequest; nowe referenceDiagnosticModeRecord wymaga Option<f64> dla absoluteL2 i Linf, ale producent przekazuje obliczone f64. Dodano import i Some dla obu rzeczywiście wyliczonych metryk; sharedprojector nadal filtruje nonfinite/negative i nie fabrykuje zer. Nie osłabiono assertions ani gates. Statyczny Rustparser/diffPASS; nowe wykonanie wymagane.
 - Native-modal37926724101/job113807324823 SUCCESS na7dcea1df4f553fcece6128c334b79d1656301069: rzeczywisty CABI v20 forcedGPU/tiny conflict test jest w main wykonywanego fem_modal_eigen_contract; CTest3/3PASS. Kontrakt odrzucenia potwierdzony bez CUDA/SLEPc; nie oznacza produkcyjnego GPU execution lub kwalifikacji demag.
+
+
+### Uzupełnienie brakującego hooka admission (2026-10-09)
+
+-4105055188 nadal pendingCI: pełny wcześniejszy Rustjob nie wykonał floquet_dynamic_demag_provider_requires_exact_requested_pair_set, ponieważ filtrclassifier nie obejmuje tego testu. Dodano dokładny hook do istniejącego kroku nativeartifactcontracts. Test sprawdza legalny pełny zbiór jednej/dwóch osi, kolejność niezależną, empty/duplicate/unknown/subset oraz brakujące mapy węzłów. Nie promowano statusu na podstawie samej kompilacji lub sąsiednich testów. Wymagane wykonanie na następnym snapshotcie.

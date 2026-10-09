@@ -102,6 +102,7 @@ jobs:
           cargo test -p fullmag-runner native_modal_manifest_distinguishes_numeric_solve_from_comparison --lib
           cargo test -p fullmag-runner actual_path_manifest_distinguishes_numeric_solve_from_comparison --lib
           cargo test -p fullmag-runner eigen_path_single_k_solver_model_ --lib
+          cargo test -p fullmag-runner floquet_dynamic_demag_provider_requires_exact_requested_pair_set --lib
           cargo test -p fullmag-runner spectrum_quantity_ --lib
 
       - name: Run diagnostic flag contracts through real single-k publishers
