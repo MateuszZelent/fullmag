@@ -1450,20 +1450,32 @@ pub(super) fn eigen_path_single_k_solver_model(
             .and_then(|value| value.as_str());
         if production_solver_available
             && execution_lane == Some("production_cpu")
-            && (solver_model == Some("slepc_multi_shift_invert_production_cpu_dense")
-                || solver_model == Some("slepc_multi_shift_invert_production_cpu_sparse_csr")
-                || solver_adapter == Some("k0_poisson_airbox_cpu_full_coupled_slepc")
-                || solver_adapter == Some("k0_poisson_airbox_cpu_schur_slepc"))
             && spectral_transform == Some("shift_invert")
         {
-            if matches!(
+            let floquet_request = matches!(
                 plan.spin_wave_bc.kind(),
                 fullmag_ir::SpinWaveBoundaryKindIR::Floquet
-            ) && !eigen_path_single_k_has_bloch_floquet_contract(diagnostics)
+            );
+            let floquet_coupled_dynamic_demag_request =
+                floquet_request && plan.operator.include_demag && plan.enable_demag;
+            if floquet_coupled_dynamic_demag_request
+                && eigen_path_single_k_has_floquet_shared_domain_production_cpu_contract(
+                    diagnostics,
+                )
             {
-                return crate::eigen::EigenSolverModel::ReferenceFull2x2Tangent;
+                return crate::eigen::EigenSolverModel::ProductionCpuShiftInvert;
             }
-            return crate::eigen::EigenSolverModel::ProductionCpuShiftInvert;
+            if solver_model == Some("slepc_multi_shift_invert_production_cpu_dense")
+                || solver_model == Some("slepc_multi_shift_invert_production_cpu_sparse_csr")
+                || solver_adapter == Some("k0_poisson_airbox_cpu_full_coupled_slepc")
+                || solver_adapter == Some("k0_poisson_airbox_cpu_schur_slepc")
+            {
+                if floquet_request && !eigen_path_single_k_has_bloch_floquet_contract(diagnostics)
+                {
+                    return crate::eigen::EigenSolverModel::ReferenceFull2x2Tangent;
+                }
+                return crate::eigen::EigenSolverModel::ProductionCpuShiftInvert;
+            }
         }
         if production_solver_available
             && execution_lane == Some("production_gpu")
@@ -1488,6 +1500,36 @@ pub(super) fn eigen_path_single_k_solver_model(
     } else {
         crate::eigen::EigenSolverModel::ReferenceScalarTangent
     }
+}
+
+fn eigen_path_single_k_has_floquet_shared_domain_production_cpu_contract(
+    diagnostics: Option<&serde_json::Value>,
+) -> bool {
+    let Some(diagnostics) = diagnostics else {
+        return false;
+    };
+    let string = |key| diagnostics.get(key).and_then(serde_json::Value::as_str);
+    let boolean = |key| diagnostics.get(key).and_then(serde_json::Value::as_bool);
+
+    // The native runner rewrites solver_model to the adapter ID when it
+    // merges result diagnostics. solver_family retains the C++ solver model.
+    string("solver_model") == Some("floquet_airbox_cpu_schur_slepc")
+        && string("solver_family") == Some("floquet_multi_shift_invert_slepc_sparse")
+        && string("solver_adapter") == Some("floquet_airbox_cpu_schur_slepc")
+        && string("mfem_operator_payload") == Some("floquet_shared_domain_sparse_matshell")
+        && string("demag_kind") == Some("floquet_airbox")
+        && string("algebraic_form") == Some("schur_reduced_descriptor")
+        && string("execution_lane") == Some("production_cpu")
+        && string("spectral_transform") == Some("shift_invert")
+        && boolean("production_solver_available") == Some(true)
+        && boolean("production_native_solver_available") == Some(true)
+        && boolean("modal_periodic_pair_contract_available") == Some(true)
+        && boolean("tiny_validation_solver") == Some(false)
+        && boolean("validation_only") != Some(true)
+        && diagnostics
+            .get("floquet_periodic_pair_count")
+            .and_then(serde_json::Value::as_u64)
+            .is_some_and(|count| count > 0)
 }
 
 pub(super) fn eigen_path_gpu_modal_device_contract(diagnostics: &serde_json::Value) -> bool {

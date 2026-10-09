@@ -6546,6 +6546,332 @@ fn native_floquet_sparse_diagnostics_keep_schur_and_nonzero_k_identity() {
     assert_eq!(diagnostics["accepted_mode_count"], 8);
 }
 
+fn eigen_path_single_k_floquet_shared_domain_production_summary_artifacts(
+    plan: &FemEigenPlanIR,
+) -> Vec<AuxiliaryArtifact> {
+    // These fields match the native CPU Floquet multi-shift producer. The
+    // runner normalizer merges the result adapter and binds production and
+    // periodic-pair attestations before summary publication.
+    let native_diagnostics = serde_json::json!({
+        "schema_version": "frequency_domain_modal_diagnostics.v1",
+        "study_product": "modal_eigen",
+        "status": "ok",
+        "complete": true,
+        "execution_lane": "production_cpu",
+        "production_solver_available": true,
+        "tiny_validation_solver": false,
+        "mfem_operator_request": true,
+        "mfem_operator_payload": "floquet_shared_domain_sparse_matshell",
+        "algebraic_form": "real_frequency_rotated_gyrotropic_sparse_csr",
+        "solver_adapter": "floquet_airbox_cpu_schur_slepc",
+        "solver_model": "floquet_multi_shift_invert_slepc_sparse",
+        "solver_family": "floquet_multi_shift_invert_slepc_sparse",
+        "spectral_transform": "shift_invert",
+        "floquet_periodic_pair_count": 4,
+        "window_completeness": {
+            "policy": "best_effort",
+            "status": "not_certified",
+            "certified_modes_in_window": 0,
+            "additional_modes_may_exist": true,
+        },
+    });
+    let native_result = serde_json::json!({
+        "schema_version": "frequency_domain_modal_result.v1",
+        "study_product": "modal_eigen",
+        "solver_adapter": "floquet_airbox_cpu_schur_slepc",
+        "demag_kind": "floquet_airbox",
+        "q_dof_count": 8,
+        "phi_dof_count": 12,
+        "magnetic_pair_count": 2,
+        "airbox_pair_count": 2,
+        "augmented_dof_count": 21,
+    });
+    let normalized_diagnostics = native_solver_diagnostics_json(
+        plan,
+        &native_diagnostics.to_string(),
+        Some(&native_result.to_string()),
+        None,
+    )
+    .expect("native Floquet production diagnostics should normalize");
+    let empty_reduction = ReductionMap {
+        active_nodes: Vec::new(),
+        node_map: Vec::new(),
+        node_phases: Vec::new(),
+        complex_reduction: false,
+    };
+    super::eigen_native_artifacts::native_modal_artifacts(
+        plan,
+        &[OutputIR::EigenSpectrum {
+            quantity: "frequency_hz".to_string(),
+        }],
+        &plan.equilibrium_magnetization,
+        &empty_reduction,
+        &[],
+        &[],
+        None,
+        normalized_diagnostics,
+        0,
+        None,
+        None,
+        None,
+        None,
+        0,
+        None,
+    )
+    .expect("native modal summary publication should preserve Floquet diagnostics")
+}
+
+fn eigen_path_single_k_summary_artifact_for_diagnostics(
+    diagnostics: &serde_json::Value,
+) -> AuxiliaryArtifact {
+    let summary = serde_json::json!({
+        "solver_kind": diagnostics.get("solver_model").cloned(),
+        "solver_diagnostics": diagnostics,
+    });
+    AuxiliaryArtifact {
+        relative_path: "eigen/metadata/eigen_summary.json".to_string(),
+        bytes: serde_json::to_vec(&summary).unwrap(),
+    }
+}
+
+fn eigen_path_single_k_publish_solver_model(
+    plan: &FemEigenPlanIR,
+    solver_model: crate::eigen::EigenSolverModel,
+) -> serde_json::Value {
+    let result = crate::eigen::PathSolveResult {
+        gamma0_rad_s_per_a_m: plan.gyromagnetic_ratio,
+        samples: Vec::new(),
+        branches: Vec::new(),
+        solver_model,
+        notes: Vec::new(),
+        include_demag: plan.operator.include_demag,
+        dispersion_validation: plan.dispersion_validation.clone(),
+        k0_kittel_validation: plan.k0_kittel_validation.clone(),
+        solver_policy: plan.solver_policy.clone(),
+        dispersion_analytic_reference: None,
+        k0_kittel_periodic_airbox_demag: None,
+    };
+    super::eigen_path::eigen_path_solver_diagnostics(
+        crate::dispatch::FemEngine::CpuNative,
+        plan,
+        &result,
+        &std::collections::BTreeSet::<u32>::new(),
+    )
+}
+
+#[test]
+fn eigen_path_single_k_solver_model_classifies_and_publishes_floquet_cpu_sparse_for_paired_k_signs() {
+    for kx in [1.0e6, -1.0e6] {
+        let mut plan = bounded_floquet_dynamic_demag_execution_plan();
+        match plan.k_sampling.as_mut() {
+            Some(KSamplingIR::Single { k_vector }) => k_vector[0] = kx,
+            _ => unreachable!("Floquet execution fixture has one k sample"),
+        }
+        let artifacts =
+            eigen_path_single_k_floquet_shared_domain_production_summary_artifacts(&plan);
+        let summary = artifacts
+            .iter()
+            .find(|artifact| artifact.relative_path == "eigen/metadata/eigen_summary.json")
+            .expect("native modal artifact builder publishes an eigen summary");
+        let summary: serde_json::Value =
+            serde_json::from_slice(&summary.bytes).expect("eigen summary should be JSON");
+        let diagnostics = &summary["solver_diagnostics"];
+        assert_eq!(
+            diagnostics["solver_model"],
+            "floquet_airbox_cpu_schur_slepc"
+        );
+        assert_eq!(
+            diagnostics["solver_family"],
+            "floquet_multi_shift_invert_slepc_sparse"
+        );
+        assert_eq!(
+            diagnostics["mfem_operator_payload"],
+            "floquet_shared_domain_sparse_matshell"
+        );
+        assert_eq!(diagnostics["demag_kind"], "floquet_airbox");
+        assert_eq!(diagnostics["production_solver_available"], true);
+        assert_eq!(diagnostics["production_native_solver_available"], true);
+        assert_eq!(
+            diagnostics["modal_periodic_pair_contract_available"],
+            true
+        );
+        assert_eq!(diagnostics["floquet_periodic_pair_count"], 4);
+        assert_eq!(diagnostics["window_completeness"]["status"], "not_certified");
+
+        let solver_model =
+            super::eigen_path::eigen_path_single_k_solver_model(&plan, &artifacts);
+        assert_eq!(
+            solver_model,
+            crate::eigen::EigenSolverModel::ProductionCpuShiftInvert
+        );
+        let mut include_demag_mismatch = plan.clone();
+        include_demag_mismatch.operator.include_demag = false;
+        assert_eq!(
+            super::eigen_path::eigen_path_single_k_solver_model(
+                &include_demag_mismatch,
+                &artifacts,
+            ),
+            crate::eigen::EigenSolverModel::ReferenceFull2x2Tangent
+        );
+
+        let mut enabled_demag_mismatch = plan.clone();
+        enabled_demag_mismatch.enable_demag = false;
+        assert_eq!(
+            super::eigen_path::eigen_path_single_k_solver_model(
+                &enabled_demag_mismatch,
+                &artifacts,
+            ),
+            crate::eigen::EigenSolverModel::ReferenceFull2x2Tangent
+        );
+
+        let publication = eigen_path_single_k_publish_solver_model(&plan, solver_model.clone());
+        assert_eq!(
+            publication["solver_model"],
+            solver_model.as_str(),
+            "path publication should preserve the classified solver model"
+        );
+        assert_eq!(publication["production_solver_available"], true);
+        assert_eq!(publication["execution_lane"], "production_cpu");
+    }
+}
+
+#[test]
+fn eigen_path_single_k_solver_model_requires_floquet_producer_flags_and_payload_contract() {
+    let plan = bounded_floquet_dynamic_demag_execution_plan();
+    let artifacts =
+        eigen_path_single_k_floquet_shared_domain_production_summary_artifacts(&plan);
+    let summary = artifacts
+        .iter()
+        .find(|artifact| artifact.relative_path == "eigen/metadata/eigen_summary.json")
+        .expect("native modal artifact builder publishes an eigen summary");
+    let summary: serde_json::Value =
+        serde_json::from_slice(&summary.bytes).expect("eigen summary should be JSON");
+    let base_diagnostics = summary["solver_diagnostics"].clone();
+    let invalid_fields: &[(&str, Option<serde_json::Value>)] = &[
+        ("production_solver_available", None),
+        ("production_solver_available", Some(serde_json::json!(false))),
+        ("production_native_solver_available", None),
+        ("production_native_solver_available", Some(serde_json::json!(false))),
+        ("execution_lane", None),
+        ("execution_lane", Some(serde_json::json!("production_gpu"))),
+        ("spectral_transform", None),
+        ("spectral_transform", Some(serde_json::json!("none"))),
+        ("validation_only", Some(serde_json::json!(true))),
+        ("tiny_validation_solver", None),
+        ("tiny_validation_solver", Some(serde_json::json!(true))),
+        ("solver_model", None),
+        ("solver_model", Some(serde_json::json!("unknown_solver"))),
+        ("solver_family", None),
+        ("solver_family", Some(serde_json::json!("unknown_solver"))),
+        ("solver_adapter", None),
+        ("solver_adapter", Some(serde_json::json!("future_floquet_adapter"))),
+        ("mfem_operator_payload", None),
+        ("mfem_operator_payload", Some(serde_json::json!("sparse_csr"))),
+        ("demag_kind", None),
+        ("demag_kind", Some(serde_json::json!("periodic_airbox_k0"))),
+        ("algebraic_form", None),
+        ("modal_periodic_pair_contract_available", None),
+        (
+            "modal_periodic_pair_contract_available",
+            Some(serde_json::json!(false)),
+        ),
+        ("floquet_periodic_pair_count", None),
+        ("floquet_periodic_pair_count", Some(serde_json::json!(0))),
+    ];
+    for (field, replacement) in invalid_fields {
+        let mut diagnostics = base_diagnostics.clone();
+        match replacement {
+            Some(value) => diagnostics[*field] = value.clone(),
+            None => {
+                diagnostics
+                    .as_object_mut()
+                    .expect("normalized diagnostics should be an object")
+                    .remove(*field);
+            }
+        }
+        let invalid_artifact =
+            eigen_path_single_k_summary_artifact_for_diagnostics(&diagnostics);
+        assert_eq!(
+            super::eigen_path::eigen_path_single_k_solver_model(&plan, &[invalid_artifact]),
+            crate::eigen::EigenSolverModel::ReferenceFull2x2Tangent,
+            "invalid {field} must fail closed"
+        );
+    }
+}
+
+#[test]
+fn eigen_path_single_k_solver_model_keeps_legacy_bloch_no_demag_guard() {
+    let mut plan = minimal_native_modal_plan();
+    plan.operator.kind = fullmag_ir::EigenOperatorIR::Full2x2;
+    plan.operator.include_demag = false;
+    plan.enable_demag = false;
+    plan.demag_realization = None;
+    plan.damping_policy = EigenDampingPolicyIR::Ignore;
+    configure_x_floquet_request(&mut plan);
+    let mut diagnostics = serde_json::json!({
+        "production_solver_available": true,
+        "execution_lane": "production_cpu",
+        "solver_model": "slepc_multi_shift_invert_production_cpu_sparse_csr",
+        "solver_adapter": "slepc_modal_eigen",
+        "spectral_transform": "shift_invert",
+        "modal_periodic_pair_contract_available": true,
+        "floquet_periodic_pair_count": 2,
+        "operator_diagnostics": {
+            "payload_kind": "bloch_floquet_tangent_operator",
+        },
+    });
+    let legacy_artifact =
+        eigen_path_single_k_summary_artifact_for_diagnostics(&diagnostics);
+    assert_eq!(
+        super::eigen_path::eigen_path_single_k_solver_model(&plan, &[legacy_artifact]),
+        crate::eigen::EigenSolverModel::ProductionCpuShiftInvert
+    );
+
+    diagnostics["operator_diagnostics"]["demag_payload_kind"] =
+        serde_json::json!("dynamic_demag_k_operator");
+    let demag_artifact =
+        eigen_path_single_k_summary_artifact_for_diagnostics(&diagnostics);
+    assert_eq!(
+        super::eigen_path::eigen_path_single_k_solver_model(&plan, &[demag_artifact]),
+        crate::eigen::EigenSolverModel::ReferenceFull2x2Tangent
+    );
+}
+
+#[test]
+fn eigen_path_single_k_solver_model_keeps_generic_cpu_and_k0_classifiers() {
+    let plan = minimal_native_modal_plan();
+    for solver_model in [
+        "slepc_multi_shift_invert_production_cpu_dense",
+        "slepc_multi_shift_invert_production_cpu_sparse_csr",
+    ] {
+        let diagnostics = serde_json::json!({
+            "production_solver_available": true,
+            "execution_lane": "production_cpu",
+            "solver_model": solver_model,
+            "spectral_transform": "shift_invert",
+        });
+        let artifact = eigen_path_single_k_summary_artifact_for_diagnostics(&diagnostics);
+        assert_eq!(
+            super::eigen_path::eigen_path_single_k_solver_model(&plan, &[artifact]),
+            crate::eigen::EigenSolverModel::ProductionCpuShiftInvert
+        );
+    }
+
+    let k0_plan = bounded_k0_execution_plan();
+    let k0_diagnostics = serde_json::json!({
+        "production_solver_available": true,
+        "execution_lane": "production_cpu",
+        "solver_model": "k0_poisson_airbox_cpu_schur_slepc",
+        "solver_adapter": "k0_poisson_airbox_cpu_schur_slepc",
+        "spectral_transform": "shift_invert",
+    });
+    let k0_artifact = eigen_path_single_k_summary_artifact_for_diagnostics(&k0_diagnostics);
+    assert_eq!(
+        super::eigen_path::eigen_path_single_k_solver_model(&k0_plan, &[k0_artifact]),
+        crate::eigen::EigenSolverModel::ProductionCpuShiftInvert
+    );
+}
+
 #[test]
 fn native_poisson_airbox_result_maps_to_k0_kittel_metrics() {
     let raw = serde_json::json!({

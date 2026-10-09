@@ -101,6 +101,7 @@ jobs:
           cargo test -p fullmag-runner native_modal_artifact_limitations_follow_executed_operator_payload --lib
           cargo test -p fullmag-runner native_modal_manifest_distinguishes_numeric_solve_from_comparison --lib
           cargo test -p fullmag-runner actual_path_manifest_distinguishes_numeric_solve_from_comparison --lib
+          cargo test -p fullmag-runner eigen_path_single_k_solver_model_ --lib
 
       - name: Run sample-scoped eigen artifact contracts
         run: cargo test -p fullmag-runner output_publication_tests --lib
