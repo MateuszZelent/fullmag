@@ -1200,6 +1200,13 @@ pub(crate) mod tests {
             problem
                 .material_assignments
                 .retain(|assignment| assignment.target.object_id != object_id);
+            problem
+                .objects
+                .iter_mut()
+                .find(|object| object.object_id == object_id)
+                .expect("converted fixture object exists")
+                .material_assignment_ids
+                .clear();
             mesh.regions[0] = WaveguideCrossSectionRegionIR::Air {
                 region_id,
                 object_id,
@@ -1207,6 +1214,10 @@ pub(crate) mod tests {
         } else {
             panic!("fixture core must start magnetic");
         }
+        assert!(
+            problem.validate().is_ok(),
+            "converted air fixture must preserve valid object/assignment references"
+        );
         let inner = mesh
             .boundary_components
             .iter()
