@@ -123,6 +123,47 @@ def finite_number(value: object) -> bool:
         return False
 
 
+def durability_report(manifest: dict) -> dict:
+    """Report namespace-sync claims without promoting file integrity to durability."""
+    if 'durability' not in manifest:
+        return {
+            'directory_sync_capability': 'unreported',
+            'directory_sync_required_for_success': None,
+            'directory_sync_policy': 'unreported',
+            'directory_entries_synced': None,
+            'power_loss_qualification': 'unreported',
+        }
+    raw = manifest['durability']
+    if not isinstance(raw, dict):
+        raise ValueError('checkpoint durability descriptor must be an object')
+    capability = raw.get('directory_sync_capability')
+    required = raw.get('directory_sync_required_for_success')
+    policy = raw.get('directory_sync_policy')
+    entries_synced = raw.get('directory_entries_synced')
+    power_loss = raw.get('power_loss_qualification')
+    if (type(required) is not bool
+            or entries_synced is not None and type(entries_synced) is not bool
+            or entries_synced is True):
+        raise ValueError('invalid checkpoint directory-sync observation')
+    if power_loss != 'NOT VERIFIED':
+        raise ValueError('checkpoint cannot claim power-loss qualification')
+    if capability == 'supported':
+        if not required or policy != 'file_and_directory_entries_required_before_success' or entries_synced is not None:
+            raise ValueError('invalid supported directory-sync descriptor')
+    elif capability == 'unavailable':
+        if required or policy != 'file_contents_only_directory_entries_unverified' or entries_synced is not False:
+            raise ValueError('invalid unavailable directory-sync descriptor')
+    else:
+        raise ValueError('unknown checkpoint directory-sync capability')
+    return {
+        'directory_sync_capability': capability,
+        'directory_sync_required_for_success': required,
+        'directory_sync_policy': policy,
+        'directory_entries_synced': entries_synced,
+        'power_loss_qualification': power_loss,
+    }
+
+
 def inspect_checkpoint(directory: Path, *, max_json_bytes: int = 64 * 1024**2,
                        max_artifact_bytes: int = 1024**3, max_total_bytes: int = 4 * 1024**3,
                        max_artifacts: int = 4096) -> dict:
@@ -144,6 +185,7 @@ def inspect_checkpoint(directory: Path, *, max_json_bytes: int = 64 * 1024**2,
             or manifest.get('branch_tracking_complete') is not False
             or manifest.get('scientific_qualification') != 'NOT VERIFIED'):
         raise ValueError('unsupported checkpoint disposition; scientific acceptance is forbidden')
+    durability = durability_report(manifest)
     index = manifest.get('sample_index')
     k = manifest.get('requested_global_k_rad_per_m')
     if type(index) is not int or index < 0 or not isinstance(k, list) or len(k) != 3:
@@ -232,7 +274,8 @@ def inspect_checkpoint(directory: Path, *, max_json_bytes: int = 64 * 1024**2,
             'requested_global_k_rad_per_m': k, 'integrity': 'PASS',
             'point_plan_sha256': plan['sha256'], 'raw_modes': rows,
             'requires_postsolve': True, 'campaign_complete': False,
-            'branch_tracking_complete': False, 'scientific_qualification': 'NOT VERIFIED'}
+            'branch_tracking_complete': False, 'scientific_qualification': 'NOT VERIFIED',
+            'durability': durability}
 
 
 def main(argv=None):

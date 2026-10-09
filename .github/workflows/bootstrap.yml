@@ -116,6 +116,14 @@ jobs:
           cargo test -p fullmag-runner tracked_pair_overlap_is_published_as_confidence_in_json_and_csv --lib
           cargo test -p fullmag-runner tracking_only_mode_contributes_to_overlap_summary_without_public_mode_selection --lib
 
+      - name: Run raw single-k checkpoint durability contracts
+        run: cargo test -p fullmag-runner single_k_checkpoint --lib
+
+      - name: Verify the persisted checkpoint with its Python inspector
+        env:
+          FULLMAG_CHECKPOINT_INSPECTOR_PYTHON: python3
+        run: cargo test -p fullmag-runner checkpoint_inspector_accepts_actual_persisted_manifest --lib -- --ignored
+
       - name: Run eigen path terminal sample admission contracts
         run: |
           cargo test -p fullmag-runner noncompleted_single_k_status_preserves_raw_bytes_and_stops_admission --lib
@@ -187,6 +195,34 @@ jobs:
           # test worker stack large enough for its nested serde traversal.
           RUST_MIN_STACK: 8388608
         run: ./scripts/ci/run_frontend3d_required_gate.sh rust-quantity-api-cli-contracts
+
+  checkpoint-windows-contracts:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.contract_scope == 'bootstrap' }}
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: checkpoint-windows
+
+      - name: Verify the Windows checkpoint policy from its real writer
+        run: cargo test -p fullmag-runner persists_platform_directory_sync_policy_from_real_checkpoint_writer --lib
+
+      - name: Verify the Windows writer-to-inspector contract
+        env:
+          FULLMAG_CHECKPOINT_INSPECTOR_PYTHON: python
+        run: cargo test -p fullmag-runner checkpoint_inspector_accepts_actual_persisted_manifest --lib -- --ignored
 
   generated-api-determinism:
     if: ${{ github.event_name != 'workflow_dispatch' || (inputs.contract_scope != 'positive-mass' && inputs.contract_scope != 'browser' && inputs.contract_scope != 'native-modal' && inputs.contract_scope != 'floquet-modal-slepc' && inputs.contract_scope != 'generic-modal-slepc' && inputs.contract_scope != 'floquet-count-slepc' && inputs.contract_scope != 'modal-phase-slepc' && inputs.contract_scope != 'retention') }}
@@ -503,6 +539,9 @@ jobs:
 
       - name: Run Python API tests
         run: python -m unittest discover -s packages/fullmag-py/tests -p 'test_api.py' -v
+
+      - name: Run raw single-k checkpoint inspector contracts
+        run: python -B scripts/test_inspect_eigen_sample_checkpoint.py -v
 
       - name: Run modal progress elapsed clock regression
         run: |

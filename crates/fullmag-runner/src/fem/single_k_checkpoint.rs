@@ -21,8 +21,47 @@ use crate::types::{AuxiliaryArtifact, ExecutionProvenance, RunStatus};
 const CHECKPOINT_SCHEMA_V1: &str = "fullmag.single_k_checkpoint.internal.v1";
 const SPECTRUM_ARTIFACT: &str = "eigen/spectrum.json";
 const MAX_RAW_CHECKPOINT_ATTEMPT_COLLISIONS: usize = 32;
+const SYNC_SAMPLE_ROOT_AFTER_MANIFEST_MARKER: &str =
+    "sync sample root after manifest commit marker";
+
+#[cfg(unix)]
+const DIRECTORY_SYNC_CAPABILITY: &str = "supported";
+#[cfg(windows)]
+const DIRECTORY_SYNC_CAPABILITY: &str = "unavailable";
+#[cfg(not(any(unix, windows)))]
+const DIRECTORY_SYNC_CAPABILITY: &str = "unavailable";
+
+#[cfg(unix)]
+const DIRECTORY_SYNC_REQUIRED_FOR_SUCCESS: bool = true;
+#[cfg(windows)]
+const DIRECTORY_SYNC_REQUIRED_FOR_SUCCESS: bool = false;
+#[cfg(not(any(unix, windows)))]
+const DIRECTORY_SYNC_REQUIRED_FOR_SUCCESS: bool = true;
+
+#[cfg(unix)]
+const DIRECTORY_SYNC_POLICY: &str = "file_and_directory_entries_required_before_success";
+#[cfg(windows)]
+const DIRECTORY_SYNC_POLICY: &str = "file_contents_only_directory_entries_unverified";
+#[cfg(not(any(unix, windows)))]
+const DIRECTORY_SYNC_POLICY: &str = "directory_sync_unsupported";
 
 static NEXT_RAW_CHECKPOINT_ATTEMPT_ID: AtomicU64 = AtomicU64::new(0);
+
+#[cfg(test)]
+#[derive(Debug)]
+struct DirectorySyncEvent {
+    directory: PathBuf,
+    operation: &'static str,
+    commit_marker_exists: bool,
+}
+
+#[cfg(test)]
+thread_local! {
+    static CHECKPOINT_DIRECTORY_SYNC_EVENTS: std::cell::RefCell<Vec<DirectorySyncEvent>> =
+        std::cell::RefCell::new(Vec::new());
+    static CHECKPOINT_DIRECTORY_SYNC_FAILURE: std::cell::RefCell<Option<(PathBuf, &'static str)>> =
+        std::cell::RefCell::new(None);
+}
 
 #[derive(Debug)]
 pub enum SingleKCheckpointError {
@@ -85,6 +124,29 @@ struct ArtifactRecord {
 }
 
 #[derive(Debug, Serialize)]
+struct CheckpointDurabilityV1 {
+    directory_sync_capability: &'static str,
+    directory_sync_required_for_success: bool,
+    directory_sync_policy: &'static str,
+    directory_entries_synced: Option<bool>,
+    power_loss_qualification: &'static str,
+}
+
+impl CheckpointDurabilityV1 {
+    fn for_disk_writer() -> Self {
+        Self {
+            directory_sync_capability: DIRECTORY_SYNC_CAPABILITY,
+            directory_sync_required_for_success: DIRECTORY_SYNC_REQUIRED_FOR_SUCCESS,
+            directory_sync_policy: DIRECTORY_SYNC_POLICY,
+            // This manifest is serialized before its own final directory
+            // barrier. Never record that later barrier as already observed.
+            directory_entries_synced: if cfg!(windows) { Some(false) } else { None },
+            power_loss_qualification: "NOT VERIFIED",
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
 struct CheckpointManifestV1 {
     schema: &'static str,
     result_disposition: &'static str,
@@ -100,6 +162,8 @@ struct CheckpointManifestV1 {
     campaign_complete: bool,
     branch_tracking_complete: bool,
     scientific_qualification: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    durability: Option<CheckpointDurabilityV1>,
 }
 
 struct PreparedArtifact<'a> {
@@ -115,10 +179,13 @@ struct PreparedArtifact<'a> {
 /// verbatim as the digest preimage. `artifacts` must be the original artifact
 /// slice returned by that ExecutedRun, including eigen/spectrum.json.
 ///
-/// The returned path names the last-written manifest commit marker. A present
-/// and parseable marker establishes only byte preservation; all native outputs
-/// still require postsolve validation. This helper intentionally never changes
-/// the canonical eigen/path/spectrum namespace or a run status.
+/// The returned path names the manifest commit marker after the platform's
+/// required directory barriers complete. The manifest records the available
+/// namespace-sync capability and policy; it never claims power-loss
+/// qualification. A present and parseable marker establishes only byte
+/// preservation; all native outputs still require postsolve validation. This
+/// helper intentionally never changes the canonical eigen/path/spectrum
+/// namespace or a run status.
 pub fn write_raw_single_k_checkpoint(
     process_root: &Path,
     sample_index: usize,
@@ -212,6 +279,7 @@ pub(super) fn interrupted_single_k_diagnostic_artifacts(
         campaign_complete: false,
         branch_tracking_complete: false,
         scientific_qualification: "NOT VERIFIED",
+        durability: None,
     };
     let mut manifest_bytes = serde_json::to_vec_pretty(&manifest)
         .map_err(|error| SingleKCheckpointError::Serialize(error.to_string()))?;
@@ -243,6 +311,7 @@ fn write_single_k_checkpoint_inner(
         .map_err(|error| SingleKCheckpointError::Serialize(error.to_string()))?;
     let prepared_artifacts = prepare_artifacts(artifacts, interruption.is_none())?;
     let process_root = validate_managed_process_root(process_root)?;
+    sync_checkpoint_parent(&process_root, "sync parent of managed process root")?;
 
     // Existing canonical output directories are accepted only as ordinary
     // directories. A symlink or reparse point is never followed for staging.
@@ -255,11 +324,16 @@ fn write_single_k_checkpoint_inner(
     fs::create_dir(&sample_root)
         .map_err(|source| io_error("create sample namespace", &sample_root, source))?;
     ensure_existing_plain_directory(&sample_root)?;
+    sync_checkpoint_parent(&sample_root, "sync parent after creating sample namespace")?;
 
     let artifact_root = sample_root.join("artifacts");
     fs::create_dir(&artifact_root)
         .map_err(|source| io_error("create artifacts directory", &artifact_root, source))?;
     ensure_existing_plain_directory(&artifact_root)?;
+    sync_checkpoint_parent(
+        &artifact_root,
+        "sync sample namespace after creating artifacts directory",
+    )?;
 
     let point_plan_path = sample_root.join("point-plan.json");
     write_new_synced_file(&point_plan_path, &point_plan_bytes)?;
@@ -283,6 +357,10 @@ fn write_single_k_checkpoint_inner(
                 fs::create_dir(&destination).map_err(|source| {
                     io_error("create artifact directory", &destination, source)
                 })?;
+                sync_checkpoint_parent(
+                    &destination,
+                    "sync parent after creating artifact directory",
+                )?;
             }
             ensure_existing_plain_directory(&destination)?;
         }
@@ -317,6 +395,7 @@ fn write_single_k_checkpoint_inner(
         campaign_complete: false,
         branch_tracking_complete: false,
         scientific_qualification: "NOT VERIFIED",
+        durability: Some(CheckpointDurabilityV1::for_disk_writer()),
     };
     let mut manifest_bytes = serde_json::to_vec_pretty(&manifest)
         .map_err(|error| SingleKCheckpointError::Serialize(error.to_string()))?;
@@ -329,6 +408,7 @@ fn write_single_k_checkpoint_inner(
     // file; there is deliberately no weaker direct-write fallback.
     fs::hard_link(&pending_manifest_path, &manifest_path)
         .map_err(|source| io_error("publish manifest commit marker", &manifest_path, source))?;
+    sync_checkpoint_directory(&sample_root, SYNC_SAMPLE_ROOT_AFTER_MANIFEST_MARKER)?;
     Ok(manifest_path)
 }
 
@@ -580,6 +660,10 @@ pub(super) fn create_raw_checkpoint_attempt(
         match fs::create_dir(&attempt_root) {
             Ok(()) => {
                 ensure_existing_plain_directory(&attempt_root)?;
+                sync_checkpoint_parent(
+                    &attempt_root,
+                    "sync attempts directory after creating attempt",
+                )?;
                 return validate_managed_process_root(&attempt_root);
             }
             Err(source) if source.kind() == io::ErrorKind::AlreadyExists => {
@@ -666,7 +750,9 @@ fn ensure_plain_directory(path: &Path) -> Result<(), SingleKCheckpointError> {
         }
         Err(source) => return Err(io_error("inspect checkpoint parent", path, source)),
     }
-    Ok(())
+    // Re-establish the parent-entry barrier even for an existing namespace
+    // component, which may have been created by an earlier writer invocation.
+    sync_checkpoint_parent(path, "sync parent of checkpoint directory")
 }
 
 fn ensure_existing_plain_directory(path: &Path) -> Result<(), SingleKCheckpointError> {
@@ -712,7 +798,8 @@ fn write_new_synced_file(path: &Path, bytes: &[u8]) -> Result<(), SingleKCheckpo
         .create_new(true)
         .open(path)
         .map_err(|source| io_error("create file without overwrite", path, source))?;
-    write_and_sync(file, path, bytes)
+    write_and_sync(file, path, bytes)?;
+    sync_checkpoint_parent(path, "sync parent after creating checkpoint file")
 }
 
 fn write_and_sync(mut file: File, path: &Path, bytes: &[u8]) -> Result<(), SingleKCheckpointError> {
@@ -736,6 +823,83 @@ fn io_error(operation: &'static str, path: &Path, source: io::Error) -> SingleKC
         operation,
         path: path.to_path_buf(),
         source,
+    }
+}
+
+fn sync_checkpoint_parent(
+    entry_path: &Path,
+    operation: &'static str,
+) -> Result<(), SingleKCheckpointError> {
+    let parent = entry_path
+        .parent()
+        .ok_or(SingleKCheckpointError::InvalidInput(
+            "checkpoint namespace entry must have a parent directory",
+        ))?;
+    sync_checkpoint_directory(parent, operation)
+}
+
+fn sync_checkpoint_directory(
+    directory: &Path,
+    operation: &'static str,
+) -> Result<(), SingleKCheckpointError> {
+    #[cfg(test)]
+    {
+        let commit_marker_exists = directory.join("manifest.json").is_file();
+        CHECKPOINT_DIRECTORY_SYNC_EVENTS.with(|events| {
+            events.borrow_mut().push(DirectorySyncEvent {
+                directory: directory.to_path_buf(),
+                operation,
+                commit_marker_exists,
+            });
+        });
+        let should_fail = CHECKPOINT_DIRECTORY_SYNC_FAILURE.with(|failure| {
+            failure
+                .borrow()
+                .as_ref()
+                .is_some_and(|(path, expected_operation)| {
+                    path == directory && *expected_operation == operation
+                })
+        });
+        if should_fail {
+            CHECKPOINT_DIRECTORY_SYNC_FAILURE.with(|failure| {
+                failure.borrow_mut().take();
+            });
+            return Err(io_error(
+                operation,
+                directory,
+                io::Error::new(
+                    io::ErrorKind::Other,
+                    "injected checkpoint directory-sync error",
+                ),
+            ));
+        }
+    }
+
+    #[cfg(unix)]
+    {
+        File::open(directory)
+            .map_err(|source| io_error(operation, directory, source))?
+            .sync_all()
+            .map_err(|source| io_error(operation, directory, source))
+    }
+    #[cfg(windows)]
+    {
+        // This is the declared weaker Windows route: file contents are synced,
+        // while the shared durability contract reports that directory-entry
+        // barriers are unavailable. Do not imply a FlushFileBuffers guarantee.
+        let _ = (directory, operation, DIRECTORY_SYNC_CAPABILITY);
+        Ok(())
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        Err(io_error(
+            operation,
+            directory,
+            io::Error::new(
+                io::ErrorKind::Unsupported,
+                "checkpoint directory-entry sync is unsupported on this platform",
+            ),
+        ))
     }
 }
 
@@ -795,6 +959,20 @@ mod tests {
         write_raw_single_k_checkpoint(root, index, k, plan, files)
     }
 
+    fn clear_directory_sync_events() {
+        CHECKPOINT_DIRECTORY_SYNC_EVENTS.with(|events| events.borrow_mut().clear());
+    }
+
+    fn take_directory_sync_events() -> Vec<DirectorySyncEvent> {
+        CHECKPOINT_DIRECTORY_SYNC_EVENTS.with(|events| std::mem::take(&mut *events.borrow_mut()))
+    }
+
+    fn fail_directory_sync_for(directory: &Path, operation: &'static str) {
+        CHECKPOINT_DIRECTORY_SYNC_FAILURE.with(|failure| {
+            *failure.borrow_mut() = Some((directory.to_path_buf(), operation));
+        });
+    }
+
     #[test]
     fn writes_exact_plan_artifact_hashes_and_diagnostic_manifest_last() {
         let root = TestDirectory::new();
@@ -848,6 +1026,249 @@ mod tests {
         assert_eq!(manifest["branch_tracking_complete"], false);
         assert_eq!(manifest["scientific_qualification"], "NOT VERIFIED");
         assert!(sample_root.join("manifest.pending").is_file());
+    }
+
+    #[test]
+    fn persists_platform_directory_sync_policy_from_real_checkpoint_writer() {
+        let root = TestDirectory::new();
+        let k = [0.0, 0.0, 0.0];
+        let plan = single_k_plan(k);
+        let manifest_path = run(root.path(), 31, k, &plan, &artifacts())
+            .expect("write checkpoint with platform durability receipt");
+        let manifest: serde_json::Value =
+            serde_json::from_slice(&fs::read(manifest_path).expect("read persisted manifest"))
+                .expect("parse persisted manifest");
+        let durability = &manifest["durability"];
+        assert_eq!(durability["power_loss_qualification"], "NOT VERIFIED");
+        #[cfg(unix)]
+        {
+            assert_eq!(durability["directory_sync_capability"], "supported");
+            assert_eq!(durability["directory_sync_required_for_success"], true);
+            assert_eq!(
+                durability["directory_sync_policy"],
+                "file_and_directory_entries_required_before_success"
+            );
+            assert!(durability["directory_entries_synced"].is_null());
+        }
+        #[cfg(windows)]
+        {
+            assert_eq!(durability["directory_sync_capability"], "unavailable");
+            assert_eq!(durability["directory_sync_required_for_success"], false);
+            assert_eq!(
+                durability["directory_sync_policy"],
+                "file_contents_only_directory_entries_unverified"
+            );
+            assert_eq!(durability["directory_entries_synced"], false);
+        }
+    }
+
+    #[test]
+    #[ignore = "requires the Python checkpoint inspector and FULLMAG_CHECKPOINT_INSPECTOR_PYTHON"]
+    fn checkpoint_inspector_accepts_actual_persisted_manifest() {
+        let interpreter = std::env::var("FULLMAG_CHECKPOINT_INSPECTOR_PYTHON")
+            .expect("set FULLMAG_CHECKPOINT_INSPECTOR_PYTHON to the inspector interpreter");
+        assert!(
+            !interpreter.trim().is_empty(),
+            "FULLMAG_CHECKPOINT_INSPECTOR_PYTHON must name an executable"
+        );
+        let repository_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../")
+            .canonicalize()
+            .expect("resolve repository root from crate manifest directory");
+        let inspector = repository_root
+            .join("scripts/inspect_eigen_sample_checkpoint.py")
+            .canonicalize()
+            .expect("resolve checkpoint inspector script");
+
+        let root = TestDirectory::new();
+        let k = [0.0, 0.0, 0.0];
+        let plan = single_k_plan(k);
+        let files = vec![AuxiliaryArtifact {
+            relative_path: SPECTRUM_ARTIFACT.into(),
+            bytes: br#"{"modes":[{"index":0,"frequency_real_hz":1.0}]}"#.to_vec(),
+        }];
+        let manifest_path = run(root.path(), 35, k, &plan, &files)
+            .expect("write actual checkpoint for the inspector");
+        let sample_root = manifest_path.parent().expect("sample root");
+        assert!(sample_root.join("manifest.pending").is_file());
+
+        let output = std::process::Command::new(interpreter)
+            .arg(inspector)
+            .arg(sample_root)
+            .output()
+            .expect("run the explicitly configured checkpoint inspector");
+        assert!(
+            output.status.success(),
+            "checkpoint inspector failed with {}: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let report: serde_json::Value = serde_json::from_slice(&output.stdout)
+            .expect("parse the inspector's complete stdout JSON");
+        assert_eq!(report["integrity"], "PASS");
+        assert_eq!(report["sample_index"], 35);
+        assert_eq!(report["scientific_qualification"], "NOT VERIFIED");
+        assert_eq!(
+            report["durability"]["power_loss_qualification"],
+            "NOT VERIFIED"
+        );
+        #[cfg(unix)]
+        {
+            assert_eq!(
+                report["durability"]["directory_sync_capability"],
+                "supported"
+            );
+            assert_eq!(
+                report["durability"]["directory_sync_required_for_success"],
+                true
+            );
+            assert_eq!(
+                report["durability"]["directory_sync_policy"],
+                "file_and_directory_entries_required_before_success"
+            );
+            assert!(report["durability"]["directory_entries_synced"].is_null());
+        }
+        #[cfg(windows)]
+        {
+            assert_eq!(
+                report["durability"]["directory_sync_capability"],
+                "unavailable"
+            );
+            assert_eq!(
+                report["durability"]["directory_sync_required_for_success"],
+                false
+            );
+            assert_eq!(
+                report["durability"]["directory_sync_policy"],
+                "file_contents_only_directory_entries_unverified"
+            );
+            assert_eq!(report["durability"]["directory_entries_synced"], false);
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn syncs_new_directory_hierarchy_and_commit_marker_before_success() {
+        let root = TestDirectory::new();
+        let k = [0.0, 0.0, 0.0];
+        let plan = single_k_plan(k);
+        clear_directory_sync_events();
+        let manifest_path = run(root.path(), 32, k, &plan, &artifacts())
+            .expect("write checkpoint with directory barriers");
+        let sample_root = manifest_path.parent().expect("sample root").to_path_buf();
+        let expected = vec![
+            root.path()
+                .parent()
+                .expect("process root parent")
+                .to_path_buf(),
+            root.path().to_path_buf(),
+            root.path().join("eigen"),
+            root.path().join("eigen/sample-checkpoints"),
+            sample_root.clone(),
+            sample_root.clone(),
+            sample_root.join("artifacts"),
+            sample_root.join("artifacts/eigen"),
+            sample_root.clone(),
+            sample_root.clone(),
+        ];
+        let events = take_directory_sync_events();
+        assert_eq!(
+            events
+                .iter()
+                .map(|event| event.directory.clone())
+                .collect::<Vec<_>>(),
+            expected,
+            "new parents and nested payload directories are synchronized in child-to-parent order"
+        );
+        let final_event = events.last().expect("manifest barrier event");
+        assert_eq!(
+            final_event.operation,
+            SYNC_SAMPLE_ROOT_AFTER_MANIFEST_MARKER
+        );
+        assert!(final_event.commit_marker_exists);
+        assert!(manifest_path.is_file());
+        assert!(sample_root.join("manifest.pending").is_file());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn nested_directory_sync_error_preserves_raw_payload_without_commit_marker() {
+        let root = TestDirectory::new();
+        let k = [0.0, 0.0, 0.0];
+        let plan = single_k_plan(k);
+        let files = artifacts();
+        let sample_root = root.path().join("eigen/sample-checkpoints/sample-0033");
+        let nested_directory = sample_root.join("artifacts/eigen");
+        fail_directory_sync_for(
+            &nested_directory,
+            "sync parent after creating checkpoint file",
+        );
+
+        let error = run(root.path(), 33, k, &plan, &files)
+            .expect_err("directory sync failure must not return a checkpoint path");
+        assert!(matches!(
+            error,
+            SingleKCheckpointError::Io {
+                operation: "sync parent after creating checkpoint file",
+                ref path,
+                ref source,
+            } if path == &nested_directory
+                && source.to_string().contains("injected checkpoint directory-sync error")
+        ));
+        let spectrum = nested_directory.join("spectrum.json");
+        assert_eq!(
+            fs::read(&spectrum).expect("preserved raw payload"),
+            files[0].bytes
+        );
+        assert!(!sample_root.join("manifest.json").exists());
+        assert!(!sample_root.join("manifest.pending").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn commit_marker_sync_error_returns_error_and_preserves_complete_raw_bytes() {
+        use std::os::unix::fs::MetadataExt;
+
+        let root = TestDirectory::new();
+        let k = [0.0, 0.0, 0.0];
+        let plan = single_k_plan(k);
+        let files = artifacts();
+        let sample_root = root.path().join("eigen/sample-checkpoints/sample-0034");
+        fail_directory_sync_for(&sample_root, SYNC_SAMPLE_ROOT_AFTER_MANIFEST_MARKER);
+
+        let error = run(root.path(), 34, k, &plan, &files)
+            .expect_err("a failed final namespace barrier must not return success");
+        assert!(matches!(
+            error,
+            SingleKCheckpointError::Io {
+                operation,
+                ref path,
+                ref source,
+            } if path == &sample_root
+                && operation == SYNC_SAMPLE_ROOT_AFTER_MANIFEST_MARKER
+                && source.to_string().contains("injected checkpoint directory-sync error")
+        ));
+        let pending = sample_root.join("manifest.pending");
+        let manifest = sample_root.join("manifest.json");
+        let pending_bytes = fs::read(&pending).expect("preserved pending receipt");
+        let manifest_bytes = fs::read(&manifest).expect("complete atomic commit marker");
+        assert_eq!(sha256(&pending_bytes), sha256(&manifest_bytes));
+        assert_eq!(
+            fs::metadata(&pending).expect("pending metadata").ino(),
+            fs::metadata(&manifest).expect("manifest metadata").ino(),
+            "commit marker remains a hard link to the complete pending bytes"
+        );
+        assert_eq!(
+            fs::read(sample_root.join("artifacts/eigen/spectrum.json")).expect("raw spectrum"),
+            files[0].bytes
+        );
+        let events = take_directory_sync_events();
+        let final_event = events.last().expect("failed final barrier event");
+        assert_eq!(
+            final_event.operation,
+            SYNC_SAMPLE_ROOT_AFTER_MANIFEST_MARKER
+        );
+        assert!(final_event.commit_marker_exists);
     }
 
     #[test]

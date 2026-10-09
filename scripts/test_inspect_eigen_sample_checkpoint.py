@@ -47,6 +47,71 @@ class CheckpointInspectionTests(unittest.TestCase):
         self.assertFalse(result['campaign_complete'])
         self.assertEqual(result['scientific_qualification'], 'NOT VERIFIED')
 
+    def test_legacy_manifest_reports_durability_as_unreported(self):
+        result = inspect_checkpoint(self.root)
+        self.assertEqual(result['integrity'], 'PASS')
+        self.assertEqual(result['durability'], {
+            'directory_sync_capability': 'unreported',
+            'directory_sync_required_for_success': None,
+            'directory_sync_policy': 'unreported',
+            'directory_entries_synced': None,
+            'power_loss_qualification': 'unreported',
+        })
+
+    def test_explicit_null_durability_is_not_treated_as_legacy(self):
+        self.manifest['durability'] = None
+        self.save()
+        with self.assertRaisesRegex(ValueError, 'descriptor must be an object'):
+            inspect_checkpoint(self.root)
+
+    def test_supported_directory_sync_policy_does_not_preclaim_final_barrier(self):
+        self.manifest['durability'] = {
+            'directory_sync_capability': 'supported',
+            'directory_sync_required_for_success': True,
+            'directory_sync_policy': 'file_and_directory_entries_required_before_success',
+            'directory_entries_synced': None,
+            'power_loss_qualification': 'NOT VERIFIED',
+        }
+        self.save()
+        result = inspect_checkpoint(self.root)
+        self.assertEqual(result['durability']['directory_sync_capability'], 'supported')
+        self.assertTrue(result['durability']['directory_sync_required_for_success'])
+        self.assertIsNone(result['durability']['directory_entries_synced'])
+        self.assertEqual(result['durability']['power_loss_qualification'], 'NOT VERIFIED')
+
+    def test_windows_directory_names_are_explicitly_unverified(self):
+        self.manifest['durability'] = {
+            'directory_sync_capability': 'unavailable',
+            'directory_sync_required_for_success': False,
+            'directory_sync_policy': 'file_contents_only_directory_entries_unverified',
+            'directory_entries_synced': False,
+            'power_loss_qualification': 'NOT VERIFIED',
+        }
+        self.save()
+        result = inspect_checkpoint(self.root)
+        self.assertEqual(result['integrity'], 'PASS')
+        self.assertEqual(result['durability']['directory_sync_capability'], 'unavailable')
+        self.assertFalse(result['durability']['directory_sync_required_for_success'])
+        self.assertIs(result['durability']['directory_entries_synced'], False)
+        self.assertEqual(result['durability']['power_loss_qualification'], 'NOT VERIFIED')
+
+    def test_reader_rejects_preclaimed_directory_sync_or_power_loss(self):
+        self.manifest['durability'] = {
+            'directory_sync_capability': 'supported',
+            'directory_sync_required_for_success': True,
+            'directory_sync_policy': 'file_and_directory_entries_required_before_success',
+            'directory_entries_synced': True,
+            'power_loss_qualification': 'NOT VERIFIED',
+        }
+        self.save()
+        with self.assertRaisesRegex(ValueError, 'directory-sync observation'):
+            inspect_checkpoint(self.root)
+        self.manifest['durability']['directory_entries_synced'] = None
+        self.manifest['durability']['power_loss_qualification'] = 'PASS'
+        self.save()
+        with self.assertRaisesRegex(ValueError, 'power-loss qualification'):
+            inspect_checkpoint(self.root)
+
     def test_mutation_size_and_digest(self):
         for update in ({'size_bytes': 0}, {'sha256': '0' * 64}, {'size_bytes': True}):
             with self.subTest(update=update):
