@@ -1814,3 +1814,10 @@ Kolejny podpunkt N-OWN-HMAX jest wykonywany niezależnie od zamrożonego checkpo
 ### Terminalny status frozen-v2 probe
 
 #4205039846: rc0 procesu nie wystarcza do completed_unqualified. Początkowy artifact_error dajefailed; błąd późnej nativevalidation także zmienia końcowy status przed jedyną publikacją receiptu. KodCLI1, zwracany result i trwałyJSON są zgodne. QualificationNOTVERIFIED pozostaje bez zmian, poprawny case zachowuje completed_unqualified. Regresja wykonuje pełny run_probe z rzeczywistym stagingiem źródła, kontroląSHA i zapisem request/result, mockując tylko runtime/validation boundaries; sprawdza oba błędy i pozytywną kontrolę. Niezależne review nie wykazało blokerów. Explicit hosted suite dodana przed meshing. Source/AST/diffPASS; runtime/physics nie są dowiedzione tym unitfixture, GHApending.
+
+
+### Sprawdzenie pivotowania LU i pełniejsza diagnoza Floqueta
+
+Generic SLEPc [37866131831](https://github.com/MateuszZelent/fullmag/actions/runs/37866131831) wykonał pustą pierwszą slice poprawnie jako `window_exhausted`, następnie znalazł częstotliwości około 0,159 Hz, lecz odrzucił pary z residualami około 7,8e-6 i 4,8e-6 przy niezmienionej bramce 1e-12. Log nie dowodzi wielkości pivotów LU. Poprawka sprawdzana w CI włącza `PCFactorReorderForNonzeroDiagonal(pc, PETSC_DECIDE)` przed setup EPS; zachowuje wartości operatora, shifty, tolerancje i kwarantannę po błędzie API. Skuteczność: NOT VERIFIED do nowego wykonania.
+
+Floquet count [37866135267](https://github.com/MateuszZelent/fullmag/actions/runs/37866135267) kończy się przed EPS: `validation_error`, `floquet_shared_domain_sparse_assembly_failed`. To odrębny problem. Istniejące komunikaty negatywnych fixture’ów wypisują teraz również bounded `error_message`, aby ustalić rzeczywisty warunek walidacji bez zmiany asercji lub tolerancji.

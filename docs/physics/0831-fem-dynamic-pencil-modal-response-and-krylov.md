@@ -2335,6 +2335,7 @@ Repository-owned related contracts:
 
 | Source path | Symbol | Responsibility |
 |---|---|---|
+| backends/fem/cpu/frequency_domain/slepc_modal_eigen.cpp | SLEPcTinyGyrotropicModalEigenResult solve_slepc_gyrotropic_modal_eigen_attempt | Configure checked nonzero-diagonal PCLU permutation before EPS setup, preserving operator values, shift policy, original residual gate and graph quarantine; provider proof pending. |
 | backends/fem/cpu/frequency_domain/slepc_modal_eigen.cpp | bool create_real_frequency_rotated_pencil | Retain exact zero structural diagonal slots in both real-split AIJ matrices for symbolic LU; preserve the operator and quarantine on hard assembly errors. Actual-provider regression pending. |
 | backends/fem/cpu/frequency_domain/modal/shifted_ksp_true_convergence.hpp | floquet_shifted_true_convergence_test | Preserve the default convergence result and iteration budget; apply the unchanged reconstructed true-residual gate and retain scalar callback observations for a hard-error-only probe. |
 | backends/fem/cpu/frequency_domain/slepc_modal_eigen.hpp | solve_slepc_sparse_gyrotropic_modal_eigen | Return the internal result carrying `FloquetShiftedKspFailureProbe`, separate from completed post-solve KSP telemetry and with the attempted EPS NEV/NCV. |
@@ -4027,3 +4028,28 @@ quarantine boundary. The public MFEM compact-CSR fixture
 its off-diagonal input and must pass through the actual SLEPc provider.
 GHA37859465446 reproduced the missing-slot failure before this correction;
 execution after correction is **NOT VERIFIED**.
+
+
+### PCLU nonzero-diagonal permutation before shift-invert
+
+`backends/fem/cpu/frequency_domain/slepc_modal_eigen.cpp` +
+`SLEPcTinyGyrotropicModalEigenResult solve_slepc_gyrotropic_modal_eigen_attempt` configures PCLU for the rotated
+pencil. Structural diagonal slots do not imply numerically nonzero pivots.
+For an invertible off-diagonal pencil, pivoting through very small diagonal
+shifts can lose precision. GHA37866131831 found the expected $0.159\,\mathrm{Hz}$ candidates
+but rejected dimensionless EPS relative residuals around $7.8\times10^{-6}$
+and $4.8\times10^{-6}$, before physical vector reconstruction, against the
+unchanged $10^{-12}$ gate. The observed cause
+requires verification; the log does not measure actual LU pivots.
+
+The bounded correction to test is checked
+`PCFactorReorderForNonzeroDiagonal(pc, PETSC_DECIDE)` before EPS setup, retaining
+the current shift policy. PETSc3.24.6 selects its ordering threshold; that
+threshold chooses a permutation and is not an eigenpair, KSP, or physical
+residual tolerance. The permutation changes neither operator values nor the
+physical metric. API errors follow the existing graph quarantine and do not
+permit later PETSc queries. No dense fallback or dependency change is allowed.
+[Versioned PETSc PCLU implementation](https://raw.githubusercontent.com/petsc/petsc/v3.24.6/src/ksp/pc/impls/factor/lu/lu.c)
+provides the upstream behavior; post-correction provider execution is
+**NOT VERIFIED**. The public compact-CSR fixture and all original residual
+checks remain the required regression.

@@ -842,8 +842,7 @@ bool apply_slepc_tangent_mass_action(
 }
 
 #if FULLMAG_FEM_WITH_SLEPC
-SLEPcTinyGyrotropicModalEigenResult
-solve_slepc_gyrotropic_modal_eigen_attempt(
+SLEPcTinyGyrotropicModalEigenResult solve_slepc_gyrotropic_modal_eigen_attempt(
     const SLEPcTinyGyrotropicModalEigenRequest &request,
     Mat stiffness,
     Mat gyrotropic,
@@ -1048,6 +1047,8 @@ solve_slepc_gyrotropic_modal_eigen_attempt(
         KSPSetType(ksp, KSPPREONLY) == 0 &&
         KSPGetPC(ksp, &pc) == 0 &&
         PCSetType(pc, PCLU) == 0 &&
+        // Let PETSc reorder for nonzero pivots without perturbing operator values.
+        PCFactorReorderForNonzeroDiagonal(pc, PETSC_DECIDE) == 0 &&
         PCFactorSetShiftType(pc, MAT_SHIFT_NONZERO) == 0 &&
         PCFactorSetShiftAmount(pc, factorization_shift) == 0 &&
         KSPSetTolerances(

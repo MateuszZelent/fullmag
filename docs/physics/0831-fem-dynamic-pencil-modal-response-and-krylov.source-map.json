@@ -2749,6 +2749,12 @@
       "path": "backends/fem/cpu/frequency_domain/slepc_modal_eigen.cpp",
       "symbol": "bool create_real_frequency_rotated_pencil",
       "responsibility": "Retain exact zero diagonal slots in both rotated AIJ matrices for symbolic LU, without altering physical CSR values or regularizing the pencil; assembly errors preserve graph quarantine. Actual-provider regression pending."
+    },
+    {
+      "id": "source-slepc-nonzero-diagonal-permutation",
+      "path": "backends/fem/cpu/frequency_domain/slepc_modal_eigen.cpp",
+      "symbol": "SLEPcTinyGyrotropicModalEigenResult solve_slepc_gyrotropic_modal_eigen_attempt",
+      "responsibility": "Configure checked nonzero-diagonal permutation for PCLU before EPS setup, preserving matrix values, shift policy and original residual gates; API errors quarantine the graph. Actual provider proof pending, NOT VERIFIED."
     }
   ],
   "public_api": {

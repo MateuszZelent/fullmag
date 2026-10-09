@@ -3807,8 +3807,9 @@ void modal_shift_invert_sparse_payload_can_be_assembled_from_mfem_operator()
     if (result.status != FULLMAG_FEM_FD_OK) {
         std::fprintf(
             stderr,
-            "FAIL-DIAGNOSTICS: generic_mfem_sparse status=%d diagnostics=%s result=%s\n",
+            "FAIL-DIAGNOSTICS: generic_mfem_sparse status=%d error=%.1024s diagnostics=%s result=%s\n",
             static_cast<int>(result.status),
+            result.error_message != nullptr ? result.error_message : "null",
             result.diagnostics_json != nullptr ? result.diagnostics_json : "null",
             result.result_json != nullptr ? result.result_json : "null");
     }
@@ -5219,8 +5220,9 @@ void modal_nonzero_k_floquet_shared_domain_nearest_reports_shifted_ksp_diagnosti
     if (window_result.status != FULLMAG_FEM_FD_OK) {
         std::fprintf(
             stderr,
-            "FAIL-DIAGNOSTICS: native_floquet_window status=%d diagnostics=%s result=%s\n",
+            "FAIL-DIAGNOSTICS: native_floquet_window status=%d error=%.1024s diagnostics=%s result=%s\n",
             static_cast<int>(window_result.status),
+            window_result.error_message != nullptr ? window_result.error_message : "null",
             window_result.diagnostics_json != nullptr ? window_result.diagnostics_json : "null",
             window_result.result_json != nullptr ? window_result.result_json : "null");
     }
