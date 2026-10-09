@@ -612,7 +612,11 @@ def run_probe(
             and execution["execution_error"] is None
             and execution["cleanup"].get("status") != "blocked"
         )
-        status = "completed_unqualified" if successful_process else "failed"
+        status = (
+            "completed_unqualified"
+            if successful_process and artifact_error is None
+            else "failed"
+        )
         result: dict[str, Any] = {
             "schema_version": RESULT_SCHEMA,
             "status": status,
@@ -676,6 +680,11 @@ def run_probe(
                 "qualification": "NOT VERIFIED",
                 "error": artifact_error,
             }
+        # Native validation can fail after process completion and inventory.
+        # Publish one terminal class consistent with the CLI and artifact gates.
+        if artifact_error is not None:
+            status = "failed"
+        result["status"] = status
         _write_new_json(output_dir / "run-result.json", result)
         return (0 if status == "completed_unqualified" and artifact_error is None else 1), result
 

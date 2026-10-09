@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+from contextlib import ExitStack, nullcontext
 import hashlib
 import importlib.util
 import json
@@ -137,6 +138,95 @@ def _native_equilibrium_binding_fixture(tmp: Path):
 
 
 class FrozenV2ManagedLaunchTests(unittest.TestCase):
+    def test_run_probe_publishes_failed_status_for_initial_or_late_artifact_error(self):
+        for failure_phase in ("inventory", "native-validation", None):
+            with self.subTest(phase=failure_phase), tempfile.TemporaryDirectory() as name:
+                root = Path(name)
+                output = root / "output"
+                job = {
+                    "job_id": "a" * 32,
+                    "source_digest": "b" * 64,
+                    "profile": driver.managed.CPU_ABI_RUNTIME_PROFILE,
+                }
+                context = SimpleNamespace(image_digest="sha256:" + "c" * 64)
+                script = b"print('probe fixture')\n"
+                prepared = SimpleNamespace(
+                    runtime_script_bytes=script,
+                    runtime_script_sha256=hashlib.sha256(script).hexdigest(),
+                    environment_for_mode=lambda _mode: {},
+                )
+                request = {
+                    "schema_version": driver.REQUEST_SCHEMA,
+                    "mode": "serial",
+                    "job": job,
+                    "source": {}, "bundle": {}, "model": {}, "numerics": {},
+                    "mode_policy": {}, "consumer_hashes": {},
+                }
+                layout = {"repo_root": str(REPO_ROOT), "storage_root": str(root)}
+
+                def execute(*_args, **_kwargs):
+                    (output / driver.PROBE_CASE).mkdir()
+                    return {
+                        "return_code": 0, "timed_out": False, "interrupted": False,
+                        "execution_error": None, "cleanup": {"status": "not_required"},
+                    }
+
+                with ExitStack() as stack:
+                    for patcher in (
+                        patch.object(driver.managed.fullmag_storage, "resolve_layout", return_value=layout),
+                        patch.object(driver.managed.fullmag_storage, "initialize"),
+                        patch.object(driver.managed.fullmag_storage, "build_lock", side_effect=lambda *_args: nullcontext()),
+                        patch.object(driver.managed, "_read_job", return_value=job),
+                        patch.object(driver.managed, "_validate_build_context", return_value=context),
+                        patch.object(driver, "_require_context"),
+                        patch.object(driver.adapter, "prepare_frozen_v2_probe", return_value=prepared),
+                        patch.object(driver.adapter, "verify_bundle_for_launch"),
+                        patch.object(driver, "_source_and_bundle_bindings", return_value=({}, {}, {"numerics": {}})),
+                        patch.object(driver.managed, "_inspect_image"),
+                        patch.object(driver.managed, "_new_output_dir", return_value=output),
+                        patch.object(driver, "compose_probe_command", return_value=["fixture-command"]),
+                        patch.object(driver, "_extra_mounts", return_value=[]),
+                        patch.object(driver, "_request_value", return_value=request),
+                        patch.object(driver, "_consumer_hashes", return_value={}),
+                        patch.object(driver, "_runtime_environment", return_value={}),
+                        patch.object(driver, "_execute_compose", side_effect=execute),
+                        patch.object(driver.validator, "collect_probe_artifact_hashes", return_value={}),
+                    ):
+                        stack.enter_context(patcher)
+                    stack.enter_context(patch.object(
+                        driver.managed, "_validate_case_artifacts",
+                        side_effect=driver.managed.BenchmarkError("broken artifact")
+                        if failure_phase == "inventory" else None,
+                        return_value={},
+                    ))
+                    native_validation = stack.enter_context(patch.object(
+                        driver.validator, "validate_probe_artifacts_from_values",
+                        side_effect=driver.validator.ProbeValidationError("changed artifact")
+                        if failure_phase == "native-validation" else None,
+                        return_value={"status": "passed", "pending_requirements": []},
+                    ))
+                    code, result = driver.run_probe(
+                        repo_root=REPO_ROOT, job_id=job["job_id"],
+                        runtime_source_digest=job["source_digest"],
+                        bundle_path=root / "bundle", mode="serial",
+                        output_dir_requested=str(output), timeout_seconds=10,
+                    )
+
+                persisted = json.loads((output / "run-result.json").read_text())
+                self.assertEqual(persisted, result)
+                self.assertEqual(result["qualification"], "NOT VERIFIED")
+                if failure_phase is None:
+                    self.assertEqual(code, 0)
+                    self.assertEqual(result["status"], "completed_unqualified")
+                    self.assertIsNone(result["artifact_error"])
+                else:
+                    self.assertEqual(code, 1)
+                    self.assertEqual(result["status"], "failed")
+                    self.assertTrue(result["artifact_error"])
+                    self.assertEqual(result["artifact_validation"]["status"], "failed")
+                    self.assertEqual(result["artifacts"]["native_validation"]["status"], "failed")
+                self.assertEqual(native_validation.call_count, 0 if failure_phase == "inventory" else 1)
+
     def test_artifact_growth_hits_streaming_cap_before_another_read(self):
         with tempfile.TemporaryDirectory() as name:
             artifact = Path(name) / "artifact.json"

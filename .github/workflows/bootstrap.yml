@@ -509,6 +509,9 @@ jobs:
           python -m pytest -q
           tests/standard_problems/mumag/comsol_nonzero_k_dispersion/test_contract.py
           -k materialization_cli_terminal_status_follows_benchmark_mesh_acceptance
+      - name: Run frozen probe terminal receipt contracts
+        run: python -B scripts/test_run_de_frozen_v2_probe.py -v
+
       - name: Run Python meshing tests
         env:
           FULLMAG_MESH_FAILURE_ARTIFACT_DIR: ${{ runner.temp }}/fullmag-mesh-failure-artifacts
