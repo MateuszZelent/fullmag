@@ -4370,11 +4370,25 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
         probe.true_probe_count = source.true_probe_count;
         probe.true_probe_measurement_failure_count =
             source.true_probe_measurement_failure_count;
+        probe.true_probe_auxiliary_measurement_failure_count =
+            source.true_probe_auxiliary_measurement_failure_count;
         probe.last_true_probe_available = source.last_true_probe_available;
         probe.last_true_probe_callback_ordinal =
             source.last_true_probe_callback_ordinal;
         probe.last_true_probe_iteration = static_cast<std::int64_t>(
             source.last_true_probe_iteration);
+        probe.last_true_solution_norm_available =
+            source.last_true_solution_norm_available;
+        if (source.last_true_solution_norm_available) {
+            probe.last_true_solution_norm = static_cast<double>(
+                source.last_true_solution_norm);
+        }
+        probe.last_true_operator_action_norm_available =
+            source.last_true_operator_action_norm_available;
+        if (source.last_true_operator_action_norm_available) {
+            probe.last_true_operator_action_norm = static_cast<double>(
+                source.last_true_operator_action_norm);
+        }
         if (source.last_true_probe_available) {
             probe.last_true_rhs_norm = static_cast<double>(
                 source.last_true_rhs_norm);

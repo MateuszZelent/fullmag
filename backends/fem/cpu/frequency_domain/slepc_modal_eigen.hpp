@@ -34,9 +34,17 @@ struct FloquetShiftedKspFailureProbe {
     std::uint64_t true_probe_attempt_count = 0;
     std::uint64_t true_probe_count = 0;
     std::uint64_t true_probe_measurement_failure_count = 0;
+    std::uint64_t true_probe_auxiliary_measurement_failure_count = 0;
     bool last_true_probe_available = false;
     std::uint64_t last_true_probe_callback_ordinal = 0;
     std::int64_t last_true_probe_iteration = -1;
+    // Internal Euclidean L2 norms for the shifted linear system, not the
+    // physical tangent-mass norm or an original-pencil residual.
+    bool last_true_solution_norm_available = false;
+    double last_true_solution_norm = std::numeric_limits<double>::quiet_NaN();
+    bool last_true_operator_action_norm_available = false;
+    double last_true_operator_action_norm =
+        std::numeric_limits<double>::quiet_NaN();
     double last_true_rhs_norm = std::numeric_limits<double>::quiet_NaN();
     double last_true_residual_norm = std::numeric_limits<double>::quiet_NaN();
     double last_true_residual_threshold =

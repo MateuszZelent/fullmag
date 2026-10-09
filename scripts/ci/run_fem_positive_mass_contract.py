@@ -997,6 +997,14 @@ def _execute_contract(args: Any) -> int:
             ("FULLMAG_FEM_REQUIRE_CEED", "0"),
             ("FULLMAG_FEM_WITH_SLEPC", slepc_enabled),
         ]
+        dense_oracle_enabled = args.contract_profile == "floquet-modal-slepc"
+        receipt["diagnostic_configuration"] = {
+            "floquet_dense_oracle_enabled": dense_oracle_enabled,
+            "scope": "bounded native fixture diagnosis; not production qualification",
+        }
+        if dense_oracle_enabled:
+            container_environment.append(("FULLMAG_FLOQUET_DENSE_ORACLE", "1"))
+        _write_json(receipt_path, receipt)
         library_dir = f"{INSTALL_PREFIX}/lib"
         if profile["uses_slepc"]:
             provider_environment = [

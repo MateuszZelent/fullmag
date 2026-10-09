@@ -30,9 +30,16 @@ struct FloquetShiftedKspTrueConvergenceContext {
     std::uint64_t true_probe_attempt_count = 0;
     std::uint64_t true_probe_count = 0;
     std::uint64_t true_probe_measurement_failure_count = 0;
+    std::uint64_t true_probe_auxiliary_measurement_failure_count = 0;
     bool last_true_probe_available = false;
     std::uint64_t last_true_probe_callback_ordinal = 0;
     PetscInt last_true_probe_iteration = -1;
+    bool last_true_solution_norm_available = false;
+    PetscReal last_true_solution_norm =
+        std::numeric_limits<PetscReal>::quiet_NaN();
+    bool last_true_operator_action_norm_available = false;
+    PetscReal last_true_operator_action_norm =
+        std::numeric_limits<PetscReal>::quiet_NaN();
     PetscReal last_true_rhs_norm =
         std::numeric_limits<PetscReal>::quiet_NaN();
     PetscReal last_true_residual_norm =
@@ -282,6 +289,12 @@ inline PetscErrorCode floquet_shifted_true_convergence_test(
     ++context->true_probe_attempt_count;
     context->last_true_probe_available = false;
     context->last_true_tolerance_ratio_available = false;
+    context->last_true_solution_norm_available = false;
+    context->last_true_solution_norm =
+        std::numeric_limits<PetscReal>::quiet_NaN();
+    context->last_true_operator_action_norm_available = false;
+    context->last_true_operator_action_norm =
+        std::numeric_limits<PetscReal>::quiet_NaN();
     context->last_true_probe_callback_ordinal = context->callback_count;
     context->last_true_probe_iteration = iteration;
     context->last_true_rhs_norm = std::numeric_limits<PetscReal>::quiet_NaN();
@@ -330,12 +343,37 @@ inline PetscErrorCode floquet_shifted_true_convergence_test(
     if (error != 0) {
         return record_probe_failure(error);
     }
+
+    // Cache diagnostics from the solution vector already built for this true
+    // residual probe. Their optional measurement must not alter the residual
+    // gate or KSP stop reason.
+    PetscReal solution_norm = std::numeric_limits<PetscReal>::quiet_NaN();
+    const PetscErrorCode solution_norm_error = VecNorm(
+        context->candidate_solution, NORM_2, &solution_norm);
+    if (solution_norm_error == 0 &&
+        std::isfinite(static_cast<double>(solution_norm)) && solution_norm >= 0.0) {
+        context->last_true_solution_norm_available = true;
+        context->last_true_solution_norm = solution_norm;
+    } else {
+        ++context->true_probe_auxiliary_measurement_failure_count;
+    }
     error = MatMult(
         operator_matrix,
         context->candidate_solution,
         context->true_residual);
     if (error != 0) {
         return record_probe_failure(error);
+    }
+    PetscReal operator_action_norm = std::numeric_limits<PetscReal>::quiet_NaN();
+    const PetscErrorCode operator_action_norm_error = VecNorm(
+        context->true_residual, NORM_2, &operator_action_norm);
+    if (operator_action_norm_error == 0 &&
+        std::isfinite(static_cast<double>(operator_action_norm)) &&
+        operator_action_norm >= 0.0) {
+        context->last_true_operator_action_norm_available = true;
+        context->last_true_operator_action_norm = operator_action_norm;
+    } else {
+        ++context->true_probe_auxiliary_measurement_failure_count;
     }
     // VecAYPX(y, -1, b) computes y <- b - y.
     error = VecAYPX(context->true_residual, -1.0, rhs);

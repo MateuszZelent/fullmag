@@ -178,31 +178,6 @@ bool contains(const char *haystack, const char *needle)
     return haystack != nullptr && std::strstr(haystack, needle) != nullptr;
 }
 
-void print_shifted_ksp_failure_probe_if_present(std::string_view diagnostics)
-{
-    constexpr std::string_view key = "\"shifted_ksp_failure_probe\":";
-    constexpr std::size_t maximum_printed_bytes = 4096u;
-    const std::size_t key_position = diagnostics.find(key);
-    if (key_position == std::string_view::npos) {
-        return;
-    }
-    const std::size_t object_start = key_position + key.size();
-    if (object_start >= diagnostics.size() || diagnostics[object_start] != '{') {
-        return;
-    }
-    const std::size_t closing_brace = diagnostics.find('}', object_start);
-    if (closing_brace == std::string_view::npos) {
-        return;
-    }
-    const std::size_t object_size = closing_brace - object_start + 1u;
-    const std::size_t printed_size = std::min(object_size, maximum_printed_bytes);
-    std::fprintf(
-        stderr,
-        "INFO: shifted_ksp_failure_probe=%.*s\n",
-        static_cast<int>(printed_size),
-        diagnostics.data() + object_start);
-}
-
 std::size_t count_occurrences(const char *haystack, const char *needle)
 {
     if (haystack == nullptr || needle == nullptr || needle[0] == '\0') {
@@ -3135,13 +3110,44 @@ void modal_floquet_shared_domain_original_descriptor_certification_is_fail_close
     if (native_result.status != fd::FrequencyDomainStatus::ok) {
         std::fprintf(
             stderr,
-            "INFO: native Floquet provenance fixture status=%u error=%.512s "
-            "diagnostics=%.2048s\n",
+            "INFO: native Floquet provenance fixture status=%u\n"
+            "INFO: native Floquet provenance fixture error=%s\n"
+            "INFO: native Floquet provenance fixture diagnostics=%s\n"
+            "INFO: native Floquet provenance fixture result=%s\n",
             static_cast<unsigned int>(native_result.status),
             native_result.error_message.c_str(),
-            native_result.diagnostics_json.c_str());
-        print_shifted_ksp_failure_probe_if_present(
-            std::string_view(native_result.diagnostics_json));
+            native_result.diagnostics_json.c_str(),
+            native_result.result_json.c_str());
+        if (contains(
+                native_result.diagnostics_json.c_str(),
+                "\"unsupported_reason\":\"floquet_slepc_solve_failed\"")) {
+            const char *diagnostics = native_result.diagnostics_json.c_str();
+            const double true_probe_count = extract_json_number(
+                diagnostics,
+                "\"true_probe_count\":",
+                "native_floquet_hard_ksp_failure_probe");
+            if (true_probe_count > 0.0) {
+                check(contains(
+                          diagnostics,
+                          "\"solution_l2_norm_available\":true") &&
+                          contains(
+                              diagnostics,
+                              "\"shifted_operator_action_l2_norm_available\":true"),
+                      "native hard KSP failure preserves cached solution and operator-action norm availability");
+                const double solution_norm = extract_json_number(
+                    diagnostics,
+                    "\"solution_l2_norm\":",
+                    "native_floquet_hard_ksp_solution_norm");
+                const double operator_action_norm = extract_json_number(
+                    diagnostics,
+                    "\"shifted_operator_action_l2_norm\":",
+                    "native_floquet_hard_ksp_operator_action_norm");
+                check(std::isfinite(solution_norm) && solution_norm >= 0.0 &&
+                          std::isfinite(operator_action_norm) &&
+                          operator_action_norm >= 0.0,
+                      "native hard KSP failure norm cache serializes finite Euclidean measurements");
+            }
+        }
     }
     check(native_result.status == fd::FrequencyDomainStatus::ok,
           "native shared-domain modal contract provenance fixture must reach the Floquet solver");
@@ -3205,15 +3211,14 @@ void modal_floquet_shared_domain_original_descriptor_certification_is_fail_close
     if (result.status != FULLMAG_FEM_FD_OK) {
         std::fprintf(
             stderr,
-            "INFO: C ABI shared-domain Floquet fixture status=%u error=%.512s "
-            "diagnostics=%.2048s\n",
+            "INFO: C ABI shared-domain Floquet fixture status=%u\n"
+            "INFO: C ABI shared-domain Floquet fixture error=%s\n"
+            "INFO: C ABI shared-domain Floquet fixture diagnostics=%s\n"
+            "INFO: C ABI shared-domain Floquet fixture result=%s\n",
             static_cast<unsigned int>(result.status),
             result.error_message != nullptr ? result.error_message : "",
-            result.diagnostics_json != nullptr ? result.diagnostics_json : "");
-        if (result.diagnostics_json != nullptr) {
-            print_shifted_ksp_failure_probe_if_present(
-                std::string_view(result.diagnostics_json));
-        }
+            result.diagnostics_json != nullptr ? result.diagnostics_json : "",
+            result.result_json != nullptr ? result.result_json : "");
     }
     check(result.status == FULLMAG_FEM_FD_OK,
           "shared-domain Floquet production adapter must certify the original descriptor");

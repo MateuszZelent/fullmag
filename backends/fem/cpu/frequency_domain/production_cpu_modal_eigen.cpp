@@ -323,6 +323,9 @@ std::string floquet_shifted_ksp_diagnostics_json_fields(
             ",\"true_probe_count_scope\":\"completed_true_gate_measurements_during_this_eps_attempt\""
             ",\"true_probe_measurement_failure_count\":" +
             std::to_string(probe.true_probe_measurement_failure_count) +
+            ",\"true_probe_auxiliary_measurement_failure_count\":" +
+            std::to_string(
+                probe.true_probe_auxiliary_measurement_failure_count) +
             ",\"last_true_probe\":{"
             "\"available\":" +
             std::string(probe.last_true_probe_available ? "true" : "false") +
@@ -354,6 +357,22 @@ std::string floquet_shifted_ksp_diagnostics_json_fields(
             ",\"reason_after_gate\":" +
             (probe.last_true_probe_reason_after_gate_available
                 ? std::to_string(probe.last_true_probe_reason_after_gate)
+                : std::string("null")) +
+            ",\"solution_l2_norm_available\":" +
+            std::string(probe.last_true_solution_norm_available
+                ? "true" : "false") +
+            ",\"solution_l2_norm_source\":\"KSPBuildSolution_vector\""
+            ",\"solution_l2_norm\":" +
+            (probe.last_true_solution_norm_available
+                ? format_double(probe.last_true_solution_norm)
+                : std::string("null")) +
+            ",\"shifted_operator_action_l2_norm_available\":" +
+            std::string(probe.last_true_operator_action_norm_available
+                ? "true" : "false") +
+            ",\"shifted_operator_action_l2_norm_source\":\"MatMult_before_residual_mutation\""
+            ",\"shifted_operator_action_l2_norm\":" +
+            (probe.last_true_operator_action_norm_available
+                ? format_double(probe.last_true_operator_action_norm)
                 : std::string("null")) +
             ",\"rhs_l2_norm\":" +
             (probe.last_true_probe_available
