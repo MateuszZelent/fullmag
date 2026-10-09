@@ -15,6 +15,7 @@ import os
 from pathlib import Path, PurePosixPath
 import re
 import stat
+import sys
 import tempfile
 import uuid
 from typing import Any, Callable
@@ -283,12 +284,40 @@ def _windows_error(ctypes_module: Any, action: str) -> SourceCompactionError:
     return SourceCompactionError(f"{action} failed with Win32 error {code}: {detail}")
 
 
+def _windows_stat_snapshot_format() -> str:
+    if sys.implementation.name != "cpython":
+        raise SourceCompactionError(
+            "Windows stat identity format is unsupported for "
+            f"Python implementation {sys.implementation.name!r}"
+        )
+    version = sys.version_info[:2]
+    if version == (3, 11):
+        return "legacy"
+    if version >= (3, 12):
+        return "full_native"
+    raise SourceCompactionError(
+        f"Windows stat identity format is unsupported for CPython {version[0]}.{version[1]}"
+    )
+
+
 def _windows_handle_info(
     kernel32: Any,
     handle: Any,
-    expected_identity: tuple[int, int] | None = None,
+    *,
+    expected_snapshot: tuple[int, int] | None = None,
+    expected_snapshot_format: str | None = None,
+    expected_native: tuple[int, int] | None = None,
 ) -> tuple[tuple[int, int], int]:
-    """Return the volume/file id and attributes for a live Windows handle."""
+    """Return the full native identity, validating a stat snapshot or native ID."""
+
+    if expected_snapshot is not None and expected_native is not None:
+        raise SourceCompactionError(
+            "Windows handle identity check cannot mix snapshot and native expectations"
+        )
+    if expected_snapshot is None and expected_snapshot_format is not None:
+        raise SourceCompactionError(
+            "Windows stat snapshot format requires an expected snapshot"
+        )
 
     from ctypes import wintypes
 
@@ -328,16 +357,35 @@ def _windows_handle_info(
     volume = int(file_id_info.volume)
     file_index = int.from_bytes(raw_file_id, "little")
     identity = (volume, file_index)
-    if expected_identity is not None and identity != expected_identity:
-        # Older Python builds expose the legacy 64-bit index. Accept it only
-        # when FileIdInfo proves that the 128-bit ID has no high half.
-        legacy_index = (int(info.index_high) << 32) | int(info.index_low)
-        if (int.from_bytes(raw_file_id[8:], "little") == 0
-                and expected_identity == (int(info.volume), legacy_index)
-                and volume == int(info.volume)):
-            identity = expected_identity
+    legacy_index = (int(info.index_high) << 32) | int(info.index_low)
+    legacy_identity = (int(info.volume), legacy_index)
+    # CPython 3.11 snapshots use the legacy volume/index pair. CPython 3.12+
+    # exposes FileIdInfo's full 128-bit inode. Never try the other format as a
+    # fallback: a native high-half change must not pass as a matching legacy ID.
+    if expected_native is not None and expected_native != identity:
+        raise SourceCompactionError(
+            "Windows native handle identity changed "
+            f"(expected_native={expected_native!r}, legacy={legacy_identity!r}, "
+            f"native={identity!r}, "
+            f"file_id={raw_file_id.hex()})"
+        )
+    if expected_snapshot is not None:
+        snapshot_format = expected_snapshot_format or _windows_stat_snapshot_format()
+        if snapshot_format == "legacy":
+            snapshot_matches = expected_snapshot == legacy_identity
+        elif snapshot_format == "full_native":
+            snapshot_matches = expected_snapshot == identity
         else:
-            raise SourceCompactionError("Windows handle identity differs from Python stat identity")
+            raise SourceCompactionError(
+                f"unsupported Windows stat snapshot format {snapshot_format!r}"
+            )
+        if not snapshot_matches:
+            raise SourceCompactionError(
+                "Windows handle identity differs from stat snapshot "
+                f"(format={snapshot_format!r}, expected_snapshot={expected_snapshot!r}, "
+                f"legacy={legacy_identity!r}, native={identity!r}, "
+                f"file_id={raw_file_id.hex()})"
+            )
     if not volume or not file_index:
         raise SourceCompactionError("Windows filesystem did not provide a stable file identity")
     return identity, int(info.attributes)
@@ -391,7 +439,9 @@ class _VerifiedDirectoryOwner:
             )
             try:
                 identity, attributes = _windows_handle_info(
-                    self._kernel32, self.handle, self.expected_identity
+                    self._kernel32,
+                    self.handle,
+                    expected_snapshot=self.expected_identity,
                 )
             except Exception:
                 self.close()
@@ -428,7 +478,7 @@ class _VerifiedDirectoryOwner:
             raise SourceCompactionError(
                 f"verified source-parent ownership is unsupported on platform {os.name!r}"
             )
-        if identity != self.expected_identity:
+        if os.name != "nt" and identity != self.expected_identity:
             self.close()
             raise SourceCompactionError(f"{self.label} identity changed before compaction")
         self.identity = identity
@@ -443,14 +493,15 @@ class _VerifiedDirectoryOwner:
     def device(self) -> int:
         if self.identity is None:
             raise SourceCompactionError(f"{self.label} owner is not open")
-        return self.identity[0]
+        # Filesystem comparisons elsewhere use Python's stat snapshot format.
+        return self.expected_identity[0]
 
     def verify_handle_identity(self) -> None:
         if self.identity is None:
             raise SourceCompactionError(f"{self.label} owner is not open")
         if os.name == "nt":
             identity, attributes = _windows_handle_info(
-                self._kernel32, self.handle, self.identity
+                self._kernel32, self.handle, expected_native=self.identity
             )
             if attributes & 0x400 or not attributes & 0x10:
                 raise SourceCompactionError(f"{self.label} handle no longer names a real directory")
@@ -469,7 +520,7 @@ class _VerifiedDirectoryOwner:
         except OSError as error:
             raise SourceCompactionError(f"{self.label} path changed during compaction") from error
         if (_is_reparse(metadata) or not stat.S_ISDIR(metadata.st_mode)
-                or _identity(metadata) != self.identity):
+                or _identity(metadata) != self.expected_identity):
             raise SourceCompactionError(f"{self.label} path identity changed during compaction")
 
     def stat_file(self, name: str, label: str) -> os.stat_result:
@@ -558,14 +609,21 @@ class _VerifiedDirectoryOwner:
             if os.name == "nt":
                 native_handle = msvcrt.get_osfhandle(descriptor)
                 handle_identity, attributes = _windows_handle_info(
-                    self._kernel32, native_handle
+                    self._kernel32, native_handle, expected_snapshot=identity
                 )
-                if (
-                    attributes & (0x400 | 0x10)
-                    or handle_identity != identity
-                ):
+                if attributes & (0x400 | 0x10):
                     raise SourceCompactionError(
                         "private compaction stage handle identity is unstable"
+                    )
+                confirmed_identity, confirmed_attributes = _windows_handle_info(
+                    self._kernel32,
+                    native_handle,
+                    expected_native=handle_identity,
+                )
+                if (confirmed_identity != handle_identity
+                        or confirmed_attributes & (0x400 | 0x10)):
+                    raise SourceCompactionError(
+                        "private compaction stage native handle identity changed"
                     )
             self.verify_path_identity()
             transferred = True
@@ -615,7 +673,7 @@ class _VerifiedDirectoryOwner:
                     label=label,
                 )
                 identity, attributes = _windows_handle_info(
-                    kernel32, handle, expected_identity
+                    kernel32, handle, expected_snapshot=expected_identity
                 )
                 if attributes & (0x400 | 0x10):
                     raise SourceCompactionError(f"{label} is not a regular Windows file")
@@ -634,6 +692,16 @@ class _VerifiedDirectoryOwner:
                     or (expected_identity is not None
                         and _identity(metadata) != expected_identity)):
                 raise SourceCompactionError(f"{label} identity changed before opening")
+            if os.name == "nt":
+                native_handle = msvcrt.get_osfhandle(descriptor)
+                confirmed_identity, confirmed_attributes = _windows_handle_info(
+                    kernel32, native_handle, expected_native=identity
+                )
+                if (confirmed_identity != identity
+                        or confirmed_attributes & (0x400 | 0x10)):
+                    raise SourceCompactionError(
+                        f"{label} native handle identity changed while opening"
+                    )
             self.verify_path_identity()
             transferred = True
             return descriptor, metadata
@@ -978,11 +1046,19 @@ class _VerifiedDirectoryOwner:
             )
             try:
                 identity, attributes = _windows_handle_info(
-                    kernel32, handle, expected_identity
+                    kernel32, handle, expected_snapshot=expected_identity
                 )
-                if attributes & (0x400 | 0x10) or identity != expected_identity:
+                if attributes & (0x400 | 0x10):
                     raise SourceCompactionError(
                         "compaction stage identity changed before handle-bound deletion"
+                    )
+                confirmed_identity, confirmed_attributes = _windows_handle_info(
+                    kernel32, handle, expected_native=identity
+                )
+                if (confirmed_identity != identity
+                        or confirmed_attributes & (0x400 | 0x10)):
+                    raise SourceCompactionError(
+                        "compaction stage native identity changed before handle-bound deletion"
                     )
 
                 class FileDispositionInfo(ctypes_module.Structure):
@@ -1088,8 +1164,10 @@ def _windows_set_readonly(
         label="source file permission update",
     )
     try:
-        identity, attributes = _windows_handle_info(kernel32, handle, expected_identity)
-        if attributes & (0x400 | 0x10) or identity != expected_identity:
+        identity, attributes = _windows_handle_info(
+            kernel32, handle, expected_snapshot=expected_identity
+        )
+        if attributes & (0x400 | 0x10):
             raise SourceCompactionError("source file identity changed before Windows permission update")
         currently_readonly = bool(attributes & _READONLY_ATTRIBUTE)
         if currently_readonly == readonly:
@@ -1116,9 +1194,9 @@ def _windows_set_readonly(
                 handle, 0, ctypes_module.byref(basic), ctypes_module.sizeof(basic)):
             raise _windows_error(ctypes_module, "SetFileInformationByHandle(FileBasicInfo)")
         after_identity, after_attributes = _windows_handle_info(
-            kernel32, handle, expected_identity
+            kernel32, handle, expected_native=identity
         )
-        if (after_identity != expected_identity
+        if (after_identity != identity
                 or bool(after_attributes & _READONLY_ATTRIBUTE) != readonly):
             raise SourceCompactionError("Windows source permission update did not preserve file identity")
     finally:

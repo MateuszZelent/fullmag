@@ -68,6 +68,144 @@ def _capture(
 
 
 class LocalRunnerSourceCompactionTests(unittest.TestCase):
+    def test_windows_handle_identity_keeps_native_id_separate_from_stat_snapshot(self) -> None:
+        class MockKernel32:
+            def __init__(self) -> None:
+                self.legacy_volume = 0xA1B2C3D4
+                self.legacy_index = 0x123456789ABCDEF0
+                self.native_volume = 0x1234567890ABCDEF
+                self.file_id = bytes.fromhex("102030405060708090a0b0c0d0e0f001")
+
+            def GetFileInformationByHandle(self, handle, info_pointer) -> bool:
+                info = info_pointer._obj
+                info.attributes = 0x10  # FILE_ATTRIBUTE_DIRECTORY
+                info.volume = self.legacy_volume
+                info.links = 1
+                info.index_high = self.legacy_index >> 32
+                info.index_low = self.legacy_index & 0xFFFFFFFF
+                return True
+
+            def GetFileInformationByHandleEx(
+                self, handle, information_class, info_pointer, size
+            ) -> bool:
+                if information_class != 18 or size != 24:
+                    return False
+                info = info_pointer._obj
+                info.volume = self.native_volume
+                for index, value in enumerate(self.file_id):
+                    info.file_id[index] = value
+                return True
+
+        kernel32 = MockKernel32()
+        legacy_snapshot = (kernel32.legacy_volume, kernel32.legacy_index)
+        native_identity = (
+            kernel32.native_volume,
+            int.from_bytes(kernel32.file_id, "little"),
+        )
+
+        identity, attributes = source_compaction._windows_handle_info(
+            kernel32,
+            7,
+            expected_snapshot=legacy_snapshot,
+            expected_snapshot_format="legacy",
+        )
+        self.assertEqual(identity, native_identity)
+        self.assertNotEqual(identity, legacy_snapshot)
+        self.assertEqual(attributes, 0x10)
+
+        # CPython 3.12+ returns the complete 128-bit inode in st_ino.
+        full_native_snapshot = (
+            kernel32.native_volume,
+            int.from_bytes(kernel32.file_id, "little"),
+        )
+        rechecked_identity, _attributes = source_compaction._windows_handle_info(
+            kernel32, 7, expected_native=native_identity
+        )
+        full_snapshot_identity, _attributes = source_compaction._windows_handle_info(
+            kernel32,
+            7,
+            expected_snapshot=full_native_snapshot,
+            expected_snapshot_format="full_native",
+        )
+        self.assertEqual(rechecked_identity, native_identity)
+        self.assertEqual(full_snapshot_identity, native_identity)
+
+        truncated_snapshot = (
+            kernel32.native_volume,
+            int.from_bytes(kernel32.file_id[:8], "little"),
+        )
+        with self.assertRaisesRegex(
+            source_compaction.SourceCompactionError,
+            r"expected_snapshot=.*native=.*file_id=",
+        ):
+            source_compaction._windows_handle_info(
+                kernel32,
+                7,
+                expected_snapshot=truncated_snapshot,
+                expected_snapshot_format="full_native",
+            )
+
+        with self.assertRaisesRegex(
+            source_compaction.SourceCompactionError,
+            r"expected_snapshot=.*legacy=.*native=.*file_id=",
+        ):
+            source_compaction._windows_handle_info(
+                kernel32,
+                7,
+                expected_snapshot=(kernel32.legacy_volume + 1, kernel32.legacy_index),
+                expected_snapshot_format="legacy",
+            )
+        with self.assertRaisesRegex(
+            source_compaction.SourceCompactionError,
+            r"expected_native=.*native=.*file_id=",
+        ):
+            source_compaction._windows_handle_info(
+                kernel32,
+                7,
+                expected_native=(native_identity[0], native_identity[1] ^ 1),
+            )
+
+        # If high=0 makes all three legacy/native fields numerically equal,
+        # a 3.12 full-native snapshot must still reject high=1 instead of
+        # falling back to the still-matching legacy tuple.
+        high_zero = MockKernel32()
+        high_zero.file_id = bytes.fromhex("1020304050607080") + bytes(8)
+        high_zero.native_volume = high_zero.legacy_volume
+        low_half = int.from_bytes(high_zero.file_id[:8], "little")
+        high_zero.legacy_index = low_half
+        initial_snapshot = (high_zero.native_volume, low_half)
+        initial_identity, _attributes = source_compaction._windows_handle_info(
+            high_zero,
+            7,
+            expected_snapshot=initial_snapshot,
+            expected_snapshot_format="full_native",
+        )
+        legacy_before = (high_zero.legacy_volume, high_zero.legacy_index)
+        changed_file_id = bytearray(high_zero.file_id)
+        changed_file_id[8] = 1
+        high_zero.file_id = bytes(changed_file_id)
+        self.assertEqual(
+            (high_zero.legacy_volume, high_zero.legacy_index), legacy_before
+        )
+        self.assertEqual(int.from_bytes(high_zero.file_id[:8], "little"), low_half)
+        with self.assertRaisesRegex(
+            source_compaction.SourceCompactionError,
+            r"format='full_native'.*expected_snapshot=.*native=.*file_id=",
+        ):
+            source_compaction._windows_handle_info(
+                high_zero,
+                7,
+                expected_snapshot=initial_snapshot,
+                expected_snapshot_format="full_native",
+            )
+        with self.assertRaisesRegex(
+            source_compaction.SourceCompactionError,
+            r"expected_native=.*native=.*file_id=",
+        ):
+            source_compaction._windows_handle_info(
+                high_zero, 7, expected_native=initial_identity
+            )
+
     def test_identical_legacy_capsules_share_cas_and_keep_manifest_identity(self) -> None:
         with tempfile.TemporaryDirectory(prefix="fullmag-source-compaction-") as raw:
             root = Path(raw)
