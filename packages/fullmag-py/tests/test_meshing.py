@@ -14407,5 +14407,225 @@ class RegionMeshPolicyTests(unittest.TestCase):
         self.assertGreaterEqual(median_overall, 10e-9)
 
 
+class MeshFailureDiagnosticTests(unittest.TestCase):
+    def test_structured_permission_error_keeps_context_without_exception_notes(self) -> None:
+        import errno
+
+        class PermissionErrorWithoutNotes(PermissionError):
+            add_note = None
+
+        final_error = PermissionErrorWithoutNotes(errno.EACCES, "denied", "surface.stl")
+        original_message = str(final_error)
+        original_args = final_error.args
+        primary_error = ValueError("primary quality evidence")
+        component_error = RuntimeError("component fallback evidence")
+        mesh_asset_pipeline._retain_mesh_fallback_failures(
+            final_error,
+            primary_error=primary_error,
+            component_fallback_error=component_error,
+        )
+        self.assertEqual(final_error.args, original_args)
+        self.assertEqual(final_error.errno, errno.EACCES)
+        self.assertEqual(final_error.strerror, "denied")
+        self.assertEqual(final_error.filename, "surface.stl")
+        self.assertEqual(str(final_error), original_message)
+        failure_text = mesh_asset_pipeline._mesh_build_failure_text(final_error)
+        self.assertTrue(failure_text.startswith(original_message))
+        self.assertIn("primary mesh/quality failure: ValueError: primary quality evidence", failure_text)
+        self.assertIn("component-aware STL fallback failure: RuntimeError: component fallback evidence", failure_text)
+        notes = final_error._fullmag_mesh_fallback_notes
+        self.assertEqual(len(notes), 2)
+        self.assertTrue(all(len(note) <= 1200 for note in notes))
+
+    def test_validate_strict_emits_bounded_si_evidence_for_rejected_tet4(self) -> None:
+        mesh = MeshData.from_legacy_tet4(
+            nodes=np.asarray(
+                [
+                    [0.0, 0.0, 0.0],
+                    [9.0e-11, 0.0, 0.0],
+                    [0.0, 9.0e-11, 0.0],
+                    [0.0, 0.0, 9.0e-11],
+                ],
+                dtype=np.float64,
+            ),
+            elements=np.asarray([[0, 1, 2, 3]], dtype=np.int32),
+            element_markers=np.asarray([41], dtype=np.int32),
+            boundary_faces=np.zeros((0, 3), dtype=np.int32),
+            boundary_markers=np.zeros((0,), dtype=np.int32),
+        )
+
+        with self.assertRaisesRegex(ValueError, "degenerate tet4 Jacobian") as raised:
+            mesh.validate_strict(
+                eps_volume=FEM_TOPOLOGY_VOLUME_EPS,
+                _evidence_coordinate_scale_to_m=1.0,
+            )
+
+        message = str(raised.exception)
+        self.assertTrue(
+            message.startswith(
+                "mesh CSR cell 0 global ordinal 0 has degenerate tet4 Jacobian"
+            )
+        )
+        self.assertIn("node_indices=[0, 1, 2, 3]", message)
+        self.assertIn("coordinates_m=[[0.000000000e+00", message)
+        self.assertIn("determinant_m3=7.290000000e-31", message)
+        self.assertIn("epsilon_m3=1.000000000e-30", message)
+        self.assertIn("edge_min_m=9.000000000e-11", message)
+        self.assertIn("edge_max_m=1.272792206e-10", message)
+        self.assertIn("diameter_m=1.272792206e-10", message)
+        self.assertIn("element_marker=41", message)
+        self.assertLess(len(message), 1500)
+
+    def test_validate_strict_keeps_valid_mesh_unchanged_with_si_evidence_enabled(self) -> None:
+        mesh = MeshData.from_legacy_tet4(
+            nodes=np.asarray(
+                [
+                    [0.0, 0.0, 0.0],
+                    [9.0e-9, 0.0, 0.0],
+                    [0.0, 9.0e-9, 0.0],
+                    [0.0, 0.0, 9.0e-9],
+                ],
+                dtype=np.float64,
+            ),
+            elements=np.asarray([[0, 1, 2, 3]], dtype=np.int32),
+            element_markers=np.asarray([7], dtype=np.int32),
+            boundary_faces=np.asarray(
+                [[0, 1, 2], [0, 1, 3], [0, 2, 3], [1, 2, 3]],
+                dtype=np.int32,
+            ),
+            boundary_markers=np.asarray([1, 1, 1, 1], dtype=np.int32),
+        )
+        nodes_before = np.array(mesh.nodes, copy=True)
+        elements_before = np.array(mesh.elements, copy=True)
+        markers_before = np.array(mesh.element_markers, copy=True)
+
+        result = mesh.validate_strict(_evidence_coordinate_scale_to_m=1.0)
+
+        self.assertIsNone(result)
+        np.testing.assert_array_equal(mesh.nodes, nodes_before)
+        np.testing.assert_array_equal(mesh.elements, elements_before)
+        np.testing.assert_array_equal(mesh.element_markers, markers_before)
+
+    def test_failed_conformal_occ_and_both_stl_fallbacks_are_retained(self) -> None:
+        geometry = fm.Box((40e-9, 30e-9, 10e-9), name="diagnostic_body")
+        rejected_mesh = MeshData.from_legacy_tet4(
+            nodes=np.asarray(
+                [
+                    [0.0, 0.0, 0.0],
+                    [9.0e-11, 0.0, 0.0],
+                    [0.0, 9.0e-11, 0.0],
+                    [0.0, 0.0, 9.0e-11],
+                ],
+                dtype=np.float64,
+            ),
+            elements=np.asarray([[0, 1, 2, 3]], dtype=np.int32),
+            element_markers=np.asarray([13], dtype=np.int32),
+            boundary_faces=np.zeros((0, 3), dtype=np.int32),
+            boundary_markers=np.zeros((0,), dtype=np.int32),
+        )
+        primary_result = SharedDomainMeshResult(
+            mesh=rejected_mesh,
+            component_marker_tags={"diagnostic_body": 1},
+            component_volume_tags={"diagnostic_body": [1]},
+            component_surface_tags={"diagnostic_body": [1]},
+            interface_surface_tags=[1],
+            outer_boundary_surface_tags=[2],
+        )
+        component_fallback_error = RuntimeError(
+            "component-aware fallback sentinel"
+        )
+        concatenated_fallback_error = ValueError(
+            "facet 22180 cannot derive a canonical role from volume adjacency []"
+        )
+
+        class _FakeSurface:
+            vertices = np.asarray(
+                [
+                    [-20e-9, -15e-9, -5e-9],
+                    [20e-9, -15e-9, -5e-9],
+                    [-20e-9, 15e-9, -5e-9],
+                    [-20e-9, -15e-9, 5e-9],
+                ],
+                dtype=np.float64,
+            )
+
+            def export(self, path: Path) -> None:
+                path.write_text("solid diagnostic\nendsolid diagnostic\n", encoding="utf-8")
+
+        fake_trimesh = SimpleNamespace(
+            util=SimpleNamespace(
+                concatenate=lambda _surfaces: _FakeSurface(),
+            )
+        )
+
+        with patch(
+            "fullmag.meshing._gmsh_occ.is_occ_compatible",
+            return_value=True,
+        ), patch(
+            "fullmag.meshing._gmsh_occ.generate_shared_domain_mesh_via_occ",
+            return_value=primary_result,
+        ), patch(
+            "fullmag.meshing.asset_pipeline.generate_shared_domain_mesh_from_components",
+            side_effect=component_fallback_error,
+        ), patch(
+            "fullmag.meshing.asset_pipeline._import_trimesh",
+            return_value=fake_trimesh,
+        ), patch(
+            "fullmag.meshing.asset_pipeline._geometry_to_trimesh",
+            return_value=_FakeSurface(),
+        ), patch(
+            "fullmag.meshing.asset_pipeline._sanitize_surface_mesh_for_stl_export",
+            side_effect=lambda surface: surface,
+        ), patch(
+            "fullmag.meshing.gmsh_bridge.generate_mesh_from_file",
+            side_effect=concatenated_fallback_error,
+        ), patch(
+            "fullmag.meshing.asset_pipeline.emit_progress_event",
+        ) as emit_progress_event_mock, patch(
+            "fullmag.meshing.asset_pipeline.emit_progress",
+        ):
+            with self.assertRaises(ValueError) as raised:
+                realize_fem_domain_mesh_asset_from_components_with_report(
+                    geometries=[geometry],
+                    hints=fm.FEM(order=1, hmax=20e-9),
+                    study_universe={
+                        "mode": "manual",
+                        "size": [120e-9, 100e-9, 60e-9],
+                        "center": [0.0, 0.0, 0.0],
+                        "airbox_hmax": 40e-9,
+                        "airbox_hmin": 10e-9,
+                    },
+                    mesh_workflow={
+                        "mesh_options": {"algorithm_3d": ALGO_3D_FRONTAL},
+                    },
+                )
+
+        self.assertIs(raised.exception, concatenated_fallback_error)
+        self.assertTrue(
+            str(raised.exception).startswith(
+                "facet 22180 cannot derive a canonical role"
+            )
+        )
+        self.assertIs(raised.exception.__cause__, component_fallback_error)
+        notes = getattr(raised.exception, "__notes__", [])
+        rendered = "\n".join([str(raised.exception), *notes])
+        self.assertTrue(all(len(note) <= 1200 for note in notes))
+        self.assertIn("primary mesh/quality failure: ValueError", rendered)
+        self.assertIn("coordinates_m=", rendered)
+        self.assertIn(
+            "component-aware STL fallback failure: RuntimeError: "
+            "component-aware fallback sentinel",
+            rendered,
+        )
+        failure_event = next(
+            call.args[0]
+            for call in emit_progress_event_mock.call_args_list
+            if call.args[0].get("kind") == "mesh_build_failed"
+        )
+        self.assertIn("facet 22180 cannot derive", failure_event["error"])
+        self.assertIn("coordinates_m=", failure_event["error"])
+        self.assertIn("component-aware fallback sentinel", failure_event["error"])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -2179,6 +2179,7 @@ class MeshData:
         *,
         require_positive_orientation: bool = True,
         eps_volume: float | None = None,
+        _evidence_coordinate_scale_to_m: float | None = None,
     ) -> None:
         # Certified mixed meshes already carry native per-cell Jacobian
         # evidence.  Re-running this check in a Python loop is prohibitively
@@ -2221,17 +2222,123 @@ class MeshData:
                 volume_context = (
                     " (degenerate tetra volume)" if cell_type == "tet4" else ""
                 )
+                evidence = (
+                    self._tet4_strict_failure_evidence(
+                        index,
+                        coordinates,
+                        float(determinants[0]),
+                        resolved_eps,
+                        coordinate_scale_to_m=_evidence_coordinate_scale_to_m,
+                    )
+                    if cell_type == "tet4"
+                    else ""
+                )
                 raise ValueError(
                     f"mesh CSR cell {index} global ordinal {int(self.cell_global_ordinals[index])} "
                     f"has degenerate {cell_type} Jacobian{volume_context} "
-                    f"{minimum_abs:.6e} <= eps {resolved_eps:.6e}"
+                    f"{minimum_abs:.6e} <= eps {resolved_eps:.6e}{evidence}"
                 )
             if require_positive_orientation and np.any(determinants < 0.0):
+                minimum_determinant = float(np.min(determinants))
+                evidence = (
+                    self._tet4_strict_failure_evidence(
+                        index,
+                        coordinates,
+                        minimum_determinant,
+                        resolved_eps,
+                        coordinate_scale_to_m=_evidence_coordinate_scale_to_m,
+                    )
+                    if cell_type == "tet4"
+                    else ""
+                )
                 raise ValueError(
                     f"mesh CSR cell {index} global ordinal {int(self.cell_global_ordinals[index])} "
                     f"has negative {cell_type} Jacobian "
-                    f"{float(np.min(determinants)):.6e}"
+                    f"{minimum_determinant:.6e}{evidence}"
                 )
+
+    def _tet4_strict_failure_evidence(
+        self,
+        index: int,
+        coordinates: NDArray[np.float64],
+        determinant: float,
+        epsilon: float,
+        *,
+        coordinate_scale_to_m: float | None,
+    ) -> str:
+        """Format bounded evidence for one rejected tet without guessing its owner."""
+        node_indices = [int(node) for node in self.cell_node_ids(index)]
+        scale_to_m: float | None = None
+        scale_cubed = 1.0
+        if coordinate_scale_to_m is not None:
+            try:
+                candidate_scale = float(coordinate_scale_to_m)
+                candidate_scale_cubed = candidate_scale**3
+            except (OverflowError, TypeError, ValueError):
+                candidate_scale = float("nan")
+                candidate_scale_cubed = float("nan")
+            if (
+                np.isfinite(candidate_scale)
+                and candidate_scale > 0.0
+                and np.isfinite(candidate_scale_cubed)
+            ):
+                scale_to_m = candidate_scale
+                scale_cubed = candidate_scale_cubed
+
+        raw_coordinates = np.asarray(coordinates, dtype=np.float64)
+        raw_edge_lengths = np.linalg.norm(
+            raw_coordinates[:, np.newaxis, :] - raw_coordinates[np.newaxis, :, :],
+            axis=2,
+        )[np.triu_indices(4, k=1)]
+        if scale_to_m is not None:
+            scaled_coordinates = raw_coordinates * scale_to_m
+            scaled_edges = raw_edge_lengths * scale_to_m
+            scaled_determinant = determinant * scale_cubed
+            scaled_epsilon = epsilon * scale_cubed
+            if (
+                np.all(np.isfinite(scaled_coordinates))
+                and np.all(np.isfinite(scaled_edges))
+                and np.isfinite(scaled_determinant)
+                and np.isfinite(scaled_epsilon)
+            ):
+                evidence_coordinates = scaled_coordinates
+                edge_lengths = scaled_edges
+                determinant = scaled_determinant
+                epsilon = scaled_epsilon
+                coordinate_label = "coordinates_m"
+                determinant_label = "determinant_m3"
+                epsilon_label = "epsilon_m3"
+                edge_min_label = "edge_min_m"
+                edge_max_label = "edge_max_m"
+                diameter_label = "diameter_m"
+            else:
+                scale_to_m = None
+        if scale_to_m is None:
+            evidence_coordinates = raw_coordinates
+            edge_lengths = raw_edge_lengths
+            coordinate_label = "coordinates_mesh_units"
+            determinant_label = "determinant_mesh_units3"
+            epsilon_label = "epsilon_mesh_units3"
+            edge_min_label = "edge_min_mesh_units"
+            edge_max_label = "edge_max_mesh_units"
+            diameter_label = "diameter_mesh_units"
+
+        coordinates_text = "[" + ", ".join(
+            "[" + ", ".join(f"{float(value):.9e}" for value in row) + "]"
+            for row in evidence_coordinates
+        ) + "]"
+        marker = int(self.element_markers[index])
+        return (
+            "; tet4 evidence: "
+            f"node_indices={node_indices}; "
+            f"{coordinate_label}={coordinates_text}; "
+            f"{determinant_label}={determinant:.9e}; "
+            f"{epsilon_label}={epsilon:.9e}; "
+            f"{edge_min_label}={float(np.min(edge_lengths)):.9e}; "
+            f"{edge_max_label}={float(np.max(edge_lengths)):.9e}; "
+            f"{diameter_label}={float(np.max(edge_lengths)):.9e}; "
+            f"element_marker={marker}"
+        )
 
     def _native_mixed_certificate_valid(self) -> bool:
         """Return whether the native certifier accepted this exact mesh.

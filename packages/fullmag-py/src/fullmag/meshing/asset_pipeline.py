@@ -1088,6 +1088,76 @@ def _execution_mesh_volume_epsilon(mesh: MeshData) -> float:
     )
 
 
+_MESH_FAILURE_CONTEXT_LIMIT = 1200
+
+
+def _bounded_mesh_exception_summary(label: str, exc: Exception) -> str:
+    try:
+        message = str(exc).strip()
+    except Exception as formatting_error:  # pragma: no cover - defensive diagnostic path
+        message = f"<message unavailable: {type(formatting_error).__name__}>"
+    summary = f"{label}: {type(exc).__name__}: {message}"
+    if len(summary) > _MESH_FAILURE_CONTEXT_LIMIT:
+        summary = summary[: _MESH_FAILURE_CONTEXT_LIMIT - 3] + "..."
+    return summary
+
+
+def _retain_mesh_fallback_failures(
+    final_error: Exception,
+    *,
+    primary_error: Exception,
+    component_fallback_error: Exception | None,
+) -> None:
+    """Attach bounded earlier failure evidence without replacing the final error."""
+    failures = [
+        _bounded_mesh_exception_summary("primary mesh/quality failure", primary_error)
+    ]
+    if component_fallback_error is not None:
+        failures.append(
+            _bounded_mesh_exception_summary(
+                "component-aware STL fallback failure",
+                component_fallback_error,
+            )
+        )
+
+    add_note = getattr(final_error, "add_note", None)
+    if callable(add_note):
+        for failure in failures:
+            add_note(failure)
+        return
+
+    # Python 3.10 needs an explicit carrier: OSError formats errno/strerror/
+    # filename independently of args, which must retain their structured form.
+    final_error._fullmag_mesh_fallback_notes = tuple(failures)
+    if not isinstance(final_error, OSError):
+        original_message = str(final_error)
+        final_error.args = (original_message + "\n" + "\n".join(failures),)
+
+
+def _mesh_build_failure_text(exc: Exception) -> str:
+    """Return the existing error text plus bounded notes for failure events."""
+    message = str(exc)
+    notes = getattr(exc, "__notes__", ())
+    if not notes:
+        notes = getattr(exc, "_fullmag_mesh_fallback_notes", ())
+    if not isinstance(notes, (list, tuple)):
+        return message
+    context_prefixes = (
+        "primary mesh/quality failure:",
+        "component-aware STL fallback failure:",
+    )
+    rendered_notes = [
+        str(note)[:_MESH_FAILURE_CONTEXT_LIMIT]
+        for note in notes
+        if isinstance(note, str)
+        and note.startswith(context_prefixes)
+        and note not in message
+    ][-2:]
+    if not rendered_notes:
+        return message
+    return message + "\n" + "\n".join(rendered_notes)
+
+
 def _conformal_occ_algorithm_name(algorithm_3d: int) -> str:
     return {
         ALGO_3D_DELAUNAY: "Delaunay",
@@ -2831,6 +2901,7 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
         )
         result: SharedDomainMeshResult | None = None
         build_mode = "component_aware"
+        fallback_failure_context: tuple[Exception, Exception | None] | None = None
 
         def _emit_mesh_build_failed(exc: Exception) -> None:
             for descriptor in [*mesh_options.size_fields, *mesh_options.lower_bound_fields]:
@@ -2859,7 +2930,7 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                         mesh_workflow=mesh_workflow,
                     )
                 ],
-                "error": str(exc),
+                "error": _mesh_build_failure_text(exc),
                 "message": "Shared-domain mesh build failed",
             }
             if mixed_shared_geo_direct or ring_shared_geo_direct or box_layered_geo_direct:
@@ -3020,6 +3091,8 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                                 result.mesh.validate_strict(
                                     require_positive_orientation=True,
                                     eps_volume=_execution_mesh_volume_epsilon(result.mesh),
+                                    # OCC returns MeshData coordinates in SI metres.
+                                    _evidence_coordinate_scale_to_m=1.0,
                                 )
                                 emit_progress_event(
                                     {
@@ -3128,6 +3201,8 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                 except Exception as primary_exc:
                     if conformal_object_regions:
                         raise
+                    initial_primary_error = primary_exc
+                    component_fallback_error: Exception | None = None
                     # If conformal OCC failed, fall back safely to component-aware STL mesh
                     if build_mode == "conformal_occ":
                         build_mode = "component_aware"
@@ -3151,9 +3226,14 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                             )
                             primary_exc = None  # successfully recovered!
                         except Exception as stl_exc:
+                            component_fallback_error = stl_exc
                             primary_exc = stl_exc
 
                     if primary_exc is not None:
+                        fallback_failure_context = (
+                            initial_primary_error,
+                            component_fallback_error,
+                        )
                         build_mode = "concatenated_stl_fallback"
                         if _PREEMPTIVE_IMPORTED_STL_FALLBACK in fallbacks_triggered:
                             emit_progress(
@@ -3238,7 +3318,20 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                             options=mesh_options,
                             **fallback_geometry_binding,
                         )
+                        fallback_failure_context = None
         except Exception as exc:
+            if fallback_failure_context is not None:
+                primary_error, component_fallback_error = fallback_failure_context
+                _retain_mesh_fallback_failures(
+                    exc,
+                    primary_error=primary_error,
+                    component_fallback_error=component_fallback_error,
+                )
+                cause = component_fallback_error or primary_error
+                _emit_mesh_build_failed(exc)
+                if cause is not exc:
+                    raise exc from cause
+                raise
             _emit_mesh_build_failed(exc)
             raise
 
