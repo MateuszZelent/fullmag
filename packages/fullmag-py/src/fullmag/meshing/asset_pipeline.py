@@ -7,7 +7,7 @@ from dataclasses import replace as _dc_replace
 import math
 import tempfile
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 import numpy as np
 
@@ -1194,6 +1194,7 @@ def realize_fem_mesh_asset(
     study_universe: Mapping[str, object] | None = None,
     mesh_workflow: Mapping[str, object] | None = None,
     per_object_recipes: dict[str, PerObjectMeshRecipe] | None = None,
+    _owner_geometry_names: Sequence[str] | None = None,
 ) -> MeshData:
     """Resolve a FEM mesh asset from either a prebuilt mesh or geometry source.
 
@@ -1222,6 +1223,7 @@ def realize_fem_mesh_asset(
         mesh_workflow,
         geometries=[geometry],
         default_hmax=target.hmax,
+        owner_geometry_names=_owner_geometry_names,
         per_object_recipes=per_object_recipes,
     )
 

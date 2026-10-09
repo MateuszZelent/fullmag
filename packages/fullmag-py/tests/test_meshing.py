@@ -16,6 +16,7 @@ import numpy as np
 
 import fullmag as fm
 import fullmag.meshing.asset_pipeline as mesh_asset_pipeline
+import fullmag.model.problem as problem_model
 from fullmag.meshing import _gmsh_swept as gmsh_swept
 from meshing_production_fixtures import (
     assert_monotone_p95_growth,
@@ -70,6 +71,7 @@ from fullmag.meshing._gmsh_swept import (
     _scaled_airbox_maximum_element_size,
     generate_swept_tetrahedral_box_airbox_mesh,
 )
+from fullmag.model.problem import BackendTarget, build_geometry_assets_for_request
 from fullmag.meshing._gmsh_types import (
     FEM_TOPOLOGY_VOLUME_EPS,
     MixedPeriodicTopologyError,
@@ -11310,6 +11312,249 @@ class RegionMeshPolicyTests(unittest.TestCase):
             },
             {"left": 5e-9, "right": 7e-9},
         )
+
+    def test_per_geometry_lower_bounds_bind_to_current_standalone_geometry(self) -> None:
+        left = fm.Box(100e-9, 100e-9, 20e-9, name="left")
+        right = fm.Box(100e-9, 100e-9, 20e-9, name="left_geom")
+        mesh_workflow = {
+            "per_geometry": [
+                {"geometry": "left", "minimum_element_size": 4e-9},
+                {"geometry": "left_geom", "minimum_element_size": 6e-9},
+            ]
+        }
+        owner_geometry_names = (left.geometry_name, right.geometry_name)
+
+        standalone_options = {
+            geometry.geometry_name: _mesh_options_from_runtime_metadata(
+                mesh_workflow,
+                geometries=[geometry],
+                default_hmax=30e-9,
+                component_aware=True,
+                owner_geometry_names=owner_geometry_names,
+            )
+            for geometry in (left, right)
+        }
+        self.assertEqual(
+            {
+                name: {
+                    field["params"]["GeometryName"]: field["params"]["MinimumElementSize"]
+                    for field in options.lower_bound_fields
+                    if field["kind"] == "ComponentVolumeLowerBound"
+                }
+                for name, options in standalone_options.items()
+            },
+            {"left": {"left": 4e-9}, "left_geom": {"left_geom": 6e-9}},
+        )
+
+        shared_options = _mesh_options_from_runtime_metadata(
+            mesh_workflow,
+            geometries=[left, right],
+            default_hmax=30e-9,
+            component_aware=True,
+        )
+        self.assertEqual(
+            {
+                field["params"]["GeometryName"]: field["params"]["MinimumElementSize"]
+                for field in shared_options.lower_bound_fields
+                if field["kind"] == "ComponentVolumeLowerBound"
+            },
+            {"left": 4e-9, "left_geom": 6e-9},
+        )
+
+    def test_per_object_recipe_lower_bound_does_not_cross_geometry_alias(self) -> None:
+        left = fm.Box(100e-9, 100e-9, 20e-9, name="left")
+        right = fm.Box(100e-9, 100e-9, 20e-9, name="left_geom")
+        owner_geometry_names = (left.geometry_name, right.geometry_name)
+        recipe = {"left": PerObjectMeshRecipe(hmin=5e-9)}
+
+        standalone_options = {
+            geometry.geometry_name: _mesh_options_from_runtime_metadata(
+                {"per_geometry": []},
+                geometries=[geometry],
+                default_hmax=30e-9,
+                component_aware=True,
+                per_object_recipes=recipe,
+                owner_geometry_names=owner_geometry_names,
+            )
+            for geometry in (left, right)
+        }
+        self.assertEqual(
+            {
+                name: {
+                    field["params"]["GeometryName"]: field["params"]["MinimumElementSize"]
+                    for field in options.lower_bound_fields
+                    if field["kind"] == "ComponentVolumeLowerBound"
+                }
+                for name, options in standalone_options.items()
+            },
+            {"left": {"left": 5e-9}, "left_geom": {}},
+        )
+
+    def test_per_object_asset_builder_threads_full_geometry_owner_roster(self) -> None:
+        left = fm.Box(100e-9, 100e-9, 20e-9, name="left")
+        right = fm.Box(100e-9, 100e-9, 20e-9, name="right")
+        owner_roster = (left.geometry_name, right.geometry_name)
+        observed: list[tuple[str, tuple[str, ...] | None]] = []
+
+        def realize(_geometry, _hints, **kwargs):
+            observed.append(
+                (_geometry.geometry_name, kwargs.get("_owner_geometry_names"))
+            )
+            return SimpleNamespace(
+                n_nodes=4,
+                n_elements=1,
+                n_boundary_faces=4,
+                to_ir=lambda mesh_name: {"mesh_name": mesh_name},
+            )
+
+        with (
+            patch.object(problem_model, "_fem_mesh_cache_dir", return_value=None),
+            patch("fullmag.meshing.realize_fem_mesh_asset", side_effect=realize),
+            patch.object(
+                mesh_asset_pipeline,
+                "_drop_degenerate_tetrahedra",
+                side_effect=lambda mesh, **_kwargs: mesh,
+            ),
+            patch.object(fullmag_core, "validate_mesh_ir", return_value=True),
+        ):
+            assets = build_geometry_assets_for_request(
+                requested_backend=BackendTarget.FEM,
+                geometries=[left, right],
+                discretization=fm.DiscretizationHints(
+                    fem=fm.FEM(order=1, hmax=30e-9)
+                ),
+                mesh_workflow={
+                    "per_geometry": [
+                        {"geometry": "left", "minimum_element_size": 4e-9},
+                        {"geometry": "right", "minimum_element_size": 6e-9},
+                    ]
+                },
+            )
+
+        self.assertEqual(
+            observed,
+            [("left", owner_roster), ("right", owner_roster)],
+        )
+        self.assertEqual(
+            [entry["geometry_name"] for entry in assets["fem_mesh_assets"]],
+            ["left", "right"],
+        )
+
+    def test_per_object_mesh_cache_key_includes_owner_roster_and_avoids_stale_hit(self) -> None:
+        left = fm.Box(100e-9, 100e-9, 20e-9, name="left")
+        right = fm.Box(100e-9, 100e-9, 20e-9, name="left_geom")
+        hints = fm.FEM(order=1, hmax=30e-9)
+        mesh_workflow = {
+            "per_geometry": [
+                {"geometry": "left_geom", "minimum_element_size": 5e-9}
+            ]
+        }
+        legacy_roster = (left.geometry_name,)
+        current_roster = (left.geometry_name, right.geometry_name)
+        legacy_key = problem_model._fem_mesh_cache_key(
+            left,
+            hints,
+            mesh_workflow=mesh_workflow,
+            owner_geometry_names=legacy_roster,
+        )
+        current_key = problem_model._fem_mesh_cache_key(
+            left,
+            hints,
+            mesh_workflow=mesh_workflow,
+            owner_geometry_names=current_roster,
+        )
+        self.assertNotEqual(legacy_key, current_key)
+
+        rebuilt: list[str] = []
+        fake_mesh = SimpleNamespace(
+            n_nodes=4,
+            n_elements=1,
+            n_boundary_faces=4,
+            to_ir=lambda mesh_name: {"mesh_name": mesh_name},
+        )
+
+        def realize(geometry, _hints, **_kwargs):
+            rebuilt.append(geometry.geometry_name)
+            return fake_mesh
+
+        with TemporaryDirectory() as tmp_dir:
+            cache_dir = Path(tmp_dir)
+            (cache_dir / f"{legacy_key}.npz").write_bytes(b"old roster mesh")
+            with (
+                patch.object(
+                    problem_model,
+                    "_fem_mesh_cache_dir",
+                    return_value=cache_dir,
+                ),
+                patch("fullmag.meshing.realize_fem_mesh_asset", side_effect=realize),
+                patch.object(
+                    mesh_asset_pipeline.MeshData,
+                    "load",
+                    return_value=fake_mesh,
+                ) as cached_load,
+                patch.object(problem_model, "_save_fem_mesh_cache_atomically"),
+                patch.object(
+                    mesh_asset_pipeline,
+                    "_drop_degenerate_tetrahedra",
+                    side_effect=lambda mesh, **_kwargs: mesh,
+                ),
+                patch.object(fullmag_core, "validate_mesh_ir", return_value=True),
+            ):
+                build_geometry_assets_for_request(
+                    requested_backend=BackendTarget.FEM,
+                    geometries=[left, right],
+                    discretization=fm.DiscretizationHints(fem=hints),
+                    mesh_workflow=mesh_workflow,
+                )
+
+        cached_load.assert_not_called()
+        self.assertEqual(rebuilt, ["left", "left_geom"])
+
+    def test_standalone_owner_roster_rejects_unknown_and_ambiguous_names(self) -> None:
+        left = fm.Box(100e-9, 100e-9, 20e-9, name="left")
+        right = fm.Box(100e-9, 100e-9, 20e-9, name="right")
+        with self.assertRaisesRegex(
+            ValueError,
+            "mesh_lower_bound_owner_binding_missing.*owner='typo'",
+        ):
+            _mesh_options_from_runtime_metadata(
+                {
+                    "per_geometry": [
+                        {"geometry": "typo", "minimum_element_size": 4e-9}
+                    ]
+                },
+                geometries=[left],
+                default_hmax=30e-9,
+                component_aware=True,
+                owner_geometry_names=(left.geometry_name, right.geometry_name),
+            )
+
+        alias_collision = fm.Box(100e-9, 100e-9, 20e-9, name="left_geom")
+        no_policy_options = _mesh_options_from_runtime_metadata(
+            {"per_geometry": []},
+            geometries=[left, alias_collision],
+            default_hmax=30e-9,
+            component_aware=True,
+        )
+        self.assertEqual(no_policy_options.lower_bound_fields, [])
+
+        ambiguous_left = fm.Box(100e-9, 100e-9, 20e-9, name="owner")
+        nested_alias = fm.Box(100e-9, 100e-9, 20e-9, name="owner_geom_geom")
+        with self.assertRaisesRegex(
+            ValueError,
+            "mesh_geometry_owner_binding_ambiguous.*owner='owner_geom'",
+        ):
+            _mesh_options_from_runtime_metadata(
+                {
+                    "per_geometry": [
+                        {"geometry": "owner_geom", "minimum_element_size": 4e-9}
+                    ]
+                },
+                geometries=[ambiguous_left],
+                default_hmax=30e-9,
+                component_aware=True,
+                owner_geometry_names=("owner", nested_alias.geometry_name),
+            )
 
     def test_per_geometry_geometry_name_alias_is_preserved_for_lower_bounds(self) -> None:
         geometry = fm.Box(100e-9, 100e-9, 20e-9, name="owner")

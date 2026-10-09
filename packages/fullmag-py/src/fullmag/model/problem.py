@@ -693,13 +693,20 @@ def _fem_mesh_cache_key(
     study_universe: dict[str, object] | None = None,
     mesh_workflow: dict[str, object] | None = None,
     per_object_recipes: Mapping[str, PerObjectMeshRecipe] | None = None,
+    owner_geometry_names: Sequence[str] | None = None,
 ) -> str:
+    resolved_owner_geometry_names = sorted(
+        owner_geometry_names
+        if owner_geometry_names is not None
+        else (str(getattr(geometry, "geometry_name", "")),)
+    )
     payload = {
         "version": _FEM_MESH_CACHE_VERSION,
         "geometry": _geometry_cache_fingerprint(geometry),
         "fem": hints.to_ir(),
         "study_universe": study_universe,
         "mesh_workflow": mesh_workflow,
+        "owner_geometry_names": resolved_owner_geometry_names,
         "per_object_recipes": {
             str(name): recipe.to_ir()
             for name, recipe in (per_object_recipes or {}).items()
@@ -989,6 +996,9 @@ def build_geometry_assets_for_request(
         )
 
         if not has_shared_domain_mesh_asset:
+            owner_geometry_names = tuple(
+                candidate.geometry_name for candidate in geometries
+            )
             for geometry in geometries:
                 imported_surface_only = (
                     discretization.fem.mesh is None
@@ -1026,6 +1036,7 @@ def build_geometry_assets_for_request(
                         study_universe=study_universe,
                         mesh_workflow=mesh_workflow,
                         per_object_recipes=per_object_recipes,
+                        owner_geometry_names=owner_geometry_names,
                     )
                     cache_path = (
                         fem_mesh_cache_dir.joinpath(f"{mesh_cache_key}.npz")
@@ -1064,6 +1075,7 @@ def build_geometry_assets_for_request(
                             study_universe=study_universe,
                             mesh_workflow=mesh_workflow,
                             per_object_recipes=dict(per_object_recipes or {}),
+                            _owner_geometry_names=owner_geometry_names,
                         )
                         mesh = _drop_degenerate_tetrahedra(
                             mesh,

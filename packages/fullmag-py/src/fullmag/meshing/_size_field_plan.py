@@ -1549,40 +1549,117 @@ def _validate_region_mesh_policy_order(
     return 1
 
 
+def _geometry_owner_alias_index(
+    geometries: list[Geometry],
+    owner_geometry_names: Sequence[str] | None,
+) -> tuple[set[str], dict[str, set[str]], dict[str, Geometry]]:
+    """Resolve aliases to authoritative names, preferring exact name matches."""
+    owner_names = (
+        list(owner_geometry_names)
+        if owner_geometry_names is not None
+        else [geometry.geometry_name for geometry in geometries]
+    )
+    alias_candidates: dict[str, set[str]] = {}
+    seen_names: set[str] = set()
+    for raw_name in owner_names:
+        if not isinstance(raw_name, str) or not raw_name.strip():
+            raise ValueError("mesh_geometry_owner_binding_missing: geometry name is empty")
+        owner_name = raw_name.strip()
+        if owner_name in seen_names:
+            raise ValueError(
+                "mesh_geometry_owner_binding_ambiguous: "
+                f"duplicate geometry name '{owner_name}'"
+            )
+        seen_names.add(owner_name)
+        for alias in _geometry_name_aliases(owner_name):
+            alias_candidates.setdefault(alias, set()).add(owner_name)
+
+    current_geometries: dict[str, Geometry] = {}
+    for geometry in geometries:
+        owner_name = _resolve_geometry_owner_name(
+            geometry.geometry_name,
+            owner_names=seen_names,
+            alias_candidates=alias_candidates,
+        )
+        if owner_name is None:
+            raise ValueError(
+                "mesh_geometry_owner_binding_missing: "
+                f"current geometry='{geometry.geometry_name}' is absent from the owner roster"
+            )
+        if owner_name in current_geometries:
+            raise ValueError(
+                "mesh_geometry_owner_binding_ambiguous: "
+                f"multiple mesh geometries resolve to owner '{owner_name}'"
+            )
+        current_geometries[owner_name] = geometry
+    return seen_names, alias_candidates, current_geometries
+
+
+def _resolve_geometry_owner_name(
+    owner: object,
+    *,
+    owner_names: set[str],
+    alias_candidates: Mapping[str, set[str]],
+) -> str | None:
+    if not isinstance(owner, str) or not owner.strip():
+        return None
+    resolved = owner.strip()
+    if resolved in owner_names:
+        return resolved
+    candidates = alias_candidates.get(resolved, set())
+    if len(candidates) > 1:
+        raise ValueError(
+            "mesh_geometry_owner_binding_ambiguous: "
+            f"owner='{resolved}' matches {sorted(candidates)}"
+        )
+    return next(iter(candidates), None)
+
+
 def _build_scoped_lower_bound_fields(
     geometries: list[Geometry],
     *,
     per_geometry: list[object],
     per_object_recipes: dict[str, PerObjectMeshRecipe] | None,
     object_regions: list[dict[str, object]],
+    owner_geometry_names: Sequence[str] | None = None,
 ) -> list[dict[str, object]]:
     """Preserve body and material-region lower bounds with their owners.
 
     These are semantic lower-bound descriptors.  Gmsh realization happens in
     ``_configure_mesh_size_fields`` where component volume identity is known.
+    A standalone object mesh may receive the full authoring roster; in that
+    case valid policies for other objects stay bound to those owners and are
+    omitted from this object's fields.
     """
     lower_bounds: list[dict[str, object]] = []
-    per_geometry_by_name = _parse_per_geometry_overrides(per_geometry)
-    geometry_aliases = {
-        alias
-        for geometry in geometries
-        for alias in _geometry_name_aliases(geometry.geometry_name)
+    owner_names, alias_candidates, current_geometries = _geometry_owner_alias_index(
+        geometries,
+        owner_geometry_names,
+    )
+    per_geometry_by_owner: dict[str, Mapping[str, object]] = {}
+    recipe_by_owner: dict[str, PerObjectMeshRecipe] = {
+        owner_name: per_object_recipes[owner_name]
+        for owner_name in owner_names
+        if per_object_recipes is not None
+        and owner_name in per_object_recipes
+        and isinstance(per_object_recipes[owner_name], PerObjectMeshRecipe)
     }
-
-    def _has_geometry_binding(owner: object) -> bool:
-        return (
-            isinstance(owner, str)
-            and bool(set(_geometry_name_aliases(owner)) & geometry_aliases)
-        )
 
     for entry in per_geometry:
         if not isinstance(entry, Mapping):
             continue
+        owner = entry.get("geometry") or entry.get("geometry_name")
+        resolved_owner = _resolve_geometry_owner_name(
+            owner,
+            owner_names=owner_names,
+            alias_candidates=alias_candidates,
+        )
+        if resolved_owner is not None:
+            per_geometry_by_owner.setdefault(resolved_owner, entry)
         raw_hmin = _first_defined(entry, "hmin", "minimum_element_size")
         if _coerce_positive_float(raw_hmin) is None:
             continue
-        owner = entry.get("geometry") or entry.get("geometry_name")
-        if not _has_geometry_binding(owner):
+        if resolved_owner is None:
             raise ValueError(
                 "mesh_lower_bound_owner_binding_missing: "
                 f"per_geometry owner='{owner}' has no matching mesh geometry"
@@ -1595,20 +1672,28 @@ def _build_scoped_lower_bound_fields(
         recipe_hmin = _first_defined(recipe_payload, "hmin", "minimum_element_size")
         if _coerce_positive_float(recipe_hmin) is None:
             continue
-        if not _has_geometry_binding(owner):
+        resolved_owner = _resolve_geometry_owner_name(
+            owner,
+            owner_names=owner_names,
+            alias_candidates=alias_candidates,
+        )
+        if resolved_owner is None:
             raise ValueError(
                 "mesh_lower_bound_owner_binding_missing: "
                 f"per-object recipe owner='{owner}' has no matching mesh geometry"
             )
+        recipe_by_owner.setdefault(resolved_owner, recipe)
 
     for geometry in geometries:
-        recipe = _lookup_geometry_name_alias(per_object_recipes or {}, geometry.geometry_name)
+        geometry_owner = _resolve_geometry_owner_name(
+            geometry.geometry_name,
+            owner_names=owner_names,
+            alias_candidates=alias_candidates,
+        )
+        recipe = recipe_by_owner.get(geometry_owner)
         recipe_payload = recipe.to_ir() if isinstance(recipe, PerObjectMeshRecipe) else {}
         recipe_hmin = _first_defined(recipe_payload, "hmin", "minimum_element_size")
-        per_geometry_entry = _lookup_geometry_name_alias(
-            per_geometry_by_name,
-            geometry.geometry_name,
-        )
+        per_geometry_entry = per_geometry_by_owner.get(geometry_owner)
         per_geometry_hmin = (
             _first_defined(per_geometry_entry, "hmin", "minimum_element_size")
             if isinstance(per_geometry_entry, Mapping)
@@ -1647,14 +1732,20 @@ def _build_scoped_lower_bound_fields(
         if region_hmin is None:
             continue
 
-        owner = region.get("owner_object")
-        aliases = _geometry_name_aliases(owner)
-        geometry = next((g for g in geometries if g.geometry_name in aliases), None)
-        if geometry is None:
+        owner = region.get("owner_geometry_name") or region.get("owner_object")
+        resolved_owner = _resolve_geometry_owner_name(
+            owner,
+            owner_names=owner_names,
+            alias_candidates=alias_candidates,
+        )
+        if resolved_owner is None:
             raise ValueError(
                 "mesh_lower_bound_owner_binding_missing: "
                 f"region='{region_id}' owner='{owner}' has no matching mesh geometry"
             )
+        geometry = current_geometries.get(resolved_owner)
+        if geometry is None:
+            continue
 
         shape = region.get("shape")
         if not isinstance(shape, Mapping):
@@ -1733,6 +1824,7 @@ def _mesh_options_from_runtime_metadata(
     *,
     geometries: list[Geometry],
     default_hmax: float,
+    owner_geometry_names: Sequence[str] | None = None,
     bounds_by_name: dict[str, tuple] | None = None,
     airbox_bounds: tuple[Sequence[float], Sequence[float]] | None = None,
     component_aware: bool = False,
@@ -1845,6 +1937,7 @@ def _mesh_options_from_runtime_metadata(
         geometries,
         per_geometry=raw_per_geometry,
         per_object_recipes=per_object_recipes,
+        owner_geometry_names=owner_geometry_names,
         object_regions=(
             [region for region in effective_object_regions if isinstance(region, dict)]
             if isinstance(effective_object_regions, list)
