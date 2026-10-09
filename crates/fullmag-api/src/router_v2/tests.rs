@@ -19333,6 +19333,9 @@ fn authoring_study_runtime_parallel_patch_preserves_nullable_optional_wire_schem
 async fn authoring_study_runtime_parallel_patch_preserves_sets_and_resets_policy() {
     let state = test_app_state_with_live_session().await;
     let mut scene = sample_scene_document();
+    // Adaptive authoring is supported only for an explicit FEM CPU request.
+    scene.study.requested_backend = "fem".to_string();
+    scene.study.requested_device = "cpu".to_string();
     let initial = fullmag_ir::ParallelExecutionPolicyIR {
         mode: fullmag_ir::ParallelExecutionModeIR::Adaptive,
         max_cpu_percent: 55.0,
@@ -19366,8 +19369,9 @@ async fn authoring_study_runtime_parallel_patch_preserves_sets_and_resets_policy
                 .body(Body::from(patch.to_string()))
                 .unwrap(),
         ).await.unwrap();
-        assert_eq!(response.status(), StatusCode::OK, "patch: {patch}");
+        let status = response.status();
         let response = body_json(response).await;
+        assert_eq!(status, StatusCode::OK, "patch: {patch}; response: {response}");
         let expected_resource = serde_json::to_value(
             crate::schemas::authoring::ParallelExecutionResource::from(&expected),
         ).unwrap();
@@ -19384,6 +19388,9 @@ async fn authoring_study_runtime_parallel_patch_preserves_sets_and_resets_policy
 async fn authoring_study_runtime_parallel_patch_rejects_invalid_policy_without_commit() {
     let state = test_app_state_with_live_session().await;
     let mut scene = sample_scene_document();
+    // Adaptive authoring is supported only for an explicit FEM CPU request.
+    scene.study.requested_backend = "fem".to_string();
+    scene.study.requested_device = "cpu".to_string();
     let initial = fullmag_ir::ParallelExecutionPolicyIR {
         mode: fullmag_ir::ParallelExecutionModeIR::Adaptive,
         max_workers: Some(3),

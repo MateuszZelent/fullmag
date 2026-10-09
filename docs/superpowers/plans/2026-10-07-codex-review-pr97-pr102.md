@@ -2066,3 +2066,9 @@ Frontend source review zatwierdziło publishCommittedSceneResource przed dotychc
 Review wykryło ważny race: odświeżanie z retained data ma status stale, nie loading. Finalny guard chroni oba stany i rzeczywistą aktywną rewizję; nie anuluje nieporównywalnego opaque/null requestu. Odroczone regresje wymagają żywego signal oraz wygranej rewizji7. Dwa positive fixtures poprawiono do rzeczywistego READY ownera zamiast unknown initial loading. Zachowano izolację klienta/sesji, undo/redo i wszystkie dependent invalidations. Finite unsafe/mismatch ACK nadal uruchamia dotychczasową invalidację, lecz nie zasila cache; nie jest to nowa pełna obsługa u64 poza bezpiecznym zakresem JS.
 
 Nie dodano nowego testu porównującego jedynie tekst implementacji panelu; mocne testy zachowania runtime-store i istniejący browser budget12/focus/scroll/render assertions pozostają. Source review i diff PASS; typy/Vitest/real browser oraz clear-path runtime nadal NOT VERIFIED. GHA generated files zjednoczono z backend DTO; nowy determinism check jest wymagany przed zakończeniem tego fragmentu.
+
+### Checkpoint: fixture PATCH adaptive (2026-10-09)
+
+- Testy PATCH ustawiają jawne requested_backend=fem i requested_device=cpu przed polityką adaptive, zgodnie z validate_for_runtime w Python DSL. Statusy 200/400/422 oraz kontrola niezmienności sceny i rewizji pozostają bez zmian. Błąd odpowiedzi pozytywnej drukuje teraz treść JSON.
+- Jest to poprawka wejścia testowego, bez zmiany polityki produkcyjnej. Nowe wykonanie HTTP w GitHub Actions jest wymagane; lokalnie testów nie uruchamiano.
+- Publikacja ACK sceny: commit 3b7197ab1 (pełny SHA zapisany w historii Git). Poprawka Robina: bd5e69cbd2ff538bf4ca19fe39313be4a69845df. Weryfikacja natywna i budżet żądań przeglądarki nadal NOT VERIFIED dla nowych źródeł.
