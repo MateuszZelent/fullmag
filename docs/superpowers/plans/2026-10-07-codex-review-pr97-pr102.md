@@ -1984,3 +1984,11 @@ Count fixture przygotowuje teraz rzeczywistą geometryczną masę MFEM przez Mas
 ### Browser fixture: opcjonalny cancel-requested jest 404, nie pustym JSON
 
 37886990725 browser113679100348: rzeczywisty proof zawiera trzy ukończone przypadki (modal mode, modal RF coupling, driven response field). Czwarty, driven frequency points, pokazał Resource load failed dla response/cancel-requested.v1. Fixture zwracało pusty204, podczas gdy backend zwraca not_found404 przy braku artefaktu, a hook jawnie mapuje ten404 na null. Fixture ma teraz API-shaped404; harness wymaga dokładnie jednego takiego GET tylko w tym przypadku i zera w pozostałych. Inne404/unknownGET, pageerrors, owner i toast guards pozostają wymagane. Source producer/hook/diff review i node syntax PASS; pełny5case oraz retained-stale Plot3D proof wymagają nowego GHA. Żadnych lokalnych testów ani browser.
+
+### Checkpoint publikacji i aktywnych weryfikacji
+
+Wysłano commity 429b4b40ff162bef748e9636519d9d6675bc7473 (recovery poza kapsułą), 7730876f83c84236772ba3d2d9bbfc6097ffbebe (świeży Windows fingerprint), 1a996532b (testowe przywrócenie read-only directory), 426c327010fa807f2535524daa3473db124857d4 (MFEM masa dla Poisson count) i 7ffe0ed9272099619994d1c26a588e0481b3b62b (opcjonalny cancel404 fixture). Stan remote potwierdzono na ostatnim SHA. Retention37887969259 terminal FAIL na source-compaction; odrębny problem Windows handle/stat reprezentacji jest diagnozowany i nie uzyskał kwalifikacji.
+
+GHA37888206607 job113682899788 count oraz37888419793 browser113683588329/controlroom113683588391 potwierdzono in_progress; timeout obserwacji nie jest podstawą restartu. Refresh8 GitHub inline nie wykazał nowych wpisów Codex. PR97OPEN/PR102CLOSED potwierdzone; nie wykonywano merge ani cleanupu hoststorage. Rejestr269entry:77implemented,14implemented_pending_ci,60valid_unfixed,23already_fixed,90duplicate,3unsupported_recommendation,2not_actionable. Cały cel pozostaje aktywny, nieukończony.
+
+Commitowy React Doctor dla smoke fixture:74/100,7 ostrzeżeń (2existing parse,5 sequential-await), bez zmiany konfiguracji/supresji. Statyczny hook nie dowodzi browser/runtime. Wszystkie wykonywane testy/buildy pozostają w GHA.
