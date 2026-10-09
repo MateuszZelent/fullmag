@@ -68,11 +68,12 @@ fn parallel_admission_progress(
     }
 }
 
+/// Stage Relax→Eigen certificates under this invocation's canonical attempt root.
 fn stage_relax_bootstrap_certificates(
-    process_root: &Path,
+    attempt_root: &Path,
     artifacts: &[AuxiliaryArtifact],
 ) -> Result<PathBuf, RunError> {
-    let bootstrap_root = process_root.join("bootstrap");
+    let bootstrap_root = attempt_root.join("bootstrap");
     fs::create_dir_all(&bootstrap_root).map_err(|error| RunError {
         message: format!("create adaptive eigen bootstrap root: {error}"),
     })?;
@@ -201,6 +202,17 @@ fn stage_relax_bootstrap_certificates(
     Ok(equilibrium_path)
 }
 
+fn bind_relax_bootstrap_equilibrium_to_worker_plan(
+    worker_plan: &mut FemEigenPlanIR,
+    equilibrium_path: &Path,
+    equilibrium_magnetization: Vec<[f64; 3]>,
+) {
+    worker_plan.equilibrium = fullmag_ir::EquilibriumSourceIR::Artifact {
+        path: equilibrium_path.to_string_lossy().to_string(),
+    };
+    worker_plan.equilibrium_magnetization = equilibrium_magnetization;
+}
+
 pub(super) fn prepare_process_pool_samples(
     execution: PlannedFemEigenExecution<'_>,
     plan: &FemEigenPlanIR,
@@ -323,12 +335,17 @@ pub(super) fn prepare_process_pool_samples(
                     .into(),
             });
         }
-        let equilibrium_path =
-            stage_relax_bootstrap_certificates(process_root, &bootstrap_run.auxiliary_artifacts)?;
-        worker_plan.equilibrium = fullmag_ir::EquilibriumSourceIR::Artifact {
-            path: equilibrium_path.to_string_lossy().to_string(),
-        };
-        worker_plan.equilibrium_magnetization = bootstrap_magnetization.clone();
+        // The caller allocated this fresh canonical attempt for this invocation.
+        // Keep bootstrap certificates out of the persistent process root shared by retries.
+        let equilibrium_path = stage_relax_bootstrap_certificates(
+            checkpoint_root,
+            &bootstrap_run.auxiliary_artifacts,
+        )?;
+        bind_relax_bootstrap_equilibrium_to_worker_plan(
+            &mut worker_plan,
+            &equilibrium_path,
+            bootstrap_magnetization.clone(),
+        );
         let (bootstrap_result, mut bootstrap_mode_artifacts) =
             super::eigen_path::parse_worker_single_k_result(
                 plan,
@@ -623,4 +640,154 @@ pub(super) fn prepare_process_pool_samples(
         precomputed,
         report: pool_result.report,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::AtomicU64;
+
+    static NEXT_TEST_DIRECTORY: AtomicU64 = AtomicU64::new(0);
+
+    struct TestDirectory(PathBuf);
+
+    impl TestDirectory {
+        fn new() -> Self {
+            let id = NEXT_TEST_DIRECTORY.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let path = std::env::temp_dir().join(format!(
+                "fullmag-eigen-k-pool-{}-{id}",
+                std::process::id()
+            ));
+            fs::create_dir(&path).expect("create test-owned temporary root");
+            Self(fs::canonicalize(&path).expect("canonicalize test root"))
+        }
+
+        fn path(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for TestDirectory {
+        fn drop(&mut self) {
+            // This test removes only the unique directory it created.
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn bootstrap_fixture_artifacts(payload: &str) -> Vec<AuxiliaryArtifact> {
+        vec![
+            AuxiliaryArtifact {
+                relative_path: "eigen/metadata/equilibrium_artifact.v8.json".to_string(),
+                bytes: serde_json::to_vec(&serde_json::json!({
+                    "schema_version": "equilibrium_artifact.v8",
+                    "test_payload": payload,
+                }))
+                .expect("serialize equilibrium writer fixture"),
+            },
+            AuxiliaryArtifact {
+                relative_path: "eigen/metadata/linearization_state.v7.json".to_string(),
+                bytes: serde_json::to_vec(&serde_json::json!({
+                    "schema_version": "LinearizationState.v7",
+                }))
+                .expect("serialize linearization sidecar fixture"),
+            },
+        ]
+    }
+
+    #[test]
+    fn relax_bootstrap_certificates_are_attempt_scoped_and_worker_plans_bind_their_bytes() {
+        let output_root = TestDirectory::new();
+        let first_attempt =
+            super::super::single_k_checkpoint::create_raw_checkpoint_attempt(output_root.path())
+                .expect("allocate first canonical attempt");
+        let second_attempt =
+            super::super::single_k_checkpoint::create_raw_checkpoint_attempt(output_root.path())
+                .expect("allocate second canonical attempt");
+        assert_ne!(first_attempt, second_attempt);
+        assert_eq!(first_attempt.parent(), second_attempt.parent());
+
+        let first_artifacts = bootstrap_fixture_artifacts("first relax payload");
+        let second_artifacts = bootstrap_fixture_artifacts("second relax payload");
+        let first_equilibrium =
+            stage_relax_bootstrap_certificates(&first_attempt, &first_artifacts)
+                .expect("stage first bootstrap");
+        let first_bytes = fs::read(&first_equilibrium).expect("read first certificate");
+        let second_equilibrium =
+            stage_relax_bootstrap_certificates(&second_attempt, &second_artifacts)
+                .expect("stage retry bootstrap");
+
+        assert!(first_equilibrium.starts_with(first_attempt.join("bootstrap")));
+        assert!(second_equilibrium.starts_with(second_attempt.join("bootstrap")));
+        assert_ne!(first_equilibrium, second_equilibrium);
+        assert_eq!(
+            fs::read(&first_equilibrium).expect("first attempt remains immutable"),
+            first_bytes
+        );
+        assert_eq!(
+            fs::read(&second_equilibrium).expect("read second certificate"),
+            second_artifacts[0].bytes
+        );
+
+        let source_plan = crate::fem::eigen_tests::minimal_native_modal_plan();
+        let samples = crate::eigen::expand_k_sampling(source_plan.k_sampling.as_ref())
+            .expect("expand single-k fixture");
+        let sample = samples.first().expect("single-k sample");
+        let mut first_worker_plan = source_plan.clone();
+        bind_relax_bootstrap_equilibrium_to_worker_plan(
+            &mut first_worker_plan,
+            &first_equilibrium,
+            source_plan.equilibrium_magnetization.clone(),
+        );
+        let mut second_worker_plan = source_plan.clone();
+        bind_relax_bootstrap_equilibrium_to_worker_plan(
+            &mut second_worker_plan,
+            &second_equilibrium,
+            source_plan.equilibrium_magnetization.clone(),
+        );
+        let first_point_plan = super::super::eigen_path::eigen_path_single_k_point_plan(
+            &first_worker_plan,
+            sample,
+            false,
+            None,
+        )
+        .expect("build first worker point plan");
+        let second_point_plan = super::super::eigen_path::eigen_path_single_k_point_plan(
+            &second_worker_plan,
+            sample,
+            false,
+            None,
+        )
+        .expect("build second worker point plan");
+        let equilibrium_path = |plan: &FemEigenPlanIR| match &plan.equilibrium {
+            fullmag_ir::EquilibriumSourceIR::Artifact { path } => PathBuf::from(path.as_str()),
+            other => panic!("worker plan must carry an artifact source, got {other:?}"),
+        };
+        assert_eq!(equilibrium_path(&first_point_plan), first_equilibrium);
+        assert_eq!(equilibrium_path(&second_point_plan), second_equilibrium);
+        let first_digest =
+            crate::fem::eigen_k_worker::equilibrium_artifact_sha256(&first_point_plan)
+                .expect("hash first worker equilibrium");
+        let second_digest =
+            crate::fem::eigen_k_worker::equilibrium_artifact_sha256(&second_point_plan)
+                .expect("hash second worker equilibrium");
+        assert_ne!(first_digest, second_digest);
+
+        let collision = stage_relax_bootstrap_certificates(&first_attempt, &second_artifacts)
+            .expect_err("same attempt must reject different bootstrap bytes");
+        assert!(
+            collision
+                .message
+                .contains("adaptive eigen bootstrap artifact would overwrite different bytes"),
+            "{collision:?}"
+        );
+        assert_eq!(
+            fs::read(&first_equilibrium).expect("failed collision does not replace first bytes"),
+            first_bytes
+        );
+        assert_eq!(
+            crate::fem::eigen_k_worker::equilibrium_artifact_sha256(&first_point_plan)
+                .expect("first worker remains bound to its original bytes"),
+            first_digest
+        );
+    }
 }

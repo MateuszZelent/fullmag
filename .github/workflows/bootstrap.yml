@@ -90,6 +90,9 @@ jobs:
           python -B -m unittest discover -s scripts -p 'test_local_runner_cli.py'
           python -B -m unittest discover -s scripts/tests/local_runner -p 'test_observability_review_regressions.py'
 
+      - name: Run attempt-scoped Relax to Eigen bootstrap contract
+        run: cargo test -p fullmag-runner relax_bootstrap_certificates_are_attempt_scoped_and_worker_plans_bind_their_bytes --lib
+
       - name: Run deterministic eigen worker input contracts
         run: cargo test -p fullmag-runner eigen_k_worker --no-fail-fast
 
