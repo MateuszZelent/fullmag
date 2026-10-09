@@ -3680,6 +3680,14 @@ void modal_shift_invert_sparse_payload_can_be_assembled_from_mfem_operator()
 
     FullmagFemFrequencyDomainResult result = fullmag_fem_modal_eigen_solve(&request);
 #if FULLMAG_FEM_WITH_SLEPC
+    if (result.status != FULLMAG_FEM_FD_OK) {
+        std::fprintf(
+            stderr,
+            "FAIL-DIAGNOSTICS: generic_mfem_sparse status=%d diagnostics=%s result=%s\n",
+            static_cast<int>(result.status),
+            result.diagnostics_json != nullptr ? result.diagnostics_json : "null",
+            result.result_json != nullptr ? result.result_json : "null");
+    }
     check(result.status == FULLMAG_FEM_FD_OK,
           "MFEM-assembled sparse modal payload should solve through production SLEPc path");
     check(contains(result.diagnostics_json, "\"mfem_operator_payload\":\"sparse_csr\""),
@@ -5084,6 +5092,14 @@ void modal_nonzero_k_floquet_shared_domain_nearest_reports_shifted_ksp_diagnosti
     window_request.completeness_policy = 0;
     FullmagFemFrequencyDomainResult window_result =
         fullmag_fem_modal_eigen_solve(&window_request);
+    if (window_result.status != FULLMAG_FEM_FD_OK) {
+        std::fprintf(
+            stderr,
+            "FAIL-DIAGNOSTICS: native_floquet_window status=%d diagnostics=%s result=%s\n",
+            static_cast<int>(window_result.status),
+            window_result.diagnostics_json != nullptr ? window_result.diagnostics_json : "null",
+            window_result.result_json != nullptr ? window_result.result_json : "null");
+    }
     check(window_result.status == FULLMAG_FEM_FD_OK,
           "native Floquet production frequency window accepts a certified mode");
     check(contains(window_result.diagnostics_json,

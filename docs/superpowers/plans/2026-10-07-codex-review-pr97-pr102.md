@@ -1755,3 +1755,10 @@ GHA [37863024787](https://github.com/MateuszZelent/fullmag/actions/runs/37863024
 ### Generacja zestawu artefaktów — zakres dalszej naprawy
 
 #4225198873 jest potwierdzoną luką spójności: path hash nie wiąże generacji, producent zapisuje pliki kolejno, a reader nie sprawdza wspólnego manifestu. [Plan kompletnej korekty](2026-10-09-eigen-artifact-publication-generation.md) obejmuje producer boundary/allow-list/CAS, generation-fenced API reads, historyczny unqualified binding i realny UI handoff. Obowiązujący dokument ADR ma dokładną nazwę `0035-typed-study-artifact-manifest-and-worker-boundary.md`; drugi0035dotyczy reprezentacji przestrzennej. Scoped ADR review wykazuje konieczność zgodności z istniejącym typed study manifest zamiast konkurencyjnego publicznego schematu. Plan/source diagnosis nie zamyka uwagi; nadal valid_unfixed, runtime/browser/fault injection NOT VERIFIED.
+
+
+### Nowe terminalne wyniki SLEPc — brak podstaw do rozluźniania progów
+
+- GHA [37862073867](https://github.com/MateuszZelent/fullmag/actions/runs/37862073867) z poprawionymi canonical IDs nadal FAIL na pierwszej akceptacji Floquet window, bez native JSON w logu. Ta trasa jest odrębna od generic rotated pencil i ma już structural diagonal w preconditioner. Source review wskazuje niespójność skali fixture: α=4/reduced_corner_mass nie uwzględnia β=μ0·Ms/γ rzeczywistego B, więc okno .145–.195Hz nie ma obecnie dowodu kalibracji. Dokładny terminalny reason wymaga diagnostyki; nie przenosimy tej hipotezy na produkcyjny solver.
+- GHA [37862599575](https://github.com/MateuszZelent/fullmag/actions/runs/37862599575) po e934cef32 nadal FAIL na generic MFEM sparse admission. Błąd PETSc missing diagonal zniknął z logu; nie oznacza to akceptacji wyniku. Brak native reason uniemożliwia potwierdzenie następnej przyczyny. Artefakty obu jobów zachowane.
+- Do dwóch istniejących asercji dodano wyłącznie failure diagnostics native enum/diagnostics/result JSON. Same asercje, count guard, residual i tolerancje pozostały bez zmian. Kolejne hosted wykonanie ma ujawnić przyczynę; żadnego lokalnego testu/builda nie uruchomiono.
