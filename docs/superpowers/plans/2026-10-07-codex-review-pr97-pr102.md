@@ -2459,3 +2459,15 @@ Nie dodano nowego testu porównującego jedynie tekst implementacji panelu; mocn
   Nie przenosimy tego failure na zielone named gates, nie nazywamy całego CI zielonym.
 - GHA37964705722 / exactad2e34b83 / PETSc-real113936042226 SUCCESS z nowymi helper
   regression i shifted KSP markerem. Managed6-case37964701814 nadal active.
+
+
+### Kompilacja nowego seam — korekta namespace (2026-10-09)
+
+- Managed37964701814 / exactad2e34b83 / native113936031456 terminalFAIL przed
+  CTest. Artifact11633169328: parametr prepare_candidate_operator_diagnostic
+  używał niekwalifikowanego FloquetShiftedKspTrueConvergenceContext, który jest
+  w namespace detail. Nie wykonano żadnego z sześciu targetów tego przebiegu.
+- Dodano detail:: do jednego parametru. Caller już przekazuje właściwy typ,
+  nie zmienia się ownership, zachowanie ani żaden residual gate. Statyczny
+  diff/source-map PASS; nowy managed przebieg jest wymagany. Portable realKSP
+ 37964705722 SUCCESS pozostaje dowodem niezmienionego headera, nie tego CPP.

@@ -2005,7 +2005,7 @@ bool prepare_candidate_operator_diagnostic(
     Mat gyrotropic,
     PetscScalar shift,
     double preconditioner_normalization_scale,
-    FloquetShiftedKspTrueConvergenceContext *callback_context,
+    detail::FloquetShiftedKspTrueConvergenceContext *callback_context,
     FloquetCandidateOperatorDiagnostic *out_summary,
     PetscErrorCode *out_fatal_error)
 {
