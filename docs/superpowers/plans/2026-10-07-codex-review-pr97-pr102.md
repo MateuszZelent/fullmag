@@ -2251,3 +2251,11 @@ Nie dodano nowego testu porównującego jedynie tekst implementacji panelu; mocn
 ### Uzupełnienie brakującego hooka admission (2026-10-09)
 
 -4105055188 nadal pendingCI: pełny wcześniejszy Rustjob nie wykonał floquet_dynamic_demag_provider_requires_exact_requested_pair_set, ponieważ filtrclassifier nie obejmuje tego testu. Dodano dokładny hook do istniejącego kroku nativeartifactcontracts. Test sprawdza legalny pełny zbiór jednej/dwóch osi, kolejność niezależną, empty/duplicate/unknown/subset oraz brakujące mapy węzłów. Nie promowano statusu na podstawie samej kompilacji lub sąsiednich testów. Wymagane wykonanie na następnym snapshotcie.
+
+
+### Full SLEPc CI — ponowna diagnoza rzeczywistych porażek (2026-10-09)
+
+-37925384526/job113802963808 na exacte4ec2011bbf7e1f528ad207721324ed7950525fe terminalFAIL; build MFEM/SLEPc zakończony, CTest0/2PASS. Receipt i pełny native-build-and-ctest.log zachowano wci-37925384526-floquet-artifact. Tiny mass correction nie powoduje wcześniejszej odmowy; całyprovidercontract nadal nie jest zielony.
+- Refill: EPS NEV4 zwrócił10positivecandidates, fourwindowcandidates i już2uniqueaccepted. Actualfirstpoolavailabilitytrue/count2 oznacza, że q32fixturezrank5 nie ćwiczył retry. Nie zmieniono solvera, nie przyjęto jednej próby jako refill. Drugi in-window mode965kHz przesunięto do physicaldistancerank15 przez dziesięć jawnych dodatkowych competitorów poniżej900kHz;905/965kHz, q32/real64, NCV32/MPDfixed i wszystkie progi/asercje pozostają. Sourceoracle liczy14bliższych physicalfrequencies; actualfirstpool=1 oraz>=2attempts nadal muszą zostać wykonawczo potwierdzone. Sam rank nie dowodzi zachowania EPS.
+- Osobny CABIprovenancefixture zatrzymuje true residual gate: recursive0, rhs i true residual≈1/3, threshold≈3.33e-14, defaultreason3→gate0, zeromeasurementfailures. Happy breakdown propaguje hardEPSError; mały recursiveKSPresidual nie obala truegate. Nie wykazano błędu window/units ani poprzedniej iteracji KSPBuildSolution. Następny dowód to pełne JSON i cachednormx/Ax oraz existingdenseoracle dla małego operatora. Gates/window bez zmian.
+- Meshdiagnostic patch przygotowany źródłowo: boundedtet4coords/det/epsilon/edges/marker i wszystkie wcześniejsze fallback errors; progi i retryorder bez zmian. Revieww toku, actualGmsh quality fix pozostaje otwarty.

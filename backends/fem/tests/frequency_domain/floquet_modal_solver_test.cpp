@@ -1134,16 +1134,20 @@ void refills_native_floquet_nev_before_tangent_mass_cap()
     constexpr double refill_window_half_width_hz = 1.0e5;
     constexpr double refill_shift_frequency_hz =
         refill_spectral_center_hz - 1.05e5;
-    // With initial NEV=4, the four closest frequencies include only the
-    // index-1 in-window mode; index 4 is the second in-window mode, and the
-    // remaining 27 modes are explicitly separated above the window.
+    // EPS may converge more Ritz pairs than the requested NEV.  Put the
+    // second in-window mode at physical distance rank 15, within the fixed
+    // real-split NCV=32 refill ceiling but beyond the five physical modes
+    // delivered by the old fixture's first NEV=4 solve.  Actual first-pool
+    // telemetry below, rather than this ordering alone, proves the refill.
     std::vector<double> refill_frequency_offsets_hz{
-        -1.1e5, -0.95e5, -1.3e5, -1.6e5, -0.35e5};
+        -1.1e5, -0.95e5, -1.3e5, -1.6e5, -0.35e5,
+        -1.2e5, -1.25e5, -1.35e5, -1.4e5, -1.45e5,
+        -1.5e5, -1.55e5, -1.65e5, -1.7e5, -1.74e5};
     for (std::size_t index = refill_frequency_offsets_hz.size();
          index < refill_q_dimension;
          ++index) {
         refill_frequency_offsets_hz.push_back(
-            2.0e5 + 1.0e4 * static_cast<double>(index - 5u));
+            2.0e5 + 1.0e4 * static_cast<double>(index - 15u));
     }
     check(refill_frequency_offsets_hz.size() == refill_q_dimension,
           "provider refill fixture contains its full real-split spectral basis");
@@ -1159,9 +1163,14 @@ void refills_native_floquet_nev_before_tangent_mass_cap()
                 refill_window_half_width_hz) {
             ++refill_fixture_window_mode_count;
         }
-        if (index >= 5u) {
+        if (index >= 5u && index < 15u) {
+            check(frequency_hz < refill_spectral_center_hz -
+                      refill_window_half_width_hz,
+                  "closer refill competitors remain strictly below the requested window");
+        }
+        if (index >= 15u) {
             check(refill_frequency_offsets_hz[index] >= 2.0e5 &&
-                      (index == 5u ||
+                      (index == 15u ||
                        refill_frequency_offsets_hz[index] -
                                refill_frequency_offsets_hz[index - 1u] >=
                            1.0e4),
@@ -1170,6 +1179,18 @@ void refills_native_floquet_nev_before_tangent_mass_cap()
     }
     check(refill_fixture_window_mode_count == 2,
           "only the two independently specified refill modes lie in the requested window");
+    const double second_window_distance_hz = std::abs(
+        refill_spectral_center_hz + refill_frequency_offsets_hz[4u] -
+        refill_shift_frequency_hz);
+    const auto closer_physical_mode_count = std::count_if(
+        refill_frequency_offsets_hz.begin(),
+        refill_frequency_offsets_hz.end(),
+        [=](double offset_hz) {
+            return std::abs(refill_spectral_center_hz + offset_hz -
+                       refill_shift_frequency_hz) < second_window_distance_hz;
+        });
+    check(closer_physical_mode_count == 14,
+          "the second in-window mode has physical distance rank fifteen");
 
     std::vector<std::complex<double>> refill_a_diagonal(refill_q_dimension);
     const std::vector<std::complex<double>> refill_b_diagonal(
