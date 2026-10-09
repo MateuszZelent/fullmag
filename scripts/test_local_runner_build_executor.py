@@ -144,12 +144,10 @@ class BuildExecutorTests(unittest.TestCase):
             })
 
         for relative in entrypoint.required_outputs_for_profile(profile):
-            data = (
-                entrypoint.EXPECTED_BUILD_MARKER[profile].encode('utf-8') + b'\n'
-                if relative == 'launcher-build-mode'
-                else b'build-output'
-            )
-            add_artifact('outputs/.fullmag/local/' + relative, data)
+            # This fixture exercises receipt inventory and file integrity, not
+            # release launcher validation. Contract-only profiles do not define
+            # a release build marker in EXPECTED_BUILD_MARKER.
+            add_artifact('outputs/.fullmag/local/' + relative, b'build-output')
         for scenario in contract['scenarios']:
             data = json.dumps({
                 'schema': contract['schema'],
