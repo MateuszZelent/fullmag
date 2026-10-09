@@ -2915,7 +2915,7 @@
       "AuthoringTransactionResponse": {
         "properties": {
           "committed_scene": {
-            "type": "object"
+            "$ref": "#/components/schemas/SceneResource"
           },
           "scene_revision": {
             "format": "int64",

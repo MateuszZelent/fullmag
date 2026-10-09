@@ -112,6 +112,7 @@ import { useKernel } from "../KernelContext";
 import type { ResourceInvalidationController } from "./ResourceInvalidationController";
 import {
   sharedResourceRuntimeStore,
+  type ResourceRuntimeSnapshot,
   type ResourceRuntimeStore,
 } from "./ResourceRuntimeStore";
 import { ResourceCache } from "./ResourceCache";
@@ -541,28 +542,61 @@ export function publishCommittedSceneResource(
   sessionScopeKey?: string | null,
   resourceCacheScope?: string | null,
 ): void {
-  const publish = resourceCacheScope
-    ? runtimeStore.updateObservedData.bind(runtimeStore)
-    : runtimeStore.updateData.bind(runtimeStore);
-  publish(
+  const finiteNumericRevision =
+    typeof revision !== "number" || Number.isFinite(revision);
+  const safeNumericRevision =
+    typeof revision !== "number" ||
+    (Number.isSafeInteger(revision) && revision >= 0);
+  const incomingSceneRevision = safeSceneRevision(scene.revision);
+  const coherentNumericSceneRevision =
+    typeof revision !== "number" ||
+    (safeNumericRevision &&
+      incomingSceneRevision !== null &&
+      scene.revision === revision);
+
+  const publishIfCurrent = (
+    resourceKey: string,
+    runtimeResourceKey: string,
+  ): void => {
+    const snapshot = runtimeStore.getSnapshot<SceneResource>(runtimeResourceKey);
+    if (
+      !safeNumericRevision ||
+      !coherentNumericSceneRevision ||
+      !canPublishCommittedSceneAtRevision({
+        hasClientScope: Boolean(resourceCacheScope),
+        incomingSceneRevision,
+        requestedRevision: resources.getRevision(resourceKey),
+        snapshot,
+      })
+    ) {
+      return;
+    }
+
+    if (resourceCacheScope) {
+      runtimeStore.updateObservedData(runtimeResourceKey, scene, revision);
+    } else {
+      runtimeStore.updateData(runtimeResourceKey, scene, revision);
+    }
+  };
+
+  publishIfCurrent(
+    SCENE_RESOURCE_KEY,
     resourceRuntimeKeyForClientScope(SCENE_RESOURCE_KEY, resourceCacheScope),
-    scene,
-    revision,
   );
   // Client-owned publications must not create unobserved aliases or resurrect
   // a disposed owner's snapshots. Canonical invalidation lets future observers
   // fetch authoritative data through their own session and client scope.
   if (sessionScopeKey) {
-    publish(
+    const scopedResourceKey = `${sessionScopeKey}|${SCENE_RESOURCE_KEY}`;
+    publishIfCurrent(
+      scopedResourceKey,
       resourceRuntimeKeyForClientScope(
-        `${sessionScopeKey}|${SCENE_RESOURCE_KEY}`,
+        scopedResourceKey,
         resourceCacheScope,
       ),
-      scene,
-      revision,
     );
   }
-  if (invalidate) {
+  if (invalidate && finiteNumericRevision) {
     if (sessionScopeKey) {
       resources.invalidate(
         `${sessionScopeKey}|${SCENE_RESOURCE_KEY}`,
@@ -572,6 +606,88 @@ export function publishCommittedSceneResource(
       resources.invalidate(SCENE_RESOURCE_KEY, revision);
     }
   }
+}
+
+function safeSceneRevision(revision: unknown): number | null {
+  return (
+    typeof revision === "number" &&
+    Number.isSafeInteger(revision) &&
+    revision >= 0
+  )
+    ? revision
+    : null;
+}
+
+function canPublishCommittedSceneAtRevision({
+  hasClientScope,
+  incomingSceneRevision,
+  requestedRevision,
+  snapshot,
+}: {
+  hasClientScope: boolean;
+  incomingSceneRevision: number | null;
+  requestedRevision: ResourceRevision | null;
+  snapshot: ResourceRuntimeSnapshot<SceneResource>;
+}): boolean {
+  if (snapshot.data !== null) {
+    const cachedSceneRevision = safeSceneRevision(snapshot.data.revision);
+    if (cachedSceneRevision === null && incomingSceneRevision !== null) {
+      return false;
+    }
+    if (
+      cachedSceneRevision !== null &&
+      (incomingSceneRevision === null ||
+        cachedSceneRevision > incomingSceneRevision)
+    ) {
+      return false;
+    }
+  }
+
+  for (const currentRevision of [
+    snapshot.revision,
+    snapshot.settledExternalRevision,
+    requestedRevision,
+  ]) {
+    if (typeof currentRevision !== "number") continue;
+    if (!Number.isSafeInteger(currentRevision) || currentRevision < 0) {
+      return false;
+    }
+    if (
+      incomingSceneRevision === null ||
+      currentRevision > incomingSceneRevision
+    ) {
+      return false;
+    }
+  }
+
+  if (
+    typeof requestedRevision === "string" &&
+    snapshot.settledExternalRevision !== requestedRevision
+  ) {
+    // Invalidation may reach the controller before the hook starts its load.
+    // A ready snapshot for an older opaque token has not settled this request.
+    return false;
+  }
+
+  if (snapshot.status === "loading" || snapshot.status === "stale") {
+    const inFlightSceneRevision = safeSceneRevision(snapshot.revision);
+    const currentRequestedRevision = safeSceneRevision(requestedRevision);
+    if (
+      inFlightSceneRevision === null ||
+      currentRequestedRevision === null ||
+      incomingSceneRevision === null ||
+      inFlightSceneRevision >= incomingSceneRevision
+    ) {
+      // `stale` retains prior data while a refresh is pending. Do not let a
+      // commit ACK cancel that refresh unless both its active and requested
+      // revisions prove it is older than the committed scene.
+      return false;
+    }
+  }
+
+  if (!hasClientScope) return true;
+  if (incomingSceneRevision === null) return false;
+  return true;
 }
 
 export function useSceneResource(options: ResourceHookOptions = {}) {

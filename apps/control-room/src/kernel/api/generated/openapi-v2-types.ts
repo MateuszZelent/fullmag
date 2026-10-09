@@ -5323,7 +5323,7 @@ export interface components {
             kind: "delete_coupling";
         };
         AuthoringTransactionResponse: {
-            committed_scene: Record<string, never>;
+            committed_scene: components["schemas"]["SceneResource"];
             /** Format: int64 */
             scene_revision: number;
             transaction_kind: string;

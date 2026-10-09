@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 
 import { EventBus } from "../events/EventBus";
 import type { KernelEventMap } from "../events/eventTypes";
-import type { DomainMetaResource } from "../api/apiTypes";
+import type { DomainMetaResource, SceneResource } from "../api/apiTypes";
 import {
   DATA_MESH_REGION_MEMBERSHIP_PATH,
   DATA_MESH_REGION_MEMBERSHIPS_PATH,
@@ -31,6 +31,7 @@ import {
 } from "../api/apiPaths";
 import { ResourceInvalidationController } from "./ResourceInvalidationController";
 import { ResourceRuntimeStore } from "./ResourceRuntimeStore";
+import { resourceRuntimeKeyForClientScope } from "./resourceClientScope";
 
 import {
   GEOMETRY_DIAGNOSTICS_RESOURCE_KEY,
@@ -74,6 +75,94 @@ import {
   resolveVisualizationStateRevision,
   publishCommittedSceneResource,
 } from "./geometryLifecycleResources";
+
+function committedScene(revision: number, objectId: string): SceneResource {
+  return {
+    objects: [{ id: objectId } as never],
+    revision,
+  } as SceneResource;
+}
+
+function deferred<T>(): {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+} {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((promiseResolve) => {
+    resolve = promiseResolve;
+  });
+  return { promise, resolve };
+}
+
+async function assertPendingSceneRefreshSurvivesAck({
+  activeRevision,
+  clientScope,
+  requestedRevision,
+  sessionScopeKey,
+}: {
+  activeRevision: number | string | null;
+  clientScope?: string;
+  requestedRevision: number | string | null;
+  sessionScopeKey?: string;
+}): Promise<void> {
+  const resources = new ResourceInvalidationController(
+    new EventBus<KernelEventMap>(),
+  );
+  const runtimeStore = new ResourceRuntimeStore<SceneResource>();
+  const resourceKey = sessionScopeKey
+    ? `${sessionScopeKey}|${MODEL_SCENE_PATH}`
+    : MODEL_SCENE_PATH;
+  const runtimeResourceKey = resourceRuntimeKeyForClientScope(
+    resourceKey,
+    clientScope,
+  );
+  const previous = committedScene(5, "retained-before-refresh");
+  const newest = committedScene(7, "refresh-result");
+  const pending = deferred<SceneResource>();
+  const signals: AbortSignal[] = [];
+  const unsubscribe = runtimeStore.subscribe(runtimeResourceKey, () => {});
+
+  if (requestedRevision !== null) {
+    resources.invalidate(resourceKey, requestedRevision);
+  }
+  runtimeStore.updateData(runtimeResourceKey, previous, 5);
+  const refresh = runtimeStore.ensureLoad({
+    externalRevision: activeRevision,
+    load: ({ signal }) => {
+      signals.push(signal);
+      return pending.promise;
+    },
+    resourceKey: runtimeResourceKey,
+    resolveRevision: (scene) => scene.revision ?? null,
+  });
+  expect(runtimeStore.getSnapshot(runtimeResourceKey)).toMatchObject({
+    data: previous,
+    revision: activeRevision,
+    status: "stale",
+  });
+  expect(resources.getRevision(resourceKey)).toBe(requestedRevision);
+
+  publishCommittedSceneResource(
+    resources,
+    committedScene(6, "commit-ack"),
+    6,
+    runtimeStore,
+    false,
+    sessionScopeKey,
+    clientScope,
+  );
+
+  expect(signals[0]?.aborted).toBe(false);
+  expect(runtimeStore.getSnapshot(runtimeResourceKey).data).toBe(previous);
+  pending.resolve(newest);
+  await refresh;
+  expect(runtimeStore.getSnapshot(runtimeResourceKey)).toMatchObject({
+    data: newest,
+    revision: 7,
+    status: "ready",
+  });
+  unsubscribe();
+}
 
 describe("geometry lifecycle resources", () => {
   it("session-scopes model and geometry resource hooks", () => {
@@ -561,6 +650,461 @@ describe("geometry lifecycle resources", () => {
       revision: 4,
       status: "ready",
     });
+  });
+
+  it("keeps a ready scene when a new opaque invalidation has not started loading", () => {
+    const resources = new ResourceInvalidationController(
+      new EventBus<KernelEventMap>(),
+    );
+    const runtimeStore = new ResourceRuntimeStore<SceneResource>();
+    const sessionScopeKey = "session=session-a&epoch=2&request_scope_epoch=4";
+    const resourceKey = `${sessionScopeKey}|${MODEL_SCENE_PATH}`;
+    const clientScope = "api-client-a";
+    const runtimeResourceKey = resourceRuntimeKeyForClientScope(resourceKey, clientScope);
+    const ready = committedScene(5, "ready-before-new-invalidation");
+    const unsubscribe = runtimeStore.subscribe(runtimeResourceKey, () => {});
+    resources.invalidate(resourceKey, "opaque-old");
+    runtimeStore.updateData(runtimeResourceKey, ready, "opaque-old");
+    resources.invalidate(resourceKey, "opaque-new");
+
+    publishCommittedSceneResource(
+      resources, committedScene(6, "unsettled-ack"), 6,
+      runtimeStore, false, sessionScopeKey, clientScope,
+    );
+
+    expect(runtimeStore.getSnapshot(runtimeResourceKey)).toMatchObject({
+      data: ready,
+      revision: "opaque-old",
+      settledExternalRevision: "opaque-old",
+      status: "ready",
+    });
+    expect(resources.getRevision(resourceKey)).toBe("opaque-new");
+    unsubscribe();
+  });
+
+  it("does not replace a newer ready scene with a late commit ACK", () => {
+    const resources = new ResourceInvalidationController(
+      new EventBus<KernelEventMap>(),
+    );
+    const runtimeStore = new ResourceRuntimeStore<SceneResource>();
+    const sessionScopeKey =
+      "session=session-a&epoch=2&request_scope_epoch=4";
+    const resourceKey = `${sessionScopeKey}|${MODEL_SCENE_PATH}`;
+    const clientScope = "api-client-a";
+    const runtimeResourceKey = resourceRuntimeKeyForClientScope(
+      resourceKey,
+      clientScope,
+    );
+    const newest = committedScene(12, "newest");
+    const unsubscribe = runtimeStore.subscribe(runtimeResourceKey, () => {});
+
+    resources.invalidate(resourceKey, 12);
+    runtimeStore.updateData(runtimeResourceKey, newest, 12);
+    publishCommittedSceneResource(
+      resources,
+      committedScene(11, "late-ack"),
+      11,
+      runtimeStore,
+      false,
+      sessionScopeKey,
+      clientScope,
+    );
+
+    expect(runtimeStore.getSnapshot(runtimeResourceKey)).toMatchObject({
+      data: newest,
+      revision: 12,
+      status: "ready",
+    });
+    unsubscribe();
+  });
+
+  it("preserves a newer requested load when an older ACK arrives", async () => {
+    const resources = new ResourceInvalidationController(
+      new EventBus<KernelEventMap>(),
+    );
+    const runtimeStore = new ResourceRuntimeStore<SceneResource>();
+    const sessionScopeKey =
+      "session=session-a&epoch=2&request_scope_epoch=4";
+    const resourceKey = `${sessionScopeKey}|${MODEL_SCENE_PATH}`;
+    const clientScope = "api-client-a";
+    const runtimeResourceKey = resourceRuntimeKeyForClientScope(
+      resourceKey,
+      clientScope,
+    );
+    const previous = committedScene(11, "previous");
+    const newest = committedScene(12, "newest");
+    const pending = deferred<SceneResource>();
+    const signals: AbortSignal[] = [];
+    const unsubscribe = runtimeStore.subscribe(runtimeResourceKey, () => {});
+
+    resources.invalidate(resourceKey, 12);
+    runtimeStore.updateData(runtimeResourceKey, previous, 11);
+    const newestLoad = runtimeStore.ensureLoad({
+      externalRevision: resources.getRevision(resourceKey),
+      load: ({ signal }) => {
+        signals.push(signal);
+        return pending.promise;
+      },
+      resourceKey: runtimeResourceKey,
+      resolveRevision: (scene) => scene.revision ?? null,
+    });
+    expect(signals).toHaveLength(1);
+
+    publishCommittedSceneResource(
+      resources,
+      previous,
+      11,
+      runtimeStore,
+      false,
+      sessionScopeKey,
+      clientScope,
+    );
+    publishCommittedSceneResource(
+      resources,
+      previous,
+      "opaque-ack",
+      runtimeStore,
+      false,
+      sessionScopeKey,
+      clientScope,
+    );
+
+    expect(signals[0]?.aborted).toBe(false);
+    expect(runtimeStore.getSnapshot(runtimeResourceKey).data).toBe(previous);
+    pending.resolve(newest);
+    await newestLoad;
+    expect(runtimeStore.getSnapshot(runtimeResourceKey)).toMatchObject({
+      data: newest,
+      revision: 12,
+      status: "ready",
+    });
+    unsubscribe();
+  });
+
+  it("preserves retained refreshes when the active request revision is unknown", async () => {
+    await assertPendingSceneRefreshSurvivesAck({
+      activeRevision: "opaque-refresh",
+      clientScope: "api-client-a",
+      requestedRevision: null,
+      sessionScopeKey: "session=session-a&epoch=2&request_scope_epoch=4",
+    });
+    await assertPendingSceneRefreshSurvivesAck({
+      activeRevision: "opaque-refresh",
+      clientScope: "api-client-b",
+      requestedRevision: 6,
+      sessionScopeKey: "session=session-b&epoch=3&request_scope_epoch=5",
+    });
+    await assertPendingSceneRefreshSurvivesAck({
+      activeRevision: null,
+      requestedRevision: 6,
+    });
+  });
+
+  it("keeps a known scene and pending numeric load when a legacy ACK omits its scene revision", async () => {
+    const resources = new ResourceInvalidationController(
+      new EventBus<KernelEventMap>(),
+    );
+    const runtimeStore = new ResourceRuntimeStore<SceneResource>();
+    const previous = committedScene(5, "previous");
+    const newest = committedScene(6, "newest");
+    const unknownScene = {
+      objects: [{ id: "unknown-revision" } as never],
+    } as SceneResource;
+    const pending = deferred<SceneResource>();
+    const signals: AbortSignal[] = [];
+    const unsubscribe = runtimeStore.subscribe(MODEL_SCENE_PATH, () => {});
+
+    resources.invalidate(MODEL_SCENE_PATH, 6);
+    runtimeStore.updateData(MODEL_SCENE_PATH, previous, 5);
+    const newestLoad = runtimeStore.ensureLoad({
+      externalRevision: resources.getRevision(MODEL_SCENE_PATH),
+      load: ({ signal }) => {
+        signals.push(signal);
+        return pending.promise;
+      },
+      resourceKey: MODEL_SCENE_PATH,
+      resolveRevision: (scene) => scene.revision ?? null,
+    });
+    expect(signals).toHaveLength(1);
+
+    publishCommittedSceneResource(
+      resources,
+      unknownScene,
+      "legacy-opaque",
+      runtimeStore,
+      false,
+    );
+
+    expect(signals[0]?.aborted).toBe(false);
+    expect(runtimeStore.getSnapshot(MODEL_SCENE_PATH).data).toBe(previous);
+    pending.resolve(newest);
+    await newestLoad;
+    expect(runtimeStore.getSnapshot(MODEL_SCENE_PATH)).toMatchObject({
+      data: newest,
+      revision: 6,
+      status: "ready",
+    });
+    unsubscribe();
+  });
+
+  it("publishes only to the observed session and client owner", () => {
+    const resources = new ResourceInvalidationController(
+      new EventBus<KernelEventMap>(),
+    );
+    const runtimeStore = new ResourceRuntimeStore<SceneResource>();
+    const sessionAScopeKey =
+      "session=session-a&epoch=2&request_scope_epoch=4";
+    const sessionBScopeKey =
+      "session=session-b&epoch=3&request_scope_epoch=5";
+    const sessionAResourceKey = `${sessionAScopeKey}|${MODEL_SCENE_PATH}`;
+    const sessionBResourceKey = `${sessionBScopeKey}|${MODEL_SCENE_PATH}`;
+    const clientASceneKey = resourceRuntimeKeyForClientScope(
+      sessionAResourceKey,
+      "api-client-a",
+    );
+    const otherSessionKey = resourceRuntimeKeyForClientScope(
+      sessionBResourceKey,
+      "api-client-a",
+    );
+    const otherClientKey = resourceRuntimeKeyForClientScope(
+      sessionAResourceKey,
+      "api-client-b",
+    );
+    const otherSessionScene = committedScene(4, "session-b-old");
+    const otherClientScene = committedScene(4, "client-b-old");
+    const runtimeEntryCount = runtimeStore.stats().entryCount;
+    const unsubscribe = runtimeStore.subscribe(clientASceneKey, () => {});
+    runtimeStore.updateData(
+      clientASceneKey,
+      committedScene(4, "session-a-client-a-old"),
+      4,
+    );
+    runtimeStore.updateData(otherSessionKey, otherSessionScene, 4);
+    runtimeStore.updateData(otherClientKey, otherClientScene, 4);
+    resources.invalidate(sessionAResourceKey, 5);
+
+    publishCommittedSceneResource(
+      resources,
+      committedScene(5, "session-a-client-a"),
+      5,
+      runtimeStore,
+      false,
+      sessionAScopeKey,
+      "api-client-a",
+    );
+
+    expect(runtimeStore.getSnapshot(clientASceneKey).data).toMatchObject({
+      objects: [{ id: "session-a-client-a" }],
+      revision: 5,
+    });
+    expect(runtimeStore.getSnapshot(otherSessionKey)).toMatchObject({
+      data: otherSessionScene,
+      revision: 4,
+    });
+    expect(runtimeStore.getSnapshot(otherClientKey)).toMatchObject({
+      data: otherClientScene,
+      revision: 4,
+    });
+    expect(
+      runtimeStore.getSnapshot(
+        resourceRuntimeKeyForClientScope(MODEL_SCENE_PATH, "api-client-a"),
+      ).status,
+    ).toBe("loading");
+    expect(runtimeStore.stats().entryCount).toBe(runtimeEntryCount + 3);
+    unsubscribe();
+  });
+
+  it("rejects incoherent numeric ACKs without suppressing finite invalidations", async () => {
+    const resources = new ResourceInvalidationController(
+      new EventBus<KernelEventMap>(),
+    );
+    const runtimeStore = new ResourceRuntimeStore<SceneResource>();
+    const sessionScopeKey =
+      "session=session-a&epoch=2&request_scope_epoch=4";
+    const resourceKey = `${sessionScopeKey}|${MODEL_SCENE_PATH}`;
+    const clientScope = "api-client-a";
+    const runtimeResourceKey = resourceRuntimeKeyForClientScope(
+      resourceKey,
+      clientScope,
+    );
+    const unsubscribe = runtimeStore.subscribe(runtimeResourceKey, () => {});
+    const initialSnapshot = runtimeStore.getSnapshot(runtimeResourceKey);
+
+    for (const sceneRevision of [-1, 5.5, Number.NaN]) {
+      publishCommittedSceneResource(
+        resources,
+        committedScene(sceneRevision, `invalid-scene-revision-${sceneRevision}`),
+        5,
+        runtimeStore,
+        true,
+        sessionScopeKey,
+        clientScope,
+      );
+      expect(runtimeStore.getSnapshot(runtimeResourceKey)).toBe(initialSnapshot);
+    }
+
+    publishCommittedSceneResource(
+      resources,
+      committedScene(4, "mismatched"),
+      5,
+      runtimeStore,
+      true,
+      sessionScopeKey,
+      clientScope,
+    );
+    expect(runtimeStore.getSnapshot(runtimeResourceKey)).toBe(initialSnapshot);
+    expect(resources.getRevision(resourceKey)).toBe(5);
+
+    const authoritative = committedScene(5, "authoritative-refresh");
+    let fetchCount = 0;
+    await runtimeStore.ensureLoad({
+      externalRevision: resources.getRevision(resourceKey),
+      load: async () => {
+        fetchCount += 1;
+        return authoritative;
+      },
+      resourceKey: runtimeResourceKey,
+      resolveRevision: (scene) => scene.revision ?? null,
+    });
+    expect(fetchCount).toBe(1);
+    const authoritativeSnapshot = runtimeStore.getSnapshot(runtimeResourceKey);
+
+    publishCommittedSceneResource(
+      resources,
+      committedScene(5, "non-finite"),
+      Number.NaN,
+      runtimeStore,
+      true,
+      sessionScopeKey,
+      clientScope,
+    );
+    publishCommittedSceneResource(
+      resources,
+      committedScene(-1, "negative-unsigned-revision"),
+      -1,
+      runtimeStore,
+      true,
+      sessionScopeKey,
+      clientScope,
+    );
+    publishCommittedSceneResource(
+      resources,
+      committedScene(5.5, "fractional-revision"),
+      5.5,
+      runtimeStore,
+      true,
+      sessionScopeKey,
+      clientScope,
+    );
+
+    const unsafeRevision = Number.MAX_SAFE_INTEGER + 1;
+    publishCommittedSceneResource(
+      resources,
+      committedScene(unsafeRevision, "unsafe-integer"),
+      unsafeRevision,
+      runtimeStore,
+      true,
+      sessionScopeKey,
+      clientScope,
+    );
+    expect(runtimeStore.getSnapshot(runtimeResourceKey)).toBe(authoritativeSnapshot);
+    expect(resources.getRevision(resourceKey)).toBe(unsafeRevision);
+
+    const opaqueScene = {
+      objects: [{ id: "opaque-revision" } as never],
+    } as SceneResource;
+    const previousOpaqueScene = {
+      objects: [{ id: "previous-opaque-revision" } as never],
+    } as SceneResource;
+    runtimeStore.updateData(
+      MODEL_SCENE_PATH,
+      previousOpaqueScene,
+      "generation:previous",
+    );
+    expect(runtimeStore.getSnapshot(MODEL_SCENE_PATH)).toMatchObject({
+      data: previousOpaqueScene,
+      revision: "generation:previous",
+      status: "ready",
+    });
+    publishCommittedSceneResource(
+      resources,
+      opaqueScene,
+      "generation:opaque",
+      runtimeStore,
+      false,
+    );
+    expect(runtimeStore.getSnapshot(MODEL_SCENE_PATH)).toMatchObject({
+      data: opaqueScene,
+      revision: "generation:opaque",
+      status: "ready",
+    });
+    unsubscribe();
+  });
+
+  it("uses SceneResource data revisions to fence opaque commit tokens", () => {
+    const resources = new ResourceInvalidationController(
+      new EventBus<KernelEventMap>(),
+    );
+    const runtimeStore = new ResourceRuntimeStore<SceneResource>();
+    const sessionScopeKey =
+      "session=session-a&epoch=2&request_scope_epoch=4";
+    const resourceKey = `${sessionScopeKey}|${MODEL_SCENE_PATH}`;
+    const clientScope = "api-client-a";
+    const runtimeResourceKey = resourceRuntimeKeyForClientScope(
+      resourceKey,
+      clientScope,
+    );
+    const current = committedScene(6, "current");
+    const unsubscribe = runtimeStore.subscribe(runtimeResourceKey, () => {});
+
+    resources.invalidate(resourceKey, "current-token");
+    runtimeStore.updateData(runtimeResourceKey, current, "current-token");
+    publishCommittedSceneResource(
+      resources,
+      committedScene(4, "older-opaque-ack"),
+      "older-token",
+      runtimeStore,
+      false,
+      sessionScopeKey,
+      clientScope,
+    );
+
+    expect(runtimeStore.getSnapshot(runtimeResourceKey)).toMatchObject({
+      data: current,
+      revision: "current-token",
+      status: "ready",
+    });
+    unsubscribe();
+  });
+
+  it("does not replace cached scene data whose revision is unknown", () => {
+    const resources = new ResourceInvalidationController(
+      new EventBus<KernelEventMap>(),
+    );
+    const runtimeStore = new ResourceRuntimeStore<SceneResource>();
+    const cachedWithoutRevision = {
+      objects: [{ id: "legacy-scene" } as never],
+    } as SceneResource;
+    const unsubscribe = runtimeStore.subscribe(MODEL_SCENE_PATH, () => {});
+
+    runtimeStore.updateData(
+      MODEL_SCENE_PATH,
+      cachedWithoutRevision,
+      "legacy-token",
+    );
+    resources.invalidate(MODEL_SCENE_PATH, 5);
+    const cachedSnapshot = runtimeStore.getSnapshot(MODEL_SCENE_PATH);
+
+    publishCommittedSceneResource(
+      resources,
+      committedScene(6, "numeric-ack"),
+      6,
+      runtimeStore,
+      false,
+    );
+
+    expect(runtimeStore.getSnapshot(MODEL_SCENE_PATH)).toBe(cachedSnapshot);
+    unsubscribe();
   });
 
   it("does not seed unrelated session scene caches when the owner is unknown", () => {

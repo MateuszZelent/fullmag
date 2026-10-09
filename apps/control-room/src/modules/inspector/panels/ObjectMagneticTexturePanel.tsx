@@ -12,6 +12,7 @@ import { useKernel } from "@/kernel/KernelContext";
 import { sessionRequestScopeKey } from "@/kernel/resources/sessionResourceIdentity";
 import { useSessionResourceIdentity } from "@/kernel/resources/useSessionStatus";
 import {
+  publishCommittedSceneResource,
   useModelRegionsResource,
   useSceneResource,
 } from "@/kernel/resources/geometryLifecycleResources";
@@ -879,6 +880,15 @@ export function ObjectMagneticTexturePanel({
         },
       );
       const revision = acknowledgedAuthoringSceneRevision(response);
+      publishCommittedSceneResource(
+        resources,
+        response.committed_scene,
+        revision,
+        undefined,
+        false,
+        sessionScopeKey,
+        api.resourceCacheScope,
+      );
       invalidateTextureResources(revision);
       const syncWarning = await syncAuthoringScriptBestEffort(api, sessionScopeKey);
       setDraftState({
@@ -931,6 +941,15 @@ export function ObjectMagneticTexturePanel({
         },
       );
       const revision = acknowledgedAuthoringSceneRevision(response);
+      publishCommittedSceneResource(
+        resources,
+        response.committed_scene,
+        revision,
+        undefined,
+        false,
+        sessionScopeKey,
+        api.resourceCacheScope,
+      );
       invalidateTextureResources(revision);
       const syncWarning = await syncAuthoringScriptBestEffort(api, sessionScopeKey);
       setDraftState({
