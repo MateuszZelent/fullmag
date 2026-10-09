@@ -686,6 +686,29 @@
         "source-count-physical-fixture-contract",
         "source-count-composed-operator-oracle"
       ]
+    },
+    {
+      "id": "eq-static-robin-graph-union",
+      "symbols": [
+        "static_robin_operator",
+        "static_robin_diffusion",
+        "static_robin_boundary_mass",
+        "static_robin_beta",
+        "static_robin_basis_i",
+        "static_robin_basis_j",
+        "static_robin_index_i",
+        "static_robin_index_j",
+        "static_robin_domain",
+        "static_robin_boundary",
+        "static_robin_gradient",
+        "static_robin_volume_measure",
+        "static_robin_surface_measure"
+      ],
+      "sources": [
+        "source-static-robin-boundary-graph-union",
+        "source-count-physical-fixture-contract",
+        "source-count-composed-operator-oracle"
+      ]
     }
   ],
   "symbols": [
@@ -1438,6 +1461,90 @@
       "latex": "$j$",
       "meaning": "physical mode index",
       "si_unit": "$1$"
+    },
+    {
+      "id": "static_robin_operator",
+      "latex": "$A_R$",
+      "meaning": "pełny operator Poissona z Robinem",
+      "si_unit": "$\\mathrm{m}$"
+    },
+    {
+      "id": "static_robin_diffusion",
+      "latex": "$K$",
+      "meaning": "macierz dyfuzji potencjału",
+      "si_unit": "$\\mathrm{m}$"
+    },
+    {
+      "id": "static_robin_boundary_mass",
+      "latex": "$B_\\Gamma$",
+      "meaning": "macierz masy na granicy Robina",
+      "si_unit": "$\\mathrm{m}^2$"
+    },
+    {
+      "id": "static_robin_beta",
+      "latex": "$\\beta$",
+      "meaning": "efektywny współczynnik Robina",
+      "si_unit": "$\\mathrm{m}^{-1}$"
+    },
+    {
+      "id": "static_robin_basis_i",
+      "latex": "$N_i$",
+      "meaning": "skalarna funkcja bazowa i",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "static_robin_basis_j",
+      "latex": "$N_j$",
+      "meaning": "skalarna funkcja bazowa j",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "static_robin_index_i",
+      "latex": "$i$",
+      "meaning": "indeks stopnia swobody",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "static_robin_index_j",
+      "latex": "$j$",
+      "meaning": "indeks stopnia swobody",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "static_robin_domain",
+      "latex": "$\\Omega$",
+      "meaning": "obszar potencjału z airboxem",
+      "si_unit": "$\\mathrm{m}^3$"
+    },
+    {
+      "id": "static_robin_boundary",
+      "latex": "$\\Gamma$",
+      "meaning": "aktywna granica Robina bez seam",
+      "si_unit": "$\\mathrm{m}^2$"
+    },
+    {
+      "id": "static_robin_gradient",
+      "latex": "$\\nabla$",
+      "meaning": "gradient przestrzenny",
+      "si_unit": "$\\mathrm{m}^{-1}$"
+    },
+    {
+      "id": "static_robin_volume_measure",
+      "latex": "$dV$",
+      "meaning": "miara objętości",
+      "si_unit": "$\\mathrm{m}^3$"
+    },
+    {
+      "id": "static_robin_surface_measure",
+      "latex": "$dS$",
+      "meaning": "miara powierzchni",
+      "si_unit": "$\\mathrm{m}^2$"
+    },
+    {
+      "id": "static_robin_fixture_length",
+      "latex": "$\\ell$",
+      "meaning": "długość krawędzi osiowego Tet4 w fixture",
+      "si_unit": "$\\mathrm{m}$"
     }
   ],
   "sources": [
@@ -2920,6 +3027,12 @@
       "path": "backends/fem/tests/frequency_domain/modal_eigen_contract_test.cpp",
       "symbol": "void verify_native_count_fixture_composed_operator",
       "responsibility": "Actual active Robin faces, canonical periodic partitions, reduced static/dynamic P and composed mass/Zeeman/gyro/demag energy-bound checks; source-reviewed, GHA execution pending."
+    },
+    {
+      "id": "source-static-robin-boundary-graph-union",
+      "path": "backends/fem/cpu/mfem/interactions/demag_poisson_boundary.cpp",
+      "symbol": "bool initialize_demag_poisson_boundary_operator",
+      "responsibility": "Statyczny Poisson Robin składa K+beta B z unią grafów MFEM; full-node fill-in regression oraz niezmieniona static/shared equality. Source/scientific review PASS, native execution NOT VERIFIED."
     }
   ],
   "public_api": {

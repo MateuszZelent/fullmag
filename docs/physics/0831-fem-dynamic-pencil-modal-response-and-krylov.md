@@ -4238,3 +4238,76 @@ mode output or EPS termination policy. The fixture's residual1e-30 rejects
 candidates and exercises lack of remaining refill budget after a converged EPS
 attempt; it is not proof of EPS_DIVERGED_ITS. Fresh hosted execution of the
 serializer correction is **NOT VERIFIED**.
+
+
+## Korekta składania statycznego Robina: nowe wpisy grafu macierzy
+
+Źródłowa diagnoza z 9 października 2026 dotyczy właściciela FEM Poisson
+Robin, `initialize_demag_poisson_boundary_operator`. Realizacja zachowuje
+istniejącą formę słabą; nie zmienia modelu magnetostatyki ani wartości beta.
+
+```{math}
+:label: eq-static-robin-graph-union
+(A_R)_{ij}=K_{ij}+\beta(B_\Gamma)_{ij},\qquad
+K_{ij}=\int_\Omega \nabla N_i\cdot\nabla N_j\,dV,\qquad
+(B_\Gamma)_{ij}=\int_\Gamma N_iN_j\,dS.
+```
+
+| Symbol | Znaczenie | Jednostka SI |
+|---|---|---|
+| $A_R$ | pełny operator Poissona z Robinem | $\mathrm{m}$ |
+| $K$ | macierz dyfuzji potencjału | $\mathrm{m}$ |
+| $B_\Gamma$ | macierz masy na granicy Robina | $\mathrm{m}^2$ |
+| $\beta$ | efektywny współczynnik Robina | $\mathrm{m}^{-1}$ |
+| $N_i$ | skalarna funkcja bazowa i | $1$ |
+| $N_j$ | skalarna funkcja bazowa j | $1$ |
+| $i$ | indeks stopnia swobody | $1$ |
+| $j$ | indeks stopnia swobody | $1$ |
+| $\Omega$ | obszar potencjału z airboxem | $\mathrm{m}^3$ |
+| $\Gamma$ | aktywna granica Robina bez seam | $\mathrm{m}^2$ |
+| $\nabla$ | gradient przestrzenny | $\mathrm{m}^{-1}$ |
+| $dV$ | miara objętości | $\mathrm{m}^3$ |
+| $dS$ | miara powierzchni | $\mathrm{m}^2$ |
+| $\ell$ | długość krawędzi osiowego Tet4 w fixture | $\mathrm{m}$ |
+
+Graf $B_\Gamma$ nie musi być podzbiorem grafu $K$: zerowy iloczyn
+gradientów nie oznacza zerowego całkowanego iloczynu funkcji na granicy.
+Metoda member `SparseMatrix::Add` w MFEM4.8 aktualizuje istniejące wpisy,
+nie tworząc nowych połączeń. Poprawka ma stosować sumowanie z unią grafów
+obu macierzy, z zachowaniem ownership, markerów, beta, gauge i tolerancji.
+Źródła pierwotne: [member Add](https://github.com/mfem/mfem/blob/v4.8/linalg/sparsemat.cpp#L3069)
+i [graph-union Add](https://github.com/mfem/mfem/blob/v4.8/linalg/sparsemat.cpp#L3906).
+
+W rzeczywistym count CI37890812855 (źródła
+20e2cc6e4bff2c2394a62a75323f9bb4adf59dab) mapy klas były identyczne.
+Dwa symetryczne wpisy różniły się o0.22767090063073975. W syntetycznym
+Tet4 airboxu każde z dwóch brakujących sprzężeń wnosi
+$\beta\ell^2(1+\sqrt{3})/24$, gdzie $\ell=1\,\mathrm{m}$ oraz
+$\beta=1\,\mathrm{m}^{-1}$ dają $0.11383545031536987\,\mathrm{m}$.
+Nie jest to parametr dobrany do otrzymanego widma. Pełny fixture ma dziesięć
+węzłów; węzeł air-only ma indeks9, a pominięte sprzężenia dotyczą indeksów1/2
+przy indeksowaniu od zera, przed redukcją periodyczną.
+Pozostałe47 wpisów operatora zredukowanego zgadzały się. Nie zmieniamy
+oracle static/shared ani jego względnej tolerancji1e-10.
+
+Weryfikacja ma obejmować obecność nowych full-node coupling slots,
+analityczne wartości Robin i istniejącą zgodność pełnych zredukowanych
+operatorów. Zmiana dotyczy składania hostowego operatora FEM; nie dotyczy
+FDM i nie dowodzi wykonania FEM GPU, zbieżności airboxu/siatki ani zgodności
+pełnej dyspersji z COMSOL. Publiczny Python, UI, ProblemIR, planner i
+kontrakt jednostek pozostają bez zmian. Nowa realizacja oraz jej wpływ na
+pole statyczne i częstotliwości pozostają **NOT VERIFIED** do świeżego CI
+oraz wymaganych osobnych bramek runtime i nauki.
+
+
+| Source ID | Path + symbol | Odpowiedzialność i dowód |
+|---|---|---|
+| source-static-robin-boundary-graph-union | `backends/fem/cpu/mfem/interactions/demag_poisson_boundary.cpp` :: `bool initialize_demag_poisson_boundary_operator` | Składanie operatora Robina, FEM host; source/scientific review PASS, native wykonanie pending |
+
+
+Po korekcie wymagane jest ponowne obliczenie lub kwalifikacja stanów równowagi
+i częstotliwości zależnych od starego statycznego Robina. Historyczne
+artefakty i ich source/runtime identity pozostają zachowane; nie podnosimy
+retroaktywnie ich statusu i nie uznajemy nowego source review za potwierdzenie
+wcześniejszych wyników. Zgodność nowej macierzy nie zastępuje zbieżności
+siatki/airboxu i porównania z analityką lub COMSOL.

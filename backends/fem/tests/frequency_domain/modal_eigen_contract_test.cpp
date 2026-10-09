@@ -2223,6 +2223,67 @@ void initialize_native_count_fixture(FloquetContourSharedDomainFixture &fixture)
               std::abs(context.poisson_demag.robin_effective_beta - 1.0) <= 1.0e-14,
           "static Poisson uses P1 periodic reduction and the shared Robin beta without a gauge pin");
 
+    auto *full_robin_matrix =
+        static_cast<mfem::SparseMatrix *>(context.poisson_demag.poisson_bc_op);
+    auto *diffusion_form =
+        static_cast<mfem::BilinearForm *>(context.poisson_demag.poisson_bilinear);
+    check(full_robin_matrix != nullptr && diffusion_form != nullptr &&
+              node_count == 10u &&
+              full_robin_matrix->Height() == static_cast<int>(node_count) &&
+              full_robin_matrix->Width() == static_cast<int>(node_count),
+          "native Robin fixture retains the full ten-node Poisson operator");
+    const auto matrix_entry = [](const mfem::SparseMatrix &matrix, int row, int column) {
+        mfem::Array<int> columns;
+        mfem::Vector values;
+        matrix.GetRow(row, columns, values);
+        for (int entry = 0; entry < columns.Size(); ++entry) {
+            if (columns[entry] == column) {
+                return static_cast<double>(values[entry]);
+            }
+        }
+        return 0.0;
+    };
+    const mfem::SparseMatrix &diffusion_matrix = diffusion_form->SpMat();
+    const int air_node_index = static_cast<int>(node_count - 1u);
+    constexpr int magnetic_node_index_1 = 1;
+    constexpr int magnetic_node_index_2 = 2;
+    const double diffusion_9_1 =
+        matrix_entry(diffusion_matrix, air_node_index, magnetic_node_index_1);
+    const double diffusion_1_9 =
+        matrix_entry(diffusion_matrix, magnetic_node_index_1, air_node_index);
+    const double diffusion_9_2 =
+        matrix_entry(diffusion_matrix, air_node_index, magnetic_node_index_2);
+    const double diffusion_2_9 =
+        matrix_entry(diffusion_matrix, magnetic_node_index_2, air_node_index);
+    check(diffusion_9_1 == 0.0 && diffusion_1_9 == 0.0 &&
+              diffusion_9_2 == 0.0 && diffusion_2_9 == 0.0,
+          "zero-based air node 9 has no volume-diffusion coupling to magnetic nodes 1 or 2");
+
+    const double expected_robin_coupling =
+        context.poisson_demag.robin_effective_beta *
+        (1.0 + std::sqrt(3.0)) / 24.0;
+    const double robin_entry_tolerance =
+        1.0e-12 * std::max(1.0, std::abs(expected_robin_coupling));
+    const double robin_9_1 =
+        matrix_entry(*full_robin_matrix, air_node_index, magnetic_node_index_1);
+    const double robin_1_9 =
+        matrix_entry(*full_robin_matrix, magnetic_node_index_1, air_node_index);
+    const double robin_9_2 =
+        matrix_entry(*full_robin_matrix, air_node_index, magnetic_node_index_2);
+    const double robin_2_9 =
+        matrix_entry(*full_robin_matrix, magnetic_node_index_2, air_node_index);
+    const auto matches_robin_integral = [&](double value) {
+        return value > 0.0 &&
+            std::abs(value - expected_robin_coupling) <= robin_entry_tolerance;
+    };
+    check(matches_robin_integral(robin_9_1) &&
+              matches_robin_integral(robin_1_9) &&
+              matches_robin_integral(robin_9_2) &&
+              matches_robin_integral(robin_2_9) &&
+              std::abs(robin_9_1 - robin_1_9) <= robin_entry_tolerance &&
+              std::abs(robin_9_2 - robin_2_9) <= robin_entry_tolerance,
+          "full-node Robin operator retains symmetric fill-in at air index 9 and magnetic indices 1 and 2");
+
     const std::size_t scalar_class_count =
         context.mesh.periodic_reduced_node_count;
     auto *static_poisson_matrix =
