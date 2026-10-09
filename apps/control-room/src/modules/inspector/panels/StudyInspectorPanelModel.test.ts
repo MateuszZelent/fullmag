@@ -5,6 +5,7 @@ import { activeLaneCapabilityFixture } from "@/kernel/resources/activeLaneCapabi
 import {
   resolveCommandSummary,
   resolveStudyInspectorModel,
+  type StageExecutionScope,
   stageExecutionForCurrentScope,
   studyRuntimeProvenanceFromCurrentRun,
   studySnapshotFromScene,
@@ -223,7 +224,7 @@ describe("StudyInspectorPanelModel", () => {
     expect(model.runtime.torqueDiagnostic).toContain("max_torque_Apm");
   });
 
-  it("does not project retained stage telemetry across refresh or scope changes", () => {
+  it("keeps ready and stale stage telemetry only for the exact current identity", () => {
     const stageExecution: StageExecutionResource = {
       revision: 5,
       runtime_state: "running",
@@ -235,56 +236,97 @@ describe("StudyInspectorPanelModel", () => {
       session_id: "session-1",
       session_epoch: "session-1@1",
     };
+    const scope = (
+      resourceStatus: StageExecutionScope["resourceStatus"],
+      overrides: Partial<StageExecutionScope> = {},
+    ): StageExecutionScope => ({
+      expectedRunId: "run-1",
+      expectedSessionId: "session-1",
+      expectedSessionEpoch: "session-1@1",
+      resourceStatus,
+      scopeReady: true,
+      ...overrides,
+    });
 
     expect(stageExecutionForCurrentScope(stageExecution)).toBe(stageExecution);
+    for (const resourceStatus of ["ready", "stale"] as const) {
+      expect(
+        stageExecutionForCurrentScope(stageExecution, scope(resourceStatus)),
+      ).toBe(stageExecution);
+    }
+
+    for (const resourceStatus of ["idle", "loading", "error"] as const) {
+      expect(
+        stageExecutionForCurrentScope(stageExecution, scope(resourceStatus)),
+      ).toBeNull();
+    }
     expect(
-      stageExecutionForCurrentScope(stageExecution, {
-        expectedRunId: "run-1",
-        expectedSessionId: "session-1",
-        expectedSessionEpoch: "session-1@1",
-        resourceStatus: "stale",
-        scopeReady: true,
-      }),
+      stageExecutionForCurrentScope(stageExecution, scope("invalid" as never)),
     ).toBeNull();
-    const missingIdentity = { ...stageExecution } as Record<string, unknown>;
-    delete missingIdentity.run_id;
+    expect(stageExecutionForCurrentScope(stageExecution, scope(undefined))).toBeNull();
+    expect(stageExecutionForCurrentScope(null, scope("ready"))).toBeNull();
+    expect(stageExecutionForCurrentScope(null, scope("stale"))).toBeNull();
+    expect(stageExecutionForCurrentScope(null, scope("loading"))).toBeNull();
     expect(
-      stageExecutionForCurrentScope(missingIdentity as never, {
-        expectedRunId: "run-1",
-        expectedSessionId: "session-1",
-        expectedSessionEpoch: "session-1@1",
-        resourceStatus: "ready",
-        scopeReady: true,
-      }),
+      stageExecutionForCurrentScope(
+        stageExecution,
+        scope("stale", { scopeReady: false }),
+      ),
     ).toBeNull();
+
+    const wrongIdentityPayloads: StageExecutionResource[] = [
+      { ...stageExecution, session_id: "session-2" },
+      { ...stageExecution, session_epoch: "session-1@2" },
+      { ...stageExecution, run_id: "run-2" },
+    ];
+    for (const resourceStatus of ["ready", "stale"] as const) {
+      for (const overrides of [
+        { expectedSessionId: "session-2" },
+        { expectedSessionEpoch: "session-1@2" },
+        { expectedRunId: "run-2" },
+      ]) {
+        expect(
+          stageExecutionForCurrentScope(
+            stageExecution,
+            scope(resourceStatus, overrides),
+          ),
+        ).toBeNull();
+      }
+      for (const payload of wrongIdentityPayloads) {
+        expect(
+          stageExecutionForCurrentScope(payload, scope(resourceStatus)),
+        ).toBeNull();
+      }
+      for (const identityField of ["session_id", "session_epoch", "run_id"] as const) {
+        const missingIdentity = { ...stageExecution } as unknown as Record<string, unknown>;
+        delete missingIdentity[identityField];
+        expect(
+          stageExecutionForCurrentScope(
+            missingIdentity as never,
+            scope(resourceStatus),
+          ),
+        ).toBeNull();
+      }
+    }
+
     const noCurrentRun = { ...stageExecution, run_id: null };
+    for (const resourceStatus of ["ready", "stale"] as const) {
+      expect(
+        stageExecutionForCurrentScope(
+          noCurrentRun,
+          scope(resourceStatus, { expectedRunId: null }),
+        ),
+      ).toBe(noCurrentRun);
+    }
+    const missingExpectedRunScope: StageExecutionScope = {
+      expectedSessionId: "session-1",
+      expectedSessionEpoch: "session-1@1",
+      resourceStatus: "stale",
+      scopeReady: true,
+    };
     expect(
-      stageExecutionForCurrentScope(noCurrentRun, {
-        expectedRunId: null,
-        expectedSessionId: "session-1",
-        expectedSessionEpoch: "session-1@1",
-        resourceStatus: "ready",
-        scopeReady: true,
-      }),
-    ).toBe(noCurrentRun);
-    expect(
-      stageExecutionForCurrentScope(stageExecution, {
-        expectedRunId: "run-2",
-        expectedSessionId: "session-1",
-        expectedSessionEpoch: "session-1@1",
-        resourceStatus: "ready",
-        scopeReady: true,
-      }),
+      stageExecutionForCurrentScope(stageExecution, missingExpectedRunScope),
     ).toBeNull();
-    expect(
-      stageExecutionForCurrentScope(stageExecution, {
-        expectedRunId: "run-1",
-        expectedSessionId: "session-1",
-        expectedSessionEpoch: "session-1@1",
-        resourceStatus: "ready",
-        scopeReady: true,
-      }),
-    ).toBe(stageExecution);
   });
 
   it("projects stage authoring, boundary policy, runtime progress, and max torque", () => {
