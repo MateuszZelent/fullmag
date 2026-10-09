@@ -2335,6 +2335,7 @@ Repository-owned related contracts:
 
 | Source path | Symbol | Responsibility |
 |---|---|---|
+| packages/fullmag-py/src/fullmag/runtime/script_builder.py | _sync_stage_output_snapshot | Reconcile immutable stage output families and preserve ordered autosave; selectors and StudyIR regression pending hosted CI. |
 | backends/fem/cpu/frequency_domain/slepc_modal_eigen.cpp | SLEPcTinyGyrotropicModalEigenResult solve_slepc_gyrotropic_modal_eigen_attempt | Configure checked nonzero-diagonal PCLU permutation before EPS setup, preserving operator values, shift policy, original residual gate and graph quarantine; provider proof pending. |
 | backends/fem/cpu/frequency_domain/slepc_modal_eigen.cpp | bool create_real_frequency_rotated_pencil | Retain exact zero structural diagonal slots in both real-split AIJ matrices for symbolic LU; preserve the operator and quarantine on hard assembly errors. Actual-provider regression pending. |
 | backends/fem/cpu/frequency_domain/modal/shifted_ksp_true_convergence.hpp | floquet_shifted_true_convergence_test | Preserve the default convergence result and iteration budget; apply the unchanged reconstructed true-residual gate and retain scalar callback observations for a hard-error-only probe. |
@@ -4057,3 +4058,28 @@ the suite then failed in a separate missing-CSR negative fixture whose expected
 reason was inconsistent with the upfront structural validation. This is narrow
 positive-provider evidence, not a passing complete generic/refill contract.
 Full post-correction provider regression remains **NOT VERIFIED**.
+
+
+### Canonical Python output snapshots at ordered stage boundaries
+
+Canonical rewrite must preserve each immutable `LoadedStage.problem.study`
+output snapshot, including mode selectors, branch/sample restrictions and
+spectrum scope. Rendering only the persistent TimeEvolution base loses Eigen
+and FrequencyResponse selectors; unioning later snapshots into that base leaks
+future output choices into earlier stages.
+
+`packages/fullmag-py/src/fullmag/runtime/script_builder.py` +
+`_sync_stage_output_snapshot` reconciles the families admitted by each study at
+its boundary. It appends a missing suffix or clears/restores replaced selectors,
+retaining other already-known families. The existing ordered autosave action
+updates renderer state after its command; unknown output types remain explicit
+errors. Public Python constructors, normalized ProblemIR and solver semantics
+are unchanged. This concerns transport/authoring for all four execution lanes,
+not proof of a numerical solve or CPU/GPU parity.
+
+`packages/fullmag-py/tests/test_script_builder_roundtrip.py` +
+`class ScriptBuilderEigenOutputRoundTripTests` compares the full per-stage
+StudyIR for two Eigen stages, mixed Time/Eigen/Time, disable-all autosave and
+FrequencyResponse/Eigen. The existing API selector regression remains an
+independent gate. Source review and parsing passed; hosted execution of this
+correction is **NOT VERIFIED**.

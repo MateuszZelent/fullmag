@@ -528,6 +528,290 @@ class LayeredMeshAuthoringRoundTripTests(unittest.TestCase):
         self.assertEqual(_requested_layered_mesh(rewritten), before)
 
 
+class ScriptBuilderEigenOutputRoundTripTests(unittest.TestCase):
+    @staticmethod
+    def _study_ir_by_stage(loaded):
+        return [
+            stage.problem.to_ir(include_geometry_assets=False)["study"]
+            for stage in loaded.stages
+        ]
+
+    def test_eigen_stage_output_selectors_do_not_leak_across_stages(self) -> None:
+        script = """
+        import fullmag as fm
+
+        study = fm.study("eigen-stage-output-snapshots")
+        study.engine("fem")
+        film = study.geometry(fm.Box(100e-9, 20e-9, 5e-9), name="film")
+        film.Ms = 800e3
+        film.Aex = 13e-12
+        film.alpha = 0.01
+        film.m = fm.texture.uniform(1, 0, 0)
+        study.save("spectrum", spectrum_scope="global")
+        study.save(
+            "mode",
+            field="mode_complex",
+            indices=[0, 2],
+            branches=[4],
+            sample_indices=[0, 2],
+            sample_labels=["Gamma", "X"],
+        )
+        study.stages.add_eigenmodes(
+            stage_id="spectrum-and-mode",
+            count=5,
+            include_demag=False,
+        )
+        study.clear_outputs()
+        study.save("dispersion", name="bands", include_branch_table=False)
+        study.save(
+            "diagnostics",
+            include_tracking=False,
+            include_overlaps=False,
+        )
+        study.stages.add_eigenmodes(
+            stage_id="dispersion-and-diagnostics",
+            count=4,
+            include_demag=False,
+        )
+        """
+
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            loaded = _load_text(script, root, "eigen_stages.py")
+            rendered = rewrite_loaded_problem_script(loaded)["rendered_source"]
+            rewritten = _load_text(rendered, root, "eigen_stages_rewritten.py")
+
+        self.assertEqual(
+            self._study_ir_by_stage(rewritten),
+            self._study_ir_by_stage(loaded),
+        )
+        first_stage = rendered.index(
+            'study.stages.add_eigenmodes(stage_id="spectrum-and-mode"'
+        )
+        clear_before_second = rendered.index("study.clear_outputs()", first_stage)
+        second_dispersion = rendered.index(
+            'study.save("dispersion", name="bands", include_branch_table=False)',
+            clear_before_second,
+        )
+        second_stage = rendered.index(
+            'study.stages.add_eigenmodes(stage_id="dispersion-and-diagnostics"',
+            second_dispersion,
+        )
+        self.assertLess(first_stage, clear_before_second)
+        self.assertLess(clear_before_second, second_dispersion)
+        self.assertLess(second_dispersion, second_stage)
+
+    def test_stage_output_snapshots_preserve_time_eigen_time_and_autosave_order(self) -> None:
+        script = """
+        import fullmag as fm
+
+        study = fm.study("mixed-stage-output-snapshots")
+        study.engine("fem")
+        film = study.geometry(fm.Box(100e-9, 20e-9, 5e-9), name="film")
+        film.Ms = 800e3
+        film.Aex = 13e-12
+        film.alpha = 0.01
+        film.m = fm.texture.uniform(1, 0, 0)
+        study.save("m", every=1e-12)
+        study.save("E_total", every=1e-12)
+        study.stages.add_run(stage_id="initial-run", until=2e-12)
+        study.save("spectrum", spectrum_scope="global")
+        study.stages.add_eigenmodes(
+            stage_id="modal-output",
+            count=5,
+            include_demag=False,
+        )
+        study.stages.autosave("m", every=2e-12, stage_id="resume-m-autosave")
+        study.stages.add_run(stage_id="follow-up-run", until=2e-12)
+        """
+
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            loaded = _load_text(script, root, "mixed_stages.py")
+            rendered = rewrite_loaded_problem_script(loaded)["rendered_source"]
+            rewritten = _load_text(rendered, root, "mixed_stages_rewritten.py")
+
+        self.assertEqual(
+            self._study_ir_by_stage(rewritten),
+            self._study_ir_by_stage(loaded),
+        )
+        initial_output = rendered.index('study.save("m", every=1e-12)')
+        initial_run = rendered.index('study.stages.add_run(stage_id="initial-run"')
+        eigen_output = rendered.index(
+            'study.save("spectrum", spectrum_scope="global")'
+        )
+        eigen_stage = rendered.index(
+            'study.stages.add_eigenmodes(stage_id="modal-output"'
+        )
+        autosave_action = rendered.index(
+            'study.stages.autosave("m", every=2e-12, stage_id="resume-m-autosave")'
+        )
+        follow_up = rendered.index(
+            'study.stages.add_run(stage_id="follow-up-run"'
+        )
+        self.assertLess(initial_output, initial_run)
+        self.assertLess(initial_run, eigen_output)
+        self.assertLess(eigen_output, eigen_stage)
+        self.assertLess(eigen_stage, autosave_action)
+        self.assertLess(autosave_action, follow_up)
+        self.assertNotIn('study.save("m", every=2e-12)', rendered)
+
+    def test_disabling_all_autosave_outputs_resets_between_eigen_stages(self) -> None:
+        script = """
+        import fullmag as fm
+
+        study = fm.study("eigen-stage-autosave-reset")
+        study.engine("fem")
+        film = study.geometry(fm.Box(100e-9, 20e-9, 5e-9), name="film")
+        film.Ms = 800e3
+        film.Aex = 13e-12
+        film.alpha = 0.01
+        film.m = fm.texture.uniform(1, 0, 0)
+        study.save("spectrum", spectrum_scope="global")
+        study.stages.add_eigenmodes(
+            stage_id="spectrum-before-reset",
+            count=5,
+            include_demag=False,
+        )
+        study.stages.autosave(enabled=False, stage_id="disable-all-outputs")
+        study.save("mode", field="mode_complex", indices=[1])
+        study.stages.add_eigenmodes(
+            stage_id="mode-after-reset",
+            count=4,
+            include_demag=False,
+        )
+        """
+
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            loaded = _load_text(script, root, "eigen_autosave_reset.py")
+            rendered = rewrite_loaded_problem_script(loaded)["rendered_source"]
+            rewritten = _load_text(
+                rendered,
+                root,
+                "eigen_autosave_reset_rewritten.py",
+            )
+
+        self.assertEqual(
+            self._study_ir_by_stage(rewritten),
+            self._study_ir_by_stage(loaded),
+        )
+        first_stage = rendered.index(
+            'study.stages.add_eigenmodes(stage_id="spectrum-before-reset"'
+        )
+        disabled_action = rendered.index(
+            'study.stages.autosave(enabled=False, stage_id="disable-all-outputs")'
+        )
+        second_output = rendered.index(
+            'study.save("mode", field="mode_complex", indices=[1])',
+            disabled_action,
+        )
+        second_stage = rendered.index(
+            'study.stages.add_eigenmodes(stage_id="mode-after-reset"',
+            second_output,
+        )
+        self.assertLess(first_stage, disabled_action)
+        self.assertLess(disabled_action, second_output)
+        self.assertLess(second_output, second_stage)
+        self.assertEqual(
+            rendered.count('study.save("spectrum", spectrum_scope="global")'),
+            1,
+        )
+        self.assertEqual(
+            rendered.count('study.save("mode", field="mode_complex", indices=[1])'),
+            1,
+        )
+        self.assertNotIn("study.clear_outputs()", rendered)
+
+    def test_frequency_response_and_eigen_outputs_roundtrip_across_stages(self) -> None:
+        script = """
+        import fullmag as fm
+
+        study = fm.study("frequency-and-eigen-output-families")
+        study.engine("fem")
+        film = study.geometry(fm.Box(100e-9, 20e-9, 5e-9), name="film")
+        film.Ms = 800e3
+        film.Aex = 13e-12
+        film.alpha = 0.01
+        film.m = fm.texture.uniform(1, 0, 0)
+        study.save_response("susceptibility_tensor")
+        study.save("spectrum", spectrum_scope="global")
+        study.stages.add_frequency_response(
+            stage_id="response-with-spectrum",
+            frequencies_hz=[1e9, 2e9],
+            excitation_field_au_per_m=(0.0, 1.0, 0.0),
+            include_demag=False,
+        )
+        study.save("mode", field="mode_complex", indices=[0, 2])
+        study.stages.add_eigenmodes(
+            stage_id="spectrum-and-mode",
+            count=5,
+            include_demag=False,
+        )
+        """
+
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            loaded = _load_text(script, root, "frequency_eigen_outputs.py")
+            rendered = rewrite_loaded_problem_script(loaded)["rendered_source"]
+            rewritten = _load_text(
+                rendered,
+                root,
+                "frequency_eigen_outputs_rewritten.py",
+            )
+
+        self.assertEqual(
+            self._study_ir_by_stage(rewritten),
+            self._study_ir_by_stage(loaded),
+        )
+        self.assertEqual(
+            [
+                output["kind"]
+                for output in loaded.stages[0].problem.study.to_ir()["sampling"]["outputs"]
+            ],
+            ["frequency_response_output", "eigen_spectrum"],
+        )
+        self.assertEqual(
+            [
+                output["kind"]
+                for output in loaded.stages[1].problem.study.to_ir()["sampling"]["outputs"]
+            ],
+            ["eigen_spectrum", "eigen_mode"],
+        )
+        response_output = rendered.index(
+            'study.save_response("susceptibility_tensor")'
+        )
+        spectrum_output = rendered.index(
+            'study.save("spectrum", spectrum_scope="global")'
+        )
+        response_stage = rendered.index(
+            'study.stages.add_frequency_response(stage_id="response-with-spectrum"'
+        )
+        mode_output = rendered.index(
+            'study.save("mode", field="mode_complex", indices=[0, 2])'
+        )
+        eigen_stage = rendered.index(
+            'study.stages.add_eigenmodes(stage_id="spectrum-and-mode"'
+        )
+        self.assertLess(response_output, spectrum_output)
+        self.assertLess(spectrum_output, response_stage)
+        self.assertLess(response_stage, mode_output)
+        self.assertLess(mode_output, eigen_stage)
+        self.assertEqual(
+            rendered.count('study.save_response("susceptibility_tensor")'),
+            1,
+        )
+        self.assertEqual(
+            rendered.count('study.save("spectrum", spectrum_scope="global")'),
+            1,
+        )
+        self.assertEqual(
+            rendered.count('study.save("mode", field="mode_complex", indices=[0, 2])'),
+            1,
+        )
+        self.assertNotIn("study.clear_outputs()", rendered)
+
+
 class ScriptBuilderRegionalDriveRoundTripTests(unittest.TestCase):
     def test_stage_autosave_does_not_leak_into_earlier_stage_outputs(self) -> None:
         script = """

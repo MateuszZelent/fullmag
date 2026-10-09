@@ -627,7 +627,13 @@ def render_loaded_problem_as_script(
         lines.append("")
         lines.extend(excitation_lines)
 
-    stage_lines = _render_stages(stages, overrides=overrides, surface=surface)
+    stage_lines = _render_stages(
+        stages,
+        overrides=overrides,
+        surface=surface,
+        magnet_vars=magnet_vars,
+        initial_outputs=_study_outputs(base_problem.study),
+    )
     if stage_lines:
         lines.append("")
         lines.extend(stage_lines)
@@ -6839,7 +6845,17 @@ def _render_outputs(problem: Problem, magnet_vars: dict[str, str], *, surface: s
     outputs = _study_outputs(problem.study)
     if not outputs:
         return []
-    lines = ["# Outputs"]
+    statements = _render_output_statements(outputs, magnet_vars, surface=surface)
+    return ["# Outputs", *statements] if statements else []
+
+
+def _render_output_statements(
+    outputs: Sequence[object],
+    magnet_vars: dict[str, str],
+    *,
+    surface: str,
+) -> list[str]:
+    lines: list[str] = []
     for output in outputs:
         if isinstance(output, SaveField):
             lines.append(
@@ -6923,6 +6939,104 @@ def _render_outputs(problem: Problem, magnet_vars: dict[str, str], *, surface: s
             continue
         raise ValueError(f"unsupported output type: {type(output).__name__}")
     return lines
+
+
+def _output_family(output: object) -> str | None:
+    if isinstance(output, (SaveSpectrum, SaveMode, SaveDispersion, SaveEigenDiagnostics)):
+        return "eigen"
+    if isinstance(output, SaveResponse):
+        return "response"
+    if isinstance(output, (SaveField, SaveScalar, Snapshot)):
+        return "time"
+    return None
+
+
+def _stage_output_families(study: object) -> frozenset[str]:
+    if isinstance(study, Eigenmodes):
+        return frozenset(("eigen",))
+    if isinstance(study, FrequencyResponse):
+        return frozenset(("eigen", "response"))
+    if isinstance(study, (Hysteresis, Relaxation, TimeEvolution)):
+        return frozenset(("time",))
+    return frozenset()
+
+
+def _sync_stage_output_snapshot(
+    active_outputs: Sequence[object],
+    stage: LoadedStage,
+    magnet_vars: dict[str, str],
+    *,
+    surface: str,
+) -> tuple[list[str], list[object]]:
+    """Reconcile only the output families captured by this immutable stage."""
+    study = stage.problem.study
+    if study is None or surface != "study":
+        return [], list(active_outputs)
+
+    families = _stage_output_families(study)
+    if not families:
+        return [], list(active_outputs)
+
+    desired = list(_study_outputs(study))
+    active = list(active_outputs)
+    current = [output for output in active if _output_family(output) in families]
+    is_prefix = len(current) <= len(desired) and current == desired[: len(current)]
+    if is_prefix:
+        missing = desired[len(current) :]
+        statements = _render_output_statements(
+            missing,
+            magnet_vars,
+            surface=surface,
+        )
+        return statements, [*active, *missing]
+
+    # A stage snapshot can reflect a clear or replacement that happened after
+    # an earlier stage. Rebuild the output state at this boundary, retaining
+    # other families already known to be active while replacing this stage's
+    # own family with its exact captured selectors.
+    retained = [output for output in active if _output_family(output) not in families]
+    restored = [*retained, *desired]
+    statements = [f"{_surface_call(surface, 'clear_outputs')}()"]
+    statements.extend(
+        _render_output_statements(restored, magnet_vars, surface=surface)
+    )
+    return statements, restored
+
+
+def _periodic_output_name(output: object) -> str | None:
+    if isinstance(output, SaveField):
+        return output.field
+    if isinstance(output, SaveScalar):
+        return output.scalar
+    return None
+
+
+def _apply_autosave_output_action(
+    active_outputs: Sequence[object],
+    *,
+    enabled: bool,
+    quantity: str | None,
+    output_name: str | None = None,
+    output_kind: object = None,
+    every: SamplingPeriod | None = None,
+) -> list[object]:
+    active = list(active_outputs)
+    if not enabled:
+        if quantity is None:
+            return []
+        return [output for output in active if _periodic_output_name(output) != quantity]
+
+    if output_name is None or every is None:
+        raise ValueError("enabled autosave output requires a name and sampling cadence")
+    if output_kind in {"field", "field_auto", "field_resolved_auto"}:
+        replacement: object = SaveField(field=output_name, every=every)
+    elif output_kind in {"scalar", "scalar_auto", "scalar_resolved_auto"}:
+        replacement = SaveScalar(scalar=output_name, every=every)
+    else:
+        raise ValueError(f"unsupported autosave output kind: {output_kind!r}")
+    return [
+        output for output in active if _periodic_output_name(output) != output_name
+    ] + [replacement]
 
 
 def _render_table_autosave(
@@ -7026,15 +7140,26 @@ def _render_stages(
     *,
     overrides: dict[str, object],
     surface: str,
+    magnet_vars: dict[str, str],
+    initial_outputs: Sequence[object],
 ) -> list[str]:
     if not stages:
         return []
     solver_override = _normalize_mapping(overrides.get("solver"))
     stage_overrides = overrides.get("stages")
     is_study_surface = surface == "study"
+    active_outputs = list(initial_outputs)
     lines = ["# Stages" if is_study_surface else "# Run"]
     previous_dynamics_signature: dict[str, object] | None = None
     for index, stage in enumerate(stages):
+        if is_study_surface and stage.problem.study is not None:
+            output_lines, active_outputs = _sync_stage_output_snapshot(
+                active_outputs,
+                stage,
+                magnet_vars,
+                surface=surface,
+            )
+            lines.extend(output_lines)
         if stage.action is not None:
             action_kind = str(stage.action.get("kind") if isinstance(stage.action, dict) else "").strip().lower()
             if action_kind == "save_state":
@@ -7176,9 +7301,13 @@ def _render_stages(
                 call_parts = []
                 enabled = bool(stage.action.get("enabled", True))
                 quantity = _text_value(stage.action.get("quantity"))
+                output_name = None
+                output_kind = None
+                every = None
                 if enabled:
                     output = _normalize_mapping(stage.action.get("output"))
                     output_name = _text_value(output.get("name")) or quantity
+                    output_kind = output.get("kind")
                     every = _requested_sampling_period_from_ir(output, "every_seconds")
                     if not output_name or every is None:
                         raise ValueError("enabled autosave action requires output name and cadence")
@@ -7195,6 +7324,14 @@ def _render_stages(
                 if stage.stage_id is not None:
                     call_parts.append(f"stage_id={_py_repr(stage.stage_id)}")
                 lines.append(f"study.stages.autosave({', '.join(call_parts)})")
+                active_outputs = _apply_autosave_output_action(
+                    active_outputs,
+                    enabled=enabled,
+                    quantity=quantity,
+                    output_name=output_name,
+                    output_kind=output_kind,
+                    every=every,
+                )
                 continue
             if action_kind == "fft_response":
                 if not is_study_surface:
@@ -9352,7 +9489,7 @@ def _normalize_bounds_pair(
 
 
 def _study_outputs(
-    study: TimeEvolution | Relaxation | Eigenmodes | FrequencyResponse | None,
+    study: TimeEvolution | Relaxation | Eigenmodes | FrequencyResponse | Hysteresis | None,
 ) -> Sequence[object]:
     return tuple(study.outputs) if study is not None else ()
 

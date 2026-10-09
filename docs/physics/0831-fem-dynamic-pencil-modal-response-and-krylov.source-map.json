@@ -2755,6 +2755,12 @@
       "path": "backends/fem/cpu/frequency_domain/slepc_modal_eigen.cpp",
       "symbol": "SLEPcTinyGyrotropicModalEigenResult solve_slepc_gyrotropic_modal_eigen_attempt",
       "responsibility": "Configure checked nonzero-diagonal permutation for PCLU before EPS setup, preserving matrix values, shift policy and original residual gates; API errors quarantine the graph. GHA37870357673 reached successful MFEM sparse window/nearest assertions; complete generic/refill regression still NOT VERIFIED after a later negative-fixture failure."
+    },
+    {
+      "id": "source-stage-output-snapshot-renderer",
+      "path": "packages/fullmag-py/src/fullmag/runtime/script_builder.py",
+      "symbol": "_sync_stage_output_snapshot",
+      "responsibility": "Reconcile exact immutable output snapshots for supported canonical study rendering without promoting later selectors to the base or duplicating ordered autosave; hosted regression pending."
     }
   ],
   "public_api": {

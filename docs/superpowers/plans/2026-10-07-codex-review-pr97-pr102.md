@@ -1891,3 +1891,8 @@ Missing-owner reason klasyfikowany jest lokalnie dla odrzuconej polityki: dodatn
 ### Browser proof — potwierdzony częściowy przebieg i diagnostyka failure
 
 37872633768 browser113633944857 FAIL na smoke-inspector1631: oczekiwanie contextual Ribbon aria-selected timeout60s. Wcześniejsze asercje clickedleaf selected/Inspectorowner oraz Analysisresonance surface przeszły, ale nie dowodzą całej5case matrix. Produkcyjny Ribbon deklaruje autoactive context (z możliwością dismiss), więc nie poluzowano testu do widoczności samejlabel. Catch zapisuje failed DOM state, wszystkie Ribbon tabs, fixture requests/errors i screenshot przed zamknięciem kontekstu. Captureerror nie zastępuje pierwotnego błędu. Następny hosted browser diagnostic pending.
+
+
+### Naprawa utraty eigen output selectors w canonical rewrite
+
+Renderer odtwarza dokładne immutable output snapshots rodzin time/eigen/response przed każdymstage/action, zachowuje orderedautosave poakcji oraz clear/restore przy zastąpieniu. Nie przywraca union późniejszychoutputów do bazystudy i nie zmienia public API/IR. Czterymeaningful regressions porównują pełneStudyIR etapów:2Eigen, Time→Eigen→Time, Eigen→disableall→Eigen, Response→Eigen. Existing314APIselectorassertniezmieniona. Independent sourcereview PASS, AST/diff/0831validator pendingbeforecommit, GHAexecutionpending. Nie ma rozpoznanej obsługi overrides[outputs] w tymrendererze; nie dodano nowego kontraktu dla takiego klucza.
