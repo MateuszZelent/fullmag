@@ -6,7 +6,8 @@
 //! based so the normal CLI startup banner cannot corrupt the response.
 
 use crate::adaptive_resources::{
-    AdaptiveAdmission, AdmissionDecision, ResourceSampler, WorkerPeak, WorkerSampleError,
+    AdaptiveAdmission, AdmissionDecision, ResourceSampler, ResourceSnapshot, WorkerPeak,
+    WorkerSampleError,
 };
 use crate::fem::eigen_k_worker::{
     build_identity_json, executable_sha256, worker_thread_environment, EigenKWorkerHandshakeV1,
@@ -191,6 +192,118 @@ fn observe_admission_peak(
     observed.cpu_cores = observed.cpu_cores.max(measured.cpu_cores);
     observed.rss_bytes = observed.rss_bytes.max(measured.rss_bytes);
     Ok(())
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum PermanentAdmissionInfeasibility {
+    MemoryReserveConsumesAllowedBudget {
+        allowed_memory_bytes: u64,
+        reserve_bytes: u64,
+    },
+    CalibratedWorkerEnvelopeExceedsBudget {
+        worker_memory_envelope_bytes: u64,
+        pool_memory_budget_bytes: u64,
+    },
+}
+
+impl PermanentAdmissionInfeasibility {
+    fn reason(&self) -> &'static str {
+        match self {
+            Self::MemoryReserveConsumesAllowedBudget { .. } => {
+                "permanent_memory_reserve_consumes_allowed_budget"
+            }
+            Self::CalibratedWorkerEnvelopeExceedsBudget { .. } => {
+                "calibrated_worker_memory_envelope_exceeds_budget"
+            }
+        }
+    }
+
+    fn message(&self) -> String {
+        match self {
+            Self::MemoryReserveConsumesAllowedBudget {
+                allowed_memory_bytes,
+                reserve_bytes,
+            } => format!(
+                "eigen process pool admission impossible ({}): memory reserve {reserve_bytes} bytes consumes the allowed {allowed_memory_bytes} byte memory budget",
+                self.reason(),
+            ),
+            Self::CalibratedWorkerEnvelopeExceedsBudget {
+                worker_memory_envelope_bytes,
+                pool_memory_budget_bytes,
+            } => format!(
+                "eigen process pool admission impossible ({}): calibrated worker memory envelope {worker_memory_envelope_bytes} bytes exceeds the {pool_memory_budget_bytes} byte pool budget",
+                self.reason(),
+            ),
+        }
+    }
+}
+
+fn classify_permanent_admission_infeasibility(
+    policy: &ParallelExecutionPolicyIR,
+    decision: &AdmissionDecision,
+    snapshot: Option<&ResourceSnapshot>,
+    observed_peak: WorkerPeak,
+    calibrated: bool,
+) -> Option<PermanentAdmissionInfeasibility> {
+    if decision.desired_workers != 0 {
+        return None;
+    }
+    let expected_memory_block_reason = if calibrated {
+        "insufficient_memory_for_worker"
+    } else {
+        "insufficient_memory_for_probe"
+    };
+    if decision.reason != expected_memory_block_reason {
+        return None;
+    }
+    let snapshot = snapshot?;
+    let allowed_memory_bytes =
+        (snapshot.memory_limit_bytes as f64 * policy.max_memory_percent / 100.0) as u64;
+    let pool_memory_budget_bytes =
+        allowed_memory_bytes.saturating_sub(policy.memory_reserve_bytes);
+    if policy.memory_reserve_bytes >= allowed_memory_bytes {
+        return Some(
+            PermanentAdmissionInfeasibility::MemoryReserveConsumesAllowedBudget {
+                allowed_memory_bytes,
+                reserve_bytes: policy.memory_reserve_bytes,
+            },
+        );
+    }
+    if calibrated {
+        // Match AdaptiveAdmission's integer 25% margin exactly. This is a
+        // pool-wide policy bound; current memory_available_bytes is pressure
+        // telemetry and may recover, so it is deliberately not used here.
+        let worker_memory_envelope_bytes = observed_peak
+            .rss_bytes
+            .saturating_add(observed_peak.rss_bytes / 4)
+            .max(1);
+        if worker_memory_envelope_bytes > pool_memory_budget_bytes {
+            return Some(
+                PermanentAdmissionInfeasibility::CalibratedWorkerEnvelopeExceedsBudget {
+                    worker_memory_envelope_bytes,
+                    pool_memory_budget_bytes,
+                },
+            );
+        }
+    }
+    None
+}
+
+fn permanent_admission_failure_if_running(
+    failure: Option<PermanentAdmissionInfeasibility>,
+    cancel: &AtomicBool,
+    admission_open: bool,
+    active_workers: usize,
+    pending_samples: usize,
+) -> Option<PermanentAdmissionInfeasibility> {
+    if cancel.load(Ordering::Relaxed)
+        || !admission_open
+        || active_workers != 0
+        || pending_samples == 0
+    {
+        return None;
+    }
+    failure
 }
 
 fn bounded_worker_log_tail(reader: &mut (impl Read + Seek)) -> std::io::Result<Vec<u8>> {
@@ -1388,13 +1501,14 @@ impl EigenKProcessPool {
                     .collect::<Vec<_>>();
                 let exit_telemetry_pending = !pending_exit_details.is_empty();
                 let admission_open = worker_admission_open(telemetry_open, exit_telemetry_pending);
+                let pending_samples = requests.len().saturating_sub(next_request);
                 let decision = if admission_open {
                     admission.decide(
                         snapshot.as_ref(),
                         active.len(),
                         own_cpu,
                         own_rss,
-                        requests.len().saturating_sub(next_request),
+                        pending_samples,
                         Instant::now(),
                     )
                 } else if exit_telemetry_pending {
@@ -1413,6 +1527,25 @@ impl EigenKProcessPool {
                         cpu_target_kind: "soft_admission_target".into(),
                     }
                 };
+                // A zero target may be caused by temporary headroom pressure or
+                // by policy capacity that cannot admit even one worker. Only
+                // classify the latter, with valid telemetry and no active workers.
+                let permanent_admission_failure =
+                    if admission_open && active.is_empty() && pending_samples > 0 {
+                        classify_permanent_admission_infeasibility(
+                            &self.policy,
+                            &decision,
+                            snapshot.as_ref(),
+                            observed_peak,
+                            !responses.is_empty(),
+                        )
+                    } else {
+                        None
+                    };
+                let admission_reason = match permanent_admission_failure.as_ref() {
+                    Some(failure) => failure.reason(),
+                    None => decision.reason.as_str(),
+                };
                 let budget = if admission_open && decision.desired_workers > active.len() {
                     Some(self.resolve_thread_budget(
                         snapshot.as_ref().ok_or_else(|| {
@@ -1426,14 +1559,14 @@ impl EigenKProcessPool {
                 let event = ProcessAdmissionEventV1 {
                     at_unix_ms: Self::unix_ms(),
                     active_workers: active.len(),
-                    pending_samples: requests.len().saturating_sub(next_request),
+                    pending_samples,
                     desired_workers: decision.desired_workers,
                     reason: if telemetry_resolution_sources.is_empty() {
-                        decision.reason.clone()
+                        admission_reason.to_string()
                     } else {
                         format!(
                             "{}; {}",
-                            decision.reason,
+                            admission_reason,
                             telemetry_resolution_sources.join(",")
                         )
                     },
@@ -1460,6 +1593,16 @@ impl EigenKProcessPool {
                     continue;
                 }
                 journal.update(&report);
+                if let Some(failure) = permanent_admission_failure_if_running(
+                    permanent_admission_failure,
+                    &cancel,
+                    admission_open,
+                    active.len(),
+                    pending_samples,
+                ) {
+                    journal.finish(&report, "failed");
+                    return Err(failure.message());
+                }
                 if let Some(budget) = budget {
                     report.thread_bindings.push(ProcessPoolThreadBindingV1 {
                         sample_index: requests[next_request].sample_index,
@@ -1508,9 +1651,174 @@ impl EigenKProcessPool {
 
 #[cfg(test)]
 mod tests {
-    use super::{admission_may_spawn_worker, bounded_worker_log_tail, MAX_WORKER_LOG_BYTES};
+    use super::{
+        admission_may_spawn_worker, bounded_worker_log_tail,
+        classify_permanent_admission_infeasibility,
+        permanent_admission_failure_if_running, PermanentAdmissionInfeasibility,
+        MAX_WORKER_LOG_BYTES,
+    };
+    use crate::adaptive_resources::{
+        AdaptiveAdmission, ResourceSnapshot, WorkerPeak,
+    };
+    use fullmag_ir::{ParallelExecutionModeIR, ParallelExecutionPolicyIR};
     use std::io::Cursor;
     use std::sync::atomic::{AtomicBool, Ordering};
+    use std::time::Instant;
+
+    fn adaptive_policy() -> ParallelExecutionPolicyIR {
+        ParallelExecutionPolicyIR {
+            mode: ParallelExecutionModeIR::Adaptive,
+            ..Default::default()
+        }
+    }
+
+    fn memory_snapshot(now: Instant, memory_available_bytes: u64) -> ResourceSnapshot {
+        ResourceSnapshot {
+            sampled_at: now,
+            sampled_at_unix_ms: 1,
+            allocated_cpu_cores: 8.0,
+            cpu_busy_percent: 10.0,
+            cpu_available_cores: 7.2,
+            memory_limit_bytes: 16 << 30,
+            memory_available_bytes,
+            allocation_sources: vec!["fixture".into()],
+        }
+    }
+
+    #[test]
+    fn reserve_that_consumes_allowed_memory_budget_is_typed_before_calibration() {
+        let now = Instant::now();
+        let mut policy = adaptive_policy();
+        policy.memory_reserve_bytes = 13 << 30;
+        let resources = memory_snapshot(now, 16 << 30);
+        let mut admission = AdaptiveAdmission::new(policy.clone()).unwrap();
+        let decision = admission.decide(Some(&resources), 0, 0.0, 0, 2, now);
+        assert_eq!(decision.reason, "insufficient_memory_for_probe");
+        let allowed_memory_bytes =
+            (resources.memory_limit_bytes as f64 * policy.max_memory_percent / 100.0) as u64;
+        assert_eq!(
+            classify_permanent_admission_infeasibility(
+                &policy,
+                &decision,
+                Some(&resources),
+                WorkerPeak::default(),
+                false,
+            ),
+            Some(PermanentAdmissionInfeasibility::MemoryReserveConsumesAllowedBudget {
+                allowed_memory_bytes,
+                reserve_bytes: policy.memory_reserve_bytes,
+            })
+        );
+    }
+
+    #[test]
+    fn temporary_memory_pressure_waits_before_and_after_calibration() {
+        let now = Instant::now();
+        let policy = adaptive_policy();
+
+        // This leaves no probe headroom now, but the allowed pool budget is
+        // still positive and can recover when neighboring work releases memory.
+        let before_calibration_resources = memory_snapshot(now, 4 << 30);
+        let mut before_calibration = AdaptiveAdmission::new(policy.clone()).unwrap();
+        let before_decision = before_calibration.decide(
+            Some(&before_calibration_resources),
+            0,
+            0.0,
+            0,
+            2,
+            now,
+        );
+        assert_eq!(before_decision.reason, "insufficient_memory_for_probe");
+        assert_eq!(
+            classify_permanent_admission_infeasibility(
+                &policy,
+                &before_decision,
+                Some(&before_calibration_resources),
+                WorkerPeak::default(),
+                false,
+            ),
+            None
+        );
+
+        let calibrated_peak = WorkerPeak {
+            cpu_cores: 1.0,
+            rss_bytes: 4 << 30,
+        };
+        let after_calibration_resources = memory_snapshot(now, 7 << 30);
+        let mut after_calibration = AdaptiveAdmission::new(policy.clone()).unwrap();
+        after_calibration.observe(calibrated_peak).unwrap();
+        after_calibration.completed_probe().unwrap();
+        let after_decision = after_calibration.decide(
+            Some(&after_calibration_resources),
+            0,
+            0.0,
+            0,
+            2,
+            now,
+        );
+        assert_eq!(after_decision.reason, "insufficient_memory_for_worker");
+        assert_eq!(
+            classify_permanent_admission_infeasibility(
+                &policy,
+                &after_decision,
+                Some(&after_calibration_resources),
+                calibrated_peak,
+                true,
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn calibrated_worker_envelope_over_budget_is_typed() {
+        let now = Instant::now();
+        let policy = adaptive_policy();
+        let resources = memory_snapshot(now, 16 << 30);
+        let calibrated_peak = WorkerPeak {
+            cpu_cores: 1.0,
+            rss_bytes: 10 << 30,
+        };
+        let mut admission = AdaptiveAdmission::new(policy.clone()).unwrap();
+        admission.observe(calibrated_peak).unwrap();
+        admission.completed_probe().unwrap();
+        let decision = admission.decide(Some(&resources), 0, 0.0, 0, 2, now);
+        assert_eq!(decision.reason, "insufficient_memory_for_worker");
+        let allowed_memory_bytes =
+            (resources.memory_limit_bytes as f64 * policy.max_memory_percent / 100.0) as u64;
+        let pool_memory_budget_bytes =
+            allowed_memory_bytes.saturating_sub(policy.memory_reserve_bytes);
+        assert_eq!(
+            classify_permanent_admission_infeasibility(
+                &policy,
+                &decision,
+                Some(&resources),
+                calibrated_peak,
+                true,
+            ),
+            Some(
+                PermanentAdmissionInfeasibility::CalibratedWorkerEnvelopeExceedsBudget {
+                    worker_memory_envelope_bytes: (10 << 30) + ((10 << 30) / 4),
+                    pool_memory_budget_bytes,
+                }
+            )
+        );
+    }
+
+    #[test]
+    fn callback_cancellation_takes_precedence_over_permanent_admission_failure() {
+        let cancel = AtomicBool::new(false);
+        let failure =
+            Some(PermanentAdmissionInfeasibility::MemoryReserveConsumesAllowedBudget {
+                allowed_memory_bytes: 100,
+                reserve_bytes: 100,
+            });
+        assert!(!admission_may_spawn_worker(&cancel, true));
+        assert!(cancel.load(Ordering::Relaxed));
+        assert_eq!(
+            permanent_admission_failure_if_running(failure, &cancel, true, 0, 2),
+            None
+        );
+    }
 
     #[test]
     fn live_worker_peak_closes_admission_before_completion_and_keeps_calibration_closed() {
