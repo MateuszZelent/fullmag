@@ -190,7 +190,8 @@ describe("analysis plots smoke script", () => {
     expect(viewportSmokeScript).toContain("Frequency Response");
     expect(viewportSmokeScript).toContain("Eigenmodes");
     expect(viewportSmokeScript).toContain("Dispersion");
-    expect(viewportSmokeScript).toContain('getAttribute("data-state") === "active"');
+    expect(viewportSmokeScript).toContain("selectAnalysisSurfaceFromExplorer");
+    expect(viewportSmokeScript).toContain('getAttribute("data-analysis-surface-title") === surfaceId');
     expect(viewportSmokeScript).toContain(".fm-chart-section, .fm-analysis-plots__empty, [role='status']");
     expect(viewportSmokeScript).toContain("assertHealthyCanvas");
     expect(viewportSmokeScript).toContain("isContextLost()");
