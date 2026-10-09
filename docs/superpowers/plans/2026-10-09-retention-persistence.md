@@ -1,6 +1,6 @@
 # Plan naprawy 4206911501: trwałe duże plany retencji
 
-Status źródeł: SOURCE PASS po niezależnym review. Hosted wykonanie i realstorage pozostają niekwalifikowane.
+Status: SOURCE PASS i hosted regresje Linux/Windows PASS. Realstorage oraz odrębne bramki API/UI pozostają niekwalifikowane.
 
 ## Przyczyna i zakres
 
@@ -57,3 +57,7 @@ AST i diff-check PASS. Wymagane wykonanie: istniejący runner-retention-contract
 w bootstrap scope=retention, matrix Linux/Windows. Nowy plik testów obejmuje
 istniejący discovery test_local_runner_retention*.py. Nie uruchomiono lokalnych
 testów ani operacji sprzątania; SOURCE PASS nie zamyka bramek API/UI i realstorage.
+
+## Wynik hosted weryfikacji
+
+Commit `3460021275da3059343903f09e69069abe221f83`, workflow [37973792165](https://github.com/MateuszZelent/fullmag/actions/runs/37973792165): SUCCESS. Jobs Linux `113966818249` i Windows `113966818226`: retention discovery po 77 testów, PASS z jednym platformowym skipem. Linux wykonał rzeczywistą podmianę FIFO; Windows potwierdził opener/reparse contracts. Oba wykonały capacity-before-mutation, konflikt części zachowujący manifest, duży plan, częściowy receipt i dual-error envelope. Dodatkowe runtime quarantine, runtime references i source compaction kroki PASS. To dowód warstwy persistence, nie pełnej ścieżki UI ani sprzątania produkcyjnego storage.
