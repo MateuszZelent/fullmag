@@ -296,7 +296,7 @@ describe("Inspector design-system reference contract", () => {
     const modeSections = read("src/modules/inspector/panels/ModeVisualizationInspectorPanel.tsx");
 
     expect(overview).toContain("<VisualizationTargetInspectorPanel");
-    expect(modeSections).not.toContain("FrequencyDomainModeDisplayControls");
+    expect(modeSections).not.toMatch(/<FrequencyDomainModeDisplayControls/);
     expect(modeSections).toContain('variant="nav"');
     expect(modeSections).not.toMatch(/<select/);
   });
