@@ -1082,7 +1082,10 @@ PetscErrorCode stop_native_floquet_eps(
         requested,
         reason,
         nullptr);
-    if (error != 0 || *reason != EPS_CONVERGED_ITERATING) {
+    // Preserve solver failures, but observe cancellation on the final
+    // successful iteration too. Completion must not skip a one-shot request
+    // that becomes visible in this stopping callback.
+    if (error != 0 || *reason < 0) {
         return error;
     }
     auto *context =

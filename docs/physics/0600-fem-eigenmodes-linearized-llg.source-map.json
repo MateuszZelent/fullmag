@@ -160,6 +160,12 @@
       "path": "crates/fullmag-runner/src/fem/eigen_tests.rs",
       "symbol": "relaxed_path_source_fixture_handoff_is_reused_for_each_nonzero_k_sample_without_per_sample_relaxation",
       "responsibility": "Add a source-level real-path regression with an explicit accepted-handoff fixture, nonzero first k and per-sample binding checks; this does not qualify physical equilibrium or runtime."
+    },
+    {
+      "id": "source-eps-cancellation-boundary",
+      "path": "backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp",
+      "symbol": "stop_native_floquet_eps",
+      "responsibility": "Preserve negative solver reasons and poll explicit cancellation on iterating and final successful EPS iterations; pending managed runtime proof."
     }
   ],
   "public_api": {

@@ -279,7 +279,13 @@ PETSc v3.24.6 documents why: `KSPGMRESBuildSoln` can set `KSP_DIVERGED_BREAKDOWN
 
 If the post-build reason is negative, preserve it and leave candidate probes and their norms unavailable; do not run `MatMult` or norm queries for that candidate. Propagate errors from the reason query, and do not issue follow-up queries after a hard error. A measured zero is not a missing-data sentinel: zero right-hand side and zero solution remain legal data. This admission guard does not change residual tolerances or matrix policy.
 
-The standalone zero-operator GMRES test is registered in .github/workflows/shifted-ksp-true-convergence.yml and runs against distro PETSc; the managed Floquet CMake/CTest path is also registered. Execution of this new post-build reason guard in either workflow remains **NOT VERIFIED**.
+The standalone zero-operator GMRES test is registered in .github/workflows/shifted-ksp-true-convergence.yml and runs against distro PETSc; the managed Floquet CMake/CTest path is also registered. The standalone workflow [37941002371](https://github.com/MateuszZelent/fullmag/actions/runs/37941002371) passed the real PETSc 3.19.6 regression on commit `4fd43b894ec96c266dbed34a52aa431b46a5c53f`, including the intentional callback exercise against a live failed GMRES solve. Execution with the managed PETSc/SLEPc stack remains **NOT VERIFIED**; the standalone result does not qualify a physical eigenproblem.
+
+## Cancellation at the EPS stopping boundary
+
+The native Floquet EPS stopping callback preserves errors from `EPSStoppingBasic` and negative EPS divergence reasons. For an iterating or successfully converged iteration, it polls the explicit cancellation callback before admitting completion. An observed request records `EPS_CONVERGED_USER` and the terminal `cancelled` result, including when the request is visible only on the final successful iteration. The existing post-solve cancellation check remains a separate safeguard; a post-solve poll alone does not prove that EPS stopped with `EPS_CONVERGED_USER`.
+
+This control-plane priority does not change the eigenproblem, residual gates, Krylov dimensions or iteration budgets. The persistent and one-shot real EPS regressions both require the user stop reason. Execution of the corrected stopping callback remains **NOT VERIFIED** until the managed Floquet CI reports those assertions passing.
 
 ## Normalization and modal fields
 
@@ -737,6 +743,7 @@ ferromagnetic films*, J. Phys. C 19 (1986), DOI:10.1088/0022-3719/19/35/7013.
 | `packages/fullmag-py/src/fullmag/model/study.py` | `class Eigenmodes` | Validate public modal parameters. |
 | `crates/fullmag-plan/src/fem.rs` | `plan_fem_eigen` | Lower the FEM eigen study and enforce capability policy. |
 | `crates/fullmag-runner/src/fem/eigen_path.rs` | `execute_fem_eigen_path` | Execute k samples and publish postsolve comparisons. |
+| `backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp` | `stop_native_floquet_eps` | Preserve negative EPS reasons and poll cancellation on the final successful iteration. |
 | `backends/fem/cpu/frequency_domain/modal/shifted_ksp_true_convergence.hpp` | `floquet_shifted_true_convergence_test` | Guard candidate admission after PETSc GMRES solution building; preserve negative reason and unavailable probes. |
 | `packages/fullmag-py/src/fullmag/world.py` | `add_relax` | Author a separate upstream Relax stage for a relaxed-initial-state eigen study. |
 | `crates/fullmag-cli/src/orchestrator.rs` | `accepted_relax_handoff_for_eigen_stage` | Resolve the accepted Relax-stage handoff; direct runner calls without it fail closed. |

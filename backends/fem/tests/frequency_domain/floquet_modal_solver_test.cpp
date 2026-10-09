@@ -1462,6 +1462,19 @@ void refills_native_floquet_nev_before_tangent_mass_cap()
     const auto cancelled_result =
         fd::solve_floquet_shared_domain_sparse_modal_spectrum(
             operator_view, cancellation_request);
+    if (!cancelled_result.eps_converged_reason_available ||
+        cancelled_result.eps_converged_reason != EPS_CONVERGED_USER ||
+        !cancelled_result.eps_cancellation_observed) {
+        std::fprintf(stderr,
+                     "DIAG: EPS cancellation polls=%d attempts=%d solved=%d "
+                     "observed=%d reason_available=%d reason=%d\n",
+                     cancellation.poll_count,
+                     cancelled_result.eps_attempt_count,
+                     cancelled_result.eps_solved_attempt_count,
+                     cancelled_result.eps_cancellation_observed ? 1 : 0,
+                     cancelled_result.eps_converged_reason_available ? 1 : 0,
+                     cancelled_result.eps_converged_reason);
+    }
     check(!cancelled_result.ok &&
               cancelled_result.status != nullptr &&
               std::strcmp(cancelled_result.status, "cancelled") == 0 &&
@@ -1500,6 +1513,8 @@ void refills_native_floquet_nev_before_tangent_mass_cap()
               one_shot_result.eps_cancellation_observed &&
               one_shot_result.eps_attempt_count == 1 &&
               one_shot_result.eps_solved_attempt_count == 1 &&
+              one_shot_result.eps_converged_reason_available &&
+              one_shot_result.eps_converged_reason == EPS_CONVERGED_USER &&
               one_shot_cancellation.fired,
           "a one-shot cancellation after EPS starts remains terminal if later polls clear");
 #endif
