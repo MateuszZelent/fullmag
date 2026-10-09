@@ -13192,6 +13192,56 @@ fn fem_eigen_floquet_dynamic_demag_requires_explicit_airbox_cpu_path() {
             && reason.contains("DMI")
     }));
 
+    let mut zero_scalar_dmi = ir.clone();
+    zero_scalar_dmi.energy_terms.extend([
+        fullmag_ir::EnergyTermIR::InterfacialDmi {
+            d: -0.0,
+            interface_normal: None,
+        },
+        fullmag_ir::EnergyTermIR::BulkDmi { d: 0.0 },
+    ]);
+    let zero_scalar_dmi_plan = plan(&zero_scalar_dmi)
+        .expect("zero scalar DMI coefficients do not activate unsupported Floquet terms");
+    match zero_scalar_dmi_plan.backend_plan {
+        BackendPlanIR::FemEigen(fem) => {
+            assert_eq!(fem.interfacial_dmi, Some(-0.0));
+            assert_eq!(fem.bulk_dmi, Some(0.0));
+        }
+        other => panic!("expected FEM eigen plan, got {other:?}"),
+    }
+
+    let mut unsupported_interfacial_dmi = ir.clone();
+    unsupported_interfacial_dmi
+        .energy_terms
+        .push(fullmag_ir::EnergyTermIR::InterfacialDmi {
+            d: 1.0e-3,
+            interface_normal: None,
+        });
+    let interfacial_dmi_error = plan(&unsupported_interfacial_dmi)
+        .expect_err("Floquet airbox Schur lane must reject nonzero interfacial DMI");
+    assert!(interfacial_dmi_error.reasons.iter().any(|reason| {
+        reason.contains("floquet_airbox_dynamic_demag_unsupported_local_interaction")
+            && reason.contains("DMI")
+    }));
+
+    let mut nodal_interfacial_dmi = ir.clone();
+    nodal_interfacial_dmi.materials[0].dind_field = Some(vec![0.0; 8]);
+    let nodal_interfacial_dmi_error = plan(&nodal_interfacial_dmi)
+        .expect_err("Floquet airbox Schur lane must continue rejecting nodal interfacial DMI");
+    assert!(nodal_interfacial_dmi_error.reasons.iter().any(|reason| {
+        reason.contains("floquet_airbox_dynamic_demag_unsupported_local_interaction")
+            && reason.contains("DMI")
+    }));
+
+    let mut nodal_bulk_dmi = ir.clone();
+    nodal_bulk_dmi.materials[0].dbulk_field = Some(vec![0.0; 8]);
+    let nodal_bulk_dmi_error = plan(&nodal_bulk_dmi)
+        .expect_err("Floquet airbox Schur lane must continue rejecting nodal bulk DMI");
+    assert!(nodal_bulk_dmi_error.reasons.iter().any(|reason| {
+        reason.contains("floquet_airbox_dynamic_demag_unsupported_local_interaction")
+            && reason.contains("DMI")
+    }));
+
     if let fullmag_ir::StudyIR::Eigenmodes { k_sampling, .. } = &mut ir.study {
         *k_sampling = Some(fullmag_ir::KSamplingIR::Path {
             points: vec![

@@ -1667,9 +1667,9 @@ fn first_unsupported_floquet_airbox_local_interaction(
     bulk_dmi: Option<f64>,
     spin_wave_bc: &fullmag_ir::SpinWaveBoundaryConditionIR,
 ) -> Option<&'static str> {
-    // Axis metadata and exactly zero coefficients do not activate anisotropy.
-    // Keep every nonzero coefficient unsupported; no numerical floor belongs
-    // in this capability boundary.
+    // Exactly zero scalar coefficients do not activate anisotropy or DMI.
+    // Nodal DMI fields stay unsupported by presence; no numerical floor
+    // belongs in this capability boundary.
     if [
         material.uniaxial_anisotropy,
         material.uniaxial_anisotropy_k2,
@@ -1699,8 +1699,8 @@ fn first_unsupported_floquet_airbox_local_interaction(
     }
     if material.dind_field.is_some()
         || material.dbulk_field.is_some()
-        || interfacial_dmi.is_some()
-        || bulk_dmi.is_some()
+        || interfacial_dmi.is_some_and(|coefficient| coefficient != 0.0)
+        || bulk_dmi.is_some_and(|coefficient| coefficient != 0.0)
     {
         return Some("DMI");
     }

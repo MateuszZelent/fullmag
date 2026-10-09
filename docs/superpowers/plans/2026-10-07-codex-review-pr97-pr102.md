@@ -6,7 +6,7 @@ Pełny rejestr obejmuje 263 komentarzy liniowych Codex oraz jedną dodatkową uw
 
 PR #102 zamknięto 2026-10-07, zachowując remote branch `codex/launcher-instance-isolation-20261002` przy `954ba797307c4cc773772d380123893210cfa447`. PR #97 pozostaje otwarty do ukończenia rozpatrzenia i uzasadnionych poprawek. Merge ani usuwanie branchy nie są częścią polecenia zamknięcia PR-ów. Wcześniejszy WIP meshing zachowany osobno.
 
-Stan rejestru: `already_fixed`: 23, `duplicate`: 90, `implemented`: 65, `implemented_pending_ci`: 13, `not_actionable`: 2, `unsupported_recommendation`: 3, `valid_unfixed`: 68. Łącznie 264 wpisów; wszystkie wpisy oceniono; zasadnych nienaprawionych i brakujących bramek nie uznaje się za zakończone.
+Stan rejestru: `already_fixed`: 23, `duplicate`: 90, `implemented`: 65, `implemented_pending_ci`: 14, `not_actionable`: 2, `unsupported_recommendation`: 3, `valid_unfixed`: 67. Łącznie 264 wpisów; wszystkie wpisy oceniono; zasadnych nienaprawionych i brakujących bramek nie uznaje się za zakończone.
 
 Legenda: `pending` — nierozpatrzona; `valid_unfixed` — zasadna, nie naprawiona; `already_fixed` — poprawka potwierdzona aktualnym kodem; `duplicate` — powtórzenie; `unsupported_recommendation` — konkretna rekomendacja nie odpowiada kontraktowi; `implemented` — poprawka z potwierdzoną regresją CI; `implemented_pending_ci` — poprawka przygotowana, regresja oczekuje CI; `implemented_pending_browser` — pokrywające CI przeszło, nadal wymaga celowanego dowodu z przeglądarki; `not_actionable` — uwaga zastąpiona późniejszą jawną decyzją użytkownika.
 
@@ -277,7 +277,7 @@ Legenda: `pending` — nierozpatrzona; `valid_unfixed` — zasadna, nie naprawio
 | [4225198879](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4225198879) / #97 | `apps/control-room/src/kernel/analysis-modules/analysisNodeKindAliases.ts` | implemented_pending_ci | Pięć wybieralnych liści Resonance ma jawne aliasy istniejących zarejestrowanych templates. Wspólny routing surface i contextual ribbon zachowuje właściciela Resonance; Inspector kind nie zmienia się. |
 | [4225198873](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4225198873) / #97 | `crates/fullmag-api/src/router_v2/handlers/analysis/frequency_domain.rs` | valid_unfixed | artifact_set_id hash canonical directory path nie wykrywa mieszanych generacji plików. Wymagany spójny kontrakt producenta i czytelnika. |
 | [4225198867](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4225198867) / #97 | `apps/runner-console/src/views/StorageView.js` | duplicate | Ten sam ograniczony timeout pełnego skanu storage. Dirty StorageView nadal7000ms; wcześniej odrzucony zapis konsoli nie jest uznany za gotowy. Powtórzenie 4061898648. |
-| [4225198861](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4225198861) / #97 | `crates/fullmag-plan/src/fem.rs` | valid_unfixed | Floquet-airbox guard fem.rs używa is_some dla skalarów DMI, więc Some(0.0) odrzuca neutralny fizycznie przypadek; source potwierdza. |
+| [4225198861](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4225198861) / #97 | `crates/fullmag-plan/src/fem.rs` | implemented_pending_ci | Scalar DMI guard dopuszcza dokładne +0/-0, zachowując Some w requested plan; każdy niezerowy coefficient oraz pola węzłowe pozostają unsupported. Bez epsilon i bez zmiany legalności rzeczywistego DMI. |
 
 ## Przygotowane przyrosty
 
@@ -1727,3 +1727,10 @@ Generic37856133644 terminalnie FAIL przy kompilacji: std::strcmp brakowało cstr
 - #4225198879: dodano aliasy `modal.mode`, `driven.field`, `driven.frequency_points`, `driven.peaks` i `modal.coupling` do istniejących templates Resonance. `analysisModuleIdForNodeKind` i `analysisSurfaceForSelectionKind` używają tej samej tabeli co contextual ribbon. Nazwy selection kinds/Inspectorów bez zmian.
 - Regresja `it.each` sprawdza rzeczywisty owner i surface dla każdego liścia; istniejący test aliasów sprawdza deklarację każdego template. Source/diff review PASS, hosted tests/browser nadal pending; lokalnie żadnego testu/UI nie uruchamiano.
 - Output order fix jest na remote w `42bbce3d8b37737afcb0ee44cb8778f960338159`; hosted wykonanie nowych dwóch paczek będzie objęte następnym bootstrapem aktualnego checkpointu.
+
+
+### Neutralny skalar DMI — korekta planowania
+
+- #4225198861: `first_unsupported_floquet_airbox_local_interaction` dopuszcza dokładne `Some(+0.0)`/`Some(-0.0)` skalarów interfacial/bulk DMI. Niezerowe DMI i obecne pola węzłowe zachowują dotychczasowy unsupported diagnostic. Brakepsilon, nowej realizacji FE, ukrytego fallbacku lub zmiany requested/resolved device.
+- Jest to korekta admission dla fizycznie neutralnego termu, a nie udostępnienie niezaimplementowanego DMI. Istniejące noty0828/0831 i ograniczenie nonzero-k DMI pozostają w mocy; DSL/IR, strict/extended, execution vocabulary i schemat API bez zmian. Przegląd capability-matrix dotyczy wyłącznie planner boundary.
+- Istniejący pełny test `fem_eigen_floquet_dynamic_demag_requires_explicit_airbox_cpu_path` rozszerzono o zero scalar, nonzero scalar i obydwa nodal fields. Bootstrap uruchamia go jawnie. Source review/diff PASS; rustfmt parse wskazał wyłącznie wcześniejsze różnice formatowania poza tym fragmentem. Hosted tests pending; brak lokalnych testów/buildów.
