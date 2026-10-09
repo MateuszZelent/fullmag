@@ -172,7 +172,24 @@ jobs:
     def test_ci_installs_native_tools_before_contract_checks(self) -> None:
         workflow = (ROOT / ".github/workflows/bootstrap.yml").read_text()
 
-        self.assertEqual(workflow.count("sudo apt-get install -y ripgrep"), 1)
+        jobs = yaml.safe_load(workflow)["jobs"]
+        for job_name, first_consumer in (
+            ("api-hygiene-rg13", "check-api-hygiene.mjs"),
+            ("control-room-contracts", "ci-resource-first-gates.sh"),
+        ):
+            with self.subTest(job=job_name):
+                steps = jobs[job_name]["steps"]
+                installations = [
+                    index for index, step in enumerate(steps)
+                    if "sudo apt-get install -y ripgrep" in step.get("run", "")
+                ]
+                consumers = [
+                    index for index, step in enumerate(steps)
+                    if first_consumer in step.get("run", "")
+                ]
+                self.assertEqual(len(installations), 1)
+                self.assertEqual(len(consumers), 1)
+                self.assertLess(installations[0], consumers[0])
         self.assertIn("sudo apt-get install -y libglu1-mesa", workflow)
         self.assertIn('test "$(/usr/bin/rg --version | head -n 1)" = "ripgrep 13.0.0"', workflow)
 
