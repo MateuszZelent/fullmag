@@ -52,7 +52,7 @@ import type { ChartSeries } from "../chartTableModel";
 import { frequencyDomainChartSeriesForAnalysisPlots } from "../frequencyDomainSeriesAdapter";
 import type { ChartDataPresentationState } from "@/shared/analysis-charts/chartPresentationState";
 import type { AnalysisSubview } from "@/kernel/workspace/analysisViewPreferences";
-import { referenceOverlaySeries } from "../referenceOverlaySeries";
+import { publishedReferenceDatasetRevision, referenceOverlaySeries } from "../referenceOverlaySeries";
 
 const EMPTY_DEFINITIONS: readonly PostprocessingDefinition[] = Object.freeze([]);
 
@@ -243,6 +243,9 @@ export function useAnalysisFrequencyData(
     enabled: frequencyDomainRoute.primaryChart === "dispersion",
   });
   const referenceDefinitions = postprocessingDefinitions.data?.definitions ?? EMPTY_DEFINITIONS;
+  const referenceDatasetRevision = publishedReferenceDatasetRevision(
+    frequencyDomainManifest.data?.result_manifest?.payload,
+  );
   const frequencyDomainSeries = useMemo<ChartSeries[]>(() => {
     if (surfaceMismatch || resultContextMismatch) return [];
     switch (frequencyDomainRoute.primaryChart) {
@@ -253,6 +256,7 @@ export function useAnalysisFrequencyData(
         return [
           ...computed,
           ...referenceOverlaySeries(computed, referenceDefinitions, {
+            artifactRevision: referenceDatasetRevision,
             runId: frequencyDomainDispersion.data?.run_id ?? null,
             stageId: frequencyDomainDispersion.data?.stage_id ?? null,
           }),
@@ -274,6 +278,7 @@ export function useAnalysisFrequencyData(
         return [];
     }
   }, [
+    referenceDatasetRevision,
     frequencyDomainDispersion.data?.run_id,
     frequencyDomainDispersion.data?.stage_id,
     frequencyDomainDispersionModel,

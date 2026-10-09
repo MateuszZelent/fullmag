@@ -14,21 +14,30 @@ const FREQUENCY_DIVISORS: Readonly<Record<string, number>> = {
  * Overlay series for imported references saved as postprocessing definitions
  * (ADR 0054, spec 32 §9). They share the computed series' frequency unit and
  * path axis, and carry `reference_frequency`, so their points never select a
- * computed mode. Only references of the shown run and stage are drawn.
+ * computed mode. Only references of the shown run, stage and published revision are drawn.
  */
+/** Explicit published dataset fence; CSV content digests are separate identities. */
+export function publishedReferenceDatasetRevision(
+  payload: Record<string, unknown> | null | undefined,
+): string | null {
+  const revision = payload?.revision;
+  return typeof revision === "string" && revision.trim().length > 0 ? revision : null;
+}
+
 export function referenceOverlaySeries(
   computed: readonly ChartSeries[],
   definitions: readonly PostprocessingDefinition[],
-  identity: { runId: string | null; stageId: string | null },
+  identity: { artifactRevision: number | string | null; runId: string | null; stageId: string | null },
 ): ChartSeries[] {
   const template = computed[0];
   const divisor = template ? FREQUENCY_DIVISORS[template.unit] : undefined;
-  if (!template || !divisor || !identity.runId || !identity.stageId) return [];
+  if (!template || !divisor || !identity.runId || !identity.stageId || identity.artifactRevision === null) return [];
   return definitions.flatMap((definition): ChartSeries[] => {
     if (
       definition.module_id !== "analysis.dispersion" ||
       definition.data_ref.run_id !== identity.runId ||
-      definition.data_ref.dataset_id !== identity.stageId
+      definition.data_ref.dataset_id !== identity.stageId ||
+      definition.data_ref.dataset_revision !== String(identity.artifactRevision)
     ) {
       return [];
     }
