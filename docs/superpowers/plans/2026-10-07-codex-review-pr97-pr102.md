@@ -2146,3 +2146,9 @@ Nie dodano nowego testu porównującego jedynie tekst implementacji panelu; mocn
 - Regresje obejmują publiczny save i niezmienność stanu, raw history, V0.3/V0.4, planner, selektor path oraz rzeczywisty planned single-k entrypoint. Source review PASS; nota0831 i source-map validator PASS. Dodano jawne filtry GHA; wykonanie regresji nowych źródeł NOT VERIFIED.
 - W tym fragmencie poprawiono dziewięć testowych importów do istniejącego eigen_path::test_support oraz cztery pozytywne fixture quantity. Nie rozszerzono widoczności produkcyjnych funkcji. Scope4060116242 oraz flagi diagnostyczne4061061294 pozostają otwarte.
 - Poprzedni fragment CPP kompletności zapisany jako cd4918f392196770cfe9899d34494c08506d4156. Ledger269: implemented82, pendingCI14, valid_unfixed55, already_fixed23, duplicate90, unsupported3, not_actionable2. Są to wpisy review, nie procent kwalifikacji solvera.
+
+### CI po walidacji quantity (2026-10-09)
+
+- Publikacja2437c7d22bfd4b14b7623707048fb492ae5e7b15. Bootstrap37911565494 oraz nativecount37911560382 uruchomione na exactSHA. Generator API, Windows volatile storage, nativeABI i FDM relaxation mają SUCCESS; nie zastępują regresji quantity.
+- Rustjob113757705336 terminalFAIL: nowy test manual single-k przechwytuje Cell<i32>, co nie spełnia wymaganego Send callback. Poprawka używa AtomicUsize/Relaxed; asercja zero callbacków, niezmienność outputs i expected quantity error bez zmiany. To korekta testu, bez zmiany runtime. Nowe wykonanie regresji nadal wymagane.
+- Refresh11 wszystkich inline PR97: zero nowych wpisów Codex. PR97 OPEN, PR102 CLOSED. Pozostałe zasadnie otwarte uwagi blokują zamknięcie celu.

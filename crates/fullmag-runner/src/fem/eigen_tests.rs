@@ -10285,9 +10285,9 @@ fn spectrum_quantity_manual_single_k_planned_entry_rejects_before_callbacks() {
         quantity: "frequency_hz".to_string(),
     }];
     let before = outputs.clone();
-    let callback_count = std::cell::Cell::new(0);
+    let callback_count = std::sync::atomic::AtomicUsize::new(0);
     let mut callback = |_event: FemEigenProgress| {
-        callback_count.set(callback_count.get() + 1);
+        callback_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         StepAction::Continue
     };
 
@@ -10305,6 +10305,10 @@ fn spectrum_quantity_manual_single_k_planned_entry_rejects_before_callbacks() {
         "expected the spectrum contract error before equilibrium/provider work, got {}",
         error.message
     );
-    assert_eq!(callback_count.get(), 0, "invalid output must not emit progress");
+    assert_eq!(
+        callback_count.load(std::sync::atomic::Ordering::Relaxed),
+        0,
+        "invalid output must not emit progress"
+    );
     assert_eq!(outputs, before, "selection validation must not mutate inputs");
 }
