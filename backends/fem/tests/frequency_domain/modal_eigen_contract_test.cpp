@@ -3145,26 +3145,37 @@ void modal_floquet_shared_domain_original_descriptor_certification_is_fail_close
     }
     check(native_result.status == fd::FrequencyDomainStatus::ok,
           "native shared-domain modal contract provenance fixture must reach the Floquet solver");
-    const bool native_window_partial =
-        native_result.diagnostics_json.find(
-            "\"window_completeness\":{\"policy\":\"best_effort\",\"status\":\"partial_convergence\"") !=
-        std::string::npos;
-    const bool native_window_truncated =
-        native_result.diagnostics_json.find(
-            "\"window_completeness\":{\"policy\":\"best_effort\",\"status\":\"truncated_by_requested_count\"") !=
-        std::string::npos;
-    check(native_result.diagnostics_json.find("\"complete\":false") !=
+    const auto best_effort_window_status =
+        [](const char *diagnostics_json, int requested_mode_count) {
+            const double accepted_modes_before_cap = extract_json_number(
+                diagnostics_json,
+                "\"accepted_modes_before_cap\":",
+                "floquet_shared_domain_window_modes_before_cap");
+            return accepted_modes_before_cap >
+                    static_cast<double>(requested_mode_count)
+                ? "truncated_by_requested_count"
+                : "partial_convergence";
+        };
+    const char *native_window_status = best_effort_window_status(
+        native_result.diagnostics_json.c_str(),
+        native_request.requested_mode_count);
+    const std::string native_result_window_status =
+        "\"window_completeness\":\"" +
+        std::string(native_window_status) + "\"";
+    const std::string native_diagnostics_window_status =
+        "\"window_completeness\":{\"policy\":\"best_effort\",\"status\":\"" +
+        std::string(native_window_status) +
+        "\",\"certification_method\":\"none\"";
+    check(native_result.diagnostics_json.find(
+                  "\"complete\":false,\"execution_lane\":\"production_cpu\"") !=
                   std::string::npos &&
               native_result.diagnostics_json.find(
                   "\"unsupported_reason\":\"floquet_nev_refill_dimension_limit_reached\"") !=
                   std::string::npos &&
-              (native_window_partial || native_window_truncated) &&
-              (native_result.result_json.find(
-                   "\"window_completeness\":\"partial_convergence\"") !=
-                   std::string::npos ||
-               native_result.result_json.find(
-                   "\"window_completeness\":\"truncated_by_requested_count\"") !=
-                   std::string::npos),
+              native_result.diagnostics_json.find(
+                  native_diagnostics_window_status) != std::string::npos &&
+              native_result.result_json.find(native_result_window_status) !=
+                  std::string::npos,
           "native best_effort result preserves incomplete coverage and the actual refill reason");
     check(native_result.diagnostics_json.find(
               "\"operator_diagnostics\":{\"operator_family\":\"mfem_linearized_llg\","
@@ -3206,21 +3217,23 @@ void modal_floquet_shared_domain_original_descriptor_certification_is_fail_close
     }
     check(result.status == FULLMAG_FEM_FD_OK,
           "shared-domain Floquet production adapter must certify the original descriptor");
-    const bool cabi_window_partial =
-        contains(result.diagnostics_json,
-                 "\"window_completeness\":{\"policy\":\"best_effort\",\"status\":\"partial_convergence\"");
-    const bool cabi_window_truncated =
-        contains(result.diagnostics_json,
-                 "\"window_completeness\":{\"policy\":\"best_effort\",\"status\":\"truncated_by_requested_count\"");
-    check(contains(result.diagnostics_json, "\"complete\":false") &&
-              contains(result.diagnostics_json, "\"window_complete\":false") &&
+    const char *cabi_window_status = best_effort_window_status(
+        result.diagnostics_json,
+        request.requested_mode_count);
+    const std::string cabi_result_window_status =
+        "\"window_completeness\":\"" +
+        std::string(cabi_window_status) + "\"";
+    const std::string cabi_diagnostics_window_status =
+        "\"window_completeness\":{\"policy\":\"best_effort\",\"status\":\"" +
+        std::string(cabi_window_status) +
+        "\",\"certification_method\":\"none\"";
+    check(contains(result.diagnostics_json,
+                   "\"complete\":false,\"execution_lane\":\"production_cpu\"") &&
+              contains(result.diagnostics_json,
+                       cabi_diagnostics_window_status.c_str()) &&
               contains(result.diagnostics_json,
                        "\"unsupported_reason\":\"floquet_nev_refill_dimension_limit_reached\"") &&
-              (cabi_window_partial || cabi_window_truncated) &&
-              (contains(result.result_json,
-                        "\"window_completeness\":\"partial_convergence\"") ||
-               contains(result.result_json,
-                        "\"window_completeness\":\"truncated_by_requested_count\"")),
+              contains(result.result_json, cabi_result_window_status.c_str()),
           "best_effort C ABI result preserves incomplete coverage and its refill reason");
     check(contains(result.diagnostics_json,
                    "\"deduplication_inner_product\":\"floquet_positive_tangent_mass\"") &&
@@ -6412,13 +6425,13 @@ void modal_nonzero_k_floquet_shared_domain_nearest_reports_shifted_ksp_diagnosti
     const bool publication_cap_truncated_modes =
         accepted_modes_before_cap >
         static_cast<double>(window_request.requested_mode_count);
-    const char *expected_window_completeness = count_certificate_only ||
-            publication_cap_truncated_modes
-        ? "truncated_by_requested_count"
-        : contains(window_result.diagnostics_json,
-                   "\"stop_reason\":\"partial_convergence\"")
-            ? "partial_convergence"
-            : "not_certified";
+    const char *expected_window_completeness = "not_certified";
+    if (count_certificate_only || publication_cap_truncated_modes) {
+        expected_window_completeness = "truncated_by_requested_count";
+    } else if (contains(window_result.diagnostics_json,
+                        "\"stop_reason\":\"partial_convergence\"")) {
+        expected_window_completeness = "partial_convergence";
+    }
     const std::string expected_result_window_completeness =
         "\"window_completeness\":\"" +
         std::string(expected_window_completeness) + "\"";
@@ -6475,12 +6488,16 @@ void modal_nonzero_k_floquet_shared_domain_nearest_reports_shifted_ksp_diagnosti
                   contains(uncertified_count_result.diagnostics_json,
                            "\"certification_unavailable_reason\":\"native_floquet_count_certificate_unavailable\""),
               "certified_count fails closed when native Floquet has no count-certificate producer");
-        check(retained_uncertified_mode_count > 0.0 &&
+        check(retained_uncertified_mode_count == 1.0 &&
                   contains(uncertified_count_result.result_json, "\"modes\":[{") &&
                   contains(uncertified_count_result.diagnostics_json,
                            "\"additional_modes_may_exist\":true") &&
                   contains(uncertified_count_result.diagnostics_json,
-                           "\"window_complete\":false"),
+                           "\"complete\":false,\"execution_lane\":\"production_cpu\"") &&
+                  contains(uncertified_count_result.result_json,
+                           "\"window_completeness\":\"truncated_by_requested_count\"") &&
+                  contains(uncertified_count_result.diagnostics_json,
+                           "\"window_completeness\":{\"policy\":\"certified_count\",\"status\":\"truncated_by_requested_count\",\"certification_method\":\"none\""),
               "strict failure retains validated diagnostic modes without claiming window completeness");
 
         const double strict_modes_before_cap =
@@ -6551,20 +6568,33 @@ void modal_nonzero_k_floquet_shared_domain_nearest_reports_shifted_ksp_diagnosti
                    "\"status\":\"ok\"") &&
               contains(dimension_limited_one_result.result_json, "\"modes\":[{"),
           "best_effort dimension-limited window publishes its certified mode");
-    const bool dimension_limited_one_partial =
-        contains(dimension_limited_one_result.diagnostics_json,
-                 "\"window_completeness\":{\"policy\":\"best_effort\",\"status\":\"partial_convergence\"");
+    const double dimension_limited_one_modes_before_cap = extract_json_number(
+        dimension_limited_one_result.diagnostics_json,
+        "\"accepted_modes_before_cap\":",
+        "public_native_floquet_window_dimension_limited_modes_before_cap");
     const bool dimension_limited_one_truncated =
-        contains(dimension_limited_one_result.diagnostics_json,
-                 "\"window_completeness\":{\"policy\":\"best_effort\",\"status\":\"truncated_by_requested_count\"");
+        dimension_limited_one_modes_before_cap >
+        static_cast<double>(dimension_limited_one_request.requested_mode_count);
+    const char *expected_dimension_limited_one_window_status =
+        dimension_limited_one_truncated
+            ? "truncated_by_requested_count"
+            : "partial_convergence";
+    const std::string expected_dimension_limited_one_result_status =
+        "\"window_completeness\":\"" +
+        std::string(expected_dimension_limited_one_window_status) + "\"";
+    const std::string expected_dimension_limited_one_diagnostic_status =
+        "\"window_completeness\":{\"policy\":\"best_effort\",\"status\":\"" +
+        std::string(expected_dimension_limited_one_window_status) +
+        "\",\"certification_method\":\"none\"";
     check(contains(dimension_limited_one_result.diagnostics_json,
-                   "\"complete\":false") &&
+                   "\"complete\":false,\"execution_lane\":\"production_cpu\"") &&
               contains(dimension_limited_one_result.diagnostics_json,
-                       "\"window_complete\":false") &&
+                       expected_dimension_limited_one_diagnostic_status.c_str()) &&
+              contains(dimension_limited_one_result.result_json,
+                       expected_dimension_limited_one_result_status.c_str()) &&
               contains(dimension_limited_one_result.diagnostics_json,
-                       "\"unsupported_reason\":\"floquet_nev_refill_dimension_limit_reached\"") &&
-              (dimension_limited_one_partial || dimension_limited_one_truncated),
-          "dimension-limited best_effort diagnostics retain incomplete-window and exact internal-limit evidence");
+                       "\"unsupported_reason\":\"floquet_nev_refill_dimension_limit_reached\""),
+          "dimension-limited best_effort preserves its exact incomplete-window status and internal-limit evidence");
     if (dimension_limited_one_truncated) {
         check(contains(dimension_limited_one_result.diagnostics_json,
                        "\"result_truncated\":true") &&
@@ -6603,8 +6633,6 @@ void modal_nonzero_k_floquet_shared_domain_nearest_reports_shifted_ksp_diagnosti
               contains(underfilled_result.diagnostics_json,
                        "\"complete\":false") &&
               contains(underfilled_result.diagnostics_json,
-                       "\"window_complete\":false") &&
-              contains(underfilled_result.diagnostics_json,
                        "\"window_completeness\":{\"policy\":\"best_effort\",\"status\":\"partial_convergence\"") &&
               contains(underfilled_result.diagnostics_json,
                        "\"additional_modes_may_exist\":true") &&
@@ -6626,8 +6654,14 @@ void modal_nonzero_k_floquet_shared_domain_nearest_reports_shifted_ksp_diagnosti
     check(strict_count_result.status == FULLMAG_FEM_FD_SOLVE_ERROR,
           "certified_count policy remains fail-closed when dimension-limited refill leaves the window incomplete");
     check(contains(strict_count_result.result_json, "\"modes\":[{") &&
+              contains(strict_count_result.result_json,
+                       "\"window_completeness\":\"partial_convergence\"") &&
               contains(strict_count_result.diagnostics_json,
-                       "\"window_complete\":false") &&
+                       "\"complete\":false,\"execution_lane\":\"production_cpu\"") &&
+              contains(strict_count_result.diagnostics_json,
+                       "\"window_completeness\":{\"policy\":\"certified_count\",\"status\":\"partial_convergence\",\"certification_method\":\"none\"") &&
+              contains(strict_count_result.diagnostics_json,
+                       "\"certification_unavailable_reason\":\"native_floquet_count_certificate_unavailable\"") &&
               contains(strict_count_result.diagnostics_json,
                        "\"unsupported_reason\":\"floquet_nev_refill_dimension_limit_reached\""),
           "strict policy preserves certified partial modes and explicit refill evidence without claiming completion");
@@ -6696,9 +6730,13 @@ void modal_nonzero_k_floquet_shared_domain_nearest_reports_shifted_ksp_diagnosti
                        "\"shifted_ksp_failure_probe\":{\"schema_version\":\"shifted_ksp_failure_probe.v1\""),
           "window hard KSP failure preserves the failing subwindow probe in aggregate diagnostics");
     check(contains(hard_ksp_window_result.diagnostics_json,
-                   "\"window_complete\":false") &&
+                   "\"complete\":false,\"execution_lane\":\"production_cpu\"") &&
+              contains(hard_ksp_window_result.diagnostics_json,
+                       "\"window_completeness\":{\"policy\":\"best_effort\",\"status\":\"solver_error\"") &&
               contains(hard_ksp_window_result.result_json,
-                       "\"status\":\"solve_error\""),
+                       "\"status\":\"solve_error\"") &&
+              contains(hard_ksp_window_result.result_json,
+                       "\"window_completeness\":\"solver_error\""),
           "window failure probe does not promote the failed solve to completion");
     fullmag_fem_frequency_domain_result_destroy(&hard_ksp_window_result);
 #else
