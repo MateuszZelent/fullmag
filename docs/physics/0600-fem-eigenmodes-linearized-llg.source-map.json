@@ -184,6 +184,18 @@
       "path": "backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp",
       "symbol": "run_floquet_dense_original_oracle",
       "responsibility": "Record bounded raw and rotated eigenvalues and shift distances before window filtering, with explicit count and truncation; not candidate identity or physics qualification."
+    },
+    {
+      "id": "source-solver-policy-native-route",
+      "path": "crates/fullmag-plan/src/fem.rs",
+      "symbol": "fem_eigen_solver_policy_has_native_path",
+      "responsibility": "Reject nonempty modal solver controls on structurally selected reference paths without changing the equation."
+    },
+    {
+      "id": "source-solver-policy-runtime-admission",
+      "path": "crates/fullmag-runner/src/fem/eigen_execution.rs",
+      "symbol": "validate_modal_solver_policy_admission",
+      "responsibility": "Reject ignored reference controls before progress, relaxation handoff and artifacts; preserve no/all-null overrides."
     }
   ],
   "public_api": {

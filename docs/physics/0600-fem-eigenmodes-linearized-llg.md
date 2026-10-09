@@ -612,6 +612,15 @@ publikuje osobno wartości rzeczywiście rozwiązane przez EPS/KSP. Ta ścieżka
 jest zintegrowana w źródłach, lecz nie została jeszcze potwierdzona w
 managed runtime dla benchmarku C0/C1/A1.
 
+Jawny `solver_policy` z przynajmniej jednym niepustym polem jest kontraktem
+sterowania natywnym PETSc/SLEPc. Referencyjne ścieżki dense/LOBPCG nie
+implementują tych nadpisań: planner i runtime mają odrzucić taką kombinację
+przed bootstrapem Relax, callbackami i publikacją artefaktów. Pusty lub
+all-null policy odpowiada brakowi nadpisania. Sama obecność policy nie może
+zmienić równania referencyjnego ani automatycznie przełączyć rodziny solvera.
+Requested controls pozostają w intencji użytkownika; odmowa nie jest cichym
+fallbackiem. Implementacja tej bramki przeszła niezależne SOURCE review; hosted regresje pozostają w toku.
+
 Początkowy komunikat postępu ma `max_iterations=None`, dopóki callback
 natywnego solvera nie dostarczy rozwiązanego limitu. Nie publikuje stałej 300.
 Mapowanie: `slepc_modal_eigen.hpp::SLEPcTinyGyrotropicModalEigenResult`,
@@ -760,6 +769,8 @@ ferromagnetic films*, J. Phys. C 19 (1986), DOI:10.1088/0022-3719/19/35/7013.
 |---|---|---|
 | `packages/fullmag-py/src/fullmag/model/study.py` | `class Eigenmodes` | Validate public modal parameters. |
 | `crates/fullmag-plan/src/fem.rs` | `plan_fem_eigen` | Lower the FEM eigen study and enforce capability policy. |
+| `crates/fullmag-plan/src/fem.rs` | `fem_eigen_solver_policy_has_native_path` | Reject ignored controls on structurally selected reference families. |
+| `crates/fullmag-runner/src/fem/eigen_execution.rs` | `validate_modal_solver_policy_admission` | Gate controls before progress/handoff/artifacts while retaining no/all-null compatibility. |
 | `crates/fullmag-runner/src/fem/eigen_path.rs` | `execute_fem_eigen_path` | Execute k samples and publish postsolve comparisons. |
 | `backends/fem/core/petsc_slepc_runtime.cpp` | `petsc_slepc_process_mutex` | Own one nonrecursive PETSc/SLEPc operation boundary for CPU/GPU, with unsafe retained-graph shutdown protection. |
 | `backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp` | `stop_native_floquet_eps` | Preserve negative EPS reasons and poll cancellation on the final successful iteration. |

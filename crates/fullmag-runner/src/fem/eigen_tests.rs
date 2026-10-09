@@ -7904,6 +7904,22 @@ fn native_gpu_shared_domain_requires_operator_demag_flag() {
 }
 
 #[test]
+fn native_gpu_shared_domain_rejects_nonfinite_target_frequency() {
+    let mut plan = minimal_native_modal_plan();
+    plan.operator.kind = fullmag_ir::EigenOperatorIR::Full2x2;
+    plan.operator.include_demag = true;
+    plan.enable_demag = true;
+    plan.damping_policy = EigenDampingPolicyIR::Ignore;
+    plan.target = fullmag_ir::EigenTargetIR::FrequencyWindow {
+        frequency_min_hz: 1.0e9,
+        frequency_max_hz: f64::INFINITY,
+    };
+    add_minimal_shared_domain_periodic_airbox(&mut plan);
+
+    assert!(!native_gpu_shared_domain_modal_supported(&plan));
+}
+
+#[test]
 fn shared_domain_k0_v6_producer_unlocks_native_magnetic_gate() {
     let mut plan = minimal_native_modal_plan();
     add_minimal_shared_domain_periodic_airbox(&mut plan);
@@ -10535,6 +10551,56 @@ fn eigen_diagnostics_reference_single_k_executor_publishes_without_native_provid
         include_orthogonality: false,
     }];
 
+    let mut policy_plan = plan.clone();
+    policy_plan.solver_policy = Some(fullmag_ir::FemEigenSolverPolicyIR {
+        residual_tolerance: Some(1.0e-8),
+        max_outer_iterations: None,
+        max_linear_iterations: None,
+    });
+    let policy_handoff = AcceptedFemEigenEquilibriumHandoff::from_accepted_linearization(
+        &policy_plan,
+        policy_plan.equilibrium_magnetization.clone(),
+        format!("sha256:{}", "c".repeat(64)),
+        format!("sha256:{}", "d".repeat(64)),
+    )
+    .expect("the reference policy fixture should retain a valid accepted handoff");
+    let callback_count = std::sync::atomic::AtomicUsize::new(0);
+    let mut callback = |_event: FemEigenProgress| {
+        callback_count.fetch_add(1, Ordering::Relaxed);
+        StepAction::Continue
+    };
+    let before_outputs = outputs.clone();
+    let policy_error = execute_fem_eigen_inner(
+        &policy_plan,
+        &outputs,
+        false,
+        false,
+        Some(&mut callback),
+        0,
+        None,
+        None,
+        Some(&policy_handoff),
+        None,
+        None,
+    )
+    .expect_err("reference runtime must reject explicit native solver controls");
+    assert!(
+        policy_error
+            .message
+            .contains("modal_solver_policy_requires_native_petsc_slepc_path"),
+        "unexpected policy error: {}",
+        policy_error.message
+    );
+    assert_eq!(
+        callback_count.load(Ordering::Relaxed),
+        0,
+        "reference policy rejection must happen before progress"
+    );
+    assert_eq!(
+        outputs, before_outputs,
+        "rejection must preserve output intent"
+    );
+
     let run = execute_fem_eigen_inner(
         &plan,
         &outputs,
@@ -10564,6 +10630,39 @@ fn eigen_diagnostics_reference_single_k_executor_publishes_without_native_provid
     assert_eq!(diagnostics["tangent_leakage"]["status"], "available");
     assert_eq!(diagnostics["residuals"]["data"]["mode_count"], diagnostics["mode_count"]);
     assert_eq!(diagnostics["tangent_leakage"]["data"]["mode_count"], diagnostics["mode_count"]);
+
+    let mut empty_policy_plan = plan.clone();
+    empty_policy_plan.solver_policy = Some(fullmag_ir::FemEigenSolverPolicyIR {
+        residual_tolerance: None,
+        max_outer_iterations: None,
+        max_linear_iterations: None,
+    });
+    let empty_policy_handoff = AcceptedFemEigenEquilibriumHandoff::from_accepted_linearization(
+        &empty_policy_plan,
+        empty_policy_plan.equilibrium_magnetization.clone(),
+        format!("sha256:{}", "e".repeat(64)),
+        format!("sha256:{}", "f".repeat(64)),
+    )
+    .expect("an all-null manual policy should retain a valid accepted handoff");
+    let empty_policy_run = execute_fem_eigen_inner(
+        &empty_policy_plan,
+        &outputs,
+        false,
+        false,
+        None,
+        0,
+        None,
+        None,
+        Some(&empty_policy_handoff),
+        None,
+        None,
+    )
+    .expect("manual all-null policy must preserve reference compatibility");
+    assert!(empty_policy_run
+        .provenance
+        .execution_engine
+        .contains("cpu_baseline_fem_eigen"));
+    assert_eigen_diagnostics_only_artifacts(&empty_policy_run.auxiliary_artifacts);
 }
 
 #[test]
@@ -10591,6 +10690,11 @@ fn relaxed_path_source_fixture_handoff_is_reused_for_each_nonzero_k_sample_witho
             .collect(),
         samples_per_segment: vec![1, 1],
         closed: false,
+    });
+    plan.solver_policy = Some(fullmag_ir::FemEigenSolverPolicyIR {
+        residual_tolerance: None,
+        max_outer_iterations: None,
+        max_linear_iterations: None,
     });
 
     let topology = MeshTopology::from_ir(&plan.mesh).expect("Floquet path fixture topology");
@@ -10629,6 +10733,46 @@ fn relaxed_path_source_fixture_handoff_is_reused_for_each_nonzero_k_sample_witho
             include_branch_table: true,
         },
     ];
+
+    let mut policy_plan = plan.clone();
+    policy_plan.solver_policy = Some(fullmag_ir::FemEigenSolverPolicyIR {
+        residual_tolerance: None,
+        max_outer_iterations: Some(24),
+        max_linear_iterations: None,
+    });
+    let policy_handoff = relax_handoff_from_completion(&policy_plan, &accepted_relax_completion())
+        .expect("the reference-policy path fixture should carry an accepted handoff");
+    let callback_count = std::sync::atomic::AtomicUsize::new(0);
+    let mut callback = |_event: FemEigenProgress| {
+        callback_count.fetch_add(1, Ordering::Relaxed);
+        StepAction::Continue
+    };
+    let before_outputs = outputs.clone();
+    let policy_error = super::execute_fem_eigen_path_with_producer_identity(
+        PlannedFemEigenExecution::legacy(FemEigenExecutionLane::Cpu),
+        &policy_plan,
+        &outputs,
+        Some(&policy_handoff),
+        Some(&mut callback),
+        None,
+    )
+    .expect_err("reference k path must reject controls before progress or artifacts");
+    assert!(
+        policy_error
+            .message
+            .contains("modal_solver_policy_requires_native_petsc_slepc_path"),
+        "unexpected path policy error: {}",
+        policy_error.message
+    );
+    assert_eq!(
+        callback_count.load(Ordering::Relaxed),
+        0,
+        "the path-level policy preflight must precede per-sample progress"
+    );
+    assert_eq!(
+        outputs, before_outputs,
+        "rejection must preserve output intent"
+    );
 
     let missing_handoff_error =
         super::execute_fem_eigen_path_with_producer_identity_and_parallel_policy(

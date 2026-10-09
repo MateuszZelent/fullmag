@@ -1315,6 +1315,221 @@ fn eigen_solver_policy(problem: &ProblemIR) -> Result<Option<FemEigenSolverPolic
     }
 }
 
+const FEM_EIGEN_POLICY_GAMMA_K_TOLERANCE_RAD_PER_M: f64 = 1.0e-12;
+
+fn eigen_policy_gamma_sampling(k_sampling: Option<&fullmag_ir::KSamplingIR>) -> bool {
+    match k_sampling {
+        None => true,
+        Some(fullmag_ir::KSamplingIR::Single { k_vector }) => k_vector.iter().all(|value| {
+            value.is_finite() && value.abs() <= FEM_EIGEN_POLICY_GAMMA_K_TOLERANCE_RAD_PER_M
+        }),
+        Some(fullmag_ir::KSamplingIR::Path { points, .. }) => {
+            !points.is_empty()
+                && points.iter().all(|point| {
+                    point.k_vector.iter().all(|value| {
+                        value.is_finite()
+                            && value.abs() <= FEM_EIGEN_POLICY_GAMMA_K_TOLERANCE_RAD_PER_M
+                    })
+                })
+        }
+    }
+}
+
+fn eigen_policy_single_k0(k_sampling: Option<&fullmag_ir::KSamplingIR>) -> bool {
+    let Some(fullmag_ir::KSamplingIR::Single { k_vector }) = k_sampling else {
+        return false;
+    };
+    k_vector.iter().all(|value| {
+        value.is_finite() && value.abs() <= FEM_EIGEN_POLICY_GAMMA_K_TOLERANCE_RAD_PER_M
+    })
+}
+
+fn eigen_policy_k0_kittel_validation_requested(plan: &FemEigenPlanIR) -> bool {
+    plan.k0_kittel_validation
+        .as_ref()
+        .is_some_and(|validation| {
+            validation.kind == "k0_kittel_field_sweep"
+                && validation.case_id.as_deref() == Some("K0-3")
+                && validation.demag_kind.as_deref() == Some("periodic_airbox_k0")
+        })
+}
+
+fn eigen_policy_native_target_frequency_hz(target: &fullmag_ir::EigenTargetIR) -> f64 {
+    match target {
+        fullmag_ir::EigenTargetIR::Lowest => 0.0,
+        fullmag_ir::EigenTargetIR::Nearest { frequency_hz } => *frequency_hz,
+        fullmag_ir::EigenTargetIR::FrequencyWindow {
+            frequency_min_hz,
+            frequency_max_hz,
+        } => frequency_min_hz + 0.5 * (frequency_max_hz - frequency_min_hz),
+    }
+}
+
+fn eigen_policy_floquet_pair_sets_match(plan: &FemEigenPlanIR) -> bool {
+    let requested = plan.spin_wave_bc.boundary_pair_ids();
+    let requested_set = requested.iter().copied().collect::<BTreeSet<_>>();
+    let node_set = plan
+        .mesh
+        .periodic_node_pairs
+        .iter()
+        .map(|pair| pair.pair_id.as_str())
+        .collect::<BTreeSet<_>>();
+    let boundary_set = plan
+        .mesh
+        .periodic_boundary_pairs
+        .iter()
+        .map(|pair| pair.pair_id.as_str())
+        .collect::<BTreeSet<_>>();
+    !requested_set.is_empty()
+        && requested_set.len() == requested.len()
+        && requested_set == node_set
+        && requested_set == boundary_set
+}
+
+fn eigen_policy_floquet_dynamic_demag_path(
+    plan: &FemEigenPlanIR,
+    planned_path: bool,
+) -> bool {
+    planned_path
+        && plan.enable_demag
+        && plan.operator.include_demag
+        && matches!(plan.operator.kind, fullmag_ir::EigenOperatorIR::Full2x2)
+        && matches!(
+            plan.damping_policy,
+            fullmag_ir::EigenDampingPolicyIR::Ignore
+        )
+        && matches!(
+            plan.spin_wave_bc.kind(),
+            fullmag_ir::SpinWaveBoundaryKindIR::Floquet
+        )
+        && plan.domain_mesh_mode == fullmag_ir::FemDomainMeshModeIR::SharedDomainMeshWithAir
+        && plan.air_box_config.is_some()
+        && plan
+            .demag_realization
+            .is_some_and(|realization| realization.is_poisson())
+        && match &plan.target {
+            fullmag_ir::EigenTargetIR::FrequencyWindow { .. } => true,
+            fullmag_ir::EigenTargetIR::Nearest { frequency_hz } => {
+                frequency_hz.is_finite() && *frequency_hz > 0.0
+            }
+            fullmag_ir::EigenTargetIR::Lowest => false,
+        }
+        && eigen_policy_floquet_pair_sets_match(plan)
+}
+
+/// Classify only structural native solver families. Runtime provider and
+/// assembly availability remain a separate fail-closed admission check.
+fn fem_eigen_solver_policy_has_native_path(
+    plan: &FemEigenPlanIR,
+    requested_gpu: bool,
+    floquet_airbox_dynamic_demag_cpu_path: bool,
+) -> bool {
+    let full_2x2 = matches!(plan.operator.kind, fullmag_ir::EigenOperatorIR::Full2x2);
+    let damping_ignored = matches!(
+        plan.damping_policy,
+        fullmag_ir::EigenDampingPolicyIR::Ignore
+    );
+    let gamma_sampling = eigen_policy_gamma_sampling(plan.k_sampling.as_ref());
+
+    if requested_gpu {
+        let target_frequency_hz = eigen_policy_native_target_frequency_hz(&plan.target);
+        // Only the GPU shared-domain Krylov family consumes PETSc/SLEPc
+        // controls. The separate dense K0 Kittel route does not.
+        return plan.precision == ExecutionPrecision::Double
+            && plan.enable_demag
+            && plan.operator.include_demag
+            && full_2x2
+            && damping_ignored
+            && matches!(
+                plan.spin_wave_bc.kind(),
+                fullmag_ir::SpinWaveBoundaryKindIR::Periodic
+            )
+            && gamma_sampling
+            && plan.air_box_config.is_some()
+            && !plan.mesh.periodic_node_pairs.is_empty()
+            && !plan.mesh.periodic_boundary_pairs.is_empty()
+            && plan.count > 0
+            && plan.count <= 32
+            && target_frequency_hz.is_finite()
+            && target_frequency_hz > 0.0;
+    }
+
+    let k0_kittel_validation = eigen_policy_k0_kittel_validation_requested(plan);
+    let shared_domain_k0_requested = plan.enable_demag
+        && plan.operator.include_demag
+        && (full_2x2 || k0_kittel_validation)
+        && damping_ignored
+        && (matches!(
+            plan.spin_wave_bc.kind(),
+            fullmag_ir::SpinWaveBoundaryKindIR::Periodic
+        ) || k0_kittel_validation)
+        && (gamma_sampling || k0_kittel_validation)
+        && (plan.air_box_config.is_some() || k0_kittel_validation)
+        && plan.count > 0
+        && eigen_policy_native_target_frequency_hz(&plan.target).is_finite()
+        && eigen_policy_native_target_frequency_hz(&plan.target) >= 0.0;
+    let floquet_airbox_dynamic_demag_cpu_path =
+        eigen_policy_floquet_dynamic_demag_path(plan, floquet_airbox_dynamic_demag_cpu_path);
+    if shared_domain_k0_requested || floquet_airbox_dynamic_demag_cpu_path {
+        return true;
+    }
+
+    let target_window = matches!(
+        plan.target,
+        fullmag_ir::EigenTargetIR::FrequencyWindow { .. }
+    );
+    let periodic_k0_runner_operator = target_window
+        && full_2x2
+        && damping_ignored
+        && !plan.enable_demag
+        && !plan.operator.include_demag
+        && matches!(
+            plan.spin_wave_bc.kind(),
+            fullmag_ir::SpinWaveBoundaryKindIR::Periodic
+        )
+        && eigen_policy_single_k0(plan.k_sampling.as_ref());
+    if periodic_k0_runner_operator {
+        return true;
+    }
+
+    let floquet_payload_path = !plan.operator.include_demag
+        && matches!(
+            plan.spin_wave_bc.kind(),
+            fullmag_ir::SpinWaveBoundaryKindIR::Floquet
+        )
+        && matches!(
+            plan.k_sampling.as_ref(),
+            Some(fullmag_ir::KSamplingIR::Single { .. })
+                | Some(fullmag_ir::KSamplingIR::Path { .. })
+        )
+        && {
+            let requested_pair_ids = plan.spin_wave_bc.boundary_pair_ids();
+            !requested_pair_ids.is_empty()
+                && requested_pair_ids.iter().any(|pair_id| {
+                    let has_nodes = plan
+                        .mesh
+                        .periodic_node_pairs
+                        .iter()
+                        .any(|pair| pair.pair_id == *pair_id);
+                    let has_translation = plan
+                        .mesh
+                        .periodic_boundary_pairs
+                        .iter()
+                        .any(|pair| pair.pair_id == *pair_id && pair.translation.is_some());
+                    has_nodes && has_translation
+                })
+        };
+
+    target_window
+        && full_2x2
+        && damping_ignored
+        && ((matches!(
+            plan.spin_wave_bc.kind(),
+            fullmag_ir::SpinWaveBoundaryKindIR::Free
+        ) && gamma_sampling)
+            || floquet_payload_path)
+}
+
 fn validate_eigen_k0_kittel_validation(
     validation: &FemEigenK0KittelValidationIR,
 ) -> Result<(), PlanError> {
@@ -5667,6 +5882,21 @@ pub(crate) fn plan_fem_eigen(
         k0_kittel_validation,
         solver_policy,
     };
+
+    if fem_plan.solver_policy.is_some()
+        && !fem_eigen_solver_policy_has_native_path(
+            &fem_plan,
+            runtime_requests_cuda(problem),
+            floquet_airbox_dynamic_demag_cpu_path,
+        )
+    {
+        return Err(PlanError {
+            reasons: vec![
+                "runtime_metadata.modal_solver_policy requires a structurally selected native PETSc/SLEPc FEM modal path; reference dense/LOBPCG paths do not implement solver overrides"
+                    .to_string(),
+            ],
+        });
+    }
 
     let study_note = format!(
         "study: eigenmodes operator={:?} count={} normalization={:?} damping_policy={:?}",

@@ -160,6 +160,9 @@ jobs:
       - name: Run modal solver policy planning contracts
         run: |
           cargo test -p fullmag-plan fem_eigen_modal_solver_policy --lib
+          cargo test -p fullmag-runner eigen_diagnostics_reference_single_k_executor_publishes_without_native_provider --lib
+          cargo test -p fullmag-runner relaxed_path_source_fixture_handoff_is_reused_for_each_nonzero_k_sample_without_per_sample_relaxation --lib
+          cargo test -p fullmag-runner native_gpu_shared_domain_rejects_nonfinite_target_frequency --lib
           cargo test -p fullmag-plan fem_eigen_floquet_dynamic_demag_requires_explicit_airbox_cpu_path --lib
           cargo test -p fullmag-runner shared_domain_modal_scope_rejects_uncertified_local_tangent_terms --lib
           cargo test -p fullmag-runner material_identity_tests --lib

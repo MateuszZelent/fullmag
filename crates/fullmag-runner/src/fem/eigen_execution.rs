@@ -1,4 +1,5 @@
 use super::eigen_capability::{
+    modal_solver_policy_has_controls, modal_solver_policy_native_path_supported,
     native_cpu_modal_window_enabled, native_cpu_modal_window_has_floquet_dynamic_demag_path,
     native_gpu_k0_kittel_modal_supported, native_gpu_shared_domain_modal_supported,
 };
@@ -90,6 +91,23 @@ use num_complex::Complex64;
 use std::collections::BTreeSet;
 
 use crate::dispatch::FemEngine;
+
+pub(super) fn validate_modal_solver_policy_admission(
+    plan: &FemEigenPlanIR,
+    try_gpu: bool,
+    use_native_modal_production: bool,
+) -> Result<(), RunError> {
+    if modal_solver_policy_has_controls(plan)
+        && (!use_native_modal_production
+            || !modal_solver_policy_native_path_supported(plan, try_gpu))
+    {
+        return Err(RunError {
+            message: "modal_solver_policy_requires_native_petsc_slepc_path: reference dense/LOBPCG paths do not implement solver overrides"
+                .to_string(),
+        });
+    }
+    Ok(())
+}
 
 pub(crate) fn reject_unsupported_floquet_dynamic_demag(
     spin_wave_bc: &SpinWaveBoundaryConditionIR,
@@ -229,6 +247,7 @@ pub(crate) fn execute_bias_field_sample_with_relaxation(
     planned_execution: Option<PlannedFemEigenExecution<'_>>,
     producer_identity: Option<&FemRelaxationProducerStageIdentity>,
 ) -> Result<ExecutedRun, RunError> {
+    validate_modal_solver_policy_admission(sample_plan, lane == FemEigenExecutionLane::Gpu, true)?;
     if let Some(execution) = planned_execution {
         validate_planned_execution(execution, sample_plan)?;
     }
@@ -522,6 +541,11 @@ pub(crate) fn execute_planned_fem_eigen_with_producer_identity(
     producer_identity: Option<&FemRelaxationProducerStageIdentity>,
 ) -> Result<ExecutedRun, RunError> {
     validate_planned_execution(execution, plan)?;
+    validate_modal_solver_policy_admission(
+        plan,
+        execution.lane() == FemEigenExecutionLane::Gpu,
+        true,
+    )?;
     if bias_field_sweep_requested(plan) {
         return execute_planned_bias_field_sweep_with_producer_identity(
             execution,
@@ -575,6 +599,11 @@ pub(crate) fn execute_planned_fem_eigen_with_handoff_and_progress(
     state_artifact_sample_index: Option<usize>,
 ) -> Result<ExecutedRun, RunError> {
     validate_planned_execution(execution, plan)?;
+    validate_modal_solver_policy_admission(
+        plan,
+        execution.lane() == FemEigenExecutionLane::Gpu,
+        true,
+    )?;
     if bias_field_sweep_requested(plan) {
         if handoff.is_some() {
             return Err(RunError {
@@ -621,6 +650,11 @@ pub(crate) fn execute_planned_fem_eigen_with_progress_and_producer_identity(
     producer_identity: Option<&FemRelaxationProducerStageIdentity>,
 ) -> Result<ExecutedRun, RunError> {
     validate_planned_execution(execution, plan)?;
+    validate_modal_solver_policy_admission(
+        plan,
+        execution.lane() == FemEigenExecutionLane::Gpu,
+        true,
+    )?;
     if bias_field_sweep_requested(plan) {
         return execute_planned_bias_field_sweep_with_producer_identity(
             execution,
@@ -676,6 +710,11 @@ pub(crate) fn execute_planned_fem_eigen_with_progress_and_stage_handoff_and_prod
     state_artifact_sample_index: Option<usize>,
     producer_identity: Option<&FemRelaxationProducerStageIdentity>,
 ) -> Result<ExecutedRun, RunError> {
+    validate_modal_solver_policy_admission(
+        plan,
+        execution.lane() == FemEigenExecutionLane::Gpu,
+        true,
+    )?;
     if bias_field_sweep_requested(plan) {
         // Each physical sweep sample carries its own relaxed equilibrium.  The
         // outer planned execution may still have produced a stage handoff, but
@@ -717,6 +756,11 @@ pub(crate) fn execute_planned_fem_eigen_with_stage_handoff(
     artifact_sample_index: usize,
     state_artifact_sample_index: Option<usize>,
 ) -> Result<ExecutedRun, RunError> {
+    validate_modal_solver_policy_admission(
+        plan,
+        execution.lane() == FemEigenExecutionLane::Gpu,
+        true,
+    )?;
     if bias_field_sweep_requested(plan) {
         validate_planned_execution(execution, plan)?;
         return execute_planned_bias_field_sweep(execution, plan, outputs, None);
@@ -818,6 +862,7 @@ pub(crate) fn execute_cpu_fem_eigen_with_handoff_and_progress_and_producer_ident
         }
         return Err(error);
     }
+    validate_modal_solver_policy_admission(plan, false, native_cpu_modal_window_enabled(plan))?;
     if bias_field_sweep_requested(plan) {
         return execute_bias_field_sweep_with_producer_identity(
             plan,
@@ -866,6 +911,7 @@ pub(crate) fn execute_cpu_fem_eigen_with_progress_and_producer_identity(
         }
         return Err(error);
     }
+    validate_modal_solver_policy_admission(plan, false, native_cpu_modal_window_enabled(plan))?;
     if bias_field_sweep_requested(plan) {
         return execute_bias_field_sweep_with_producer_identity(
             plan,
@@ -918,6 +964,7 @@ pub(crate) fn execute_cpu_fem_eigen_with_progress_and_stage_handoff_and_producer
     state_artifact_sample_index: Option<usize>,
     producer_identity: Option<&FemRelaxationProducerStageIdentity>,
 ) -> Result<ExecutedRun, RunError> {
+    validate_modal_solver_policy_admission(plan, false, native_cpu_modal_window_enabled(plan))?;
     if bias_field_sweep_requested(plan) {
         return execute_bias_field_sweep_with_producer_identity(
             plan,
@@ -952,6 +999,7 @@ pub(crate) fn execute_cpu_fem_eigen_with_stage_handoff(
     artifact_sample_index: usize,
     state_artifact_sample_index: Option<usize>,
 ) -> Result<ExecutedRun, RunError> {
+    validate_modal_solver_policy_admission(plan, false, native_cpu_modal_window_enabled(plan))?;
     if bias_field_sweep_requested(plan) {
         return execute_bias_field_sweep(plan, outputs, false, None);
     }
@@ -1044,6 +1092,7 @@ pub(crate) fn execute_gpu_fem_eigen_with_handoff_and_progress_and_producer_ident
         }
         return Err(error);
     }
+    validate_modal_solver_policy_admission(plan, true, true)?;
     if bias_field_sweep_requested(plan) {
         return execute_bias_field_sweep_with_producer_identity(
             plan,
@@ -1161,6 +1210,7 @@ pub(crate) fn execute_gpu_fem_eigen_with_progress_and_stage_handoff_and_producer
     state_artifact_sample_index: Option<usize>,
     producer_identity: Option<&FemRelaxationProducerStageIdentity>,
 ) -> Result<ExecutedRun, RunError> {
+    validate_modal_solver_policy_admission(plan, true, true)?;
     if bias_field_sweep_requested(plan) {
         return execute_bias_field_sweep_with_producer_identity(
             plan,
@@ -1552,6 +1602,7 @@ pub(super) fn execute_fem_eigen_inner(
     source_relax_handoff: Option<&AcceptedFemRelaxStageHandoff>,
     planned_execution: Option<PlannedFemEigenExecution<'_>>,
 ) -> Result<ExecutedRun, RunError> {
+    validate_modal_solver_policy_admission(plan, try_gpu, use_native_modal_production)?;
     crate::eigen::output_selection::validate_eigen_spectrum_quantities(outputs).map_err(
         |error| RunError {
             message: format!("invalid eigen output selection: {error}"),

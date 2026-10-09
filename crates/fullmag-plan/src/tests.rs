@@ -11733,6 +11733,36 @@ fn branch_selector_fem_eigen_ir(k_sampling: Option<fullmag_ir::KSamplingIR>) -> 
     ir
 }
 
+fn free_gamma_modal_policy_fixture(
+    operator_kind: fullmag_ir::EigenOperatorIR,
+    target: fullmag_ir::EigenTargetIR,
+    damping_policy: fullmag_ir::EigenDampingPolicyIR,
+) -> ProblemIR {
+    let mut ir = branch_selector_fem_eigen_ir(Some(fullmag_ir::KSamplingIR::Single {
+        k_vector: [0.0, 0.0, 0.0],
+    }));
+    ir.energy_terms = vec![fullmag_ir::EnergyTermIR::Exchange];
+    if let fullmag_ir::StudyIR::Eigenmodes {
+        operator,
+        target: planned_target,
+        damping_policy: planned_damping_policy,
+        spin_wave_bc,
+        magnetostatic_bc,
+        ..
+    } = &mut ir.study
+    {
+        operator.kind = operator_kind;
+        operator.include_demag = false;
+        *planned_target = target;
+        *planned_damping_policy = damping_policy;
+        *spin_wave_bc = fullmag_ir::SpinWaveBoundaryConditionIR::default();
+        *magnetostatic_bc = fullmag_ir::MagnetostaticBoundaryConditionIR::Open;
+    } else {
+        unreachable!("fixture must remain an eigenmode study");
+    }
+    ir
+}
+
 fn eigen_mode_output(indices: Vec<u32>, branches: Vec<u32>) -> fullmag_ir::OutputIR {
     fullmag_ir::OutputIR::EigenMode {
         field: "mode".to_string(),
@@ -12230,6 +12260,179 @@ fn fem_eigen_modal_solver_policy_absence_and_empty_metadata_keep_native_defaults
         };
         assert!(fem.solver_policy.is_none());
     }
+}
+
+#[test]
+fn fem_eigen_modal_solver_policy_rejects_each_control_on_reference_solver_families() {
+    let window = || fullmag_ir::EigenTargetIR::FrequencyWindow {
+        frequency_min_hz: 100.0e6,
+        frequency_max_hz: 25.0e9,
+    };
+    let variants = [
+        (
+            "full2x2 lowest",
+            fullmag_ir::EigenOperatorIR::Full2x2,
+            fullmag_ir::EigenTargetIR::Lowest,
+            fullmag_ir::EigenDampingPolicyIR::Ignore,
+        ),
+        (
+            "projected scalar",
+            fullmag_ir::EigenOperatorIR::ProjectedScalar,
+            window(),
+            fullmag_ir::EigenDampingPolicyIR::Ignore,
+        ),
+        (
+            "damping included",
+            fullmag_ir::EigenOperatorIR::Full2x2,
+            window(),
+            fullmag_ir::EigenDampingPolicyIR::Include,
+        ),
+    ];
+    let controls = [
+        serde_json::json!({"residual_tolerance": 1.0e-8}),
+        serde_json::json!({"max_outer_iterations": 24}),
+        serde_json::json!({"max_linear_iterations": 96}),
+    ];
+
+    for (variant, operator, target, damping_policy) in variants {
+        for control in &controls {
+            let mut ir =
+                free_gamma_modal_policy_fixture(operator.clone(), target.clone(), damping_policy);
+            ir.problem_meta
+                .runtime_metadata
+                .insert("modal_solver_policy".to_string(), (*control).clone());
+
+            let error = plan(&ir).expect_err(&format!(
+                "reference {variant} must reject explicit modal controls"
+            ));
+            assert!(
+                error.reasons.iter().any(|reason| {
+                    reason.contains("runtime_metadata.modal_solver_policy requires a structurally selected native PETSc/SLEPc FEM modal path")
+                }),
+                "unexpected reference-policy error for {variant}: {error:?}"
+            );
+            assert_eq!(
+                ir.problem_meta.runtime_metadata["modal_solver_policy"], *control,
+                "planning refusal must preserve the authored policy"
+            );
+        }
+    }
+}
+
+#[test]
+fn fem_eigen_modal_solver_policy_keeps_empty_reference_and_native_lane_compatibility() {
+    for policy in [
+        None,
+        Some(serde_json::json!({})),
+        Some(serde_json::json!({
+            "residual_tolerance": null,
+            "max_outer_iterations": null,
+            "max_linear_iterations": null,
+        })),
+    ] {
+        let mut ir = free_gamma_modal_policy_fixture(
+            fullmag_ir::EigenOperatorIR::Full2x2,
+            fullmag_ir::EigenTargetIR::Lowest,
+            fullmag_ir::EigenDampingPolicyIR::Ignore,
+        );
+        if let Some(policy) = policy {
+            ir.problem_meta
+                .runtime_metadata
+                .insert("modal_solver_policy".to_string(), policy);
+        }
+        let planned = plan(&ir).expect("empty policy keeps reference defaults");
+        let BackendPlanIR::FemEigen(fem) = planned.backend_plan else {
+            panic!("expected FEM eigen plan");
+        };
+        assert!(fem.solver_policy.is_none());
+    }
+
+    let mut cpu = free_gamma_modal_policy_fixture(
+        fullmag_ir::EigenOperatorIR::Full2x2,
+        fullmag_ir::EigenTargetIR::FrequencyWindow {
+            frequency_min_hz: 100.0e6,
+            frequency_max_hz: 25.0e9,
+        },
+        fullmag_ir::EigenDampingPolicyIR::Ignore,
+    );
+    cpu.problem_meta.runtime_metadata.insert(
+        "runtime_selection".to_string(),
+        serde_json::json!({"device": "cpu", "precision": "double"}),
+    );
+    cpu.problem_meta.runtime_metadata.insert(
+        "modal_solver_policy".to_string(),
+        serde_json::json!({"max_linear_iterations": 96}),
+    );
+    let cpu_plan = plan(&cpu).expect("Free Gamma native CPU window supports a partial policy");
+    assert!(
+        cpu_plan.provenance.fem_eigen_execution_resolution.is_none(),
+        "Free Gamma FrequencyWindow is structurally native even without an execution-resolution object"
+    );
+    let BackendPlanIR::FemEigen(cpu_fem) = cpu_plan.backend_plan else {
+        panic!("expected FEM eigen plan");
+    };
+    assert_eq!(
+        cpu_fem
+            .solver_policy
+            .as_ref()
+            .and_then(|policy| policy.max_linear_iterations),
+        Some(96)
+    );
+
+    let mut gpu = k0_periodic_airbox_fem_eigen_ir();
+    gpu.problem_meta.runtime_metadata.insert(
+        "runtime_selection".to_string(),
+        serde_json::json!({"device": "gpu", "precision": "double"}),
+    );
+    gpu.problem_meta.runtime_metadata.insert(
+        "modal_solver_policy".to_string(),
+        serde_json::json!({"residual_tolerance": 1.0e-8}),
+    );
+    let gpu_plan = plan(&gpu).expect("native GPU shared-domain Krylov supports partial policy");
+    assert_eq!(
+        gpu_plan
+            .provenance
+            .fem_eigen_execution_resolution
+            .as_ref()
+            .map(|resolution| resolution.resolved_engine),
+        Some(fullmag_ir::FemEigenEngineIR::GpuModalDeviceKrylov)
+    );
+    let BackendPlanIR::FemEigen(gpu_fem) = gpu_plan.backend_plan else {
+        panic!("expected FEM eigen plan");
+    };
+    assert_eq!(
+        gpu_fem
+            .solver_policy
+            .as_ref()
+            .and_then(|policy| policy.residual_tolerance),
+        Some(1.0e-8)
+    );
+
+    let mut forced_gpu_reference = free_gamma_modal_policy_fixture(
+        fullmag_ir::EigenOperatorIR::Full2x2,
+        fullmag_ir::EigenTargetIR::FrequencyWindow {
+            frequency_min_hz: 100.0e6,
+            frequency_max_hz: 25.0e9,
+        },
+        fullmag_ir::EigenDampingPolicyIR::Ignore,
+    );
+    forced_gpu_reference.problem_meta.runtime_metadata.insert(
+        "runtime_selection".to_string(),
+        serde_json::json!({"device": "gpu", "precision": "double"}),
+    );
+    forced_gpu_reference.problem_meta.runtime_metadata.insert(
+        "modal_solver_policy".to_string(),
+        serde_json::json!({"max_outer_iterations": 24}),
+    );
+    let error = plan(&forced_gpu_reference)
+        .expect_err("CPU native support must not become a forced-GPU fallback");
+    assert!(error.reasons.iter().any(|reason| {
+        reason.contains("modal_solver_policy requires a structurally selected native PETSc/SLEPc")
+    }));
+    assert_eq!(
+        forced_gpu_reference.problem_meta.runtime_metadata["runtime_selection"]["device"], "gpu",
+        "the planner must preserve forced GPU intent"
+    );
 }
 
 #[test]
@@ -13109,6 +13312,24 @@ fn fem_eigen_floquet_dynamic_demag_requires_explicit_airbox_cpu_path() {
     );
     assert_eq!(resolution.resolved_device, fullmag_ir::ExecutionDevice::Cpu);
     assert!(!resolution.fallback_used);
+
+    let mut policy_ir = ir.clone();
+    policy_ir.problem_meta.runtime_metadata.insert(
+        "modal_solver_policy".to_string(),
+        serde_json::json!({"max_linear_iterations": 4}),
+    );
+    let policy_plan = plan(&policy_ir)
+        .expect("the exact bounded Floquet-airbox SLEPc route accepts solver controls");
+    match &policy_plan.backend_plan {
+        BackendPlanIR::FemEigen(fem) => assert_eq!(
+            fem.solver_policy
+                .as_ref()
+                .and_then(|policy| policy.max_linear_iterations),
+            Some(4)
+        ),
+        other => panic!("expected FEM eigen plan, got {other:?}"),
+    }
+
     match planned.backend_plan {
         BackendPlanIR::FemEigen(fem) => {
             assert_eq!(fem.operator.kind, fullmag_ir::EigenOperatorIR::Full2x2);

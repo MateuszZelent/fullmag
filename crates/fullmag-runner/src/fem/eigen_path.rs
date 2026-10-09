@@ -1000,6 +1000,11 @@ pub(crate) fn execute_fem_eigen_path_with_producer_identity_and_parallel_policy(
     if engine == FemEngine::NativeGpu && !gpu_modal_k0_kittel_path_supported(plan) {
         return Err(gpu_modal_dispersion_path_unavailable_error(plan));
     }
+    super::eigen_execution::validate_modal_solver_policy_admission(
+        plan,
+        engine == FemEngine::NativeGpu,
+        true,
+    )?;
     let native_cpu_floquet_demag_path =
         engine == FemEngine::CpuNative && native_cpu_modal_window_enabled(plan);
     if !(k0_kittel_synthetic_demag_factor_enabled(plan) && !bias_field_sweep_requested(plan))

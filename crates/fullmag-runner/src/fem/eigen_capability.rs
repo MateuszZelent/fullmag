@@ -11,6 +11,28 @@ use super::eigen_shared_domain_geometry::{pa_e4b_airbox_size_m, periodic_domain_
 use fullmag_ir::{EigenDampingPolicyIR, FemEigenPlanIR, SpinWaveBoundaryKindIR};
 use std::collections::BTreeSet;
 
+pub(super) fn modal_solver_policy_has_controls(plan: &FemEigenPlanIR) -> bool {
+    plan.solver_policy.as_ref().is_some_and(|policy| {
+        policy.residual_tolerance.is_some()
+            || policy.max_outer_iterations.is_some()
+            || policy.max_linear_iterations.is_some()
+    })
+}
+
+/// Return whether the requested lane structurally selects a native PETSc/SLEPc
+/// family that consumes modal solver controls. The GPU dense K0 Kittel route is
+/// intentionally excluded because it does not use PETSc/SLEPc policy.
+pub(super) fn modal_solver_policy_native_path_supported(
+    plan: &FemEigenPlanIR,
+    requested_gpu: bool,
+) -> bool {
+    if requested_gpu {
+        native_gpu_shared_domain_modal_supported(plan)
+    } else {
+        native_cpu_modal_window_enabled(plan)
+    }
+}
+
 pub(super) fn native_gpu_shared_domain_modal_supported(plan: &FemEigenPlanIR) -> bool {
     plan.precision == fullmag_ir::ExecutionPrecision::Double
         && plan.enable_demag
@@ -24,6 +46,7 @@ pub(super) fn native_gpu_shared_domain_modal_supported(plan: &FemEigenPlanIR) ->
         && native_shared_domain_magnetic_assembly_available(plan)
         && plan.count > 0
         && plan.count <= 32
+        && native_modal_target_frequency_hz(&plan.target).is_finite()
         && native_modal_target_frequency_hz(&plan.target) > 0.0
 }
 
