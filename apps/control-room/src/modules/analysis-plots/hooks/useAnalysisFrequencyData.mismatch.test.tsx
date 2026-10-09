@@ -22,6 +22,10 @@ vi.mock("@/kernel/selection/useSelection", () => ({
   useSelectionSelector: (selector: (selection: unknown) => unknown) =>
     selector({ ref: selectedResultRunId ? { analysisRunId: selectedResultRunId, type: "frequency-domain" } : null }),
 }));
+vi.mock("@/kernel/resources/postprocessingDefinitionResources", () => ({
+  usePostprocessingDefinitionsResource: () => ({ data: null, status: "idle" }),
+}));
+
 vi.mock("@/kernel/resources/studyRuntimeResources", () => ({
   useFrequencyDomainManifestResource: (options: unknown) => { manifest(options); return manifestState; },
   useFrequencyDomainEigenSpectrumResource: (options: unknown) => { spectrum(options); return spectrumState; },
