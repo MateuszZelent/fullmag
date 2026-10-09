@@ -76,6 +76,8 @@ const ids = {
 };
 
 let mockMode = 'healthy';
+const expectedAuthToken = 'browser-smoke-token';
+let authRequired = false;
 const requestLog = [];
 const queuePageRequests = [];
 const retentionPlanId = 'plan-b0123456789abcdef';
@@ -403,15 +405,28 @@ function apiFailureForMode(reqPath) {
 
 async function handleApi(req, res, url) {
   const reqPath = url.pathname;
-  requestLog.push({ method: req.method, path: reqPath, mode: mockMode });
+  requestLog.push({ method: req.method, path: reqPath, mode: mockMode, authorization: req.headers.authorization || null });
 
   if (reqPath === '/api/v1/auth/session' && req.method === 'POST') {
-    await readBody(req);
-    if (mockMode === 'unauthorized') {
+    let body;
+    try {
+      body = JSON.parse(await readBody(req));
+    } catch (_) {
+      json(res, 400, { error: 'Nieprawidłowe body logowania fixture' });
+      return;
+    }
+    if (authRequired && (body?.token !== expectedAuthToken ||
+        req.headers.authorization !== `Bearer ${expectedAuthToken}`)) {
       json(res, 401, { error: 'Token fixture odrzucony' });
       return;
     }
+    if (authRequired) mockMode = 'healthy';
     json(res, 200, { authenticated: true, session: 'fixture-only' });
+    return;
+  }
+
+  if (authRequired && req.headers.authorization !== `Bearer ${expectedAuthToken}`) {
+    json(res, 401, { error: 'Brak poprawnego Bearer tokenu fixture' });
     return;
   }
 
@@ -775,14 +790,32 @@ async function run() {
     console.log('[browser-smoke] unavailable: storage error state rendered');
 
     mockMode = 'unauthorized';
+    authRequired = true;
     await gotoView('overview');
     await page.locator('#auth-token-input').waitFor({ state: 'visible', timeout: 5000 });
     assert.match(await textOf('#modal-container'), /Połącz z runnerem/);
-    mockMode = 'healthy';
-    await page.locator('#auth-token-input').fill('browser-smoke-token');
+    await page.locator('#auth-token-input').fill('wrong-browser-smoke-token');
+    await page.locator('#btn-auth-submit').click();
+    await page.locator('#auth-error-msg').waitFor({ state: 'visible', timeout: 5000 });
+    assert.equal(mockMode, 'unauthorized', 'invalid login must not recover the fixture');
+    const recoveryRequestStart = requestLog.length;
+    const recoveredOverview = page.waitForResponse(response =>
+      new URL(response.url()).pathname === '/api/v1/overview' &&
+      response.request().method() === 'GET' && response.status() === 200,
+      { timeout: 5000 });
+    await page.locator('#auth-token-input').fill(expectedAuthToken);
     await page.locator('#btn-auth-submit').click();
     await page.locator('#auth-token-input').waitFor({ state: 'detached', timeout: 5000 });
-    console.log('[browser-smoke] auth/error: 401 modal and recovery exercised');
+    await recoveredOverview;
+    assert(requestLog.slice(recoveryRequestStart).some(request =>
+      request.method === 'GET' && request.path === '/api/v1/overview' &&
+      request.mode === 'healthy' && request.authorization === `Bearer ${expectedAuthToken}`),
+      'recovered overview must carry the token through the real RunnerAPI client');
+    const rejectedGet = await page.request.get(`${baseUrl}/api/v1/overview`, {
+      headers: { Authorization: 'Bearer wrong-browser-smoke-token' },
+    });
+    assert.equal(rejectedGet.status(), 401, 'recovered fixture must still reject a wrong Bearer token');
+    console.log('[browser-smoke] auth/error: invalid login rejected; valid body and subsequent Bearer GET verified');
 
     await wait(100);
     assert.equal(pageErrors.length, 0, `browser page errors:\n${pageErrors.map(error => `${error.message}\n${error.stack || ''}`).join('\n')}`);
