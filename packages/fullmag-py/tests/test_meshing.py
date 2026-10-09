@@ -13869,6 +13869,48 @@ class RegionMeshPolicyTests(unittest.TestCase):
         self.assertIs(size_field[_SCOPED_LAYER_PLANE_PROOF_KEY], proof)
         self.assertIs(lower_field[_SCOPED_LAYER_PLANE_PROOF_KEY], proof)
 
+    def test_thin_film_box_airbox_dispatch_checks_exact_cell_bounds(self) -> None:
+        class LayeredRouteReached(BaseException):
+            pass
+
+        class OccRouteReached(BaseException):
+            pass
+
+        geometry = fm.Box(4e-6, 2e-6, 0.2e-6, name="route_box")
+        cases = (
+            ("exact_cell", [4e-6, 2e-6, 4e-6], [0.0, 0.0, 0.0], True),
+            ("lateral_padding", [8e-6, 6e-6, 4e-6], [0.0, 0.0, 0.0], False),
+            ("shifted_airbox", [8e-6, 6e-6, 4e-6], [0.5e-6, 0.0, 0.0], False),
+        )
+        for name, size, center, layered in cases:
+            with self.subTest(name=name), patch(
+                "fullmag.meshing.asset_pipeline.generate_mesh",
+                side_effect=LayeredRouteReached,
+            ) as generate_layered, patch(
+                "fullmag.meshing._gmsh_occ.generate_shared_domain_mesh_via_occ",
+                side_effect=OccRouteReached,
+            ) as generate_occ:
+                # Stop at the actual generator boundary. No invented mesh or
+                # certificate should make this route-selection check pass.
+                with self.assertRaises(LayeredRouteReached if layered else OccRouteReached):
+                    realize_fem_domain_mesh_asset_from_components_with_report(
+                        geometries=[geometry],
+                        hints=fm.FEM(order=1, hmax=0.8e-6),
+                        study_universe={"mode": "manual", "size": size, "center": center},
+                        mesh_workflow={"mesh_options": {
+                            "mesh_strategy": "thin_film_tetrahedral",
+                            "through_thickness_elements": 1,
+                            "compute_quality": False,
+                            "per_element_quality": False,
+                        }},
+                    )
+                if layered:
+                    generate_layered.assert_called_once()
+                    generate_occ.assert_not_called()
+                else:
+                    generate_occ.assert_called_once()
+                    generate_layered.assert_not_called()
+
     def test_layered_box_accepts_distinct_outer_boundary_marker(self) -> None:
         mesh = object()
         airbox = AirboxOptions(

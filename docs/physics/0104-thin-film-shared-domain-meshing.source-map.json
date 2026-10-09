@@ -241,6 +241,20 @@
       "path": "packages/fullmag-py/src/fullmag/meshing/_mesh_targets.py",
       "symbol": "_geometry_owner_alias_index",
       "responsibility": "Canonical exact-name-first owner roster shared by scalar targets and size-field resolution; source regression pending hosted CI, no scientific qualification."
+    },
+    {
+      "id": "box-exact-cell-route-bounds",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py",
+      "symbol": "_coincident_ring_airbox_bounds",
+      "responsibility": "Decides exact-cell bbox dimensions, lateral center and body containment without Gmsh.",
+      "evidence_status": "implemented"
+    },
+    {
+      "id": "box-exact-cell-route-selection",
+      "path": "packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py",
+      "symbol": "_realize_fem_domain_mesh_asset_from_components_impl",
+      "responsibility": "Selects layered GEO only for an exact-cell Box airbox; other unscoped supported geometry uses OCC.",
+      "evidence_status": "source-only"
     }
   ],
   "public_api": {

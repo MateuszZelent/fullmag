@@ -441,3 +441,9 @@ Kotwice: `packages/fullmag-py/src/fullmag/meshing/_mesh_targets.py` +
 kontrolując przekazane cele i pola z mockiem wyłącznie granicy generowania
 siatki. Aktualny wynik hosted CI, rzeczywista gęstość siatki i kwalifikacja
 fizyczna tej poprawki: **NOT VERIFIED**.
+
+## Dobór trasy Box z airboxem (uwaga 4204792272)
+
+Layered GEO Box wymaga airboxu bbox o tych samych wymiarach w x/y i środku bocznym co Box, zawierającego całą jego wysokość. Współrzędne i rozmiary są w metrach; istniejący resolver exact-cell pozostaje źródłem tolerancji i walidacji. Dodatkowy boczny padding lub przesunięcie wymaga generic OCC-conformal route zamiast generatora bez lateral transition shell. Exact-cell zachowuje layered GEO. Scoped layer-plane fields nadal wymagają udokumentowanej exact-cell geometry i blokują nieobsługiwaną konfigurację; nie obiecujemy tych płaszczyzn na generic OCC.
+
+Zmiana dotyczy wyłącznie dispatch wspólnej siatki FEM CPU/GPU. Nie zmienia równań, jednostek, publicznego Python/ProblemIR ani backend capability i nie kwalifikuje solvera GPU. Provenance musi podawać rzeczywistą trasę. FDM CPU/GPU nie dotyczy. Regresja przechodzi realizer do granicy generatora dla exact-cell, bocznego paddingu i przesunięcia, bez symulowania poprawnego końcowego mesh certificate. Hosted wynik i jakość rzeczywistej siatki pozostają NOT VERIFIED.

@@ -45,6 +45,7 @@ from ._gmsh_swept import (
     THIN_FILM_SCOPED_LAYER_PARTITION_UNSUPPORTED,
     THIN_FILM_SCOPED_LAYER_PARTITION_UNSUPPORTED_REASON,
     _SCOPED_LAYER_PLANE_PROOF_KEY,
+    _coincident_ring_airbox_bounds,
     _fresh_scoped_layer_plane_attempt_options,
     _has_component_scoped_size_fields,
     _is_box_cylinder_ring,
@@ -2702,6 +2703,9 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
         and airbox is not None
         and surface_mesh_options.mesh_strategy == "thin_film_tetrahedral"
         and not per_object_recipes and not object_regions
+        # Layered GEO has no lateral transition shell. Use the same bounds
+        # admission as its generator before excluding the generic OCC route.
+        and _coincident_ring_airbox_bounds(geometries[0], airbox) is not None
     )
     single_geometry_occ_direct = mixed_shared_geo_direct or ring_shared_geo_direct or box_layered_geo_direct
     if (
