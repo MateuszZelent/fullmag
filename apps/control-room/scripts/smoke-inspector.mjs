@@ -3688,6 +3688,17 @@ async function installInspectorFixtureApi(page, fixture) {
       total_steps: 1,
     });
     if (path === "/v2/sessions/current/simulation/objects/film/metrics") return fulfillJson(route, inspectorObjectMetrics());
+    if (/^\/v2\/sessions\/current\/analysis\/results\/runs\/[^/]+\/datasets$/.test(path)) {
+      return fulfillJson(route, {
+        items: [],
+        next_cursor: null,
+        revision: "inspector-fixture",
+        run_id: path.split("/")[6],
+        schema_version: "analysis-result-index.v1",
+        status: "ready",
+        total_count: 0,
+      });
+    }
     if (path === "/v2/sessions/current/analysis/postprocessing/definitions") {
       return fulfillJson(route, {
         count: 0,
