@@ -2700,7 +2700,7 @@
       "id": "source-modal-phase-aware-result-serialization",
       "path": "backends/fem/cpu/frequency_domain/production_cpu_modal_eigen.cpp",
       "symbol": "std::string mode_kinematics_json_fields",
-      "responsibility": "Map selected and per-mode signed eigenvalues through map_eigenvalue(lambda, phase_convention), publish the actual phasor_convention label at both levels, and preserve raw lambda, mode vectors, amplitudes, and residuals. Provider-backed phase-branch proof is NOT VERIFIED pending GHA."
+      "responsibility": "Map selected and per-mode signed eigenvalues through map_eigenvalue(lambda, phase_convention), publish the actual phasor_convention label at both levels, and preserve raw lambda, mode vectors, amplitudes, and residuals. Focused GHA37862208552 passed eight C ABI combinations, one selected mode per case; multimode/demag/release qualification remains separate."
     },
     {
       "id": "source-modal-request-phase-diagnostic",
@@ -2712,7 +2712,7 @@
       "id": "test-modal-phase-aware-cabi",
       "path": "backends/fem/tests/frequency_domain/modal_eigen_contract_test.cpp",
       "symbol": "void generic_slepc_phase_convention_cabi",
-      "responsibility": "Exercise actual generic dense and CSR SLEPc C ABI providers for nearest and window results under both temporal conventions; check top-level and every mode's actual phasor_convention, signed lambda, frequency, omega, and branch. The existing contour-minus rejection remains in the full contract suite; tiny validation keeps request-based mapping. GHA execution pending; NOT VERIFIED."
+      "responsibility": "Exercise actual generic dense and CSR SLEPc C ABI providers for nearest and window results under both temporal conventions; check top-level and every mode's actual phasor_convention, signed lambda, frequency, omega, and branch. The existing contour-minus rejection remains in the full contract suite; tiny validation keeps request-based mapping. Focused GHA37862208552 passed; eight cases each select one physical mode. It does not qualify multimode output or demag physics."
     },
     {
       "id": "source-floquet-ksp-failure-probe-dto",

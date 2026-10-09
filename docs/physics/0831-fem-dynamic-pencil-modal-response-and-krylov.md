@@ -1754,7 +1754,11 @@ label. Tiny validation continues to map the request convention, and the
 contour-minus rejection remains covered by the full contract test. The focused
 mode fails when MFEM or SLEPc is unavailable and prints the exact marker
 `PASS: modal_slepc_phase_convention_contract` only after those checks pass.
-Provider-backed GHA execution is pending; source proof is **NOT VERIFIED**.
+Focused GHA [37862208552](https://github.com/MateuszZelent/fullmag/actions/runs/37862208552)
+passed on commit `39399b8c60aea099719b325114f229f2cba7a40b` with actual
+MFEM/SLEPc and CUDA disabled. It covers eight C ABI combinations, each selecting
+one physical mode. Multimode output, demag physics, and release qualification
+remain separate and **NOT VERIFIED** by this focused fixture.
 
 ## 6. Completeness checklist
 
@@ -2341,9 +2345,9 @@ Repository-owned related contracts:
 | crates/fullmag-runner/src/fem/eigen_native_window.rs | execute_native_cpu_modal_window_from_bloch_floquet_complex_with_provenance | Return non-OK native solve status before parsing result_json modes; strict-count error modes remain C ABI diagnostics and are not runner artifacts. |
 | backends/fem/tests/frequency_domain/mode_deduplication_test.cpp | main | The test entrypoint calls `slepc_hard_solve_error_prevents_followup_queries_and_cleanup`, `slepc_vector_query_error_leaves_acquired_views_in_quarantine`, `slepc_destroy_sequence_stops_and_retains_remaining_handles_on_failure`, and `generic_candidate_span_gram_rejects_indefinite_dense_and_csr_mass`, alongside the finalizer fixture; injected callbacks verify the shared operation/destroy gates only, not PETSc runtime failures. The other cases cover phase-copy rank deficiency, mass-orthogonal modes, candidate-span PSD rejection, and missing/invalid mass. |
 | backends/fem/tests/frequency_domain/modal_eigen_contract_test.cpp | main | The test entrypoint calls `generic_dense_window_refills_after_search_filtering`, covering provider-backed dense refill, partial output, nearest underfill, mass rejection, and budget telemetry; GHA execution pending. |
-| backends/fem/cpu/frequency_domain/production_cpu_modal_eigen.cpp | std::string mode_kinematics_json_fields | Map top-level selections and all serialized modes using the request's temporal phase convention; publish its `phasor_convention` label while preserving raw eigenvalues, vectors, amplitudes, and residuals. Provider-backed phase-branch proof is **NOT VERIFIED** pending GHA. |
+| backends/fem/cpu/frequency_domain/production_cpu_modal_eigen.cpp | std::string mode_kinematics_json_fields | Map top-level selections and all serialized modes using the request's temporal phase convention; publish its `phasor_convention` label while preserving raw eigenvalues, vectors, amplitudes, and residuals. Focused eight-case C ABI proof passed in GHA37862208552; multimode/demag/release qualification remains separate. |
 | backends/fem/src/frequency_domain/modal_eigen_solver.cpp | FrequencyDomainContractResult nonzero_k_floquet_k0_poisson_path_unavailable | Preserve the requested temporal phasor label in unavailable-path diagnostics. |
-| backends/fem/tests/frequency_domain/modal_eigen_contract_test.cpp | void generic_slepc_phase_convention_cabi | Exercise actual dense and CSR generic SLEPc C ABI providers for nearest and window results under both conventions; assert top-level and all-mode signed kinematics, preserve existing contour-minus coverage and request-based tiny-validation mapping, and print `PASS: modal_slepc_phase_convention_contract`. GHA execution pending; **NOT VERIFIED**. |
+| backends/fem/tests/frequency_domain/modal_eigen_contract_test.cpp | void generic_slepc_phase_convention_cabi | Exercise actual dense and CSR generic SLEPc C ABI providers for nearest and window results under both conventions; assert top-level and all-mode signed kinematics, preserve existing contour-minus coverage and request-based tiny-validation mapping, and print `PASS: modal_slepc_phase_convention_contract`. Focused GHA37862208552 passed; each case selects one physical mode and does not qualify demag or a full multimode workload. |
 | backends/fem/cpu/frequency_domain/slepc_modal_eigen.cpp | SLEPcModalCandidateFinalization finalize_slepc_modal_candidates_with_mass | Before overlap deduplication, form and certify only the residual-approved candidate-span Gram matrix using the declared dense or CSR mass action. |
 | backends/fem/cpu/frequency_domain/slepc_modal_eigen.cpp | bool destroy_slepc_modal_objects | Stop after hard PETSc/SLEPc operation errors, check each destructor, and quarantine remaining per-call handles without further graph calls, retrying, or publishing canonical output. |
 | backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp | solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context | Copy callback-owned scalar telemetry before releasing an unsafe failed EPS/KSP graph; do not query PETSc objects after a hard solve error. |
