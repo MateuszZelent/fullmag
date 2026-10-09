@@ -490,7 +490,10 @@ async function prepareAdaptiveDraft(scenario) {
     name: "Independent k points",
     exact: true,
   });
-  const maxCpu = scenario.page.getByLabel("Maximum CPU target (%)");
+  const maxCpu = scenario.inspector.getByRole("textbox", {
+    name: "Maximum CPU target (%)",
+    exact: true,
+  });
   await mode.selectOption("adaptive");
   await maxCpu.fill("73");
   return { mode, maxCpu };
