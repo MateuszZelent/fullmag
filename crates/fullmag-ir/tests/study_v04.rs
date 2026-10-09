@@ -1407,6 +1407,9 @@ fn migration_rejects_unknown_spectral_intent_without_mutating_input() {
 
 #[test]
 fn v04_sampling_rejects_unknown_fields_at_every_level_for_all_studies() {
+    // Internally tagged output variants buffer their nested content in serde.
+    // The tracked pointer then identifies the output element; the rejection
+    // must still identify the exact unknown field without dropping intent.
     let unknown_cases = [
         (
             json!({ "outputs": [], "future_sampling_flag": true }),
@@ -1436,7 +1439,7 @@ fn v04_sampling_rejects_unknown_fields_at_every_level_for_all_studies() {
                     }
                 }]
             }),
-            "/study/sampling/outputs/0/sample_period_policy",
+            "/study/sampling/outputs/0",
             "future_policy_flag",
         ),
         (
@@ -1475,7 +1478,7 @@ fn v04_sampling_rejects_unknown_fields_at_every_level_for_all_studies() {
                     }
                 }]
             }),
-            "/study/sampling/outputs/0/sample_selector",
+            "/study/sampling/outputs/0",
             "future_selector_flag",
         ),
         (
