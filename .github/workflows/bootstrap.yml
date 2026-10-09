@@ -421,6 +421,9 @@ jobs:
       - name: Audit managed FEM CPU-only verification configuration
         run: python scripts/test_audit_fem_cpu_only_runtime.py -v
 
+      - name: Run retained FEM startup diagnostic contracts
+        run: python -B scripts/test_diagnose_managed_fem_startup.py -v
+
       - name: Run bootstrap workflow contract
         run: |
           python -m pip install PyYAML==6.0.3

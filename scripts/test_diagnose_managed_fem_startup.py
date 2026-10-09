@@ -61,6 +61,35 @@ class DiagnosticDriverTests(unittest.TestCase):
         self.assertIn("LD_DEBUG=libs", _driver.PROBES[1][1])
         self.assertIn("libfullmag_fem.so.0.1.0", _driver.LINKAGE_SCRIPT)
 
+    def test_runtime_contract_schema_is_bound_to_its_profile(self) -> None:
+        from local_runner.build_entrypoint import PROFILES, _runtime_contract
+
+        for profile in sorted(_driver.SLEPC_PROFILES):
+            with self.subTest(profile=profile):
+                contract = _runtime_contract(PROFILES[profile])
+                _driver._validate_runtime_contract(contract, profile)
+                other_profile = next(
+                    candidate for candidate in _driver.SLEPC_PROFILES
+                    if candidate != profile
+                )
+                with self.assertRaisesRegex(_driver.DiagnosticError, "CPU/SLEPc"):
+                    _driver._validate_runtime_contract(contract, other_profile)
+                for key, invalid in (
+                    ("schema", "unknown"),
+                    ("backend", "fdm"),
+                    ("device", "gpu"),
+                    ("precision", "single"),
+                    ("slepc", False),
+                    ("unit_test_targets", ["fem_modal_eigen_contract"]),
+                ):
+                    with self.subTest(field=key):
+                        changed = dict(contract)
+                        changed[key] = invalid
+                        with self.assertRaises(_driver.DiagnosticError):
+                            _driver._validate_runtime_contract(changed, profile)
+        with self.assertRaises(_driver.DiagnosticError):
+            _driver._validate_runtime_contract({}, "unrecognized-profile")
+
     def test_create_command_is_fixed_and_confined(self) -> None:
         image = "sha256:" + "a" * 64
         expected_env = _driver._diagnostic_environment("/image/lib")

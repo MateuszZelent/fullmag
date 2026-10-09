@@ -39,9 +39,11 @@ DIGEST_RE = re.compile(r"[a-f0-9]{64}\Z")
 IMAGE_RE = re.compile(r"sha256:[a-f0-9]{64}\Z")
 CONTAINER_RE = re.compile(r"[a-f0-9]{64}\Z")
 CAPTURE_RE = re.compile(r"[a-f0-9]{32}\Z")
-SLEPC_PROFILES = frozenset(
-    {"fem-cpu-slepc-runtime-v1", "fem-cpu-slepc-runtime-v2"}
-)
+SLEPC_RUNTIME_CONTRACT_SCHEMAS = {
+    "fem-cpu-slepc-runtime-v1": "fullmag.fem.cpu.slepc_runtime_contract.v1",
+    "fem-cpu-slepc-runtime-v2": "fullmag.fem.cpu.slepc_runtime_contract.v2",
+}
+SLEPC_PROFILES = frozenset(SLEPC_RUNTIME_CONTRACT_SCHEMAS)
 AVAILABILITY_ERROR = re.compile(
     r"^BuildEntryPointError: SLEPc runtime availability probe "
     r"(?:failed|timed out|unavailable|exited|returned|did not attest|startup stamp)"
@@ -157,6 +159,22 @@ def is_availability_probe_error(value: object) -> bool:
     return isinstance(value, str) and bool(AVAILABILITY_ERROR.match(value))
 
 
+def _validate_runtime_contract(contract: object, profile: str) -> None:
+    expected_schema = SLEPC_RUNTIME_CONTRACT_SCHEMAS.get(profile)
+    if expected_schema is None:
+        raise DiagnosticError("job is not a CPU/SLEPc runtime profile")
+    if (
+        not isinstance(contract, dict)
+        or contract.get("schema") != expected_schema
+        or contract.get("backend") != "fem"
+        or contract.get("device") != "cpu"
+        or contract.get("precision") != "double"
+        or contract.get("slepc") is not True
+        or contract.get("unit_test_targets") != []
+    ):
+        raise DiagnosticError("runtime contract is not CPU/SLEPc")
+
+
 def _load_job(layout: Mapping[str, Any], job_id: str) -> dict[str, Any]:
     if not JOB_ID_RE.fullmatch(job_id):
         raise DiagnosticError("job id must be 32 lowercase hexadecimal characters")
@@ -268,16 +286,7 @@ def _load_job(layout: Mapping[str, Any], job_id: str) -> dict[str, Any]:
     ):
         raise DiagnosticError("unqualified failed runtime receipt is not trusted")
     contract = build_receipt.get("runtime_contract")
-    if (
-        not isinstance(contract, dict)
-        or contract.get("schema") != "fullmag.fem.cpu.slepc_runtime_contract.v2"
-        or contract.get("backend") != "fem"
-        or contract.get("device") != "cpu"
-        or contract.get("precision") != "double"
-        or contract.get("slepc") is not True
-        or contract.get("unit_test_targets") != []
-    ):
-        raise DiagnosticError("runtime contract is not CPU/SLEPc")
+    _validate_runtime_contract(contract, job["profile"])
     stages = build_receipt.get("stages")
     native_stages = [
         stage for stage in stages or ()
