@@ -192,14 +192,52 @@ describe("EigenBranchInspectorPanel point model", () => {
     );
     expect(baseline).not.toBeNull();
 
+    for (const resourceStatus of ["ready", "stale"]) {
+      for (const manifestStatus of ["ready", "stale"]) {
+        expect(
+          buildEigenBranchModePlotHandoff(
+            "acoustic", baselinePoint, resourceStatus, artifact,
+            manifestStatus, modalManifestOwner,
+          ),
+        ).toEqual(baseline);
+      }
+    }
+    for (const unavailableStatus of ["idle", "loading", "error"]) {
+      expect(
+        buildEigenBranchModePlotHandoff(
+          "acoustic", baselinePoint, unavailableStatus, artifact,
+          "stale", modalManifestOwner,
+        ),
+      ).toBeNull();
+      expect(
+        buildEigenBranchModePlotHandoff(
+          "acoustic", baselinePoint, "stale", artifact,
+          unavailableStatus, modalManifestOwner,
+        ),
+      ).toBeNull();
+    }
+    for (const changedOwner of [
+      { session_id: "other-session" },
+      { artifact_set_id: "sha256:other-set" },
+      { run_id: "other-run" },
+      { stage_id: "other-stage" },
+    ]) {
+      expect(
+        buildEigenBranchModePlotHandoff(
+          "acoustic", baselinePoint, "stale", artifact, "stale",
+          buildEigenBranchResultManifestOwner(modalManifestResource(changedOwner)),
+        ),
+      ).toBeNull();
+    }
     expect(
       buildEigenBranchModePlotHandoff(
-        "acoustic",
-        baselinePoint,
-        "stale",
-        artifact,
-        "ready",
-        modalManifestOwner,
+        "acoustic", baselinePoint, "stale", null, "stale", modalManifestOwner,
+      ),
+    ).toBeNull();
+    expect(
+      buildEigenBranchModePlotHandoff(
+        "acoustic", baselinePoint, "stale", { ...artifact, status: "missing" },
+        "stale", modalManifestOwner,
       ),
     ).toBeNull();
     const incompleteArtifacts: FrequencyDomainJsonArtifactResource[] = [

@@ -115,9 +115,9 @@ export function buildEigenBranchModePlotHandoff(
   const studyProduct = manifestContext?.studyProduct;
   const wavevectorKf = point.wavevectorKf;
   if (
-    resourceStatus !== "ready" ||
+    !hasReadyOrRetainedSnapshot(resourceStatus) ||
     artifact?.status !== "ready" ||
-    manifestStatus !== "ready" ||
+    !hasReadyOrRetainedSnapshot(manifestStatus) ||
     !eigenModeFieldAvailable(point) ||
     !isNonEmptyString(sessionId) ||
     !isNonEmptyString(artifactSetId) ||
@@ -552,7 +552,7 @@ function useEigenBranchSummary(selection: InspectorPanelProps["selection"]) {
   const manifest = useFrequencyDomainManifestResource();
   const branches = useFrequencyDomainEigenBranchesResource();
   const dispersion = useFrequencyDomainEigenDispersionResource();
-  const manifestOwner = manifest.status === "ready"
+  const manifestOwner = hasReadyOrRetainedSnapshot(manifest.status)
     ? buildEigenBranchResultManifestOwner(manifest.data)
     : null;
   const branchesModel = buildEigenBranchesModel(branches.data, dispersion.data);
@@ -595,6 +595,12 @@ function useEigenBranchSummary(selection: InspectorPanelProps["selection"]) {
           )}-${Math.max(...sampleValues)}`
         : "not available",
   };
+}
+
+// A stale hook retains its last successful envelope. Availability and owner
+// identity are checked separately before creating a plot command.
+function hasReadyOrRetainedSnapshot(status: string): boolean {
+  return status === "ready" || status === "stale";
 }
 
 function isNonEmptyString(value: unknown): value is string {
