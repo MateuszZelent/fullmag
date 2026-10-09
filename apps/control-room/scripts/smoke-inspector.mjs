@@ -147,7 +147,8 @@ await page.addInitScript((baseUrl) => {
     ...(window.__FULLMAG_CONFIG__ ?? {}),
     allowMissingSessionSmoke: true,
     controlRoomApiBase: baseUrl,
-    disableRealtime: true,
+    disableRealtime:
+      new URL(window.location.href).searchParams.get("inspectorRealtimeFixture") !== "1",
     enableDiagnosticRecorder: true,
   };
 }, new URL(workspaceUrl).origin);
@@ -1834,6 +1835,18 @@ async function inspectorResonanceLeafRoutingState(page, expectedNodeId = null) {
 async function qualifyModalDispersionAndPostprocessing(page, inspector, screenshotFiles, fixture) {
   fixture.analysisProduct = "modal_eigen";
   fixture.modalDispersionOwnershipRegression = true;
+  fixture.modalBranchPlotRealtime = { connectionCount: 0, socket: null };
+  await page.routeWebSocket(
+    (url) => new URL(url).pathname === "/v2/sessions/current/events/ws",
+    (websocket) => {
+      assert(
+        websocket.protocols().includes("fullmag.live.v1"),
+        "The stale branch Plot 3D fixture websocket omitted fullmag.live.v1.",
+      );
+      fixture.modalBranchPlotRealtime.connectionCount += 1;
+      fixture.modalBranchPlotRealtime.socket = websocket;
+    },
+  );
   let releaseOldCsv;
   const oldCsvGate = new Promise((resolve) => {
     releaseOldCsv = resolve;
@@ -1844,11 +1857,15 @@ async function qualifyModalDispersionAndPostprocessing(page, inspector, screensh
     runARequestCount: 0,
     runAResponseCount: 0,
   };
-  await reloadInspectorDocument(page, fixture, {
+  const realtimeWorkspaceUrl = new URL(page.url());
+  realtimeWorkspaceUrl.searchParams.set("inspectorRealtimeFixture", "1");
+  await gotoInspectorDocument(page, fixture, realtimeWorkspaceUrl.toString(), {
     waitUntil: "domcontentloaded",
     timeout: 60_000,
-  }, "modal-eigen");
+  }, "modal-eigen-realtime");
   await inspector.waitFor({ state: "visible", timeout: 30_000 });
+  await waitForInspectorRealtimeConnection(fixture, 1);
+  sendInspectorRealtimeHello(fixture, 1);
 
   const resultsTab = page
     .locator(".fm-explorer .fm-tabs-trigger")
@@ -1926,6 +1943,130 @@ async function qualifyModalDispersionAndPostprocessing(page, inspector, screensh
     state: "visible",
     timeout: 60_000,
   });
+}
+
+async function waitForInspectorRealtimeConnection(fixture, minimumConnectionCount) {
+  const deadline = Date.now() + 60_000;
+  while (
+    fixture.modalBranchPlotRealtime.connectionCount < minimumConnectionCount &&
+    Date.now() < deadline
+  ) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert(
+    fixture.modalBranchPlotRealtime.connectionCount >= minimumConnectionCount,
+    `Realtime fixture did not connect ${minimumConnectionCount} time(s).`,
+  );
+}
+
+function sendInspectorRealtimeHello(fixture, sequence) {
+  const socket = fixture.modalBranchPlotRealtime.socket;
+  assert(socket, "Realtime fixture socket is not connected.");
+  socket.send(JSON.stringify({
+    contract_version: "1.0.0",
+    payload: { request_scope_epoch: "inspector-request-scope-1" },
+    run_id: "inspector-run",
+    seq: sequence,
+    session_id: "inspector-routing-smoke",
+    type: "hello",
+  }));
+}
+
+function sendInspectorBranchPlotInvalidation(fixture, sequence) {
+  const socket = fixture.modalBranchPlotRealtime.socket;
+  assert(socket, "Realtime fixture socket is not connected.");
+  const revision = fixture.revision + sequence;
+  socket.send(JSON.stringify({
+    contract_version: "1.0.0",
+    payload: {
+      changes: [
+        {
+          recommended_fetch: "/v2/sessions/current/analysis/frequency-domain/manifest.v1",
+          resource: "analysis",
+          resource_id: "frequency_domain_manifest",
+          revision,
+        },
+        {
+          recommended_fetch: "/v2/sessions/current/analysis/frequency-domain/eigen/branches.v2",
+          resource: "analysis",
+          resource_id: "eigen_branches",
+          revision,
+        },
+      ],
+    },
+    run_id: "inspector-run",
+    seq: sequence,
+    session_id: "inspector-routing-smoke",
+    type: "resource.batch_changed",
+  }));
+}
+
+function createInspectorBranchPlotRefreshGate() {
+  const expectedPaths = new Set([
+    "/v2/sessions/current/analysis/frequency-domain/manifest.v1",
+    "/v2/sessions/current/analysis/frequency-domain/eigen/branches.v2",
+  ]);
+  let resolveBothHeld;
+  const bothHeld = new Promise((resolve) => {
+    resolveBothHeld = resolve;
+  });
+  const gate = {
+    bothHeld,
+    expectedPaths,
+    heldPaths: new Set(),
+    phase: "holding",
+    pendingResponses: [],
+    releaseBothHeld: resolveBothHeld,
+    async release() {
+      if (gate.phase === "released") return;
+      gate.phase = "released";
+      await Promise.all(gate.pendingResponses.splice(0).map((release) => release()));
+    },
+  };
+  return gate;
+}
+
+async function fulfillOrHoldModalBranchPlotRefresh(route, fixture, path, payload) {
+  const gate = fixture.modalBranchPlotRefreshGate;
+  if (!gate || gate.phase !== "holding" || !gate.expectedPaths.has(path)) {
+    await fulfillJson(route, payload);
+    return;
+  }
+
+  gate.heldPaths.add(path);
+  const response = new Promise((resolve, reject) => {
+    gate.pendingResponses.push(async () => {
+      try {
+        await fulfillJson(route, payload);
+        resolve();
+      } catch (error) {
+        reject(error);
+      }
+    });
+  });
+  if ([...gate.expectedPaths].every((expectedPath) => gate.heldPaths.has(expectedPath))) {
+    gate.releaseBothHeld();
+  }
+  await response;
+}
+
+async function waitForInspectorBranchPlotRefreshesHeld(gate) {
+  let timeout;
+  try {
+    await Promise.race([
+      gate.bothHeld,
+      new Promise((_, reject) => {
+        timeout = setTimeout(
+          () => reject(new Error(
+            `Branch/manifest refreshes did not both enter the stale hold: ${JSON.stringify([...gate.heldPaths])}`,
+          )),
+          60_000,
+        );
+      }),
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
 }
 
 async function qualifyModalArtifactOwnershipRace(
@@ -2023,6 +2164,8 @@ async function qualifyMatchedRunBModalArtifact(
   { dispersionRootId, modalStageId, resultRootId },
   diagnostic,
 ) {
+  const realtimeConnectionsBeforeReload =
+    fixture.modalBranchPlotRealtime.connectionCount;
   const runBResponse = page.waitForResponse((response) =>
     new URL(response.url()).pathname ===
       "/v2/sessions/current/analysis/frequency-domain/eigen/dispersion" &&
@@ -2033,6 +2176,14 @@ async function qualifyMatchedRunBModalArtifact(
     waitUntil: "domcontentloaded",
     timeout: 60_000,
   }, "modal-eigen-run-b-artifacts");
+  await waitForInspectorRealtimeConnection(
+    fixture,
+    realtimeConnectionsBeforeReload + 1,
+  );
+  sendInspectorRealtimeHello(
+    fixture,
+    realtimeConnectionsBeforeReload + 1,
+  );
   const resultsTab = page
     .locator(".fm-explorer .fm-tabs-trigger")
     .filter({ hasText: /^Results$/ });
@@ -2058,72 +2209,121 @@ async function qualifyMatchedRunBModalArtifact(
     `Matched run B CSV did not supply its own nonzero path/k identity: ${JSON.stringify(matchedRow)}`,
   );
 
-  diagnostic.phase = "capture-mode-field-observers";
-  const matchedCaptureStart = await page.evaluate(
-    () => window.__FULLMAG_INSPECTOR_WAVEVECTOR_UNIFORMS__?.length ?? 0,
-  );
-  const matchedModeFieldMetadataResponse = observeInspectorResponse(
-    page.waitForResponse((response) =>
-      new URL(response.url()).pathname ===
-        "/v2/sessions/current/analysis/frequency-domain/eigen/mode-field/1/2/meta" &&
-      response.status() === 200,
-      { timeout: 60_000 },
-    ),
-  );
-  const matchedModeFieldVectorResponse = observeInspectorResponse(
-    page.waitForResponse((response) =>
-      new URL(response.url()).pathname ===
-        `/v2/sessions/current/data/fields/${encodeURIComponent(INSPECTOR_MODAL_FIELD_ID)}/samples/vector` &&
-      response.status() === 200,
-      { timeout: 60_000 },
-    ),
-  );
-  diagnostic.phase = "click-plot-mode-field";
-  await inspector.getByRole("button", { name: "Plot sample 1 mode 2 in 3D" }).click();
-  diagnostic.phase = "switch-to-model-tab";
-  await modelTab.click();
-  diagnostic.phase = "select-mode-visualization-node";
-  await selectInspectorNode(page, inspector, "model:object:film:visualization:mode-visualization", {
-    owner: "object-mode-visualization-overview",
-    label: "Matched run B mode field",
+  const plotModeButton = inspector.getByRole("button", {
+    name: "Plot sample 1 mode 2 in 3D",
   });
-  diagnostic.phase = "assert-viewport-canvas";
-  await assertHealthyViewportCanvas(page, "matched run B nonzero-k modal handoff");
-  diagnostic.phase = "wait-mode-field-metadata";
-  const modeFieldMetadataResponse = await requireInspectorResponse(
-    matchedModeFieldMetadataResponse,
-    "matched run B mode-field metadata",
-  );
-  diagnostic.phase = "validate-mode-field-metadata";
-  const modeFieldMetadata = await modeFieldMetadataResponse.json();
-  assertInspectorModalModeFieldMetadata(modeFieldMetadata);
-  diagnostic.phase = "wait-wavevector-uniform";
-  await page.waitForFunction(
-    ({ start, expected }) =>
-      (window.__FULLMAG_INSPECTOR_WAVEVECTOR_UNIFORMS__ ?? [])
-        .slice(start)
-        .some((vector) => Array.isArray(vector) && vector.length === 3 &&
-          expected.every((value, index) =>
-            Math.abs(vector[index] - value) <= Math.max(1e-3, Math.abs(value) * 1e-6),
-          )),
-    { start: matchedCaptureStart, expected: [0, 0, 3e7] },
-    { timeout: 30_000 },
-  );
-  diagnostic.phase = "wait-mode-field-vector";
-  await assertInspectorModalModeFieldVectorResponse(
-    await requireInspectorResponse(
-      matchedModeFieldVectorResponse,
-      "matched run B mode-field vector",
-    ),
-    fixture,
-  );
-  diagnostic.phase = "assert-valid-result-context";
   assert(
-    await inspector.getByRole("alert", {
-      name: "Active Analysis Overlay context warning",
-    }).count() === 0,
-    "Matched run B branch handoff remains outside its valid 3D result context.",
+    await plotModeButton.isEnabled(),
+    "The matching ready run B branch must enable its 3D mode handoff.",
   );
+  diagnostic.phase = "settle-ready-branch-resources";
+  await waitForInspectorRequestQuiet(page, fixture);
+  const modeFieldRequestCountBeforeStaleHandoff =
+    inspectorModeFieldVectorRequestCount(fixture);
+  const staleRefreshGate = createInspectorBranchPlotRefreshGate();
+  fixture.modalBranchPlotRefreshGate = staleRefreshGate;
+  try {
+    diagnostic.phase = "invalidate-branch-and-manifest";
+    sendInspectorBranchPlotInvalidation(
+      fixture,
+      fixture.modalBranchPlotRealtime.connectionCount + 1,
+    );
+    diagnostic.phase = "hold-both-stale-resource-refreshes";
+    await waitForInspectorBranchPlotRefreshesHeld(staleRefreshGate);
+    assert(
+      staleRefreshGate.heldPaths.size === 2,
+      `Both stale owner resources must be refreshing before Plot 3D: ${JSON.stringify([...staleRefreshGate.heldPaths])}`,
+    );
+    assert(
+      await plotModeButton.isEnabled(),
+      "The matched branch Plot 3D action must remain enabled while its branch and manifest hooks retain stale snapshots.",
+    );
+    assert(
+      inspectorModeFieldVectorRequestCount(fixture) ===
+        modeFieldRequestCountBeforeStaleHandoff,
+      "The stale Plot 3D proof must observe a real click, not a prior field request.",
+    );
+
+    diagnostic.phase = "capture-stale-mode-field-observers";
+    const matchedCaptureStart = await page.evaluate(
+      () => window.__FULLMAG_INSPECTOR_WAVEVECTOR_UNIFORMS__?.length ?? 0,
+    );
+    const matchedModeFieldMetadataResponse = observeInspectorResponse(
+      page.waitForResponse((response) =>
+        new URL(response.url()).pathname ===
+          "/v2/sessions/current/analysis/frequency-domain/eigen/mode-field/1/2/meta" &&
+        response.status() === 200,
+        { timeout: 60_000 },
+      ),
+    );
+    const matchedModeFieldVectorResponse = observeInspectorResponse(
+      page.waitForResponse((response) =>
+        new URL(response.url()).pathname ===
+          `/v2/sessions/current/data/fields/${encodeURIComponent(INSPECTOR_MODAL_FIELD_ID)}/samples/vector` &&
+        response.status() === 200,
+        { timeout: 60_000 },
+      ),
+    );
+    diagnostic.phase = "click-plot-mode-field-while-stale";
+    await plotModeButton.click();
+    diagnostic.phase = "switch-to-model-tab";
+    await modelTab.click();
+    diagnostic.phase = "select-mode-visualization-node";
+    await selectInspectorNode(page, inspector, "model:object:film:visualization:mode-visualization", {
+      owner: "object-mode-visualization-overview",
+      label: "Matched run B mode field from retained branch snapshot",
+    });
+    diagnostic.phase = "assert-viewport-canvas";
+    await assertHealthyViewportCanvas(page, "matched run B nonzero-k stale modal handoff");
+    diagnostic.phase = "wait-mode-field-metadata";
+    const modeFieldMetadataResponse = await requireInspectorResponse(
+      matchedModeFieldMetadataResponse,
+      "matched run B stale mode-field metadata",
+    );
+    diagnostic.phase = "validate-mode-field-metadata";
+    const modeFieldMetadata = await modeFieldMetadataResponse.json();
+    assertInspectorModalModeFieldMetadata(modeFieldMetadata);
+    diagnostic.phase = "wait-wavevector-uniform";
+    await page.waitForFunction(
+      ({ start, expected }) =>
+        (window.__FULLMAG_INSPECTOR_WAVEVECTOR_UNIFORMS__ ?? [])
+          .slice(start)
+          .some((vector) => Array.isArray(vector) && vector.length === 3 &&
+            expected.every((value, index) =>
+              Math.abs(vector[index] - value) <= Math.max(1e-3, Math.abs(value) * 1e-6),
+            )),
+      { start: matchedCaptureStart, expected: [0, 0, 3e7] },
+      { timeout: 30_000 },
+    );
+    diagnostic.phase = "wait-mode-field-vector";
+    await assertInspectorModalModeFieldVectorResponse(
+      await requireInspectorResponse(
+        matchedModeFieldVectorResponse,
+        "matched run B stale mode-field vector",
+      ),
+      fixture,
+    );
+    assert(
+      inspectorModeFieldVectorRequestCount(fixture) >
+        modeFieldRequestCountBeforeStaleHandoff,
+      "The stale branch handoff did not request its matching run B mode-field vector.",
+    );
+    diagnostic.phase = "assert-valid-result-context";
+    assert(
+      await inspector.getByRole("alert", {
+        name: "Active Analysis Overlay context warning",
+      }).count() === 0,
+      "Matched run B stale branch handoff is outside its valid 3D result context.",
+    );
+  } finally {
+    diagnostic.phase = "release-stale-resource-refreshes";
+    await staleRefreshGate.release();
+    if (fixture.modalBranchPlotRefreshGate === staleRefreshGate) {
+      fixture.modalBranchPlotRefreshGate = null;
+    }
+  }
+  diagnostic.phase = "wait-stale-refresh-completion";
+  await waitForInspectorRequestQuiet(page, fixture);
 
   diagnostic.phase = "restore-results-branch";
   if ((await resultsTab.getAttribute("aria-selected")) !== "true") {
@@ -3360,9 +3560,32 @@ async function installInspectorFixtureApi(page, fixture) {
       total_steps: 1,
     });
     if (path === "/v2/sessions/current/simulation/objects/film/metrics") return fulfillJson(route, inspectorObjectMetrics());
-    if (path === "/v2/sessions/current/analysis/frequency-domain/manifest.v1") return fulfillJson(route, inspectorFrequencyManifest(fixture));
+    if (path === "/v2/sessions/current/analysis/postprocessing/definitions") {
+      return fulfillJson(route, {
+        count: 0,
+        definitions: [],
+        scene_revision: fixture.scene.revision,
+      });
+    }
+    if (path === "/v2/sessions/current/analysis/frequency-domain/manifest.v1") {
+      await fulfillOrHoldModalBranchPlotRefresh(
+        route,
+        fixture,
+        path,
+        inspectorFrequencyManifest(fixture),
+      );
+      return;
+    }
     if (path === "/v2/sessions/current/analysis/frequency-domain/eigen/spectrum.v2") return fulfillJson(route, inspectorFrequencySpectrum(fixture));
-    if (path === "/v2/sessions/current/analysis/frequency-domain/eigen/branches.v2") return fulfillJson(route, inspectorFrequencyBranches(fixture));
+    if (path === "/v2/sessions/current/analysis/frequency-domain/eigen/branches.v2") {
+      await fulfillOrHoldModalBranchPlotRefresh(
+        route,
+        fixture,
+        path,
+        inspectorFrequencyBranches(fixture),
+      );
+      return;
+    }
     const eigenModeMatch = /^\/v2\/sessions\/current\/analysis\/frequency-domain\/eigen\/modes\/(\d+)\/(\d+)$/.exec(path);
     if (eigenModeMatch) {
       return fulfillJson(route, inspectorFrequencyMode(
