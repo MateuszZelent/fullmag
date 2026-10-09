@@ -109,6 +109,11 @@ pub(crate) enum WaveguideRegistryBindingsError {
         object_id: String,
         module_ids: Vec<String>,
     },
+    AirRegionHasMaterialAssignment {
+        mesh_region_id: String,
+        object_id: String,
+        assignment_ids: Vec<String>,
+    },
     UnmappedMagnetizationModule {
         module_id: String,
     },
@@ -361,6 +366,24 @@ pub(crate) fn validate_waveguide_registry_bindings_for_validated_problem<'a>(
                             mesh_region_id: mesh_region_id.to_string(),
                             object_id: object_id.to_string(),
                             module_ids,
+                        },
+                    );
+                }
+                // Air is the explicitly tagged nonmagnetic vacuum region.
+                // Inspect actual assignments by target, not only the object's
+                // advertised ID list, so no assigned material intent is lost.
+                let assignment_ids = problem
+                    .material_assignments
+                    .iter()
+                    .filter(|assignment| assignment.target.object_id == object_id)
+                    .map(|assignment| assignment.assignment_id.clone())
+                    .collect::<BTreeSet<_>>();
+                if !assignment_ids.is_empty() {
+                    return Err(
+                        WaveguideRegistryBindingsError::AirRegionHasMaterialAssignment {
+                            mesh_region_id: mesh_region_id.to_string(),
+                            object_id: object_id.to_string(),
+                            assignment_ids: assignment_ids.into_iter().collect(),
                         },
                     );
                 }
@@ -970,6 +993,77 @@ pub(crate) mod tests {
         assert!(matches!(
             expect_binding_error(&problem, &mesh, &region_targets),
             WaveguideRegistryBindingsError::AirRegionHasMagnetizationModule { .. }
+        ));
+    }
+
+    #[test]
+    fn air_rejects_a_listed_material_assignment_without_a_magnetization_module() {
+        let (mut problem, mesh, region_targets) = valid_fixture();
+        let material_id = problem.materials[0].name.clone();
+        add_material_assignment(
+            &mut problem,
+            AIR_OBJECT_ID,
+            "assignment-air",
+            region_targets["region-air"].clone(),
+            &material_id,
+        );
+        assert!(problem.validate().is_ok());
+
+        assert!(matches!(
+            expect_binding_error(&problem, &mesh, &region_targets),
+            WaveguideRegistryBindingsError::AirRegionHasMaterialAssignment {
+                mesh_region_id,
+                object_id,
+                assignment_ids,
+            }
+                if mesh_region_id == "region-air"
+                    && object_id == AIR_OBJECT_ID
+                    && assignment_ids == vec!["assignment-air".to_string()]
+        ));
+    }
+
+    #[test]
+    fn air_rejects_sorted_whole_object_and_regional_material_assignments() {
+        let (mut problem, mesh, region_targets) = valid_fixture();
+        let material_id = problem.materials[0].name.clone();
+        let mut air_object_region = problem.object_regions[0].clone();
+        air_object_region.region_id = "object-region-air".to_string();
+        air_object_region.owner_object = AIR_OBJECT_ID.to_string();
+        air_object_region.name = "waveguide-air-region".to_string();
+        problem.object_regions.push(air_object_region);
+
+        add_material_assignment(
+            &mut problem,
+            AIR_OBJECT_ID,
+            "z-assignment-air",
+            region_targets["region-air"].clone(),
+            &material_id,
+        );
+        // The common ProblemIR validator permits a material assignment which
+        // is not listed on its owner. The waveguide binding must still observe
+        // this actual regional assignment, irrespective of target scope.
+        problem
+            .material_assignments
+            .push(ObjectMaterialAssignmentIR::new(
+                "a-assignment-air",
+                RegionRefIR {
+                    object_id: AIR_OBJECT_ID.to_string(),
+                    region_id: Some("object-region-air".to_string()),
+                },
+                material_id,
+            ));
+        assert!(problem.validate().is_ok());
+
+        assert!(matches!(
+            expect_binding_error(&problem, &mesh, &region_targets),
+            WaveguideRegistryBindingsError::AirRegionHasMaterialAssignment {
+                assignment_ids,
+                ..
+            } if assignment_ids
+                == vec![
+                    "a-assignment-air".to_string(),
+                    "z-assignment-air".to_string(),
+                ]
         ));
     }
 
