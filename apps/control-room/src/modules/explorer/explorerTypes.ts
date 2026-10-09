@@ -315,6 +315,8 @@ export interface ExplorerNode {
   analysisFieldRepresentation?: "complex-vector-xyz";
   /** Analysis feature module that owns this Results node (ADR 0054). */
   analysisModuleId?: AnalysisModuleId;
+  /** Marks the root row for a published analysis module's pinned visualizations. */
+  analysisPinnedGroup?: boolean;
   normalization?: string;
   observationFrame?: ObservationFrameResource;
   badge?: string;
@@ -382,6 +384,7 @@ export interface ExplorerNode {
   meshPartId?: string;
   monitorId?: string;
   visualizationTargetId?: string;
+  modeId?: string;
   modeIndex?: number;
   objectId?: string;
   objectRole?: "antenna" | "magnet" | "auxiliary";
@@ -414,6 +417,7 @@ export interface ExplorerNode {
    * descriptor still depends on yAxisIds.
    */
   yAxisIds?: readonly string[];
+  sampleId?: string;
   sampleIndex?: number;
   wavevectorKf?: readonly [number, number, number];
   stageId?: string;

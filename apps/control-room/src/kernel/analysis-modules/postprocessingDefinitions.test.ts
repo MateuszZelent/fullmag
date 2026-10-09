@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { modeVisualizationDefinitionFromSelection, pinnedModeVisualizationId } from "./postprocessingDefinitions";
+import {
+  modeVisualizationOwnerMatch,
+  modeVisualizationDefinitionFromSelection,
+  pinnedModeVisualizationId,
+  sameModeVisualizationOwner,
+} from "./postprocessingDefinitions";
 
 function modeSelection(kind: string, overrides: Record<string, unknown> = {}) {
   return {
@@ -28,7 +33,12 @@ describe("pinned mode visualization definitions", () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.definition).toMatchObject({
-      definition_id: pinnedModeVisualizationId("analysis.dispersion", "analysis:eigen:sample-0006:mode-0001"),
+      definition_id: pinnedModeVisualizationId("analysis.dispersion", {
+        run_id: "run-1",
+        dataset_id: "eigen-dispersion",
+        dataset_revision: "7",
+        field_id: "analysis:eigen:sample-0006:mode-0001",
+      }),
       definition_schema: "analysis.dispersion.mode_visualization.v1",
       label: "Mode 1 · 12.0251 GHz",
       module_id: "analysis.dispersion",
@@ -40,6 +50,124 @@ describe("pinned mode visualization definitions", () => {
         run_id: "run-1",
       },
     });
+  });
+
+  it("keys pins by full published owner identity without delimiter collisions", () => {
+    const base = modeVisualizationDefinitionFromSelection(
+      modeSelection("results.dispersion.modal.mode_at_k") as never,
+    );
+    const otherRun = modeVisualizationDefinitionFromSelection(
+      modeSelection("results.dispersion.modal.mode_at_k", { analysisRunId: "run-2" }) as never,
+    );
+    const otherStage = modeVisualizationDefinitionFromSelection(
+      modeSelection("results.dispersion.modal.mode_at_k", {
+        analysisStageId: "another-dataset",
+      }) as never,
+    );
+    const otherRevision = modeVisualizationDefinitionFromSelection(
+      modeSelection("results.dispersion.modal.mode_at_k", { artifactRevision: 8 }) as never,
+    );
+    const otherSample = modeVisualizationDefinitionFromSelection(
+      modeSelection("results.dispersion.modal.mode_at_k", { sampleId: "sample-7" }) as never,
+    );
+    const otherItem = modeVisualizationDefinitionFromSelection(
+      modeSelection("results.dispersion.modal.mode_at_k", { modeId: "mode-7" }) as never,
+    );
+    const delimiterLeft = modeVisualizationDefinitionFromSelection(
+      modeSelection("results.dispersion.modal.mode_at_k", {
+        analysisRunId: "run:dataset",
+        analysisStageId: "revision",
+        artifactRevision: "x:y",
+        fieldId: "field",
+      }) as never,
+    );
+    const delimiterRight = modeVisualizationDefinitionFromSelection(
+      modeSelection("results.dispersion.modal.mode_at_k", {
+        analysisRunId: "run",
+        analysisStageId: "dataset:revision",
+        artifactRevision: "x:y",
+        fieldId: "field",
+      }) as never,
+    );
+
+    expect(
+      base.ok &&
+        otherRun.ok &&
+        otherStage.ok &&
+        otherRevision.ok &&
+        otherSample.ok &&
+        otherItem.ok &&
+        delimiterLeft.ok &&
+        delimiterRight.ok,
+    ).toBe(true);
+    if (
+      !base.ok ||
+      !otherRun.ok ||
+      !otherStage.ok ||
+      !otherRevision.ok ||
+      !otherSample.ok ||
+      !otherItem.ok ||
+      !delimiterLeft.ok ||
+      !delimiterRight.ok
+    ) {
+      return;
+    }
+    const baseId = base.definition.definition_id;
+    expect(otherRun.definition.definition_id).not.toBe(baseId);
+    expect(otherStage.definition.definition_id).not.toBe(baseId);
+    expect(otherRevision.definition.definition_id).not.toBe(baseId);
+    expect(otherSample.definition.definition_id).not.toBe(baseId);
+    expect(otherItem.definition.definition_id).not.toBe(baseId);
+    expect(delimiterLeft.definition.definition_id).not.toBe(
+      delimiterRight.definition.definition_id,
+    );
+    expect(otherSample.definition.data_ref).toMatchObject({ sample_id: "sample-7" });
+    expect(otherItem.definition.data_ref).toMatchObject({ item_id: "mode-7" });
+  });
+
+  it("recognizes historical field-only IDs by full stored owner data_ref", () => {
+    const result = modeVisualizationDefinitionFromSelection(
+      modeSelection("results.dispersion.modal.mode_at_k", {
+        sampleId: "sample-6",
+        modeId: "mode-1",
+      }) as never,
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const historical = {
+      ...result.definition,
+      definition_id: "analysis.dispersion:mode-visualization:analysis:eigen:sample-0006:mode-0001",
+    };
+    expect(sameModeVisualizationOwner(historical, result.definition)).toBe(true);
+    expect(modeVisualizationOwnerMatch(historical, result.definition)).toBe("exact");
+    expect(sameModeVisualizationOwner(historical, {
+      ...result.definition,
+      data_ref: { ...result.definition.data_ref, dataset_revision: "8" },
+    })).toBe(false);
+    expect(modeVisualizationOwnerMatch({
+      ...historical,
+      data_ref: {
+        ...historical.data_ref,
+        sample_id: undefined,
+        item_id: undefined,
+      },
+    }, result.definition)).toBe("compatible-incomplete");
+    expect(sameModeVisualizationOwner(historical, {
+      ...result.definition,
+      data_ref: { ...result.definition.data_ref, item_id: "mode-2" },
+    })).toBe(false);
+    expect(modeVisualizationOwnerMatch({
+      ...historical,
+      data_ref: { ...historical.data_ref, item_id: "mode-2" },
+    }, result.definition)).toBe("different");
+    expect(modeVisualizationOwnerMatch({
+      ...historical,
+      data_ref: {
+        ...historical.data_ref,
+        sample_id: undefined,
+        item_id: "mode-2",
+      },
+    }, result.definition)).toBe("different");
   });
 
   it("routes resonance modes to the resonance module", () => {

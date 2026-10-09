@@ -149,6 +149,20 @@ function postprocessingRootKind(
 }
 
 export function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
+  if (
+    node.kind === "results.pinned_visualizations.root" &&
+    node.analysisPinnedGroup === true
+  ) {
+    if (!node.analysisRunId || !node.analysisModuleId) return null;
+    return {
+      kind: "results.pinned_visualizations.root",
+      moduleId: node.analysisModuleId,
+      nodeId: node.id,
+      runId: node.analysisRunId,
+      type: "analysis-pinned-group",
+    };
+  }
+
   if (node.kind === "results.observation_frame" && node.observationFrame) {
     const frame = node.observationFrame;
     return {
@@ -347,10 +361,12 @@ export function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
         ? { kPathCoordinateRadPerM: node.kPathCoordinateRadPerM }
         : {}),
       ...(node.modeIndex !== undefined ? { modeIndex: node.modeIndex } : {}),
+      ...(node.modeId ? { modeId: node.modeId } : {}),
       nodeId: node.id,
       ...(node.observableId ? { observableId: node.observableId } : {}),
       ...(node.resourceRef ? { resourceRef: node.resourceRef } : {}),
       ...(node.resourceState ? { resourceState: node.resourceState } : {}),
+      ...(node.sampleId ? { sampleId: node.sampleId } : {}),
       ...(node.analysisFieldRepresentation
         ? { representation: node.analysisFieldRepresentation }
         : {}),

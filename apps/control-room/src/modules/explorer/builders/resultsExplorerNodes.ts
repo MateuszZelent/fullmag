@@ -3,6 +3,10 @@ import {
   PIN_MODE_VISUALIZATION_COMMAND,
   UNPIN_POSTPROCESSING_DEFINITION_COMMAND,
 } from "@/kernel/analysis-modules/postprocessingCommandContributions";
+import {
+  modeVisualizationBaseOwnerKey,
+  type ModeVisualizationOwnerIdentity,
+} from "@/kernel/analysis-modules/postprocessingDefinitions";
 import type {
   AnalysisResultDatasetSummaryResource,
   PostprocessingDefinition as AnalysisPostprocessingDefinition,
@@ -69,10 +73,12 @@ export interface PhysicsFirstAnalysisFieldTarget {
   frequencyIndex?: number;
   kPathCoordinateRadPerM?: number;
   label: string;
+  modeId?: string;
   modeIndex?: number;
   observableId?: string;
   representation: "complex-vector-xyz";
   resourceRef: string;
+  sampleId?: string;
   sampleIndex?: number;
   source: "eigen-mode" | "frequency-response";
   view: "phase_rotated_real";
@@ -336,9 +342,11 @@ function modalFieldTargets({
         frequencyHz: point.frequencyHz,
         kPathCoordinateRadPerM: point.pathS,
         label: `Sample ${point.sampleIndex} · Mode ${point.rawModeIndex}`,
+        ...(point.modeId ? { modeId: point.modeId } : {}),
         modeIndex: point.rawModeIndex,
         representation: "complex-vector-xyz" as const,
         resourceRef: point.modeFieldResourceKey,
+        ...(point.sampleId ? { sampleId: point.sampleId } : {}),
         sampleIndex: point.sampleIndex,
         source: "eigen-mode" as const,
         view: "phase_rotated_real" as const,
@@ -355,9 +363,11 @@ function modalFieldTargets({
           fieldId: point.modeFieldId,
           frequencyHz: point.frequencyHz,
           label: `Sample ${point.sampleIndex} · Mode ${point.rawModeIndex}`,
+          ...(point.modeId ? { modeId: point.modeId } : {}),
           modeIndex: point.rawModeIndex,
           representation: "complex-vector-xyz" as const,
           resourceRef: point.modeFieldResourceKey,
+          ...(point.sampleId ? { sampleId: point.sampleId } : {}),
           sampleIndex: point.sampleIndex,
           source: "eigen-mode" as const,
           view: "phase_rotated_real" as const,
@@ -670,10 +680,12 @@ function analysisFieldTargetNodes(
         ...(target.kPathCoordinateRadPerM !== undefined
           ? { kPathCoordinateRadPerM: target.kPathCoordinateRadPerM }
           : {}),
+        ...(target.modeId ? { modeId: target.modeId } : {}),
         ...(target.modeIndex !== undefined ? { modeIndex: target.modeIndex } : {}),
         ...(target.observableId ? { observableId: target.observableId } : {}),
         resourceRef: target.resourceRef,
         ...(entry.normalization ? { normalization: entry.normalization } : {}),
+        ...(target.sampleId ? { sampleId: target.sampleId } : {}),
         ...(target.sampleIndex !== undefined ? { sampleIndex: target.sampleIndex } : {}),
         studyProduct: entry.studyProduct,
         ...(target.wavevectorKf ? { wavevectorKf: target.wavevectorKf } : {}),
@@ -884,9 +896,9 @@ function kResolvedStage(
 /**
  * Adds a "Pinned visualizations" group to each analysis family for the
  * user-created definitions it owns (ADR 0054, spec 32 §8). A pinned node is a
- * copy of the published mode node with the same field identity, so selecting
- * it behaves exactly like selecting that mode. A definition whose field is no
- * longer published stays visible as unavailable instead of disappearing.
+ * copy of the published mode node with the same run, dataset, revision, field,
+ * and optional sample/item identity, so selecting it reopens that exact mode.
+ * An unpublished or ambiguous owner stays visible as unavailable.
  */
 export function withPinnedAnalysisDefinitions(
   tree: readonly ExplorerNode[],
@@ -901,15 +913,36 @@ export function withPinnedAnalysisDefinitions(
       const owned = definitions.filter(
         (definition) =>
           definition.module_id === moduleId &&
+          definition.node_kind === `${moduleId}.mode_visualization` &&
           definition.data_ref.run_id === resultsRoot.analysisRunId,
       );
       if (owned.length === 0) return family;
       const groupId = `${family.id}:pinned`;
-      const publishedByField = new Map<string, ExplorerNode>();
+      const publishedByBaseOwner = new Map<
+        string,
+        { identity: ModeVisualizationOwnerIdentity; node: ExplorerNode }[]
+      >();
       const collect = (nodes: readonly ExplorerNode[] | undefined) => {
         for (const candidate of nodes ?? []) {
-          if (candidate.fieldId && !publishedByField.has(candidate.fieldId)) {
-            publishedByField.set(candidate.fieldId, candidate);
+          if (
+            candidate.fieldId &&
+            candidate.analysisRunId &&
+            candidate.analysisStageId &&
+            candidate.artifactRevision !== undefined
+          ) {
+            const identity: ModeVisualizationOwnerIdentity = {
+              moduleId,
+              runId: candidate.analysisRunId,
+              datasetId: candidate.analysisStageId,
+              datasetRevision: String(candidate.artifactRevision),
+              fieldId: candidate.fieldId,
+              sampleId: candidate.sampleId ?? null,
+              itemId: candidate.modeId ?? null,
+            };
+            const ownerKey = modeVisualizationBaseOwnerKey(identity);
+            const matches = publishedByBaseOwner.get(ownerKey) ?? [];
+            matches.push({ identity, node: candidate });
+            publishedByBaseOwner.set(ownerKey, matches);
           }
           collect(candidate.children);
         }
@@ -917,9 +950,24 @@ export function withPinnedAnalysisDefinitions(
       collect(family.children);
       const pinned = owned.map((definition): ExplorerNode => {
         const id = `${groupId}:${key(definition.definition_id)}`;
-        const published = definition.data_ref.field_id
-          ? publishedByField.get(definition.data_ref.field_id)
-          : undefined;
+        const dataRef = definition.data_ref;
+        const baseIdentity: ModeVisualizationOwnerIdentity = {
+          moduleId,
+          runId: dataRef.run_id,
+          datasetId: dataRef.dataset_id,
+          datasetRevision: dataRef.dataset_revision,
+          fieldId: dataRef.field_id ?? null,
+        };
+        const candidates = dataRef.field_id
+          ? publishedByBaseOwner.get(modeVisualizationBaseOwnerKey(baseIdentity)) ?? []
+          : [];
+        const matching = candidates.filter(({ identity }) =>
+          (dataRef.sample_id == null || dataRef.sample_id === identity.sampleId) &&
+          (dataRef.item_id == null || dataRef.item_id === identity.itemId),
+        );
+        // Legacy definitions without optional IDs remain usable when their
+        // mandatory identity resolves to exactly one published mode.
+        const published = matching.length === 1 ? matching[0].node : undefined;
         const unpin = {
           contextCommandInputs: {
             [UNPIN_POSTPROCESSING_DEFINITION_COMMAND]: { definitionId: definition.definition_id },
@@ -948,6 +996,8 @@ export function withPinnedAnalysisDefinitions(
       });
       const group = node(groupId, "results.pinned_visualizations.root", "Pinned visualizations", family.id, {
         analysisModuleId: moduleId,
+        analysisPinnedGroup: true,
+        analysisRunId: resultsRoot.analysisRunId,
         badge: String(pinned.length),
         children: pinned,
         icon: "wave",

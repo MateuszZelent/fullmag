@@ -28,6 +28,7 @@ import { RealtimeConnectionController } from "@/kernel/realtime/RealtimeConnecti
 import { RealtimeInvalidationBridge } from "@/kernel/realtime/RealtimeInvalidationBridge";
 import { ResourceInvalidationController } from "@/kernel/resources/ResourceInvalidationController";
 import { SelectionController } from "@/kernel/selection/SelectionController";
+import { selectionRefEquals } from "@/kernel/selection/selectionTypes";
 import { ObjectMoveToolController } from "@/kernel/authoring/ObjectMoveToolController";
 import type { KernelApi } from "@/kernel/types";
 import { AnalysisFieldOverlayController } from "@/kernel/visualization/AnalysisFieldOverlayController";
@@ -878,6 +879,49 @@ describe("selectExplorerNode", () => {
     expect(ref).toBeNull();
   });
 
+  it("selects a pinned analysis group by its published run and module identity", () => {
+    const groupRef = selectionRefFromNode({
+      analysisModuleId: "analysis.dispersion",
+      analysisPinnedGroup: true,
+      analysisRunId: "run-17",
+      id: "results:run-17:dispersion:pinned",
+      kind: "results.pinned_visualizations.root",
+      label: "Pinned visualizations",
+      parentId: "results:run-17:dispersion",
+    });
+
+    expect(groupRef).toEqual({
+      kind: "results.pinned_visualizations.root",
+      moduleId: "analysis.dispersion",
+      nodeId: "results:run-17:dispersion:pinned",
+      runId: "run-17",
+      type: "analysis-pinned-group",
+    });
+    expect(selectionRefEquals(groupRef, {
+      kind: "results.pinned_visualizations.root",
+      moduleId: "analysis.dispersion",
+      nodeId: "results:run-17:dispersion:pinned",
+      runId: "run-17",
+      type: "analysis-pinned-group",
+    })).toBe(true);
+    expect(selectionRefEquals(groupRef, {
+      kind: "results.pinned_visualizations.root",
+      moduleId: "analysis.dispersion",
+      nodeId: "results:run-17:dispersion:pinned",
+      runId: "run-18",
+      type: "analysis-pinned-group",
+    })).toBe(false);
+
+    expect(selectionRefFromNode({
+      analysisModuleId: "analysis.dispersion",
+      analysisRunId: "run-17",
+      id: "results:run-17:dispersion:pinned-child",
+      kind: "results.pinned_visualizations.root",
+      label: "A pinned mode",
+      parentId: "results:run-17:dispersion:pinned",
+    })).toBeNull();
+  });
+
   it("preserves frequency-domain response observable metadata for inspectors", () => {
     const kernel = makeKernel();
     const node: ExplorerNode = {
@@ -913,12 +957,14 @@ describe("selectExplorerNode", () => {
       id: "results:eigen:sample:0:mode:2",
       kind: "results.eigen.mode",
       label: "Sample 0 Mode 2",
+      modeId: "mode-stable-2",
       modeIndex: 2,
       parentId: "results:eigen:modes",
       resourceRef: analysisFieldVectorResourceKey(
         "analysis:eigen:sample-0000:mode-0002",
       ),
       sampleIndex: 0,
+      sampleId: "sample-stable-0",
     };
 
     selectExplorerNode(kernel, node, "explorer");
@@ -930,12 +976,14 @@ describe("selectExplorerNode", () => {
         branchId: "branch-0",
         fieldId: "analysis:eigen:sample-0000:mode-0002",
         kind: "results.eigen.mode",
+        modeId: "mode-stable-2",
         modeIndex: 2,
         nodeId: "results:eigen:sample:0:mode:2",
         resourceRef: analysisFieldVectorResourceKey(
           "analysis:eigen:sample-0000:mode-0002",
         ),
         sampleIndex: 0,
+        sampleId: "sample-stable-0",
         type: "frequency-domain",
       },
     });

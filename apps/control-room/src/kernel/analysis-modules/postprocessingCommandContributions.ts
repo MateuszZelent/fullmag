@@ -4,6 +4,7 @@ import type { CommandContext, CommandContribution, CommandResult } from "@/kerne
 import {
   importedReferenceDefinition,
   modeVisualizationDefinitionFromSelection,
+  modeVisualizationOwnerMatch,
 } from "./postprocessingDefinitions";
 
 export const PIN_MODE_VISUALIZATION_COMMAND = "analysis.postprocessing.pin-mode-visualization";
@@ -81,8 +82,18 @@ async function pinModeVisualization(context: CommandContext): Promise<CommandRes
   }
   const definitions = context.api.analysis.postprocessing.definitions;
   const current = await definitions.list();
-  if (current.definitions.some((definition) => definition.definition_id === result.definition.definition_id)) {
+  const ownerMatches = current.definitions.map((definition) =>
+    modeVisualizationOwnerMatch(definition, result.definition),
+  );
+  if (ownerMatches.includes("exact")) {
     return { message: "This mode visualization is already pinned.", status: "completed" };
+  }
+  if (ownerMatches.includes("compatible-incomplete")) {
+    return {
+      message:
+        "An existing pin and this selection share the same published field owner, but lack enough sample or mode identity to tell whether they are the same mode. Review or remove the existing pin before adding another.",
+      status: "failed",
+    };
   }
   const created = await definitions.create({
     definition: result.definition,

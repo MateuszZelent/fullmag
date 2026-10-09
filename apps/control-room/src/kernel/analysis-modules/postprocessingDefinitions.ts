@@ -8,14 +8,121 @@ import { analysisModuleIdForNodeKind } from "./analysisSurfaceRouting";
 /**
  * Builds the persistent definition of a mode visualization pinned from a
  * selected Results mode node (ADR 0054, spec 32 §8). Only published
- * identities are stored: run, stage (dataset), artifact revision and field id.
+ * identities are stored: module, run, dataset, revision, field, and optional
+ * sample/item IDs when the producer supplies them.
  */
 export type ModeVisualizationDefinitionResult =
   | { definition: PostprocessingDefinition; ok: true }
   | { ok: false; reason: string };
 
-export function pinnedModeVisualizationId(moduleId: AnalysisModuleId, fieldId: string): string {
-  return `${moduleId}:mode-visualization:${fieldId}`;
+export interface ModeVisualizationOwnerIdentity {
+  moduleId: string;
+  runId: string;
+  datasetId: string;
+  datasetRevision: string;
+  fieldId: string | null;
+  sampleId?: string | null;
+  itemId?: string | null;
+}
+
+export function modeVisualizationOwnerKey(identity: ModeVisualizationOwnerIdentity): string {
+  return JSON.stringify([
+    identity.moduleId,
+    identity.runId,
+    identity.datasetId,
+    identity.datasetRevision,
+    identity.fieldId,
+    identity.sampleId ?? null,
+    identity.itemId ?? null,
+  ]);
+}
+
+export function modeVisualizationBaseOwnerKey(
+  identity: Omit<ModeVisualizationOwnerIdentity, "sampleId" | "itemId">,
+): string {
+  return JSON.stringify([
+    identity.moduleId,
+    identity.runId,
+    identity.datasetId,
+    identity.datasetRevision,
+    identity.fieldId,
+  ]);
+}
+
+type ModeVisualizationDataRef = Pick<
+  PostprocessingDefinition["data_ref"],
+  "run_id" | "dataset_id" | "dataset_revision"
+> & {
+  field_id: string;
+  sample_id?: string;
+  item_id?: string;
+};
+
+export type ModeVisualizationOwnerMatch =
+  | "exact"
+  | "compatible-incomplete"
+  | "different";
+
+export function pinnedModeVisualizationId(
+  moduleId: AnalysisModuleId,
+  dataRef: ModeVisualizationDataRef,
+): string {
+  const identity: ModeVisualizationOwnerIdentity = {
+    moduleId,
+    runId: dataRef.run_id,
+    datasetId: dataRef.dataset_id,
+    datasetRevision: dataRef.dataset_revision,
+    fieldId: dataRef.field_id,
+    sampleId: dataRef.sample_id ?? null,
+    itemId: dataRef.item_id ?? null,
+  };
+  const ownerKey = encodeURIComponent(modeVisualizationOwnerKey(identity));
+  return `${moduleId}:mode-visualization:${ownerKey}`;
+}
+
+/** Compares exact published owners and identifies older partial identities safely. */
+export function modeVisualizationOwnerMatch(
+  left: Pick<PostprocessingDefinition, "module_id" | "node_kind" | "data_ref">,
+  right: Pick<PostprocessingDefinition, "module_id" | "node_kind" | "data_ref">,
+): ModeVisualizationOwnerMatch {
+  const identity = (definition: typeof left): ModeVisualizationOwnerIdentity => ({
+    moduleId: definition.module_id,
+    runId: definition.data_ref.run_id,
+    datasetId: definition.data_ref.dataset_id,
+    datasetRevision: definition.data_ref.dataset_revision,
+    fieldId: definition.data_ref.field_id ?? null,
+    sampleId: definition.data_ref.sample_id ?? null,
+    itemId: definition.data_ref.item_id ?? null,
+  });
+  const leftIdentity = identity(left);
+  const rightIdentity = identity(right);
+  if (
+    left.module_id !== right.module_id ||
+    left.node_kind !== right.node_kind ||
+    modeVisualizationBaseOwnerKey(leftIdentity) !==
+      modeVisualizationBaseOwnerKey(rightIdentity)
+  ) {
+    return "different";
+  }
+
+  let incomplete = false;
+  for (const key of ["sampleId", "itemId"] as const) {
+    const leftValue = leftIdentity[key] ?? null;
+    const rightValue = rightIdentity[key] ?? null;
+    if (leftValue !== null && rightValue !== null && leftValue !== rightValue) {
+      return "different";
+    }
+    if ((leftValue === null) !== (rightValue === null)) incomplete = true;
+  }
+  return incomplete ? "compatible-incomplete" : "exact";
+}
+
+/** Exact owner equality, retained for callers that need a boolean predicate. */
+export function sameModeVisualizationOwner(
+  left: Pick<PostprocessingDefinition, "module_id" | "node_kind" | "data_ref">,
+  right: Pick<PostprocessingDefinition, "module_id" | "node_kind" | "data_ref">,
+): boolean {
+  return modeVisualizationOwnerMatch(left, right) === "exact";
 }
 
 export function modeVisualizationDefinitionFromSelection(
@@ -35,6 +142,14 @@ export function modeVisualizationDefinitionFromSelection(
   if (!ref.analysisRunId || !ref.analysisStageId || ref.artifactRevision === undefined) {
     return { ok: false, reason: "The selected field has no published run, stage or revision identity." };
   }
+  const dataRef: ModeVisualizationDataRef = {
+    run_id: ref.analysisRunId,
+    dataset_id: ref.analysisStageId,
+    dataset_revision: String(ref.artifactRevision),
+    field_id: ref.fieldId,
+    ...(ref.sampleId ? { sample_id: ref.sampleId } : {}),
+    ...(ref.modeId ? { item_id: ref.modeId } : {}),
+  };
   const frequency =
     typeof ref.frequencyHz === "number" && Number.isFinite(ref.frequencyHz)
       ? ` · ${(ref.frequencyHz / 1e9).toFixed(4)} GHz`
@@ -42,21 +157,14 @@ export function modeVisualizationDefinitionFromSelection(
   return {
     ok: true,
     definition: {
-      definition_id: pinnedModeVisualizationId(manifest.id, ref.fieldId),
+      definition_id: pinnedModeVisualizationId(manifest.id, dataRef),
       revision: 0,
       module_id: manifest.id,
       module_version: manifest.version,
       definition_schema: schema,
       node_kind: nodeKind,
       label: `${selection.label ?? "Mode"}${frequency}`,
-      data_ref: {
-        run_id: ref.analysisRunId,
-        dataset_id: ref.analysisStageId,
-        dataset_revision: String(ref.artifactRevision),
-        field_id: ref.fieldId,
-        ...(ref.sampleId ? { sample_id: ref.sampleId } : {}),
-        ...(ref.modeId ? { item_id: ref.modeId } : {}),
-      },
+      data_ref: dataRef,
       settings: { placement: "beside" },
     },
   };

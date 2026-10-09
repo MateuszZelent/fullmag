@@ -15,6 +15,7 @@ import {
   type PhysicsFirstResultEntry,
 } from "./resultsExplorerNodes";
 import { selectExplorerNode } from "../explorerSelection";
+import type { ExplorerNode } from "../explorerTypes";
 
 const modalFinite = {
   artifactRevision: "spectrum-r7",
@@ -1193,8 +1194,10 @@ describe("withPinnedAnalysisDefinitions", () => {
               fieldId,
               frequencyHz: 12e9,
               label: "Sample 1 · Mode 0",
+              modeId: "mode-0000",
               representation: "complex-vector-xyz",
               resourceRef: "eigen/modes/sample_0001/mode_0000.json",
+              sampleId: "sample-0001",
               source: "eigen-mode",
               view: "phase_rotated_real",
             },
@@ -1207,7 +1210,12 @@ describe("withPinnedAnalysisDefinitions", () => {
       resultContextRunId: modalFinite.runId,
     });
   const definition = (field: string) => ({
-    data_ref: { dataset_id: modalFinite.stageId, dataset_revision: "1", field_id: field, run_id: modalFinite.runId },
+    data_ref: {
+      dataset_id: modalFinite.stageId,
+      dataset_revision: String(modalFinite.artifactRevision),
+      field_id: field,
+      run_id: modalFinite.runId,
+    },
     definition_id: `analysis.dispersion:mode-visualization:${field}`,
     definition_schema: "analysis.dispersion.mode_visualization.v1",
     label: "Pinned mode",
@@ -1217,12 +1225,54 @@ describe("withPinnedAnalysisDefinitions", () => {
     revision: 1,
   });
 
+  const publishedMode = (
+    id: string,
+    runId: string,
+    stageId: string,
+    revision: string,
+    sampleId: string,
+    modeId: string,
+  ): ExplorerNode => ({
+    id,
+    kind: "results.dispersion.modal.mode_at_k",
+    label: `Published ${id}`,
+    parentId: `dispersion-${runId}`,
+    analysisRunId: runId,
+    analysisStageId: stageId,
+    artifactRevision: revision,
+    fieldId: "analysis:eigen:sample-local:mode-local",
+    sampleId,
+    modeId,
+  });
+
+  const resultsRoot = (runId: string, modes: ExplorerNode[]): ExplorerNode => ({
+    id: `results-${runId}`,
+    kind: "results.root",
+    label: "Results",
+    parentId: null,
+    analysisRunId: runId,
+    children: [{
+      id: `dispersion-${runId}`,
+      kind: "results.dispersion.root",
+      label: "Dispersion",
+      parentId: `results-${runId}`,
+      analysisModuleId: "analysis.dispersion",
+      children: modes,
+    }],
+  });
+
   it("adds pinned copies of published mode nodes under the owning family", () => {
     const nodes = flattenExplorerNodes(withPinnedAnalysisDefinitions(tree(), [definition(fieldId)]));
     const group = nodes.find((node) => node.kind === "results.pinned_visualizations.root" && node.label === "Pinned visualizations");
     expect(group?.analysisModuleId).toBe("analysis.dispersion");
     const pinned = group?.children?.[0];
-    expect(pinned).toMatchObject({ fieldId, kind: "results.dispersion.modal.mode_at_k", label: "Pinned mode" });
+    expect(pinned).toMatchObject({
+      fieldId,
+      kind: "results.dispersion.modal.mode_at_k",
+      label: "Pinned mode",
+      sampleId: "sample-0001",
+      modeId: "mode-0000",
+    });
     expect(pinned?.contextCommands).toEqual(["analysis.postprocessing.unpin-definition"]);
   });
 
@@ -1231,6 +1281,155 @@ describe("withPinnedAnalysisDefinitions", () => {
       withPinnedAnalysisDefinitions(tree(), [definition("analysis:eigen:sample-0009:mode-0009")]),
     );
     expect(nodes.find((node) => node.label === "Pinned mode")).toMatchObject({
+      availability: "unavailable",
+      kind: "results.pinned_visualizations.root",
+    });
+  });
+
+  it("reopens the exact run, dataset revision, sample and item for a repeated field ID", () => {
+    const fieldId = "analysis:eigen:sample-local:mode-local";
+    const first = publishedMode(
+      "first", "run-1", "stage-1", "revision-1", "sample-1", "mode-1",
+    );
+    const firstDuplicate = publishedMode(
+      "first-duplicate", "run-1", "stage-1", "revision-1", "sample-1b", "mode-1b",
+    );
+    const second = publishedMode(
+      "second", "run-1", "stage-2", "revision-2", "sample-2", "mode-2",
+    );
+    const third = publishedMode(
+      "third", "run-2", "stage-1", "revision-1", "sample-3", "mode-3",
+    );
+    const makeDefinition = (
+      label: string,
+      owner: {
+        runId: string;
+        stageId: string;
+        revision: string;
+        sampleId?: string;
+        itemId?: string;
+      },
+    ) => ({
+      data_ref: {
+        run_id: owner.runId,
+        dataset_id: owner.stageId,
+        dataset_revision: owner.revision,
+        field_id: fieldId,
+        ...(owner.sampleId ? { sample_id: owner.sampleId } : {}),
+        ...(owner.itemId ? { item_id: owner.itemId } : {}),
+      },
+      definition_id: `pinned:${label}`,
+      definition_schema: "analysis.dispersion.mode_visualization.v1",
+      label,
+      module_id: "analysis.dispersion",
+      module_version: "0.1.0",
+      node_kind: "analysis.dispersion.mode_visualization",
+      revision: 1,
+    });
+    const definitions = [
+      makeDefinition("Pin stage 1", {
+        runId: "run-1",
+        stageId: "stage-1",
+        revision: "revision-1",
+        sampleId: "sample-1",
+        itemId: "mode-1",
+      }),
+      makeDefinition("Pin same dataset sample 1b", {
+        runId: "run-1",
+        stageId: "stage-1",
+        revision: "revision-1",
+        sampleId: "sample-1b",
+        itemId: "mode-1b",
+      }),
+      makeDefinition("Pin stage 2", {
+        runId: "run-1",
+        stageId: "stage-2",
+        revision: "revision-2",
+        sampleId: "sample-2",
+        itemId: "mode-2",
+      }),
+      makeDefinition("Pin run 2", {
+        runId: "run-2",
+        stageId: "stage-1",
+        revision: "revision-1",
+        sampleId: "sample-3",
+        itemId: "mode-3",
+      }),
+      makeDefinition("Legacy pin", {
+        runId: "run-2", stageId: "stage-1", revision: "revision-1",
+      }),
+    ];
+    const nodes = flattenExplorerNodes(
+      withPinnedAnalysisDefinitions(
+        [
+          resultsRoot("run-1", [first, firstDuplicate, second]),
+          resultsRoot("run-2", [third]),
+        ],
+        definitions,
+      ),
+    );
+
+    expect(nodes.find((node) => node.label === "Pin stage 1")).toMatchObject({
+      analysisRunId: "run-1",
+      analysisStageId: "stage-1",
+      artifactRevision: "revision-1",
+      sampleId: "sample-1",
+      modeId: "mode-1",
+    });
+    expect(nodes.find((node) => node.label === "Pin stage 2")).toMatchObject({
+      analysisRunId: "run-1",
+      analysisStageId: "stage-2",
+      artifactRevision: "revision-2",
+      sampleId: "sample-2",
+      modeId: "mode-2",
+    });
+    expect(
+      nodes.find((node) => node.label === "Pin same dataset sample 1b"),
+    ).toMatchObject({
+      analysisRunId: "run-1",
+      analysisStageId: "stage-1",
+      artifactRevision: "revision-1",
+      sampleId: "sample-1b",
+      modeId: "mode-1b",
+    });
+    expect(nodes.find((node) => node.label === "Pin run 2")).toMatchObject({
+      analysisRunId: "run-2",
+      analysisStageId: "stage-1",
+      sampleId: "sample-3",
+      modeId: "mode-3",
+    });
+    expect(nodes.find((node) => node.label === "Legacy pin")).toMatchObject({
+      analysisRunId: "run-2",
+      analysisStageId: "stage-1",
+      sampleId: "sample-3",
+      modeId: "mode-3",
+    });
+  });
+
+  it("keeps a legacy field-only pin unavailable when its base owner is ambiguous", () => {
+    const first = publishedMode("first", "run-1", "stage-1", "revision-1", "sample-1", "mode-1");
+    const second = publishedMode("second", "run-1", "stage-1", "revision-1", "sample-2", "mode-2");
+    const legacy = {
+      data_ref: {
+        run_id: "run-1",
+        dataset_id: "stage-1",
+        dataset_revision: "revision-1",
+        field_id: first.fieldId,
+      },
+      definition_id: "legacy-ambiguous",
+      definition_schema: "analysis.dispersion.mode_visualization.v1",
+      label: "Ambiguous legacy pin",
+      module_id: "analysis.dispersion",
+      module_version: "0.1.0",
+      node_kind: "analysis.dispersion.mode_visualization",
+      revision: 1,
+    };
+    const nodes = flattenExplorerNodes(withPinnedAnalysisDefinitions(
+      [resultsRoot("run-1", [first, second])],
+      [legacy],
+    ));
+
+    expect(nodes.find((node) => node.label === "Ambiguous legacy pin")).toMatchObject({
       availability: "unavailable",
       kind: "results.pinned_visualizations.root",
     });
