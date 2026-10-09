@@ -172,6 +172,10 @@ przez aliasy z etapu 2b): dyspersja → Dispersion, rezonans → Resonance & FMR
 migawki → Dynamics. Podzakładki zostają przejściowo jako nawigacja
 pomocnicza. Część 3b (usunięcie podzakładek i widoki dostarczane przez moduły)
 wymaga równoległej zmiany smoke testów przeglądarkowych.
+Część 3b jest **zablokowana przez etap 8**: powierzchnie Comparison i
+Hysteresis nie mają jeszcze węzłów w drzewie wyników (Hysteresis dostanie je
+z modułem `analysis.hysteresis`, gdy backend opublikuje jego `product_kind`).
+Usunięcie podzakładek wcześniej odcięłoby te powierzchnie.
 
 - Karta Analysis renderuje widok zaznaczonego węzła; `AnalysisSurfaceTabs`
   wycofane; widoki modułu dyspersji jako pierwsze.
