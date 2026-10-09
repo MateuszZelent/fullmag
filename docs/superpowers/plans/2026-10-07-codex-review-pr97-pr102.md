@@ -2623,3 +2623,7 @@ Refresh19 dodał 11 nowych uwag PR97, zachowanych w pełnym rejestrze jako pendi
 ### Managed Floquet CI — błąd typu callbacku przed testami
 
 GHA37996812646/job114044880684, exact d4e0b4421fa58c6cd8041e06d7d9ede6c66f549a, terminal FAIL. Artefakt11648049040 zawiera cztery błędy kompilatora w tej samej lambdzie: dedukcja int kontra anonimowy enum PETSc. Testy nie wystartowały; nie jest to nowy wynik residualu ani regresja fizyki. Dodano jawny return type PetscErrorCode zgodny z checked transaction i callbackiem. Jedna linia, bez castów, zmiany tolerancji/window/policy. Niezależny SOURCE review i diff-check PASS. Ponowna kompilacja oraz pomiar live-PC pozostają NOT VERIFIED; wyłącznie GHA.
+
+### Runtime→execution CI — rzeczywista wersja fixture kolejki
+
+GHA37998904463 exact a226728249180e4f75feb17a77b624573cfb50e8 zakończył się FAIL na Linux114051867300 i Windows114051867666. Sześć nowych integration/race testów zatrzymało się w setup: ręcznie utworzona tabela jobs miała user_version=0, a prawidłowy readonly JobQueue wymaga inicjalizacji. Fixture ustawia teraz user_version=1, zgodnie z istniejącym actual runtime fixture. Produkcyjna walidacja kolejki, tombstone i cleanup niezmieniona. Root SOURCE review, AST/diff-check PASS; wykonanie tych sześciu przypadków nadal NOT VERIFIED. Oddzielne kroki archive receipt12, runtime retention26 i runtime use10 PASS obu OS w poprzednim jobie. Nie usuwano rzeczywistych danych i nie uruchamiano testów lokalnie.

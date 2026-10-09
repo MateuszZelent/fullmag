@@ -214,6 +214,7 @@ class ExecutionCleanupTests(unittest.TestCase):
                 'state,2,2,exit_code FROM jobs WHERE job_id=?',
                 (newer_id, 'runtime-retention-newer-request', JOB_ID),
             )
+            database.execute('PRAGMA user_version=1')
         finally:
             database.close()
 
