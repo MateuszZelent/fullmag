@@ -749,7 +749,16 @@ Current object-authoring routes:
 region endpoint references the deleted object, so the committed scene cannot
 retain dangling coupling endpoints. The response includes `transaction_kind`,
 `scene_revision`, and `committed_scene`. Direct object and region mutation
-routes also return the committed scene. Material mutation returns the committed
+routes also return the committed scene.
+
+Pole `committed_scene` jest typowanym `SceneResource`, identycznym z projekcją
+`GET model/scene` dla tej samej rewizji; `scene_revision` musi odpowiadać
+`committed_scene.revision`. Nie zastępuje prywatnego `SceneDocument` w storage.
+Klient może opublikować ten zasób przez centralnego właściciela cache przed
+unieważnieniem zależności, pod warunkiem związania z sesją, klientem i rewizją.
+Starszy ACK nie może zastąpić nowszego zasobu ani przerwać jego odczytu.
+Odczyt sceny przed mutacją potrzebny do historii pozostaje wymagany.
+Material mutation returns the committed
 material asset and must invalidate `model/scene` because material changes can
 synchronize interaction state such as interfacial DMI. There is currently no
 `GET /v2/sessions/current/model/objects/{object_id}` read route; browser

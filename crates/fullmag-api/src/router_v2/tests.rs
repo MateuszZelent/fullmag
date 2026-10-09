@@ -16600,6 +16600,57 @@ async fn authoring_scene_patch_applies_merge_patch() {
     assert_eq!(committed.scene.name, "Patched Scene");
 }
 
+#[test]
+fn authoring_transaction_ack_schema_exposes_canonical_scene_resource() {
+    let document = crate::openapi_v2::openapi_json();
+    let schema = &document["components"]["schemas"]["AuthoringTransactionResponse"];
+    assert_eq!(schema["properties"]["committed_scene"]["$ref"],
+               "#/components/schemas/SceneResource");
+}
+
+#[tokio::test]
+async fn authoring_transaction_ack_matches_current_scene_resource_and_revision() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(sample_scene_document());
+    }
+    let app = build_v2_router().with_state(state.clone());
+    let response = app.clone().oneshot(
+        Request::builder()
+            .method("POST")
+            .uri("/v2/sessions/current/model/transactions")
+            .header("content-type", "application/json")
+            .body(Body::from(serde_json::json!({
+                "kind": "merge_patch",
+                "base_revision": 3,
+                "merge_patch": { "scene": { "name": "Canonical ACK resource" } },
+            }).to_string()))
+            .unwrap(),
+    ).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let ack = body_json(response).await;
+    let response = app.oneshot(
+        Request::builder()
+            .method("GET")
+            .uri("/v2/sessions/current/model/scene")
+            .body(Body::empty())
+            .unwrap(),
+    ).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let current_resource = body_json(response).await;
+    assert_eq!(ack["committed_scene"], current_resource);
+    assert_eq!(ack["scene_revision"], current_resource["revision"]);
+    assert_eq!(current_resource["scene"]["name"], "Canonical ACK resource");
+    let guard = state.current_live_state.read().await;
+    let committed = guard.as_ref()
+        .and_then(|snapshot| snapshot.scene_document.as_ref())
+        .expect("canonical document remains committed");
+    let projected = crate::schemas::authoring::SceneResource::from_scene_document(
+        committed.clone(),
+    ).unwrap();
+    assert_eq!(serde_json::to_value(projected).unwrap(), current_resource);
+}
+
 #[tokio::test]
 async fn authoring_transactions_replace_scene_commits_document() {
     let state = test_app_state_with_live_session().await;

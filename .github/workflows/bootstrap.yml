@@ -165,6 +165,7 @@ jobs:
           cargo test -p fullmag-api --bin fullmag-api quantities::tests
           cargo test -p fullmag-api --bin fullmag-api frequency_domain_
           cargo test -p fullmag-api --bin fullmag-api authoring_study_runtime_parallel_patch
+          cargo test -p fullmag-api --bin fullmag-api authoring_transaction_ack_
 
       - name: Run application materialization and eigen selector contracts
         run: cargo test -p fullmag-application --no-fail-fast
@@ -205,6 +206,17 @@ jobs:
         run: |
           node --test apps/control-room/scripts/normalize-openapi-build-identity.node-test.mjs
           ./scripts/ci/run_frontend3d_required_gate.sh generated-api-determinism
+
+      - name: Preserve generated API contract for source review
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: generated-api-contract-${{ github.run_id }}
+          path: |
+            apps/control-room/src/kernel/api/generated/openapi-v2.json
+            apps/control-room/src/kernel/api/generated/openapi-v2-types.ts
+            apps/control-room/src/kernel/api/generated/openapi-v2-client.ts
+          if-no-files-found: error
 
   api-hygiene-rg13:
     if: ${{ github.event_name != 'workflow_dispatch' || (inputs.contract_scope != 'positive-mass' && inputs.contract_scope != 'browser' && inputs.contract_scope != 'native-modal' && inputs.contract_scope != 'floquet-modal-slepc' && inputs.contract_scope != 'generic-modal-slepc' && inputs.contract_scope != 'floquet-count-slepc' && inputs.contract_scope != 'modal-phase-slepc' && inputs.contract_scope != 'retention') }}

@@ -3844,28 +3844,21 @@ pub async fn commit_authoring_transaction(
     // after the commit cannot publish an ACK for a different current scene.
     crate::validate_current_live_request_context(&state, &request_context).await?;
 
-    let committed_scene = serde_json::to_value(&committed).map_err(|error| {
-        ApiError::internal(format!("failed to serialize scene document: {error}"))
-    })?;
-
-    Ok(Json(AuthoringTransactionResponse {
-        transaction_kind: transaction_kind.to_string(),
-        scene_revision: committed.revision,
-        committed_scene,
-    }))
+    authoring_transaction_response(transaction_kind, committed)
 }
 
 fn authoring_transaction_response(
     transaction_kind: &str,
     committed: SceneDocument,
 ) -> Result<Json<AuthoringTransactionResponse>, ApiError> {
-    let committed_scene = serde_json::to_value(&committed).map_err(|error| {
-        ApiError::internal(format!("failed to serialize scene document: {error}"))
+    let scene_revision = committed.revision;
+    let committed_scene = SceneResource::from_scene_document(committed).map_err(|error| {
+        ApiError::internal(format!("failed to project committed scene resource: {error}"))
     })?;
 
     Ok(Json(AuthoringTransactionResponse {
         transaction_kind: transaction_kind.to_string(),
-        scene_revision: committed.revision,
+        scene_revision,
         committed_scene,
     }))
 }

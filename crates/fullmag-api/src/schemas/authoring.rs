@@ -1721,8 +1721,7 @@ pub enum AuthoringTransactionRequest {
 pub struct AuthoringTransactionResponse {
     pub transaction_kind: String,
     pub scene_revision: u64,
-    #[schema(value_type = Object)]
-    pub committed_scene: Value,
+    pub committed_scene: SceneResource,
 }
 
 #[cfg(test)]
