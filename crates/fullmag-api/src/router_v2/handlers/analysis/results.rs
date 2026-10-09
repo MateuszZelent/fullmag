@@ -3886,6 +3886,7 @@ fn parse_page_query(query: &HashMap<String, String>) -> Result<ParsedPageQuery, 
             "driven_response",
             "time_domain_spectrum",
             "dynamic_structure_factor",
+            "hysteresis_loop",
         ],
     )?;
     validate_enum_filter(
@@ -4542,6 +4543,25 @@ mod tests {
 
         let query = HashMap::from([(String::from("has_fields"), String::from("true"))]);
         assert_eq!(parse_page_query(&query).unwrap().has_field, Some(true));
+    }
+
+    #[test]
+    fn published_hysteresis_product_kind_is_a_valid_catalog_filter() {
+        let query = HashMap::from([(
+            String::from("product_kind"),
+            String::from("hysteresis_loop"),
+        )]);
+        let parsed = parse_page_query(&query)
+            .expect("the published hysteresis product must be queryable");
+        assert_eq!(parsed.product_kind.as_deref(), Some("hysteresis_loop"));
+
+        let invalid = HashMap::from([(
+            String::from("product_kind"),
+            String::from("hysteresis_looop"),
+        )]);
+        let error = parse_page_query(&invalid)
+            .expect_err("unpublished product kinds must still be rejected");
+        assert!(error.message.starts_with("RESULT_INVALID_FILTER"));
     }
 
     #[test]
