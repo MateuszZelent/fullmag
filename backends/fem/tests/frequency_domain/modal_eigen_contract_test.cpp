@@ -6405,18 +6405,39 @@ void modal_nonzero_k_floquet_shared_domain_nearest_reports_shifted_ksp_diagnosti
     check(contains(window_result.result_json,
                    "\"floquet_descriptor_certified\":true"),
           "native window keeps original descriptor certification after merging");
-    check(contains(window_result.result_json, "\"window_complete\":false"),
-          "native merge does not promote selected modes to a certified full window");
+    const double accepted_modes_before_cap = extract_json_number(
+        window_result.diagnostics_json,
+        "\"accepted_modes_before_cap\":",
+        "native_floquet_window_modes_before_cap");
+    const bool publication_cap_truncated_modes =
+        accepted_modes_before_cap >
+        static_cast<double>(window_request.requested_mode_count);
+    const char *expected_window_completeness = count_certificate_only ||
+            publication_cap_truncated_modes
+        ? "truncated_by_requested_count"
+        : contains(window_result.diagnostics_json,
+                   "\"stop_reason\":\"partial_convergence\"")
+            ? "partial_convergence"
+            : "not_certified";
+    const std::string expected_result_window_completeness =
+        "\"window_completeness\":\"" +
+        std::string(expected_window_completeness) + "\"";
+    const std::string expected_diagnostic_window_completeness =
+        "\"window_completeness\":{\"policy\":\"best_effort\",\"status\":\"" +
+        std::string(expected_window_completeness) +
+        "\",\"certification_method\":\"none\"";
+    check(contains(window_result.result_json,
+                   expected_result_window_completeness.c_str()) &&
+              contains(window_result.diagnostics_json,
+                       "\"complete\":false,\"execution_lane\":\"production_cpu\"") &&
+              contains(window_result.diagnostics_json,
+                       expected_diagnostic_window_completeness.c_str()) &&
+              contains(window_result.diagnostics_json,
+                       "\"additional_modes_may_exist\":true"),
+          "native merge preserves the exact incomplete best_effort window status");
     check(!contains(window_result.diagnostics_json,
                     "\"shifted_ksp_failure_probe\":"),
           "successful window subsolves omit the failure-only shifted-KSP probe");
-    check(contains(window_result.diagnostics_json,
-                   "\"window_completeness\":{\"policy\":\"best_effort\"") &&
-              contains(window_result.diagnostics_json,
-                       "\"certification_method\":\"none\"") &&
-              contains(window_result.diagnostics_json,
-                       "\"additional_modes_may_exist\":true"),
-          "best_effort preserves the native Floquet window's explicit non-certification");
 
     if (count_certificate_only) {
         const std::size_t best_effort_subwindow_count =
@@ -6432,12 +6453,7 @@ void modal_nonzero_k_floquet_shared_domain_nearest_reports_shifted_ksp_diagnosti
                             "floquet_nev_refill_dimension_limit_reached"),
               "best_effort control has one completed native subwindow with no partial or refill-limit result");
 
-        const double best_effort_modes_before_cap =
-            extract_json_number(
-                window_result.diagnostics_json,
-                "\"accepted_modes_before_cap\":",
-                "public_native_floquet_count_fixture_unique_modes");
-        check(best_effort_modes_before_cap >= 4.0,
+        check(accepted_modes_before_cap >= 4.0,
               "expanded fixture supplies at least four independent in-window modes before the public cap");
 
         FullmagFemModalEigenRequest uncertified_count_request = window_request;
