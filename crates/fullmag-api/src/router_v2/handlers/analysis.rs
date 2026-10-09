@@ -1,3 +1,4 @@
+pub mod analytic_references;
 pub mod eigen;
 pub mod extensions;
 pub mod frequency_domain;
@@ -7,6 +8,7 @@ pub mod response;
 pub mod results;
 pub mod spin_wave_response;
 
+pub use analytic_references::*;
 pub use eigen::*;
 pub use extensions::*;
 pub use frequency_domain::*;

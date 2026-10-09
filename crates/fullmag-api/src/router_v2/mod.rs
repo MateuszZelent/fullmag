@@ -133,6 +133,10 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
             post(handlers::model::duplicate_planar_monitor),
         )
         .route(
+            "/v2/sessions/current/analysis/references/analytic-models",
+            get(handlers::analysis::list_analytic_reference_models),
+        )
+        .route(
             "/v2/sessions/current/analysis/postprocessing/definitions",
             get(handlers::analysis::list_postprocessing_definitions)
                 .post(handlers::analysis::create_postprocessing_definition),

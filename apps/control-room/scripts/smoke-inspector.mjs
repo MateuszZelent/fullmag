@@ -3863,6 +3863,9 @@ async function installInspectorFixtureApi(page, fixture) {
         total_count: 0,
       });
     }
+    if (path === "/v2/sessions/current/analysis/references/analytic-models") {
+      return fulfillJson(route, { models: [], schema_version: "analytic-reference-models.v1" });
+    }
     if (path === "/v2/sessions/current/analysis/postprocessing/definitions") {
       return fulfillJson(route, {
         count: 0,

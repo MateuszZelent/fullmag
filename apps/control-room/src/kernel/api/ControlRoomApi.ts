@@ -159,6 +159,7 @@ import {
   MODEL_OBJECTS_PATH,
   MODEL_PHYSICS_GRAPH_PATH,
   ANALYSIS_POSTPROCESSING_DEFINITION_PATH,
+  ANALYSIS_ANALYTIC_REFERENCE_MODELS_PATH,
   ANALYSIS_POSTPROCESSING_DEFINITIONS_PATH,
   MODEL_PLANAR_MONITOR_DUPLICATE_PATH,
   MODEL_PLANAR_MONITOR_PATH,
@@ -338,6 +339,7 @@ import type {
   PlanarFieldProbeResource,
   PlanarFieldQuery,
   PlanarFieldSource,
+  AnalyticReferenceModelCollectionResource,
   PostprocessingDefinitionCollectionResource,
   PostprocessingDefinitionCreateRequest,
   PostprocessingDefinitionDeleteRequest,
@@ -1293,6 +1295,14 @@ export class ControlRoomApi {
   };
 
   readonly analysis = {
+    /** Analytic reference models with their declared assumptions (spec 32 §9). */
+    references: {
+      analyticModels: (options?: RequestOptions) =>
+        this.requestJson<AnalyticReferenceModelCollectionResource>(
+          ANALYSIS_ANALYTIC_REFERENCE_MODELS_PATH,
+          options,
+        ),
+    },
     /** User-created Results nodes saved with the project (ADR 0054, spec 32 §8). */
     postprocessing: {
       definitions: {

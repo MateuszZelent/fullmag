@@ -1284,6 +1284,22 @@ export interface paths {
         patch: operations["analysis_patch_sessions_current_analysis_postprocessing_definitions_definition_id"];
         trace?: never;
     };
+    "/v2/sessions/current/analysis/references/analytic-models": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["analysis_get_sessions_current_analysis_references_analytic_models"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v2/sessions/current/analysis/results/runs/{run_id}/datasets": {
         parameters: {
             query?: never;
@@ -5133,6 +5149,28 @@ export interface components {
             qualification: string;
             reason_code?: string | null;
             resource: string;
+        };
+        AnalyticReferenceModelCollectionResource: {
+            models: components["schemas"]["AnalyticReferenceModelResource"][];
+            schema_version: string;
+        };
+        AnalyticReferenceModelResource: {
+            assumptions: string[];
+            bibliography: string;
+            /** @description Boundary assumption compared with the run's, e.g. `open_film`. */
+            boundary_assumption: string;
+            model_id: string;
+            physics_note: string;
+            surface_pinning: string;
+            /** Format: int32 */
+            thickness_mode_order: number;
+            title: string;
+            validity: components["schemas"]["AnalyticReferenceValidity"];
+        };
+        AnalyticReferenceValidity: {
+            note: string;
+            /** @description Field of the run's validation intent that bounds the compared |k| [rad/m]. */
+            wavevector_limit_source: string;
         };
         ApiErrorDiagnosticResponse: {
             code: string;
@@ -18374,6 +18412,28 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    analysis_get_sessions_current_analysis_references_analytic_models: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AnalyticReferenceModelCollectionResource"];
+                };
             };
         };
     };

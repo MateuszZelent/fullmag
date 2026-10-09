@@ -111,6 +111,9 @@ export type PlanarFieldProbeResource =
   components["schemas"]["PlanarFieldProbeResource"];
 export type PostprocessingDataRef = components["schemas"]["PostprocessingDataRef"];
 export type PostprocessingDefinition = components["schemas"]["PostprocessingDefinition"];
+export type AnalyticReferenceModelCollectionResource =
+  components["schemas"]["AnalyticReferenceModelCollectionResource"];
+export type AnalyticReferenceModelResource = components["schemas"]["AnalyticReferenceModelResource"];
 export type PostprocessingDefinitionCollectionResource =
   components["schemas"]["PostprocessingDefinitionCollectionResource"];
 export type PostprocessingDefinitionCreateRequest =

@@ -795,6 +795,10 @@ export const MODEL_PLANAR_MONITOR_PATH = openApiV2Path(
   "/v2/sessions/current/model/planar-monitors/{monitor_id}",
 );
 
+export const ANALYSIS_ANALYTIC_REFERENCE_MODELS_PATH = openApiV2Path(
+  "/v2/sessions/current/analysis/references/analytic-models",
+);
+
 export const ANALYSIS_POSTPROCESSING_DEFINITIONS_PATH = openApiV2Path(
   "/v2/sessions/current/analysis/postprocessing/definitions",
 );

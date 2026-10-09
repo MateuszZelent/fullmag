@@ -2056,6 +2056,89 @@
         ],
         "type": "object"
       },
+      "AnalyticReferenceModelCollectionResource": {
+        "properties": {
+          "models": {
+            "items": {
+              "$ref": "#/components/schemas/AnalyticReferenceModelResource"
+            },
+            "type": "array"
+          },
+          "schema_version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema_version",
+          "models"
+        ],
+        "type": "object"
+      },
+      "AnalyticReferenceModelResource": {
+        "properties": {
+          "assumptions": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "bibliography": {
+            "type": "string"
+          },
+          "boundary_assumption": {
+            "description": "Boundary assumption compared with the run's, e.g. `open_film`.",
+            "type": "string"
+          },
+          "model_id": {
+            "type": "string"
+          },
+          "physics_note": {
+            "type": "string"
+          },
+          "surface_pinning": {
+            "type": "string"
+          },
+          "thickness_mode_order": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "title": {
+            "type": "string"
+          },
+          "validity": {
+            "$ref": "#/components/schemas/AnalyticReferenceValidity"
+          }
+        },
+        "required": [
+          "model_id",
+          "title",
+          "boundary_assumption",
+          "surface_pinning",
+          "thickness_mode_order",
+          "assumptions",
+          "validity",
+          "bibliography",
+          "physics_note"
+        ],
+        "type": "object"
+      },
+      "AnalyticReferenceValidity": {
+        "properties": {
+          "note": {
+            "type": "string"
+          },
+          "wavevector_limit_source": {
+            "description": "Field of the run's validation intent that bounds the compared |k| [rad/m].",
+            "type": "string"
+          }
+        },
+        "required": [
+          "wavevector_limit_source",
+          "note"
+        ],
+        "type": "object"
+      },
       "ApiErrorDiagnosticResponse": {
         "properties": {
           "code": {
@@ -46262,6 +46345,31 @@
           },
           "409": {
             "description": "Revision conflict"
+          }
+        },
+        "tags": [
+          "analysis"
+        ]
+      }
+    },
+    "/v2/sessions/current/analysis/references/analytic-models": {
+      "get": {
+        "operationId": "analysis_get_sessions_current_analysis_references_analytic_models",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AnalyticReferenceModelCollectionResource"
+                }
+              }
+            },
+            "description": ""
           }
         },
         "tags": [

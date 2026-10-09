@@ -6,6 +6,8 @@ import {
   referenceModelBoundaryAssumption,
   runBoundaryAssumptionFromMagnetostaticBc,
 } from "@/shared/domain/analysis/referenceComparisonStatus";
+import { useAnalyticReferenceModelsResource } from "@/kernel/resources/analyticReferenceResources";
+import type { AnalyticReferenceModelResource } from "@/kernel/api/apiTypes";
 import {
   ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DISPERSION_PATH,
 } from "@/kernel/api/apiPaths";
@@ -56,6 +58,7 @@ export function useEigenDispersionInspectorSummary() {
   const spectrum = useFrequencyDomainEigenSpectrumResource();
   const branches = useFrequencyDomainEigenBranchesResource();
   const dispersion = useFrequencyDomainEigenDispersionResource();
+  const referenceModels = useAnalyticReferenceModelsResource();
   const spectrumModel = buildEigenSpectrumChartModel(spectrum.data);
   const branchesModel = buildEigenBranchesModel(branches.data);
   const dispersionModel = buildEigenDispersionChartModel(
@@ -82,6 +85,7 @@ export function useEigenDispersionInspectorSummary() {
     dispersionModel.points,
     pathValues,
     record(record(branches.data?.payload)?.diagnostics),
+    referenceModels.data?.models ?? [],
   );
 
   return {
@@ -122,6 +126,7 @@ function dispersionReferenceComparison(
   points: readonly EigenDispersionPoint[],
   pathValues: readonly number[],
   branchDiagnostics: Record<string, unknown> | null,
+  referenceModels: readonly AnalyticReferenceModelResource[],
 ) {
   const validation = record(record(manifestPayload?.validation)?.dispersion_validation);
   const requested = record(manifestPayload?.requested_execution);
@@ -135,14 +140,24 @@ function dispersionReferenceComparison(
       trackingSource !== "modal_overlap_unavailable",
     hasReferencePoints: points.some((point) => point.analyticFrequencyHz != null),
     maxPathWavevectorRadPerM: maxPath,
-    referenceBoundaryAssumption: referenceModelBoundaryAssumption(
+    referenceBoundaryAssumption: publishedOrKnownBoundaryAssumption(
       stringValue(validation?.analytic_model) ?? null,
+      referenceModels,
     ),
     runBoundaryAssumption:
       stringValue(requested?.boundary_assumption) ??
       runBoundaryAssumptionFromMagnetostaticBc(stringValue(requested?.magnetostatic_bc) ?? null),
     validityMaxWavevectorRadPerM: finiteNumber(validation?.max_k_rad_per_m) ?? null,
   });
+}
+
+/** The backend-published model is authoritative; the client table covers older servers. */
+function publishedOrKnownBoundaryAssumption(
+  analyticModel: string | null,
+  referenceModels: readonly AnalyticReferenceModelResource[],
+): string | null {
+  const published = referenceModels.find((model) => model.model_id === analyticModel);
+  return published?.boundary_assumption ?? referenceModelBoundaryAssumption(analyticModel);
 }
 
 function dispersionAnalyticReferenceSummary(
