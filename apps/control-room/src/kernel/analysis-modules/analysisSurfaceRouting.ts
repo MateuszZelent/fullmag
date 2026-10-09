@@ -20,6 +20,7 @@ const KERNEL_RESULT_SURFACES: Readonly<Record<string, AnalysisSurface>> = {
   "results.observation_frames.root": "dynamics",
   "results.observation_frame": "dynamics",
   "results.hysteresis.root": "hysteresis",
+  "results.frequency_domain.comparison": "comparison",
 };
 
 export function analysisModuleIdForNodeKind(kind: string): AnalysisModuleId | null {

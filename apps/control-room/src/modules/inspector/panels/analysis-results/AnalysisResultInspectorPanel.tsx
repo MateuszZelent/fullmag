@@ -190,7 +190,7 @@ export function AnalysisResultInspectorPanel({
       mono: true,
       value: display(resultRef.fieldRevision ?? itemData?.field_ref?.field_revision),
     },
-    { label: "Resource transport", value: transportStatus },
+    { label: "Resource transport", value: display(transportStatus) },
     { label: "Selection source", value: selection.moduleSource },
   ];
 
@@ -201,7 +201,7 @@ export function AnalysisResultInspectorPanel({
           { label: "Focus", value: focusLabel(resultRef.focus) },
           {
             label: "Status",
-            value: status?.completeness ?? transportStatus,
+            value: display(status?.completeness ?? transportStatus),
             tone: status?.completeness === "complete" ? "success" : "neutral",
           },
           { label: "Residual L2", value: display(itemData?.quality.residual_relative_l2) },

@@ -1,4 +1,7 @@
-import type { PostprocessingDefinition } from "@/kernel/api/apiTypes";
+import type {
+  AnalysisResultDatasetSummaryResource,
+  PostprocessingDefinition,
+} from "@/kernel/api/apiTypes";
 import type {
   ArtifactResource,
   CurrentRunResource,
@@ -20,6 +23,8 @@ import type { RuntimeResourceSnapshot } from "./runtimeExplorerSnapshot";
 export interface ExplorerTreeResources {
   /** User-created Results nodes saved with the project (ADR 0054). */
   analysisDefinitions?: readonly PostprocessingDefinition[] | null;
+  /** Typed results catalog of the current run; drives catalog-only families. */
+  analysisDatasets?: readonly AnalysisResultDatasetSummaryResource[] | null;
   resultContextContractGaps?: readonly string[];
   resultContextRunId?: string | null;
   activeAnalysisFieldOverlay?: AnalysisFieldOverlayState | null;

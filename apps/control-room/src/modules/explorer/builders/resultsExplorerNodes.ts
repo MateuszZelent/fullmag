@@ -3,7 +3,10 @@ import {
   PIN_MODE_VISUALIZATION_COMMAND,
   UNPIN_POSTPROCESSING_DEFINITION_COMMAND,
 } from "@/kernel/analysis-modules/postprocessingCommandContributions";
-import type { PostprocessingDefinition as AnalysisPostprocessingDefinition } from "@/kernel/api/apiTypes";
+import type {
+  AnalysisResultDatasetSummaryResource,
+  PostprocessingDefinition as AnalysisPostprocessingDefinition,
+} from "@/kernel/api/apiTypes";
 import {
   classifyFrequencyDomainResult,
   type FrequencyDomainResultEvidence,
@@ -955,6 +958,70 @@ export function withPinnedAnalysisDefinitions(
 }
 
 /** Keeps an analysis family only when it has published children, tagged with its owning module. */
+/**
+ * Families published only through the typed results catalog (plan stage 8):
+ * hysteresis loops, and a Comparison family once the run has more than one
+ * dataset or a saved reference to compare against.
+ */
+export function withCatalogAnalysisFamilies(
+  tree: readonly ExplorerNode[],
+  datasets: readonly AnalysisResultDatasetSummaryResource[],
+  definitions: readonly AnalysisPostprocessingDefinition[] = [],
+): ExplorerNode[] {
+  return tree.map((resultsRoot) => {
+    const runDatasets = datasets.filter((dataset) => dataset.run_id === resultsRoot.analysisRunId);
+    const existingKinds = new Set((resultsRoot.children ?? []).map((child) => child.kind));
+    const families: ExplorerNode[] = [];
+    const loops = runDatasets.filter((dataset) => dataset.product_kind === "hysteresis_loop");
+    if (loops.length > 0 && !existingKinds.has("results.hysteresis.root")) {
+      const familyId = `${resultsRoot.id}:hysteresis`;
+      families.push(
+        withAnalysisModule(
+          node(familyId, "results.hysteresis.root", "Hysteresis", resultsRoot.id, {
+            analysisRunId: resultsRoot.analysisRunId,
+            children: loops.map((dataset) =>
+              node(`${familyId}:${key(dataset.stage_id)}`, "results.hysteresis.root", dataset.title, familyId, {
+                analysisRunId: dataset.run_id,
+                analysisStageId: dataset.stage_id,
+                badge: dataset.stage_id,
+                icon: "activity",
+              }),
+            ),
+            icon: "activity",
+          }),
+          "analysis.hysteresis",
+        ),
+      );
+    }
+    const references = definitions.filter(
+      (definition) =>
+        definition.node_kind === "analysis.dispersion.reference" &&
+        definition.data_ref.run_id === resultsRoot.analysisRunId,
+    );
+    if (
+      (runDatasets.length > 1 || references.length > 0) &&
+      !existingKinds.has("results.frequency_domain.comparison")
+    ) {
+      families.push(
+        node(`${resultsRoot.id}:comparison`, "results.frequency_domain.comparison", "Comparison", resultsRoot.id, {
+          analysisRunId: resultsRoot.analysisRunId,
+          badge: `${runDatasets.length + references.length} sources`,
+          icon: "activity",
+        }),
+      );
+    }
+    if (families.length === 0) return resultsRoot;
+    return {
+      ...resultsRoot,
+      availability: "available",
+      executionState: "completed",
+      resourceState: resultsRoot.resourceState === "error" ? "error" : "ready",
+      status: resultsRoot.status === "failed" ? "failed" : "ready",
+      children: [...(resultsRoot.children ?? []), ...families],
+    };
+  });
+}
+
 function publishedAnalysisRoot(
   root: ExplorerNode | null,
   analysisModuleId?: AnalysisModuleId,

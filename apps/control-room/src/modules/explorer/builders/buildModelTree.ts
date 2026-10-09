@@ -40,6 +40,7 @@ import {
 } from "./modelRootNodes";
 import {
   buildPhysicsFirstResultsTree,
+  withCatalogAnalysisFamilies,
   withPinnedAnalysisDefinitions,
   physicsFirstResultsSnapshotFromResources,
 } from "./resultsExplorerNodes";
@@ -206,7 +207,11 @@ export function buildExplorerTree(
       tableCatalog: resources.tableCatalog,
     });
     return withPinnedAnalysisDefinitions(
-      buildPhysicsFirstResultsTree(adapted.snapshot),
+      withCatalogAnalysisFamilies(
+        buildPhysicsFirstResultsTree(adapted.snapshot),
+        resources.analysisDatasets ?? [],
+        resources.analysisDefinitions ?? [],
+      ),
       resources.analysisDefinitions ?? [],
     );
   }
