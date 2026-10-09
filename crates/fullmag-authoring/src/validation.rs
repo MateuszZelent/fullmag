@@ -339,6 +339,7 @@ fn validate_scene_document_with_mode(
     }
     validate_scene_field_drives(scene, &object_ids)?;
     validate_scene_planar_monitors(scene, &object_ids)?;
+    validate_scene_postprocessing_definitions(scene)?;
     validate_scene_magnetization_constraints(scene, &object_ids)?;
 
     Ok(())
@@ -864,6 +865,66 @@ fn validate_scene_planar_monitors(
                     )));
                 }
             }
+        }
+    }
+    Ok(())
+}
+
+/// User-created Results nodes (ADR 0054): stable ids, module ownership, a
+/// published data identity, and parents that exist and are not cyclic.
+fn validate_scene_postprocessing_definitions(
+    scene: &SceneDocument,
+) -> Result<(), SceneDocumentValidationError> {
+    let definitions = &scene.analysis.postprocessing_definitions;
+    let mut ids = BTreeSet::new();
+    for (index, definition) in definitions.iter().enumerate() {
+        let context = format!("analysis.postprocessing_definitions[{index}]");
+        if definition.definition_id.trim().is_empty() || !ids.insert(definition.definition_id.as_str()) {
+            return Err(SceneDocumentValidationError::new(format!(
+                "{context} definition_id must be non-empty and unique"
+            )));
+        }
+        for (field, value) in [
+            ("module_id", &definition.module_id),
+            ("module_version", &definition.module_version),
+            ("definition_schema", &definition.definition_schema),
+            ("node_kind", &definition.node_kind),
+            ("label", &definition.label),
+            ("data_ref.run_id", &definition.data_ref.run_id),
+            ("data_ref.dataset_id", &definition.data_ref.dataset_id),
+            ("data_ref.dataset_revision", &definition.data_ref.dataset_revision),
+        ] {
+            if value.trim().is_empty() {
+                return Err(SceneDocumentValidationError::new(format!(
+                    "{context} {field} must be non-empty"
+                )));
+            }
+        }
+        if !definition.module_id.starts_with("analysis.")
+            || !definition.node_kind.starts_with(&format!("{}.", definition.module_id))
+        {
+            return Err(SceneDocumentValidationError::new(format!(
+                "{context} node_kind '{}' must belong to module '{}'",
+                definition.node_kind, definition.module_id
+            )));
+        }
+    }
+    for (index, definition) in definitions.iter().enumerate() {
+        let mut parent = definition.parent_definition_id.as_deref();
+        let mut hops = 0usize;
+        while let Some(parent_id) = parent {
+            if parent_id == definition.definition_id || hops > definitions.len() {
+                return Err(SceneDocumentValidationError::new(format!(
+                    "analysis.postprocessing_definitions[{index}] parent chain is cyclic"
+                )));
+            }
+            let Some(next) = definitions.iter().find(|candidate| candidate.definition_id == parent_id) else {
+                return Err(SceneDocumentValidationError::new(format!(
+                    "analysis.postprocessing_definitions[{index}] parent '{parent_id}' does not exist"
+                )));
+            };
+            parent = next.parent_definition_id.as_deref();
+            hops += 1;
         }
     }
     Ok(())

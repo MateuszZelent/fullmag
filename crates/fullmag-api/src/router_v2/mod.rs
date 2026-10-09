@@ -133,6 +133,17 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
             post(handlers::model::duplicate_planar_monitor),
         )
         .route(
+            "/v2/sessions/current/analysis/postprocessing/definitions",
+            get(handlers::analysis::list_postprocessing_definitions)
+                .post(handlers::analysis::create_postprocessing_definition),
+        )
+        .route(
+            "/v2/sessions/current/analysis/postprocessing/definitions/:definition_id",
+            get(handlers::analysis::get_postprocessing_definition)
+                .patch(handlers::analysis::patch_postprocessing_definition)
+                .delete(handlers::analysis::delete_postprocessing_definition),
+        )
+        .route(
             "/v2/sessions/current/model/frozen-spins",
             get(handlers::model::list_frozen_spins)
                 .post(handlers::model::create_frozen_spins),

@@ -53,6 +53,10 @@ pub struct SceneDocument {
     pub outputs: SceneOutputsState,
     #[serde(default)]
     pub editor: SceneEditorState,
+    /// User-created Results nodes (ADR 0054). Not part of the physics model or
+    /// the script; saved with the project and omitted while empty.
+    #[serde(default, skip_serializing_if = "SceneAnalysisState::is_empty")]
+    pub analysis: SceneAnalysisState,
 }
 
 impl Default for SceneDocument {
@@ -78,8 +82,59 @@ impl Default for SceneDocument {
             study: SceneStudyState::default(),
             outputs: SceneOutputsState::default(),
             editor: SceneEditorState::default(),
+            analysis: SceneAnalysisState::default(),
         }
     }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
+#[serde(deny_unknown_fields)]
+pub struct SceneAnalysisState {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub postprocessing_definitions: Vec<ScenePostprocessingDefinition>,
+}
+
+impl SceneAnalysisState {
+    pub fn is_empty(&self) -> bool {
+        self.postprocessing_definitions.is_empty()
+    }
+}
+
+/// A Results node owned by an analysis module, e.g. a mode visualization
+/// pinned to a dispersion point (spec frontend-v2/32 §8). Data references use
+/// published identities only, never array indices.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct ScenePostprocessingDefinition {
+    pub definition_id: String,
+    #[serde(default)]
+    pub revision: u64,
+    pub module_id: String,
+    pub module_version: String,
+    pub definition_schema: String,
+    pub node_kind: String,
+    pub label: String,
+    pub data_ref: ScenePostprocessingDataRef,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_definition_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Value::is_null")]
+    pub settings: Value,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ScenePostprocessingDataRef {
+    pub run_id: String,
+    pub dataset_id: String,
+    pub dataset_revision: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sample_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub item_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub field_id: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]

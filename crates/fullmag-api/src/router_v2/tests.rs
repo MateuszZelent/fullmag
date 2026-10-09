@@ -50779,6 +50779,8 @@ mod remesh_admission;
 
 #[path = "tests/project_documents.rs"]
 mod project_documents;
+#[path = "tests/postprocessing_definitions.rs"]
+mod postprocessing_definitions;
 
 
 #[tokio::test]

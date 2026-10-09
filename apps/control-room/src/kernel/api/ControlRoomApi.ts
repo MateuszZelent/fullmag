@@ -158,6 +158,8 @@ import {
   MODEL_OBJECT_REGIONS_PATH,
   MODEL_OBJECTS_PATH,
   MODEL_PHYSICS_GRAPH_PATH,
+  ANALYSIS_POSTPROCESSING_DEFINITION_PATH,
+  ANALYSIS_POSTPROCESSING_DEFINITIONS_PATH,
   MODEL_PLANAR_MONITOR_DUPLICATE_PATH,
   MODEL_PLANAR_MONITOR_PATH,
   MODEL_PLANAR_MONITORS_PATH,
@@ -336,6 +338,11 @@ import type {
   PlanarFieldProbeResource,
   PlanarFieldQuery,
   PlanarFieldSource,
+  PostprocessingDefinitionCollectionResource,
+  PostprocessingDefinitionCreateRequest,
+  PostprocessingDefinitionDeleteRequest,
+  PostprocessingDefinitionPatchRequest,
+  PostprocessingDefinitionResource,
   PlanarMonitorCollectionResource,
   PlanarMonitorCreateRequest,
   PlanarMonitorDeleteRequest,
@@ -1286,6 +1293,50 @@ export class ControlRoomApi {
   };
 
   readonly analysis = {
+    /** User-created Results nodes saved with the project (ADR 0054, spec 32 §8). */
+    postprocessing: {
+      definitions: {
+        list: (options?: RequestOptions) =>
+          this.requestJson<PostprocessingDefinitionCollectionResource>(
+            ANALYSIS_POSTPROCESSING_DEFINITIONS_PATH,
+            options,
+          ),
+        get: (definitionId: string, options?: RequestOptions) =>
+          this.requestJson<PostprocessingDefinitionResource>(
+            ANALYSIS_POSTPROCESSING_DEFINITION_PATH,
+            options,
+            { path: { definition_id: definitionId } },
+          ),
+        create: (request: PostprocessingDefinitionCreateRequest, options?: RequestOptions) =>
+          this.postJson<PostprocessingDefinitionResource, PostprocessingDefinitionCreateRequest>(
+            ANALYSIS_POSTPROCESSING_DEFINITIONS_PATH,
+            request,
+            options,
+          ),
+        patch: (
+          definitionId: string,
+          request: PostprocessingDefinitionPatchRequest,
+          options?: RequestOptions,
+        ) =>
+          this.patchJson<PostprocessingDefinitionResource, PostprocessingDefinitionPatchRequest>(
+            ANALYSIS_POSTPROCESSING_DEFINITION_PATH,
+            request,
+            options,
+            { path: { definition_id: definitionId } },
+          ),
+        remove: (
+          definitionId: string,
+          request: PostprocessingDefinitionDeleteRequest,
+          options?: RequestOptions,
+        ) =>
+          this.deleteJsonWithBody<
+            PostprocessingDefinitionCollectionResource,
+            PostprocessingDefinitionDeleteRequest
+          >(ANALYSIS_POSTPROCESSING_DEFINITION_PATH, request, options, {
+            path: { definition_id: definitionId },
+          }),
+      },
+    },
     spinWave: {
       gamma: (options?: RequestOptions) =>
         this.requestJson<SpinWaveGammaResource>(

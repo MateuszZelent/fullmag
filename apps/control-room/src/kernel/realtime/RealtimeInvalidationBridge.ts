@@ -2,6 +2,7 @@ import type { ResourceRevision } from "../api/apiTypes";
 import type { EventBus } from "../events/EventBus";
 import type { KernelEventMap } from "../events/eventTypes";
 import {
+  ANALYSIS_POSTPROCESSING_DEFINITIONS_PATH,
   ANALYSIS_OBJECT_TOPOLOGICAL_CHARGE_PATH,
   ANALYSIS_HYSTERESIS_ADAPTIVE_REFINEMENT_PATH,
   ANALYSIS_HYSTERESIS_BOOKMARKS_PATH,
@@ -953,6 +954,8 @@ export class RealtimeInvalidationBridge {
     this.resources.invalidate(MODEL_REGION_DIAGNOSTICS_PATH, dependentRevision);
     this.resources.invalidate(MODEL_MATERIAL_FIELDS_PATH, dependentRevision);
     this.resources.invalidate(MODEL_READINESS_PATH, dependentRevision);
+    // User-created Results nodes are stored in the scene document (ADR 0054).
+    this.resources.invalidate(ANALYSIS_POSTPROCESSING_DEFINITIONS_PATH, dependentRevision);
     this.resources.invalidateMatching(
       (resourceKey) =>
         matchesStageScopedResource(

@@ -128,6 +128,7 @@ pub fn scene_document_from_script_builder(builder: &ScriptBuilderState) -> Scene
         },
         outputs: SceneOutputsState::default(),
         editor: SceneEditorState::default(),
+        analysis: Default::default(),
     }
 }
 

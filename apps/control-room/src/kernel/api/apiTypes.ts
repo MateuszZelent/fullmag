@@ -109,6 +109,18 @@ export type PlanarSampleSourceResource =
   components["schemas"]["PlanarSampleSourceResource"];
 export type PlanarFieldProbeResource =
   components["schemas"]["PlanarFieldProbeResource"];
+export type PostprocessingDataRef = components["schemas"]["PostprocessingDataRef"];
+export type PostprocessingDefinition = components["schemas"]["PostprocessingDefinition"];
+export type PostprocessingDefinitionCollectionResource =
+  components["schemas"]["PostprocessingDefinitionCollectionResource"];
+export type PostprocessingDefinitionCreateRequest =
+  components["schemas"]["PostprocessingDefinitionCreateRequest"];
+export type PostprocessingDefinitionDeleteRequest =
+  components["schemas"]["PostprocessingDefinitionDeleteRequest"];
+export type PostprocessingDefinitionPatchRequest =
+  components["schemas"]["PostprocessingDefinitionPatchRequest"];
+export type PostprocessingDefinitionResource =
+  components["schemas"]["PostprocessingDefinitionResource"];
 export type PlanarMonitorCollectionResource =
   components["schemas"]["PlanarMonitorCollectionResource"];
 export type PlanarMonitorCreateRequest =

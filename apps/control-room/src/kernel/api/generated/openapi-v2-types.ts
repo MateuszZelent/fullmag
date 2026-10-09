@@ -1252,6 +1252,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v2/sessions/current/analysis/postprocessing/definitions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["analysis_get_sessions_current_analysis_postprocessing_definitions"];
+        put?: never;
+        post: operations["analysis_post_sessions_current_analysis_postprocessing_definitions"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/analysis/postprocessing/definitions/{definition_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["analysis_get_sessions_current_analysis_postprocessing_definitions_definition_id"];
+        put?: never;
+        post?: never;
+        delete: operations["analysis_delete_sessions_current_analysis_postprocessing_definitions_definition_id"];
+        options?: never;
+        head?: never;
+        patch: operations["analysis_patch_sessions_current_analysis_postprocessing_definitions_definition_id"];
+        trace?: never;
+    };
     "/v2/sessions/current/analysis/results/runs/{run_id}/datasets": {
         parameters: {
             query?: never;
@@ -10923,6 +10955,61 @@ export interface components {
             opacity: number;
         };
         PositiveThreadCountSchema: number;
+        /** @description Published data identity a definition refers to; never array indices. */
+        PostprocessingDataRef: {
+            branch_id?: string | null;
+            dataset_id: string;
+            dataset_revision: string;
+            field_id?: string | null;
+            item_id?: string | null;
+            run_id: string;
+            sample_id?: string | null;
+        };
+        PostprocessingDefinition: {
+            data_ref: components["schemas"]["PostprocessingDataRef"];
+            definition_id: string;
+            /** @description Versioned settings schema, e.g. `analysis.dispersion.mode_visualization.v1`. */
+            definition_schema: string;
+            label: string;
+            /** @description Owning analysis module, e.g. `analysis.dispersion`. */
+            module_id: string;
+            module_version: string;
+            /** @description Node template kind; must start with `<module_id>.`. */
+            node_kind: string;
+            parent_definition_id?: string | null;
+            /**
+             * Format: int64
+             * @description Bumped by the server on every change to this definition.
+             */
+            revision?: number;
+            /** @description Module-owned settings validated by `definition_schema` on the client. */
+            settings?: Record<string, never>;
+        };
+        PostprocessingDefinitionCollectionResource: {
+            count: number;
+            definitions: components["schemas"]["PostprocessingDefinition"][];
+            /** Format: int64 */
+            scene_revision: number;
+        };
+        PostprocessingDefinitionCreateRequest: {
+            definition: components["schemas"]["PostprocessingDefinition"];
+            /** Format: int64 */
+            expected_scene_revision: number;
+        };
+        PostprocessingDefinitionDeleteRequest: {
+            /** Format: int64 */
+            expected_scene_revision: number;
+        };
+        PostprocessingDefinitionPatchRequest: {
+            definition: components["schemas"]["PostprocessingDefinition"];
+            /** Format: int64 */
+            expected_scene_revision: number;
+        };
+        PostprocessingDefinitionResource: {
+            definition: components["schemas"]["PostprocessingDefinition"];
+            /** Format: int64 */
+            scene_revision: number;
+        };
         PreparationClockAdjustment: {
             /** Format: int64 */
             backward_delta_ms: number;
@@ -18101,6 +18188,190 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["HysteresisSettleTraceEntrySchema"][];
                 };
+            };
+        };
+    };
+    analysis_get_sessions_current_analysis_postprocessing_definitions: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PostprocessingDefinitionCollectionResource"];
+                };
+            };
+        };
+    };
+    analysis_post_sessions_current_analysis_postprocessing_definitions: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PostprocessingDefinitionCreateRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PostprocessingDefinitionResource"];
+                };
+            };
+            /** @description Invalid definition */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Revision or identity conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    analysis_get_sessions_current_analysis_postprocessing_definitions_definition_id: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
+            path: {
+                definition_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PostprocessingDefinitionResource"];
+                };
+            };
+            /** @description Definition missing */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    analysis_delete_sessions_current_analysis_postprocessing_definitions_definition_id: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
+            path: {
+                definition_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PostprocessingDefinitionDeleteRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PostprocessingDefinitionCollectionResource"];
+                };
+            };
+            /** @description Definition missing */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Revision conflict or definition has children */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    analysis_patch_sessions_current_analysis_postprocessing_definitions_definition_id: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
+            path: {
+                definition_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PostprocessingDefinitionPatchRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PostprocessingDefinitionResource"];
+                };
+            };
+            /** @description Invalid definition */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Definition missing */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Revision conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

@@ -78,6 +78,8 @@ export const openApiV2PathLiterals = [
   "/v2/sessions/current/analysis/hysteresis/{stage_id}/settle-trace",
   "/v2/sessions/current/analysis/hysteresis/{stage_id}/steps/{point_id}",
   "/v2/sessions/current/analysis/hysteresis/{stage_id}/steps/{point_id}/settle-trace",
+  "/v2/sessions/current/analysis/postprocessing/definitions",
+  "/v2/sessions/current/analysis/postprocessing/definitions/{definition_id}",
   "/v2/sessions/current/analysis/results/runs/{run_id}/datasets",
   "/v2/sessions/current/analysis/results/runs/{run_id}/datasets/{dataset_id}",
   "/v2/sessions/current/analysis/results/runs/{run_id}/datasets/{dataset_id}/axes/{axis_id}/values",

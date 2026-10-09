@@ -25495,6 +25495,193 @@
         "minimum": 1,
         "type": "integer"
       },
+      "PostprocessingDataRef": {
+        "description": "Published data identity a definition refers to; never array indices.",
+        "properties": {
+          "branch_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "dataset_id": {
+            "type": "string"
+          },
+          "dataset_revision": {
+            "type": "string"
+          },
+          "field_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "item_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "sample_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "run_id",
+          "dataset_id",
+          "dataset_revision"
+        ],
+        "type": "object"
+      },
+      "PostprocessingDefinition": {
+        "properties": {
+          "data_ref": {
+            "$ref": "#/components/schemas/PostprocessingDataRef"
+          },
+          "definition_id": {
+            "type": "string"
+          },
+          "definition_schema": {
+            "description": "Versioned settings schema, e.g. `analysis.dispersion.mode_visualization.v1`.",
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "module_id": {
+            "description": "Owning analysis module, e.g. `analysis.dispersion`.",
+            "type": "string"
+          },
+          "module_version": {
+            "type": "string"
+          },
+          "node_kind": {
+            "description": "Node template kind; must start with `<module_id>.`.",
+            "type": "string"
+          },
+          "parent_definition_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "revision": {
+            "description": "Bumped by the server on every change to this definition.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "settings": {
+            "description": "Module-owned settings validated by `definition_schema` on the client.",
+            "type": "object"
+          }
+        },
+        "required": [
+          "definition_id",
+          "module_id",
+          "module_version",
+          "definition_schema",
+          "node_kind",
+          "label",
+          "data_ref"
+        ],
+        "type": "object"
+      },
+      "PostprocessingDefinitionCollectionResource": {
+        "properties": {
+          "count": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "definitions": {
+            "items": {
+              "$ref": "#/components/schemas/PostprocessingDefinition"
+            },
+            "type": "array"
+          },
+          "scene_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "scene_revision",
+          "count",
+          "definitions"
+        ],
+        "type": "object"
+      },
+      "PostprocessingDefinitionCreateRequest": {
+        "properties": {
+          "definition": {
+            "$ref": "#/components/schemas/PostprocessingDefinition"
+          },
+          "expected_scene_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "expected_scene_revision",
+          "definition"
+        ],
+        "type": "object"
+      },
+      "PostprocessingDefinitionDeleteRequest": {
+        "properties": {
+          "expected_scene_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "expected_scene_revision"
+        ],
+        "type": "object"
+      },
+      "PostprocessingDefinitionPatchRequest": {
+        "properties": {
+          "definition": {
+            "$ref": "#/components/schemas/PostprocessingDefinition"
+          },
+          "expected_scene_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "expected_scene_revision",
+          "definition"
+        ],
+        "type": "object"
+      },
+      "PostprocessingDefinitionResource": {
+        "properties": {
+          "definition": {
+            "$ref": "#/components/schemas/PostprocessingDefinition"
+          },
+          "scene_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "scene_revision",
+          "definition"
+        ],
+        "type": "object"
+      },
       "PreparationClockAdjustment": {
         "properties": {
           "backward_delta_ms": {
@@ -45876,6 +46063,203 @@
               }
             },
             "description": "Settle trace for a point"
+          }
+        },
+        "tags": [
+          "analysis"
+        ]
+      }
+    },
+    "/v2/sessions/current/analysis/postprocessing/definitions": {
+      "get": {
+        "operationId": "analysis_get_sessions_current_analysis_postprocessing_definitions",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PostprocessingDefinitionCollectionResource"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "tags": [
+          "analysis"
+        ]
+      },
+      "post": {
+        "operationId": "analysis_post_sessions_current_analysis_postprocessing_definitions",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PostprocessingDefinitionCreateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PostprocessingDefinitionResource"
+                }
+              }
+            },
+            "description": ""
+          },
+          "400": {
+            "description": "Invalid definition"
+          },
+          "409": {
+            "description": "Revision or identity conflict"
+          }
+        },
+        "tags": [
+          "analysis"
+        ]
+      }
+    },
+    "/v2/sessions/current/analysis/postprocessing/definitions/{definition_id}": {
+      "delete": {
+        "operationId": "analysis_delete_sessions_current_analysis_postprocessing_definitions_definition_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "definition_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PostprocessingDefinitionDeleteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PostprocessingDefinitionCollectionResource"
+                }
+              }
+            },
+            "description": ""
+          },
+          "404": {
+            "description": "Definition missing"
+          },
+          "409": {
+            "description": "Revision conflict or definition has children"
+          }
+        },
+        "tags": [
+          "analysis"
+        ]
+      },
+      "get": {
+        "operationId": "analysis_get_sessions_current_analysis_postprocessing_definitions_definition_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "definition_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PostprocessingDefinitionResource"
+                }
+              }
+            },
+            "description": ""
+          },
+          "404": {
+            "description": "Definition missing"
+          }
+        },
+        "tags": [
+          "analysis"
+        ]
+      },
+      "patch": {
+        "operationId": "analysis_patch_sessions_current_analysis_postprocessing_definitions_definition_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "definition_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PostprocessingDefinitionPatchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PostprocessingDefinitionResource"
+                }
+              }
+            },
+            "description": ""
+          },
+          "400": {
+            "description": "Invalid definition"
+          },
+          "404": {
+            "description": "Definition missing"
+          },
+          "409": {
+            "description": "Revision conflict"
           }
         },
         "tags": [
