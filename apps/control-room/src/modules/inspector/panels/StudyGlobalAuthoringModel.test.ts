@@ -1200,6 +1200,7 @@ describe("StudyGlobalAuthoringModel", () => {
       "External field must contain three finite numbers.",
       "CPU threads must be a positive integer.",
       "Adaptive parallel execution requires an explicit FEM CPU lane for independent eigen k execution.",
+      "Adaptive parallel execution requires a known Relax or Eigen workflow.",
       "Adaptive dt max must be greater than or equal to dt min.",
       "FEM demag policy must be a JSON object.",
     ]);
