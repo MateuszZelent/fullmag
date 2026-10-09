@@ -701,3 +701,5 @@ jobs:
         run: python -B scripts/test_local_runner_runtime_references.py -v
       - name: Run source capsule owner binding and cleanup regressions
         run: python -B scripts/test_local_runner_source_compaction.py -v
+      - name: Run source store publication and lock recovery regressions
+        run: python -B scripts/test_local_runner_source_store.py -v

@@ -15,8 +15,15 @@ from pathlib import Path
 import re
 import stat
 import tempfile
-import time
 from typing import Iterator
+
+from .source_store_lock import (
+    OwnerIdentityProvider,
+    SourceStoreLockError,
+    ensure_publication_process_is_safe as _ensure_lock_process_is_safe,
+    publication_lock as _complete_owner_publication_lock,
+    publication_process_is_safe as _lock_process_is_safe,
+)
 
 
 _DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -144,11 +151,13 @@ class SourceContentStore:
             candidate = Path.cwd() / candidate
         self.root = Path(os.path.abspath(candidate))
         _guard_path(self.root, "source content store", allow_missing=True)
+        self._owner_identity_provider = OwnerIdentityProvider()
 
     def _object_path(self, digest: str, mode: str) -> Path:
         return self.root / "sha256" / digest[:2] / f"{digest}-{mode}"
 
     def _prepare_object_parent(self, path: Path) -> None:
+        self._assert_publication_process_safe()
         try:
             path.relative_to(self.root)
         except ValueError as error:
@@ -160,58 +169,23 @@ class SourceContentStore:
     @contextmanager
     def _publication_lock(self, object_path: Path) -> Iterator[None]:
         lock_path = object_path.with_name(object_path.name + ".lock")
-        deadline = time.monotonic() + _LOCK_WAIT_SECONDS
-        descriptor: int | None = None
-        while descriptor is None:
-            _guard_path(lock_path, "content publication lock", allow_missing=True)
-            try:
-                descriptor = os.open(
-                    lock_path,
-                    os.O_CREAT | os.O_EXCL | os.O_WRONLY,
-                    0o600,
-                )
-            except FileExistsError:
-                _regular_file(lock_path, "content publication lock")
-                if time.monotonic() >= deadline:
-                    raise SourceContentStoreError(
-                        f"content publication lock is held or stale: {lock_path}"
-                    )
-                time.sleep(0.025)
-            except OSError as error:
-                raise SourceContentStoreError(
-                    f"cannot acquire content publication lock: {lock_path}"
-                ) from error
-
-        lock_identity: tuple[int, int] | None = None
         try:
-            metadata = os.fstat(descriptor)
-            if not stat.S_ISREG(metadata.st_mode):
-                raise SourceContentStoreError("content publication lock is not regular")
-            lock_identity = _identity(metadata)
-            os.write(descriptor, f"pid={os.getpid()}\n".encode("ascii"))
-            os.fsync(descriptor)
-            yield
-        finally:
-            try:
-                os.close(descriptor)
-            except OSError:
-                pass
-            if lock_identity is not None:
-                try:
-                    metadata = _regular_file(lock_path, "content publication lock")
-                    if _identity(metadata) != lock_identity:
-                        raise SourceContentStoreError(
-                            "content publication lock changed before release"
-                        )
-                    lock_path.unlink()
-                except FileNotFoundError:
-                    pass
-                except SourceContentStoreError:
-                    raise
-                except OSError as error:
-                    raise SourceContentStoreError(
-                        f"cannot release content publication lock: {lock_path}"
-                    ) from error
+            with _complete_owner_publication_lock(
+                lock_path,
+                self.root,
+                wait_timeout_seconds=_LOCK_WAIT_SECONDS,
+                identity_provider=self._owner_identity_provider,
+            ):
+                yield
+        except SourceStoreLockError as error:
+            raise SourceContentStoreError(str(error)) from error
+
+    @staticmethod
+    def _assert_publication_process_safe() -> None:
+        try:
+            _ensure_lock_process_is_safe()
+        except SourceStoreLockError as error:
+            raise SourceContentStoreError(str(error)) from error
 
     def _verify_object(
         self,
@@ -289,13 +263,22 @@ class SourceContentStore:
         object_path: Path,
         expected_identity: tuple[int, int],
     ) -> None:
+        if not _lock_process_is_safe():
+            return
         try:
+            self._assert_publication_process_safe()
             metadata = _regular_file(object_path, "content object")
             if _identity(metadata) != expected_identity:
                 return
             if os.name == "nt":
+                self._assert_publication_process_safe()
                 object_path.chmod(0o666)
+            self._assert_publication_process_safe()
             object_path.unlink()
+        except SourceContentStoreError:
+            if not _lock_process_is_safe():
+                return
+            raise
         except FileNotFoundError:
             return
         except OSError:
@@ -314,6 +297,7 @@ class SourceContentStore:
         object_path = self._object_path(digest, mode)
         self._prepare_object_parent(object_path)
         with self._publication_lock(object_path):
+            self._assert_publication_process_safe()
             _guard_path(object_path, "content object", allow_missing=True)
             if os.path.lexists(object_path):
                 self._verify_object(
@@ -322,12 +306,14 @@ class SourceContentStore:
                     mode=mode,
                     size=size,
                 )
+                self._assert_publication_process_safe()
                 return object_path
 
             descriptor: int | None = None
             temporary: Path | None = None
             published_identity: tuple[int, int] | None = None
             try:
+                self._assert_publication_process_safe()
                 descriptor, temporary_name = tempfile.mkstemp(
                     prefix=f".pending-{digest}-{mode}-",
                     dir=object_path.parent,
@@ -335,12 +321,14 @@ class SourceContentStore:
                 os.close(descriptor)
                 descriptor = None
                 temporary = Path(temporary_name)
+                self._assert_publication_process_safe()
                 self._copy_to_temporary(
                     source,
                     temporary,
                     digest=digest,
                     size=size,
                 )
+                self._assert_publication_process_safe()
                 try:
                     os.link(temporary, object_path, follow_symlinks=False)
                 except FileExistsError:
@@ -350,16 +338,20 @@ class SourceContentStore:
                         mode=mode,
                         size=size,
                     )
+                    self._assert_publication_process_safe()
                     return object_path
                 except OSError as error:
                     raise SourceContentStoreError(
                         f"atomic content object publication failed: {object_path}"
                     ) from error
 
+                self._assert_publication_process_safe()
                 metadata = _regular_file(object_path, "published content object")
                 published_identity = _identity(metadata)
+                self._assert_publication_process_safe()
                 temporary.unlink()
                 temporary = None
+                self._assert_publication_process_safe()
                 object_path.chmod(_readonly_mode(mode))
                 self._verify_object(
                     object_path,
@@ -378,6 +370,7 @@ class SourceContentStore:
                         raise SourceContentStoreError(
                             f"cannot sync content object directory: {object_path.parent}"
                         ) from error
+                self._assert_publication_process_safe()
                 return object_path
             except SourceContentStoreError:
                 if published_identity is not None:
@@ -397,7 +390,11 @@ class SourceContentStore:
                         pass
                 if temporary is not None:
                     try:
+                        self._assert_publication_process_safe()
                         temporary.unlink()
+                    except SourceContentStoreError:
+                        # A forked child must leave inherited temporary state alone.
+                        pass
                     except FileNotFoundError:
                         pass
                     except OSError:
@@ -499,6 +496,7 @@ class SourceContentStore:
             return False
         try:
             with self._publication_lock(object_path):
+                self._assert_publication_process_safe()
                 if not os.path.lexists(object_path):
                     return False
                 object_metadata = self._verify_object(
@@ -516,20 +514,26 @@ class SourceContentStore:
                     )
 
                 if os.name == "nt":
+                    self._assert_publication_process_safe()
                     object_path.chmod(0o666)
                     try:
+                        self._assert_publication_process_safe()
                         stage_path.unlink()
                     finally:
+                        self._assert_publication_process_safe()
                         if os.path.lexists(object_path):
                             object_path.chmod(_readonly_mode(mode))
                 else:
+                    self._assert_publication_process_safe()
                     stage_path.unlink()
+                self._assert_publication_process_safe()
                 self._verify_object(
                     object_path,
                     digest=digest,
                     mode=mode,
                     size=size,
                 )
+                self._assert_publication_process_safe()
                 return True
         except SourceContentStoreError:
             raise
