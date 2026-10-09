@@ -1622,6 +1622,18 @@
       "responsibility": "Separate frequency agreement from missing per-mode seam certificate"
     },
     {
+      "id": "source-kittel-fit-residual-status",
+      "path": "crates/fullmag-runner/src/eigen/artifacts/kittel.rs",
+      "symbol": "build_kittel_fit_artifact_impl",
+      "responsibility": "Require finite non-negative residual evidence on every selected Kittel point before validation_status can pass while retaining partial diagnostics"
+    },
+    {
+      "id": "source-kittel-fit-residual-status-regression",
+      "path": "crates/fullmag-runner/src/eigen/artifacts/tests.rs",
+      "symbol": "kittel_fit_validation_requires_finite_residual_for_each_selected_point",
+      "responsibility": "Cover incomplete and complete selected residual sets and frequency-failure precedence"
+    },
+    {
       "id": "source-kittel-declared-metric-selector",
       "path": "crates/fullmag-runner/src/eigen/artifacts/kittel.rs",
       "symbol": "k0_kittel_mode_uniformity_score",

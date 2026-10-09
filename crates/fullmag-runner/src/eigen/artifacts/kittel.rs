@@ -1293,16 +1293,27 @@ fn build_kittel_fit_artifact_impl(
                 solved_frequency_hz: point.eigen_frequency_hz,
                 relative_frequency_error: point.relative_frequency_error,
                 branch_id: selected_branch.branch_id,
-                status: ServerArtifactStatus::Complete,
+                status: if point.mode_residual_relative.is_some() {
+                    ServerArtifactStatus::Complete
+                } else {
+                    ServerArtifactStatus::Partial
+                },
             })
         })
         .collect::<std::io::Result<Vec<_>>>()?;
-    let validation_status = if validation.relative_tolerance.is_finite()
-        && selected_branch.max_relative_frequency_error <= validation.relative_tolerance
-    {
-        "passed"
-    } else {
+    let frequency_comparison_passed = validation.relative_tolerance.is_finite()
+        && validation.relative_tolerance >= 0.0
+        && selected_branch.max_relative_frequency_error <= validation.relative_tolerance;
+    let residual_measurements_complete = selected_branch
+        .points
+        .iter()
+        .all(|point| point.mode_residual_relative.is_some());
+    let validation_status = if !frequency_comparison_passed {
         "failed"
+    } else if !residual_measurements_complete {
+        "not_verified"
+    } else {
+        "passed"
     };
     let mut parameters = vec![KittelFitParameterArtifact {
         name: "gamma0_rad_s_per_A_m".to_string(),
@@ -1343,11 +1354,18 @@ fn build_kittel_fit_artifact_impl(
     };
     let status = if points
         .iter()
-        .all(|point| point.status == ServerArtifactStatus::Complete)
+        .any(|point| point.status == ServerArtifactStatus::Corrupt)
     {
-        ServerArtifactStatus::Partial
-    } else {
         ServerArtifactStatus::Corrupt
+    } else if points
+        .iter()
+        .any(|point| point.status == ServerArtifactStatus::Interrupted)
+    {
+        ServerArtifactStatus::Interrupted
+    } else {
+        // This artifact is always partial because fit covariance is unavailable.
+        // Missing residual evidence also remains an inspectable partial result.
+        ServerArtifactStatus::Partial
     };
     let mut artifact = KittelFitArtifact {
         schema_version: "fmr/kittel_fit.v1",
@@ -1616,6 +1634,10 @@ pub(crate) fn k0_kittel_validation_auxiliary_artifacts(
         .points
         .iter()
         .all(|point| point.max_periodic_seam_mismatch.is_some());
+    let selected_mode_residuals_complete = selected_branch
+        .points
+        .iter()
+        .all(|point| point.mode_residual_relative.is_some());
     // Measurement availability is not tolerance/runtime qualification.
     let status = if frequency_comparison_status == "failed" {
         "failed"
@@ -1679,17 +1701,25 @@ pub(crate) fn k0_kittel_validation_auxiliary_artifacts(
             "production_periodic_airbox_claim": false,
         })
     };
+    let mut missing_evidence = Vec::new();
+    if !selected_mode_residuals_complete {
+        missing_evidence.push("per_mode_residual_measurement");
+    }
+    if !periodic_mode_seam_metrics_complete {
+        missing_evidence.push("per_mode_periodic_seam_measurement");
+    }
+    missing_evidence.extend([
+        "periodic_mode_seam_acceptance_gate",
+        "phi_seam_certificate",
+        "managed_runtime_qualification",
+    ]);
     let summary = serde_json::json!({
         "schema_version": "frequency_domain_kittel_k0_validation.v1",
         "status": status,
         "frequency_comparison_status": frequency_comparison_status,
         "periodic_mode_seam_metrics_complete": periodic_mode_seam_metrics_complete,
         "qualification": "NOT VERIFIED",
-        "missing_evidence": if periodic_mode_seam_metrics_complete {
-            vec!["periodic_mode_seam_acceptance_gate", "phi_seam_certificate", "managed_runtime_qualification"]
-        } else {
-            vec!["per_mode_periodic_seam_measurement", "periodic_mode_seam_acceptance_gate", "phi_seam_certificate", "managed_runtime_qualification"]
-        },
+        "missing_evidence": missing_evidence,
         "case_id": k0_kittel_validation_case_id(validation),
         "test_id": if validation.case_id.as_deref() == Some("K0-3") { "kittel_k0_pbc_thinfilm_demag_inplane" } else { "kittel_k0_pbc_zeeman_no_demag" },
         "model": validation.model.as_str(),

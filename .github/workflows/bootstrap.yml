@@ -105,6 +105,9 @@ jobs:
       - name: Run sample-scoped eigen artifact contracts
         run: cargo test -p fullmag-runner output_publication_tests --lib
 
+      - name: Run eigen artifact and Kittel residual evidence contracts
+        run: cargo test -p fullmag-runner eigen::artifacts::tests --lib
+
       - name: Run tracking confidence and branch writer contracts
         run: |
           cargo test -p fullmag-runner eigen::tracking::tests --lib --no-fail-fast

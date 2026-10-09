@@ -3226,6 +3226,34 @@ Implementacja obliczenia seam z par/pełnego pola pozostaje otwarta.
 | source-kittel-unmeasured-seam-publication | `crates/fullmag-runner/src/eigen/artifacts/kittel.rs` | `k0_kittel_validation_auxiliary_artifacts` |
 
 
+### Brak residualu w typed Kittel fit
+
+`fmr/kittel_fit.v1.json.validation_status` opisuje wynik postsolve porównania
+Kittela, ale nie może oznaczać `passed` tylko na podstawie częstotliwości.
+Każdy wybrany punkt musi mieć dostępny residual `residual_relative_l2`, który
+jest skończony i nieujemny. Nie zmienia to progu ani źródła akceptacji
+oryginalnego residualu solvera; jest bramką dostępności wymaganej miary.
+
+Jeżeli porównanie częstotliwości nie spełnia zadeklarowanej tolerancji,
+`validation_status=failed` ma pierwszeństwo. Gdy częstotliwość jest w tolerancji,
+ale któremukolwiek punktowi brakuje poprawnego residualu,
+`validation_status=not_verified`; taki punkt zachowuje dane diagnostyczne i ma
+`status=partial`. Tylko komplet residuali oraz zgodność częstotliwości pozwalają
+na `validation_status=passed`. Typed fit nadal pozostaje `partial` i
+`complete=false`, gdy brakuje covariance/conditioning.
+
+Brak residualu nie przerywa zapisu pozostałych artefaktów. K0 summary zachowuje
+`frequency_comparison_status` jako wyłącznie porównanie częstotliwości, lecz
+raportuje brak wybranego residualu w `missing_evidence`; nieobecna walidacja
+Kittela nadal nie generuje artefaktu Kittela. Weryfikator produkcyjny wymaga
+skończonego residualu w każdym wybranym wierszu. Nie podstawiamy zera i nie
+zmieniamy tolerancji.
+
+| Source ID | Źródło | Symbol |
+|---|---|---|
+| source-kittel-fit-residual-status | `crates/fullmag-runner/src/eigen/artifacts/kittel.rs` | `build_kittel_fit_artifact_impl` |
+| source-kittel-fit-residual-status-regression | `crates/fullmag-runner/src/eigen/artifacts/tests.rs` | `kittel_fit_validation_requires_finite_residual_for_each_selected_point` |
+
 ### Pomiar seam magnetycznego pola modu (źródła WIP)
 
 Dla klas periodycznych porównujemy fizyczny zespolony wektor Cartesian

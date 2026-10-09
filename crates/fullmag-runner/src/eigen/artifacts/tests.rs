@@ -1342,6 +1342,14 @@ fn k0_kittel_relative_residual_is_null_when_any_point_is_missing() {
         .expect("Kittel summary should be present");
     let summary: Value = serde_json::from_slice(&summary.bytes).expect("summary should be JSON");
     assert!(summary["solver"]["max_eigen_residual_relative"].is_null());
+    assert_eq!(summary["status"], "partial");
+    assert_eq!(summary["frequency_comparison_status"], "passed");
+    assert_eq!(summary["qualification"], "NOT VERIFIED");
+    assert!(summary["missing_evidence"]
+        .as_array()
+        .expect("missing evidence should be an array")
+        .iter()
+        .any(|item| item.as_str() == Some("per_mode_residual_measurement")));
 
     let points = artifacts
         .iter()
@@ -2287,6 +2295,67 @@ fn kittel_fit_contains_only_postsolve_comparison_and_digest_bound_source() {
         fit.stop_reason.as_deref(),
         Some("statistical_fit_covariance_not_available")
     );
+}
+
+#[test]
+fn kittel_fit_validation_requires_finite_residual_for_each_selected_point() {
+    for residual in [None, Some(f64::NAN), Some(-1.0)] {
+        let mut result = sample_result_with_k0_kittel_sweep();
+        result.samples[1].modes[0].residual_relative_l2 = residual;
+
+        let fit = build_kittel_fit_artifact(&result)
+            .expect("diagnostic Kittel fit should remain writable")
+            .expect("fixture declares Kittel validation");
+        assert_eq!(fit.validation_status, "not_verified");
+        assert_eq!(fit.status, ServerArtifactStatus::Partial);
+        assert!(!fit.complete);
+        assert_eq!(fit.points.len(), 3);
+        assert_eq!(fit.points[0].status, ServerArtifactStatus::Complete);
+        assert_eq!(fit.points[1].status, ServerArtifactStatus::Partial);
+        assert_eq!(fit.points[2].status, ServerArtifactStatus::Complete);
+    }
+
+    let complete_result = sample_result_with_k0_kittel_sweep();
+    let complete_fit = build_kittel_fit_artifact(&complete_result)
+        .expect("complete residual control should build")
+        .expect("fixture declares Kittel validation");
+    assert_eq!(complete_fit.validation_status, "passed");
+    assert!(complete_fit
+        .points
+        .iter()
+        .all(|point| point.status == ServerArtifactStatus::Complete));
+}
+
+#[test]
+fn kittel_fit_frequency_failure_precedes_unavailable_residual() {
+    let mut result = sample_result_with_k0_kittel_sweep();
+    result.samples[1].modes[0].frequency_real_hz *= 2.0;
+    result.samples[1].modes[0].residual_relative_l2 = None;
+
+    let fit = build_kittel_fit_artifact(&result)
+        .expect("frequency failure should remain reportable")
+        .expect("fixture declares Kittel validation");
+    assert_eq!(fit.validation_status, "failed");
+    assert_eq!(fit.points[1].status, ServerArtifactStatus::Partial);
+}
+
+#[test]
+fn undeclared_kittel_validation_does_not_break_path_writer() {
+    let temp = TempDirGuard::new("eigen-artifacts-kittel-validation-optional-off");
+    let mut result = sample_result_with_k0_kittel_sweep();
+    result.k0_kittel_validation = None;
+
+    write_path_bundle(&temp.path, &result)
+        .expect("ordinary path writer should work without optional Kittel validation");
+    assert!(!write_kittel_fit_artifact(&temp.path, &result)
+        .expect("optional Kittel fit artifact should remain non-failing"));
+    assert!(build_kittel_fit_artifact(&result)
+        .expect("optional Kittel fit builder should remain non-failing")
+        .is_none());
+    assert!(k0_kittel_validation_auxiliary_artifacts(&result)
+        .expect("optional Kittel summary builder should remain non-failing")
+        .is_empty());
+    assert!(!temp.path.join("fmr/kittel_fit.v1.json").exists());
 }
 
 #[test]
