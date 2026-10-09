@@ -1544,6 +1544,7 @@ async function qualifyInspectorResonanceLeafRouting(browser, workspaceUrl, outpu
       }
     });
 
+    let expectedNodeId = null;
     try {
       await page.addInitScript((baseUrl) => {
         window.__FULLMAG_CONFIG__ = {
@@ -1605,6 +1606,7 @@ async function qualifyInspectorResonanceLeafRouting(browser, workspaceUrl, outpu
       const nodeId = resultCase.fieldSource
         ? `${stageId}:${resultCase.childGroup}:${resultCase.fieldSource}:${encodeURIComponent(resultCase.fieldId)}`
         : `${stageId}:${resultCase.suffix}`;
+      expectedNodeId = nodeId;
       if (resultCase.childGroup) {
         await expandInspectorNode(
           page,
@@ -1712,6 +1714,42 @@ async function qualifyInspectorResonanceLeafRouting(browser, workspaceUrl, outpu
         unknownGetPaths: [...fixture.unknownGetPaths],
       });
       await writeFile(proofPath, `${JSON.stringify(proof, null, 2)}\n`, "utf8");
+    } catch (error) {
+      // Retain the failed mounted-UI state before closing this isolated context.
+      try {
+        const failure = {
+          id: resultCase.id,
+          kind: resultCase.kind,
+          expectedNodeId,
+          fixtureEvidence,
+          error: String(error?.stack ?? error),
+          state: await inspectorResonanceLeafRoutingState(page, expectedNodeId),
+          ribbonTabs: await page.locator(".fm-ribbon__tab").evaluateAll((tabs) =>
+            tabs.map((tab) => ({
+              id: tab.id,
+              label: tab.textContent?.trim(),
+              selected: tab.getAttribute("aria-selected"),
+              contextual: tab.getAttribute("data-contextual"),
+              visible: tab.getBoundingClientRect().width > 0 && tab.getBoundingClientRect().height > 0,
+            })),
+          ),
+          requests: [...fixture.requests],
+          pageErrors,
+          consoleErrors,
+          unknownGetPaths: [...fixture.unknownGetPaths],
+        };
+        await writeFile(
+          resolve(outputDir, `analysis-resonance-leaf-${resultCase.id}-failure.json`),
+          `${JSON.stringify(failure, null, 2)}\n`,
+          "utf8",
+        );
+        await page.screenshot({
+          path: resolve(outputDir, `analysis-resonance-leaf-${resultCase.id}-failure.png`),
+        });
+      } catch (captureError) {
+        console.error("Resonance leaf failure capture failed:", captureError);
+      }
+      throw error;
     } finally {
       await context.close();
     }

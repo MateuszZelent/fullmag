@@ -289,6 +289,18 @@ describe("Inspector design-system reference contract", () => {
     }
   });
 
+  it("builds the mode visualization Inspector from the object visualization Inspector", () => {
+    // ADR 0054 / spec 32 §12: one Inspector style for the whole tree; a mode is a
+    // quantity on the magnetic object, not a second visualization panel.
+    const overview = read("src/modules/inspector/panels/mode-visualization/ModeVisualizationOverviewPanel.tsx");
+    const modeSections = read("src/modules/inspector/panels/ModeVisualizationInspectorPanel.tsx");
+
+    expect(overview).toContain("<VisualizationTargetInspectorPanel");
+    expect(modeSections).not.toContain("FrequencyDomainModeDisplayControls");
+    expect(modeSections).toContain('variant="nav"');
+    expect(modeSections).not.toMatch(/<select/);
+  });
+
   it.each([
     "ObjectVisualizationPanel.tsx",
     "ChartInspectorPanel.tsx",

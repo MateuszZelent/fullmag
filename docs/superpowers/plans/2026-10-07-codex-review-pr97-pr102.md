@@ -1886,3 +1886,8 @@ Canonical exact-name-first roster jest wspólny dla scalar hmax, lower hmin, gen
 ### Domknięcie lower-owner error contract po nowym CI
 
 Missing-owner reason klasyfikowany jest lokalnie dla odrzuconej polityki: dodatni canonical minimum/hmin daje mesh_lower_bound_owner_binding_missing; brak/wyłączonylower zachowuje caller general code. PerObjectRecipe używa to_ir; ambiguity nie jest przechwytywane. Nie opieramy kodu błędu na innym obiekcie workflow, nie zmieniamy priority/numerics i nie poluzowujemy regexów wcześniejszych testów. Dodano hmax-only/mixedknownlower/absentlower/canonicalprecedence controls. AST/diff/reviewPASS, hosted suite pending.
+
+
+### Browser proof — potwierdzony częściowy przebieg i diagnostyka failure
+
+37872633768 browser113633944857 FAIL na smoke-inspector1631: oczekiwanie contextual Ribbon aria-selected timeout60s. Wcześniejsze asercje clickedleaf selected/Inspectorowner oraz Analysisresonance surface przeszły, ale nie dowodzą całej5case matrix. Produkcyjny Ribbon deklaruje autoactive context (z możliwością dismiss), więc nie poluzowano testu do widoczności samejlabel. Catch zapisuje failed DOM state, wszystkie Ribbon tabs, fixture requests/errors i screenshot przed zamknięciem kontekstu. Captureerror nie zastępuje pierwotnego błędu. Następny hosted browser diagnostic pending.

@@ -60,6 +60,8 @@ function modeVisualizationPhaseCommandId(
 }
 
 const PHASE_MIN_RAD = 0;
+/** Visual playback rates; they never change the physical mode frequency. */
+const PHASE_ANIMATION_RATES_HZ = [0.1, 0.25, 0.5, 1, 2] as const;
 const PHASE_MAX_RAD = Math.PI * 2;
 
 function finiteNumber(value: unknown): number | null {
@@ -202,26 +204,24 @@ export function ModeVisualizationPhaseControl({
         >
           {animate ? "Pause" : "Play"}
         </Button>
-        <select
+        <SegmentedControl
           aria-label="Mode phase animation speed"
-          className="fm-inspector-select"
           disabled={disabled}
+          options={PHASE_ANIMATION_RATES_HZ.map((rate) => ({
+            accessibleLabel: `${rate} visual cycles per second`,
+            label: `${rate} Hz`,
+            value: String(rate),
+          }))}
           value={String(animationRateHz)}
-          onChange={(event) =>
+          onValueChange={(value) =>
             onAnimationChange?.({
               animatePhase: animate,
-              animationRateHz: Number(event.currentTarget.value),
+              animationRateHz: Number(value),
               direction: animationDirection,
               loop: animationLoop,
             })
           }
-        >
-          <option value="0.1">0.1 Hz</option>
-          <option value="0.25">0.25 Hz</option>
-          <option value="0.5">0.5 Hz</option>
-          <option value="1">1 Hz</option>
-          <option value="2">2 Hz</option>
-        </select>
+        />
         <Button
           aria-label={
             animationDirection === 1
