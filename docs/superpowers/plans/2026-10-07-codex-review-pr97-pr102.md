@@ -1903,3 +1903,10 @@ Renderer odtwarza dokładne immutable output snapshots rodzin time/eigen/respons
 37876177027 (69aa29af11b48173ed425de8519a585eb4d4b768): Control Room contracts/build PASS; Python FAIL wcześniej w nowym receipt fixture: KeyError EXPECTED_BUILD_MARKER dla current-contract CPU/GPU. Fixture inventory/integrity używa teraz niepustych opaque bytes, bez wymagania nieistniejącego release marker. Negatywne missing-file/missing-entry assertions i produkcyjna walidacja bez zmian. Renderer roundtrip/API pozostają NOT VERIFIED, ponieważ ten job nie dotarł do tych kroków. AST/diff PASS, ponowienie GHA pending.
 
 Generic 37872370420: jawny positive MFEM sparse window/nearest marker PASS; późniejszy budget negative case FAIL. Dodano wyłącznie failure diagnostic status/error/diagnostics/result przed niezmienioną asercją. Nie zmieniono tolerancji, budżetu ani wymaganych modów. Do naprawy przyczyny potrzebny rzeczywisty JSON kolejnego GHA.
+
+
+### Rzeczywiste regresje owner/recipe i kolejny renderer checkpoint
+
+37873787832 job113637554275:327testów Gmsh,1FAIL i1SKIP. Alias-colliding realization, coarser recipe preservation, trimmed hmax/hmin precedence, shared realizer boundary, standalone owner roster/cache oraz missing-lower reason PASS. #4207587018 implemented wyłącznie dla tego kontraktu. Exact-layer finite-cylinder ROI nadalFAIL i nie otrzymuje kwalifikacji. Zachowano ci-37873787832-mesh.log.
+
+37879663756 job113656196365:27receipt tests PASS,9startup PASS,22frozenprobe PASS. Ordered roundtrip76PASS+35subtests,2FAIL. Faktyczny błąd tracked state: _text_value(None) zwraca pusty string, więc disable-all nie czyścił pomocniczej listy; optionalquantity normalizowane teraz doNone. Nie poluzowano asercji braku redundant clear ani pełnego StudyIR. Drugi nowy fixture podawał unsupported stage_id do add_frequency_response; używa teraz istniejącego API i sprawdza właściwy generated call. Independent source review+AST/diff PASS; freshGHA pending.

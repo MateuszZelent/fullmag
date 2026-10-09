@@ -737,7 +737,6 @@ class ScriptBuilderEigenOutputRoundTripTests(unittest.TestCase):
         study.save_response("susceptibility_tensor")
         study.save("spectrum", spectrum_scope="global")
         study.stages.add_frequency_response(
-            stage_id="response-with-spectrum",
             frequencies_hz=[1e9, 2e9],
             excitation_field_au_per_m=(0.0, 1.0, 0.0),
             include_demag=False,
@@ -785,7 +784,7 @@ class ScriptBuilderEigenOutputRoundTripTests(unittest.TestCase):
             'study.save("spectrum", spectrum_scope="global")'
         )
         response_stage = rendered.index(
-            'study.stages.add_frequency_response(stage_id="response-with-spectrum"'
+            'study.stages.add_frequency_response(frequencies_hz=[1000000000, 2000000000]'
         )
         mode_output = rendered.index(
             'study.save("mode", field="mode_complex", indices=[0, 2])'

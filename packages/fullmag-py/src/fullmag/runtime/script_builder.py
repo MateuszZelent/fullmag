@@ -7300,7 +7300,7 @@ def _render_stages(
                     raise ValueError("autosave action requires the study API surface")
                 call_parts = []
                 enabled = bool(stage.action.get("enabled", True))
-                quantity = _text_value(stage.action.get("quantity"))
+                quantity = _text_value(stage.action.get("quantity")) or None
                 output_name = None
                 output_kind = None
                 every = None
