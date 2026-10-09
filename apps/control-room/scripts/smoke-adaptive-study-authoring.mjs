@@ -261,7 +261,12 @@ async function openStudyInspector(browser, { id, stage, realtime = false }) {
     pageErrors.push(error.stack ?? error.message);
   });
 
-  const targetUrl = new URL(workspaceUrl);
+  let targetUrl;
+  try {
+    targetUrl = new URL(workspaceUrl);
+  } catch {
+    throw new Error("CONTROL_ROOM_URL must be a valid workspace URL.");
+  }
   targetUrl.searchParams.set("fullmag_api_instance", API_INSTANCE);
   if (realtime) targetUrl.searchParams.set("inspectorRealtimeFixture", "1");
 
