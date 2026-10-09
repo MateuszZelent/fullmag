@@ -10697,7 +10697,7 @@ fn relaxed_path_source_fixture_handoff_is_reused_for_each_nonzero_k_sample_witho
             mode
                 .get("relax_to_eigen_handoff_sha256")
                 .and_then(serde_json::Value::as_str)
-                == Some(handoff_sha256.as_str())
+                == Some(handoff_sha256)
         }));
     }
 }

@@ -2319,3 +2319,8 @@ Nie dodano nowego testu porównującego jedynie tekst implementacji panelu; mocn
 -4fd43b894ec96c266dbed34a52aa431b46a5c53f pushed. Standalone37941002371/job113855046117 SUCCESS: realPETSc3.19.6, PASS shifted KSP true-convergence regression. Obejmuje healthyGMRES/FGMRES, zeroRHS, iterationbudget oraz livefailedzerooperator + intentionalproductioncallback/sentinel/postbuilderreason. Dowód nie kwalifikuje jeszcze managedPETSc3.24.6 ani fizycznegooperatora. Log ci-37941002371-shifted-ksp.log.
 - Managed37941002111/job113855056369 nadal IN_PROGRESS; bootstrap37941008418 także uruchomiony. Nowy snapshot nie jest automatycznie tym samym dowodem dla kolejnej poprawki anulowania.
 - Przyczyna cancellationassertion: EPSStoppingBasic positiveconvergence pomijał cancelpoll. Callback teraz zachowuje error/negativereason, a poll wykonuje dla ITERATING i positiveconvergence; observedUSER ma pierwszeństwo przed successfulcompletion, zgodnie z istniejącym postsolve cancellation priority. Bez zmian budżetu/tolerancji ani acceptancegate. PersistentstrictUSERassertion zachowano; one-shotcase zaostrzono doUSER, z boundedfailureonlytelemetry. Source/docvalidation i review są oddzielne od nowego hostedexecution.
+
+
+### Korekta fixture po hosted kompilacji (2026-10-09)
+
+- Bootstrap37941008418/Rust113855076848 FAIL E0658 w nowym real-path fixture: content_sha256 zwraca już &str, więc .as_str() wymagał unstable str_as_str. Usunięto redundantcall; nadal porównywany dokładny handoffdigest każdego opublikowanego moda. Nie zmieniono produkcji ani żadnego assertion; test jeszcze nie wykonał się. Log ci-37941008418-rust.log. Brak lokalnych testów/buildów.
