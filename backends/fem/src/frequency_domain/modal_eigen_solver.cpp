@@ -2116,6 +2116,20 @@ FrequencyDomainContractResult solve_modal_eigen_contract(
             request.operator_request.operator_diagnostics_json);
         return result;
     }
+    if (request.tiny_validation_enabled != 0 &&
+        request.execution_target == ModalExecutionTarget::production_gpu) {
+        FrequencyDomainContractResult result = validation_error_result(
+            "modal_eigen",
+            "native FEM modal_eigen production_gpu cannot use a tiny validation fixture",
+            "tiny_validation_production_gpu_conflict",
+            request.operator_request.operator_diagnostics_json);
+        set_modal_execution(
+            result,
+            request.execution_target,
+            request.spectral_transform_kind,
+            "production_gpu_tiny_validation_rejected");
+        return result;
+    }
     if (request.tiny_validation_enabled != 0) {
         FrequencyDomainContractResult result = solve_tiny_validation_modal_problem(request);
         set_modal_execution(

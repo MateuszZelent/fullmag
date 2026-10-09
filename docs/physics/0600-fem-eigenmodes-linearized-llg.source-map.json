@@ -51,7 +51,7 @@
       ],
       "sources": [
         "source-tiny-slepc-reference-metric",
-        "source-tiny-slepc-reference-regression"
+        "source-tiny-validation-dispatch-regression"
       ]
     }
   ],
@@ -126,10 +126,16 @@
       "responsibility": "Supply explicit positive identity metric only for two-DOF validation reference; generic production mass remains mandatory."
     },
     {
-      "id": "source-tiny-slepc-reference-regression",
+      "id": "source-tiny-validation-dispatch-regression",
       "path": "backends/fem/tests/frequency_domain/modal_eigen_contract_test.cpp",
       "symbol": "main",
-      "responsibility": "Actual CABI macrospin validation solve and failure-only raw diagnostics; new runtime proof pending GHA."
+      "responsibility": "Run the positive AUTO tiny CABI solve and forced-GPU/tiny conflict regression through result v20; GHA proof pending."
+    },
+    {
+      "id": "source-tiny-gpu-conflict-guard",
+      "path": "backends/fem/src/frequency_domain/modal_eigen_solver.cpp",
+      "symbol": "solve_modal_eigen_contract",
+      "responsibility": "Reject a forced production GPU request with a tiny validation fixture before the toy solver; preserve the resolved GPU target and do not fall back."
     }
   ],
   "public_api": {

@@ -4112,6 +4112,59 @@ void modal_v20_strict_gpu_attestation_is_present_complete_and_known()
     fullmag_fem_frequency_domain_result_v20_destroy(&result);
 }
 
+void modal_v20_tiny_validation_rejects_forced_production_gpu()
+{
+    constexpr double stiffness_matrix_row_major[] = {1.0, 0.0, 0.0, 1.0};
+    constexpr double gyrotropic_mass_row_major[] = {0.0, -1.0, 1.0, 0.0};
+
+    FullmagFemModalEigenRequest request = base_request();
+    request.execution_target = FULLMAG_FEM_MODAL_EXECUTION_PRODUCTION_GPU;
+    request.tiny_validation_enabled = 1;
+    request.tiny_validation_tangent_dof_count = 2;
+    request.tiny_validation_stiffness_matrix_row_major = stiffness_matrix_row_major;
+    request.tiny_validation_mass_matrix_row_major = gyrotropic_mass_row_major;
+
+    FullmagFemFrequencyDomainResultV20 result{};
+    result.abi_version = FULLMAG_FEM_FREQUENCY_DOMAIN_RESULT_V20_ABI_VERSION;
+    result.struct_size = sizeof(result);
+    check(fullmag_fem_modal_eigen_solve_v20(&request, &result) == FULLMAG_FEM_OK,
+          "v20 accepts the forced-GPU tiny-conflict request envelope");
+    const FullmagFemFrequencyDomainResult &scientific_result =
+        result.scientific_result_v18;
+    check(scientific_result.status == FULLMAG_FEM_FD_VALIDATION_ERROR,
+          "forced production GPU with a tiny fixture is rejected before validation solve");
+    check(contains(
+              scientific_result.diagnostics_json,
+              "tiny_validation_production_gpu_conflict"),
+          "forced-GPU tiny rejection reports its explicit conflict reason");
+    check(scientific_result.resolved_execution_target ==
+              FULLMAG_FEM_MODAL_EXECUTION_PRODUCTION_GPU,
+          "rejection preserves the explicitly requested GPU target as resolved target");
+    check(scientific_result.resolved_fallback_state ==
+              0u &&
+              contains(scientific_result.resolved_fallback_reason, "none"),
+          "forced-GPU tiny rejection records no CPU or validation fallback");
+    check(contains(
+              scientific_result.resolved_engine_id,
+              "production_gpu_tiny_validation_rejected"),
+          "resolved engine identifies the rejected GPU/tiny combination");
+    check(!contains(
+              scientific_result.diagnostics_json,
+              "\"tiny_validation_solver\":true") &&
+              !contains(
+                  scientific_result.result_json,
+                  "\"tiny_validation_solver\":true"),
+          "the forced-GPU request never enters the toy validation solver");
+    check(result.gpu_attestation != nullptr &&
+              result.gpu_attestation->measurement_state ==
+                  FULLMAG_FEM_MODAL_GPU_MEASUREMENT_UNAVAILABLE &&
+              result.gpu_attestation->fallback_state ==
+                  FULLMAG_FEM_MODAL_GPU_FALLBACK_NONE,
+          "rejected GPU request remains unavailable with no attested fallback");
+
+    fullmag_fem_frequency_domain_result_v20_destroy(&result);
+}
+
 void modal_v20_destroy_is_safe_for_partial_allocation_and_repeated_calls()
 {
     FullmagFemFrequencyDomainResultV20 partial{};
@@ -7142,6 +7195,7 @@ int main(int argc, char **argv)
     modal_v18_result_is_frozen_and_strict_gpu_requires_v20_attestation();
     modal_v20_short_envelope_is_rejected_before_any_write();
     modal_v20_strict_gpu_attestation_is_present_complete_and_known();
+    modal_v20_tiny_validation_rejects_forced_production_gpu();
     modal_v20_destroy_is_safe_for_partial_allocation_and_repeated_calls();
     modal_shift_invert_finds_macrospin_mode();
     modal_shift_invert_residual_below_tolerance();

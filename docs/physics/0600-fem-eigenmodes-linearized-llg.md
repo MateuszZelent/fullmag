@@ -723,18 +723,27 @@ zmienia się pencil K/G, konwencji czasowej, progu residualu ani wyboru
 CPU/GPU. Tiny-validation nie kwalifikuje demag, siatki ani dyspersji FEM.
 
 Publiczny Python/ProblemIR nie otrzymuje nowego parametru. Kontrakt dotyczy
-wewnętrznego adaptera CABI: istniejące jawne tiny input wybiera validation
-lane. Ta poprawka nie zmienia istniejącego wyboru execution target ani
-dispatchu CPU/GPU; tiny-validation jawnie raportuje validation lane.
-FDM CPU/GPU i produkcyjny FEM GPU nie korzystają z tej referencyjnej metryki.
+istniejącego adaptera CABI: jawne tiny input przy `auto_select` zachowuje
+dotychczasowy validation dispatch. Zachowujemy też dotychczasowy routing
+`production_cpu` z tiny fixture do validation; nie jest to produkcyjny solver
+CPU. Jawne `production_gpu` razem z tiny fixture jest sprzecznym żądaniem i
+zostaje odrzucone przed wywołaniem toy solvera. Błąd zachowuje
+`resolved_execution_target=production_gpu` i `fallback_state=none`, bez
+przekierowania na validation lub CPU. Target requestu jest nadal przekazywany
+przez istniejący v15 C ABI tail; GPU regresja używa wymaganego v20 result
+envelope. Nie dodaje się pól ani migracji C ABI. FDM CPU/GPU i produkcyjny FEM
+GPU nie korzystają z referencyjnej metryki.
 
-GHA37915874849 wykazało odmowę macrospin validation; source trace wskazuje
-na nieprzekazaną metrykę do strict SLEPc preparation. Do potwierdzenia
-przyczyny i poprawki potrzeba failure-only diagnostics oraz wykonania
-pełnego natywnego kontraktu z MFEM/SLEPc w GitHub Actions. Runtime i
+GHA37915874849 wykazało wcześniejszą odmowę macrospin validation; source trace
+wskazał wtedy nieprzekazaną metrykę do strict SLEPc preparation. Obecna
+regresja `modal_shift_invert_finds_macrospin_mode` zachowuje pozytywny AUTO
+fixture. `modal_v20_tiny_validation_rejects_forced_production_gpu` sprawdza
+konflikt GPU/tiny przez C ABI bez wywoływania toy solvera i bez fallbacku.
+Oba źródłowe kontrakty wymagają wykonania w GitHub Actions. Runtime i
 kwalifikacja naukowa nowych źródeł pozostają **NOT VERIFIED**.
 
 | Source ID | Path + symbol | Odpowiedzialność |
 |---|---|---|
 | source-tiny-slepc-reference-metric | `backends/fem/src/frequency_domain/modal_eigen_solver.cpp` :: `slepc_tiny_validation_result` | jawna metryka wyłącznie dwuwymiarowej validation lane |
-| source-tiny-slepc-reference-regression | `backends/fem/tests/frequency_domain/modal_eigen_contract_test.cpp` :: `main` (wywołuje `modal_shift_invert_finds_macrospin_mode`) | rzeczywisty CABI solve i failure-only diagnostics; GHA NOT VERIFIED |
+| source-tiny-validation-dispatch-regression | `backends/fem/tests/frequency_domain/modal_eigen_contract_test.cpp` :: `main` (wywołuje `modal_shift_invert_finds_macrospin_mode` i `modal_v20_tiny_validation_rejects_forced_production_gpu`) | pozytywny AUTO tiny CABI solve i forced GPU conflict rejection przez v20; GHA NOT VERIFIED |
+| source-tiny-gpu-conflict-guard | `backends/fem/src/frequency_domain/modal_eigen_solver.cpp` :: `solve_modal_eigen_contract` | odrzuca forced production GPU z tiny fixture przed toy validation, zachowując resolved GPU i fallback none |
