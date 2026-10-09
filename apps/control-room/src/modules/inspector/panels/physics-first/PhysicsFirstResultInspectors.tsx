@@ -1,5 +1,6 @@
 import type { ComponentType } from "react";
 
+import { ReferenceImportSection } from "../analysis-results/ReferenceImportSection";
 import type { InspectorPanelProps } from "../../inspectorTypes";
 import { FieldRow } from "../../primitives/FieldRow";
 import { InspectorGroup } from "../../primitives/InspectorGroup";
@@ -247,7 +248,12 @@ export function DispersionKSamplingResultInspector(props: InspectorPanelProps) {
 }
 
 export function DispersionRelationResultInspector(props: InspectorPanelProps) {
-  return <ScientificFrameRoute Panel={EigenDispersionInspectorPanel} props={props} />;
+  return (
+    <>
+      <ScientificFrameRoute Panel={EigenDispersionInspectorPanel} props={props} />
+      <ReferenceImportSection />
+    </>
+  );
 }
 
 export function DispersionBranchesResultInspector(props: InspectorPanelProps) {

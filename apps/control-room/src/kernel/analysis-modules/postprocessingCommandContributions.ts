@@ -1,10 +1,67 @@
 import { ANALYSIS_POSTPROCESSING_DEFINITIONS_PATH } from "@/kernel/api/apiPaths";
 import type { CommandContext, CommandContribution, CommandResult } from "@/kernel/commands/commandTypes";
 
-import { modeVisualizationDefinitionFromSelection } from "./postprocessingDefinitions";
+import {
+  importedReferenceDefinition,
+  modeVisualizationDefinitionFromSelection,
+} from "./postprocessingDefinitions";
 
 export const PIN_MODE_VISUALIZATION_COMMAND = "analysis.postprocessing.pin-mode-visualization";
 export const UNPIN_POSTPROCESSING_DEFINITION_COMMAND = "analysis.postprocessing.unpin-definition";
+export const IMPORT_DISPERSION_REFERENCE_COMMAND = "analysis.postprocessing.import-dispersion-reference";
+
+export interface ImportDispersionReferenceInput {
+  fileName: string;
+  label: string;
+  points: readonly (readonly [number, number])[];
+  sourceUnits: { frequency: string; path: string };
+}
+
+function asImportInput(input: unknown): ImportDispersionReferenceInput | null {
+  if (!input || typeof input !== "object") return null;
+  const candidate = input as Partial<ImportDispersionReferenceInput>;
+  return typeof candidate.fileName === "string" &&
+    typeof candidate.label === "string" &&
+    candidate.label.trim().length > 0 &&
+    Array.isArray(candidate.points) &&
+    candidate.points.length >= 2 &&
+    candidate.sourceUnits
+    ? (candidate as ImportDispersionReferenceInput)
+    : null;
+}
+
+/** The selected dispersion result whose run and stage the reference is compared with. */
+function importDataset(context: CommandContext) {
+  const ref = context.selection?.get()?.ref;
+  if (ref?.type !== "frequency-domain" || !ref.analysisRunId || !ref.analysisStageId || ref.artifactRevision === undefined) {
+    return null;
+  }
+  return { artifactRevision: ref.artifactRevision, runId: ref.analysisRunId, stageId: ref.analysisStageId };
+}
+
+function importDisabledReason(context: CommandContext): string | null {
+  if (!context.api) return "Control Room API is not available.";
+  if (!importDataset(context)) return "Select a dispersion relation in the Results tree.";
+  if (!asImportInput(context.input)) return "Choose a file, its columns and units, and a label.";
+  return null;
+}
+
+async function importDispersionReference(context: CommandContext): Promise<CommandResult> {
+  const reason = importDisabledReason(context);
+  const dataset = importDataset(context);
+  const input = asImportInput(context.input);
+  if (reason || !dataset || !input || !context.api) {
+    return { message: reason ?? "Reference cannot be imported.", status: "failed" };
+  }
+  const definitions = context.api.analysis.postprocessing.definitions;
+  const current = await definitions.list();
+  const created = await definitions.create({
+    definition: importedReferenceDefinition({ ...input, dataset }),
+    expected_scene_revision: current.scene_revision,
+  });
+  context.resources?.invalidate(ANALYSIS_POSTPROCESSING_DEFINITIONS_PATH, created.scene_revision);
+  return { message: `Imported reference ${created.definition.label}.`, status: "completed" };
+}
 
 interface UnpinInput {
   definitionId: string;
@@ -57,6 +114,16 @@ async function unpinDefinition(context: CommandContext): Promise<CommandResult> 
 
 /** Persistent user-created Results nodes (ADR 0054, spec 32 §8). */
 export const POSTPROCESSING_DEFINITION_COMMANDS: CommandContribution[] = [
+  {
+    id: IMPORT_DISPERSION_REFERENCE_COMMAND,
+    title: "Import dispersion reference",
+    category: "analysis",
+    group: "analysis.postprocessing",
+    scope: "selection",
+    isEnabled: (context) => importDisabledReason(context) === null,
+    disabledReason: importDisabledReason,
+    run: importDispersionReference,
+  },
   {
     id: PIN_MODE_VISUALIZATION_COMMAND,
     title: "Pin mode visualization",

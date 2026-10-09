@@ -61,3 +61,65 @@ export function modeVisualizationDefinitionFromSelection(
     },
   };
 }
+
+export interface ImportedReferenceInput {
+  /** Published identity of the dispersion result the reference is compared with. */
+  dataset: { artifactRevision: number | string; runId: string; stageId: string };
+  fileName: string;
+  label: string;
+  points: readonly (readonly [number, number])[];
+  sourceUnits: { frequency: string; path: string };
+}
+
+export const IMPORTED_REFERENCE_SCHEMA = "analysis.dispersion.reference.v1";
+
+/**
+ * Definition of an imported reference (COMSOL or CSV) overlaid on the
+ * dispersion relation. Points are stored in SI: path coordinate [rad/m] and
+ * frequency [Hz]. The reference carries no physics assumptions of its own;
+ * its comparison status stays "unknown" until metadata is provided.
+ */
+export function importedReferenceDefinition(input: ImportedReferenceInput): PostprocessingDefinition {
+  const manifest = ANALYSIS_FEATURE_MANIFESTS.find((candidate) => candidate.id === "analysis.dispersion");
+  const stamp = `${input.fileName}:${input.points.length}:${input.points[0]?.join(",") ?? ""}`;
+  return {
+    definition_id: `analysis.dispersion:reference:${input.dataset.runId}:${input.dataset.stageId}:${stamp}`,
+    revision: 0,
+    module_id: "analysis.dispersion",
+    module_version: manifest?.version ?? "0.1.0",
+    definition_schema: IMPORTED_REFERENCE_SCHEMA,
+    node_kind: "analysis.dispersion.reference",
+    label: input.label,
+    data_ref: {
+      run_id: input.dataset.runId,
+      dataset_id: input.dataset.stageId,
+      dataset_revision: String(input.dataset.artifactRevision),
+    },
+    settings: {
+      file_name: input.fileName,
+      path_quantity: "path_coordinate_rad_per_m",
+      points: input.points.map(([path, frequency]) => [path, frequency]),
+      source: "imported_table",
+      source_units: input.sourceUnits,
+      y_quantity: "frequency_hz",
+    },
+  };
+}
+
+/** SI points of a stored imported reference, or null when the settings are not a reference. */
+export function importedReferencePoints(definition: PostprocessingDefinition): [number, number][] | null {
+  if (definition.definition_schema !== IMPORTED_REFERENCE_SCHEMA) return null;
+  const points = (definition.settings as Record<string, unknown> | undefined)?.points;
+  if (!Array.isArray(points)) return null;
+  const parsed = points.flatMap((point): [number, number][] =>
+    Array.isArray(point) &&
+    point.length === 2 &&
+    typeof point[0] === "number" &&
+    typeof point[1] === "number" &&
+    Number.isFinite(point[0]) &&
+    Number.isFinite(point[1])
+      ? [[point[0], point[1]]]
+      : [],
+  );
+  return parsed.length >= 2 ? parsed : null;
+}
