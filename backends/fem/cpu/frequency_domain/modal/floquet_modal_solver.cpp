@@ -1653,6 +1653,7 @@ struct FloquetCandidateOperatorDiagnosticWorkspace {
     NativeFloquetMatShellContext isolated_context{};
     const NativeFloquetMatShellContext *production_context = nullptr;
     Mat exact_shifted_matrix = nullptr;
+    Mat expected_shifted_pmat = nullptr; // Borrowed from the production graph.
     Mat mat_shift_nonzero_matrix = nullptr;
     Mat mat_shift_none_matrix = nullptr;
     KSP mat_shift_nonzero_ksp = nullptr;
@@ -1693,7 +1694,573 @@ struct FloquetCandidateOperatorDiagnosticWorkspace {
     Vec shifted_lu_operator_action = nullptr;
     Vec shifted_lu_residual = nullptr;
     Vec shifted_lu_difference = nullptr;
+    Vec live_pc_rhs = nullptr;
+    Vec live_pc_solution = nullptr;
+    Vec live_pc_repeat_solution = nullptr;
+    Vec live_pc_candidate_snapshot = nullptr;
+    Vec live_pc_pmat_action = nullptr;
+    Vec live_pc_expected_pmat_action = nullptr;
+    Vec live_pc_operator_solution = nullptr;
+    Vec live_pc_operator_action = nullptr;
+    Vec live_pc_residual = nullptr;
 };
+
+PetscErrorCode floquet_candidate_relative_vector_defect(
+    Vec lhs,
+    Vec rhs,
+    Vec difference,
+    double *out);
+
+PetscErrorCode apply_isolated_candidate_shifted_action(
+    FloquetCandidateOperatorDiagnosticWorkspace *workspace,
+    Vec input,
+    Vec output);
+
+bool copy_bounded_petsc_type_name(
+    const char *source,
+    char *destination,
+    std::size_t destination_capacity,
+    bool *overflow) noexcept
+{
+    if (overflow != nullptr) {
+        *overflow = false;
+    }
+    if (destination == nullptr || destination_capacity == 0u) {
+        if (overflow != nullptr) {
+            *overflow = true;
+        }
+        return false;
+    }
+    destination[0] = '\0';
+    if (source == nullptr) {
+        return false;
+    }
+    std::size_t length = 0u;
+    while (length < destination_capacity && source[length] != '\0') {
+        ++length;
+    }
+    if (length == destination_capacity) {
+        if (overflow != nullptr) {
+            *overflow = true;
+        }
+        return false;
+    }
+    std::memcpy(destination, source, length + 1u);
+    return true;
+}
+
+PetscErrorCode capture_candidate_live_pc_observation(
+    FloquetCandidateOperatorDiagnosticWorkspace *workspace,
+    KSP live_ksp,
+    Mat shifted_operator,
+    Vec shifted_rhs,
+    Vec candidate_solution) noexcept
+{
+    if (workspace == nullptr) {
+        return PETSC_SUCCESS;
+    }
+    auto &observation = workspace->summary.live_pc_observation;
+    observation = {};
+    observation.requested = true;
+    observation.available = false;
+    observation.status = "unavailable";
+    observation.reason = "live_pc_observation_not_started";
+    const double preconditioner_scale =
+        workspace->summary.preconditioner_normalization_scale;
+    if (std::isfinite(preconditioner_scale) && preconditioner_scale > 0.0) {
+        observation.preconditioner_normalization_scale_available = true;
+        observation.preconditioner_normalization_scale = preconditioner_scale;
+    }
+
+    const auto record_first_error = [&observation](PetscErrorCode error) {
+        if (error != PETSC_SUCCESS && !observation.first_error_code_available) {
+            observation.first_error_code_available = true;
+            observation.first_error_code = static_cast<int>(error);
+        }
+    };
+    const auto mark_partial =
+        [&observation, &record_first_error](PetscErrorCode error, const char *reason) {
+            record_first_error(error);
+            observation.status = "partial";
+            observation.reason = reason;
+            return PETSC_SUCCESS;
+        };
+
+    const auto transaction =
+        detail::run_floquet_candidate_diagnostic_capture_transaction(
+            []() {
+                return PetscPushErrorHandler(PetscReturnErrorHandler, nullptr);
+            },
+            [&]() {
+                if (live_ksp == nullptr) {
+                    observation.reason = "live_ksp_unavailable";
+                    return PETSC_SUCCESS;
+                }
+
+                PC live_pc = nullptr;
+                PetscErrorCode error = KSPGetPC(live_ksp, &live_pc);
+                if (error != PETSC_SUCCESS) {
+                    return mark_partial(error, "live_pc_query_failed");
+                }
+                if (live_pc == nullptr) {
+                    observation.reason = "live_pc_unavailable";
+                    return PETSC_SUCCESS;
+                }
+                observation.pc_available = true;
+
+                const char *pc_type = nullptr;
+                error = PCGetType(live_pc, &pc_type);
+                if (error == PETSC_SUCCESS) {
+                    observation.pc_type_available = copy_bounded_petsc_type_name(
+                        pc_type,
+                        observation.pc_type,
+                        sizeof(observation.pc_type),
+                        &observation.pc_type_overflow);
+                    if (!observation.pc_type_available && pc_type == nullptr) {
+                        record_first_error(PETSC_ERR_ARG_WRONGSTATE);
+                    }
+                } else {
+                    record_first_error(error);
+                }
+
+                PCSide pc_side = PC_SIDE_DEFAULT;
+                error = KSPGetPCSide(live_ksp, &pc_side);
+                if (error == PETSC_SUCCESS) {
+                    observation.pc_side_available = true;
+                    observation.pc_side = static_cast<int>(pc_side);
+                } else {
+                    record_first_error(error);
+                }
+
+                PetscBool diagonal_scaling = PETSC_FALSE;
+                error = KSPGetDiagonalScale(live_ksp, &diagonal_scaling);
+                if (error == PETSC_SUCCESS) {
+                    observation.ksp_diagonal_scaling_available = true;
+                    observation.ksp_diagonal_scaling_enabled =
+                        diagonal_scaling == PETSC_TRUE;
+                } else {
+                    record_first_error(error);
+                }
+
+                Mat ksp_operator = nullptr;
+                Mat ksp_pmat = nullptr;
+                error = KSPGetOperators(live_ksp, &ksp_operator, &ksp_pmat);
+                if (error == PETSC_SUCCESS) {
+                    observation.ksp_pmat_available = ksp_pmat != nullptr;
+                } else {
+                    record_first_error(error);
+                }
+
+                Mat pc_operator = nullptr;
+                Mat pc_pmat = nullptr;
+                error = PCGetOperators(live_pc, &pc_operator, &pc_pmat);
+                if (error == PETSC_SUCCESS) {
+                    observation.pc_pmat_available = pc_pmat != nullptr;
+                } else {
+                    record_first_error(error);
+                }
+                if (observation.pc_pmat_available) {
+                    const char *pmat_type = nullptr;
+                    error = MatGetType(pc_pmat, &pmat_type);
+                    if (error == PETSC_SUCCESS) {
+                        observation.pmat_type_available =
+                            copy_bounded_petsc_type_name(
+                                pmat_type,
+                                observation.pmat_type,
+                                sizeof(observation.pmat_type),
+                                &observation.pmat_type_overflow);
+                        if (!observation.pmat_type_available &&
+                            pmat_type == nullptr) {
+                            record_first_error(PETSC_ERR_ARG_WRONGSTATE);
+                        }
+                    } else {
+                        record_first_error(error);
+                    }
+                }
+                if (observation.pc_pmat_available &&
+                    observation.ksp_pmat_available) {
+                    observation.pc_and_ksp_pmat_identity_available = true;
+                    observation.pc_and_ksp_pmat_identical =
+                        pc_pmat == ksp_pmat;
+                }
+                if (observation.pc_pmat_available &&
+                    workspace->exact_shifted_matrix_available &&
+                    workspace->exact_shifted_matrix != nullptr) {
+                    observation.pc_pmat_matches_expected_available = true;
+                    observation.pc_pmat_matches_expected =
+                        pc_pmat == workspace->expected_shifted_pmat;
+                }
+                (void)pc_operator;
+                (void)ksp_operator;
+
+                const bool vector_workspace_available =
+                    workspace->live_pc_rhs != nullptr &&
+                    workspace->live_pc_solution != nullptr &&
+                    workspace->live_pc_repeat_solution != nullptr &&
+                    workspace->live_pc_candidate_snapshot != nullptr &&
+                    workspace->live_pc_pmat_action != nullptr &&
+                    workspace->live_pc_expected_pmat_action != nullptr &&
+                    workspace->live_pc_operator_solution != nullptr &&
+                    workspace->live_pc_operator_action != nullptr &&
+                    workspace->live_pc_residual != nullptr &&
+                    workspace->difference != nullptr;
+                if (workspace->live_pc_candidate_snapshot == nullptr ||
+                    candidate_solution == nullptr) {
+                    observation.reason = "candidate_snapshot_workspace_unavailable";
+                    return PETSC_SUCCESS;
+                }
+                error = VecCopy(
+                    candidate_solution,
+                    workspace->live_pc_candidate_snapshot);
+                if (error != PETSC_SUCCESS) {
+                    return mark_partial(error, "candidate_snapshot_unavailable");
+                }
+                observation.candidate_snapshot_available = true;
+                if (!detail::floquet_live_pc_observation_inputs_available(
+                        observation.pc_available,
+                        observation.pc_pmat_available,
+                        shifted_rhs != nullptr,
+                        observation.candidate_snapshot_available,
+                        vector_workspace_available)) {
+                    observation.reason = !observation.pc_pmat_available
+                        ? "live_pc_pmat_unavailable"
+                        : "live_pc_observation_workspace_unavailable";
+                    return PETSC_SUCCESS;
+                }
+                if (shifted_operator == nullptr) {
+                    observation.reason = "live_shifted_operator_unavailable";
+                    return PETSC_SUCCESS;
+                }
+
+                PetscReal rhs_norm = std::numeric_limits<PetscReal>::quiet_NaN();
+                error = VecCopy(shifted_rhs, workspace->live_pc_rhs);
+                if (error != PETSC_SUCCESS) {
+                    return mark_partial(error, "live_rhs_snapshot_unavailable");
+                }
+                error = VecNorm(workspace->live_pc_rhs, NORM_2, &rhs_norm);
+                if (error != PETSC_SUCCESS ||
+                    !std::isfinite(static_cast<double>(rhs_norm)) ||
+                    rhs_norm < 0.0) {
+                    return mark_partial(
+                        error != PETSC_SUCCESS ? error : PETSC_ERR_FP,
+                        "live_rhs_norm_unavailable");
+                }
+                observation.rhs_l2_norm_available = true;
+                observation.rhs_l2_norm = static_cast<double>(rhs_norm);
+
+                ++observation.pc_apply_attempt_count;
+                // Private fault injection is reachable only inside the opt-in diagnostic.
+                const char *fault =
+                    std::getenv("FULLMAG_FLOQUET_LIVE_PC_DIAGNOSTIC_FAULT");
+                if (fault != nullptr && std::strcmp(fault, "pc_apply") == 0) {
+                    observation.pc_apply_fault_injected = true;
+                    observation.pc_apply_error_code_available = true;
+                    observation.pc_apply_error_code = static_cast<int>(PETSC_ERR_LIB);
+                    record_first_error(PETSC_ERR_LIB);
+                    observation.status = "error";
+                    observation.reason = "live_pc_apply_failed";
+                    return PETSC_ERR_LIB;
+                }
+                error = PCApply(
+                    live_pc,
+                    workspace->live_pc_rhs,
+                    workspace->live_pc_solution);
+                if (error != PETSC_SUCCESS) {
+                    observation.pc_apply_error_code_available = true;
+                    observation.pc_apply_error_code = static_cast<int>(error);
+                    record_first_error(error);
+                    observation.status = "error";
+                    observation.reason = "live_pc_apply_failed";
+                    return error;
+                }
+                ++observation.pc_apply_success_count;
+
+                PetscBool candidate_unchanged = PETSC_FALSE;
+                error = VecEqual(
+                    workspace->live_pc_candidate_snapshot,
+                    candidate_solution,
+                    &candidate_unchanged);
+                if (error != PETSC_SUCCESS) {
+                    record_first_error(error);
+                    observation.status = "error";
+                    observation.reason = "candidate_snapshot_check_failed";
+                    return error;
+                }
+                observation.candidate_unchanged_after_first_apply_available = true;
+                observation.candidate_unchanged_after_first_apply =
+                    candidate_unchanged == PETSC_TRUE;
+                if (!observation.candidate_unchanged_after_first_apply) {
+                    record_first_error(PETSC_ERR_ARG_WRONGSTATE);
+                    observation.status = "error";
+                    observation.reason = "candidate_changed_during_live_pc_apply";
+                    return PETSC_ERR_ARG_WRONGSTATE;
+                }
+
+                ++observation.pmat_action_attempt_count;
+                error = MatMult(
+                    pc_pmat,
+                    workspace->live_pc_solution,
+                    workspace->live_pc_pmat_action);
+                if (error != PETSC_SUCCESS) {
+                    return mark_partial(error, "live_pmat_action_unavailable");
+                }
+                if (workspace->exact_shifted_matrix_available &&
+                    workspace->exact_shifted_matrix != nullptr) {
+                    error = MatMult(
+                        workspace->exact_shifted_matrix,
+                        workspace->live_pc_solution,
+                        workspace->live_pc_expected_pmat_action);
+                    if (error == PETSC_SUCCESS) {
+                        error = floquet_candidate_relative_vector_defect(
+                            workspace->live_pc_pmat_action,
+                            workspace->live_pc_expected_pmat_action,
+                            workspace->difference,
+                            &observation.expected_pmat_action_relative_defect);
+                    }
+                    if (error == PETSC_SUCCESS) {
+                        observation.expected_pmat_action_defect_available = true;
+                    } else {
+                        return mark_partial(
+                            error,
+                            "expected_normalized_pmat_action_unavailable");
+                    }
+                }
+
+                error = VecCopy(
+                    workspace->live_pc_pmat_action,
+                    workspace->live_pc_residual);
+                if (error == PETSC_SUCCESS) {
+                    error = VecAXPY(
+                        workspace->live_pc_residual,
+                        static_cast<PetscScalar>(-1.0),
+                        workspace->live_pc_rhs);
+                }
+                PetscReal pmat_residual_norm =
+                    std::numeric_limits<PetscReal>::quiet_NaN();
+                if (error == PETSC_SUCCESS) {
+                    error = VecNorm(
+                        workspace->live_pc_residual,
+                        NORM_2,
+                        &pmat_residual_norm);
+                }
+                if (error != PETSC_SUCCESS ||
+                    !std::isfinite(static_cast<double>(pmat_residual_norm)) ||
+                    pmat_residual_norm < 0.0) {
+                    return mark_partial(
+                        error != PETSC_SUCCESS ? error : PETSC_ERR_FP,
+                        "live_pmat_residual_unavailable");
+                }
+                observation.pmat_residual_l2_norm_available = true;
+                observation.pmat_residual_l2_norm =
+                    static_cast<double>(pmat_residual_norm);
+                PetscReal pmat_relative_residual =
+                    std::numeric_limits<PetscReal>::quiet_NaN();
+                error = detail::calculate_floquet_relative_residual(
+                    pmat_residual_norm,
+                    rhs_norm,
+                    &pmat_relative_residual);
+                if (error != PETSC_SUCCESS) {
+                    return mark_partial(error, "live_pmat_relative_residual_unavailable");
+                }
+                observation.pmat_relative_residual_available = true;
+                observation.pmat_relative_residual =
+                    static_cast<double>(pmat_relative_residual);
+
+                error = VecCopy(
+                    workspace->live_pc_solution,
+                    workspace->live_pc_operator_solution);
+                if (error == PETSC_SUCCESS) {
+                    error = VecScale(
+                        workspace->live_pc_operator_solution,
+                        static_cast<PetscScalar>(
+                            workspace->summary.preconditioner_normalization_scale));
+                }
+                if (error == PETSC_SUCCESS) {
+                    ++observation.shifted_operator_action_attempt_count;
+                    error = apply_isolated_candidate_shifted_action(
+                        workspace,
+                        workspace->live_pc_operator_solution,
+                        workspace->live_pc_operator_action);
+                }
+                if (error == PETSC_SUCCESS) {
+                    error = VecAXPY(
+                        workspace->live_pc_operator_action,
+                        static_cast<PetscScalar>(-1.0),
+                        workspace->live_pc_rhs);
+                }
+                PetscReal shifted_residual_norm =
+                    std::numeric_limits<PetscReal>::quiet_NaN();
+                if (error == PETSC_SUCCESS) {
+                    error = VecNorm(
+                        workspace->live_pc_operator_action,
+                        NORM_2,
+                        &shifted_residual_norm);
+                }
+                if (error != PETSC_SUCCESS ||
+                    !std::isfinite(static_cast<double>(shifted_residual_norm)) ||
+                    shifted_residual_norm < 0.0) {
+                    return mark_partial(
+                        error != PETSC_SUCCESS ? error : PETSC_ERR_FP,
+                        "isolated_shifted_operator_residual_unavailable");
+                }
+                observation.shifted_operator_residual_l2_norm_available = true;
+                observation.shifted_operator_residual_l2_norm =
+                    static_cast<double>(shifted_residual_norm);
+                PetscReal shifted_relative_residual =
+                    std::numeric_limits<PetscReal>::quiet_NaN();
+                error = detail::calculate_floquet_relative_residual(
+                    shifted_residual_norm,
+                    rhs_norm,
+                    &shifted_relative_residual);
+                if (error != PETSC_SUCCESS) {
+                    return mark_partial(
+                        error,
+                        "isolated_shifted_operator_relative_residual_unavailable");
+                }
+                observation.shifted_operator_relative_residual_available = true;
+                observation.shifted_operator_relative_residual =
+                    static_cast<double>(shifted_relative_residual);
+
+                ++observation.repeat_pc_apply_attempt_count;
+                error = PCApply(
+                    live_pc,
+                    workspace->live_pc_rhs,
+                    workspace->live_pc_repeat_solution);
+                if (error != PETSC_SUCCESS) {
+                    observation.repeat_pc_apply_error_code_available = true;
+                    observation.repeat_pc_apply_error_code =
+                        static_cast<int>(error);
+                    record_first_error(error);
+                    observation.status = "error";
+                    observation.reason = "live_pc_repeat_apply_failed";
+                    return error;
+                }
+                ++observation.repeat_pc_apply_success_count;
+
+                candidate_unchanged = PETSC_FALSE;
+                error = VecEqual(
+                    workspace->live_pc_candidate_snapshot,
+                    candidate_solution,
+                    &candidate_unchanged);
+                if (error != PETSC_SUCCESS) {
+                    record_first_error(error);
+                    observation.status = "error";
+                    observation.reason = "candidate_snapshot_check_failed";
+                    return error;
+                }
+                observation.candidate_unchanged_after_repeat_apply_available = true;
+                observation.candidate_unchanged_after_repeat_apply =
+                    candidate_unchanged == PETSC_TRUE;
+                if (!observation.candidate_unchanged_after_repeat_apply) {
+                    record_first_error(PETSC_ERR_ARG_WRONGSTATE);
+                    observation.status = "error";
+                    observation.reason = "candidate_changed_during_live_pc_repeat_apply";
+                    return PETSC_ERR_ARG_WRONGSTATE;
+                }
+
+                error = floquet_candidate_relative_vector_defect(
+                    workspace->live_pc_solution,
+                    workspace->live_pc_repeat_solution,
+                    workspace->difference,
+                    &observation.repeatability_relative_defect);
+                if (error != PETSC_SUCCESS) {
+                    return mark_partial(
+                        error,
+                        "live_pc_repeatability_unavailable");
+                }
+                observation.repeatability_relative_defect_available = true;
+
+                PetscBool production_phi_rhs_unchanged = PETSC_FALSE;
+                error = VecEqual(
+                    workspace->production_phi_rhs,
+                    workspace->production_context->phi_rhs,
+                    &production_phi_rhs_unchanged);
+                if (error != PETSC_SUCCESS) {
+                    return mark_partial(
+                        error,
+                        "production_phi_rhs_invariance_unavailable");
+                }
+                observation.
+                    production_phi_rhs_unchanged_after_observation_available =
+                        true;
+                observation.production_phi_rhs_unchanged_after_observation =
+                    production_phi_rhs_unchanged == PETSC_TRUE;
+                PetscBool production_phi_solution_unchanged = PETSC_FALSE;
+                error = VecEqual(
+                    workspace->production_phi_solution,
+                    workspace->production_context->phi_solution,
+                    &production_phi_solution_unchanged);
+                if (error != PETSC_SUCCESS) {
+                    return mark_partial(
+                        error,
+                        "production_phi_solution_invariance_unavailable");
+                }
+                observation.
+                    production_phi_solution_unchanged_after_observation_available =
+                        true;
+                observation.
+                    production_phi_solution_unchanged_after_observation =
+                        production_phi_solution_unchanged == PETSC_TRUE;
+                if (!observation.production_phi_rhs_unchanged_after_observation ||
+                    !observation.
+                        production_phi_solution_unchanged_after_observation) {
+                    record_first_error(PETSC_ERR_ARG_WRONGSTATE);
+                    observation.status = "error";
+                    observation.reason =
+                        "production_phi_workspace_mutated_during_live_pc_observation";
+                    return PETSC_ERR_ARG_WRONGSTATE;
+                }
+
+                const bool core_available =
+                    observation.pc_apply_success_count == 1u &&
+                    observation.repeat_pc_apply_success_count == 1u &&
+                    observation.pmat_residual_l2_norm_available &&
+                    observation.pmat_relative_residual_available &&
+                    observation.shifted_operator_residual_l2_norm_available &&
+                    observation.shifted_operator_relative_residual_available &&
+                    observation.repeatability_relative_defect_available &&
+                    observation.candidate_unchanged_after_first_apply_available &&
+                    observation.candidate_unchanged_after_first_apply &&
+                    observation.candidate_unchanged_after_repeat_apply_available &&
+                    observation.candidate_unchanged_after_repeat_apply &&
+                    observation.
+                        production_phi_rhs_unchanged_after_observation_available &&
+                    observation.production_phi_rhs_unchanged_after_observation &&
+                    observation.
+                        production_phi_solution_unchanged_after_observation_available &&
+                    observation.production_phi_solution_unchanged_after_observation;
+                observation.available = core_available;
+                observation.status = core_available &&
+                        !observation.first_error_code_available
+                    ? "measured"
+                    : "partial";
+                observation.reason = core_available &&
+                        !observation.first_error_code_available
+                    ? "live_pc_action_observed"
+                    : "live_pc_observation_partial";
+                return PETSC_SUCCESS;
+            },
+            []() { return PetscPopErrorHandler(); });
+
+    if (transaction.push_error != PETSC_SUCCESS) {
+        record_first_error(transaction.push_error);
+        observation.status = "unavailable";
+        observation.reason = "petsc_return_error_handler_push_failed";
+    }
+    if (transaction.capture_error != PETSC_SUCCESS) {
+        record_first_error(transaction.capture_error);
+    }
+    if (transaction.pop_error != PETSC_SUCCESS) {
+        workspace->cleanup_failed = true;
+        workspace->cleanup_error = transaction.pop_error;
+        record_first_error(transaction.pop_error);
+        if (transaction.capture_error == PETSC_SUCCESS) {
+            observation.status = "unavailable";
+            observation.reason = "petsc_return_error_handler_restore_failed";
+        }
+    }
+    return detail::floquet_live_pc_capture_fatal_error(transaction);
+}
 
 void begin_candidate_operator_diagnostic_sample(
     void *raw_workspace,
@@ -1703,6 +2270,7 @@ PetscErrorCode capture_candidate_operator_diagnostic_sample(
     void *raw_workspace,
     PetscInt iteration,
     std::uint64_t callback_ordinal,
+    KSP live_ksp,
     Mat shifted_operator,
     Vec shifted_rhs,
     Vec candidate_solution,
@@ -1886,7 +2454,16 @@ PetscErrorCode destroy_candidate_operator_diagnostic_workspace(
         &workspace->shifted_lu_preconditioner_action,
         &workspace->shifted_lu_operator_action,
         &workspace->shifted_lu_residual,
-        &workspace->shifted_lu_difference};
+        &workspace->shifted_lu_difference,
+        &workspace->live_pc_rhs,
+        &workspace->live_pc_solution,
+        &workspace->live_pc_repeat_solution,
+        &workspace->live_pc_candidate_snapshot,
+        &workspace->live_pc_pmat_action,
+        &workspace->live_pc_expected_pmat_action,
+        &workspace->live_pc_operator_solution,
+        &workspace->live_pc_operator_action,
+        &workspace->live_pc_residual};
     for (Vec *vector : vectors) {
         const PetscErrorCode error = destroy_vec(vector);
         if (error != PETSC_SUCCESS) {
@@ -1975,6 +2552,7 @@ PetscErrorCode initialize_candidate_operator_diagnostic_workspace(
     shifted_lu.shifted_ksp_atol = static_cast<double>(shifted_ksp_atol);
     workspace->isolated_context = *production_context;
     workspace->production_context = production_context;
+    workspace->expected_shifted_pmat = exact_shifted_matrix;
     workspace->isolated_context.p = nullptr;
     workspace->isolated_context.p_ksp = nullptr;
     workspace->isolated_context.phi_rhs = nullptr;
@@ -2086,7 +2664,16 @@ PetscErrorCode initialize_candidate_operator_diagnostic_workspace(
         &workspace->isolated_sum_action,
         &workspace->isolated_gyrotropic_action,
         &workspace->exact_matrix_action,
-        &workspace->difference};
+        &workspace->difference,
+        &workspace->live_pc_rhs,
+        &workspace->live_pc_solution,
+        &workspace->live_pc_repeat_solution,
+        &workspace->live_pc_candidate_snapshot,
+        &workspace->live_pc_pmat_action,
+        &workspace->live_pc_expected_pmat_action,
+        &workspace->live_pc_operator_solution,
+        &workspace->live_pc_operator_action,
+        &workspace->live_pc_residual};
     for (Vec *vector : q_vectors) {
         error = VecDuplicate(workspace->q_template_output, vector);
         if (error != PETSC_SUCCESS) {
@@ -2921,6 +3508,9 @@ void begin_candidate_operator_diagnostic_sample(
     workspace->summary.last_error_code = setup_error_code;
     workspace->summary.status = "unavailable";
     workspace->summary.reason = "candidate_action_not_observed";
+    workspace->summary.live_pc_observation.requested = true;
+    workspace->summary.live_pc_observation.status = "unavailable";
+    workspace->summary.live_pc_observation.reason = "awaiting_live_ksp_capture";
     workspace->summary.callback_ordinal = callback_ordinal;
     workspace->summary.iteration = static_cast<std::int64_t>(iteration);
     workspace->summary.preconditioner_normalization_scale = preconditioner_scale;
@@ -2931,6 +3521,7 @@ PetscErrorCode capture_candidate_operator_diagnostic_sample(
     void *raw_workspace,
     PetscInt iteration,
     std::uint64_t callback_ordinal,
+    KSP live_ksp,
     Mat shifted_operator,
     Vec shifted_rhs,
     Vec candidate_solution,
@@ -2947,8 +3538,9 @@ PetscErrorCode capture_candidate_operator_diagnostic_sample(
     workspace->summary.status = "unavailable";
     workspace->summary.reason = "production_candidate_capture_failed";
 
-    // Copy the exact production phi inputs/results first. No production
-    // Poisson solve is repeated; the later isolated replay owns its own P/KSP.
+    // Preserve the production MatShell scratch and candidate action before
+    // any independent observation runs. The observer uses owned vectors and
+    // the isolated production-Schur MatShell context.
     PetscErrorCode error = VecCopy(
         workspace->production_context->phi_rhs,
         workspace->production_phi_rhs);
@@ -2968,6 +3560,17 @@ PetscErrorCode capture_candidate_operator_diagnostic_sample(
         record_candidate_diagnostic_error(workspace, error);
         return PETSC_SUCCESS;
     }
+
+    const PetscErrorCode live_pc_error = capture_candidate_live_pc_observation(
+        workspace,
+        live_ksp,
+        shifted_operator,
+        shifted_rhs,
+        candidate_solution);
+    if (live_pc_error != PETSC_SUCCESS) {
+        return live_pc_error;
+    }
+
     workspace->summary.sample_available = true;
     workspace->summary.status = "partial";
     workspace->summary.reason = "measurements_pending";
@@ -3190,6 +3793,37 @@ PetscErrorCode capture_candidate_operator_diagnostic_sample(
         shifted_rhs);
     if (error != PETSC_SUCCESS) {
         return error;
+    }
+    auto &live_pc = workspace->summary.live_pc_observation;
+    const auto &shifted_lu =
+        workspace->summary.shifted_lu_policy_comparison;
+    if (live_pc.pc_apply_success_count == 1u &&
+        shifted_lu.mat_shift_nonzero.solve_available &&
+        workspace->shifted_lu_nonzero_solution != nullptr) {
+        error = floquet_candidate_relative_vector_defect(
+            workspace->live_pc_solution,
+            workspace->shifted_lu_nonzero_solution,
+            workspace->difference,
+            &live_pc.mat_shift_nonzero_solution_relative_defect);
+        if (error == PETSC_SUCCESS) {
+            live_pc.mat_shift_nonzero_solution_defect_available = true;
+        } else {
+            record_candidate_diagnostic_error(workspace, error);
+        }
+    }
+    if (live_pc.pc_apply_success_count == 1u &&
+        shifted_lu.mat_shift_none.solve_available &&
+        workspace->shifted_lu_none_solution != nullptr) {
+        error = floquet_candidate_relative_vector_defect(
+            workspace->live_pc_solution,
+            workspace->shifted_lu_none_solution,
+            workspace->difference,
+            &live_pc.mat_shift_none_solution_relative_defect);
+        if (error == PETSC_SUCCESS) {
+            live_pc.mat_shift_none_solution_defect_available = true;
+        } else {
+            record_candidate_diagnostic_error(workspace, error);
+        }
     }
     if (workspace->summary.measurement_failure_count == 0u) {
         workspace->summary.status = "measured";

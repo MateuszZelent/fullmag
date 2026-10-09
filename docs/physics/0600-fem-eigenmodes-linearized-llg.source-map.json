@@ -177,7 +177,7 @@
       "id": "source-floquet-candidate-diagnostic-workspace",
       "path": "backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp",
       "symbol": "prepare_candidate_operator_diagnostic",
-      "responsibility": "Create the bounded opt-in isolated Poisson workspace without changing the production solver or candidate admission; source implementation and managed proof pending."
+      "responsibility": "Create the bounded opt-in isolated Poisson workspace without changing solver admission; current source reviewed, current hosted execution pending."
     },
     {
       "id": "source-floquet-dense-raw-spectrum",
@@ -208,6 +208,24 @@
       "path": "backends/fem/cpu/frequency_domain/modal/shifted_ksp_true_convergence.hpp",
       "symbol": "run_floquet_candidate_diagnostic_capture_transaction",
       "responsibility": "Propagate uncertain handler setup/restoration before production residual mutation and gate continuation."
+    },
+    {
+      "id": "source-candidate-live-pc-observation",
+      "path": "backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp",
+      "symbol": "capture_candidate_live_pc_observation",
+      "responsibility": "Observe live PC with private RHS and isolated Schur action, preserving candidate phi snapshots and canonical fatal error quarantine."
+    },
+    {
+      "id": "source-live-pc-owned-type-name",
+      "path": "backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp",
+      "symbol": "bool copy_bounded_petsc_type_name",
+      "responsibility": "Own bounded type-name snapshots without borrowed PETSc type-name pointers after teardown."
+    },
+    {
+      "id": "source-live-pc-fresh-process-fault",
+      "path": "backends/fem/tests/frequency_domain/modal_eigen_contract_test.cpp",
+      "symbol": "void modal_nonzero_k_floquet_shared_domain_nearest_reports_shifted_ksp_diagnostics",
+      "responsibility": "Run the diagnostic apply fault assertion via a dedicated fresh-process CLI path; hosted execution pending."
     }
   ],
   "public_api": {

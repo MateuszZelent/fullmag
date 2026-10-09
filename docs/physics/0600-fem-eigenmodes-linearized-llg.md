@@ -776,6 +776,9 @@ ferromagnetic films*, J. Phys. C 19 (1986), DOI:10.1088/0022-3719/19/35/7013.
 | `backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp` | `stop_native_floquet_eps` | Preserve negative EPS reasons and poll cancellation on the final successful iteration. |
 | `backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp` | `prepare_candidate_operator_diagnostic` | Prepare the bounded isolated Poisson workspace and attach its owner to the true-probe callback; hosted candidate measurements observed, full solve unqualified. |
 | `backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp` | `capture_candidate_shifted_lu_comparison` | Observe isolated current/NONE LU on the actual RHS with source-calibrated operator residual; hosted comparison observed, full production solve still fails. |
+| `backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp` | `capture_candidate_live_pc_observation` | Observe borrowed live PC on private RHS/vectors and isolated Schur action; source reviewed, hosted execution pending. |
+| `backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp` | `bool copy_bounded_petsc_type_name` | Own bounded type-name snapshots through callback cleanup and DTO copy/move; overflow stays unavailable. |
+| `backends/fem/tests/frequency_domain/modal_eigen_contract_test.cpp` | `void modal_nonzero_k_floquet_shared_domain_nearest_reports_shifted_ksp_diagnostics` | Run the live-PC fault contract in an independent CLI process without resetting the permanent unsafe latch. |
 | `backends/fem/cpu/frequency_domain/modal/shifted_ksp_true_convergence.hpp` | `run_floquet_candidate_diagnostic_capture_transaction` | Stop callback on uncertain handler push/pop; preserve honest partial diagnostic completeness. |
 | `backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp` | `run_floquet_dense_original_oracle` | Record bounded raw/rotated eigenvalues and shift distances before window filtering, with explicit truncation. |
 | `backends/fem/cpu/frequency_domain/modal/shifted_ksp_true_convergence.hpp` | `floquet_shifted_true_convergence_test` | Guard candidate admission after PETSc GMRES solution building; preserve negative reason and unavailable probes. |
@@ -871,7 +874,7 @@ Nie stanowią residualu zaakceptowanego fizycznego modu.
 Wynik nie uzasadnia zmiany polityki LU, progu ani okna wyszukiwania.
 Dotychczasowe porównanie używa osobnych faktorów i nie mierzy działania
 preconditionera rzeczywiście zainstalowanego w produkcyjnym GMRES.
-Następny **planowany, jeszcze niewdrożony** pomiar ma porównać działanie
+Następny pomiar ma już implementację po pełnym SOURCE review; kompilacja i hosted wykonanie pozostają NOT VERIFIED. Ma porównać działanie
 tego żywego PC na prywatnej kopii RHS z izolowanymi faktorami oraz sprawdzić
 niezmienność kandydata przed i po obserwatorze. Musi zachować istniejącą
 kalibrację $P_{\mathrm{norm}}=T A_{\mathrm{shift}}$ i $x_A=T y$,
@@ -885,3 +888,40 @@ bazy Kryłowa. Punkt odniesienia implementacyjnego: PETSc 3.24.6
 oraz `floquet_shifted_true_convergence_test` w pliku wskazanym w indeksie
 źródeł tej strony. Zakres dotyczy diagnostyki FEM CPU; nie rozszerza
 publicznego Python/ProblemIR, FDM CPU/GPU ani kwalifikacji FEM GPU.
+
+
+### Kontrakt źródłowy live-PC — SOURCE PASS, hosted pomiar wymagany
+
+`capture_candidate_live_pc_observation` pożycza żywy KSP tylko na czas
+callbacku. Metadane obejmują jego PC/Pmat, stronę oraz rzeczywisty
+`KSPGetDiagonalScale`. Obie aplikacje PC i ich residuals używają prywatnej
+kopii RHS. Akcja operatora przy diagnostycznym rozwiązaniu direct korzysta
+z `apply_isolated_candidate_shifted_action` na izolowanym kontekście
+Schura; porównanie jawnej macierzy Pmat jest osobnym pomiarem.
+Pierwotne phi/action są kopiowane przed obserwatorem, a produkcyjne
+phi buffers muszą pozostać niezmienione. Nie zastępujemy akcji operatora
+residualem samej macierzy jawnej.
+
+Nazwy typów są kopiowane przez `copy_bounded_petsc_type_name` do własnych
+ograniczonych buforów DTO; overflow oznacza unavailable, bez pożyczonych
+wskaźników po cleanup/refill. Każdy pomiar zachowuje własną availability
+i null przy braku dowodu. Błąd PCApply/reapply jest fatalny: checked handler
+transaction, callback error, hard EPS error i istniejący retained
+graph/process-unsafe owner. Nie wykonujemy dalszego admission ani
+pomiarów po tym błędzie. Nie zmieniono progów, okien ani solver policy.
+
+CTest `modal_eigen_live_pc_apply_fault_quarantine` uruchamia
+`fem_modal_eigen_contract --floquet-live-pc-apply-fault-quarantine-probe`
+w świeżym procesie. Poprzednie hard-error fixtures nie mogą być
+poprzednikiem tej próby w jednym procesie; latch nie jest resetowany.
+Istniejący hosted profil obejmuje siedem testów, zachowując poprzednie sześć.
+Root profile AST i delimiter/diff checks oraz niezależny pełny SOURCE
+review PASS nie są kompilacją. Wartości nowych metryk i rzeczywiste
+osiągnięcie fault hooka wymagają GHA. Copy/move regression potwierdza
+własność DTO; near-pole ścieżka sama nie kwalifikuje zdrowego teardown.
+
+To bounded opt-in diagnostyka FEM CPU, nie nowe publiczne Python/ProblemIR
+ani obserwable fizyczne. Normy dotyczą wewnętrznych współrzędnych
+numerycznych, a ratios są bezwymiarowe. Poprawny produkcyjny wynik
+eigen/dispersion i kwalifikacja pozostałych realizacji nadal wymagają
+odrębnych bramek opisanych wcześniej na tej stronie.

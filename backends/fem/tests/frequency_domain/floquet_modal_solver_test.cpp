@@ -12,6 +12,7 @@
 #include <limits>
 #include <mutex>
 #include <string>
+#include <utility>
 #include <vector>
 
 #ifndef FULLMAG_FEM_WITH_SLEPC
@@ -125,6 +126,9 @@ void candidate_diagnostic_transaction_and_completeness_fail_closed()
               push_failure.push_error == PETSC_ERR_LIB &&
               push_failure.fatal_error == PETSC_ERR_LIB,
           "a failed production-handler push returns before capture queries or handler pop");
+    check(fd::detail::floquet_live_pc_capture_fatal_error(push_failure) ==
+              PETSC_ERR_LIB,
+          "live-PC transaction preserves a failed handler push as fatal");
 
     capture_calls = 0;
     pop_calls = 0;
@@ -143,6 +147,69 @@ void candidate_diagnostic_transaction_and_completeness_fail_closed()
               measurement_failure.capture_error == PETSC_ERR_FP &&
               measurement_failure.fatal_error == PETSC_SUCCESS,
           "ordinary optional measurement failure still restores the error handler");
+
+    int live_pc_apply_calls = 0;
+    int live_pc_pmat_mult_calls = 0;
+    int live_pc_repeat_apply_calls = 0;
+    int live_pc_candidate_admissions = 0;
+    int live_pc_pop_calls = 0;
+    const auto live_pc_apply_failure =
+        fd::detail::run_floquet_candidate_diagnostic_capture_transaction(
+            []() { return PETSC_SUCCESS; },
+            [&]() {
+                ++live_pc_apply_calls;
+                const PetscErrorCode apply_error = PETSC_ERR_LIB;
+                if (apply_error != PETSC_SUCCESS) {
+                    return apply_error;
+                }
+                ++live_pc_pmat_mult_calls;
+                ++live_pc_repeat_apply_calls;
+                ++live_pc_candidate_admissions;
+                return PETSC_SUCCESS;
+            },
+            [&]() {
+                ++live_pc_pop_calls;
+                return PETSC_SUCCESS;
+            });
+    check(fd::detail::floquet_live_pc_capture_fatal_error(live_pc_apply_failure) ==
+                  PETSC_ERR_LIB &&
+              live_pc_apply_calls == 1 && live_pc_pmat_mult_calls == 0 &&
+              live_pc_repeat_apply_calls == 0 && live_pc_candidate_admissions == 0 &&
+              live_pc_pop_calls == 1,
+          "a borrowed live-PC apply error stays fatal, pops the handler, and stops later measurements and candidate admission");
+    int live_pc_restore_calls = 0;
+    const auto live_pc_restore_failure =
+        fd::detail::run_floquet_candidate_diagnostic_capture_transaction(
+            []() { return PETSC_SUCCESS; },
+            []() { return PETSC_ERR_LIB; },
+            [&]() {
+                ++live_pc_restore_calls;
+                return PETSC_ERR_PLIB;
+            });
+    check(live_pc_restore_calls == 1 &&
+              fd::detail::floquet_live_pc_capture_fatal_error(
+                  live_pc_restore_failure) == PETSC_ERR_LIB,
+          "the first live-PC failure remains authoritative while handler restoration still runs");
+    int live_pc_restore_only_calls = 0;
+    const auto live_pc_restore_only_failure =
+        fd::detail::run_floquet_candidate_diagnostic_capture_transaction(
+            []() { return PETSC_SUCCESS; },
+            []() { return PETSC_SUCCESS; },
+            [&]() {
+                ++live_pc_restore_only_calls;
+                return PETSC_ERR_PLIB;
+            });
+    check(live_pc_restore_only_calls == 1 &&
+              fd::detail::floquet_live_pc_capture_fatal_error(
+                  live_pc_restore_only_failure) == PETSC_ERR_PLIB,
+          "a handler restoration error remains fatal after successful live-PC capture");
+    check(!fd::detail::floquet_live_pc_observation_inputs_available(
+              true, false, true, true, true) &&
+              !fd::detail::floquet_live_pc_observation_inputs_available(
+                  true, true, true, false, true) &&
+              fd::detail::floquet_live_pc_observation_inputs_available(
+                  true, true, true, true, true),
+          "missing Pmat or candidate snapshot keeps live-PC application unavailable");
 
     const auto complete_outcome = []() {
         Outcome outcome{};
@@ -287,6 +354,8 @@ struct ScopedFloquetDiagnosticEnvironment {
         "FULLMAG_FLOQUET_DENSE_ORACLE"};
     SavedEnvironmentValue schur_action{
         "FULLMAG_FLOQUET_SCHUR_ACTION_DIAGNOSTIC"};
+    SavedEnvironmentValue live_pc_fault{
+        "FULLMAG_FLOQUET_LIVE_PC_DIAGNOSTIC_FAULT"};
     bool ready = false;
 
     ScopedFloquetDiagnosticEnvironment()
@@ -294,13 +363,16 @@ struct ScopedFloquetDiagnosticEnvironment {
         ready = set_floquet_diagnostic_environment_value(
                     dense_oracle.name, "1") == 0 &&
             set_floquet_diagnostic_environment_value(
-                    schur_action.name, "1") == 0;
+                    schur_action.name, "1") == 0 &&
+            set_floquet_diagnostic_environment_value(
+                    live_pc_fault.name, "") == 0;
     }
 
     ~ScopedFloquetDiagnosticEnvironment()
     {
         dense_oracle.restore();
         schur_action.restore();
+        live_pc_fault.restore();
     }
 };
 
@@ -1904,6 +1976,73 @@ void captures_near_pole_failure_probe()
                       shifted_lu.mat_shift_nonzero.repeatability_relative_defect_available &&
                       shifted_lu.mat_shift_none.repeatability_relative_defect_available,
                   "both LU policies report direct-P and calibrated A_shift residuals, threshold ratios, and repeatability");
+            const auto &live_pc = candidate_diagnostic.live_pc_observation;
+            check(live_pc.requested && live_pc.available &&
+                      live_pc.preconditioner_normalization_scale_available &&
+                      live_pc.preconditioner_normalization_scale ==
+                          result.preconditioner_normalization_scale &&
+                      live_pc.pc_available && live_pc.pc_type_available &&
+                      !live_pc.pc_type_overflow &&
+                      live_pc.pmat_type_available && !live_pc.pmat_type_overflow &&
+                      std::strcmp(live_pc.pc_type, "lu") == 0 &&
+                      live_pc.pc_side_available && live_pc.pc_side == PC_RIGHT &&
+                      live_pc.ksp_diagonal_scaling_available &&
+                      live_pc.pc_pmat_available && live_pc.ksp_pmat_available &&
+                      live_pc.pc_and_ksp_pmat_identity_available &&
+                      live_pc.pc_pmat_matches_expected_available &&
+                      live_pc.pc_pmat_matches_expected,
+                  "live candidate probe records the configured PC, side, scaling, and actual expected Pmat identity");
+            check(live_pc.expected_pmat_action_defect_available &&
+                      std::isfinite(live_pc.expected_pmat_action_relative_defect) &&
+                      live_pc.pc_apply_attempt_count == 1 &&
+                      live_pc.pc_apply_success_count == 1 &&
+                      live_pc.repeat_pc_apply_attempt_count == 1 &&
+                      live_pc.repeat_pc_apply_success_count == 1 &&
+                      live_pc.pmat_residual_l2_norm_available &&
+                      live_pc.pmat_relative_residual_available &&
+                      live_pc.shifted_operator_residual_l2_norm_available &&
+                      live_pc.shifted_operator_relative_residual_available &&
+                      live_pc.repeatability_relative_defect_available &&
+                      live_pc.candidate_snapshot_available &&
+                      live_pc.candidate_unchanged_after_first_apply_available &&
+                      live_pc.candidate_unchanged_after_first_apply &&
+                      live_pc.candidate_unchanged_after_repeat_apply_available &&
+                      live_pc.candidate_unchanged_after_repeat_apply &&
+                      live_pc.production_phi_rhs_unchanged_after_observation_available &&
+                      live_pc.production_phi_rhs_unchanged_after_observation &&
+                      live_pc.
+                          production_phi_solution_unchanged_after_observation_available &&
+                      live_pc.production_phi_solution_unchanged_after_observation &&
+                      live_pc.mat_shift_nonzero_solution_defect_available &&
+                      live_pc.mat_shift_none_solution_defect_available,
+                  "live PCApply captures both residual equations, repeatability, candidate stability, production phi-workspace invariance, and isolated-LU differences");
+            auto copied_live_pc_observation = live_pc;
+            auto moved_live_pc_observation =
+                std::move(copied_live_pc_observation);
+            check(moved_live_pc_observation.pc_type_available &&
+                      moved_live_pc_observation.pmat_type_available &&
+                      std::strcmp(moved_live_pc_observation.pc_type, "lu") == 0 &&
+                      std::strcmp(moved_live_pc_observation.pmat_type,
+                                  live_pc.pmat_type) == 0,
+                  "owned PETSc type names survive diagnostic cleanup and DTO copy/move");
+            const double live_rhs_denominator = std::max(
+                live_pc.rhs_l2_norm, std::numeric_limits<double>::min());
+            const auto relative_residual_matches =
+                [live_rhs_denominator](double relative, double residual) {
+                    const double expected = residual / live_rhs_denominator;
+                    return std::isfinite(expected) &&
+                        std::abs(relative - expected) <=
+                            16.0 * std::numeric_limits<double>::epsilon() *
+                                std::max(1.0, std::abs(expected));
+                };
+            check(live_pc.rhs_l2_norm_available &&
+                      relative_residual_matches(
+                          live_pc.pmat_relative_residual,
+                          live_pc.pmat_residual_l2_norm) &&
+                      relative_residual_matches(
+                          live_pc.shifted_operator_relative_residual,
+                          live_pc.shifted_operator_residual_l2_norm),
+                  "reported live-PC relative residuals use the same captured RHS norm as their L2 residuals");
             if (probe.last_true_probe_available) {
                 const double expected_threshold = std::max(
                     probe.last_true_atol,

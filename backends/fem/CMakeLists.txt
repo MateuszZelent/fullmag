@@ -1170,6 +1170,12 @@ if(FULLMAG_USE_MFEM_STACK AND FULLMAG_FEM_WITH_SLEPC)
         COMMAND fem_floquet_modal_solver_contract --forced-inner-failure)
     set_tests_properties(fem_floquet_forced_inner_failure_contract
         PROPERTIES TIMEOUT 120)
+    add_custom_target(modal_eigen_live_pc_apply_fault_quarantine
+        DEPENDS fem_modal_eigen_contract)
+    add_test(NAME modal_eigen_live_pc_apply_fault_quarantine
+        COMMAND fem_modal_eigen_contract --floquet-live-pc-apply-fault-quarantine-probe)
+    set_tests_properties(modal_eigen_live_pc_apply_fault_quarantine
+        PROPERTIES TIMEOUT 120)
 
 endif()
 add_fem_source_facade_contract(

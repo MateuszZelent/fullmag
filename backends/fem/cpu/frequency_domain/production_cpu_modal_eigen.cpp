@@ -268,6 +268,214 @@ std::string shifted_lu_policy_comparison_json(
             "MAT_SHIFT_NONE", false, comparison.mat_shift_none) + "}";
 }
 
+std::string live_pc_observation_json(
+    const FloquetShiftedKspFailureProbe::CandidateOperatorDiagnostic::
+        LivePcObservation &observation)
+{
+    if (!observation.requested) {
+        return "null";
+    }
+    const auto optional_bool = [](bool available, bool value) {
+        return available
+            ? std::string(value ? "true" : "false")
+            : std::string("null");
+    };
+    const auto optional_number = [](bool available, double value) {
+        return available ? format_double(value) : std::string("null");
+    };
+    std::string json =
+        "{\"schema_version\":\"floquet_live_pc_observation.v1\","
+        "\"requested\":true,"
+        "\"measurement_scope\":\"borrowed_live_shifted_ksp_pc_before_residual_gate\","
+        "\"solution_calibration\":\"P_normalized = preconditioner_normalization_scale * normalized_live_ksp_A_shift; x_A = preconditioner_normalization_scale * z_P\","
+        "\"shifted_operator_action_source\":\"isolated_copy_of_production_matshell_components\","
+        "\"preconditioner_normalization_scale_available\":" +
+        std::string(observation.preconditioner_normalization_scale_available ? "true" : "false") +
+        ",\"preconditioner_normalization_scale\":" +
+        (observation.preconditioner_normalization_scale_available
+            ? format_double(observation.preconditioner_normalization_scale)
+            : std::string("null")) +
+        ",\"status\":\"" +
+        escape_json_string(observation.status != nullptr ? observation.status : "unknown") +
+        "\",\"reason\":\"" +
+        escape_json_string(observation.reason != nullptr ? observation.reason : "") +
+        "\",\"available\":" +
+        std::string(observation.available ? "true" : "false") +
+        ",\"pc_available\":" +
+        std::string(observation.pc_available ? "true" : "false") +
+        ",\"pc_type_available\":" +
+        std::string(observation.pc_type_available ? "true" : "false") +
+        ",\"pc_type_overflow\":" +
+        std::string(observation.pc_type_overflow ? "true" : "false") +
+        ",\"pc_type\":" +
+        (observation.pc_type_available
+            ? "\"" + escape_json_string(observation.pc_type) + "\""
+            : std::string("null")) +
+        ",\"pmat_type_available\":" +
+        std::string(observation.pmat_type_available ? "true" : "false") +
+        ",\"pmat_type_overflow\":" +
+        std::string(observation.pmat_type_overflow ? "true" : "false") +
+        ",\"pmat_type\":" +
+        (observation.pmat_type_available
+            ? "\"" + escape_json_string(observation.pmat_type) + "\""
+            : std::string("null")) +
+        ",\"pc_side_available\":" +
+        std::string(observation.pc_side_available ? "true" : "false") +
+        ",\"pc_side\":" +
+        (observation.pc_side_available
+            ? std::to_string(observation.pc_side)
+            : std::string("null")) +
+        ",\"ksp_diagonal_scaling_available\":" +
+        std::string(
+            observation.ksp_diagonal_scaling_available ? "true" : "false") +
+        ",\"ksp_diagonal_scaling_enabled\":" +
+        optional_bool(
+            observation.ksp_diagonal_scaling_available,
+            observation.ksp_diagonal_scaling_enabled) +
+        ",\"pc_pmat_available\":" +
+        std::string(observation.pc_pmat_available ? "true" : "false") +
+        ",\"ksp_pmat_available\":" +
+        std::string(observation.ksp_pmat_available ? "true" : "false") +
+        ",\"pc_and_ksp_pmat_identity_available\":" +
+        std::string(observation.pc_and_ksp_pmat_identity_available ? "true" : "false") +
+        ",\"pc_and_ksp_pmat_identical\":" +
+        optional_bool(
+            observation.pc_and_ksp_pmat_identity_available,
+            observation.pc_and_ksp_pmat_identical) +
+        ",\"pc_pmat_matches_expected_available\":" +
+        std::string(observation.pc_pmat_matches_expected_available ? "true" : "false") +
+        ",\"pc_pmat_matches_expected\":" +
+        optional_bool(
+            observation.pc_pmat_matches_expected_available,
+            observation.pc_pmat_matches_expected) +
+        ",\"expected_pmat_action_defect_available\":" +
+        std::string(observation.expected_pmat_action_defect_available
+            ? "true" : "false") +
+        ",\"expected_pmat_action_relative_defect\":" +
+        optional_number(
+            observation.expected_pmat_action_defect_available,
+            observation.expected_pmat_action_relative_defect) +
+        ",\"pc_apply_attempt_count\":" +
+        std::to_string(observation.pc_apply_attempt_count) +
+        ",\"pc_apply_success_count\":" +
+        std::to_string(observation.pc_apply_success_count) +
+        ",\"pc_apply_error_code_available\":" +
+        std::string(observation.pc_apply_error_code_available ? "true" : "false") +
+        ",\"pc_apply_error_code\":" +
+        (observation.pc_apply_error_code_available
+            ? std::to_string(observation.pc_apply_error_code)
+            : std::string("null")) +
+        ",\"pc_apply_fault_injected\":" +
+        std::string(observation.pc_apply_fault_injected ? "true" : "false") +
+        ",\"repeat_pc_apply_attempt_count\":" +
+        std::to_string(observation.repeat_pc_apply_attempt_count) +
+        ",\"repeat_pc_apply_success_count\":" +
+        std::to_string(observation.repeat_pc_apply_success_count) +
+        ",\"repeat_pc_apply_error_code_available\":" +
+        std::string(observation.repeat_pc_apply_error_code_available ? "true" : "false") +
+        ",\"repeat_pc_apply_error_code\":" +
+        (observation.repeat_pc_apply_error_code_available
+            ? std::to_string(observation.repeat_pc_apply_error_code)
+            : std::string("null")) +
+        ",\"pmat_action_attempt_count\":" +
+        std::to_string(observation.pmat_action_attempt_count) +
+        ",\"shifted_operator_action_attempt_count\":" +
+        std::to_string(observation.shifted_operator_action_attempt_count) +
+        ",\"rhs_l2_norm_available\":" +
+        std::string(observation.rhs_l2_norm_available ? "true" : "false") +
+        ",\"rhs_l2_norm\":" +
+        optional_number(observation.rhs_l2_norm_available, observation.rhs_l2_norm) +
+        ",\"pmat_residual_l2_norm_available\":" +
+        std::string(observation.pmat_residual_l2_norm_available ? "true" : "false") +
+        ",\"pmat_residual_l2_norm\":" +
+        optional_number(
+            observation.pmat_residual_l2_norm_available,
+            observation.pmat_residual_l2_norm) +
+        ",\"pmat_relative_residual_available\":" +
+        std::string(observation.pmat_relative_residual_available ? "true" : "false") +
+        ",\"pmat_relative_residual\":" +
+        optional_number(
+            observation.pmat_relative_residual_available,
+            observation.pmat_relative_residual) +
+        ",\"shifted_operator_residual_l2_norm_available\":" +
+        std::string(observation.shifted_operator_residual_l2_norm_available
+            ? "true" : "false") +
+        ",\"shifted_operator_residual_l2_norm\":" +
+        optional_number(
+            observation.shifted_operator_residual_l2_norm_available,
+            observation.shifted_operator_residual_l2_norm) +
+        ",\"shifted_operator_relative_residual_available\":" +
+        std::string(observation.shifted_operator_relative_residual_available
+            ? "true" : "false") +
+        ",\"shifted_operator_relative_residual\":" +
+        optional_number(
+            observation.shifted_operator_relative_residual_available,
+            observation.shifted_operator_relative_residual) +
+        ",\"repeatability_relative_defect_available\":" +
+        std::string(observation.repeatability_relative_defect_available
+            ? "true" : "false") +
+        ",\"repeatability_relative_defect\":" +
+        optional_number(
+            observation.repeatability_relative_defect_available,
+            observation.repeatability_relative_defect) +
+        ",\"candidate_snapshot_available\":" +
+        std::string(observation.candidate_snapshot_available ? "true" : "false") +
+        ",\"candidate_unchanged_after_first_apply_available\":" +
+        std::string(observation.candidate_unchanged_after_first_apply_available
+            ? "true" : "false") +
+        ",\"candidate_unchanged_after_first_apply\":" +
+        optional_bool(
+            observation.candidate_unchanged_after_first_apply_available,
+            observation.candidate_unchanged_after_first_apply) +
+        ",\"candidate_unchanged_after_repeat_apply_available\":" +
+        std::string(observation.candidate_unchanged_after_repeat_apply_available
+            ? "true" : "false") +
+        ",\"candidate_unchanged_after_repeat_apply\":" +
+        optional_bool(
+            observation.candidate_unchanged_after_repeat_apply_available,
+            observation.candidate_unchanged_after_repeat_apply) +
+        ",\"production_phi_rhs_unchanged_after_observation_available\":" +
+        std::string(
+            observation.production_phi_rhs_unchanged_after_observation_available
+                ? "true" : "false") +
+        ",\"production_phi_rhs_unchanged_after_observation\":" +
+        optional_bool(
+            observation.production_phi_rhs_unchanged_after_observation_available,
+            observation.production_phi_rhs_unchanged_after_observation) +
+        ",\"production_phi_solution_unchanged_after_observation_available\":" +
+        std::string(
+            observation.production_phi_solution_unchanged_after_observation_available
+                ? "true" : "false") +
+        ",\"production_phi_solution_unchanged_after_observation\":" +
+        optional_bool(
+            observation.
+                production_phi_solution_unchanged_after_observation_available,
+            observation.
+                production_phi_solution_unchanged_after_observation) +
+        ",\"mat_shift_nonzero_solution_defect_available\":" +
+        std::string(observation.mat_shift_nonzero_solution_defect_available
+            ? "true" : "false") +
+        ",\"mat_shift_nonzero_solution_relative_defect\":" +
+        optional_number(
+            observation.mat_shift_nonzero_solution_defect_available,
+            observation.mat_shift_nonzero_solution_relative_defect) +
+        ",\"mat_shift_none_solution_defect_available\":" +
+        std::string(observation.mat_shift_none_solution_defect_available
+            ? "true" : "false") +
+        ",\"mat_shift_none_solution_relative_defect\":" +
+        optional_number(
+            observation.mat_shift_none_solution_defect_available,
+            observation.mat_shift_none_solution_relative_defect) +
+        ",\"first_error_code_available\":" +
+        std::string(observation.first_error_code_available ? "true" : "false") +
+        ",\"first_error_code\":" +
+        (observation.first_error_code_available
+            ? std::to_string(observation.first_error_code)
+            : std::string("null")) +
+        "}";
+    return json;
+}
+
 std::string candidate_operator_diagnostic_json(
     const FloquetShiftedKspFailureProbe::CandidateOperatorDiagnostic &diagnostic)
 {
@@ -346,6 +554,8 @@ std::string candidate_operator_diagnostic_json(
             : std::string("null")) +
         ",\"preconditioner_normalization_scale\":" +
         format_double(diagnostic.preconditioner_normalization_scale) +
+        ",\"live_pc_observation\":" +
+        live_pc_observation_json(diagnostic.live_pc_observation) +
         ",\"shifted_lu_policy_comparison\":" +
         shifted_lu_policy_comparison_json(diagnostic.shifted_lu_policy_comparison) +
         ",\"measurement_failure_count\":" +

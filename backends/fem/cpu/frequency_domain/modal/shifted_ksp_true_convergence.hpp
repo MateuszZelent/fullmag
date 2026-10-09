@@ -18,6 +18,7 @@ using FloquetCandidateOperatorDiagnosticCapture = PetscErrorCode (*)(
     void *user_context,
     PetscInt iteration,
     std::uint64_t callback_ordinal,
+    KSP live_ksp,
     Mat shifted_operator,
     Vec shifted_rhs,
     Vec candidate_solution,
@@ -86,6 +87,29 @@ run_floquet_candidate_diagnostic_capture_transaction(
     result.pop_error = pop();
     result.fatal_error = result.pop_error;
     return result;
+}
+
+inline PetscErrorCode floquet_live_pc_capture_fatal_error(
+    const FloquetCandidateDiagnosticCaptureTransaction &transaction) noexcept
+{
+    if (transaction.push_error != PETSC_SUCCESS) {
+        return transaction.push_error;
+    }
+    if (transaction.capture_error != PETSC_SUCCESS) {
+        return transaction.capture_error;
+    }
+    return transaction.pop_error;
+}
+
+constexpr bool floquet_live_pc_observation_inputs_available(
+    bool pc_available,
+    bool pmat_available,
+    bool rhs_available,
+    bool candidate_snapshot_available,
+    bool workspace_available) noexcept
+{
+    return pc_available && pmat_available && rhs_available &&
+        candidate_snapshot_available && workspace_available;
 }
 
 constexpr bool floquet_candidate_shifted_lu_workspace_ready(
@@ -615,6 +639,7 @@ inline PetscErrorCode floquet_shifted_true_convergence_test(
             context->candidate_operator_diagnostic_context,
             iteration,
             context->last_true_probe_callback_ordinal,
+            ksp,
             operator_matrix,
             rhs,
             context->candidate_solution,

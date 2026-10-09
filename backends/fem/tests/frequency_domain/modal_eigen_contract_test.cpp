@@ -12,6 +12,7 @@
 #include "frequency_domain/canonical_digest.hpp"
 #include "context.hpp"
 #include "core/fem_mesh.hpp"
+#include "core/petsc_slepc_runtime.hpp"
 #include "cpu/mfem/interactions/demag_poisson_lifecycle.hpp"
 #include "cpu/mfem/interactions/demag_poisson_solve.hpp"
 #include "cpu/mfem/runtime/mfem_mesh_builder.hpp"
@@ -31,6 +32,7 @@
 #include <iterator>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <string_view>
 #include <type_traits>
@@ -112,6 +114,8 @@ struct ScopedFloquetDiagnosticEnvironment {
     SavedEnvironmentValue dense_oracle{"FULLMAG_FLOQUET_DENSE_ORACLE"};
     SavedEnvironmentValue schur_action{
         "FULLMAG_FLOQUET_SCHUR_ACTION_DIAGNOSTIC"};
+    SavedEnvironmentValue live_pc_fault{
+        "FULLMAG_FLOQUET_LIVE_PC_DIAGNOSTIC_FAULT"};
     bool ready = false;
 
     ScopedFloquetDiagnosticEnvironment()
@@ -119,13 +123,16 @@ struct ScopedFloquetDiagnosticEnvironment {
         ready = set_floquet_diagnostic_environment(
                     dense_oracle.name, "1") == 0 &&
             set_floquet_diagnostic_environment(
-                    schur_action.name, "1") == 0;
+                    schur_action.name, "1") == 0 &&
+            set_floquet_diagnostic_environment(
+                    live_pc_fault.name, "") == 0;
     }
 
     ~ScopedFloquetDiagnosticEnvironment()
     {
         dense_oracle.restore();
         schur_action.restore();
+        live_pc_fault.restore();
     }
 };
 
@@ -6303,7 +6310,8 @@ void modal_nonzero_k_floquet_bloch_payload_with_dynamic_demag_k_is_admitted()
 }
 
 void modal_nonzero_k_floquet_shared_domain_nearest_reports_shifted_ksp_diagnostics(
-    bool count_certificate_only = false)
+    bool count_certificate_only = false,
+    bool fault_quarantine_only = false)
 {
 #if FULLMAG_HAS_MFEM_STACK && FULLMAG_FEM_WITH_SLEPC
     FloquetContourSharedDomainFixture fixture{};
@@ -6348,6 +6356,66 @@ void modal_nonzero_k_floquet_shared_domain_nearest_reports_shifted_ksp_diagnosti
     request.operator_request.operator_diagnostics_json =
         "{\"operator_family\":\"mfem_linearized_llg\","
         "\"payload_kind\":\"certified_shared_domain\"}";
+
+    if (fault_quarantine_only) {
+        const ScopedFloquetDiagnosticEnvironment diagnostic_environment{};
+        SavedEnvironmentValue fault_environment{
+            "FULLMAG_FLOQUET_LIVE_PC_DIAGNOSTIC_FAULT"};
+        const bool fault_ready = diagnostic_environment.ready &&
+            set_floquet_diagnostic_environment(
+                fault_environment.name, "pc_apply") == 0;
+        check(fault_ready,
+              "enable the private live-PC apply fault hook in its fresh process");
+        FullmagFemModalEigenRequest fault_request = request;
+        fault_request.max_linear_iterations = 1;
+        FullmagFemFrequencyDomainResult fault_result =
+            fullmag_fem_modal_eigen_solve(&fault_request);
+        fault_environment.restore();
+        if (!contains(fault_result.diagnostics_json,
+                      "\"pc_apply_fault_injected\":true")) {
+            std::fprintf(
+                stderr,
+                "FAIL: fresh process did not reach the injected live-PC callback; status=%d diagnostics=%s\n",
+                static_cast<int>(fault_result.status),
+                fault_result.diagnostics_json != nullptr
+                    ? fault_result.diagnostics_json
+                    : "<null>");
+        }
+        check(fault_result.status == FULLMAG_FEM_FD_SOLVE_ERROR &&
+                  contains(fault_result.diagnostics_json,
+                           "\"unsupported_reason\":\"floquet_slepc_solve_failed\"") &&
+                  contains(fault_result.diagnostics_json,
+                           "\"live_pc_observation\":{\"schema_version\":\"floquet_live_pc_observation.v1\"") &&
+                  contains(fault_result.diagnostics_json,
+                           "\"pc_apply_fault_injected\":true") &&
+                  contains(fault_result.diagnostics_json,
+                           "\"pc_apply_error_code_available\":true") &&
+                  contains(fault_result.diagnostics_json,
+                           "\"pmat_residual_l2_norm_available\":false,\"pmat_residual_l2_norm\":null") &&
+                  contains(fault_result.diagnostics_json,
+                           "\"shifted_operator_residual_l2_norm_available\":false,\"shifted_operator_residual_l2_norm\":null") &&
+                  contains(fault_result.diagnostics_json,
+                           "\"pc_apply_attempt_count\":1,\"pc_apply_success_count\":0") &&
+                  contains(fault_result.diagnostics_json,
+                           "\"repeat_pc_apply_attempt_count\":0") &&
+                  contains(fault_result.diagnostics_json,
+                           "\"pmat_action_attempt_count\":0,\"shifted_operator_action_attempt_count\":0") &&
+                  contains(fault_result.diagnostics_json,
+                           "\"sample_available\":false") &&
+                  contains(fault_result.result_json, "\"status\":\"solve_error\""),
+              "fresh-process injected PCApply failure stops before residual actions, repeat apply, or candidate admission");
+        fullmag_fem_frequency_domain_result_destroy(&fault_result);
+        bool process_unsafe = false;
+        {
+            std::lock_guard<std::mutex> lock(
+                fullmag::fem::runtime::petsc_slepc_process_mutex());
+            process_unsafe =
+                fullmag::fem::runtime::petsc_slepc_process_is_unsafe_locked();
+        }
+        check(process_unsafe,
+              "the actual hard EPS error marks the canonical PETSc/SLEPc process state unsafe");
+        return;
+    }
 
     if (!count_certificate_only) {
         FullmagFemFrequencyDomainResult result = fullmag_fem_modal_eigen_solve(&request);
@@ -6823,6 +6891,8 @@ void modal_nonzero_k_floquet_shared_domain_nearest_reports_shifted_ksp_diagnosti
         contains(hard_ksp_nearest_result.diagnostics_json,
                  "\"candidate_operator_diagnostic\":{\"schema_version\":\"floquet_candidate_operator_diagnostic.v1\"") &&
         contains(hard_ksp_nearest_result.diagnostics_json,
+                 "\"live_pc_observation\":{\"schema_version\":\"floquet_live_pc_observation.v1\"") &&
+        contains(hard_ksp_nearest_result.diagnostics_json,
                  "\"requested\":true");
     if (!candidate_diagnostic_serialized) {
         std::fprintf(
@@ -6860,6 +6930,64 @@ void modal_nonzero_k_floquet_shared_domain_nearest_reports_shifted_ksp_diagnosti
                  "\"mat_shift_none\":{\"factorization_shift_policy\":\"MAT_SHIFT_NONE\",\"factorization_shift_amount_is_honored_by_policy\":false,\"actual_factorization_perturbation_measured\":false,\"factorization_setup_available\":true,\"factorization_setup_error_code\":0,\"solve_available\":true");
     check(both_shifted_lu_setups_and_solves_available,
           "the real hard-KSP callback retains successful independent setup and solve evidence for both LU policies");
+    check(contains(hard_ksp_nearest_result.diagnostics_json,
+                   "\"shifted_operator_action_source\":\"isolated_copy_of_production_matshell_components\"") &&
+              contains(hard_ksp_nearest_result.diagnostics_json,
+                       "\"pc_type_available\":true,\"pc_type_overflow\":false,\"pc_type\":\"lu\"") &&
+              contains(hard_ksp_nearest_result.diagnostics_json,
+                       "\"pmat_type_available\":true") &&
+              contains(hard_ksp_nearest_result.diagnostics_json,
+                       "\"pc_side_available\":true") &&
+              contains(hard_ksp_nearest_result.diagnostics_json,
+                       "\"pc_pmat_matches_expected_available\":true,\"pc_pmat_matches_expected\":true") &&
+              contains(hard_ksp_nearest_result.diagnostics_json,
+                       "\"candidate_unchanged_after_repeat_apply\":true") &&
+              contains(hard_ksp_nearest_result.diagnostics_json,
+                       "\"production_phi_rhs_unchanged_after_observation_available\":true,\"production_phi_rhs_unchanged_after_observation\":true") &&
+              contains(hard_ksp_nearest_result.diagnostics_json,
+                       "\"production_phi_solution_unchanged_after_observation_available\":true,\"production_phi_solution_unchanged_after_observation\":true") &&
+              contains(hard_ksp_nearest_result.diagnostics_json,
+                       "\"ksp_diagonal_scaling_available\":true") &&
+              contains(hard_ksp_nearest_result.diagnostics_json,
+                       "\"mat_shift_nonzero_solution_defect_available\":true") &&
+              contains(hard_ksp_nearest_result.diagnostics_json,
+                       "\"mat_shift_none_solution_defect_available\":true"),
+          "the hard-KSP JSON consumer retains live PC identity, candidate stability, and both isolated-LU differences");
+    const double live_rhs_norm = extract_json_number(
+        hard_ksp_nearest_result.diagnostics_json,
+        "\"rhs_l2_norm\":",
+        "live_pc_rhs_norm");
+    const double live_pmat_residual = extract_json_number(
+        hard_ksp_nearest_result.diagnostics_json,
+        "\"pmat_residual_l2_norm\":",
+        "live_pc_pmat_residual");
+    const double live_pmat_relative_residual = extract_json_number(
+        hard_ksp_nearest_result.diagnostics_json,
+        "\"pmat_relative_residual\":",
+        "live_pc_pmat_relative_residual");
+    const double live_shifted_residual = extract_json_number(
+        hard_ksp_nearest_result.diagnostics_json,
+        "\"shifted_operator_residual_l2_norm\":",
+        "live_pc_shifted_residual");
+    const double live_shifted_relative_residual = extract_json_number(
+        hard_ksp_nearest_result.diagnostics_json,
+        "\"shifted_operator_relative_residual\":",
+        "live_pc_shifted_relative_residual");
+    const double live_rhs_denominator = std::max(
+        live_rhs_norm, std::numeric_limits<double>::min());
+    check(std::isfinite(live_rhs_norm) && std::isfinite(live_pmat_residual) &&
+              std::isfinite(live_pmat_relative_residual) &&
+              std::abs(live_pmat_relative_residual -
+                       live_pmat_residual / live_rhs_denominator) <=
+                  16.0 * std::numeric_limits<double>::epsilon() *
+                      std::max(1.0, std::abs(live_pmat_relative_residual)) &&
+              std::isfinite(live_shifted_residual) &&
+              std::isfinite(live_shifted_relative_residual) &&
+              std::abs(live_shifted_relative_residual -
+                       live_shifted_residual / live_rhs_denominator) <=
+                  16.0 * std::numeric_limits<double>::epsilon() *
+                      std::max(1.0, std::abs(live_shifted_relative_residual)),
+          "serialized live-Pmat and normalized shifted-operator residual ratios use the same actual KSP RHS norm");
     check(contains(hard_ksp_nearest_result.diagnostics_json,
                    "\"rhs_source\":\"live_shifted_ksp_get_rhs\"") &&
               contains(hard_ksp_nearest_result.diagnostics_json,
@@ -6928,10 +7056,12 @@ void modal_nonzero_k_floquet_shared_domain_nearest_reports_shifted_ksp_diagnosti
                        "\"window_completeness\":\"solver_error\""),
           "window failure probe does not promote the failed solve to completion");
     fullmag_fem_frequency_domain_result_destroy(&hard_ksp_window_result);
+
+
 #else
-    if (count_certificate_only) {
+    if (count_certificate_only || fault_quarantine_only) {
         std::fprintf(stderr,
-                     "FAIL: --floquet-count-certificate requires MFEM and SLEPc");
+                     "FAIL: isolated Floquet contract mode requires MFEM and SLEPc");
         std::exit(2);
     }
 #endif
@@ -7298,6 +7428,22 @@ int main(int argc, char **argv)
             modal_nonzero_k_floquet_shared_domain_nearest_reports_shifted_ksp_diagnostics(true);
             return 0;
         }
+        if (argc == 2 &&
+            std::strcmp(
+                argv[1],
+                "--floquet-live-pc-apply-fault-quarantine-probe") == 0) {
+#if FULLMAG_HAS_MFEM_STACK && FULLMAG_FEM_WITH_SLEPC
+            modal_nonzero_k_floquet_shared_domain_nearest_reports_shifted_ksp_diagnostics(
+                false, true);
+            std::printf("PASS: Floquet live PC apply fault quarantine contract\n");
+            return 0;
+#else
+            std::fprintf(
+                stderr,
+                "FAIL: --floquet-live-pc-apply-fault-quarantine-probe requires MFEM and SLEPc\n");
+            return 3;
+#endif
+        }
         std::fprintf(stderr, "FAIL: unknown modal eigen contract test argument\n");
         return 2;
     }
@@ -7352,10 +7498,10 @@ int main(int argc, char **argv)
     modal_nonzero_k_floquet_bloch_payload_rejects_gated_operator_terms();
     modal_nonzero_k_floquet_bloch_payload_with_demag_is_unavailable();
     modal_nonzero_k_floquet_bloch_payload_with_dynamic_demag_k_is_admitted();
-    modal_nonzero_k_floquet_shared_domain_nearest_reports_shifted_ksp_diagnostics();
     modal_nonzero_k_floquet_dynamic_demag_k_rejects_malformed_payload();
     modal_poisson_airbox_tail_payload_resolves_augmented_gauge_schur_solver();
     modal_poisson_airbox_tail_shift_invert_action_writes_artifact();
     modal_poisson_airbox_tail_gpu_shift_invert_action_writes_artifact();
+    modal_nonzero_k_floquet_shared_domain_nearest_reports_shifted_ksp_diagnostics();
     return 0;
 }

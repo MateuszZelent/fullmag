@@ -171,6 +171,82 @@ struct FloquetShiftedKspFailureProbe {
             ShiftedLuPolicyOutcome mat_shift_nonzero{};
             ShiftedLuPolicyOutcome mat_shift_none{};
         };
+        struct LivePcObservation {
+            bool requested = false;
+            bool available = false;
+            const char *status = "unavailable";
+            const char *reason = "live_ksp_not_observed";
+            bool pc_available = false;
+            bool pc_type_available = false;
+            bool pc_type_overflow = false;
+            char pc_type[128] = {};
+            bool pmat_type_available = false;
+            bool pmat_type_overflow = false;
+            char pmat_type[128] = {};
+            bool pc_side_available = false;
+            int pc_side = -1;
+            bool ksp_diagonal_scaling_available = false;
+            bool ksp_diagonal_scaling_enabled = false;
+            bool pc_pmat_available = false;
+            bool preconditioner_normalization_scale_available = false;
+            double preconditioner_normalization_scale =
+                std::numeric_limits<double>::quiet_NaN();
+            bool ksp_pmat_available = false;
+            bool pc_and_ksp_pmat_identity_available = false;
+            bool pc_and_ksp_pmat_identical = false;
+            bool pc_pmat_matches_expected_available = false;
+            bool pc_pmat_matches_expected = false;
+            bool expected_pmat_action_defect_available = false;
+            double expected_pmat_action_relative_defect =
+                std::numeric_limits<double>::quiet_NaN();
+            std::uint64_t pc_apply_attempt_count = 0;
+            std::uint64_t pc_apply_success_count = 0;
+            bool pc_apply_error_code_available = false;
+            int pc_apply_error_code = 0;
+            bool pc_apply_fault_injected = false;
+            std::uint64_t repeat_pc_apply_attempt_count = 0;
+            std::uint64_t repeat_pc_apply_success_count = 0;
+            bool repeat_pc_apply_error_code_available = false;
+            int repeat_pc_apply_error_code = 0;
+            std::uint64_t pmat_action_attempt_count = 0;
+            std::uint64_t shifted_operator_action_attempt_count = 0;
+            bool rhs_l2_norm_available = false;
+            double rhs_l2_norm =
+                std::numeric_limits<double>::quiet_NaN();
+            bool pmat_residual_l2_norm_available = false;
+            double pmat_residual_l2_norm =
+                std::numeric_limits<double>::quiet_NaN();
+            bool pmat_relative_residual_available = false;
+            double pmat_relative_residual =
+                std::numeric_limits<double>::quiet_NaN();
+            bool shifted_operator_residual_l2_norm_available = false;
+            double shifted_operator_residual_l2_norm =
+                std::numeric_limits<double>::quiet_NaN();
+            bool shifted_operator_relative_residual_available = false;
+            double shifted_operator_relative_residual =
+                std::numeric_limits<double>::quiet_NaN();
+            bool repeatability_relative_defect_available = false;
+            double repeatability_relative_defect =
+                std::numeric_limits<double>::quiet_NaN();
+            bool candidate_snapshot_available = false;
+            bool candidate_unchanged_after_first_apply_available = false;
+            bool candidate_unchanged_after_first_apply = false;
+            bool candidate_unchanged_after_repeat_apply_available = false;
+            bool candidate_unchanged_after_repeat_apply = false;
+            bool production_phi_rhs_unchanged_after_observation_available = false;
+            bool production_phi_rhs_unchanged_after_observation = false;
+            bool production_phi_solution_unchanged_after_observation_available =
+                false;
+            bool production_phi_solution_unchanged_after_observation = false;
+            bool mat_shift_nonzero_solution_defect_available = false;
+            double mat_shift_nonzero_solution_relative_defect =
+                std::numeric_limits<double>::quiet_NaN();
+            bool mat_shift_none_solution_defect_available = false;
+            double mat_shift_none_solution_relative_defect =
+                std::numeric_limits<double>::quiet_NaN();
+            bool first_error_code_available = false;
+            int first_error_code = 0;
+        };
         bool requested = false;
         bool workspace_available = false;
         bool sample_available = false;
@@ -201,6 +277,7 @@ struct FloquetShiftedKspFailureProbe {
         double exact_shifted_matrix_relative_defect =
             std::numeric_limits<double>::quiet_NaN();
         ShiftedLuPolicyComparison shifted_lu_policy_comparison{};
+        LivePcObservation live_pc_observation{};
         double preconditioner_normalization_scale =
             std::numeric_limits<double>::quiet_NaN();
         std::uint64_t measurement_failure_count = 0;
