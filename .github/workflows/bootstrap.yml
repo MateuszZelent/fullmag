@@ -157,6 +157,10 @@ jobs:
           cargo test -p fullmag-api --bin fullmag-api analysis_field_vector_binary
 
       - name: Run frequency-domain artifact ownership contracts
+        env:
+          # Canonical scene ACK contracts traverse a full SceneDocument, as do
+          # the other router contracts using this existing worker stack size.
+          RUST_MIN_STACK: 8388608
         run: |
           cargo test -p fullmag-api --bin fullmag-api field_sweep_items_keep_their_owner_identity_and_encode_resource_paths
           cargo test -p fullmag-api --bin fullmag-api spectrum_v3_items_project_durable_field_identity_without_mutating_payload
