@@ -908,6 +908,18 @@ fn validate_scene_postprocessing_definitions(
                 definition.node_kind, definition.module_id
             )));
         }
+        if !definition.settings.is_null() && !definition.settings.is_object() {
+            let settings_kind = match &definition.settings {
+                Value::Array(_) => "array",
+                Value::String(_) => "string",
+                Value::Number(_) => "number",
+                Value::Bool(_) => "boolean",
+                Value::Null | Value::Object(_) => unreachable!("settings kind checked above"),
+            };
+            return Err(SceneDocumentValidationError::new(format!(
+                "{context}.settings must be an object or null, got {settings_kind}"
+            )));
+        }
     }
     for (index, definition) in definitions.iter().enumerate() {
         let mut parent = definition.parent_definition_id.as_deref();
@@ -3431,6 +3443,134 @@ mod tests {
             .expect("geometry may be authored before material and texture assignment");
         validate_scene_document(&scene)
             .expect_err("execution validation must still require material and texture");
+    }
+
+    #[test]
+    fn postprocessing_settings_accept_objects_and_null_defaults() {
+        let definition = serde_json::json!({
+            "definition_id": "pin-1",
+            "module_id": "analysis.dispersion",
+            "module_version": "0.1.0",
+            "definition_schema": "analysis.dispersion.mode_visualization.v1",
+            "node_kind": "analysis.dispersion.mode_visualization",
+            "label": "Mode 1",
+            "data_ref": {
+                "run_id": "run-1",
+                "dataset_id": "dataset-1",
+                "dataset_revision": "revision-1"
+            }
+        });
+        let definition_with_settings = |settings: Value| {
+            let mut value = definition.clone();
+            value["settings"] = settings;
+            value
+        };
+
+        for settings in [
+            serde_json::json!({}),
+            serde_json::json!({ "placement": "beside", "metadata": { "visible": true } }),
+            Value::Null,
+        ] {
+            let mut scene_value = serde_json::json!({
+                "version": "scene.v2",
+                "analysis": { "postprocessing_definitions": [] }
+            });
+            scene_value["analysis"]["postprocessing_definitions"] =
+                serde_json::json!([definition_with_settings(settings.clone())]);
+            let scene: SceneDocument = serde_json::from_value(scene_value)
+                .expect("object and null settings should deserialize");
+
+            validate_scene_document_for_authoring(&scene)
+                .expect("object and null settings should satisfy the authoring contract");
+            assert_eq!(scene.analysis.postprocessing_definitions[0].settings, settings);
+
+            let serialized = serde_json::to_value(&scene).expect("scene should serialize");
+            if settings.is_null() {
+                assert!(serialized["analysis"]["postprocessing_definitions"][0]
+                    .get("settings")
+                    .is_none());
+            } else {
+                assert_eq!(
+                    serialized["analysis"]["postprocessing_definitions"][0]["settings"],
+                    settings
+                );
+            }
+            let restored: SceneDocument = serde_json::from_value(serialized)
+                .expect("serialized settings should round-trip");
+            assert_eq!(restored.analysis.postprocessing_definitions[0].settings, settings);
+        }
+
+        let mut missing_settings = definition.clone();
+        missing_settings["definition_id"] = serde_json::json!("pin-default");
+        let scene: SceneDocument = serde_json::from_value(serde_json::json!({
+            "version": "scene.v2",
+            "analysis": { "postprocessing_definitions": [missing_settings] }
+        }))
+        .expect("omitted settings should use the null default");
+        assert!(scene.analysis.postprocessing_definitions[0].settings.is_null());
+        validate_scene_document_for_authoring(&scene)
+            .expect("the omitted settings default should remain valid");
+        let serialized = serde_json::to_value(&scene).expect("default scene should serialize");
+        assert!(serialized["analysis"]["postprocessing_definitions"][0]
+            .get("settings")
+            .is_none());
+        let restored: SceneDocument = serde_json::from_value(serialized)
+            .expect("omitted default settings should round-trip");
+        assert!(restored.analysis.postprocessing_definitions[0]
+            .settings
+            .is_null());
+    }
+
+    #[test]
+    fn postprocessing_settings_reject_non_objects_without_mutating_input() {
+        let base_definition = serde_json::json!({
+            "definition_id": "pin-invalid",
+            "module_id": "analysis.dispersion",
+            "module_version": "0.1.0",
+            "definition_schema": "analysis.dispersion.mode_visualization.v1",
+            "node_kind": "analysis.dispersion.mode_visualization",
+            "label": "Mode 1",
+            "data_ref": {
+                "run_id": "run-1",
+                "dataset_id": "dataset-1",
+                "dataset_revision": "revision-1"
+            }
+        });
+
+        for (settings, expected_kind) in [
+            (serde_json::json!(["placement", "beside"]), "array"),
+            (serde_json::json!("beside"), "string"),
+            (serde_json::json!(3), "number"),
+            (serde_json::json!(true), "boolean"),
+        ] {
+            let mut definition = base_definition.clone();
+            definition["settings"] = settings.clone();
+            let input = serde_json::json!({
+                "version": "scene.v2",
+                "analysis": { "postprocessing_definitions": [definition] }
+            });
+            let scene: SceneDocument = serde_json::from_value(input.clone())
+                .expect("opaque settings values should remain available for validation");
+            let before = scene.clone();
+
+            let error = validate_scene_document_for_authoring(&scene)
+                .expect_err("non-object settings must be rejected");
+
+            assert!(
+                error.message.contains(
+                    "analysis.postprocessing_definitions[0].settings"
+                ),
+                "{error}"
+            );
+            assert!(error.message.contains(expected_kind), "{error}");
+            assert_eq!(scene, before, "validation must not mutate the scene");
+            assert_eq!(
+                serde_json::to_value(&scene).expect("scene should remain serializable")
+                    ["analysis"]["postprocessing_definitions"][0]["settings"],
+                settings,
+                "invalid settings should not be silently normalized"
+            );
+        }
     }
 
     #[test]

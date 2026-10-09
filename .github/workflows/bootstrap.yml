@@ -171,6 +171,9 @@ jobs:
       - name: Run scene periodic boundary intent contracts
         run: cargo test -p fullmag-authoring scene_pbc --lib
 
+      - name: Run postprocessing settings preservation contracts
+        run: cargo test -p fullmag-authoring postprocessing_settings_ --lib
+
       - name: Run scene PBC Rust-Python synchronization regression
         env:
           FULLMAG_REPO_ROOT: ${{ github.workspace }}
