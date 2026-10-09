@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
-from typing import Literal, Mapping
+from typing import Literal, Mapping, Sequence
 
 from fullmag._validation import TypedValidationError, parse_finite_float
 from fullmag.model.discretization import FEM, PerObjectMeshRecipe
@@ -138,6 +138,229 @@ def _geometry_name_aliases(name: str) -> tuple[str, ...]:
     return tuple(dict.fromkeys(aliases))
 
 
+_MESH_GEOMETRY_POLICY_KEYS = frozenset(
+    {
+        "bulk_hmax",
+        "hmax",
+        "maximum_element_size",
+        "minimum_element_size",
+        "hmin",
+        "surface_maximum_element_size",
+        "surface_hmax",
+        "interface_hmax",
+        "interface_thickness",
+        "transition_distance",
+        "transition_growth",
+        "edge_maximum_element_size",
+        "edge_hmax",
+        "edge_thickness",
+        "edge_transition_distance",
+        "corner_maximum_element_size",
+        "corner_hmax",
+        "corner_extent",
+        "corner_transition_distance",
+        "size_fields",
+        "mesh_strategy",
+        "through_thickness_elements",
+        "through_thickness_distribution",
+        "through_thickness_element_ratio",
+        "through_thickness_symmetric",
+        "sweep_face_meshing",
+        "sweep_direction",
+        "boundary_layer_count",
+        "boundary_layer_thickness",
+        "boundary_layer_stretching",
+        "boundary_layer_target_surface_tags",
+        "boundary_layer_target_curve_tags",
+        "boundary_layer_target_surface_selectors",
+        "boundary_layer_target_curve_selectors",
+    }
+)
+
+
+def _geometry_owner_alias_index(
+    geometries: Sequence[Geometry],
+    owner_geometry_names: Sequence[str] | None = None,
+) -> tuple[set[str], dict[str, set[str]], dict[str, Geometry]]:
+    """Resolve aliases to authoritative names, preferring exact name matches."""
+    owner_names = (
+        list(owner_geometry_names)
+        if owner_geometry_names is not None
+        else [geometry.geometry_name for geometry in geometries]
+    )
+    alias_candidates: dict[str, set[str]] = {}
+    seen_names: set[str] = set()
+    for raw_name in owner_names:
+        if not isinstance(raw_name, str) or not raw_name.strip():
+            raise ValueError("mesh_geometry_owner_binding_missing: geometry name is empty")
+        owner_name = raw_name.strip()
+        if owner_name in seen_names:
+            raise ValueError(
+                "mesh_geometry_owner_binding_ambiguous: "
+                f"duplicate geometry name '{owner_name}'"
+            )
+        seen_names.add(owner_name)
+        for alias in _geometry_name_aliases(owner_name):
+            alias_candidates.setdefault(alias, set()).add(owner_name)
+
+    current_geometries: dict[str, Geometry] = {}
+    for geometry in geometries:
+        owner_name = _resolve_geometry_owner_name(
+            geometry.geometry_name,
+            owner_names=seen_names,
+            alias_candidates=alias_candidates,
+        )
+        if owner_name is None:
+            raise ValueError(
+                "mesh_geometry_owner_binding_missing: "
+                f"current geometry='{geometry.geometry_name}' is absent from the owner roster"
+            )
+        if owner_name in current_geometries:
+            raise ValueError(
+                "mesh_geometry_owner_binding_ambiguous: "
+                f"multiple mesh geometries resolve to owner '{owner_name}'"
+            )
+        current_geometries[owner_name] = geometry
+    return seen_names, alias_candidates, current_geometries
+
+
+def _resolve_geometry_owner_name(
+    owner: object,
+    *,
+    owner_names: set[str],
+    alias_candidates: Mapping[str, set[str]],
+) -> str | None:
+    if not isinstance(owner, str) or not owner.strip():
+        return None
+    resolved = owner.strip()
+    if resolved in owner_names:
+        return resolved
+    candidates = alias_candidates.get(resolved, set())
+    if len(candidates) > 1:
+        raise ValueError(
+            "mesh_geometry_owner_binding_ambiguous: "
+            f"owner='{resolved}' matches {sorted(candidates)}"
+        )
+    return next(iter(candidates), None)
+
+
+def _canonicalize_geometry_owner_mapping(
+    mapping: Mapping[str, object] | None,
+    *,
+    owner_names: set[str],
+    alias_candidates: Mapping[str, set[str]],
+    owner_label: str,
+    missing_error_code: str = "mesh_geometry_owner_binding_missing",
+) -> dict[str, object]:
+    """Bind a name-keyed policy map to owners, preferring exact keys.
+
+    When a legacy alias and an exact owner key both resolve to one owner, the
+    exact key wins regardless of mapping insertion order. Among aliases,
+    first-entry order is retained.
+    """
+    if not mapping:
+        return {}
+    result: dict[str, object] = {}
+    exact_keys: set[str] = set()
+    for raw_owner, value in mapping.items():
+        owner = _resolve_geometry_owner_name(
+            raw_owner,
+            owner_names=owner_names,
+            alias_candidates=alias_candidates,
+        )
+        if owner is None:
+            raise ValueError(
+                f"{missing_error_code}: "
+                f"{owner_label} owner='{raw_owner}' has no matching geometry"
+            )
+        is_exact = isinstance(raw_owner, str) and raw_owner.strip() == owner
+        if owner not in result or (is_exact and owner not in exact_keys):
+            result[owner] = value
+            if is_exact:
+                exact_keys.add(owner)
+    return result
+
+
+def _scope_per_geometry_entries(
+    per_geometry: object,
+    *,
+    geometries: Sequence[Geometry],
+    owner_geometry_names: Sequence[str] | None = None,
+    missing_error_code: str = "mesh_size_field_owner_binding_missing",
+) -> list[tuple[str, Mapping[str, object]]]:
+    """Return ordered per-geometry entries bound to current owners.
+
+    Valid policies for other names in a supplied full owner roster are kept
+    out of a single-object mesh. Original list order and duplicate entries are
+    retained for callers that combine or compare values.
+    """
+    owner_names, alias_candidates, current_geometries = _geometry_owner_alias_index(
+        geometries,
+        owner_geometry_names,
+    )
+    if not isinstance(per_geometry, list):
+        return []
+
+    result: list[tuple[str, Mapping[str, object]]] = []
+    for entry in per_geometry:
+        if not isinstance(entry, Mapping):
+            continue
+        raw_owner = entry.get("geometry") or entry.get("geometry_name")
+        has_policy = any(
+            key in _MESH_GEOMETRY_POLICY_KEYS
+            and value is not None
+            and not (key == "size_fields" and value == [])
+            for key, value in entry.items()
+        )
+        if not isinstance(raw_owner, str) or not raw_owner.strip():
+            if has_policy:
+                raise ValueError(
+                    f"{missing_error_code}: per_geometry owner='{raw_owner}' "
+                    "has no matching mesh geometry"
+                )
+            continue
+        try:
+            owner = _resolve_geometry_owner_name(
+                raw_owner,
+                owner_names=owner_names,
+                alias_candidates=alias_candidates,
+            )
+        except ValueError:
+            if has_policy:
+                raise
+            continue
+        if owner is None:
+            if has_policy:
+                raise ValueError(
+                    f"{missing_error_code}: per_geometry owner='{raw_owner}' "
+                    "has no matching mesh geometry"
+                )
+            continue
+        if owner not in current_geometries:
+            continue
+        result.append((owner, entry))
+    return result
+
+
+def _resolve_per_geometry_overrides(
+    per_geometry: object,
+    *,
+    geometries: Sequence[Geometry],
+    owner_geometry_names: Sequence[str] | None = None,
+    missing_error_code: str = "mesh_size_field_owner_binding_missing",
+) -> dict[str, Mapping[str, object]]:
+    """Resolve entries to current owners with first-entry-wins semantics."""
+    result: dict[str, Mapping[str, object]] = {}
+    for owner, entry in _scope_per_geometry_entries(
+        per_geometry,
+        geometries=geometries,
+        owner_geometry_names=owner_geometry_names,
+        missing_error_code=missing_error_code,
+    ):
+        result.setdefault(owner, entry)
+    return result
+
+
 def _lookup_geometry_name_alias(
     mapping: Mapping[str, object] | None,
     geometry_name: str,
@@ -179,6 +402,7 @@ def resolve_object_preview_target(
     *,
     mesh_workflow: Mapping[str, object] | None = None,
     per_object_recipes: dict[str, PerObjectMeshRecipe] | None = None,
+    owner_geometry_names: Sequence[str] | None = None,
 ) -> ResolvedObjectPreviewTarget:
     """Resolve the effective hmax/order for a single-object preview mesh.
 
@@ -191,6 +415,20 @@ def resolve_object_preview_target(
     hmax = float(hints.hmax)
     order = int(hints.order)
     source = "fem_default"
+    owner_names, alias_candidates, current_geometries = _geometry_owner_alias_index(
+        [geometry],
+        owner_geometry_names,
+    )
+    geometry_owner = _resolve_geometry_owner_name(
+        geometry.geometry_name,
+        owner_names=owner_names,
+        alias_candidates=alias_candidates,
+    )
+    if geometry_owner is None or geometry_owner not in current_geometries:
+        raise ValueError(
+            "mesh_geometry_owner_binding_missing: "
+            f"current geometry='{geometry.geometry_name}' has no owner"
+        )
 
     # Level 3: mesh_workflow.default_mesh[hmax]
     if isinstance(mesh_workflow, Mapping):
@@ -203,27 +441,30 @@ def resolve_object_preview_target(
 
     # Level 2: mesh_workflow.per_geometry[hmax]
     if isinstance(mesh_workflow, Mapping):
-        per_geometry = mesh_workflow.get("per_geometry")
-        if isinstance(per_geometry, list):
-            override_by_name: dict[str, float] = {}
-            for entry in per_geometry:
-                if not isinstance(entry, Mapping):
-                    continue
-                raw_name = entry.get("geometry") or entry.get("geometry_name")
-                if not isinstance(raw_name, str) or not raw_name.strip():
-                    continue
-                override_hmax = _coerce_positive_float(entry.get("hmax"))
-                if override_hmax is not None:
-                    for alias in _geometry_name_aliases(raw_name):
-                        override_by_name.setdefault(alias, override_hmax)
-            resolved = _lookup_geometry_name_alias(override_by_name, geometry.geometry_name)
-            if isinstance(resolved, (int, float)):
-                hmax = float(resolved)
-                source = "workflow_override"
+        per_geometry_by_owner = _resolve_per_geometry_overrides(
+            mesh_workflow.get("per_geometry"),
+            geometries=[geometry],
+            owner_geometry_names=owner_geometry_names,
+        )
+        entry = per_geometry_by_owner.get(geometry_owner)
+        override_hmax = (
+            _coerce_positive_float(entry.get("hmax"))
+            if isinstance(entry, Mapping)
+            else None
+        )
+        if override_hmax is not None:
+            hmax = override_hmax
+            source = "workflow_override"
 
     # Level 1: PerObjectMeshRecipe.hmax (highest priority)
     if per_object_recipes:
-        recipe = _lookup_geometry_name_alias(per_object_recipes, geometry.geometry_name)
+        recipe_by_owner = _canonicalize_geometry_owner_mapping(
+            per_object_recipes,
+            owner_names=owner_names,
+            alias_candidates=alias_candidates,
+            owner_label="per-object recipe",
+        )
+        recipe = recipe_by_owner.get(geometry_owner)
         if isinstance(recipe, PerObjectMeshRecipe):
             recipe_hmax = (
                 recipe.maximum_element_size
@@ -267,35 +508,44 @@ def _resolve_requested_partition_hmaxs(
         if isinstance(default_mesh, Mapping):
             default_object_hmax = _coerce_positive_float(default_mesh.get("hmax"))
 
-    override_by_name: dict[str, float] = {}
+    owner_names, alias_candidates, current_geometries = _geometry_owner_alias_index(
+        geometries
+    )
+    per_geometry_by_owner: dict[str, Mapping[str, object]] = {}
     if isinstance(mesh_workflow, Mapping):
-        per_geometry = mesh_workflow.get("per_geometry")
-        if isinstance(per_geometry, list):
-            for entry in per_geometry:
-                if not isinstance(entry, Mapping):
-                    continue
-                raw_name = entry.get("geometry") or entry.get("geometry_name")
-                if not isinstance(raw_name, str) or not raw_name.strip():
-                    continue
-                override_hmax = _coerce_positive_float(entry.get("hmax"))
-                if override_hmax is not None:
-                    for alias in _geometry_name_aliases(raw_name):
-                        override_by_name.setdefault(alias, override_hmax)
+        per_geometry_by_owner = _resolve_per_geometry_overrides(
+            mesh_workflow.get("per_geometry"),
+            geometries=geometries,
+        )
 
-    if per_object_recipes:
-        for geometry_name, recipe in per_object_recipes.items():
+    recipe_by_owner = _canonicalize_geometry_owner_mapping(
+        per_object_recipes,
+        owner_names=owner_names,
+        alias_candidates=alias_candidates,
+        owner_label="per-object recipe",
+    )
+
+    object_hmax_by_geometry: dict[str, float | None] = {}
+    for geometry in geometries:
+        geometry_owner = _resolve_geometry_owner_name(
+            geometry.geometry_name,
+            owner_names=owner_names,
+            alias_candidates=alias_candidates,
+        )
+        per_geometry_entry = per_geometry_by_owner.get(geometry_owner)
+        recipe = recipe_by_owner.get(geometry_owner)
+        recipe_hmax = None
+        if isinstance(recipe, PerObjectMeshRecipe):
             recipe_hmax = (
                 recipe.maximum_element_size
                 if recipe.maximum_element_size is not None
                 else recipe.hmax
             )
-            if recipe_hmax is not None and float(recipe_hmax) > 0.0:
-                for alias in _geometry_name_aliases(geometry_name):
-                    override_by_name[alias] = float(recipe_hmax)
-
-    object_hmax_by_geometry: dict[str, float | None] = {}
-    for geometry in geometries:
-        requested = _lookup_geometry_name_alias(override_by_name, geometry.geometry_name)
+        requested = None
+        if recipe_hmax is not None and float(recipe_hmax) > 0.0:
+            requested = float(recipe_hmax)
+        elif isinstance(per_geometry_entry, Mapping):
+            requested = _coerce_positive_float(per_geometry_entry.get("hmax"))
         if requested is None:
             requested = default_object_hmax
         if requested is None:
@@ -335,26 +585,37 @@ def resolve_shared_domain_targets(
 
     default_hmax = float(hints.hmax) if hints.hmax is not None else None
 
-    workflow_by_name: dict[str, Mapping[str, object]] = {}
+    owner_names, alias_candidates, current_geometries = _geometry_owner_alias_index(
+        geometries
+    )
+    workflow_by_owner: dict[str, Mapping[str, object]] = {}
     if isinstance(mesh_workflow, Mapping):
-        per_geometry = mesh_workflow.get("per_geometry")
-        if isinstance(per_geometry, list):
-            for entry in per_geometry:
-                if not isinstance(entry, Mapping):
-                    continue
-                raw_name = entry.get("geometry") or entry.get("geometry_name")
-                if isinstance(raw_name, str) and raw_name.strip():
-                    for alias in _geometry_name_aliases(raw_name):
-                        workflow_by_name.setdefault(alias, entry)
+        workflow_by_owner = _resolve_per_geometry_overrides(
+            mesh_workflow.get("per_geometry"),
+            geometries=geometries,
+        )
+
+    recipe_by_owner = _canonicalize_geometry_owner_mapping(
+        per_object_recipes,
+        owner_names=owner_names,
+        alias_candidates=alias_candidates,
+        owner_label="per-object recipe",
+    )
 
     per_object: dict[str, ResolvedSharedObjectTarget] = {}
     for geometry in geometries:
-        workflow_entry = _lookup_geometry_name_alias(workflow_by_name, geometry.geometry_name)
-        recipe = (
-            _lookup_geometry_name_alias(per_object_recipes, geometry.geometry_name)
-            if per_object_recipes
-            else None
+        geometry_owner = _resolve_geometry_owner_name(
+            geometry.geometry_name,
+            owner_names=owner_names,
+            alias_candidates=alias_candidates,
         )
+        if geometry_owner is None or geometry_owner not in current_geometries:
+            raise ValueError(
+                "mesh_geometry_owner_binding_missing: "
+                f"current geometry='{geometry.geometry_name}' has no owner"
+            )
+        workflow_entry = workflow_by_owner.get(geometry_owner)
+        recipe = recipe_by_owner.get(geometry_owner)
         bulk_hmax = requested_hmax_by_geometry.get(geometry.geometry_name)
 
         interface_hmax = (

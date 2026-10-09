@@ -277,6 +277,7 @@ nie kwalifikuje operatora ani managed runtime.
 | Python API | `packages/fullmag-py/src/fullmag/world.py` | `class GeometryMeshHandle` | publiczny thin-film contract |
 | Sweep | `packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py` | `generate_swept_box_mesh` | ograniczona mixed-P1 realizacja box |
 | Tetra fields | `packages/fullmag-py/src/fullmag/meshing/_size_field_plan.py` | `_build_field_stack` | strefy surface/edge/corner/air |
+| Owner binding | `packages/fullmag-py/src/fullmag/meshing/_mesh_targets.py` | `_geometry_owner_alias_index` | exact-name-first roster, jednoznaczne aliasy i izolacja polityk obiektów |
 | Quality | `packages/fullmag-py/src/fullmag/meshing/_gmsh_extraction.py` | `_extract_quality_metrics` | bieżące metryki Gmsh |
 
 
@@ -345,3 +346,35 @@ Dotyczy obu tras ring, wspólnych dla FEM CPU/GPU; FDM nie dotyczy.
 Nie zmienia geometrii ani tolerancji. Regresja syntetyczna porównuje certyfikat
 z niezależnym przeliczeniem na SI i wymaga odrzucenia błędnej translacji.
 Aktualny status wykonania tej regresji i integracji Gmsh: NOT VERIFIED.
+
+
+(thin-film-canonical-owner-precedence)=
+## Kanoniczny właściciel i precedence parametrów siatki
+
+Roster całej sceny rozróżnia nazwy `left` oraz `left_geom` także podczas
+budowania pojedynczego obiektu. Dokładna nazwa po usunięciu zewnętrznych spacji
+ma pierwszeństwo przed historycznym aliasem; alias można użyć tylko przy jednym
+właścicielu. Nieznana lub niejednoznaczna aktywna polityka jest błędem, a polityka
+znanego innego obiektu nie wpływa na bieżącą siatkę.
+
+Recepta wybierana jest jako całość: docelowy rozmiar i dolna granica nie mogą
+pochodzić z różnych wpisów aliasów. Precedence górnego celu to recepta obiektu,
+polityka per-geometry, workflow default, a następnie domyślny FEM target.
+Pierwszy wpis powtarzanej polityki per-geometry zachowuje pierwszeństwo.
+Wybór grubszej recepty musi usunąć zastępowane, generowane pola workflow
+tego właściciela przed ich przekazaniem do Gmsh; sam większy scalar target nie
+wystarcza, ponieważ minimum pól zachowałoby drobniejszy cel. Jawne manual
+hotspots i polityki regionów pozostają oddzielnymi ograniczeniami.
+
+Zmiana dotyczy wspólnego przygotowania siatki FEM CPU i FEM GPU; nie zmienia
+fizyki ani nie dowodzi wykonania solvera GPU. FDM CPU/GPU nie korzystają z tego
+kontraktu siatki tetraedralnej. Namespace cache v9 zapobiega ponownemu użyciu
+siatek utworzonych przy starszym rozstrzyganiu aliasów. Nie usuwa starych danych.
+
+Kotwice: `packages/fullmag-py/src/fullmag/meshing/_mesh_targets.py` +
+`_geometry_owner_alias_index`, `packages/fullmag-py/src/fullmag/meshing/_size_field_plan.py`
++ `_build_field_stack`, oraz `packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py`
++ `realize_fem_mesh_asset`. Regresja przechodzi rzeczywisty builder i realizer,
+kontrolując przekazane cele i pola z mockiem wyłącznie granicy generowania
+siatki. Aktualny wynik hosted CI, rzeczywista gęstość siatki i kwalifikacja
+fizyczna tej poprawki: **NOT VERIFIED**.

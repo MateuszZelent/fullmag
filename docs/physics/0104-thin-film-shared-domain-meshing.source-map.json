@@ -180,6 +180,12 @@
       "symbol": "_recertify_scaled_periodic_mesh",
       "responsibility": "Revalidate final SI periodic relations and rebuild their coordinate-bound certificate.",
       "evidence_status": "planned_contract_runtime_not_verified"
+    },
+    {
+      "id": "source-canonical-geometry-owner-roster",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_mesh_targets.py",
+      "symbol": "_geometry_owner_alias_index",
+      "responsibility": "Canonical exact-name-first owner roster shared by scalar targets and size-field resolution; source regression pending hosted CI, no scientific qualification."
     }
   ],
   "public_api": {

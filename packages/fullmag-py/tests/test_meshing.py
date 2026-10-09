@@ -9331,6 +9331,370 @@ class FieldStackAcceptanceTests(unittest.TestCase):
         self.assertAlmostEqual(target.hmax, 20e-9)
         self.assertEqual(target.source, "recipe_override")
 
+    def test_recipe_hmax_and_hmin_share_trimmed_exact_owner_precedence(self) -> None:
+        left = fm.Box(100e-9, 100e-9, 20e-9, name="left")
+        recipes = {
+            "left_geom": PerObjectMeshRecipe(hmax=5e-9, hmin=2e-9),
+            " left ": PerObjectMeshRecipe(hmax=20e-9, hmin=10e-9),
+        }
+        target = resolve_object_preview_target(
+            left,
+            fm.FEM(order=1, hmax=100e-9),
+            per_object_recipes=recipes,
+            owner_geometry_names=("left",),
+        )
+        lower_bounds = _build_scoped_lower_bound_fields(
+            [left],
+            per_geometry=[],
+            per_object_recipes=recipes,
+            object_regions=[],
+            owner_geometry_names=("left",),
+        )
+
+        self.assertEqual((target.hmax, target.source), (20e-9, "recipe_override"))
+        self.assertEqual(
+            [field["params"]["MinimumElementSize"] for field in lower_bounds],
+            [10e-9],
+        )
+
+    def test_alias_colliding_geometry_hmax_targets_remain_bound_through_realization(self) -> None:
+        left = fm.Box(100e-9, 100e-9, 20e-9, name="left")
+        left_geom = fm.Box(100e-9, 100e-9, 20e-9, name="left_geom")
+        owner_names = (left.geometry_name, left_geom.geometry_name)
+        hints = fm.FEM(order=1, hmax=100e-9)
+        mesh_workflow = {
+            "per_geometry": [
+                {
+                    "geometry": "left",
+                    "hmax": 10e-9,
+                    "surface_hmax": 4e-9,
+                },
+                {
+                    "geometry": "left_geom",
+                    "hmax": 20e-9,
+                    "surface_hmax": 8e-9,
+                },
+            ]
+        }
+        recipes = {"left": PerObjectMeshRecipe(hmax=5e-9, hmin=2e-9)}
+
+        left_target = resolve_object_preview_target(
+            left,
+            hints,
+            mesh_workflow=mesh_workflow,
+            per_object_recipes=recipes,
+            owner_geometry_names=owner_names,
+        )
+        left_geom_target = resolve_object_preview_target(
+            left_geom,
+            hints,
+            mesh_workflow=mesh_workflow,
+            per_object_recipes=recipes,
+            owner_geometry_names=owner_names,
+        )
+        self.assertEqual((left_target.hmax, left_target.source), (5e-9, "recipe_override"))
+        self.assertEqual(
+            (left_geom_target.hmax, left_geom_target.source),
+            (20e-9, "workflow_override"),
+        )
+
+        shared = resolve_shared_domain_targets(
+            [left, left_geom],
+            hints,
+            airbox_hmax=200e-9,
+            mesh_workflow=mesh_workflow,
+            per_object_recipes=recipes,
+        )
+        self.assertEqual(
+            {name: target.hmax for name, target in shared.per_object.items()},
+            {"left": 5e-9, "left_geom": 20e-9},
+        )
+
+        surface_kwargs = mesh_asset_pipeline._surface_trimesh_kwargs_for_geometry(
+            left_geom,
+            {},
+            mesh_workflow,
+            owner_geometry_names=owner_names,
+        )
+        self.assertEqual(surface_kwargs["surface_maximum_element_size"], 8e-9)
+
+        component_fields = _build_field_stack(
+            [left_geom, left],
+            default_hmax=50e-9,
+            per_geometry=[
+                {
+                    "geometry": left.geometry_name,
+                    "bulk_hmax": 10e-9,
+                    "interface_hmax": 4e-9,
+                },
+                {
+                    "geometry": left_geom.geometry_name,
+                    "bulk_hmax": 20e-9,
+                    "interface_hmax": 8e-9,
+                },
+            ],
+            owner_geometry_names=owner_names,
+            per_object_recipes=recipes,
+            component_aware=True,
+        )
+        left_bulk_fields = [
+            field
+            for field in component_fields
+            if field.get("kind") == "ComponentVolumeConstant"
+            and field.get("params", {}).get("GeometryName") == left.geometry_name
+        ]
+        left_geom_bulk_fields = [
+            field
+            for field in component_fields
+            if field.get("kind") == "ComponentVolumeConstant"
+            and field.get("params", {}).get("GeometryName") == left_geom.geometry_name
+        ]
+        self.assertEqual(left_bulk_fields, [])
+        self.assertEqual(
+            [field["params"]["VIn"] for field in left_geom_bulk_fields],
+            [20e-9],
+        )
+        self.assertFalse(
+            any(field.get("params", {}).get("SizeMin") == 4e-9 for field in component_fields)
+        )
+        self.assertTrue(
+            any(field.get("params", {}).get("SizeMin") == 8e-9 for field in component_fields)
+        )
+
+        region_options = _mesh_options_from_runtime_metadata(
+            {
+                "mesh_options": {
+                    "scene_problem_patch": {
+                        "object_regions": [
+                            {
+                                "region_id": "left:core",
+                                "owner_object": "left",
+                                "enabled": True,
+                                "shape": {
+                                    "kind": "box",
+                                    "size": [20e-9, 20e-9, 10e-9],
+                                    "center": [0.0, 0.0, 0.0],
+                                },
+                                "mesh_policy": {
+                                    "maximum_element_size": 2e-9,
+                                    "order": 1,
+                                },
+                            }
+                        ]
+                    }
+                }
+            },
+            geometries=[left_geom, left],
+            default_hmax=50e-9,
+            component_aware=True,
+        )
+        region_fields = [
+            field
+            for field in region_options.size_fields
+            if field.get("params", {}).get("Source") == "region_mesh_policy"
+        ]
+        self.assertTrue(region_fields)
+        self.assertEqual(
+            {field["params"]["GeometryName"] for field in region_fields},
+            {"left"},
+        )
+
+        generated: list[tuple[str, float, list[dict[str, object]]]] = []
+
+        def generate(_geometry, *, hmax, order, options):
+            generated.append(
+                (
+                    _geometry.geometry_name,
+                    float(hmax),
+                    list(options.lower_bound_fields),
+                )
+            )
+            return SimpleNamespace(
+                n_nodes=4,
+                n_elements=1,
+                n_boundary_faces=4,
+                to_ir=lambda mesh_name: {"mesh_name": mesh_name},
+            )
+
+        with (
+            patch.object(problem_model, "_fem_mesh_cache_dir", return_value=None),
+            patch.object(mesh_asset_pipeline, "generate_mesh", side_effect=generate),
+            patch.object(mesh_asset_pipeline, "build_surface_preview_payload", return_value=None),
+            patch.object(
+                mesh_asset_pipeline,
+                "_drop_degenerate_tetrahedra",
+                side_effect=lambda mesh, **_kwargs: mesh,
+            ),
+            patch.object(fullmag_core, "validate_mesh_ir", return_value=True),
+        ):
+            assets = build_geometry_assets_for_request(
+                requested_backend=BackendTarget.FEM,
+                geometries=[left, left_geom],
+                discretization=fm.DiscretizationHints(fem=hints),
+                mesh_workflow=mesh_workflow,
+                per_object_recipes=recipes,
+            )
+
+        self.assertEqual(
+            [(name, hmax) for name, hmax, _lower_bounds in generated],
+            [("left", 5e-9), ("left_geom", 20e-9)],
+        )
+        self.assertEqual(
+            [field["params"]["MinimumElementSize"] for field in generated[0][2]],
+            [2e-9],
+        )
+        self.assertEqual(generated[1][2], [])
+        self.assertEqual(
+            [entry["geometry_name"] for entry in assets["fem_mesh_assets"]],
+            ["left", "left_geom"],
+        )
+
+    def test_coarser_recipe_hmax_replaces_workflow_fields_but_keeps_manual_and_region_scopes(self) -> None:
+        left = fm.Box(100e-9, 100e-9, 20e-9, name="left")
+        left_geom = fm.Box(100e-9, 100e-9, 20e-9, name="left_geom")
+        hints = fm.FEM(order=1, hmax=100e-9)
+        manual_hotspot = {
+            "kind": "Box",
+            "params": {
+                "VIn": 3e-9,
+                "VOut": 1.0e22,
+                "XMin": -10e-9,
+                "XMax": 10e-9,
+                "YMin": -10e-9,
+                "YMax": 10e-9,
+                "ZMin": -5e-9,
+                "ZMax": 5e-9,
+                "Source": "manual_hotspot",
+            },
+        }
+        object_regions = [
+            {
+                "region_id": "left:core",
+                "owner_object": "left",
+                "owner_geometry_name": "left",
+                "enabled": True,
+                "frame": "object",
+                "shape": {
+                    "kind": "box",
+                    "size": [20e-9, 20e-9, 10e-9],
+                    "center": [0.0, 0.0, 0.0],
+                },
+                "mesh_policy": {
+                    "maximum_element_size": 2e-9,
+                    "minimum_element_size": 1e-9,
+                    "order": 1,
+                },
+            }
+        ]
+        mesh_workflow = {
+            "per_geometry": [
+                {
+                    "geometry": "left",
+                    "hmax": 10e-9,
+                    "interface_hmax": 6e-9,
+                    "size_fields": [manual_hotspot],
+                },
+                {
+                    "geometry": "left_geom",
+                    "hmax": 25e-9,
+                    "interface_hmax": 5e-9,
+                },
+            ],
+            "mesh_options": {
+                "scene_problem_patch": {"object_regions": object_regions}
+            },
+        }
+        recipes = {"left": PerObjectMeshRecipe(hmax=20e-9, hmin=2e-9)}
+        generated: dict[
+            str,
+            tuple[float, list[dict[str, object]], list[dict[str, object]]],
+        ] = {}
+
+        def generate(_geometry, *, hmax, order, options):
+            generated[_geometry.geometry_name] = (
+                float(hmax),
+                list(options.size_fields),
+                list(options.lower_bound_fields),
+            )
+            return SimpleNamespace(
+                n_nodes=4,
+                n_elements=1,
+                n_boundary_faces=4,
+                to_ir=lambda mesh_name: {"mesh_name": mesh_name},
+            )
+
+        with (
+            patch.object(problem_model, "_fem_mesh_cache_dir", return_value=None),
+            patch.object(mesh_asset_pipeline, "generate_mesh", side_effect=generate),
+            patch.object(mesh_asset_pipeline, "build_surface_preview_payload", return_value=None),
+            patch.object(
+                mesh_asset_pipeline,
+                "_drop_degenerate_tetrahedra",
+                side_effect=lambda mesh, **_kwargs: mesh,
+            ),
+            patch.object(fullmag_core, "validate_mesh_ir", return_value=True),
+        ):
+            build_geometry_assets_for_request(
+                requested_backend=BackendTarget.FEM,
+                geometries=[left, left_geom],
+                discretization=fm.DiscretizationHints(fem=hints),
+                mesh_workflow=mesh_workflow,
+                per_object_recipes=recipes,
+            )
+
+        left_hmax, left_fields, left_lower_bounds = generated["left"]
+        self.assertEqual(left_hmax, 20e-9)
+        self.assertFalse(
+            any(
+                field.get("kind") == "Box"
+                and field.get("params", {}).get("VIn") == 10e-9
+                for field in left_fields
+            )
+        )
+        self.assertFalse(
+            any(
+                field.get("params", {}).get("SizeMin") == 6e-9
+                for field in left_fields
+            )
+        )
+        self.assertTrue(
+            any(
+                field.get("params", {}).get("Source") == "manual_hotspot"
+                for field in left_fields
+            )
+        )
+        self.assertTrue(
+            any(
+                field.get("params", {}).get("Source") == "region_mesh_policy"
+                for field in left_fields
+            )
+        )
+        self.assertEqual(
+            {
+                field["params"]["MinimumElementSize"]
+                for field in left_lower_bounds
+                if field["kind"] == "ComponentVolumeLowerBound"
+            },
+            {2e-9},
+        )
+        self.assertIn(
+            1e-9,
+            {
+                field["params"]["MinimumElementSize"]
+                for field in left_lower_bounds
+            },
+        )
+
+        right_hmax, right_fields, _right_lower_bounds = generated["left_geom"]
+        self.assertEqual(right_hmax, 25e-9)
+        self.assertTrue(
+            any(
+                field.get("kind") == "BoundsSurfaceThreshold"
+                and field.get("params", {}).get("SizeMin") == 5e-9
+                for field in right_fields
+            )
+        )
+
     def test_resolve_shared_domain_targets_recipe_beats_workflow(self) -> None:
         """Shared-domain: recipe hmax must override workflow per_geometry hmax (A1)."""
         left = fm.Box(2.0, 2.0, 2.0, name="left")
@@ -9420,88 +9784,308 @@ class FieldStackAcceptanceTests(unittest.TestCase):
         # so effective_hmax must be at least 200 nm.
         self.assertGreaterEqual(resolved.effective_hmax, 200e-9)
 
-    def test_recipe_replaces_bulk_fields_without_removing_region_owned_refinement(self) -> None:
-        from fullmag.meshing.asset_pipeline import _strip_overridden_geometry_fields
-
-        geometry = fm.Box(100e-9, 100e-9, 40e-9, name="left")
-        options = _mesh_options_from_runtime_metadata(
-            {
-                "per_geometry": [{"geometry": "left", "bulk_hmax": 8e-9}],
-                "mesh_options": {
-                    "scene_problem_patch": {
-                        "object_regions": [{
-                            "owner_object": "left",
-                            "enabled": True,
-                            "shape": {
-                                "kind": "cylinder", "radius": 15e-9, "height": 10e-9,
-                                "center": [0.0, 0.0, 0.0], "axis": [0.0, 0.0, 1.0],
-                            },
-                            "mesh_policy": {
-                                "maximum_element_size": 3e-9, "minimum_element_size": 1.5e-9,
-                                "transition_distance": 5e-9, "order": 1,
-                            },
-                        }],
-                    },
-                },
-            },
-            geometries=[geometry],
-            default_hmax=50e-9,
-            component_aware=True,
-        )
-        fields = list(options.size_fields)
-        region_fields = [field for field in fields if field["params"].get("Source") == "region_mesh_policy"]
-        bulk_fields = [field for field in fields if field["kind"] == "ComponentVolumeConstant"]
-        self.assertEqual(len(region_fields), 1)
-        self.assertEqual(len(bulk_fields), 1)
-        foreign_field = {
+    def test_recipe_hmax_filters_generated_workflow_fields_only(self) -> None:
+        left = fm.Box(100e-9, 100e-9, 20e-9, name="left")
+        right = fm.Box(100e-9, 100e-9, 20e-9, name="right").translate((250e-9, 0.0, 0.0))
+        manual_left = {
             "kind": "ComponentVolumeConstant",
-            "params": {"GeometryName": "right", "VIn": 7e-9, "VOut": 1.0},
-        }
-        for recipe_name in ("left", "left_geom"):
-            with self.subTest(recipe_name=recipe_name):
-                stripped = _strip_overridden_geometry_fields(
-                    fields + [foreign_field],
-                    {recipe_name: PerObjectMeshRecipe(hmax=20e-9)},
-                )
-                self.assertNotIn(bulk_fields[0], stripped)
-                self.assertIn(region_fields[0], stripped)
-                self.assertIs(next(field for field in stripped if field is region_fields[0]), region_fields[0])
-                self.assertEqual(region_fields[0]["params"]["VIn"], 3e-9)
-                self.assertEqual(region_fields[0]["params"]["Radius"], 15e-9)
-                self.assertEqual(region_fields[0]["params"]["Height"], 10e-9)
-                self.assertIn(foreign_field, stripped)
-
-    def test_recipe_can_coarsen_workflow_field_stack_for_same_geometry(self) -> None:
-        """When recipe wants a coarser mesh, workflow fields for that geometry
-        should be removed so the recipe field actually takes effect (A3)."""
-        left = fm.Box(2.0, 2.0, 2.0, name="left")
-        # Workflow sets fine 8 nm per_geometry
-        mesh_options = _mesh_options_from_runtime_metadata(
-            {
-                "per_geometry": [{"geometry": "left", "bulk_hmax": "8e-9"}],
+            "params": {
+                "GeometryName": left.geometry_name,
+                "VIn": 30e-9,
+                "VOut": 1.0e22,
+                "Source": "manual_owner_component",
             },
-            geometries=[left],
-            default_hmax=20e-9,
-            component_aware=True,
-        )
-        # Before stripping: there should be component-aware fields for "left"
-        component_fields = [
-            f for f in mesh_options.size_fields
-            if isinstance(f.get("params"), dict) and f["params"].get("GeometryName") == "left"
+        }
+        manual_right = {
+            "kind": "ComponentVolumeConstant",
+            "params": {
+                "GeometryName": right.geometry_name,
+                "VIn": 35e-9,
+                "VOut": 1.0e22,
+                "Source": "manual_foreign_component",
+            },
+        }
+        per_geometry = [
+            {
+                "geometry": left.geometry_name,
+                "bulk_hmax": 8e-9,
+                "interface_hmax": 4e-9,
+                "size_fields": [manual_left],
+            },
+            {
+                "geometry": right.geometry_name,
+                "bulk_hmax": 20e-9,
+                "interface_hmax": 6e-9,
+                "size_fields": [manual_right],
+            },
         ]
-        self.assertGreater(len(component_fields), 0)
+        object_regions = [
+            {
+                "region_id": "left:core",
+                "owner_object": left.geometry_name,
+                "owner_geometry_name": left.geometry_name,
+                "enabled": True,
+                "shape": {
+                    "kind": "box",
+                    "size": [20e-9, 20e-9, 10e-9],
+                    "center": [0.0, 0.0, 0.0],
+                },
+                "mesh_policy": {"maximum_element_size": 3e-9, "order": 1},
+            }
+        ]
 
-        # After stripping for a recipe override on "left"
-        from fullmag.meshing.asset_pipeline import _strip_overridden_geometry_fields
-        stripped = _strip_overridden_geometry_fields(
-            list(mesh_options.size_fields),
-            {"left": PerObjectMeshRecipe(hmax=50e-9)},
+        fields = _build_field_stack(
+            [left, right],
+            default_hmax=100e-9,
+            per_geometry=per_geometry,
+            owner_geometry_names=(left.geometry_name, right.geometry_name),
+            per_object_recipes={left.geometry_name: PerObjectMeshRecipe(hmax=50e-9)},
+            component_aware=True,
+            object_regions=object_regions,
         )
-        remaining_left = [
-            f for f in stripped
-            if isinstance(f.get("params"), dict) and f["params"].get("GeometryName") == "left"
+
+        self.assertFalse(
+            any(
+                field.get("kind") == "ComponentVolumeConstant"
+                and field.get("params", {}).get("GeometryName") == left.geometry_name
+                and field.get("params", {}).get("VIn") == 8e-9
+                and field.get("params", {}).get("Source") is None
+                for field in fields
+            )
+        )
+        self.assertFalse(
+            any(field.get("params", {}).get("SizeMin") == 4e-9 for field in fields)
+        )
+        self.assertIn(manual_left, fields)
+        self.assertTrue(
+            any(
+                field.get("kind") == "ComponentVolumeConstant"
+                and field.get("params", {}).get("GeometryName") == right.geometry_name
+                and field.get("params", {}).get("VIn") == 20e-9
+                and field.get("params", {}).get("Source") is None
+                for field in fields
+            )
+        )
+        self.assertTrue(
+            any(field.get("params", {}).get("SizeMin") == 6e-9 for field in fields)
+        )
+        self.assertIn(manual_right, fields)
+        self.assertTrue(
+            any(
+                field.get("params", {}).get("Source") == "region_mesh_policy"
+                and field.get("params", {}).get("GeometryName") == left.geometry_name
+                for field in fields
+            )
+        )
+
+    def test_shared_domain_recipe_hmax_preserves_manual_owner_fields_at_gmsh_boundary(self) -> None:
+        from fullmag.meshing._gmsh_types import MeshData, MeshOptions, SharedDomainMeshResult
+
+        left = fm.Box(size=(1.0, 1.0, 1.0), name="left")
+        right = fm.Box(size=(1.0, 1.0, 1.0), name="right").translate((2.0, 0.0, 0.0))
+        shared_domain_mesh = MeshData.from_legacy_tet4(
+            nodes=np.asarray(
+                [
+                    [-0.5, -0.5, -0.5],
+                    [0.5, -0.5, -0.5],
+                    [-0.5, 0.5, -0.5],
+                    [-0.5, -0.5, 0.5],
+                    [1.5, -0.5, -0.5],
+                    [2.5, -0.5, -0.5],
+                    [1.5, 0.5, -0.5],
+                    [1.5, -0.5, 0.5],
+                    [-2.0, -2.0, -2.0],
+                    [4.0, -2.0, -2.0],
+                    [-2.0, 2.0, -2.0],
+                    [-2.0, -2.0, 2.0],
+                ],
+                dtype=np.float64,
+            ),
+            elements=np.asarray(
+                [[0, 1, 2, 3], [4, 5, 6, 7], [8, 9, 10, 11]],
+                dtype=np.int32,
+            ),
+            element_markers=np.asarray([1, 2, 3], dtype=np.int32),
+            boundary_faces=np.empty((0, 3), dtype=np.int32),
+            boundary_markers=np.empty((0,), dtype=np.int32),
+        )
+        fake_result = SharedDomainMeshResult(
+            mesh=shared_domain_mesh,
+            component_marker_tags={left.geometry_name: 1, right.geometry_name: 2},
+            component_volume_tags={left.geometry_name: [11], right.geometry_name: [12]},
+            component_surface_tags={left.geometry_name: [21], right.geometry_name: [22]},
+            interface_surface_tags=[21, 22],
+            outer_boundary_surface_tags=[31, 32, 33, 34, 35, 36],
+        )
+        manual_owner_component = {
+            "kind": "ComponentVolumeConstant",
+            "params": {
+                "GeometryName": left.geometry_name,
+                "VIn": 0.09,
+                "VOut": 1.0e22,
+                "Source": "manual_owner_component",
+            },
+        }
+        manual_foreign_component = {
+            "kind": "ComponentVolumeConstant",
+            "params": {
+                "GeometryName": right.geometry_name,
+                "VIn": 0.11,
+                "VOut": 1.0e22,
+                "Source": "manual_foreign_component",
+            },
+        }
+        object_core_relaxation = {
+            "kind": "ObjectCoreRelaxation",
+            "params": {
+                "core_maximum_element_size": 0.08,
+                "surface_maximum_element_size": 0.07,
+                "surface_distance": 0.25,
+                "edge_maximum_element_size": 0.06,
+                "edge_distance": 0.2,
+            },
+        }
+        object_regions = [
+            {
+                "region_id": "left:core",
+                "owner_object": left.geometry_name,
+                "owner_geometry_name": left.geometry_name,
+                "enabled": True,
+                "shape": {
+                    "kind": "box",
+                    "size": [0.2, 0.2, 0.2],
+                    "center": [0.0, 0.0, 0.0],
+                },
+                "mesh_policy": {"maximum_element_size": 0.04, "order": 1},
+            }
         ]
-        self.assertEqual(len(remaining_left), 0, "workflow fields for 'left' should be removed")
+        mesh_workflow = {
+            "per_geometry": [
+                {
+                    "geometry": left.geometry_name,
+                    "bulk_hmax": 0.02,
+                    "interface_hmax": 0.01,
+                    "size_fields": [manual_owner_component, object_core_relaxation],
+                },
+                {
+                    "geometry": right.geometry_name,
+                    "bulk_hmax": 0.03,
+                    "interface_hmax": 0.015,
+                    "size_fields": [manual_foreign_component],
+                },
+            ]
+        }
+        captured_options: list[MeshOptions] = []
+
+        def generate_via_occ(*_args: object, **kwargs: object) -> SharedDomainMeshResult:
+            options = kwargs.get("options")
+            self.assertIsInstance(options, MeshOptions)
+            captured_options.append(options)
+            return fake_result
+
+        with patch(
+            "fullmag.meshing._gmsh_occ.generate_shared_domain_mesh_via_occ",
+            side_effect=generate_via_occ,
+        ):
+            mesh, region_markers, report = realize_fem_domain_mesh_asset_from_components_with_report(
+                geometries=[left, right],
+                hints=fm.FEM(order=1, hmax=0.1),
+                study_universe={
+                    "mode": "manual",
+                    "size": [8.0, 8.0, 8.0],
+                    "center": [0.0, 0.0, 0.0],
+                    "airbox_hmax": 0.2,
+                },
+                mesh_workflow=mesh_workflow,
+                per_object_recipes={left.geometry_name: PerObjectMeshRecipe(hmax=0.05)},
+                object_regions=object_regions,
+            )
+
+        self.assertEqual(len(captured_options), 1)
+        self.assertEqual(report.build_mode, "conformal_occ")
+        np.testing.assert_array_equal(
+            mesh.element_markers,
+            np.asarray([1, 2, 0], dtype=np.int32),
+        )
+        self.assertEqual(
+            region_markers,
+            [
+                {"geometry_name": left.geometry_name, "marker": 1},
+                {"geometry_name": right.geometry_name, "marker": 2},
+            ],
+        )
+
+        fields = list(captured_options[0].size_fields)
+        left_fields = [
+            field
+            for field in fields
+            if field.get("params", {}).get("GeometryName") == left.geometry_name
+        ]
+        right_fields = [
+            field
+            for field in fields
+            if field.get("params", {}).get("GeometryName") == right.geometry_name
+        ]
+        self.assertTrue(
+            any(
+                field.get("kind") == "ComponentVolumeConstant"
+                and field.get("params", {}).get("VIn") == 0.05
+                and field.get("params", {}).get("Source") is None
+                for field in left_fields
+            ),
+            "the recipe-owned bulk field must reach the shared Gmsh generator",
+        )
+        self.assertFalse(
+            any(
+                field.get("kind") == "ComponentVolumeConstant"
+                and field.get("params", {}).get("VIn") == 0.02
+                and field.get("params", {}).get("Source") is None
+                for field in left_fields
+            ),
+            "the generated workflow bulk field must be suppressed for the recipe owner",
+        )
+        self.assertFalse(
+            any(field.get("params", {}).get("SizeMin") == 0.01 for field in fields),
+            "the generated workflow interface field must be suppressed for the recipe owner",
+        )
+        self.assertIn(manual_owner_component, fields)
+        core_fields = [
+            field
+            for field in left_fields
+            if field.get("params", {}).get("Source") == "ObjectCoreRelaxation"
+        ]
+        self.assertEqual(
+            [field.get("kind") for field in core_fields],
+            [
+                "ComponentVolumeConstant",
+                "SurfaceDistanceThreshold",
+                "EdgeDistanceThreshold",
+            ],
+        )
+        self.assertTrue(
+            all(field.get("params", {}).get("GeometryName") == left.geometry_name for field in core_fields)
+        )
+        region_fields = [
+            field
+            for field in left_fields
+            if field.get("params", {}).get("Source") == "region_mesh_policy"
+        ]
+        self.assertEqual(len(region_fields), 1)
+        self.assertEqual(region_fields[0].get("params", {}).get("VIn"), 0.04)
+        self.assertTrue(
+            any(
+                field.get("kind") == "ComponentVolumeConstant"
+                and field.get("params", {}).get("VIn") == 0.03
+                and field.get("params", {}).get("Source") is None
+                for field in right_fields
+            ),
+            "the foreign owner's generated workflow bulk field must remain unchanged",
+        )
+        self.assertTrue(
+            any(field.get("params", {}).get("SizeMin") == 0.015 for field in fields),
+            "the foreign owner's generated workflow interface field must remain unchanged",
+        )
+        self.assertIn(manual_foreign_component, fields)
 
     def test_per_object_recipe_hmax_does_not_auto_add_transition_shell(self) -> None:
         layer = fm.Box(size=(2000e-9, 600e-9, 10e-9), name="permalloy_layer")
@@ -11390,6 +11974,114 @@ class RegionMeshPolicyTests(unittest.TestCase):
             {"left": {"left": 5e-9}, "left_geom": {}},
         )
 
+    def test_per_geometry_hmax_fields_follow_canonical_owner_scope(self) -> None:
+        left = fm.Box(100e-9, 100e-9, 20e-9, name="left")
+        right = fm.Box(100e-9, 100e-9, 20e-9, name="left_geom")
+        owner_geometry_names = (left.geometry_name, right.geometry_name)
+        mesh_workflow = {
+            "per_geometry": [
+                {"geometry": "left", "hmax": 10e-9},
+                {"geometry": "left_geom", "hmax": 20e-9},
+            ]
+        }
+
+        def bulk_targets(options):
+            return sorted(
+                (
+                    field["params"]["GeometryName"],
+                    field["params"]["VIn"],
+                )
+                for field in options.size_fields
+                if field["kind"] == "ComponentVolumeConstant"
+            )
+
+        standalone = {
+            geometry.geometry_name: _mesh_options_from_runtime_metadata(
+                mesh_workflow,
+                geometries=[geometry],
+                default_hmax=50e-9,
+                component_aware=True,
+                owner_geometry_names=owner_geometry_names,
+            )
+            for geometry in (left, right)
+        }
+        self.assertEqual(
+            {name: bulk_targets(options) for name, options in standalone.items()},
+            {"left": [("left", 10e-9)], "left_geom": [("left_geom", 20e-9)]},
+        )
+
+        shared = _mesh_options_from_runtime_metadata(
+            mesh_workflow,
+            geometries=[left, right],
+            default_hmax=50e-9,
+            component_aware=True,
+        )
+        self.assertEqual(
+            bulk_targets(shared),
+            [("left", 10e-9), ("left_geom", 20e-9)],
+        )
+
+        foreign_only = _mesh_options_from_runtime_metadata(
+            {"per_geometry": [{"geometry": "left_geom", "hmax": 20e-9}]},
+            geometries=[left],
+            default_hmax=50e-9,
+            component_aware=True,
+            owner_geometry_names=owner_geometry_names,
+        )
+        self.assertEqual(bulk_targets(foreign_only), [])
+
+        foreign_policy_for_left_geom = _mesh_options_from_runtime_metadata(
+            {"per_geometry": [{"geometry": "left", "hmax": 10e-9}]},
+            geometries=[right],
+            default_hmax=50e-9,
+            component_aware=True,
+            owner_geometry_names=owner_geometry_names,
+        )
+        self.assertEqual(bulk_targets(foreign_policy_for_left_geom), [])
+
+        first_alias_wins = _mesh_options_from_runtime_metadata(
+            {
+                "per_geometry": [
+                    {"geometry": "left", "hmax": 10e-9},
+                    {"geometry": "left_geom", "hmax": 20e-9},
+                ]
+            },
+            geometries=[left],
+            default_hmax=50e-9,
+            component_aware=True,
+            owner_geometry_names=(left.geometry_name,),
+        )
+        self.assertEqual(bulk_targets(first_alias_wins), [("left", 10e-9)])
+
+    def test_per_geometry_hmax_owner_binding_rejects_unknown_and_ambiguous(self) -> None:
+        left = fm.Box(100e-9, 100e-9, 20e-9, name="left")
+        right = fm.Box(100e-9, 100e-9, 20e-9, name="right")
+        with self.assertRaisesRegex(
+            ValueError,
+            "mesh_size_field_owner_binding_missing.*owner='typo'",
+        ):
+            _mesh_options_from_runtime_metadata(
+                {"per_geometry": [{"geometry": "typo", "hmax": 10e-9}]},
+                geometries=[left],
+                default_hmax=50e-9,
+                component_aware=True,
+                owner_geometry_names=(left.geometry_name, right.geometry_name),
+            )
+
+        owner = fm.Box(100e-9, 100e-9, 20e-9, name="owner")
+        nested_alias = fm.Box(100e-9, 100e-9, 20e-9, name="owner_geom_geom")
+        with self.assertRaisesRegex(
+            ValueError,
+            "mesh_geometry_owner_binding_ambiguous.*owner='owner_geom'",
+        ):
+            _mesh_options_from_runtime_metadata(
+                {"per_geometry": [{"geometry": "owner_geom", "hmax": 10e-9}]},
+                geometries=[owner],
+                default_hmax=50e-9,
+                component_aware=True,
+                owner_geometry_names=(owner.geometry_name, nested_alias.geometry_name),
+            )
+
     def test_per_object_asset_builder_threads_full_geometry_owner_roster(self) -> None:
         left = fm.Box(100e-9, 100e-9, 20e-9, name="left")
         right = fm.Box(100e-9, 100e-9, 20e-9, name="right")
@@ -11480,6 +12172,77 @@ class RegionMeshPolicyTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             cache_dir = Path(tmp_dir)
             (cache_dir / f"{legacy_key}.npz").write_bytes(b"old roster mesh")
+            with (
+                patch.object(
+                    problem_model,
+                    "_fem_mesh_cache_dir",
+                    return_value=cache_dir,
+                ),
+                patch("fullmag.meshing.realize_fem_mesh_asset", side_effect=realize),
+                patch.object(
+                    mesh_asset_pipeline.MeshData,
+                    "load",
+                    return_value=fake_mesh,
+                ) as cached_load,
+                patch.object(problem_model, "_save_fem_mesh_cache_atomically"),
+                patch.object(
+                    mesh_asset_pipeline,
+                    "_drop_degenerate_tetrahedra",
+                    side_effect=lambda mesh, **_kwargs: mesh,
+                ),
+                patch.object(fullmag_core, "validate_mesh_ir", return_value=True),
+            ):
+                build_geometry_assets_for_request(
+                    requested_backend=BackendTarget.FEM,
+                    geometries=[left, right],
+                    discretization=fm.DiscretizationHints(fem=hints),
+                    mesh_workflow=mesh_workflow,
+                )
+
+        cached_load.assert_not_called()
+        self.assertEqual(rebuilt, ["left", "left_geom"])
+
+    def test_old_per_object_mesh_cache_version_is_not_reused_after_hmax_fix(self) -> None:
+        left = fm.Box(100e-9, 100e-9, 20e-9, name="left")
+        right = fm.Box(100e-9, 100e-9, 20e-9, name="left_geom")
+        hints = fm.FEM(order=1, hmax=30e-9)
+        owner_roster = (left.geometry_name, right.geometry_name)
+        mesh_workflow = {
+            "per_geometry": [
+                {"geometry": "left", "hmax": 10e-9},
+                {"geometry": "left_geom", "hmax": 20e-9},
+            ]
+        }
+        with patch.object(problem_model, "_FEM_MESH_CACHE_VERSION", "v8"):
+            old_right_key = problem_model._fem_mesh_cache_key(
+                right,
+                hints,
+                mesh_workflow=mesh_workflow,
+                owner_geometry_names=owner_roster,
+            )
+        current_right_key = problem_model._fem_mesh_cache_key(
+            right,
+            hints,
+            mesh_workflow=mesh_workflow,
+            owner_geometry_names=owner_roster,
+        )
+        self.assertNotEqual(old_right_key, current_right_key)
+
+        rebuilt: list[str] = []
+        fake_mesh = SimpleNamespace(
+            n_nodes=4,
+            n_elements=1,
+            n_boundary_faces=4,
+            to_ir=lambda mesh_name: {"mesh_name": mesh_name},
+        )
+
+        def realize(geometry, _hints, **_kwargs):
+            rebuilt.append(geometry.geometry_name)
+            return fake_mesh
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            cache_dir = Path(tmp_dir)
+            (cache_dir / f"{old_right_key}.npz").write_bytes(b"old hmax semantics")
             with (
                 patch.object(
                     problem_model,

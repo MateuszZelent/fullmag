@@ -108,10 +108,12 @@ from ._mesh_targets import (
 from ._gmsh_extraction import build_per_domain_quality_from_mesh_arrays
 from .mesh_build_report import _build_mesh_operation_statuses, _build_shared_domain_build_report
 from ._mesh_targets import (
+    _canonicalize_geometry_owner_mapping as _canonicalize_geometry_owner_mapping,
     _coerce_positive_float as _coerce_positive_float,
+    _geometry_owner_alias_index as _geometry_owner_alias_index,
     _geometry_name_aliases as _geometry_name_aliases,
-    _lookup_geometry_name_alias as _lookup_geometry_name_alias,
-    _parse_per_geometry_overrides as _parse_per_geometry_overrides,
+    _resolve_geometry_owner_name as _resolve_geometry_owner_name,
+    _resolve_per_geometry_overrides as _resolve_per_geometry_overrides,
     _resolve_requested_partition_hmaxs as _mesh_targets_resolve_partition_hmaxs,
 )
 
@@ -1107,15 +1109,33 @@ def _surface_trimesh_kwargs_for_geometry(
     geometry: Geometry,
     base_kwargs: Mapping[str, object],
     mesh_workflow: Mapping[str, object] | None,
+    *,
+    owner_geometry_names: Sequence[str] | None = None,
 ) -> dict[str, object]:
     kwargs = dict(base_kwargs)
-    per_geometry = (
+    owner_names, alias_candidates, current_geometries = _geometry_owner_alias_index(
+        [geometry],
+        owner_geometry_names,
+    )
+    geometry_owner = _resolve_geometry_owner_name(
+        geometry.geometry_name,
+        owner_names=owner_names,
+        alias_candidates=alias_candidates,
+    )
+    if geometry_owner is None or geometry_owner not in current_geometries:
+        raise ValueError(
+            "mesh_geometry_owner_binding_missing: "
+            f"current geometry='{geometry.geometry_name}' has no owner"
+        )
+    overrides = _resolve_per_geometry_overrides(
         mesh_workflow.get("per_geometry")
         if isinstance(mesh_workflow, Mapping)
-        else None
+        else None,
+        geometries=[geometry],
+        owner_geometry_names=owner_geometry_names,
+        missing_error_code="mesh_geometry_owner_binding_missing",
     )
-    overrides = _parse_per_geometry_overrides(per_geometry)
-    entry = _lookup_geometry_name_alias(overrides, geometry.geometry_name)
+    entry = overrides.get(geometry_owner)
     if isinstance(entry, Mapping):
         surface_hmax = _coerce_positive_float(
             entry.get("surface_maximum_element_size")
@@ -1218,6 +1238,7 @@ def realize_fem_mesh_asset(
         geometry, hints,
         mesh_workflow=mesh_workflow,
         per_object_recipes=per_object_recipes,
+        owner_geometry_names=_owner_geometry_names,
     )
     mesh_options = _mesh_options_from_runtime_metadata(
         mesh_workflow,
@@ -1595,9 +1616,8 @@ def _rectangular_airbox_bounds_from_options(
     )
 
 
-# _coerce_positive_float, _parse_per_geometry_overrides,
-# _geometry_name_aliases, _lookup_geometry_name_alias are now imported
-# from _mesh_targets (see top-of-file imports).
+# Numeric coercion and canonical geometry-owner resolution are imported from
+# _mesh_targets (see top-of-file imports).
 
 # _shared_domain_local_size_fields, _build_field_stack and layer builders,
 # _resolve_per_object_mesh_options, _mesh_options_from_runtime_metadata
@@ -2287,50 +2307,6 @@ def _assert_frozen_magnetic_submesh_invariants(
         compare(expected[key], candidate[key], key)
 
 
-def _strip_overridden_geometry_fields(
-    existing_fields: list[dict[str, object]],
-    per_object_recipes: dict[str, PerObjectMeshRecipe],
-) -> list[dict[str, object]]:
-    """Remove geometry-owned workflow fields replaced by per-object recipes.
-
-    This ensures that when a recipe specifies a *coarser* hmax than the workflow,
-    the finer workflow field is removed so Gmsh's ``Min`` background-field rule
-    doesn't silently clamp the coarser recipe back to the workflow value.
-    """
-    overridden_names: set[str] = set()
-    for geometry_name, recipe in per_object_recipes.items():
-        recipe_hmax = recipe.to_ir().get("hmax")
-        if isinstance(recipe_hmax, (int, float)) and float(recipe_hmax) > 0.0:
-            overridden_names.add(geometry_name.strip())
-            if geometry_name.strip().endswith("_geom") and len(geometry_name.strip()) > len("_geom"):
-                overridden_names.add(geometry_name.strip()[: -len("_geom")])
-            else:
-                overridden_names.add(f"{geometry_name.strip()}_geom")
-    if not overridden_names:
-        return existing_fields
-
-    # Explicit region policies refine their owner independently of its bulk recipe.
-    # Preserve their authored support and target instead of silently removing them.
-    def _is_overridden(field: dict[str, object]) -> bool:
-        params = field.get("params")
-        if not isinstance(params, dict):
-            return False
-        # Match the source taxonomy used by the realized-field report.
-        if (field.get("source") or params.get("Source")) == "region_mesh_policy":
-            return False
-        geom_name = params.get("GeometryName")
-        if isinstance(geom_name, str) and geom_name in overridden_names:
-            return True
-        # For Box / BoundsSurfaceThreshold fields we can't match by geometry name
-        # directly — they don't carry one. We leave them; recipe fields prepended
-        # with smaller VIn will still win via Min. Only component-aware fields
-        # (ComponentVolumeConstant, InterfaceShellThreshold, TransitionShellThreshold)
-        # are reliably matchable.
-        return False
-
-    return [f for f in existing_fields if not _is_overridden(f)]
-
-
 def realize_fem_domain_mesh_asset(
     geometries: list[Geometry],
     hints: FEM,
@@ -2707,6 +2683,9 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                         geometry,
                         surface_trimesh_kwargs,
                         mesh_workflow,
+                        owner_geometry_names=tuple(
+                            candidate.geometry_name for candidate in geometries
+                        ),
                     ),
                 )
                 comp_mesh = _sanitize_surface_mesh_for_stl_export(comp_mesh)
@@ -2781,10 +2760,10 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                 component_aware=component_aware_mesh_options,
             )
             if recipe_fields:
-                existing = _strip_overridden_geometry_fields(
-                    list(mesh_options.size_fields), per_object_recipes
+                mesh_options = _dc_replace(
+                    mesh_options,
+                    size_fields=recipe_fields + list(mesh_options.size_fields),
                 )
-                mesh_options = _dc_replace(mesh_options, size_fields=recipe_fields + existing)
         mesh_options = _fresh_scoped_layer_plane_attempt_options(mesh_options)
         scoped_layer_partitioned_geo = False
         scoped_thin_film_box = (
@@ -3212,11 +3191,9 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                                 component_aware=False,
                             )
                             if recipe_fields:
-                                existing = _strip_overridden_geometry_fields(
-                                    list(mesh_options.size_fields), per_object_recipes
-                                )
                                 mesh_options = _dc_replace(
-                                    mesh_options, size_fields=recipe_fields + existing
+                                    mesh_options,
+                                    size_fields=recipe_fields + list(mesh_options.size_fields),
                                 )
                         used_size_field_kinds = _unique_size_field_kinds(list(mesh_options.size_fields))
                         if mesh_options.size_fields:
@@ -3233,6 +3210,10 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                                         g,
                                         surface_trimesh_kwargs,
                                         mesh_workflow,
+                                        owner_geometry_names=tuple(
+                                            candidate.geometry_name
+                                            for candidate in geometries
+                                        ),
                                     ),
                                 )
                             )
