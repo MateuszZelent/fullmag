@@ -636,6 +636,53 @@
         "source-generic-slepc-mass-pool",
         "source-generic-candidate-span-gram"
       ]
+    },
+    {
+      "id": "eq-count-fixture-equilibrium",
+      "symbols": [
+        "count_fixture_bias",
+        "count_fixture_ez",
+        "count_fixture_external",
+        "count_fixture_demagstatic",
+        "count_fixture_effective"
+      ],
+      "sources": [
+        "source-count-physical-fixture-contract"
+      ]
+    },
+    {
+      "id": "eq-count-fixture-local-field",
+      "symbols": [
+        "count_fixture_aqq",
+        "count_fixture_gyro",
+        "count_fixture_rotation",
+        "count_fixture_frequency",
+        "count_fixture_bias",
+        "Ms",
+        "mu0",
+        "thickness_gamma",
+        "modal_tangent_mass"
+      ],
+      "sources": [
+        "source-count-physical-fixture-contract"
+      ]
+    },
+    {
+      "id": "eq-count-fixture-demag-bound",
+      "symbols": [
+        "count_fixture_demag",
+        "count_fixture_frequency",
+        "count_fixture_modefrequency",
+        "count_fixture_modeindex",
+        "count_fixture_bias",
+        "Ms",
+        "mu0",
+        "thickness_gamma",
+        "modal_tangent_mass"
+      ],
+      "sources": [
+        "source-count-physical-fixture-contract"
+      ]
     }
   ],
   "symbols": [
@@ -1309,6 +1356,84 @@
       "id": "modal_mass_overlap",
       "latex": "$\\eta_M$",
       "meaning": "normalized absolute overlap in the geometric tangent-mass metric",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "count_fixture_bias",
+      "latex": "$H_0$",
+      "meaning": "prescribed total effective bias of the count fixture",
+      "si_unit": "$\\mathrm{A\\,m^{-1}}$"
+    },
+    {
+      "id": "count_fixture_ez",
+      "latex": "$\\mathbf e_z$",
+      "meaning": "unit direction of the prescribed equilibrium",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "count_fixture_external",
+      "latex": "$\\mathbf H_{\\rm ext}$",
+      "meaning": "compensating external field",
+      "si_unit": "$\\mathrm{A\\,m^{-1}}$"
+    },
+    {
+      "id": "count_fixture_demagstatic",
+      "latex": "$\\mathbf H_{{\\rm demag},0}$",
+      "meaning": "owner-computed static demagnetizing field",
+      "si_unit": "$\\mathrm{A\\,m^{-1}}$"
+    },
+    {
+      "id": "count_fixture_effective",
+      "latex": "$\\mathbf H_{{\\rm eff},0}$",
+      "meaning": "total static effective field",
+      "si_unit": "$\\mathrm{A\\,m^{-1}}$"
+    },
+    {
+      "id": "count_fixture_potential",
+      "latex": "$\\phi_0$",
+      "meaning": "owner-computed static magnetic scalar potential",
+      "si_unit": "$\\mathrm A$"
+    },
+    {
+      "id": "count_fixture_aqq",
+      "latex": "$\\mathbf A_Z$",
+      "meaning": "Zeeman curvature in the geometric weak tangent basis",
+      "si_unit": "$\\mathrm J$"
+    },
+    {
+      "id": "count_fixture_gyro",
+      "latex": "$\\mathbf B$",
+      "meaning": "gyrotropic weak tangent block",
+      "si_unit": "$\\mathrm{J\\,s}$"
+    },
+    {
+      "id": "count_fixture_rotation",
+      "latex": "$\\mathbf J$",
+      "meaning": "tangent-plane rotation matrix",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "count_fixture_demag",
+      "latex": "$\\mathbf D$",
+      "meaning": "positive dynamic demag curvature in the same basis",
+      "si_unit": "$\\mathrm J$"
+    },
+    {
+      "id": "count_fixture_frequency",
+      "latex": "$f_Z$",
+      "meaning": "independent local-field reference frequency",
+      "si_unit": "$\\mathrm{Hz}$"
+    },
+    {
+      "id": "count_fixture_modefrequency",
+      "latex": "$f_j$",
+      "meaning": "frequency of physical mode j",
+      "si_unit": "$\\mathrm{Hz}$"
+    },
+    {
+      "id": "count_fixture_modeindex",
+      "latex": "$j$",
+      "meaning": "physical mode index",
       "si_unit": "$1$"
     }
   ],
@@ -2761,6 +2886,13 @@
       "path": "packages/fullmag-py/src/fullmag/runtime/script_builder.py",
       "symbol": "_sync_stage_output_snapshot",
       "responsibility": "Reconcile exact immutable output snapshots for supported canonical study rendering without promoting later selectors to the base or duplicating ordered autosave; hosted regression pending."
+    },
+    {
+      "id": "source-count-physical-fixture-contract",
+      "path": "docs/physics/0831-fem-dynamic-pencil-modal-response-and-krylov.md",
+      "symbol": "DOC-ANCHOR:count-physical-fixture-contract",
+      "evidence_status": "planned_contract",
+      "responsibility": "Prospective physically coherent count fixture with actual static/dynamic owner forms, data digests and independent energy bound; implementation and runtime NOT VERIFIED."
     }
   ],
   "public_api": {

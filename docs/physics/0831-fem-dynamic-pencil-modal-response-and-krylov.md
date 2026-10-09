@@ -2335,6 +2335,7 @@ Repository-owned related contracts:
 
 | Source path | Symbol | Responsibility |
 |---|---|---|
+| docs/physics/0831-fem-dynamic-pencil-modal-response-and-krylov.md | DOC-ANCHOR:count-physical-fixture-contract | Planned physically bound count fixture; static-owner, boundary-form, digest and energy-oracle execution NOT VERIFIED. |
 | packages/fullmag-py/src/fullmag/runtime/script_builder.py | _sync_stage_output_snapshot | Reconcile immutable stage output families and preserve ordered autosave; selectors and StudyIR regression pending hosted CI. |
 | backends/fem/cpu/frequency_domain/slepc_modal_eigen.cpp | SLEPcTinyGyrotropicModalEigenResult solve_slepc_gyrotropic_modal_eigen_attempt | Configure checked nonzero-diagonal PCLU permutation before EPS setup, preserving operator values, shift policy, original residual gate and graph quarantine; provider proof pending. |
 | backends/fem/cpu/frequency_domain/slepc_modal_eigen.cpp | bool create_real_frequency_rotated_pencil | Retain exact zero structural diagonal slots in both real-split AIJ matrices for symbolic LU; preserve the operator and quarantine on hard assembly errors. Actual-provider regression pending. |
@@ -4083,3 +4084,80 @@ StudyIR for two Eigen stages, mixed Time/Eigen/Time, disable-all autosave and
 FrequencyResponse/Eigen. The existing API selector regression remains an
 independent gate. Source review and parsing passed; hosted execution of this
 correction is **NOT VERIFIED**.
+
+
+(count-physical-fixture-contract)=
+### Prospective physical contract for the native count fixture
+
+Status: planned correction, **NOT VERIFIED**. The current count fixture has an
+empty term mask. The shared production importer assembles native magnetic Aqq
+from the descriptor and replaces the supplied synthetic CSR; changing only the
+mask would not establish physical consistency.
+
+The bounded CPU fixture will use the same expanded conforming mesh, periodic
+partition and geometric tangent mass, uniform magnetization along z, zero
+Gilbert damping, $M_s=2\,\mathrm{A\,m^{-1}}$,
+$\gamma_0=3\,\mathrm{m\,A^{-1}\,s^{-1}}$ and
+$H_0=100\,\mathrm{A\,m^{-1}}$. These are explicit test-model parameters, not
+production defaults or a DE/BV dispersion benchmark.
+
+| Token | Meaning | SI unit |
+|---|---|---|
+| $H_0$ | prescribed total effective bias of the count fixture | $\mathrm{A\,m^{-1}}$ |
+| $\mathbf e_z$ | unit direction of the prescribed equilibrium | $1$ |
+| $\mathbf H_{\rm ext}$ | compensating external field | $\mathrm{A\,m^{-1}}$ |
+| $\mathbf H_{{\rm demag},0}$ | owner-computed static demagnetizing field | $\mathrm{A\,m^{-1}}$ |
+| $\mathbf H_{{\rm eff},0}$ | total static effective field | $\mathrm{A\,m^{-1}}$ |
+| $\phi_0$ | owner-computed static magnetic scalar potential | $\mathrm A$ |
+| $\mathbf A_Z$ | Zeeman curvature in the geometric weak tangent basis | $\mathrm J$ |
+| $\mathbf B$ | gyrotropic weak tangent block | $\mathrm{J\,s}$ |
+| $\mathbf J$ | tangent-plane rotation matrix | $1$ |
+| $\mathbf D$ | positive dynamic demag curvature in the same basis | $\mathrm J$ |
+| $f_Z$ | independent local-field reference frequency | $\mathrm{Hz}$ |
+| $f_j$ | frequency of physical mode j | $\mathrm{Hz}$ |
+| $j$ | physical mode index | $1$ |
+
+Static demag and $\phi_0$ must be computed by the native owner. Compensation
+then makes the total field parallel to the prescribed magnetization:
+
+```{math}
+:label: eq-count-fixture-equilibrium
+\mathbf H_{\rm ext}=H_0\mathbf e_z-\mathbf H_{{\rm demag},0},
+\qquad \mathbf H_{{\rm eff},0}=H_0\mathbf e_z.
+```
+
+For this FIELD/DEMAG model, with the native tangent basis and zero damping,
+the independent local-field oracle is:
+
+```{math}
+:label: eq-count-fixture-local-field
+\mathbf A_Z=\mu_0 M_s H_0\mathbf M_T,
+\qquad \mathbf B=\frac{\mu_0 M_s}{\gamma_0}\mathbf M_T\mathbf J,
+\qquad f_Z=\frac{\gamma_0H_0}{2\pi}.
+```
+
+For a consistent positive Poisson bilinear form and its adjoint FE coupling,
+the demag energy bound implies the following bracket. Its prerequisites and
+inequality must be checked on the actual assembled blocks:
+
+```{math}
+:label: eq-count-fixture-demag-bound
+0\preceq\mathbf D\preceq\mu_0M_s^2\mathbf M_T,
+\qquad f_Z\le f_j\le\frac{\gamma_0(H_0+M_s)}{2\pi}.
+```
+
+The planned search window $[0.90f_Z,1.03f_Z]$ is derived before observing any
+spectrum and has one partition with its midpoint below this bracket. Preserve
+all residual and canonical-admission gates; best-effort mode cap and rejection
+of unsupported certified-count policy remain distinct controls.
+
+Required source evidence: `demag_poisson_solve.cpp` +
+`context_compute_demag_poisson` for static H/phi; `poisson_airbox_shared_domain.cpp`
++ `assemble_native_magnetic_a_qq` and `assemble_poisson_airbox_shared_domain` for
+native weak blocks; `canonical_digest.hpp` + `class CanonicalDigestBuilder` for
+actual data/term bindings. Compare canonical equivalence partitions and the
+actual static/dynamic boundary forms and gauges. Equal beta or class counts
+alone are insufficient, especially when the static owner omits periodic
+boundary traces. Do not introduce an arbitrary CSR, zero-potential assumption,
+constant placeholder hashes, or a dense fallback. This gate exercises FEM CPU;
+FEM GPU and both FDM lanes gain no qualification from it.
