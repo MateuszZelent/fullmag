@@ -4363,3 +4363,63 @@ w GitHub Actions jest **NOT VERIFIED**.
 | source-eigen-spectrum-v04-quantity | `crates/fullmag-ir/src/study_v04.rs` :: `validate_v04_spectrum_quantities` | Semantic V0.4 sampling validation bez zmiany raw serde. Source review PASS, GHA NOT VERIFIED. |
 | source-eigen-spectrum-plan-quantity | `crates/fullmag-plan/src/validate.rs` :: `validate_eigen_outputs` | Planner reject unsupported spectrum quantity, canonical duplicate identity. Source review PASS, GHA NOT VERIFIED. |
 | source-eigen-spectrum-single-quantity | `crates/fullmag-runner/src/fem/eigen_execution.rs` :: `execute_fem_eigen_inner` | Guard przed handoff/providerem dla ręcznego Single-k; source review PASS, GHA NOT VERIFIED. |
+
+## Proveniencja wykonania ścieżki k
+
+Ścieżka k jest sekwencją niezależnie rozwiązanych próbek. Próbka Γ (K=0)
+i próbka z niezerowym wektorem Floqueta mogą używać innych adapterów,
+konwencji fazowej, rezydencji i stanu walidacji. Manifest ścieżki nie może
+więc wyprowadzać globalnego `resolved_execution` ani `physics.phase_convention`
+z pierwszej próbki.
+
+Pola globalne `resolved_execution` i pola diagnostyczne walidacji opisują wartość wspólną tylko wtedy, gdy każda
+próbka ma jawne odpowiednie metadane i wartości są zgodne. Rozbieżność lub
+brak w którejkolwiek próbce daje `null`; globalne pola nie są uzupełniane
+etykietą z orkiestratora ani modelem solvera. `requested_execution` nadal
+opisuje plan i żądanie użytkownika, a `physics` opisuje wspólny plan fizyczny.
+Requested fields such as `solver_method`, `preconditioner` and
+`magnetostatic_bc` use plan-level requested intent when no sample diagnostic
+reports them. If any sample reports a field, the manifest emits it only when
+every sample reports the same value; incomplete or differing evidence gives
+`null`. These values describe requested intent, not resolved execution. The
+label `orchestrator_only_reference` explicitly marks the limited legacy
+reference/model values retained for a reference path without native diagnostics.
+`physics.phase_convention` oznacza tu czasową konwencję fazora. Agreguje
+wyłącznie per-sample diagnostyczne `phasor_convention` (exp_±iωt); wymaga
+zgodności jawnych wartości we wszystkich próbkach. Przestrzenna
+`phase_convention` SpinWaveBC/Floqueta jest innym polem i nie zastępuje fazora.
+
+Manifest dodaje kompaktowe `sample_execution_provenance` w kolejności
+próbek rozwiązanych przez orkiestrator. Każdy wpis zachowuje indeks, etykietę
+i wektor k, dostępność diagnostyki oraz obecne requested/resolved execution,
+rezydencję, fallback i stan walidacji. Brakujące pola pozostają `null`;
+pełne diagnostyki nadal należą do osobnego artefaktu
+`eigen/diagnostics/solver.v1.json` i nie są kopiowane do manifestu. Stan
+podsumowania rozróżnia: `homogeneous` (diagnostyka jest dostępna dla każdej
+próbki, a porównywane deskryptory wykonania mają zgodne raportowane wartości;
+pola nieobecne we wszystkich próbkach pozostają `null` i nie powodują `partial`),
+`mixed` (jawne deskryptory wykonania różnią się), `partial` (brakuje diagnostyki
+lub porównywanego deskryptora w części próbek, bez jawnego konfliktu), `missing`
+(brak porównywanych deskryptorów wykonania; licznik brakujących diagnostyk
+pozostaje jawny) oraz `orchestrator_only_reference` dla rozpoznanej
+referencyjnej ścieżki bez diagnostyk native. `homogeneous` oznacza zgodność
+dostępnych raportowanych deskryptorów, a nie kompletność wszystkich pól,
+walidację ani kwalifikację naukową. `orchestrator_only_reference` zachowuje
+ograniczone wartości modelu referencyjnego; nie jest pomiarem rezydencji ani
+dowodem adaptera native. Nieznane wykonanie native pozostaje nieznane.
+Żaden status nie podnosi walidacji źródłowej ani kwalifikacji naukowej.
+
+| Pole | Agregacja globalna | Zachowanie szczegółów |
+|---|---|---|
+| `resolved_execution` oraz pola diagnostyczne walidacji | Wartość tylko przy zgodności jawnego pola we wszystkich próbkach; inaczej `null`. | Wartości per próbka i ich dostępność są w `sample_execution_provenance.samples[]`. |
+| `physics.phase_convention` | Wartość tylko przy zgodności jawnego `phasor_convention` we wszystkich próbkach; brak lub różnica daje `null`. | Zachowana czasowa konwencja fazora per próbka; przestrzenna `phase_convention` pozostaje osobnym polem. |
+| Żądanie użytkownika i fizyka planu | Pozostają polami planu; nie są zastępowane przez rozwiązanie próbki Γ. | Diagnostyczne różnice per próbka pozostają widoczne w rekordach. |
+
+Ta agregacja opisuje pochodzenie wykonania. Nie zmienia równań, solvera,
+fallbacku, rezydencji, wyniku widma ani statusu walidacji metody. Kontrakt
+i regresje są source-level; pełne testy Rust i wykonanie naukowe pozostają
+**NOT VERIFIED** do GitHub Actions oraz właściwych bramek.
+
+| Source ID | Path + symbol | Odpowiedzialność i dowód |
+|---|---|---|
+| source-eigen-path-sample-execution-provenance | `crates/fullmag-runner/src/fem/eigen_path_manifest.rs` :: `eigen_path_sample_execution_provenance` | Globalne wartości tylko dla wspólnych jawnych metadanych; kompaktowe rekordy per próbka zachowują mieszane/brakujące provenance i kolejność. Source review pending; Rust/GHA i runtime NOT VERIFIED. |

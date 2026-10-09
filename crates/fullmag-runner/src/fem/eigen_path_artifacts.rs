@@ -1143,6 +1143,740 @@ mod output_publication_tests {
     }
 
     #[test]
+    fn path_manifest_records_mixed_homogeneous_partial_and_missing_execution_provenance() {
+        let plan = residual_transport_test_plan();
+        let model = crate::eigen::EigenSolverModel::ProductionCpuShiftInvert;
+        let reference_model = crate::eigen::EigenSolverModel::ReferenceScalarTangent;
+        let diagnostic = |engine: &str, algorithm: &str, phasor: &str, signature: &str| {
+            serde_json::json!({
+                "solver_adapter": algorithm,
+                "execution_lane": "production_cpu",
+                "requested_execution": {
+                    "solver_method": "targeted_spectrum",
+                    "preconditioner": "jacobi",
+                    "magnetostatic_bc": "floquet_airbox",
+                },
+                "resolved_execution": {
+                    "device": "cpu",
+                    "precision": "double",
+                    "engine": engine,
+                    "native_backend": "native_cpu",
+                    "reference_or_production": "production",
+                    "demag_realization": "floquet_airbox",
+                    "solver_library": "slepc",
+                    "solver_algorithm": algorithm,
+                    "implementation_id": algorithm,
+                    "status": "ready",
+                    "device_residency": "host",
+                    "operator_residency": "host",
+                    "vector_residency": "host",
+                    "krylov_residency": "host",
+                    "preconditioner_residency": "host",
+                    "fallback_used": false,
+                    "fallback_reason": null,
+                    "fallback_from_engine": null,
+                    "fallback_to_engine": null,
+                },
+                "phasor_convention": phasor,
+                "phase_convention": "ExpMinusIKDotDeltaR",
+                "physics_contract_version": "fixture-v1",
+                "operator_dictionary_version": "fixture-v1",
+                "implementation_state": "source_visible",
+                "validation_state": "unvalidated",
+                "validated_scope": "must-not-be-promoted",
+                "assembly_kind": "mfem_weak_form_shared_domain",
+                "operator_input_signature_sha256": signature,
+                "boundary_gauge": {"gauge_policy": "none", "magnetostatic_bc": "floquet_airbox"},
+                "spectral": {"spectral_transform": "shift_invert", "target_representation": "fixture"},
+                "phase_constraint_sha256": format!("phase-{signature}"),
+                "equilibrium_artifact_sha256": format!("equilibrium-{signature}"),
+                "linearization_state_sha256": format!("linearization-{signature}"),
+                "periodic_mesh_certificate_sha256": "mesh-certificate-common",
+                "large_native_debug_blob": {"payload": "must-not-be-copied"},
+            })
+        };
+        let sample = |sample_index: usize,
+                      k_vector: [f64; 3],
+                      solver_model: crate::eigen::EigenSolverModel,
+                      solver_diagnostics: Option<serde_json::Value>| {
+            crate::eigen::SingleKSolveResult {
+                sample: KSampleDescriptor {
+                    sample_index,
+                    label: Some(format!("sample-{sample_index}")),
+                    segment_index: Some(0),
+                    path_s: sample_index as f64,
+                    t_in_segment: 0.0,
+                    k_vector,
+                },
+                modes: Vec::new(),
+                relaxation_steps: 0,
+                solver_model,
+                solver_notes: Vec::new(),
+                solver_diagnostics,
+            }
+        };
+        let path_result = |samples: Vec<crate::eigen::SingleKSolveResult>,
+                           solver_model: crate::eigen::EigenSolverModel| {
+            crate::eigen::PathSolveResult {
+                gamma0_rad_s_per_a_m: 2.211e5,
+                samples,
+                branches: Vec::new(),
+                solver_model,
+                notes: Vec::new(),
+                include_demag: true,
+                dispersion_validation: None,
+                k0_kittel_validation: None,
+                solver_policy: None,
+                dispersion_analytic_reference: None,
+                k0_kittel_periodic_airbox_demag: None,
+            }
+        };
+        let manifest = |result: &crate::eigen::PathSolveResult| {
+            build_eigen_path_frequency_domain_manifest(
+                FemEngine::CpuNative,
+                result,
+                &[],
+                &plan,
+                &[],
+            )
+        };
+
+        let mixed_result = path_result(
+            vec![
+                sample(
+                    7,
+                    [0.0, 0.0, 0.0],
+                    model,
+                    Some(diagnostic(
+                        "k0_poisson_adapter",
+                        "k0_poisson_solver",
+                        "exp_plus_i_omega_t",
+                        "signature-k0",
+                    )),
+                ),
+                sample(
+                    0,
+                    [1.0e6, 0.0, 0.0],
+                    model,
+                    Some(diagnostic(
+                        "floquet_modal_adapter",
+                        "floquet_solver",
+                        "exp_i_omega_t",
+                        "signature-k1",
+                    )),
+                ),
+                sample(
+                    5,
+                    [2.0e6, 0.0, 0.0],
+                    model,
+                    Some(diagnostic(
+                        "floquet_modal_adapter",
+                        "floquet_solver",
+                        "exp_i_omega_t",
+                        "signature-k2",
+                    )),
+                ),
+            ],
+            model,
+        );
+        let mixed = manifest(&mixed_result);
+        let serialized = serde_json::to_vec_pretty(&mixed).unwrap();
+        let mixed: serde_json::Value = serde_json::from_slice(&serialized).unwrap();
+        assert_eq!(
+            mixed["sample_execution_provenance"]["status"],
+            "mixed"
+        );
+        assert_eq!(
+            mixed["sample_execution_provenance"]["diagnostics_available_count"],
+            3
+        );
+        assert_eq!(
+            mixed["sample_execution_provenance"]["samples"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|sample| sample["sample_index"].as_u64().unwrap())
+                .collect::<Vec<_>>(),
+            vec![7, 0, 5],
+            "provenance records follow solved-sample order, not sorted sample IDs"
+        );
+        assert_eq!(
+            mixed["sample_execution_provenance"]["samples"][0]["resolved_execution"]["engine"],
+            "k0_poisson_adapter"
+        );
+        assert_eq!(
+            mixed["sample_execution_provenance"]["samples"][1]["resolved_execution"]["engine"],
+            "floquet_modal_adapter"
+        );
+        assert!(mixed["resolved_execution"]["engine"].is_null());
+        assert!(mixed["resolved_execution"]["solver_algorithm"].is_null());
+        assert!(mixed["physics"]["phase_convention"].is_null());
+        assert!(mixed["operator_input_signature_sha256"].is_null());
+        assert_eq!(mixed["validation_state"], "unvalidated");
+        assert!(mixed["validated_scope"].is_null());
+        assert!(!String::from_utf8(serialized)
+            .unwrap()
+            .contains("large_native_debug_blob"));
+
+        let reversed_result = path_result(
+            vec![
+                sample(
+                    5,
+                    [2.0e6, 0.0, 0.0],
+                    model,
+                    Some(diagnostic(
+                        "floquet_modal_adapter",
+                        "floquet_solver",
+                        "exp_i_omega_t",
+                        "signature-k2",
+                    )),
+                ),
+                sample(
+                    0,
+                    [1.0e6, 0.0, 0.0],
+                    model,
+                    Some(diagnostic(
+                        "floquet_modal_adapter",
+                        "floquet_solver",
+                        "exp_i_omega_t",
+                        "signature-k1",
+                    )),
+                ),
+                sample(
+                    7,
+                    [0.0, 0.0, 0.0],
+                    model,
+                    Some(diagnostic(
+                        "k0_poisson_adapter",
+                        "k0_poisson_solver",
+                        "exp_plus_i_omega_t",
+                        "signature-k0",
+                    )),
+                ),
+            ],
+            model,
+        );
+        let reversed = manifest(&reversed_result);
+        assert_eq!(
+            reversed["sample_execution_provenance"]["samples"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|sample| sample["sample_index"].as_u64().unwrap())
+                .collect::<Vec<_>>(),
+            vec![5, 0, 7]
+        );
+        assert!(reversed["resolved_execution"]["engine"].is_null());
+        assert!(reversed["physics"]["phase_convention"].is_null());
+
+        let nested_diagnostics =
+            diagnostic("nested_engine", "nested_algorithm", "exp_i_omega_t", "nested-signature");
+        let one_sample_envelope = serde_json::json!({
+            "solver_adapter": "root_first_sample_adapter",
+            "resolved_execution": {
+                "engine": "root_first_sample_engine",
+                "solver_algorithm": "root_first_sample_algorithm",
+            },
+            "relax_to_eigen_handoff_sha256": "root-handoff-binding",
+            "relax_to_eigen_source_mesh_topology_sha256": "root-source-binding",
+            "source_mesh_topology_sha256": "root-modal-mesh-binding",
+            "sample_solver_diagnostics": [{
+                "sample_index": 11,
+                "diagnostics": nested_diagnostics,
+            }],
+        });
+        let envelope_result = path_result(
+            vec![sample(
+                11,
+                [1.0e6, 0.0, 0.0],
+                model,
+                Some(one_sample_envelope),
+            )],
+            model,
+        );
+        let envelope_manifest = manifest(&envelope_result);
+        assert_eq!(
+            envelope_manifest["resolved_execution"]["engine"],
+            "nested_engine"
+        );
+        assert_eq!(
+            envelope_manifest["resolved_execution"]["solver_algorithm"],
+            "nested_algorithm"
+        );
+        assert_eq!(
+            envelope_manifest["sample_execution_provenance"]["samples"][0]["solver_adapter"],
+            "nested_algorithm"
+        );
+        assert_eq!(
+            envelope_manifest["sample_execution_provenance"]["samples"][0]["sample_binding"]
+                ["relax_to_eigen_handoff_sha256"],
+            "root-handoff-binding"
+        );
+        assert_eq!(
+            envelope_manifest["sample_execution_provenance"]["samples"][0]["sample_binding"]
+                ["source_mesh_topology_sha256"],
+            "root-modal-mesh-binding"
+        );
+
+        let wrong_index_envelope = serde_json::json!({
+            "solver_adapter": "root_wrong_index_adapter",
+            "resolved_execution": {"engine": "root_wrong_index_engine"},
+            "sample_solver_diagnostics": [{
+                "sample_index": 10,
+                "diagnostics": diagnostic(
+                    "unmatched_nested_engine",
+                    "unmatched_nested_algorithm",
+                    "exp_i_omega_t",
+                    "wrong-index",
+                ),
+            }],
+        });
+        let wrong_index_result = path_result(
+            vec![sample(
+                11,
+                [1.0e6, 0.0, 0.0],
+                model,
+                Some(wrong_index_envelope),
+            )],
+            model,
+        );
+        let wrong_index_manifest = manifest(&wrong_index_result);
+        assert_eq!(
+            wrong_index_manifest["sample_execution_provenance"]["status"],
+            "missing"
+        );
+        assert_eq!(
+            wrong_index_manifest["sample_execution_provenance"]["diagnostics_available_count"],
+            0
+        );
+        assert!(wrong_index_manifest["resolved_execution"]["engine"].is_null());
+
+        let duplicate_index_envelope = serde_json::json!({
+            "solver_adapter": "root_duplicate_index_adapter",
+            "resolved_execution": {"engine": "root_duplicate_index_engine"},
+            "sample_solver_diagnostics": [
+                {
+                    "sample_index": 13,
+                    "diagnostics": diagnostic(
+                        "duplicate_nested_engine_a",
+                        "duplicate_nested_algorithm_a",
+                        "exp_i_omega_t",
+                        "duplicate-a",
+                    ),
+                },
+                {
+                    "sample_index": 13,
+                    "diagnostics": diagnostic(
+                        "duplicate_nested_engine_b",
+                        "duplicate_nested_algorithm_b",
+                        "exp_i_omega_t",
+                        "duplicate-b",
+                    ),
+                },
+            ],
+        });
+        let duplicate_index_result = path_result(
+            vec![sample(
+                13,
+                [1.0e6, 0.0, 0.0],
+                model,
+                Some(duplicate_index_envelope),
+            )],
+            model,
+        );
+        let duplicate_index_manifest = manifest(&duplicate_index_result);
+        assert_eq!(
+            duplicate_index_manifest["sample_execution_provenance"]["status"],
+            "missing"
+        );
+        assert_eq!(
+            duplicate_index_manifest["sample_execution_provenance"]["diagnostics_available_count"],
+            0
+        );
+        assert!(duplicate_index_manifest["resolved_execution"]["engine"].is_null());
+
+        let mut algorithm_a =
+            diagnostic("shared_engine", "shared_implementation", "exp_i_omega_t", "alg-a");
+        algorithm_a["solver_adapter"] = serde_json::json!("shared_adapter");
+        algorithm_a["resolved_execution"]["implementation_id"] =
+            serde_json::json!("shared_implementation");
+        algorithm_a["resolved_execution"]["solver_algorithm"] =
+            serde_json::json!("algorithm_a");
+        let mut algorithm_b =
+            diagnostic("shared_engine", "shared_implementation", "exp_i_omega_t", "alg-b");
+        algorithm_b["solver_adapter"] = serde_json::json!("shared_adapter");
+        algorithm_b["resolved_execution"]["implementation_id"] =
+            serde_json::json!("shared_implementation");
+        algorithm_b["resolved_execution"]["solver_algorithm"] =
+            serde_json::json!("algorithm_b");
+        let algorithm_result = path_result(
+            vec![
+                sample(
+                    2,
+                    [0.0, 0.0, 0.0],
+                    model,
+                    Some(algorithm_a),
+                ),
+                sample(
+                    9,
+                    [1.0e6, 0.0, 0.0],
+                    model,
+                    Some(algorithm_b),
+                ),
+            ],
+            model,
+        );
+        let algorithm_manifest = manifest(&algorithm_result);
+        assert_eq!(
+            algorithm_manifest["sample_execution_provenance"]["status"],
+            "mixed"
+        );
+        assert_eq!(
+            algorithm_manifest["resolved_execution"]["engine"],
+            "shared_engine"
+        );
+        assert_eq!(
+            algorithm_manifest["resolved_execution"]["implementation_id"],
+            "shared_implementation"
+        );
+        assert!(algorithm_manifest["resolved_execution"]["solver_algorithm"].is_null());
+        assert_eq!(
+            algorithm_manifest["sample_execution_provenance"]["samples"][0]
+                ["resolved_execution"]["solver_algorithm"],
+            "algorithm_a"
+        );
+        assert_eq!(
+            algorithm_manifest["sample_execution_provenance"]["samples"][1]
+                ["resolved_execution"]["solver_algorithm"],
+            "algorithm_b"
+        );
+
+        let mut implementation_a =
+            diagnostic("same_engine", "same_algorithm", "exp_i_omega_t", "implementation-a");
+        implementation_a["solver_adapter"] = serde_json::json!("same_adapter");
+        implementation_a["resolved_execution"]["solver_algorithm"] =
+            serde_json::json!("same_algorithm");
+        implementation_a["resolved_execution"]["implementation_id"] =
+            serde_json::json!("implementation_a");
+        let mut implementation_b =
+            diagnostic("same_engine", "same_algorithm", "exp_i_omega_t", "implementation-b");
+        implementation_b["solver_adapter"] = serde_json::json!("same_adapter");
+        implementation_b["resolved_execution"]["solver_algorithm"] =
+            serde_json::json!("same_algorithm");
+        implementation_b["resolved_execution"]["implementation_id"] =
+            serde_json::json!("implementation_b");
+        let implementation_result = path_result(
+            vec![
+                sample(2, [0.0, 0.0, 0.0], model, Some(implementation_a)),
+                sample(9, [1.0e6, 0.0, 0.0], model, Some(implementation_b)),
+            ],
+            model,
+        );
+        let implementation_manifest = manifest(&implementation_result);
+        assert_eq!(
+            implementation_manifest["sample_execution_provenance"]["status"],
+            "mixed"
+        );
+        assert_eq!(
+            implementation_manifest["resolved_execution"]["engine"],
+            "same_engine"
+        );
+        assert_eq!(
+            implementation_manifest["resolved_execution"]["solver_algorithm"],
+            "same_algorithm"
+        );
+        assert!(implementation_manifest["resolved_execution"]["implementation_id"].is_null());
+
+        let homogeneous_result = path_result(
+            vec![
+                sample(
+                    7,
+                    [0.0, 0.0, 0.0],
+                    model,
+                    Some(diagnostic(
+                        "single_path_adapter",
+                        "same_solver",
+                        "exp_i_omega_t",
+                        "signature-k0",
+                    )),
+                ),
+                sample(
+                    0,
+                    [1.0e6, 0.0, 0.0],
+                    model,
+                    Some(diagnostic(
+                        "single_path_adapter",
+                        "same_solver",
+                        "exp_i_omega_t",
+                        "signature-k1",
+                    )),
+                ),
+            ],
+            model,
+        );
+        let homogeneous = manifest(&homogeneous_result);
+        assert_eq!(
+            homogeneous["sample_execution_provenance"]["status"],
+            "homogeneous"
+        );
+        assert_eq!(homogeneous["resolved_execution"]["engine"], "single_path_adapter");
+        assert_eq!(homogeneous["resolved_execution"]["solver_algorithm"], "same_solver");
+        assert_eq!(homogeneous["physics"]["phase_convention"], "exp_i_omega_t");
+        assert!(homogeneous["operator_input_signature_sha256"].is_null());
+
+        let partial_result = path_result(
+            vec![
+                sample(
+                    2,
+                    [0.0, 0.0, 0.0],
+                    model,
+                    Some(diagnostic(
+                        "single_path_adapter",
+                        "same_solver",
+                        "exp_i_omega_t",
+                        "signature-partial",
+                    )),
+                ),
+                sample(8, [1.0e6, 0.0, 0.0], model, None),
+            ],
+            model,
+        );
+        let partial = manifest(&partial_result);
+        assert_eq!(
+            partial["sample_execution_provenance"]["status"],
+            "partial"
+        );
+        assert_eq!(
+            partial["sample_execution_provenance"]["diagnostics_missing_count"],
+            1
+        );
+        assert!(partial["resolved_execution"]["engine"].is_null());
+        assert!(partial["physics"]["phase_convention"].is_null());
+
+        let missing_result = path_result(
+            vec![
+                sample(3, [0.0, 0.0, 0.0], model, None),
+                sample(6, [1.0e6, 0.0, 0.0], model, None),
+            ],
+            model,
+        );
+        let missing = manifest(&missing_result);
+        assert_eq!(
+            missing["sample_execution_provenance"]["status"],
+            "missing"
+        );
+        assert!(missing["resolved_execution"]["engine"].is_null());
+        assert!(missing["resolved_execution"]["solver_algorithm"].is_null());
+        assert!(missing["physics"]["phase_convention"].is_null());
+
+        let legacy_reference_result = path_result(
+            vec![
+                sample(1, [0.0, 0.0, 0.0], reference_model, None),
+                sample(4, [1.0e6, 0.0, 0.0], reference_model, None),
+            ],
+            reference_model,
+        );
+        let legacy_reference = manifest(&legacy_reference_result);
+        assert_eq!(
+            legacy_reference["sample_execution_provenance"]["status"],
+            "orchestrator_only_reference"
+        );
+        assert_eq!(
+            legacy_reference["resolved_execution"]["reference_or_production"],
+            "reference"
+        );
+        assert_eq!(
+            legacy_reference["resolved_execution"]["solver_algorithm"],
+            "reference_scalar_tangent"
+        );
+        assert!(legacy_reference["physics"]["phase_convention"].is_null());
+    }
+
+    #[test]
+    fn native_modal_producer_summary_keeps_outer_sample_index_in_path_provenance() {
+        let plan = residual_transport_test_plan();
+        let solver_model = crate::eigen::EigenSolverModel::ProductionCpuShiftInvert;
+        let reduction = ReductionMap {
+            active_nodes: Vec::new(),
+            node_map: Vec::new(),
+            node_phases: Vec::new(),
+            complex_reduction: false,
+        };
+        let producer_sample = |sample_index: usize,
+                               engine: &str,
+                               algorithm: &str,
+                               adapter: &str| {
+            let producer_diagnostics = serde_json::json!({
+                "schema_version": "frequency_domain_modal_solver_diagnostics.v1",
+                "solver_adapter": adapter,
+                "execution_lane": "production_cpu",
+                "requested_execution": {
+                    "solver_method": "targeted_spectrum",
+                    "preconditioner": "jacobi",
+                    "magnetostatic_bc": "not_applicable",
+                },
+                "resolved_execution": {
+                    "device": "cpu",
+                    "precision": "double",
+                    "engine": engine,
+                    "native_backend": "native_cpu",
+                    "reference_or_production": "production",
+                    "demag_realization": "none",
+                    "solver_library": "slepc",
+                    "solver_algorithm": algorithm,
+                    "implementation_id": format!("{algorithm}_implementation"),
+                    "status": "ready",
+                    "device_residency": "host",
+                    "operator_residency": "host",
+                    "vector_residency": "host",
+                    "krylov_residency": "host",
+                    "preconditioner_residency": "host",
+                    "fallback_used": false,
+                },
+                "phasor_convention": "exp_i_omega_t",
+                "validation_state": "unvalidated",
+            });
+            let artifacts = crate::fem::eigen_native_artifacts::native_modal_artifacts(
+                &plan,
+                &[OutputIR::EigenSpectrum {
+                    quantity: "eigenfrequency".to_string(),
+                }],
+                &plan.equilibrium_magnetization,
+                &reduction,
+                &[],
+                &[],
+                None,
+                producer_diagnostics,
+                0,
+                None,
+                None,
+                None,
+                None,
+                sample_index,
+                None,
+            )
+            .expect("native producer should publish its summary diagnostics");
+            let summary_artifact = artifacts
+                .iter()
+                .find(|artifact| artifact.relative_path == "eigen/metadata/eigen_summary.json")
+                .expect("native producer should publish an eigen summary");
+            let summary: serde_json::Value = serde_json::from_slice(&summary_artifact.bytes)
+                .expect("producer summary should be JSON");
+            assert_eq!(summary["sample_index"], sample_index);
+            assert_eq!(
+                summary["solver_diagnostics"]["sample_solver_diagnostics"][0]["sample_index"],
+                sample_index
+            );
+
+            let sample = SingleKSolveResult {
+                sample: KSampleDescriptor {
+                    sample_index,
+                    label: Some(format!("producer-sample-{sample_index}")),
+                    segment_index: Some(0),
+                    path_s: sample_index as f64,
+                    t_in_segment: 0.0,
+                    k_vector: if sample_index == 0 {
+                        [0.0, 0.0, 0.0]
+                    } else {
+                        [sample_index as f64, 0.0, 0.0]
+                    },
+                },
+                modes: Vec::new(),
+                relaxation_steps: 0,
+                solver_model,
+                solver_notes: Vec::new(),
+                solver_diagnostics: Some(summary["solver_diagnostics"].clone()),
+            };
+            (sample, artifacts)
+        };
+        let (k0_sample, artifacts) = producer_sample(
+            0,
+            "native_k0_engine",
+            "native_k0_algorithm",
+            "native_k0_adapter",
+        );
+        let (later_sample, _later_artifacts) = producer_sample(
+            7,
+            "native_floquet_engine",
+            "native_floquet_algorithm",
+            "native_floquet_adapter",
+        );
+        let result = crate::eigen::PathSolveResult {
+            gamma0_rad_s_per_a_m: plan.gyromagnetic_ratio,
+            samples: vec![k0_sample, later_sample],
+            branches: Vec::new(),
+            solver_model,
+            notes: Vec::new(),
+            include_demag: plan.operator.include_demag,
+            dispersion_validation: plan.dispersion_validation.clone(),
+            k0_kittel_validation: plan.k0_kittel_validation.clone(),
+            solver_policy: plan.solver_policy.clone(),
+            dispersion_analytic_reference: None,
+            k0_kittel_periodic_airbox_demag: None,
+        };
+        let path_diagnostics = eigen_path_solver_diagnostics(
+            FemEngine::CpuNative,
+            &plan,
+            &result,
+            &BTreeSet::new(),
+        );
+        assert_eq!(
+            path_diagnostics["sample_solver_diagnostics"][0]["sample_index"],
+            0
+        );
+        assert_eq!(
+            path_diagnostics["sample_solver_diagnostics"][1]["sample_index"],
+            7
+        );
+        assert_eq!(
+            path_diagnostics["sample_solver_diagnostics"][1]["diagnostics"]
+                ["sample_solver_diagnostics"][0]["sample_index"],
+            7
+        );
+        assert_ne!(
+            path_diagnostics["solver_adapter"],
+            path_diagnostics["sample_solver_diagnostics"][0]["diagnostics"]
+                ["sample_solver_diagnostics"][0]["diagnostics"]["solver_adapter"]
+        );
+        assert_ne!(
+            path_diagnostics["solver_adapter"],
+            path_diagnostics["sample_solver_diagnostics"][1]["diagnostics"]
+                ["sample_solver_diagnostics"][0]["diagnostics"]["solver_adapter"]
+        );
+
+        let manifest = build_eigen_path_frequency_domain_manifest(
+            FemEngine::CpuNative,
+            &result,
+            &artifacts,
+            &plan,
+            &[],
+        );
+        assert_eq!(
+            manifest["sample_execution_provenance"]["status"],
+            "mixed"
+        );
+        assert_eq!(
+            manifest["sample_execution_provenance"]["samples"][0]["sample_index"],
+            0
+        );
+        assert_eq!(
+            manifest["sample_execution_provenance"]["samples"][0]["resolved_execution"]["engine"],
+            "native_k0_engine"
+        );
+        assert_eq!(
+            manifest["sample_execution_provenance"]["samples"][1]["sample_index"],
+            7
+        );
+        assert_eq!(
+            manifest["sample_execution_provenance"]["samples"][1]["resolved_execution"]["engine"],
+            "native_floquet_engine"
+        );
+        assert!(manifest["resolved_execution"]["engine"].is_null());
+        assert!(manifest["resolved_execution"]["solver_algorithm"].is_null());
+        assert!(manifest["resolved_execution"]["implementation_id"].is_null());
+        assert_eq!(manifest["physics"]["phase_convention"], "exp_i_omega_t");
+    }
+    #[test]
     fn conflicting_signed_sample_sidecars_fail_before_deduplication() {
         let path = "eigen/metadata/sample_0007/certified_fem_equilibrium_fields.v2.json";
         let artifact = |bytes: &[u8]| AuxiliaryArtifact {

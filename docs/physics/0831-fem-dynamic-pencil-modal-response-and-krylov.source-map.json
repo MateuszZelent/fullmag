@@ -2581,7 +2581,14 @@
       "path": "crates/fullmag-runner/src/fem/eigen_path_manifest.rs",
       "symbol": "build_eigen_path_frequency_domain_manifest",
       "evidence_status": "source_visible",
-      "responsibility": "List only present accepted fields v1/v2 and linearization identity v2 sidecars in the multi-k manifest."
+      "responsibility": "List present signed sidecars and aggregate resolved execution only for sample-common metadata; add compact ordered sample provenance and keep heterogeneous or missing values explicit."
+    },
+    {
+      "id": "source-eigen-path-sample-execution-provenance",
+      "path": "crates/fullmag-runner/src/fem/eigen_path_manifest.rs",
+      "symbol": "eigen_path_sample_execution_provenance",
+      "evidence_status": "source_visible",
+      "responsibility": "Project ordered, compact per-sample execution metadata; summarize only common resolved and validation values, and distinguish homogeneous, mixed, partial, missing, and orchestrator-only reference evidence without copying raw diagnostics."
     },
     {
       "id": "source-nearest-floquet-capability",

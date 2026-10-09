@@ -143,96 +143,92 @@ pub(super) fn build_eigen_path_frequency_domain_manifest(
         production_periodic_airbox_k0 && engine == FemEngine::CpuNative;
     let production_native_solver =
         production_shift_invert || production_gpu_k0_kittel || production_periodic_airbox_k0;
-    let periodic_airbox_adapter = if production_periodic_airbox_gpu {
-        "k0_poisson_airbox_gpu_petsc_slepc"
-    } else {
-        "k0_poisson_airbox_cpu_schur_slepc"
-    };
-    // The single-k native solver publishes a path-level diagnostics envelope
-    // containing one immutable `diagnostics` object per sample.  The path
-    // manifest must bind to that object rather than reconstructing an engine
-    // label from the orchestrator.  Reconstruction used to hide the actual
-    // PETSc/SLEPc adapter and all residency/fallback fields.
-    let native_diagnostics = eigen_path_native_modal_diagnostics(result);
+    let execution_provenance = eigen_path_sample_execution_provenance(result);
+    let native_diagnostics = Some(&execution_provenance.common_diagnostics);
+    let orchestrator_only_reference =
+        execution_provenance.status == "orchestrator_only_reference";
+    let orchestrator_reference_solver = result
+        .samples
+        .first()
+        .map(|sample| sample.solver_model)
+        .unwrap_or(result.solver_model);
     let requested_solver_method =
         eigen_path_nested_string(native_diagnostics, "requested_execution", "solver_method")
-            .unwrap_or_else(|| {
-                if production_periodic_airbox_k0 || production_shift_invert {
-                    "targeted_spectrum".to_string()
-                } else {
-                    "auto".to_string()
-                }
+            .or_else(|| {
+                (!execution_provenance.requested_solver_method_present).then(|| {
+                    if production_periodic_airbox_k0 || production_shift_invert {
+                        "targeted_spectrum".to_string()
+                    } else {
+                        "auto".to_string()
+                    }
+                })
             });
     let requested_preconditioner =
         eigen_path_nested_string(native_diagnostics, "requested_execution", "preconditioner")
-            .unwrap_or_else(|| "not_applicable".to_string());
+            .or_else(|| {
+                (!execution_provenance.requested_preconditioner_present)
+                    .then(|| "not_applicable".to_string())
+            });
     let requested_magnetostatic_bc = eigen_path_nested_string(
         native_diagnostics,
         "requested_execution",
         "magnetostatic_bc",
     )
     .or_else(|| {
-        plan.operator
-            .include_demag
-            .then_some("periodic_airbox_k0".to_string())
-    })
-    .unwrap_or_else(|| "not_applicable".to_string());
+        (!execution_provenance.requested_magnetostatic_bc_present).then(|| {
+            if plan.operator.include_demag {
+                fem_eigen::eigen_native_window::planned_magnetostatic_bc(plan).to_string()
+            } else {
+                "not_applicable".to_string()
+            }
+        })
+    });
     let resolved_device =
         eigen_path_nested_string(native_diagnostics, "resolved_execution", "device")
-            .unwrap_or_else(|| device.to_string());
+            .or_else(|| orchestrator_only_reference.then(|| device.to_string()));
     let resolved_precision =
         eigen_path_nested_string(native_diagnostics, "resolved_execution", "precision")
-            .unwrap_or_else(|| "double".to_string());
+            .or_else(|| orchestrator_only_reference.then(|| "double".to_string()));
     let resolved_engine =
-        eigen_path_nested_string(native_diagnostics, "resolved_execution", "engine")
-            .unwrap_or_else(|| {
+        eigen_path_nested_string(native_diagnostics, "resolved_execution", "engine").or_else(|| {
+            orchestrator_only_reference.then(|| {
                 format!(
                     "multi_k_orchestrator/{}",
-                    if production_periodic_airbox_k0 {
-                        periodic_airbox_adapter
-                    } else {
-                        result.solver_model.as_str()
-                    }
+                    orchestrator_reference_solver.as_str()
                 )
-            });
+            })
+        });
     let resolved_native_backend =
         eigen_path_nested_string(native_diagnostics, "resolved_execution", "native_backend")
-            .unwrap_or_else(|| {
-                if production_periodic_airbox_gpu || production_gpu_k0_kittel {
-                    "native_gpu".to_string()
-                } else if production_periodic_airbox_cpu || production_shift_invert {
-                    "native_cpu".to_string()
-                } else if engine == FemEngine::NativeGpu {
-                    "native_gpu".to_string()
-                } else {
-                    "runner_validation".to_string()
-                }
+            .or_else(|| orchestrator_only_reference.then(|| "runner_validation".to_string()));
+    let resolved_reference_or_production = eigen_path_nested_string(
+        native_diagnostics,
+        "resolved_execution",
+        "reference_or_production",
+    )
+    .or_else(|| orchestrator_only_reference.then(|| "reference".to_string()));
+    let resolved_demag_realization =
+        eigen_path_nested_string(native_diagnostics, "resolved_execution", "demag_realization")
+            .or_else(|| {
+                orchestrator_only_reference.then(|| {
+                    if plan.operator.include_demag {
+                        "requested".to_string()
+                    } else {
+                        "none".to_string()
+                    }
+                })
             });
     let resolved_solver_library =
         eigen_path_nested_string(native_diagnostics, "resolved_execution", "solver_library")
-            .unwrap_or_else(|| {
-                if production_periodic_airbox_gpu {
-                    "SLEPc/PETSc/hypre CUDA".to_string()
-                } else if production_periodic_airbox_cpu || production_shift_invert {
-                    "slepc".to_string()
-                } else if production_gpu_k0_kittel {
-                    "cusolverdn".to_string()
-                } else {
-                    "nalgebra".to_string()
-                }
-            });
+            .or_else(|| orchestrator_only_reference.then(|| "nalgebra".to_string()));
     let resolved_solver_algorithm = eigen_path_nested_string(
         native_diagnostics,
         "resolved_execution",
-        "implementation_id",
+        "solver_algorithm",
     )
-    .or_else(|| eigen_path_nested_string(native_diagnostics, "resolved_execution", "engine"))
-    .unwrap_or_else(|| {
-        if production_periodic_airbox_k0 {
-            periodic_airbox_adapter.to_string()
-        } else {
-            result.solver_model.as_str().to_string()
-        }
+    .or_else(|| {
+        orchestrator_only_reference
+            .then(|| orchestrator_reference_solver.as_str().to_string())
     });
     let resolved_status =
         eigen_path_nested_string(native_diagnostics, "resolved_execution", "status");
@@ -241,6 +237,20 @@ pub(super) fn build_eigen_path_frequency_domain_manifest(
         "resolved_execution",
         "implementation_id",
     );
+    let resolved_device_residency = eigen_path_nested_string(
+        native_diagnostics,
+        "resolved_execution",
+        "device_residency",
+    )
+    .or_else(|| {
+        orchestrator_only_reference.then(|| {
+            if engine == FemEngine::NativeGpu {
+                "gpu_requested".to_string()
+            } else {
+                "host".to_string()
+            }
+        })
+    });
     let resolved_operator_residency = eigen_path_nested_string(
         native_diagnostics,
         "resolved_execution",
@@ -269,14 +279,10 @@ pub(super) fn build_eigen_path_frequency_domain_manifest(
         "resolved_execution",
         "fallback_to_engine",
     );
-    let hardened_validation_state = eigen_path_diag_string(native_diagnostics, "validation_state");
-    // A scope token is not a validated scope while the diagnostics explicitly
-    // say `unvalidated`; publishing it in the manifest would contradict the
-    // readiness matrix and turn an executable slice into a qualification claim.
-    let hardened_validated_scope = hardened_validation_state
-        .as_deref()
-        .filter(|state| *state != "unvalidated")
-        .and_then(|_| eigen_path_diag_string(native_diagnostics, "validated_scope"));
+    let hardened_validation_state =
+        eigen_path_diag_string(native_diagnostics, "validation_state");
+    // An unvalidated scope token is not a validated scope in the manifest.
+    let hardened_validated_scope = eigen_path_diag_string(native_diagnostics, "validated_scope");
     let hardened_boundary_gauge = eigen_path_known_object(native_diagnostics, "boundary_gauge");
     let hardened_spectral = eigen_path_known_object(native_diagnostics, "spectral");
     let mut manifest = serde_json::json!({
@@ -320,20 +326,21 @@ pub(super) fn build_eigen_path_frequency_domain_manifest(
             "precision": resolved_precision,
             "engine": resolved_engine,
             "native_backend": resolved_native_backend,
-            "reference_or_production": if production_native_solver { "production" } else if engine == FemEngine::NativeGpu { "development" } else { "reference" },
+            "reference_or_production": resolved_reference_or_production,
             "container_image": null,
             "build_features": [],
-            "demag_realization": if plan.operator.include_demag { "requested" } else { "none" },
+            "demag_realization": resolved_demag_realization,
             "solver_library": resolved_solver_library,
             "solver_algorithm": resolved_solver_algorithm,
             "solve_kind": "modal_eigen",
-            "device_residency": if production_periodic_airbox_gpu || production_gpu_k0_kittel { "gpu_device_resident" } else if engine == FemEngine::NativeGpu { "gpu_requested" } else { "host" },
+            "device_residency": resolved_device_residency,
         },
+        "sample_execution_provenance": execution_provenance.manifest_value.clone(),
         "physics": {
             "analysis_family": "magnetic_frequency_domain",
             "llg_gamma0_si": null,
             "llg_alpha": null,
-            "phase_convention": if production_periodic_airbox_k0 { "exp_plus_i_omega_t" } else if production_shift_invert || production_gpu_k0_kittel { "exp_i_omega_t" } else { "exp_minus_i_omega_t" },
+            "phase_convention": eigen_path_diag_string(native_diagnostics, "phasor_convention"),
             "frequency_units": "Hz",
             "field_units": "dimensionless_delta_m",
             "normalization": format!("{:?}", plan.normalization).to_lowercase(),
@@ -544,9 +551,7 @@ pub(super) fn build_eigen_path_frequency_domain_manifest(
             ),
         ];
         for (key, value) in optional_fields {
-            if let Some(value) = value {
-                resolved.insert(key.to_string(), value);
-            }
+            resolved.insert(key.to_string(), value.unwrap_or(Value::Null));
         }
     }
     let hardened_fields = [
@@ -606,9 +611,7 @@ pub(super) fn build_eigen_path_frequency_domain_manifest(
     ];
     if let Some(manifest_object) = manifest.as_object_mut() {
         for (key, value) in hardened_fields {
-            if let Some(value) = value {
-                manifest_object.insert(key.to_string(), value);
-            }
+            manifest_object.insert(key.to_string(), value.unwrap_or(Value::Null));
         }
     }
     if !production_shift_invert {
@@ -989,29 +992,349 @@ pub(super) fn eigen_path_created_at_label() -> String {
         .unwrap_or_else(|_| "unix:0".to_string())
 }
 
-pub(super) fn eigen_path_native_modal_diagnostics(
+struct EigenPathSampleExecutionProvenance {
+    common_diagnostics: Value,
+    manifest_value: Value,
+    status: &'static str,
+    requested_solver_method_present: bool,
+    requested_preconditioner_present: bool,
+    requested_magnetostatic_bc_present: bool,
+}
+
+fn eigen_path_sample_execution_provenance(
     result: &crate::eigen::PathSolveResult,
+) -> EigenPathSampleExecutionProvenance {
+    let diagnostics = result
+        .samples
+        .iter()
+        .map(eigen_path_sample_native_modal_diagnostics)
+        .collect::<Vec<_>>();
+    let diagnostics_available_count = diagnostics.iter().filter(|entry| entry.is_some()).count();
+    let sample_records = result
+        .samples
+        .iter()
+        .zip(diagnostics.iter().copied())
+        .map(|(sample, diagnostics)| {
+            let validation_state = eigen_path_diag_string(diagnostics, "validation_state");
+            let validated_scope = validation_state
+                .as_deref()
+                .filter(|state| *state != "unvalidated")
+                .and_then(|_| eigen_path_diag_string(diagnostics, "validated_scope"));
+            let source = if diagnostics.is_some() {
+                "sample_solver_diagnostics"
+            } else if eigen_path_is_reference_solver_model(sample.solver_model) {
+                "orchestrator_only_reference"
+            } else {
+                "missing"
+            };
+            let root_diagnostics = sample.solver_diagnostics.as_ref();
+            let binding_value = |key| {
+                eigen_path_diag_string(diagnostics, key)
+                    .or_else(|| eigen_path_diag_string(root_diagnostics, key))
+            };
+            serde_json::json!({
+                "sample_index": sample.sample.sample_index,
+                "label": sample.sample.label,
+                "k_vector": sample.sample.k_vector,
+                "solver_model": sample.solver_model.as_str(),
+                "diagnostics_available": diagnostics.is_some(),
+                "source": source,
+                "sample_binding": {
+                    "relax_to_eigen_handoff_sha256": binding_value("relax_to_eigen_handoff_sha256"),
+                    "relax_to_eigen_source_mesh_topology_sha256": binding_value("relax_to_eigen_source_mesh_topology_sha256"),
+                    "source_mesh_topology_sha256": binding_value("source_mesh_topology_sha256"),
+                },
+                "solver_adapter": eigen_path_diag_string(diagnostics, "solver_adapter"),
+                "execution_lane": eigen_path_diag_string(diagnostics, "execution_lane"),
+                "requested_execution": {
+                    "solver_method": eigen_path_nested_string(diagnostics, "requested_execution", "solver_method"),
+                    "preconditioner": eigen_path_nested_string(diagnostics, "requested_execution", "preconditioner"),
+                    "magnetostatic_bc": eigen_path_nested_string(diagnostics, "requested_execution", "magnetostatic_bc"),
+                },
+                "resolved_execution": {
+                    "device": eigen_path_nested_string(diagnostics, "resolved_execution", "device"),
+                    "precision": eigen_path_nested_string(diagnostics, "resolved_execution", "precision"),
+                    "engine": eigen_path_nested_string(diagnostics, "resolved_execution", "engine"),
+                    "native_backend": eigen_path_nested_string(diagnostics, "resolved_execution", "native_backend"),
+                    "reference_or_production": eigen_path_nested_string(diagnostics, "resolved_execution", "reference_or_production"),
+                    "demag_realization": eigen_path_nested_string(diagnostics, "resolved_execution", "demag_realization"),
+                    "solver_library": eigen_path_nested_string(diagnostics, "resolved_execution", "solver_library"),
+                    "solver_algorithm": eigen_path_sample_solver_algorithm(diagnostics),
+                    "implementation_id": eigen_path_nested_string(diagnostics, "resolved_execution", "implementation_id"),
+                    "status": eigen_path_nested_string(diagnostics, "resolved_execution", "status"),
+                    "device_residency": eigen_path_nested_string(diagnostics, "resolved_execution", "device_residency"),
+                    "operator_residency": eigen_path_nested_string(diagnostics, "resolved_execution", "operator_residency"),
+                    "vector_residency": eigen_path_nested_string(diagnostics, "resolved_execution", "vector_residency"),
+                    "krylov_residency": eigen_path_nested_string(diagnostics, "resolved_execution", "krylov_residency"),
+                    "preconditioner_residency": eigen_path_nested_string(diagnostics, "resolved_execution", "preconditioner_residency"),
+                    "fallback_used": eigen_path_nested_bool(diagnostics, "resolved_execution", "fallback_used"),
+                    "fallback_reason": eigen_path_nested_string(diagnostics, "resolved_execution", "fallback_reason"),
+                    "fallback_from_engine": eigen_path_nested_string(diagnostics, "resolved_execution", "fallback_from_engine"),
+                    "fallback_to_engine": eigen_path_nested_string(diagnostics, "resolved_execution", "fallback_to_engine"),
+                },
+                "phasor_convention": eigen_path_diag_string(diagnostics, "phasor_convention"),
+                "spin_wave_phase_convention": eigen_path_diag_string(diagnostics, "phase_convention"),
+                "validation": {
+                    "physics_contract_version": eigen_path_diag_string(diagnostics, "physics_contract_version"),
+                    "operator_dictionary_version": eigen_path_diag_string(diagnostics, "operator_dictionary_version"),
+                    "implementation_state": eigen_path_diag_string(diagnostics, "implementation_state"),
+                    "validation_state": validation_state,
+                    "validated_scope": validated_scope,
+                    "assembly_kind": eigen_path_diag_string(diagnostics, "assembly_kind"),
+                    "operator_input_signature_sha256": eigen_path_diag_string(diagnostics, "operator_input_signature_sha256"),
+                    "boundary_gauge": eigen_path_known_object(diagnostics, "boundary_gauge"),
+                    "spectral": eigen_path_known_object(diagnostics, "spectral"),
+                    "phase_constraint_sha256": eigen_path_diag_string(diagnostics, "phase_constraint_sha256"),
+                    "equilibrium_artifact_sha256": eigen_path_diag_string(diagnostics, "equilibrium_artifact_sha256"),
+                    "linearization_state_sha256": eigen_path_diag_string(diagnostics, "linearization_state_sha256"),
+                    "periodic_mesh_certificate_sha256": eigen_path_diag_string(diagnostics, "periodic_mesh_certificate_sha256"),
+                },
+            })
+        })
+        .collect::<Vec<_>>();
+
+    // Homogeneity compares execution descriptors, not per-k coordinates or
+    // identity hashes that are expected to vary along a path.
+    const EXECUTION_FIELDS: &[&[&str]] = &[
+        &["solver_adapter"],
+        &["execution_lane"],
+        &["requested_execution", "solver_method"],
+        &["requested_execution", "preconditioner"],
+        &["requested_execution", "magnetostatic_bc"],
+        &["resolved_execution", "device"],
+        &["resolved_execution", "precision"],
+        &["resolved_execution", "engine"],
+        &["resolved_execution", "native_backend"],
+        &["resolved_execution", "reference_or_production"],
+        &["resolved_execution", "demag_realization"],
+        &["resolved_execution", "solver_library"],
+        &["resolved_execution", "solver_algorithm"],
+        &["resolved_execution", "implementation_id"],
+        &["resolved_execution", "status"],
+        &["resolved_execution", "device_residency"],
+        &["resolved_execution", "operator_residency"],
+        &["resolved_execution", "vector_residency"],
+        &["resolved_execution", "krylov_residency"],
+        &["resolved_execution", "preconditioner_residency"],
+        &["resolved_execution", "fallback_used"],
+        &["resolved_execution", "fallback_reason"],
+        &["resolved_execution", "fallback_from_engine"],
+        &["resolved_execution", "fallback_to_engine"],
+        &["phasor_convention"],
+        &["spin_wave_phase_convention"],
+        &["validation", "physics_contract_version"],
+        &["validation", "operator_dictionary_version"],
+        &["validation", "implementation_state"],
+        &["validation", "validation_state"],
+        &["validation", "validated_scope"],
+        &["validation", "assembly_kind"],
+        &["validation", "boundary_gauge"],
+        &["validation", "spectral"],
+    ];
+    const EXECUTION_METADATA_FIELDS: &[&[&str]] = &[
+        &["solver_adapter"],
+        &["execution_lane"],
+        &["resolved_execution", "device"],
+        &["resolved_execution", "engine"],
+        &["resolved_execution", "native_backend"],
+        &["resolved_execution", "solver_library"],
+        &["resolved_execution", "solver_algorithm"],
+        &["resolved_execution", "implementation_id"],
+        &["phasor_convention"],
+        &["validation", "validation_state"],
+    ];
+    let has_mixed_values = EXECUTION_FIELDS
+        .iter()
+        .any(|path| eigen_path_record_values_differ(&sample_records, path));
+    let has_partial_values = EXECUTION_FIELDS
+        .iter()
+        .any(|path| eigen_path_record_value_is_partial(&sample_records, path));
+    let has_execution_metadata = EXECUTION_METADATA_FIELDS
+        .iter()
+        .any(|path| eigen_path_record_has_value(&sample_records, path));
+    let same_reference_model_without_diagnostics = diagnostics_available_count == 0
+        && result.samples.first().is_some_and(|first| {
+            eigen_path_is_reference_solver_model(first.solver_model)
+                && result
+                    .samples
+                    .iter()
+                    .all(|sample| sample.solver_model == first.solver_model)
+        });
+    let status = if same_reference_model_without_diagnostics {
+        "orchestrator_only_reference"
+    } else if has_mixed_values {
+        "mixed"
+    } else if diagnostics_available_count == 0 || !has_execution_metadata {
+        "missing"
+    } else if diagnostics_available_count < result.samples.len() || has_partial_values {
+        "partial"
+    } else {
+        "homogeneous"
+    };
+
+    let requested_solver_method_present =
+        eigen_path_record_has_value(&sample_records, &["requested_execution", "solver_method"]);
+    let requested_preconditioner_present =
+        eigen_path_record_has_value(&sample_records, &["requested_execution", "preconditioner"]);
+    let requested_magnetostatic_bc_present =
+        eigen_path_record_has_value(&sample_records, &["requested_execution", "magnetostatic_bc"]);
+    let common_diagnostics = serde_json::json!({
+        "requested_execution": {
+            "solver_method": eigen_path_common_record_value(&sample_records, &["requested_execution", "solver_method"]),
+            "preconditioner": eigen_path_common_record_value(&sample_records, &["requested_execution", "preconditioner"]),
+            "magnetostatic_bc": eigen_path_common_record_value(&sample_records, &["requested_execution", "magnetostatic_bc"]),
+        },
+        "resolved_execution": {
+            "device": eigen_path_common_record_value(&sample_records, &["resolved_execution", "device"]),
+            "precision": eigen_path_common_record_value(&sample_records, &["resolved_execution", "precision"]),
+            "engine": eigen_path_common_record_value(&sample_records, &["resolved_execution", "engine"]),
+            "native_backend": eigen_path_common_record_value(&sample_records, &["resolved_execution", "native_backend"]),
+            "reference_or_production": eigen_path_common_record_value(&sample_records, &["resolved_execution", "reference_or_production"]),
+            "demag_realization": eigen_path_common_record_value(&sample_records, &["resolved_execution", "demag_realization"]),
+            "solver_library": eigen_path_common_record_value(&sample_records, &["resolved_execution", "solver_library"]),
+            "solver_algorithm": eigen_path_common_record_value(&sample_records, &["resolved_execution", "solver_algorithm"]),
+            "implementation_id": eigen_path_common_record_value(&sample_records, &["resolved_execution", "implementation_id"]),
+            "status": eigen_path_common_record_value(&sample_records, &["resolved_execution", "status"]),
+            "device_residency": eigen_path_common_record_value(&sample_records, &["resolved_execution", "device_residency"]),
+            "operator_residency": eigen_path_common_record_value(&sample_records, &["resolved_execution", "operator_residency"]),
+            "vector_residency": eigen_path_common_record_value(&sample_records, &["resolved_execution", "vector_residency"]),
+            "krylov_residency": eigen_path_common_record_value(&sample_records, &["resolved_execution", "krylov_residency"]),
+            "preconditioner_residency": eigen_path_common_record_value(&sample_records, &["resolved_execution", "preconditioner_residency"]),
+            "fallback_used": eigen_path_common_record_value(&sample_records, &["resolved_execution", "fallback_used"]),
+            "fallback_reason": eigen_path_common_record_value(&sample_records, &["resolved_execution", "fallback_reason"]),
+            "fallback_from_engine": eigen_path_common_record_value(&sample_records, &["resolved_execution", "fallback_from_engine"]),
+            "fallback_to_engine": eigen_path_common_record_value(&sample_records, &["resolved_execution", "fallback_to_engine"]),
+        },
+        "phasor_convention": eigen_path_common_record_value(&sample_records, &["phasor_convention"]),
+        "validation_state": eigen_path_common_record_value(&sample_records, &["validation", "validation_state"]),
+        "validated_scope": eigen_path_common_record_value(&sample_records, &["validation", "validated_scope"]),
+        "physics_contract_version": eigen_path_common_record_value(&sample_records, &["validation", "physics_contract_version"]),
+        "operator_dictionary_version": eigen_path_common_record_value(&sample_records, &["validation", "operator_dictionary_version"]),
+        "implementation_state": eigen_path_common_record_value(&sample_records, &["validation", "implementation_state"]),
+        "assembly_kind": eigen_path_common_record_value(&sample_records, &["validation", "assembly_kind"]),
+        "operator_input_signature_sha256": eigen_path_common_record_value(&sample_records, &["validation", "operator_input_signature_sha256"]),
+        "boundary_gauge": eigen_path_common_record_value(&sample_records, &["validation", "boundary_gauge"]),
+        "spectral": eigen_path_common_record_value(&sample_records, &["validation", "spectral"]),
+        "phase_constraint_sha256": eigen_path_common_record_value(&sample_records, &["validation", "phase_constraint_sha256"]),
+        "equilibrium_artifact_sha256": eigen_path_common_record_value(&sample_records, &["validation", "equilibrium_artifact_sha256"]),
+        "linearization_state_sha256": eigen_path_common_record_value(&sample_records, &["validation", "linearization_state_sha256"]),
+        "periodic_mesh_certificate_sha256": eigen_path_common_record_value(&sample_records, &["validation", "periodic_mesh_certificate_sha256"]),
+    });
+    let manifest_value = serde_json::json!({
+        "schema_version": "frequency_domain_sample_execution_provenance.v1",
+        "status": status,
+        "sample_count": sample_records.len(),
+        "diagnostics_available_count": diagnostics_available_count,
+        "diagnostics_missing_count": sample_records.len().saturating_sub(diagnostics_available_count),
+        "samples": sample_records,
+    });
+    EigenPathSampleExecutionProvenance {
+        common_diagnostics,
+        manifest_value,
+        status,
+        requested_solver_method_present,
+        requested_preconditioner_present,
+        requested_magnetostatic_bc_present,
+    }
+}
+
+fn eigen_path_sample_native_modal_diagnostics(
+    sample: &crate::eigen::SingleKSolveResult,
 ) -> Option<&Value> {
-    for sample in &result.samples {
-        let Some(root) = sample.solver_diagnostics.as_ref() else {
+    let root = sample.solver_diagnostics.as_ref()?;
+    if let Some(sample_records) = root.get("sample_solver_diagnostics") {
+        let entries = sample_records.as_array()?;
+        let mut matches = entries.iter().filter(|entry| {
+            entry.get("sample_index").and_then(Value::as_u64)
+                == Some(sample.sample.sample_index as u64)
+        });
+        let selected = matches.next()?;
+        if matches.next().is_some() {
+            return None;
+        }
+        return selected.get("diagnostics").filter(|value| value.is_object());
+    }
+    [
+        "resolved_execution",
+        "solver_adapter",
+        "assembly_kind",
+        "requested_execution",
+        "phasor_convention",
+        "phase_convention",
+        "validation_state",
+        "boundary_gauge",
+        "spectral",
+    ]
+    .iter()
+    .any(|key| root.get(*key).is_some())
+    .then_some(root)
+}
+
+fn eigen_path_is_reference_solver_model(model: crate::eigen::EigenSolverModel) -> bool {
+    matches!(
+        model,
+        crate::eigen::EigenSolverModel::ReferenceScalarTangent
+            | crate::eigen::EigenSolverModel::ReferenceFull2x2Tangent
+            | crate::eigen::EigenSolverModel::ReferenceK0KittelSyntheticDemagFactor
+    )
+}
+
+fn eigen_path_sample_solver_algorithm(diagnostics: Option<&Value>) -> Option<String> {
+    eigen_path_nested_string(diagnostics, "resolved_execution", "solver_algorithm")
+        .or_else(|| {
+            eigen_path_nested_string(diagnostics, "resolved_execution", "implementation_id")
+        })
+        .or_else(|| eigen_path_nested_string(diagnostics, "resolved_execution", "engine"))
+}
+
+fn eigen_path_record_value<'a>(record: &'a Value, path: &[&str]) -> Option<&'a Value> {
+    path.iter().try_fold(record, |value, key| value.get(*key))
+}
+
+fn eigen_path_common_record_value(records: &[Value], path: &[&str]) -> Option<Value> {
+    let mut common: Option<&Value> = None;
+    for record in records {
+        let value = eigen_path_record_value(record, path).filter(|value| !value.is_null())?;
+        if common.is_some_and(|existing| existing != value) {
+            return None;
+        }
+        common = Some(value);
+    }
+    common.cloned()
+}
+
+fn eigen_path_record_has_value(records: &[Value], path: &[&str]) -> bool {
+    records.iter().any(|record| {
+        eigen_path_record_value(record, path).is_some_and(|value| !value.is_null())
+    })
+}
+
+fn eigen_path_record_values_differ(records: &[Value], path: &[&str]) -> bool {
+    let mut first: Option<&Value> = None;
+    for record in records {
+        let Some(value) = eigen_path_record_value(record, path).filter(|value| !value.is_null())
+        else {
             continue;
         };
-        if let Some(diagnostics) = root
-            .get("sample_solver_diagnostics")
-            .and_then(Value::as_array)
-            .and_then(|entries| entries.first())
-            .and_then(|entry| entry.get("diagnostics"))
-        {
-            return Some(diagnostics);
+        if first.is_some_and(|existing| existing != value) {
+            return true;
         }
-        if root.get("resolved_execution").is_some()
-            || root.get("solver_adapter").is_some()
-            || root.get("assembly_kind").is_some()
-        {
-            return Some(root);
-        }
+        first = Some(value);
     }
-    None
+    false
+}
+
+fn eigen_path_record_value_is_partial(records: &[Value], path: &[&str]) -> bool {
+    if records.is_empty() {
+        return false;
+    }
+    let present = records
+        .iter()
+        .filter(|record| {
+            eigen_path_record_value(record, path).is_some_and(|value| !value.is_null())
+        })
+        .count();
+    present > 0 && present < records.len()
 }
 
 pub(super) fn eigen_path_diag_string(diagnostics: Option<&Value>, key: &str) -> Option<String> {
