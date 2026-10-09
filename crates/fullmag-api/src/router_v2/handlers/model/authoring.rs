@@ -17,7 +17,8 @@ use crate::schemas::authoring::{
     GeometryRealizationRequest, MagnetizationAssetPatchRequest, MagnetizationAssetResource,
     MaterialParameterFieldListResource, MaterialParameterFieldResource, MaterialPatchRequest,
     MaterialPropertiesResource, MaterialReferenceResource, MaterialResource, NullableF64PatchValue,
-    NullableStringPatchValue, NullableU32PatchValue, ObjectCreateRequest,
+    NullableParallelExecutionPatchValue, NullableStringPatchValue, NullableU32PatchValue,
+    ObjectCreateRequest,
     ObjectGeometryPatchRequest, ObjectInteractionPatchRequest, ObjectInteractionResource,
     ObjectPatchRequest, ObjectRegionCreateRequest, ObjectRegionDuplicateRequest,
     ObjectRegionPatchRequest, ObjectRegionReorderRequest, OerstedFieldCommitResource,
@@ -3018,9 +3019,14 @@ pub async fn patch_authoring_study_runtime(
         };
     }
     if let Some(value) = req.parallel_execution {
-        scene.study.parallel_execution = value
-            .try_into()
-            .map_err(|error: String| ApiError::bad_request(error))?;
+        scene.study.parallel_execution = match value {
+            NullableParallelExecutionPatchValue::Value(value) => value
+                .try_into()
+                .map_err(|error: String| ApiError::bad_request(error))?,
+            NullableParallelExecutionPatchValue::Null => {
+                fullmag_ir::ParallelExecutionPolicyIR::default()
+            }
+        };
     }
 
     let committed =

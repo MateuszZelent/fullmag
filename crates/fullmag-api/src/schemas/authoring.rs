@@ -36,6 +36,13 @@ pub struct ParallelExecutionResource {
     pub threads_per_worker: u32,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum NullableParallelExecutionPatchValue {
+    Value(ParallelExecutionResource),
+    Null,
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, ToSchema, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ParallelExecutionModeResource {
@@ -107,7 +114,9 @@ pub struct StudyRuntimePatchRequest {
     pub requested_mode: Option<String>,
     #[serde(default, deserialize_with = "deserialize_nullable_u32_patch_field")]
     pub requested_cpu_threads: Option<NullableU32PatchValue>,
-    pub parallel_execution: Option<ParallelExecutionResource>,
+    #[serde(default, deserialize_with = "deserialize_nullable_parallel_execution_patch_field")]
+    #[schema(value_type = Option<ParallelExecutionResource>)]
+    pub parallel_execution: Option<NullableParallelExecutionPatchValue>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -1464,6 +1473,15 @@ pub struct RegionPatchRequest {
     pub enabled: Option<bool>,
     #[serde(default, deserialize_with = "deserialize_nullable_string_patch_field")]
     pub magnetization_ref: Option<NullableStringPatchValue>,
+}
+
+fn deserialize_nullable_parallel_execution_patch_field<'de, D>(
+    deserializer: D,
+) -> Result<Option<NullableParallelExecutionPatchValue>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    NullableParallelExecutionPatchValue::deserialize(deserializer).map(Some)
 }
 
 fn deserialize_nullable_u32_patch_field<'de, D>(

@@ -164,6 +164,7 @@ jobs:
           cargo test -p fullmag-api --bin fullmag-api openapi_field_sweep_schema_exposes_typed_dataset_and_sample_contract
           cargo test -p fullmag-api --bin fullmag-api quantities::tests
           cargo test -p fullmag-api --bin fullmag-api frequency_domain_
+          cargo test -p fullmag-api --bin fullmag-api authoring_study_runtime_parallel_patch
 
       - name: Run application materialization and eigen selector contracts
         run: cargo test -p fullmag-application --no-fail-fast

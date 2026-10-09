@@ -19263,6 +19263,113 @@ async fn authoring_study_runtime_get_returns_requested_selection() {
     assert_eq!(json["requested_precision"], "double");
 }
 
+#[test]
+fn authoring_study_runtime_parallel_patch_preserves_nullable_optional_wire_schema() {
+    let document = crate::openapi_v2::openapi_json();
+    let schema = &document["components"]["schemas"]["StudyRuntimePatchRequest"];
+    assert_eq!(schema["properties"]["parallel_execution"], serde_json::json!({
+        "oneOf": [
+            { "type": "null" },
+            { "$ref": "#/components/schemas/ParallelExecutionResource" },
+        ],
+    }));
+    assert!(!schema["required"].as_array().is_some_and(|required| {
+        required.iter().any(|field| field == "parallel_execution")
+    }));
+}
+
+#[tokio::test]
+async fn authoring_study_runtime_parallel_patch_preserves_sets_and_resets_policy() {
+    let state = test_app_state_with_live_session().await;
+    let mut scene = sample_scene_document();
+    let initial = fullmag_ir::ParallelExecutionPolicyIR {
+        mode: fullmag_ir::ParallelExecutionModeIR::Adaptive,
+        max_cpu_percent: 55.0,
+        max_memory_percent: 60.0,
+        memory_reserve_bytes: 123,
+        max_workers: Some(3),
+        threads_per_worker: 2,
+    };
+    scene.study.parallel_execution = initial.clone();
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(scene);
+    }
+    let app = build_v2_router().with_state(state.clone());
+    let replacement = fullmag_ir::ParallelExecutionPolicyIR {
+        max_cpu_percent: 70.0,
+        max_workers: Some(4),
+        ..initial.clone()
+    };
+    let replacement_resource = crate::schemas::authoring::ParallelExecutionResource::from(&replacement);
+    for (patch, expected) in [
+        (serde_json::json!({}), initial),
+        (serde_json::json!({ "parallel_execution": replacement_resource }), replacement),
+        (serde_json::json!({ "parallel_execution": null }), fullmag_ir::ParallelExecutionPolicyIR::default()),
+        (serde_json::json!({}), fullmag_ir::ParallelExecutionPolicyIR::default()),
+    ] {
+        let response = app.clone().oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/v2/sessions/current/model/study")
+                .header("content-type", "application/json")
+                .body(Body::from(patch.to_string()))
+                .unwrap(),
+        ).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK, "patch: {patch}");
+        let response = body_json(response).await;
+        let expected_resource = serde_json::to_value(
+            crate::schemas::authoring::ParallelExecutionResource::from(&expected),
+        ).unwrap();
+        assert_eq!(response["parallel_execution"], expected_resource, "patch: {patch}");
+        let guard = state.current_live_state.read().await;
+        let committed = guard.as_ref()
+            .and_then(|snapshot| snapshot.scene_document.as_ref())
+            .expect("scene document committed");
+        assert_eq!(committed.study.parallel_execution, expected, "patch: {patch}");
+    }
+}
+
+#[tokio::test]
+async fn authoring_study_runtime_parallel_patch_rejects_invalid_policy_without_commit() {
+    let state = test_app_state_with_live_session().await;
+    let mut scene = sample_scene_document();
+    let initial = fullmag_ir::ParallelExecutionPolicyIR {
+        mode: fullmag_ir::ParallelExecutionModeIR::Adaptive,
+        max_workers: Some(3),
+        ..fullmag_ir::ParallelExecutionPolicyIR::default()
+    };
+    scene.study.parallel_execution = initial.clone();
+    let revision = scene.revision;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(scene);
+    }
+    let app = build_v2_router().with_state(state.clone());
+    let mut invalid_policy = serde_json::to_value(
+        crate::schemas::authoring::ParallelExecutionResource::from(&initial),
+    ).unwrap();
+    invalid_policy["max_cpu_percent"] = serde_json::json!(0);
+    for (value, status) in [
+        (invalid_policy, StatusCode::BAD_REQUEST),
+        (serde_json::json!("adaptive"), StatusCode::UNPROCESSABLE_ENTITY),
+    ] {
+        let response = app.clone().oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/v2/sessions/current/model/study")
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::json!({ "parallel_execution": value }).to_string()))
+                .unwrap(),
+        ).await.unwrap();
+        assert_eq!(response.status(), status);
+        let guard = state.current_live_state.read().await;
+        let committed = guard.as_ref()
+            .and_then(|snapshot| snapshot.scene_document.as_ref())
+            .expect("original scene document preserved");
+        assert_eq!(committed.study.parallel_execution, initial);
+        assert_eq!(committed.revision, revision);
+    }
+}
+
 #[tokio::test]
 async fn authoring_study_runtime_patch_commits_requested_selection() {
     let state = test_app_state_with_live_session().await;
