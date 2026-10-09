@@ -19,6 +19,8 @@ from local_runner.worker import _resolve_storage_dir, _format_cpus, _format_memo
 from local_runner.worker_entrypoint import verify_source
 from local_runner.build_entrypoint import (
     BuildEntryPointError,
+    HEADLESS_REQUIRED_OUTPUTS,
+    PROFILES as BUILD_ENTRYPOINT_PROFILES,
     required_outputs_for_profile,
     validate_native_source_snapshot,
 )
@@ -86,6 +88,18 @@ RUNTIME_PROFILE_CONTRACTS['fem-cpu-slepc-runtime-v2'] = {
         'FULLMAG_ENABLE_FEM_GPU': 'OFF',
     },
 }
+
+
+def required_output_artifact_paths(profile_name):
+    profile = BUILD_ENTRYPOINT_PROFILES.get(profile_name)
+    if profile is None:
+        raise ValueError('Unknown build entrypoint profile: ' + str(profile_name))
+    outputs = (
+        HEADLESS_REQUIRED_OUTPUTS
+        if profile.build_runtime or profile.runtime_only
+        else required_outputs_for_profile(profile_name)
+    )
+    return {'outputs/.fullmag/local/' + name for name in outputs}
 
 
 def valid_cpu_mfem_abi_attestation(cmake_attestation):
@@ -510,11 +524,7 @@ def validate_build_receipt(artifacts, job, journal):
         entry_paths = {
             entry.get('path') for entry in entries if isinstance(entry, dict)
         }
-        required = {
-            'outputs/.fullmag/local/bin/fullmag-bin',
-            'outputs/.fullmag/local/bin/fullmag-api',
-            'outputs/.fullmag/local/_fullmag_core.so',
-            'outputs/.fullmag/local/launcher-build-mode',
+        required = required_output_artifact_paths(job['profile']) | {
             'source-identity.json',
             'cmake-attestation.json',
             'runtime-attestation.json',
@@ -686,8 +696,7 @@ def validate_build_receipt(artifacts, job, journal):
         ):
             raise ValueError('SLEPc runtime receipt does not prove native-only build')
     elif contract is None:
-        outputs = required_outputs_for_profile(job['profile'])
-        required = {'outputs/.fullmag/local/' + name for name in outputs}
+        required = required_output_artifact_paths(job['profile'])
         if not required.issubset({entry.get('path') for entry in entries}):
             raise ValueError('Required build outputs missing')
         stages = receipt.get('stages', [])
@@ -703,9 +712,15 @@ def validate_build_receipt(artifacts, job, journal):
         entry_paths = {
             entry.get('path') for entry in entries if isinstance(entry, dict)
         }
-        required = {f'contracts/{scenario}/result.json' for scenario in scenarios}
+        required = required_output_artifact_paths(job['profile'])
         if not required.issubset(entry_paths):
+            raise ValueError('Required build outputs missing')
+        contract_receipts = {
+            f'contracts/{scenario}/result.json' for scenario in scenarios
+        }
+        if not contract_receipts.issubset(entry_paths):
             raise ValueError('Required contract receipts missing')
+        required.update(contract_receipts)
         if job['profile'] == 'fem-cpu-slepc-modal-v1':
             if not any(
                 isinstance(path, str)

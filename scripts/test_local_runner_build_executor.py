@@ -83,22 +83,142 @@ class BuildExecutorTests(unittest.TestCase):
         self.assertEqual(v2['FULLMAG_USE_MFEM_STACK'], 'ON')
         self.assertEqual(v2['FULLMAG_FEM_WITH_SLEPC'], 'ON')
 
-    def test_extended_profile_registry_does_not_promote_specialized_outputs_to_release(self):
+    def test_extended_profile_registry_keeps_producer_output_contracts(self):
         from local_runner import build_entrypoint as entrypoint
-        for profile in (
-            'fem-cpu-current-contracts-v1',
-            'fem-cpu-slepc-modal-v1',
-            'fem-cpu-slepc-runtime-v2',
-        ):
-            with self.subTest(profile=profile):
+
+        for profile_name, profile in entrypoint.PROFILES.items():
+            output_names = (
+                entrypoint.HEADLESS_REQUIRED_OUTPUTS
+                if profile.build_runtime or profile.runtime_only
+                else entrypoint.required_outputs_for_profile(profile_name)
+            )
+            expected = {
+                'outputs/.fullmag/local/' + name for name in output_names
+            }
+            with self.subTest(profile=profile_name):
                 self.assertEqual(
-                    entrypoint.required_outputs_for_profile(profile),
-                    entrypoint.BASE_REQUIRED_OUTPUTS,
+                    executor.required_output_artifact_paths(profile_name),
+                    expected,
                 )
-        self.assertEqual(
-            entrypoint.required_outputs_for_profile('fem-cpu-release'),
-            entrypoint.REQUIRED_OUTPUTS,
+                self.assertEqual(
+                    entrypoint.required_outputs_for_profile(profile_name),
+                    (
+                        entrypoint.REQUIRED_OUTPUTS
+                        if profile_name in entrypoint.RELEASE_PROFILE_NAMES
+                        else entrypoint.BASE_REQUIRED_OUTPUTS
+                    ),
+                )
+        self.assertNotIn(
+            'outputs/.fullmag/local/web/index.html',
+            executor.required_output_artifact_paths('fem-cpu-slepc-runtime-v2'),
         )
+
+    def _write_contract_receipt(self, root, profile):
+        from local_runner import build_entrypoint as entrypoint
+        from local_runner.worker_entrypoint import canonical
+
+        contract = executor.PROFILE_CONTRACTS[profile]
+        image = 'sha256:' + 'e' * 64
+        native = {
+            'head_commit_full': 'c' * 40,
+            'source_snapshot_sha256': 'd' * 64,
+            'source_snapshot_dirty': False,
+        }
+        job = {
+            'job_id': 'a' * 32,
+            'source_digest': 'b' * 64,
+            'profile': profile,
+            'payload': {'native_source_identity': native},
+        }
+        journal = {'image_digest': image}
+        artifacts = []
+
+        def add_artifact(relative, data):
+            path = root / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(data)
+            artifacts.append({
+                'path': relative,
+                'size': len(data),
+                'sha256': hashlib.sha256(data).hexdigest(),
+            })
+
+        for relative in entrypoint.required_outputs_for_profile(profile):
+            data = (
+                entrypoint.EXPECTED_BUILD_MARKER[profile].encode('utf-8') + b'\n'
+                if relative == 'launcher-build-mode'
+                else b'build-output'
+            )
+            add_artifact('outputs/.fullmag/local/' + relative, data)
+        for scenario in contract['scenarios']:
+            data = json.dumps({
+                'schema': contract['schema'],
+                'scenario': scenario,
+                'status': 'pass',
+            }).encode('utf-8')
+            add_artifact(f'contracts/{scenario}/result.json', data)
+
+        receipt = {
+            **job,
+            'image_digest': image,
+            'native_source_identity': native,
+            'native_source_identity_sha256': hashlib.sha256(canonical(native)).hexdigest(),
+            'qualification': 'NOT VERIFIED',
+            'state': 'succeeded',
+            'contract_scenarios': list(contract['scenarios']),
+            'contract_schema': contract['schema'],
+            'stages': [
+                {'name': 'contract-' + scenario, 'exit_code': 0}
+                for scenario in contract['scenarios']
+            ],
+            'artifacts': artifacts,
+        }
+        (root / 'build-receipt.json').write_text(
+            json.dumps(receipt), encoding='utf-8'
+        )
+        return job, journal, receipt
+
+    def test_contract_receipts_require_all_producer_outputs(self):
+        from local_runner import build_entrypoint as entrypoint
+
+        profiles = (
+            'fem-cpu-current-contracts-v1',
+            'fem-gpu-current-contracts-v1',
+        )
+        for profile in profiles:
+            with self.subTest(profile=profile), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory).resolve()
+                job, journal, receipt = self._write_contract_receipt(root, profile)
+                validated = executor.validate_build_receipt(root, job, journal)
+                self.assertEqual(validated['state'], 'succeeded')
+
+                missing_file_relative = (
+                    'outputs/.fullmag/local/' + entrypoint.BASE_REQUIRED_OUTPUTS[0]
+                )
+                missing_file = root / missing_file_relative
+                missing_file.unlink()
+                with self.assertRaisesRegex(ValueError, 'Artifact size mismatch'):
+                    executor.validate_build_receipt(root, job, journal)
+                missing_file.write_bytes(b'build-output')
+
+                missing_entry_relative = (
+                    'outputs/.fullmag/local/' + entrypoint.BASE_REQUIRED_OUTPUTS[1]
+                )
+                receipt['artifacts'] = [
+                    entry for entry in receipt['artifacts']
+                    if entry['path'] != missing_entry_relative
+                ]
+                (root / 'build-receipt.json').write_text(
+                    json.dumps(receipt), encoding='utf-8'
+                )
+                with self.assertRaisesRegex(ValueError, 'Required build outputs missing'):
+                    executor.validate_build_receipt(root, job, journal)
+
+                job, journal, receipt = self._write_contract_receipt(root, profile)
+                self.assertEqual(
+                    executor.validate_build_receipt(root, job, journal)['state'],
+                    'succeeded',
+                )
 
     def _write_release_receipt(self, root, *, profile='fem-cpu-release', empty=None, accepted=True):
         outputs = ['bin/fullmag-bin', 'bin/fullmag-api', '_fullmag_core.so',
@@ -330,6 +450,7 @@ class BuildExecutorTests(unittest.TestCase):
     def test_slepc_modal_receipt_accepts_contract_artifacts_and_cpu_provenance(self):
         import hashlib
         import json
+        from local_runner import build_entrypoint as entrypoint
         from local_runner.worker_entrypoint import canonical
 
         with tempfile.TemporaryDirectory() as directory:
@@ -451,6 +572,23 @@ class BuildExecutorTests(unittest.TestCase):
             identity_path.write_text(json.dumps(native), encoding="utf-8")
             native_library_bytes = native_library.read_bytes()
             identity_bytes = identity_path.read_bytes()
+            headless_outputs = {}
+            headless_output_entries = []
+            for relative in entrypoint.HEADLESS_REQUIRED_OUTPUTS:
+                output_path = root / "outputs" / ".fullmag" / "local" / relative
+                output_path.parent.mkdir(parents=True, exist_ok=True)
+                data = (
+                    entrypoint.EXPECTED_BUILD_MARKER[job["profile"]].encode("utf-8") + b"\n"
+                    if relative == "launcher-build-mode"
+                    else b"headless-output"
+                )
+                output_path.write_bytes(data)
+                headless_outputs[relative] = data
+                headless_output_entries.append({
+                    "path": "outputs/.fullmag/local/" + relative,
+                    "size": len(data),
+                    "sha256": hashlib.sha256(data).hexdigest(),
+                })
             receipt = {
                 **job,
                 "image_digest": image,
@@ -474,6 +612,7 @@ class BuildExecutorTests(unittest.TestCase):
                         "size": len(result_bytes),
                         "sha256": hashlib.sha256(result_bytes).hexdigest(),
                     },
+                    *headless_output_entries,
                     {
                         "path": "outputs/.fullmag/local/lib/libfullmag_fem.so.0",
                         "size": len(native_library_bytes),
@@ -495,6 +634,33 @@ class BuildExecutorTests(unittest.TestCase):
                 {"image_digest": image},
             )
             self.assertEqual(validated["state"], "succeeded")
+
+            # The modal producer requires the headless package, not web/index.html.
+            required_output_path = (
+                "outputs/.fullmag/local/" + entrypoint.HEADLESS_REQUIRED_OUTPUTS[0]
+            )
+            valid_artifacts = list(receipt["artifacts"])
+            receipt["artifacts"] = [
+                entry for entry in valid_artifacts
+                if entry["path"] != required_output_path
+            ]
+            (root / "build-receipt.json").write_text(
+                json.dumps(receipt), encoding="utf-8"
+            )
+            with self.assertRaisesRegex(ValueError, "Required build outputs missing"):
+                executor.validate_build_receipt(root, job, {"image_digest": image})
+
+            receipt["artifacts"] = valid_artifacts
+            (root / "build-receipt.json").write_text(
+                json.dumps(receipt), encoding="utf-8"
+            )
+            required_output_file = root / required_output_path
+            required_output_file.unlink()
+            with self.assertRaisesRegex(ValueError, "Artifact size mismatch"):
+                executor.validate_build_receipt(root, job, {"image_digest": image})
+            required_output_file.write_bytes(
+                headless_outputs[entrypoint.HEADLESS_REQUIRED_OUTPUTS[0]]
+            )
 
             dependency_values = result["attestation"]["dependency"]["dependency"]
             for diagnostics in ({}, {"native_source_snapshot_sha256": "4" * 64}):
