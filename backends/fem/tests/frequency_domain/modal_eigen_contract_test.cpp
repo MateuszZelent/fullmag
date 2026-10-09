@@ -4048,6 +4048,16 @@ void generic_dense_window_refills_after_search_filtering()
               contains(budget_result.diagnostics_json,
                        "\"outer_iteration_budget\":1"),
           "generic nearest solve fails closed and records a one-iteration EPS budget");
+    if (!contains(budget_result.diagnostics_json,
+                  "\"outer_iteration_budget_exhausted\":true")) {
+        std::fprintf(
+            stderr,
+            "FAIL-DIAGNOSTICS: generic_budget status=%d error=%.1024s diagnostics=%s result=%s\n",
+            static_cast<int>(budget_result.status),
+            budget_result.error_message != nullptr ? budget_result.error_message : "null",
+            budget_result.diagnostics_json != nullptr ? budget_result.diagnostics_json : "null",
+            budget_result.result_json != nullptr ? budget_result.result_json : "null");
+    }
     check(contains(budget_result.diagnostics_json,
                    "\"outer_iteration_budget_exhausted\":true") &&
               !contains(budget_result.result_json, "\"modes\":["),

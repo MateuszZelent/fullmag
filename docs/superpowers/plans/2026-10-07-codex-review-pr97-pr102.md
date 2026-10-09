@@ -1896,3 +1896,10 @@ Missing-owner reason klasyfikowany jest lokalnie dla odrzuconej polityki: dodatn
 ### Naprawa utraty eigen output selectors w canonical rewrite
 
 Renderer odtwarza dokładne immutable output snapshots rodzin time/eigen/response przed każdymstage/action, zachowuje orderedautosave poakcji oraz clear/restore przy zastąpieniu. Nie przywraca union późniejszychoutputów do bazystudy i nie zmienia public API/IR. Czterymeaningful regressions porównują pełneStudyIR etapów:2Eigen, Time→Eigen→Time, Eigen→disableall→Eigen, Response→Eigen. Existing314APIselectorassertniezmieniona. Independent sourcereview PASS, AST/diff/0831validator pendingbeforecommit, GHAexecutionpending. Nie ma rozpoznanej obsługi overrides[outputs] w tymrendererze; nie dodano nowego kontraktu dla takiego klucza.
+
+
+### Nowy bootstrap i diagnostyka generic budget
+
+37876177027 (69aa29af11b48173ed425de8519a585eb4d4b768): Control Room contracts/build PASS; Python FAIL wcześniej w nowym receipt fixture: KeyError EXPECTED_BUILD_MARKER dla current-contract CPU/GPU. Fixture inventory/integrity używa teraz niepustych opaque bytes, bez wymagania nieistniejącego release marker. Negatywne missing-file/missing-entry assertions i produkcyjna walidacja bez zmian. Renderer roundtrip/API pozostają NOT VERIFIED, ponieważ ten job nie dotarł do tych kroków. AST/diff PASS, ponowienie GHA pending.
+
+Generic 37872370420: jawny positive MFEM sparse window/nearest marker PASS; późniejszy budget negative case FAIL. Dodano wyłącznie failure diagnostic status/error/diagnostics/result przed niezmienioną asercją. Nie zmieniono tolerancji, budżetu ani wymaganych modów. Do naprawy przyczyny potrzebny rzeczywisty JSON kolejnego GHA.
