@@ -21,6 +21,7 @@
 #if FULLMAG_FEM_WITH_SLEPC
 #include <petscksp.h>
 #include <slepceps.h>
+#include "cpu/frequency_domain/modal/shifted_ksp_true_convergence.hpp"
 #endif
 
 namespace fd = fullmag::fem::frequency_domain;
@@ -91,6 +92,102 @@ void cleanup_and_cancellation_gates_fail_closed()
           "a one-shot post-solve cancellation remains sticky after the callback clears");
     check(fd::detail::floquet_cancellation_is_observed(false, true, false),
           "an EPS stopping-callback cancellation remains observed after solve");
+}
+
+void candidate_diagnostic_transaction_and_completeness_fail_closed()
+{
+#if FULLMAG_FEM_WITH_SLEPC
+    using Comparison =
+        fd::FloquetShiftedKspFailureProbe::CandidateOperatorDiagnostic::
+            ShiftedLuPolicyComparison;
+    using Outcome =
+        fd::FloquetShiftedKspFailureProbe::CandidateOperatorDiagnostic::
+            ShiftedLuPolicyOutcome;
+
+    int push_calls = 0;
+    int capture_calls = 0;
+    int pop_calls = 0;
+    const auto push_failure =
+        fd::detail::run_floquet_candidate_diagnostic_capture_transaction(
+            [&]() {
+                ++push_calls;
+                return PETSC_ERR_LIB;
+            },
+            [&]() {
+                ++capture_calls;
+                return PETSC_SUCCESS;
+            },
+            [&]() {
+                ++pop_calls;
+                return PETSC_SUCCESS;
+            });
+    check(push_calls == 1 && capture_calls == 0 && pop_calls == 0 &&
+              push_failure.push_error == PETSC_ERR_LIB &&
+              push_failure.fatal_error == PETSC_ERR_LIB,
+          "a failed production-handler push returns before capture queries or handler pop");
+
+    capture_calls = 0;
+    pop_calls = 0;
+    const auto measurement_failure =
+        fd::detail::run_floquet_candidate_diagnostic_capture_transaction(
+            []() { return PETSC_SUCCESS; },
+            [&]() {
+                ++capture_calls;
+                return PETSC_ERR_FP;
+            },
+            [&]() {
+                ++pop_calls;
+                return PETSC_SUCCESS;
+            });
+    check(capture_calls == 1 && pop_calls == 1 &&
+              measurement_failure.capture_error == PETSC_ERR_FP &&
+              measurement_failure.fatal_error == PETSC_SUCCESS,
+          "ordinary optional measurement failure still restores the error handler");
+
+    const auto complete_outcome = []() {
+        Outcome outcome{};
+        outcome.factorization_setup_available = true;
+        outcome.solve_available = true;
+        outcome.solve_reason_available = true;
+        outcome.repeat_solve_reason_available = true;
+        outcome.preconditioner_solution_l2_norm_available = true;
+        outcome.operator_solution_l2_norm_available = true;
+        outcome.repeat_operator_solution_l2_norm_available = true;
+        outcome.repeatability_relative_defect_available = true;
+        outcome.preconditioner_residual_l2_norm_available = true;
+        outcome.preconditioner_relative_residual_available = true;
+        outcome.operator_residual_l2_norm_available = true;
+        outcome.operator_relative_residual_available = true;
+        outcome.operator_tolerance_ratio_available = true;
+        return outcome;
+    };
+    Comparison comparison{};
+    comparison.exact_shifted_matrix_available = true;
+    comparison.rhs_available = true;
+    comparison.rhs_l2_norm_available = true;
+    comparison.true_residual_threshold_available = true;
+    comparison.mat_shift_nonzero = complete_outcome();
+    comparison.mat_shift_none = complete_outcome();
+    check(fd::detail::floquet_candidate_shifted_lu_comparison_complete(
+              comparison, true),
+          "complete outcomes with exact matrix, RHS, threshold, and vectors can be measured");
+
+    comparison.mat_shift_nonzero.preconditioner_solution_l2_norm_available = false;
+    check(!fd::detail::floquet_candidate_shifted_lu_comparison_complete(
+              comparison, true),
+          "a missing preconditioner-solution norm keeps the LU comparison partial");
+    comparison.mat_shift_nonzero.preconditioner_solution_l2_norm_available = true;
+    comparison.mat_shift_none.solve_error_code = PETSC_ERR_FP;
+    check(!fd::detail::floquet_candidate_shifted_lu_comparison_complete(
+              comparison, true),
+          "a nonzero LU solve error keeps the comparison partial even when other metrics exist");
+    comparison.mat_shift_none.solve_error_code = PETSC_SUCCESS;
+    check(!fd::detail::floquet_candidate_shifted_lu_workspace_ready(
+              true, false, true, true) &&
+              !fd::detail::floquet_candidate_shifted_lu_comparison_complete(
+                  comparison, false),
+          "factor-ready policies remain partial when shifted-LU work vectors are unavailable");
+#endif
 }
 
 void floquet_complex_spectral_shift_distance_keeps_imaginary_offset()
@@ -1776,6 +1873,37 @@ void captures_near_pole_failure_probe()
                       candidate_diagnostic.isolated_additivity_available &&
                       candidate_diagnostic.exact_shifted_matrix_comparison_available,
                   "isolated candidate replay, repeatability, additivity, and exact shifted-matrix comparisons are available");
+            const auto &shifted_lu =
+                candidate_diagnostic.shifted_lu_policy_comparison;
+            check(shifted_lu.requested &&
+                      shifted_lu.exact_shifted_matrix_available &&
+                      shifted_lu.rhs_available &&
+                      shifted_lu.rhs_l2_norm_available &&
+                      shifted_lu.true_residual_threshold_available &&
+                      shifted_lu.operator_normalization_scale ==
+                          result.operator_normalization_scale &&
+                      shifted_lu.preconditioner_normalization_scale ==
+                          result.preconditioner_normalization_scale &&
+                      shifted_lu.requested_factorization_shift_amount ==
+                          result.factorization_shift_amount,
+                  "near-pole LU comparison binds the live RHS, exact shifted matrix, both scales, and requested factor shift");
+            check(shifted_lu.available &&
+                      shifted_lu.mat_shift_nonzero.factorization_setup_available &&
+                      shifted_lu.mat_shift_nonzero.solve_available &&
+                      shifted_lu.mat_shift_none.factorization_setup_available &&
+                      shifted_lu.mat_shift_none.solve_available,
+                  "the actual callback RHS is solved by separate MAT_SHIFT_NONZERO and MAT_SHIFT_NONE LU factors");
+            check(shifted_lu.mat_shift_nonzero.preconditioner_residual_l2_norm_available &&
+                      shifted_lu.mat_shift_nonzero.operator_residual_l2_norm_available &&
+                      shifted_lu.mat_shift_nonzero.operator_relative_residual_available &&
+                      shifted_lu.mat_shift_nonzero.operator_tolerance_ratio_available &&
+                      shifted_lu.mat_shift_none.preconditioner_residual_l2_norm_available &&
+                      shifted_lu.mat_shift_none.operator_residual_l2_norm_available &&
+                      shifted_lu.mat_shift_none.operator_relative_residual_available &&
+                      shifted_lu.mat_shift_none.operator_tolerance_ratio_available &&
+                      shifted_lu.mat_shift_nonzero.repeatability_relative_defect_available &&
+                      shifted_lu.mat_shift_none.repeatability_relative_defect_available,
+                  "both LU policies report direct-P and calibrated A_shift residuals, threshold ratios, and repeatability");
             if (probe.last_true_probe_available) {
                 const double expected_threshold = std::max(
                     probe.last_true_atol,
@@ -1871,6 +1999,7 @@ int main(int argc, char **argv)
         return 2;
     }
     cleanup_and_cancellation_gates_fail_closed();
+    candidate_diagnostic_transaction_and_completeness_fail_closed();
     floquet_complex_spectral_shift_distance_keeps_imaginary_offset();
     accepts_finite_nonzero_k_cpu_contract();
     rejects_missing_dynamic_payload_and_gpu();

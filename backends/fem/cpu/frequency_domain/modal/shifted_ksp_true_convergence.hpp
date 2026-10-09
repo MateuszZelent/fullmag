@@ -14,11 +14,12 @@ using FloquetCandidateOperatorDiagnosticBegin = void (*)(
     void *user_context,
     PetscInt iteration,
     std::uint64_t callback_ordinal) noexcept;
-using FloquetCandidateOperatorDiagnosticCapture = void (*)(
+using FloquetCandidateOperatorDiagnosticCapture = PetscErrorCode (*)(
     void *user_context,
     PetscInt iteration,
     std::uint64_t callback_ordinal,
     Mat shifted_operator,
+    Vec shifted_rhs,
     Vec candidate_solution,
     Vec shifted_operator_action) noexcept;
 using FloquetCandidateOperatorDiagnosticDestroy = PetscErrorCode (*)(
@@ -58,6 +59,85 @@ run_floquet_candidate_diagnostic_setup_transaction(
         ? result.cleanup_error
         : result.pop_error;
     return result;
+}
+
+struct FloquetCandidateDiagnosticCaptureTransaction {
+    PetscErrorCode push_error = PETSC_SUCCESS;
+    PetscErrorCode capture_error = PETSC_SUCCESS;
+    PetscErrorCode pop_error = PETSC_SUCCESS;
+    PetscErrorCode fatal_error = PETSC_SUCCESS;
+};
+
+template <typename Push, typename Capture, typename Pop>
+inline FloquetCandidateDiagnosticCaptureTransaction
+run_floquet_candidate_diagnostic_capture_transaction(
+    Push push,
+    Capture capture,
+    Pop pop)
+{
+    FloquetCandidateDiagnosticCaptureTransaction result{};
+    result.push_error = push();
+    if (result.push_error != PETSC_SUCCESS) {
+        result.fatal_error = result.push_error;
+        return result;
+    }
+    result.capture_error = capture();
+    // Measurement failure remains caller-owned; only stack restoration is fatal.
+    result.pop_error = pop();
+    result.fatal_error = result.pop_error;
+    return result;
+}
+
+constexpr bool floquet_candidate_shifted_lu_workspace_ready(
+    bool exact_shifted_matrix_available,
+    bool vectors_available,
+    bool mat_shift_nonzero_factor_available,
+    bool mat_shift_none_factor_available) noexcept
+{
+    return exact_shifted_matrix_available &&
+        vectors_available &&
+        mat_shift_nonzero_factor_available &&
+        mat_shift_none_factor_available;
+}
+
+template <typename Outcome>
+inline bool floquet_candidate_shifted_lu_outcome_complete(
+    const Outcome &outcome) noexcept
+{
+    return outcome.factorization_setup_available &&
+        outcome.factorization_setup_error_code == PETSC_SUCCESS &&
+        outcome.solve_available &&
+        outcome.solve_error_code == PETSC_SUCCESS &&
+        outcome.solve_reason_available &&
+        outcome.repeat_solve_reason_available &&
+        outcome.preconditioner_solution_l2_norm_available &&
+        outcome.preconditioner_residual_l2_norm_available &&
+        outcome.preconditioner_relative_residual_available &&
+        outcome.operator_solution_l2_norm_available &&
+        outcome.repeat_operator_solution_l2_norm_available &&
+        outcome.repeatability_relative_defect_available &&
+        outcome.operator_residual_l2_norm_available &&
+        outcome.operator_relative_residual_available &&
+        outcome.operator_tolerance_ratio_available;
+}
+
+template <typename Comparison>
+inline bool floquet_candidate_shifted_lu_comparison_complete(
+    const Comparison &comparison,
+    bool vectors_available) noexcept
+{
+    return floquet_candidate_shifted_lu_workspace_ready(
+               comparison.exact_shifted_matrix_available,
+               vectors_available,
+               comparison.mat_shift_nonzero.factorization_setup_available,
+               comparison.mat_shift_none.factorization_setup_available) &&
+        comparison.rhs_available &&
+        comparison.rhs_l2_norm_available &&
+        comparison.true_residual_threshold_available &&
+        floquet_candidate_shifted_lu_outcome_complete(
+            comparison.mat_shift_nonzero) &&
+        floquet_candidate_shifted_lu_outcome_complete(
+            comparison.mat_shift_none);
 }
 
 inline PetscErrorCode calculate_floquet_relative_residual(
@@ -525,17 +605,23 @@ inline PetscErrorCode floquet_shifted_true_convergence_test(
     if (error != 0) {
         return record_probe_failure(error);
     }
-    // This observer receives the actual production action and candidate before
-    // the callback mutates true_residual into b - A*x. Its return path is
-    // intentionally void: optional measurement cannot change the true gate.
+    // This observer receives the actual production operator, RHS, action, and
+    // candidate before the callback mutates true_residual into b - A*x.
+    // Ordinary optional measurement failures are cached; an error-handler stack
+    // push or restoration failure fails the callback so the owning graph is
+    // quarantined rather than used with uncertain PETSc global state.
     if (context->candidate_operator_diagnostic_capture != nullptr) {
-        context->candidate_operator_diagnostic_capture(
+        error = context->candidate_operator_diagnostic_capture(
             context->candidate_operator_diagnostic_context,
             iteration,
             context->last_true_probe_callback_ordinal,
             operator_matrix,
+            rhs,
             context->candidate_solution,
             context->true_residual);
+        if (error != PETSC_SUCCESS) {
+            return record_probe_failure(error);
+        }
     }
     PetscReal operator_action_norm = std::numeric_limits<PetscReal>::quiet_NaN();
     const PetscErrorCode operator_action_norm_error = VecNorm(

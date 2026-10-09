@@ -105,6 +105,72 @@ struct FloquetShiftedKspFailureProbe {
     double last_true_tolerance_ratio =
         std::numeric_limits<double>::quiet_NaN();
     struct CandidateOperatorDiagnostic {
+        struct ShiftedLuPolicyOutcome {
+            bool factorization_setup_available = false;
+            int factorization_setup_error_code = 0;
+            bool solve_available = false;
+            int solve_error_code = 0;
+            bool solve_reason_available = false;
+            int solve_reason = 0;
+            bool repeat_solve_reason_available = false;
+            int repeat_solve_reason = 0;
+            bool preconditioner_solution_l2_norm_available = false;
+            double preconditioner_solution_l2_norm =
+                std::numeric_limits<double>::quiet_NaN();
+            bool operator_solution_l2_norm_available = false;
+            double operator_solution_l2_norm =
+                std::numeric_limits<double>::quiet_NaN();
+            bool repeat_operator_solution_l2_norm_available = false;
+            double repeat_operator_solution_l2_norm =
+                std::numeric_limits<double>::quiet_NaN();
+            bool repeatability_relative_defect_available = false;
+            double repeatability_relative_defect =
+                std::numeric_limits<double>::quiet_NaN();
+            bool preconditioner_residual_l2_norm_available = false;
+            double preconditioner_residual_l2_norm =
+                std::numeric_limits<double>::quiet_NaN();
+            bool preconditioner_relative_residual_available = false;
+            double preconditioner_relative_residual =
+                std::numeric_limits<double>::quiet_NaN();
+            bool operator_residual_l2_norm_available = false;
+            double operator_residual_l2_norm =
+                std::numeric_limits<double>::quiet_NaN();
+            bool operator_relative_residual_available = false;
+            double operator_relative_residual =
+                std::numeric_limits<double>::quiet_NaN();
+            bool operator_tolerance_ratio_available = false;
+            double operator_tolerance_ratio =
+                std::numeric_limits<double>::quiet_NaN();
+        };
+        struct ShiftedLuPolicyComparison {
+            bool requested = false;
+            bool exact_shifted_matrix_available = false;
+            bool rhs_available = false;
+            bool rhs_l2_norm_available = false;
+            double rhs_l2_norm = std::numeric_limits<double>::quiet_NaN();
+            bool true_residual_threshold_available = false;
+            double true_residual_threshold_l2_norm =
+                std::numeric_limits<double>::quiet_NaN();
+            bool available = false;
+            const char *status = "disabled";
+            const char *reason = "";
+            double target_shift_rad_s =
+                std::numeric_limits<double>::quiet_NaN();
+            double operator_normalization_scale =
+                std::numeric_limits<double>::quiet_NaN();
+            double preconditioner_normalization_scale =
+                std::numeric_limits<double>::quiet_NaN();
+            double shifted_preconditioner_matrix_infinity_norm_after_normalization =
+                std::numeric_limits<double>::quiet_NaN();
+            double requested_factorization_shift_amount =
+                std::numeric_limits<double>::quiet_NaN();
+            double shifted_ksp_rtol =
+                std::numeric_limits<double>::quiet_NaN();
+            double shifted_ksp_atol =
+                std::numeric_limits<double>::quiet_NaN();
+            ShiftedLuPolicyOutcome mat_shift_nonzero{};
+            ShiftedLuPolicyOutcome mat_shift_none{};
+        };
         bool requested = false;
         bool workspace_available = false;
         bool sample_available = false;
@@ -134,6 +200,7 @@ struct FloquetShiftedKspFailureProbe {
         bool exact_shifted_matrix_comparison_available = false;
         double exact_shifted_matrix_relative_defect =
             std::numeric_limits<double>::quiet_NaN();
+        ShiftedLuPolicyComparison shifted_lu_policy_comparison{};
         double preconditioner_normalization_scale =
             std::numeric_limits<double>::quiet_NaN();
         std::uint64_t measurement_failure_count = 0;

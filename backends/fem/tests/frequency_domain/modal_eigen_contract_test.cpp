@@ -6844,6 +6844,33 @@ void modal_nonzero_k_floquet_shared_domain_nearest_reports_shifted_ksp_diagnosti
           "nearest hard KSP failure serializes its failure-only scalar probe");
     check(candidate_diagnostic_serialized,
           "nearest hard KSP failure serializes its bounded opt-in candidate diagnostics without clipping the native result evidence");
+    const bool shifted_lu_diagnostic_serialized =
+        contains(hard_ksp_nearest_result.diagnostics_json,
+                 "\"shifted_lu_policy_comparison\":{\"schema_version\":\"floquet_shifted_lu_policy_comparison.v1\"") &&
+        contains(hard_ksp_nearest_result.diagnostics_json,
+                 "\"mat_shift_nonzero\":{\"factorization_shift_policy\":\"MAT_SHIFT_NONZERO\"") &&
+        contains(hard_ksp_nearest_result.diagnostics_json,
+                 "\"mat_shift_none\":{\"factorization_shift_policy\":\"MAT_SHIFT_NONE\"");
+    check(shifted_lu_diagnostic_serialized,
+          "nearest hard KSP failure serializes separate exact-shift LU policy measurements");
+    const bool both_shifted_lu_setups_and_solves_available =
+        contains(hard_ksp_nearest_result.diagnostics_json,
+                 "\"mat_shift_nonzero\":{\"factorization_shift_policy\":\"MAT_SHIFT_NONZERO\",\"factorization_shift_amount_is_honored_by_policy\":true,\"actual_factorization_perturbation_measured\":false,\"factorization_setup_available\":true,\"factorization_setup_error_code\":0,\"solve_available\":true") &&
+        contains(hard_ksp_nearest_result.diagnostics_json,
+                 "\"mat_shift_none\":{\"factorization_shift_policy\":\"MAT_SHIFT_NONE\",\"factorization_shift_amount_is_honored_by_policy\":false,\"actual_factorization_perturbation_measured\":false,\"factorization_setup_available\":true,\"factorization_setup_error_code\":0,\"solve_available\":true");
+    check(both_shifted_lu_setups_and_solves_available,
+          "the real hard-KSP callback retains successful independent setup and solve evidence for both LU policies");
+    check(contains(hard_ksp_nearest_result.diagnostics_json,
+                   "\"rhs_source\":\"live_shifted_ksp_get_rhs\"") &&
+              contains(hard_ksp_nearest_result.diagnostics_json,
+                       "\"operator_normalization_relation\":\"normalized_live_ksp_A_shift = operator_normalization_scale * raw_pencil_A_shift\"") &&
+              contains(hard_ksp_nearest_result.diagnostics_json,
+                       "\"solution_calibration\":\"P_normalized = preconditioner_normalization_scale * normalized_live_ksp_A_shift; x_A = preconditioner_normalization_scale * y_P\"") &&
+              contains(hard_ksp_nearest_result.diagnostics_json,
+                       "\"actual_factorization_perturbation_measured\":false") &&
+              contains(hard_ksp_nearest_result.diagnostics_json,
+                       "\"operator_residual_to_unchanged_ksp_threshold_ratio\":"),
+          "LU JSON binds the live RHS and calibrated operator residual without claiming a measured factor perturbation");
     check(contains(hard_ksp_nearest_result.diagnostics_json,
                    "\"raw_spectrum\":{\"count_available\":") &&
               contains(hard_ksp_nearest_result.diagnostics_json,

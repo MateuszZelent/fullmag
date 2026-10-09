@@ -775,6 +775,8 @@ ferromagnetic films*, J. Phys. C 19 (1986), DOI:10.1088/0022-3719/19/35/7013.
 | `backends/fem/core/petsc_slepc_runtime.cpp` | `petsc_slepc_process_mutex` | Own one nonrecursive PETSc/SLEPc operation boundary for CPU/GPU, with unsafe retained-graph shutdown protection. |
 | `backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp` | `stop_native_floquet_eps` | Preserve negative EPS reasons and poll cancellation on the final successful iteration. |
 | `backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp` | `prepare_candidate_operator_diagnostic` | Prepare the bounded isolated Poisson workspace and attach its owner to the true-probe callback; source review and managed evidence pending. |
+| `backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp` | `capture_candidate_shifted_lu_comparison` | Observe isolated current/NONE LU on the actual RHS with source-calibrated operator residual; hosted measurement pending. |
+| `backends/fem/cpu/frequency_domain/modal/shifted_ksp_true_convergence.hpp` | `run_floquet_candidate_diagnostic_capture_transaction` | Stop callback on uncertain handler push/pop; preserve honest partial diagnostic completeness. |
 | `backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp` | `run_floquet_dense_original_oracle` | Record bounded raw/rotated eigenvalues and shift distances before window filtering, with explicit truncation. |
 | `backends/fem/cpu/frequency_domain/modal/shifted_ksp_true_convergence.hpp` | `floquet_shifted_true_convergence_test` | Guard candidate admission after PETSc GMRES solution building; preserve negative reason and unavailable probes. |
 | `packages/fullmag-py/src/fullmag/world.py` | `add_relax` | Author a separate upstream Relax stage for a relaxed-initial-state eigen study. |
@@ -837,3 +839,17 @@ kwalifikacja naukowa nowych źródeł pozostają **NOT VERIFIED**.
 | source-tiny-slepc-reference-metric | `backends/fem/src/frequency_domain/modal_eigen_solver.cpp` :: `slepc_tiny_validation_result` | jawna metryka wyłącznie dwuwymiarowej validation lane |
 | source-tiny-validation-dispatch-regression | `backends/fem/tests/frequency_domain/modal_eigen_contract_test.cpp` :: `main` (wywołuje `modal_shift_invert_finds_macrospin_mode` i `modal_v20_tiny_validation_rejects_forced_production_gpu`) | pozytywny AUTO tiny CABI solve i forced GPU conflict rejection przez v20; GHA NOT VERIFIED |
 | source-tiny-gpu-conflict-guard | `backends/fem/src/frequency_domain/modal_eigen_solver.cpp` :: `solve_modal_eigen_contract` | odrzuca forced production GPU z tiny fixture przed toy validation, zachowując resolved GPU i fallback none |
+
+## Diagnostyka LU dokładnego shifted operatora — plan dowodu
+
+Managed37973910821 dla provenance fixture ma rzeczywisty residual3.30355e-10 przy wymaganiu2.41258e-14. Oracle odsuwa shift od najbliższego eigenpole o0.893984 rad/s; ten fixture nie jest dowodem near-pole. Actual-vector Poisson/replay/linearity oraz zgodność dokładnej shifted matrix są bliskie roundoff. Nie wynika z tego możliwość obniżenia gate ani wyboru innej fizyki.
+
+Kolejny opt-in bounded workspace ma porównać osobne LU na tej samej dokładnej shifted matrix i tym samym rzeczywistym RHS: obecna żądana polityka MAT_SHIFT_NONZERO oraz MAT_SHIFT_NONE, z identycznym reorder. Dla każdego wariantu mierzymy actual residual względem niezmienionego operatora i RHS, rozwiązanie oraz repeatability; wszystkie skale normalizacji i requested factor shift muszą być jawne. Requested shift nie dowodzi rzeczywistej perturbacji faktoryzacji. Wektory i factor workspace są własne; pomiary zachodzą przed hard EPS error, bez produkcyjnych workbuffers ani final-query po error.
+
+To diagnostyka FEM CPU/PETSc ograniczona do istniejącego opt-in tiny bound; FDM i GPU runtime nie są kwalifikowane. Publiczny Python/ProblemIR i tolerancje pozostają bez zmian. Failure/unsafe teardown zachowuje fail-closed quarantine i unavailable metryki, nie pozorny sukces. Dopiero hosted rzeczywisty callback i residual comparison mogą uzasadnić zmianę bounded preconditionera. Implementacja diagnostyki, przewaga jednej polityki i poprawne production eigenpairs: NOT VERIFIED.
+
+### Źródłowy kontrakt porównania LU
+
+Implementacja i niezależny pełny SOURCE review obejmują opt-in capture przed mutacją residualu. Źródłowo $P_{\mathrm{norm}}=T A_{\mathrm{shift}}$; rozwiązanie $P_{\mathrm{norm}}y=b$ jest porównywane z operatorem przy $x_A=T y$. S jest wcześniejszą wspólną normalizacją pencil i nie jest stosowane drugi raz w tym przekształceniu. Normy są diagnostyką współrzędnych wewnętrznych KSP, nie nowym obserwablem fizycznym; ratio residual/RHS oraz residual/threshold są bezwymiarowe. Requested factor shift nadal nie jest zmierzoną perturbacją.
+
+Push/pop handler failure propaguje się do quarantine przed dalszymi działaniami callbacku. Stan measured wymaga kompletnego własnego workspace, wszystkich dostępnych norm i zerowych error codes; częściowe pomiary nie udają sukcesu. Regresje używają rzeczywiście stosowanych transaction/completeness helpers oraz istniejących rzeczywistych callback fixtures. Local runtime/compile nie wykonano; hosted LU metrics i poprawne production eigenpairs pozostają NOT VERIFIED.

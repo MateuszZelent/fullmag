@@ -1653,11 +1653,18 @@ struct FloquetCandidateOperatorDiagnosticWorkspace {
     NativeFloquetMatShellContext isolated_context{};
     const NativeFloquetMatShellContext *production_context = nullptr;
     Mat exact_shifted_matrix = nullptr;
+    Mat mat_shift_nonzero_matrix = nullptr;
+    Mat mat_shift_none_matrix = nullptr;
+    KSP mat_shift_nonzero_ksp = nullptr;
+    KSP mat_shift_none_ksp = nullptr;
     Mat gyrotropic = nullptr; // Borrowed from the reusable production graph.
     PetscScalar shift = 0.0;
     bool exact_shifted_matrix_available = false;
+    bool shifted_lu_vectors_available = false;
     bool cleanup_failed = false;
     PetscErrorCode cleanup_error = PETSC_SUCCESS;
+    FloquetCandidateOperatorDiagnostic::ShiftedLuPolicyComparison
+        shifted_lu_setup_summary{};
     Vec q_template_input = nullptr;
     Vec q_template_output = nullptr;
     Vec candidate_input = nullptr;
@@ -1674,17 +1681,30 @@ struct FloquetCandidateOperatorDiagnosticWorkspace {
     Vec production_phi_rhs = nullptr;
     Vec production_phi_solution = nullptr;
     Vec production_poisson_residual = nullptr;
+    Vec shifted_lu_solution_template = nullptr;
+    Vec shifted_lu_rhs = nullptr;
+    Vec shifted_lu_nonzero_solution = nullptr;
+    Vec shifted_lu_nonzero_repeat_solution = nullptr;
+    Vec shifted_lu_none_solution = nullptr;
+    Vec shifted_lu_none_repeat_solution = nullptr;
+    Vec shifted_lu_operator_solution = nullptr;
+    Vec shifted_lu_operator_repeat_solution = nullptr;
+    Vec shifted_lu_preconditioner_action = nullptr;
+    Vec shifted_lu_operator_action = nullptr;
+    Vec shifted_lu_residual = nullptr;
+    Vec shifted_lu_difference = nullptr;
 };
 
 void begin_candidate_operator_diagnostic_sample(
     void *raw_workspace,
     PetscInt iteration,
     std::uint64_t callback_ordinal) noexcept;
-void capture_candidate_operator_diagnostic_sample(
+PetscErrorCode capture_candidate_operator_diagnostic_sample(
     void *raw_workspace,
     PetscInt iteration,
     std::uint64_t callback_ordinal,
     Mat shifted_operator,
+    Vec shifted_rhs,
     Vec candidate_solution,
     Vec shifted_operator_action) noexcept;
 
@@ -1700,6 +1720,69 @@ void record_candidate_diagnostic_error(
         error != PETSC_SUCCESS ? error : PETSC_ERR_LIB);
     workspace->summary.status = "partial";
     workspace->summary.reason = "one_or_more_measurements_unavailable";
+}
+
+void initialize_candidate_shifted_lu_policy(
+    FloquetCandidateOperatorDiagnosticWorkspace *workspace,
+    Mat *matrix_slot,
+    KSP *ksp_slot,
+    FloquetCandidateOperatorDiagnostic::ShiftedLuPolicyOutcome *outcome,
+    decltype(MAT_SHIFT_NONE) shift_type,
+    PetscReal factorization_shift_amount)
+{
+    if (workspace == nullptr || matrix_slot == nullptr || ksp_slot == nullptr ||
+        outcome == nullptr || workspace->exact_shifted_matrix == nullptr) {
+        if (workspace != nullptr && outcome != nullptr) {
+            outcome->factorization_setup_error_code = PETSC_ERR_ARG_WRONGSTATE;
+            record_candidate_diagnostic_error(workspace, PETSC_ERR_ARG_WRONGSTATE);
+        }
+        return;
+    }
+
+    PetscErrorCode error = MatDuplicate(
+        workspace->exact_shifted_matrix,
+        MAT_COPY_VALUES,
+        matrix_slot);
+    if (error == PETSC_SUCCESS) {
+        error = KSPCreate(PETSC_COMM_SELF, ksp_slot);
+    }
+    if (error == PETSC_SUCCESS) {
+        error = KSPSetOperators(*ksp_slot, *matrix_slot, *matrix_slot);
+    }
+    if (error == PETSC_SUCCESS) {
+        error = KSPSetType(*ksp_slot, KSPPREONLY);
+    }
+    PC pc = nullptr;
+    if (error == PETSC_SUCCESS) {
+        error = KSPGetPC(*ksp_slot, &pc);
+        if (error == PETSC_SUCCESS && pc == nullptr) {
+            error = PETSC_ERR_ARG_WRONGSTATE;
+        }
+    }
+    if (error == PETSC_SUCCESS) {
+        error = PCSetType(pc, PCLU);
+    }
+    if (error == PETSC_SUCCESS) {
+        error = PCFactorReorderForNonzeroDiagonal(pc, 1.0e-12);
+    }
+    if (error == PETSC_SUCCESS) {
+        error = PCFactorSetShiftType(pc, shift_type);
+    }
+    if (error == PETSC_SUCCESS && shift_type == MAT_SHIFT_NONZERO) {
+        error = PCFactorSetShiftAmount(pc, factorization_shift_amount);
+    }
+    if (error == PETSC_SUCCESS) {
+        error = KSPSetErrorIfNotConverged(*ksp_slot, PETSC_FALSE);
+    }
+    if (error == PETSC_SUCCESS) {
+        error = KSPSetUp(*ksp_slot);
+    }
+    if (error != PETSC_SUCCESS) {
+        outcome->factorization_setup_error_code = static_cast<int>(error);
+        record_candidate_diagnostic_error(workspace, error);
+        return;
+    }
+    outcome->factorization_setup_available = true;
 }
 
 PetscErrorCode destroy_candidate_operator_diagnostic_workspace(
@@ -1752,6 +1835,26 @@ PetscErrorCode destroy_candidate_operator_diagnostic_workspace(
         *slot = nullptr;
         return PETSC_SUCCESS;
     };
+    const auto destroy_ksp = [&](KSP *slot) {
+        if (slot == nullptr || *slot == nullptr) {
+            return PETSC_SUCCESS;
+        }
+        KSP owned = *slot;
+        const PetscErrorCode error = KSPDestroy(&owned);
+        if (error != PETSC_SUCCESS || owned != nullptr) {
+            return fail_cleanup(error);
+        }
+        *slot = nullptr;
+        return PETSC_SUCCESS;
+    };
+    PetscErrorCode error = destroy_ksp(&workspace->mat_shift_nonzero_ksp);
+    if (error != PETSC_SUCCESS) {
+        return error;
+    }
+    error = destroy_ksp(&workspace->mat_shift_none_ksp);
+    if (error != PETSC_SUCCESS) {
+        return error;
+    }
     Vec *vectors[] = {
         &workspace->isolated_context.phi_rhs,
         &workspace->isolated_context.phi_solution,
@@ -1771,14 +1874,34 @@ PetscErrorCode destroy_candidate_operator_diagnostic_workspace(
         &workspace->difference,
         &workspace->production_phi_rhs,
         &workspace->production_phi_solution,
-        &workspace->production_poisson_residual};
+        &workspace->production_poisson_residual,
+        &workspace->shifted_lu_solution_template,
+        &workspace->shifted_lu_rhs,
+        &workspace->shifted_lu_nonzero_solution,
+        &workspace->shifted_lu_nonzero_repeat_solution,
+        &workspace->shifted_lu_none_solution,
+        &workspace->shifted_lu_none_repeat_solution,
+        &workspace->shifted_lu_operator_solution,
+        &workspace->shifted_lu_operator_repeat_solution,
+        &workspace->shifted_lu_preconditioner_action,
+        &workspace->shifted_lu_operator_action,
+        &workspace->shifted_lu_residual,
+        &workspace->shifted_lu_difference};
     for (Vec *vector : vectors) {
         const PetscErrorCode error = destroy_vec(vector);
         if (error != PETSC_SUCCESS) {
             return error;
         }
     }
-    PetscErrorCode error = destroy_mat(&workspace->exact_shifted_matrix);
+    error = destroy_mat(&workspace->mat_shift_nonzero_matrix);
+    if (error != PETSC_SUCCESS) {
+        return error;
+    }
+    error = destroy_mat(&workspace->mat_shift_none_matrix);
+    if (error != PETSC_SUCCESS) {
+        return error;
+    }
+    error = destroy_mat(&workspace->exact_shifted_matrix);
     if (error != PETSC_SUCCESS) {
         return error;
     }
@@ -1798,7 +1921,12 @@ PetscErrorCode initialize_candidate_operator_diagnostic_workspace(
     bool exact_shifted_matrix_available,
     Mat gyrotropic,
     PetscScalar shift,
-    double preconditioner_normalization_scale)
+    double operator_normalization_scale,
+    double preconditioner_normalization_scale,
+    double shifted_preconditioner_matrix_norm_inf,
+    double factorization_shift_amount,
+    PetscReal shifted_ksp_rtol,
+    PetscReal shifted_ksp_atol)
 {
     if (workspace == nullptr || production_context == nullptr ||
         production_context->a_qq == nullptr || production_context->a_qphi == nullptr ||
@@ -1809,8 +1937,18 @@ PetscErrorCode initialize_candidate_operator_diagnostic_workspace(
         production_context->q_split_count > 512 ||
         production_context->phi_split_count > 512 ||
         (exact_shifted_matrix_available && exact_shifted_matrix == nullptr) ||
+        !std::isfinite(operator_normalization_scale) ||
+        operator_normalization_scale <= 0.0 ||
         !std::isfinite(preconditioner_normalization_scale) ||
-        preconditioner_normalization_scale <= 0.0) {
+        preconditioner_normalization_scale <= 0.0 ||
+        !std::isfinite(shifted_preconditioner_matrix_norm_inf) ||
+        shifted_preconditioner_matrix_norm_inf <= 0.0 ||
+        !std::isfinite(factorization_shift_amount) ||
+        factorization_shift_amount <= 0.0 ||
+        !std::isfinite(static_cast<double>(shifted_ksp_rtol)) ||
+        shifted_ksp_rtol < 0.0 ||
+        !std::isfinite(static_cast<double>(shifted_ksp_atol)) ||
+        shifted_ksp_atol < 0.0) {
         return PETSC_ERR_ARG_WRONGSTATE;
     }
     workspace->summary.requested = true;
@@ -1818,6 +1956,23 @@ PetscErrorCode initialize_candidate_operator_diagnostic_workspace(
     workspace->summary.reason = "workspace_setup_incomplete";
     workspace->summary.preconditioner_normalization_scale =
         preconditioner_normalization_scale;
+    auto &shifted_lu = workspace->summary.shifted_lu_policy_comparison;
+    shifted_lu.requested = true;
+    shifted_lu.exact_shifted_matrix_available = false;
+    shifted_lu.status = "unavailable";
+    shifted_lu.reason = exact_shifted_matrix_available
+        ? "exact_shifted_matrix_copy_pending"
+        : "exact_materialized_shifted_schur_matrix_unavailable";
+    shifted_lu.target_shift_rad_s = static_cast<double>(PetscRealPart(shift));
+    shifted_lu.operator_normalization_scale = operator_normalization_scale;
+    shifted_lu.preconditioner_normalization_scale =
+        preconditioner_normalization_scale;
+    shifted_lu.shifted_preconditioner_matrix_infinity_norm_after_normalization =
+        shifted_preconditioner_matrix_norm_inf;
+    shifted_lu.requested_factorization_shift_amount =
+        factorization_shift_amount;
+    shifted_lu.shifted_ksp_rtol = static_cast<double>(shifted_ksp_rtol);
+    shifted_lu.shifted_ksp_atol = static_cast<double>(shifted_ksp_atol);
     workspace->isolated_context = *production_context;
     workspace->production_context = production_context;
     workspace->isolated_context.p = nullptr;
@@ -1963,9 +2118,59 @@ PetscErrorCode initialize_candidate_operator_diagnostic_workspace(
             &workspace->exact_shifted_matrix);
         if (error == PETSC_SUCCESS) {
             workspace->exact_shifted_matrix_available = true;
+            shifted_lu.exact_shifted_matrix_available = true;
+            shifted_lu.reason = "shifted_lu_factor_setups_pending";
         } else {
             // A failure in this optional comparison does not disable the
             // independent Poisson replay or change the production solve.
+            record_candidate_diagnostic_error(workspace, error);
+            shifted_lu.reason = "exact_shifted_matrix_copy_failed";
+        }
+    }
+    if (workspace->exact_shifted_matrix_available) {
+        initialize_candidate_shifted_lu_policy(
+            workspace,
+            &workspace->mat_shift_nonzero_matrix,
+            &workspace->mat_shift_nonzero_ksp,
+            &shifted_lu.mat_shift_nonzero,
+            MAT_SHIFT_NONZERO,
+            static_cast<PetscReal>(factorization_shift_amount));
+        initialize_candidate_shifted_lu_policy(
+            workspace,
+            &workspace->mat_shift_none_matrix,
+            &workspace->mat_shift_none_ksp,
+            &shifted_lu.mat_shift_none,
+            MAT_SHIFT_NONE,
+            static_cast<PetscReal>(factorization_shift_amount));
+
+        error = MatCreateVecs(
+            workspace->exact_shifted_matrix,
+            &workspace->shifted_lu_solution_template,
+            &workspace->shifted_lu_rhs);
+        if (error == PETSC_SUCCESS) {
+            Vec *shifted_lu_vectors[] = {
+                &workspace->shifted_lu_nonzero_solution,
+                &workspace->shifted_lu_nonzero_repeat_solution,
+                &workspace->shifted_lu_none_solution,
+                &workspace->shifted_lu_none_repeat_solution,
+                &workspace->shifted_lu_operator_solution,
+                &workspace->shifted_lu_operator_repeat_solution,
+                &workspace->shifted_lu_preconditioner_action,
+                &workspace->shifted_lu_operator_action,
+                &workspace->shifted_lu_residual,
+                &workspace->shifted_lu_difference};
+            for (Vec *vector : shifted_lu_vectors) {
+                error = VecDuplicate(workspace->shifted_lu_solution_template, vector);
+                if (error != PETSC_SUCCESS) {
+                    break;
+                }
+            }
+        }
+        if (error == PETSC_SUCCESS) {
+            workspace->shifted_lu_vectors_available = true;
+        } else {
+            shifted_lu.status = "partial";
+            shifted_lu.reason = "shifted_lu_workspace_vectors_unavailable";
             record_candidate_diagnostic_error(workspace, error);
         }
     }
@@ -1995,6 +2200,21 @@ PetscErrorCode initialize_candidate_operator_diagnostic_workspace(
     workspace->summary.workspace_available = true;
     workspace->summary.status = "ready";
     workspace->summary.reason = "awaiting_true_probe_candidate";
+    if (workspace->exact_shifted_matrix_available) {
+        const bool shifted_lu_workspace_ready =
+            detail::floquet_candidate_shifted_lu_workspace_ready(
+                workspace->exact_shifted_matrix_available,
+                workspace->shifted_lu_vectors_available,
+                shifted_lu.mat_shift_nonzero.factorization_setup_available,
+                shifted_lu.mat_shift_none.factorization_setup_available);
+        shifted_lu.status = shifted_lu_workspace_ready ? "ready" : "partial";
+        shifted_lu.reason = shifted_lu_workspace_ready
+            ? "awaiting_live_shifted_ksp_rhs"
+            : !workspace->shifted_lu_vectors_available
+                ? "shifted_lu_workspace_vectors_unavailable"
+                : "one_or_more_lu_factor_setups_unavailable";
+    }
+    workspace->shifted_lu_setup_summary = shifted_lu;
     return PETSC_SUCCESS;
 }
 
@@ -2004,7 +2224,10 @@ bool prepare_candidate_operator_diagnostic(
     bool exact_shifted_matrix_available,
     Mat gyrotropic,
     PetscScalar shift,
+    double operator_normalization_scale,
     double preconditioner_normalization_scale,
+    double shifted_preconditioner_matrix_norm_inf,
+    double factorization_shift_amount,
     detail::FloquetShiftedKspTrueConvergenceContext *callback_context,
     FloquetCandidateOperatorDiagnostic *out_summary,
     PetscErrorCode *out_fatal_error)
@@ -2022,6 +2245,20 @@ bool prepare_candidate_operator_diagnostic(
     out_summary->reason = "candidate_diagnostic_not_started";
     out_summary->preconditioner_normalization_scale =
         preconditioner_normalization_scale;
+    auto &shifted_lu = out_summary->shifted_lu_policy_comparison;
+    shifted_lu.requested = true;
+    shifted_lu.exact_shifted_matrix_available = exact_shifted_matrix_available;
+    shifted_lu.status = "unavailable";
+    shifted_lu.reason = exact_shifted_matrix_available
+        ? "shifted_lu_workspace_setup_pending"
+        : "exact_materialized_shifted_schur_matrix_unavailable";
+    shifted_lu.target_shift_rad_s = static_cast<double>(PetscRealPart(shift));
+    shifted_lu.operator_normalization_scale = operator_normalization_scale;
+    shifted_lu.preconditioner_normalization_scale =
+        preconditioner_normalization_scale;
+    shifted_lu.shifted_preconditioner_matrix_infinity_norm_after_normalization =
+        shifted_preconditioner_matrix_norm_inf;
+    shifted_lu.requested_factorization_shift_amount = factorization_shift_amount;
     if (production_context == nullptr || callback_context == nullptr ||
         production_context->q_split_count <= 0 ||
         production_context->phi_split_count <= 0) {
@@ -2032,6 +2269,7 @@ bool prepare_candidate_operator_diagnostic(
     if (production_context->q_split_count > 512 ||
         production_context->phi_split_count > 512) {
         out_summary->reason = "real_split_dimension_exceeds_512";
+        shifted_lu.reason = "real_split_dimension_exceeds_512";
         return false;
     }
     auto *workspace = new (std::nothrow)
@@ -2061,7 +2299,12 @@ bool prepare_candidate_operator_diagnostic(
                     exact_shifted_matrix_available,
                     gyrotropic,
                     shift,
-                    preconditioner_normalization_scale);
+                    operator_normalization_scale,
+                    preconditioner_normalization_scale,
+                    shifted_preconditioner_matrix_norm_inf,
+                    factorization_shift_amount,
+                    callback_context->rtol,
+                    callback_context->atol);
                 return setup_error;
             },
             [&]() {
@@ -2266,6 +2509,395 @@ PetscErrorCode apply_isolated_candidate_shifted_action(
     return PETSC_SUCCESS;
 }
 
+void capture_candidate_shifted_lu_policy_outcome(
+    FloquetCandidateOperatorDiagnosticWorkspace *workspace,
+    KSP ksp,
+    Vec solution,
+    Vec repeat_solution,
+    FloquetCandidateOperatorDiagnostic::ShiftedLuPolicyOutcome *outcome,
+    double rhs_norm,
+    double true_residual_threshold)
+{
+    if (workspace == nullptr || outcome == nullptr ||
+        !outcome->factorization_setup_available) {
+        return;
+    }
+    if (ksp == nullptr || solution == nullptr || repeat_solution == nullptr) {
+        outcome->solve_error_code = PETSC_ERR_ARG_WRONGSTATE;
+        record_candidate_diagnostic_error(workspace, PETSC_ERR_ARG_WRONGSTATE);
+        return;
+    }
+    const auto record_failure = [workspace, outcome](PetscErrorCode error) {
+        const PetscErrorCode recorded_error = error != PETSC_SUCCESS
+            ? error
+            : PETSC_ERR_LIB;
+        if (outcome->solve_error_code == 0) {
+            outcome->solve_error_code = static_cast<int>(recorded_error);
+        }
+        record_candidate_diagnostic_error(workspace, recorded_error);
+    };
+    PetscErrorCode error = VecSet(solution, static_cast<PetscScalar>(0.0));
+    if (error == PETSC_SUCCESS) {
+        error = KSPSolve(ksp, workspace->shifted_lu_rhs, solution);
+    }
+    KSPConvergedReason solve_reason = KSP_CONVERGED_ITERATING;
+    if (error == PETSC_SUCCESS) {
+        error = KSPGetConvergedReason(ksp, &solve_reason);
+    }
+    outcome->solve_reason_available = error == PETSC_SUCCESS;
+    outcome->solve_reason = static_cast<int>(solve_reason);
+    if (error == PETSC_SUCCESS && solve_reason <= KSP_CONVERGED_ITERATING) {
+        error = PETSC_ERR_NOT_CONVERGED;
+    }
+    if (error != PETSC_SUCCESS) {
+        record_failure(error);
+        return;
+    }
+
+    PetscReal solution_norm = 0.0;
+    error = VecNorm(solution, NORM_2, &solution_norm);
+    if (error == PETSC_SUCCESS &&
+        std::isfinite(static_cast<double>(solution_norm)) && solution_norm >= 0.0) {
+        outcome->preconditioner_solution_l2_norm_available = true;
+        outcome->preconditioner_solution_l2_norm = static_cast<double>(solution_norm);
+    } else {
+        record_failure(error != PETSC_SUCCESS ? error : PETSC_ERR_FP);
+    }
+
+    error = MatMult(
+        workspace->exact_shifted_matrix,
+        solution,
+        workspace->shifted_lu_preconditioner_action);
+    if (error == PETSC_SUCCESS) {
+        error = VecAXPY(
+            workspace->shifted_lu_preconditioner_action,
+            static_cast<PetscScalar>(-1.0),
+            workspace->shifted_lu_rhs);
+    }
+    PetscReal preconditioner_residual_norm = 0.0;
+    if (error == PETSC_SUCCESS) {
+        error = VecNorm(
+            workspace->shifted_lu_preconditioner_action,
+            NORM_2,
+            &preconditioner_residual_norm);
+    }
+    if (error == PETSC_SUCCESS &&
+        std::isfinite(static_cast<double>(preconditioner_residual_norm)) &&
+        preconditioner_residual_norm >= 0.0) {
+        outcome->preconditioner_residual_l2_norm_available = true;
+        outcome->preconditioner_residual_l2_norm =
+            static_cast<double>(preconditioner_residual_norm);
+        PetscReal relative_residual =
+            std::numeric_limits<PetscReal>::quiet_NaN();
+        const PetscErrorCode relative_error = detail::calculate_floquet_relative_residual(
+            preconditioner_residual_norm,
+            static_cast<PetscReal>(rhs_norm),
+            &relative_residual);
+        outcome->preconditioner_relative_residual_available =
+            relative_error == PETSC_SUCCESS;
+        if (outcome->preconditioner_relative_residual_available) {
+            outcome->preconditioner_relative_residual =
+                static_cast<double>(relative_residual);
+        } else {
+            record_failure(relative_error);
+        }
+    } else {
+        record_failure(error != PETSC_SUCCESS ? error : PETSC_ERR_FP);
+    }
+
+    error = VecCopy(solution, workspace->shifted_lu_operator_solution);
+    if (error == PETSC_SUCCESS) {
+        error = VecScale(
+            workspace->shifted_lu_operator_solution,
+            static_cast<PetscScalar>(
+                workspace->summary.shifted_lu_policy_comparison
+                    .preconditioner_normalization_scale));
+    }
+    PetscReal operator_solution_norm = 0.0;
+    if (error == PETSC_SUCCESS) {
+        error = VecNorm(
+            workspace->shifted_lu_operator_solution,
+            NORM_2,
+            &operator_solution_norm);
+    }
+    if (error == PETSC_SUCCESS &&
+        std::isfinite(static_cast<double>(operator_solution_norm)) &&
+        operator_solution_norm >= 0.0) {
+        outcome->operator_solution_l2_norm_available = true;
+        outcome->operator_solution_l2_norm =
+            static_cast<double>(operator_solution_norm);
+    } else {
+        error = error != PETSC_SUCCESS ? error : PETSC_ERR_FP;
+        record_failure(error);
+    }
+
+    error = outcome->operator_solution_l2_norm_available
+        ? apply_isolated_candidate_shifted_action(
+              workspace,
+              workspace->shifted_lu_operator_solution,
+              workspace->shifted_lu_operator_action)
+        : PETSC_ERR_ARG_WRONGSTATE;
+    if (error == PETSC_SUCCESS) {
+        error = VecAXPY(
+            workspace->shifted_lu_operator_action,
+            static_cast<PetscScalar>(-1.0),
+            workspace->shifted_lu_rhs);
+    }
+    PetscReal operator_residual_norm = 0.0;
+    if (error == PETSC_SUCCESS) {
+        error = VecNorm(
+            workspace->shifted_lu_operator_action,
+            NORM_2,
+            &operator_residual_norm);
+    }
+    if (error == PETSC_SUCCESS &&
+        std::isfinite(static_cast<double>(operator_residual_norm)) &&
+        operator_residual_norm >= 0.0) {
+        outcome->operator_residual_l2_norm_available = true;
+        outcome->operator_residual_l2_norm =
+            static_cast<double>(operator_residual_norm);
+        PetscReal relative_residual =
+            std::numeric_limits<PetscReal>::quiet_NaN();
+        const PetscErrorCode relative_error = detail::calculate_floquet_relative_residual(
+            operator_residual_norm,
+            static_cast<PetscReal>(rhs_norm),
+            &relative_residual);
+        outcome->operator_relative_residual_available =
+            relative_error == PETSC_SUCCESS;
+        if (outcome->operator_relative_residual_available) {
+            outcome->operator_relative_residual =
+                static_cast<double>(relative_residual);
+        } else {
+            record_failure(relative_error);
+        }
+        if (std::isfinite(true_residual_threshold) && true_residual_threshold > 0.0) {
+            const double ratio = static_cast<double>(operator_residual_norm) /
+                true_residual_threshold;
+            if (std::isfinite(ratio) && ratio >= 0.0) {
+                outcome->operator_tolerance_ratio_available = true;
+                outcome->operator_tolerance_ratio = ratio;
+            } else {
+                record_failure(PETSC_ERR_FP);
+            }
+        }
+    } else {
+        record_failure(error != PETSC_SUCCESS ? error : PETSC_ERR_FP);
+    }
+
+    error = VecSet(repeat_solution, static_cast<PetscScalar>(0.0));
+    if (error == PETSC_SUCCESS) {
+        error = KSPSolve(ksp, workspace->shifted_lu_rhs, repeat_solution);
+    }
+    KSPConvergedReason repeat_reason = KSP_CONVERGED_ITERATING;
+    if (error == PETSC_SUCCESS) {
+        error = KSPGetConvergedReason(ksp, &repeat_reason);
+    }
+    outcome->repeat_solve_reason_available = error == PETSC_SUCCESS;
+    outcome->repeat_solve_reason = static_cast<int>(repeat_reason);
+    if (error == PETSC_SUCCESS && repeat_reason <= KSP_CONVERGED_ITERATING) {
+        error = PETSC_ERR_NOT_CONVERGED;
+    }
+    if (error != PETSC_SUCCESS) {
+        record_failure(error);
+        return;
+    }
+    outcome->solve_available = true;
+
+    error = VecCopy(repeat_solution, workspace->shifted_lu_operator_repeat_solution);
+    if (error == PETSC_SUCCESS) {
+        error = VecScale(
+            workspace->shifted_lu_operator_repeat_solution,
+            static_cast<PetscScalar>(
+                workspace->summary.shifted_lu_policy_comparison
+                    .preconditioner_normalization_scale));
+    }
+    PetscReal repeat_operator_solution_norm = 0.0;
+    if (error == PETSC_SUCCESS) {
+        error = VecNorm(
+            workspace->shifted_lu_operator_repeat_solution,
+            NORM_2,
+            &repeat_operator_solution_norm);
+    }
+    if (error == PETSC_SUCCESS &&
+        std::isfinite(static_cast<double>(repeat_operator_solution_norm)) &&
+        repeat_operator_solution_norm >= 0.0) {
+        outcome->repeat_operator_solution_l2_norm_available = true;
+        outcome->repeat_operator_solution_l2_norm =
+            static_cast<double>(repeat_operator_solution_norm);
+    } else {
+        record_failure(error != PETSC_SUCCESS ? error : PETSC_ERR_FP);
+    }
+
+    if (outcome->operator_solution_l2_norm_available &&
+        outcome->repeat_operator_solution_l2_norm_available) {
+        error = VecCopy(
+            workspace->shifted_lu_operator_solution,
+            workspace->shifted_lu_difference);
+        if (error == PETSC_SUCCESS) {
+            error = VecAXPY(
+                workspace->shifted_lu_difference,
+                static_cast<PetscScalar>(-1.0),
+                workspace->shifted_lu_operator_repeat_solution);
+        }
+        PetscReal repeatability_norm = 0.0;
+        if (error == PETSC_SUCCESS) {
+            error = VecNorm(
+                workspace->shifted_lu_difference,
+                NORM_2,
+                &repeatability_norm);
+        }
+        if (error == PETSC_SUCCESS &&
+            std::isfinite(static_cast<double>(repeatability_norm)) &&
+            repeatability_norm >= 0.0) {
+            const double denominator = std::max(
+                {outcome->operator_solution_l2_norm,
+                 outcome->repeat_operator_solution_l2_norm,
+                 std::numeric_limits<double>::min()});
+            const double defect = static_cast<double>(repeatability_norm) / denominator;
+            if (std::isfinite(defect) && defect >= 0.0) {
+                outcome->repeatability_relative_defect_available = true;
+                outcome->repeatability_relative_defect = defect;
+            } else {
+                record_failure(PETSC_ERR_FP);
+            }
+        } else {
+            record_failure(error != PETSC_SUCCESS ? error : PETSC_ERR_FP);
+        }
+    } else {
+        record_failure(PETSC_ERR_ARG_WRONGSTATE);
+    }
+}
+
+PetscErrorCode capture_candidate_shifted_lu_comparison(
+    FloquetCandidateOperatorDiagnosticWorkspace *workspace,
+    Mat shifted_operator,
+    Vec shifted_rhs) noexcept
+{
+    if (workspace == nullptr) {
+        return PETSC_SUCCESS;
+    }
+    auto &comparison = workspace->summary.shifted_lu_policy_comparison;
+    if (!comparison.requested || !workspace->exact_shifted_matrix_available) {
+        return PETSC_SUCCESS;
+    }
+    if (!workspace->shifted_lu_vectors_available) {
+        comparison.available = false;
+        comparison.status = "partial";
+        comparison.reason = "shifted_lu_workspace_vectors_unavailable";
+        return PETSC_SUCCESS;
+    }
+    if (shifted_operator == nullptr || shifted_rhs == nullptr ||
+        workspace->shifted_lu_rhs == nullptr) {
+        comparison.available = false;
+        comparison.status = "unavailable";
+        comparison.reason = "live_shifted_operator_or_rhs_missing";
+        record_candidate_diagnostic_error(workspace, PETSC_ERR_ARG_WRONGSTATE);
+        return PETSC_SUCCESS;
+    }
+
+    const auto transaction =
+        detail::run_floquet_candidate_diagnostic_capture_transaction(
+            []() {
+                return PetscPushErrorHandler(PetscReturnErrorHandler, nullptr);
+            },
+            [&]() {
+                PetscErrorCode error = PETSC_SUCCESS;
+                PetscInt operator_rows = 0;
+                PetscInt operator_columns = 0;
+                PetscInt rhs_size = 0;
+                error = MatGetSize(shifted_operator, &operator_rows, &operator_columns);
+                if (error == PETSC_SUCCESS) {
+                    error = VecGetSize(shifted_rhs, &rhs_size);
+                }
+                if (error == PETSC_SUCCESS &&
+                    (operator_rows <= 0 || operator_rows != operator_columns ||
+                     operator_rows != rhs_size ||
+                     rhs_size != workspace->production_context->q_split_count)) {
+                    error = PETSC_ERR_ARG_SIZ;
+                }
+                if (error == PETSC_SUCCESS) {
+                    error = VecCopy(shifted_rhs, workspace->shifted_lu_rhs);
+                }
+                PetscReal rhs_norm = 0.0;
+                if (error == PETSC_SUCCESS) {
+                    error = VecNorm(workspace->shifted_lu_rhs, NORM_2, &rhs_norm);
+                }
+                if (error == PETSC_SUCCESS &&
+                    (!std::isfinite(static_cast<double>(rhs_norm)) || rhs_norm < 0.0)) {
+                    error = PETSC_ERR_FP;
+                }
+                if (error == PETSC_SUCCESS) {
+                    comparison.rhs_available = true;
+                    comparison.rhs_l2_norm_available = true;
+                    comparison.rhs_l2_norm = static_cast<double>(rhs_norm);
+                    const double threshold = std::max(
+                        comparison.shifted_ksp_atol,
+                        comparison.shifted_ksp_rtol * comparison.rhs_l2_norm);
+                    if (std::isfinite(threshold) && threshold >= 0.0) {
+                        comparison.true_residual_threshold_available = true;
+                        comparison.true_residual_threshold_l2_norm = threshold;
+                    } else {
+                        error = PETSC_ERR_FP;
+                    }
+                }
+                if (error == PETSC_SUCCESS) {
+                    capture_candidate_shifted_lu_policy_outcome(
+                        workspace,
+                        workspace->mat_shift_nonzero_ksp,
+                        workspace->shifted_lu_nonzero_solution,
+                        workspace->shifted_lu_nonzero_repeat_solution,
+                        &comparison.mat_shift_nonzero,
+                        comparison.rhs_l2_norm,
+                        comparison.true_residual_threshold_l2_norm);
+                    capture_candidate_shifted_lu_policy_outcome(
+                        workspace,
+                        workspace->mat_shift_none_ksp,
+                        workspace->shifted_lu_none_solution,
+                        workspace->shifted_lu_none_repeat_solution,
+                        &comparison.mat_shift_none,
+                        comparison.rhs_l2_norm,
+                        comparison.true_residual_threshold_l2_norm);
+                    comparison.available =
+                        detail::floquet_candidate_shifted_lu_comparison_complete(
+                            comparison,
+                            workspace->shifted_lu_vectors_available);
+                    comparison.status = comparison.available ? "measured" : "partial";
+                    comparison.reason = comparison.available
+                        ? "exact_shifted_lu_policy_comparison"
+                        : "one_or_more_lu_policy_measurements_unavailable";
+                } else {
+                    comparison.available = false;
+                    comparison.status = "partial";
+                    comparison.reason = "live_rhs_or_matrix_measurement_failed";
+                    record_candidate_diagnostic_error(workspace, error);
+                }
+                return error;
+            },
+            []() { return PetscPopErrorHandler(); });
+
+    if (transaction.push_error != PETSC_SUCCESS) {
+        comparison.available = false;
+        comparison.status = "unavailable";
+        comparison.reason = "petsc_return_error_handler_push_failed";
+        record_candidate_diagnostic_error(workspace, transaction.push_error);
+        return transaction.fatal_error;
+    }
+    if (transaction.pop_error != PETSC_SUCCESS) {
+        workspace->cleanup_failed = true;
+        workspace->cleanup_error = transaction.pop_error;
+        comparison.available = false;
+        comparison.status = "unavailable";
+        comparison.reason = "petsc_return_error_handler_restore_failed";
+        record_candidate_diagnostic_error(workspace, transaction.pop_error);
+        return transaction.fatal_error;
+    }
+    if (transaction.capture_error != PETSC_SUCCESS) {
+        // The capture body already recorded this optional measurement as partial.
+        return PETSC_SUCCESS;
+    }
+    return transaction.fatal_error;
+}
+
 void begin_candidate_operator_diagnostic_sample(
     void *raw_workspace,
     PetscInt iteration,
@@ -2281,6 +2913,7 @@ void begin_candidate_operator_diagnostic_sample(
     const std::uint64_t setup_failure_count =
         workspace->summary.measurement_failure_count;
     const int setup_error_code = workspace->summary.last_error_code;
+    const auto shifted_lu_setup_summary = workspace->shifted_lu_setup_summary;
     workspace->summary = FloquetCandidateOperatorDiagnostic{};
     workspace->summary.requested = true;
     workspace->summary.workspace_available = true;
@@ -2291,20 +2924,22 @@ void begin_candidate_operator_diagnostic_sample(
     workspace->summary.callback_ordinal = callback_ordinal;
     workspace->summary.iteration = static_cast<std::int64_t>(iteration);
     workspace->summary.preconditioner_normalization_scale = preconditioner_scale;
+    workspace->summary.shifted_lu_policy_comparison = shifted_lu_setup_summary;
 }
 
-void capture_candidate_operator_diagnostic_sample(
+PetscErrorCode capture_candidate_operator_diagnostic_sample(
     void *raw_workspace,
     PetscInt iteration,
     std::uint64_t callback_ordinal,
-    Mat,
+    Mat shifted_operator,
+    Vec shifted_rhs,
     Vec candidate_solution,
     Vec shifted_operator_action) noexcept
 {
     auto *workspace =
         static_cast<FloquetCandidateOperatorDiagnosticWorkspace *>(raw_workspace);
     if (workspace == nullptr || !workspace->summary.workspace_available) {
-        return;
+        return PETSC_SUCCESS;
     }
     workspace->summary.callback_ordinal = callback_ordinal;
     workspace->summary.iteration = static_cast<std::int64_t>(iteration);
@@ -2319,19 +2954,19 @@ void capture_candidate_operator_diagnostic_sample(
         workspace->production_phi_rhs);
     if (error != PETSC_SUCCESS) {
         record_candidate_diagnostic_error(workspace, error);
-        return;
+        return PETSC_SUCCESS;
     }
     error = VecCopy(
         workspace->production_context->phi_solution,
         workspace->production_phi_solution);
     if (error != PETSC_SUCCESS) {
         record_candidate_diagnostic_error(workspace, error);
-        return;
+        return PETSC_SUCCESS;
     }
     error = VecCopy(shifted_operator_action, workspace->production_action);
     if (error != PETSC_SUCCESS) {
         record_candidate_diagnostic_error(workspace, error);
-        return;
+        return PETSC_SUCCESS;
     }
     workspace->summary.sample_available = true;
     workspace->summary.status = "partial";
@@ -2549,6 +3184,13 @@ void capture_candidate_operator_diagnostic_sample(
             record_candidate_diagnostic_error(workspace, error);
         }
     }
+    error = capture_candidate_shifted_lu_comparison(
+        workspace,
+        shifted_operator,
+        shifted_rhs);
+    if (error != PETSC_SUCCESS) {
+        return error;
+    }
     if (workspace->summary.measurement_failure_count == 0u) {
         workspace->summary.status = "measured";
         workspace->summary.reason = "bounded_candidate_operator_observation";
@@ -2556,6 +3198,7 @@ void capture_candidate_operator_diagnostic_sample(
         workspace->summary.status = "partial";
         workspace->summary.reason = "one_or_more_measurements_unavailable";
     }
+    return PETSC_SUCCESS;
 }
 
 bool run_floquet_schur_action_diagnostic(
@@ -5481,7 +6124,10 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
             exact_schur_preconditioner_materialized,
             gyrotropic,
             static_cast<PetscScalar>(target_shift),
+            result.operator_normalization_scale,
             result.preconditioner_normalization_scale,
+            static_cast<double>(shifted_preconditioner_norm),
+            static_cast<double>(factorization_shift_amount),
             shifted_ksp_true_convergence_context.get(),
             &candidate_diagnostic,
             &candidate_diagnostic_setup_error)) {

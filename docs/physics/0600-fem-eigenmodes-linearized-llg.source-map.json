@@ -196,6 +196,18 @@
       "path": "crates/fullmag-runner/src/fem/eigen_execution.rs",
       "symbol": "validate_modal_solver_policy_admission",
       "responsibility": "Reject ignored reference controls before progress, relaxation handoff and artifacts; preserve no/all-null overrides."
+    },
+    {
+      "id": "source-candidate-shifted-lu-comparison",
+      "path": "backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp",
+      "symbol": "capture_candidate_shifted_lu_comparison",
+      "responsibility": "Capture isolated per-policy exact shifted LU residuals using the actual callback RHS and source-derived P-to-A scaling."
+    },
+    {
+      "id": "source-candidate-lu-handler-transaction",
+      "path": "backends/fem/cpu/frequency_domain/modal/shifted_ksp_true_convergence.hpp",
+      "symbol": "run_floquet_candidate_diagnostic_capture_transaction",
+      "responsibility": "Propagate uncertain handler setup/restoration before production residual mutation and gate continuation."
     }
   ],
   "public_api": {

@@ -121,6 +121,153 @@ std::string floquet_shifted_ksp_configuration_json_field(
         std::to_string(result.shifted_ksp_norm_type_before_eps) + "}";
 }
 
+std::string shifted_lu_policy_outcome_json(
+    const char *policy,
+    bool factorization_shift_amount_is_honored_by_policy,
+    const FloquetShiftedKspFailureProbe::CandidateOperatorDiagnostic::
+        ShiftedLuPolicyOutcome &outcome)
+{
+    return std::string("{\"factorization_shift_policy\":\"") + policy +
+        "\",\"factorization_shift_amount_is_honored_by_policy\":" +
+        std::string(factorization_shift_amount_is_honored_by_policy ? "true" : "false") +
+        ",\"actual_factorization_perturbation_measured\":false"
+        ",\"factorization_setup_available\":" +
+        std::string(outcome.factorization_setup_available ? "true" : "false") +
+        ",\"factorization_setup_error_code\":" +
+        std::to_string(outcome.factorization_setup_error_code) +
+        ",\"solve_available\":" +
+        std::string(outcome.solve_available ? "true" : "false") +
+        ",\"solve_error_code\":" + std::to_string(outcome.solve_error_code) +
+        ",\"solve_reason_available\":" +
+        std::string(outcome.solve_reason_available ? "true" : "false") +
+        ",\"solve_reason\":" +
+        (outcome.solve_reason_available
+            ? std::to_string(outcome.solve_reason)
+            : std::string("null")) +
+        ",\"repeat_solve_reason_available\":" +
+        std::string(outcome.repeat_solve_reason_available ? "true" : "false") +
+        ",\"repeat_solve_reason\":" +
+        (outcome.repeat_solve_reason_available
+            ? std::to_string(outcome.repeat_solve_reason)
+            : std::string("null")) +
+        ",\"preconditioner_solution_l2_norm_available\":" +
+        std::string(outcome.preconditioner_solution_l2_norm_available
+            ? "true" : "false") +
+        ",\"preconditioner_solution_l2_norm\":" +
+        (outcome.preconditioner_solution_l2_norm_available
+            ? format_double(outcome.preconditioner_solution_l2_norm)
+            : std::string("null")) +
+        ",\"operator_solution_l2_norm_available\":" +
+        std::string(outcome.operator_solution_l2_norm_available ? "true" : "false") +
+        ",\"operator_solution_l2_norm\":" +
+        (outcome.operator_solution_l2_norm_available
+            ? format_double(outcome.operator_solution_l2_norm)
+            : std::string("null")) +
+        ",\"repeat_operator_solution_l2_norm_available\":" +
+        std::string(outcome.repeat_operator_solution_l2_norm_available
+            ? "true" : "false") +
+        ",\"repeat_operator_solution_l2_norm\":" +
+        (outcome.repeat_operator_solution_l2_norm_available
+            ? format_double(outcome.repeat_operator_solution_l2_norm)
+            : std::string("null")) +
+        ",\"repeatability_relative_defect_available\":" +
+        std::string(outcome.repeatability_relative_defect_available
+            ? "true" : "false") +
+        ",\"repeatability_relative_defect\":" +
+        (outcome.repeatability_relative_defect_available
+            ? format_double(outcome.repeatability_relative_defect)
+            : std::string("null")) +
+        ",\"preconditioner_residual_l2_norm_available\":" +
+        std::string(outcome.preconditioner_residual_l2_norm_available
+            ? "true" : "false") +
+        ",\"preconditioner_residual_l2_norm\":" +
+        (outcome.preconditioner_residual_l2_norm_available
+            ? format_double(outcome.preconditioner_residual_l2_norm)
+            : std::string("null")) +
+        ",\"preconditioner_relative_residual_available\":" +
+        std::string(outcome.preconditioner_relative_residual_available
+            ? "true" : "false") +
+        ",\"preconditioner_relative_residual\":" +
+        (outcome.preconditioner_relative_residual_available
+            ? format_double(outcome.preconditioner_relative_residual)
+            : std::string("null")) +
+        ",\"operator_residual_l2_norm_available\":" +
+        std::string(outcome.operator_residual_l2_norm_available ? "true" : "false") +
+        ",\"operator_residual_l2_norm\":" +
+        (outcome.operator_residual_l2_norm_available
+            ? format_double(outcome.operator_residual_l2_norm)
+            : std::string("null")) +
+        ",\"operator_relative_residual_available\":" +
+        std::string(outcome.operator_relative_residual_available
+            ? "true" : "false") +
+        ",\"operator_relative_residual\":" +
+        (outcome.operator_relative_residual_available
+            ? format_double(outcome.operator_relative_residual)
+            : std::string("null")) +
+        ",\"operator_tolerance_ratio_available\":" +
+        std::string(outcome.operator_tolerance_ratio_available ? "true" : "false") +
+        ",\"operator_residual_to_unchanged_ksp_threshold_ratio\":" +
+        (outcome.operator_tolerance_ratio_available
+            ? format_double(outcome.operator_tolerance_ratio)
+            : std::string("null")) + "}";
+}
+
+std::string shifted_lu_policy_comparison_json(
+    const FloquetShiftedKspFailureProbe::CandidateOperatorDiagnostic::
+        ShiftedLuPolicyComparison &comparison)
+{
+    if (!comparison.requested) {
+        return "null";
+    }
+    return std::string("{\"schema_version\":\"floquet_shifted_lu_policy_comparison.v1\",") +
+        "\"requested\":true,"
+        "\"measurement_scope\":\"true_probe_callback_live_rhs_exact_materialized_shifted_schur_matrix\","
+        "\"rhs_source\":\"live_shifted_ksp_get_rhs\","
+        "\"shifted_operator_action_source\":\"isolated_copy_of_production_matshell_components\","
+        "\"operator_normalization_relation\":\"normalized_live_ksp_A_shift = operator_normalization_scale * raw_pencil_A_shift\","
+        "\"solution_calibration\":\"P_normalized = preconditioner_normalization_scale * normalized_live_ksp_A_shift; x_A = preconditioner_normalization_scale * y_P\","
+        "\"factorization_shift_semantics\":\"requested amount is not a measurement of the actual factorization perturbation\","
+        "\"status\":\"" +
+        escape_json_string(comparison.status != nullptr ? comparison.status : "unknown") +
+        "\",\"reason\":\"" +
+        escape_json_string(comparison.reason != nullptr ? comparison.reason : "") +
+        "\",\"exact_shifted_matrix_available\":" +
+        std::string(comparison.exact_shifted_matrix_available ? "true" : "false") +
+        ",\"rhs_available\":" +
+        std::string(comparison.rhs_available ? "true" : "false") +
+        ",\"rhs_l2_norm_available\":" +
+        std::string(comparison.rhs_l2_norm_available ? "true" : "false") +
+        ",\"rhs_l2_norm\":" +
+        (comparison.rhs_l2_norm_available
+            ? format_double(comparison.rhs_l2_norm)
+            : std::string("null")) +
+        ",\"true_residual_threshold_l2_norm_available\":" +
+        std::string(comparison.true_residual_threshold_available ? "true" : "false") +
+        ",\"true_residual_threshold_l2_norm\":" +
+        (comparison.true_residual_threshold_available
+            ? format_double(comparison.true_residual_threshold_l2_norm)
+            : std::string("null")) +
+        ",\"available\":" +
+        std::string(comparison.available ? "true" : "false") +
+        ",\"target_shift_rad_s\":" + format_double(comparison.target_shift_rad_s) +
+        ",\"operator_normalization_scale\":" +
+        format_double(comparison.operator_normalization_scale) +
+        ",\"preconditioner_normalization_scale\":" +
+        format_double(comparison.preconditioner_normalization_scale) +
+        ",\"shifted_preconditioner_matrix_infinity_norm_after_normalization\":" +
+        format_double(
+            comparison.shifted_preconditioner_matrix_infinity_norm_after_normalization) +
+        ",\"requested_factorization_shift_amount\":" +
+        format_double(comparison.requested_factorization_shift_amount) +
+        ",\"requested_factorization_shift_amount_scope\":\"sqrt(PETSC_MACHINE_EPSILON)*norm_infinity_of_normalized_shifted_preconditioner\""
+        ",\"shifted_ksp_rtol\":" + format_double(comparison.shifted_ksp_rtol) +
+        ",\"shifted_ksp_atol\":" + format_double(comparison.shifted_ksp_atol) +
+        ",\"mat_shift_nonzero\":" + shifted_lu_policy_outcome_json(
+            "MAT_SHIFT_NONZERO", true, comparison.mat_shift_nonzero) +
+        ",\"mat_shift_none\":" + shifted_lu_policy_outcome_json(
+            "MAT_SHIFT_NONE", false, comparison.mat_shift_none) + "}";
+}
+
 std::string candidate_operator_diagnostic_json(
     const FloquetShiftedKspFailureProbe::CandidateOperatorDiagnostic &diagnostic)
 {
@@ -199,6 +346,8 @@ std::string candidate_operator_diagnostic_json(
             : std::string("null")) +
         ",\"preconditioner_normalization_scale\":" +
         format_double(diagnostic.preconditioner_normalization_scale) +
+        ",\"shifted_lu_policy_comparison\":" +
+        shifted_lu_policy_comparison_json(diagnostic.shifted_lu_policy_comparison) +
         ",\"measurement_failure_count\":" +
         std::to_string(diagnostic.measurement_failure_count) +
         ",\"last_error_code\":" +
