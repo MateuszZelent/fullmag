@@ -388,7 +388,7 @@ class RetentionPersistenceTests(unittest.TestCase):
         error = error_type('diagnostic ' + 'x' * 20_000)
         with patch('local_runner.runtime_retention.complete_jobs', return_value=[job]), \
              patch('local_runner.runtime_retention.container_inventory', return_value=([], None)), \
-             patch('local_runner.runtime_retention._reference_roots', return_value=([], True)), \
+             patch('local_runner.runtime_retention._reference_roots', return_value=([], True, [])), \
              patch('local_runner.runtime_retention.plan_runtime_references', return_value=raw), \
              patch('local_runner.runtime_retention._package', side_effect=error):
             preview = plan_runtime_cleanup(

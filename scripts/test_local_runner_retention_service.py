@@ -1,8 +1,10 @@
 import json
 from pathlib import Path
+import sys
 import tempfile
 import threading
 import time
+import traceback
 import unittest
 from unittest.mock import patch
 
@@ -33,7 +35,16 @@ class RetentionServiceTests(unittest.TestCase):
                                         stream_logs=self.stream_logs)
 
     def finish(self):
-        self.service.thread.join(timeout=5)
+        thread = self.service.thread
+        thread.join(timeout=5)
+        if thread.is_alive():
+            frame = sys._current_frames().get(thread.ident)
+            stack = ''.join(traceback.format_stack(frame)) if frame is not None else '<unavailable>'
+            self.fail(
+                f'retention worker {thread.name} still alive after 5 seconds; '
+                f'active_kind={self.service.active_kind!r}, active_scope={self.service.active_scope!r}\n'
+                f'{stack}'
+            )
         self.assertFalse(self.service.busy)
 
     def test_preview_is_async_and_durable_and_apply_is_idempotent(self):
