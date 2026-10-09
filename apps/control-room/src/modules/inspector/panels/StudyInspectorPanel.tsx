@@ -1143,6 +1143,7 @@ export function useStudyInspectorPanelController(
     const baseRevision = currentScene.revision;
     const profileBound = hasStudyExecutionProfile(currentScene.scene);
     const errors = validateStudyGlobalDraft(state.globalDraft, {
+      studyStages: rawStudyStages(currentScene.scene),
       activeLane: runtimeStatus?.capabilities.active_lane ?? null,
       algorithmsAvailable: runtimeStatus?.capabilities.algorithms_available,
       executionProfileBound: profileBound,
@@ -1468,6 +1469,8 @@ export function StudyInspectorPanel({ selection }: InspectorPanelProps) {
   );
   const sceneMagneticObjectIds = magneticObjectIds(scene.data);
   const globalValidation = validateStudyGlobalDraft(state.globalDraft, {
+    studyStages: rawStudyStages(scene.data),
+    studyStageDrafts: state.stageDrafts,
     activeLane: runtimeStatus?.capabilities.active_lane ?? null,
     algorithmsAvailable: runtimeStatus?.capabilities.algorithms_available,
     executionProfileBound:
@@ -2143,6 +2146,7 @@ export function StudyBoundarySection({
     perMagnet: "",
   };
   const validation = validateStudyGlobalDraft(draft, {
+    studyStages: rawStudyStages(scene),
     activeLane,
     algorithmsAvailable,
     executionProfileBound,

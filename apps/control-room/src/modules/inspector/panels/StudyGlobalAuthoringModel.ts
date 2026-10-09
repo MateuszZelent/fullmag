@@ -7,6 +7,8 @@ import {
   type ActiveLaneCapabilitySnapshot,
 } from "@/kernel/resources/useActiveLaneCapabilities";
 
+import { createStudyStageDrafts, type StudyStageDraft } from "./StudyStageAuthoringModel";
+
 type JsonRecord = Record<string, unknown>;
 
 const FDM_DEMAG_REALIZATIONS = [
@@ -265,6 +267,8 @@ export function validateStudyGlobalDraft(
     magneticObjectIds?: readonly string[];
     requestedDiscretization?: string | null;
     sessionDiscretization?: string | null;
+    studyStages?: readonly unknown[];
+    studyStageDrafts?: readonly StudyStageDraft[];
   },
 ): StudyGlobalDraftValidation[] {
   const issues: StudyGlobalDraftValidation[] = [];
@@ -332,6 +336,9 @@ export function validateStudyGlobalDraft(
       severity: "error",
     });
   }
+  if (draft.parallelExecution.mode === "adaptive") {
+    validateAdaptiveWorkflow(issues, capabilities?.studyStages, capabilities?.studyStageDrafts);
+  }
   validateSolverDraft(issues, draft.solver, draft, capabilities);
   const explicitFdm = isExplicitFdmStudy({
     requestedBackend: capabilities?.executionProfileBound
@@ -365,6 +372,71 @@ export function validateStudyGlobalDraft(
     );
   }
   return issues;
+}
+
+
+
+function validateRawAdaptiveStages(
+  issues: StudyGlobalDraftValidation[],
+  stages: readonly unknown[] | undefined,
+): void {
+  const canonicalKinds = new Set([
+    "relax", "minimize", "eigenmodes", "frequency_response", "run", "hysteresis",
+    "change_device", "table_autosave", "autosave", "save_state", "fft_response", "add_field_drive",
+  ]);
+  for (const raw of stages ?? []) {
+    const stage = asRecord(raw);
+    const rawKind = stage?.kind ?? stage?.entrypoint_kind;
+    const kind = typeof rawKind === "string" ? rawKind.trim().toLowerCase().replace(/^flat_/, "") : "";
+    if (!canonicalKinds.has(kind)) {
+      issues.push({ message: "Adaptive parallel execution requires canonical, known stage types.", severity: "error" });
+      continue;
+    }
+    if (kind === "change_device" && (typeof stage?.device !== "string" || !["cpu", "gpu", "auto"].includes(stage.device.trim().toLowerCase()))) {
+      issues.push({ message: "Adaptive parallel execution requires an explicit, valid device transition.", severity: "error" });
+    }
+    if (kind === "eigenmodes") {
+      const rawSweep = stage?.eigen_bias_field_sweep ?? stage?.bias_field_sweep;
+      if (rawSweep !== undefined && rawSweep !== null) {
+        const sweep = asRecord(rawSweep);
+        const samples = sweep?.samples_a_per_m;
+        if (!Array.isArray(samples) || samples.length === 0 || samples.some((row) => !Array.isArray(row) || row.length !== 3 || row.some((value) => typeof value !== "number" || !Number.isFinite(value)))) {
+          issues.push({ message: "Adaptive parallel execution cannot accept malformed bias-field continuation samples.", severity: "error" });
+        }
+      }
+    }
+  }
+}
+
+function validateAdaptiveWorkflow(
+  issues: StudyGlobalDraftValidation[],
+  rawStages: readonly unknown[] | undefined,
+  previewStages?: readonly StudyStageDraft[],
+): void {
+  validateRawAdaptiveStages(issues, rawStages);
+  const stages = previewStages ?? createStudyStageDrafts(rawStages ?? []);
+  let hasSolverStage = false;
+  let device = "cpu"; // The independent lane gate requires explicit FEM CPU.
+  for (const stage of stages ?? []) {
+    if (stage.kind === "relax") {
+      hasSolverStage = true;
+    } else if (stage.kind === "eigenmodes") {
+      hasSolverStage = true;
+      if (stage.biasFieldSamplesApm.trim()) {
+        issues.push({ message: "Adaptive parallel execution is unavailable for bias-field continuation. Use serial execution.", severity: "error" });
+      }
+    } else if (stage.kind === "change_device") {
+      device = stage.deviceTarget.trim().toLowerCase();
+    } else if (!["table_autosave", "autosave", "save_state", "fft_response", "add_field_drive"].includes(stage.kind)) {
+      issues.push({ message: `Adaptive parallel execution is unavailable for ${stage.kind} stages. Use serial execution.`, severity: "error" });
+    }
+    if ((stage.kind === "relax" || stage.kind === "eigenmodes") && device !== "cpu") {
+      issues.push({ message: "Adaptive parallel execution requires the CPU device at every solver stage.", severity: "error" });
+    }
+  }
+  if (!hasSolverStage) {
+    issues.push({ message: "Adaptive parallel execution requires a known Relax or Eigen workflow.", severity: "error" });
+  }
 }
 
 function fdmDemagStrategyForDraft(draft: StudyGlobalDraft): string {

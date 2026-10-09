@@ -645,6 +645,56 @@ describe("StudyGlobalAuthoringModel", () => {
     );
   });
 
+  it("matches adaptive admission to solver stages and device transitions", () => {
+    const draft = createStudyGlobalDraft({ study: {
+      requested_backend: "fem", requested_device: "cpu",
+      parallel_execution: { mode: "adaptive" },
+    } });
+    const adaptiveIssues = (stages: readonly unknown[] | undefined) =>
+      validateStudyGlobalDraft(draft, {
+        studyStages: stages,
+      }).filter((issue) => issue.message.startsWith("Adaptive parallel execution"));
+    const accepted = [
+      [{ kind: "relax" }],
+      [{ kind: "eigenmodes", k_sampling: { path: "gamma-x", points: 3 } }],
+      [{ kind: "eigenmodes", k_sampling: { kind: "single", k_vector: [0, 0, 0] } }],
+      [{ kind: "eigenmodes" }],
+      [{ kind: "relax" }, { kind: "eigenmodes" }, { kind: "save_state" }],
+      [{ kind: "change_device", device: "gpu" }, { kind: "change_device", device: "cpu" }, { kind: "eigenmodes" }],
+    ];
+    for (const stages of accepted) expect(adaptiveIssues(stages)).toEqual([]);
+    const rejected = [
+      undefined, [], [{ kind: "frequency_response" }], [{ kind: "run" }],
+      [{ kind: "unknown" }], [{ kind: "save_state" }],
+      [{ kind: "experimental_eigen_task" }], [{ kind: "custom_relax_adapter" }],
+      [{ kind: "eigenmodes", bias_field_sweep: { samples_a_per_m: "invalid" } }],
+      [{ kind: "eigenmodes", bias_field_sweep: { samples_a_per_m: [] } }],
+      [{ kind: "eigenmodes", eigen_bias_field_sweep: { samples_a_per_m: ["not-a-vector"] } }],
+      [{ kind: "change_device", device: true }, { kind: "eigenmodes" }],
+      [{ kind: "change_device", device: {} }, { kind: "eigenmodes" }],
+      [{ kind: "relax" }, { kind: "frequency_response" }],
+      [{ kind: "eigenmodes", bias_field_sweep: { samples_a_per_m: [[1, 0, 0], [2, 0, 0]] } }],
+      [{ kind: "change_device", device: "gpu" }, { kind: "eigenmodes" }],
+    ];
+    for (const stages of rejected) expect(adaptiveIssues(stages).length).toBeGreaterThan(0);
+    expect(validateStudyGlobalDraft({ ...draft, parallelExecution: {
+      ...draft.parallelExecution, mode: "serial",
+    } }, { studyStages: [{ kind: "frequency_response" }] })
+      .filter((issue) => issue.message.startsWith("Adaptive parallel execution"))).toEqual([]);
+  });
+
+  it("uses the current workflow context rather than a prior eligible preview", () => {
+    const draft = createStudyGlobalDraft({ study: {
+      requested_backend: "fem", requested_device: "cpu",
+      parallel_execution: { mode: "adaptive" },
+    } });
+    const issues = (kind: string) => validateStudyGlobalDraft(draft, {
+      studyStages: [{ kind }],
+    }).filter((issue) => issue.message.startsWith("Adaptive parallel execution"));
+    expect(issues("eigenmodes")).toEqual([]);
+    expect(issues("frequency_response").length).toBeGreaterThan(0);
+  });
+
   it("rejects adaptive parallel execution outside an explicit FEM CPU lane", () => {
     const adaptive = createStudyGlobalDraft({
       study: { parallel_execution: { mode: "adaptive" } },
