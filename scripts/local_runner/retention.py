@@ -244,7 +244,9 @@ def inspect_execution(root: Path, *, cancelled: object | None = None,
             _check_cancelled(cancelled)
             path = Path(entry.path)
             try:
-                info = entry.stat(follow_symlinks=False)
+                # Windows DirEntry metadata is cached by enumeration and has
+                # synthetic zero inode/device. Query the live no-follow record.
+                info = os.lstat(path) if os.name == "nt" else entry.stat(follow_symlinks=False)
             except OSError as error:
                 raise _PathIssue("unreadable_execution_tree") from error
             completed_stat_entries += 1

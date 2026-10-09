@@ -1,3 +1,4 @@
+from contextlib import contextmanager
 import hashlib
 import json
 import platform
@@ -307,6 +308,54 @@ class RetentionPlanTests(unittest.TestCase):
         self.assertTrue(all('fingerprint' not in item and 'candidates' not in item for item in updates))
         self.assertTrue(all('total_entries' not in item and 'percent' not in item and 'eta_seconds' not in item
                             for item in updates))
+
+    @unittest.skipUnless(os.name == "nt", "Windows must bypass cached DirEntry metadata")
+    def test_windows_inventory_uses_live_metadata_and_real_child_identities(self):
+        execution = self.storage / 'execution'
+        (execution / 'nested').mkdir(parents=True)
+        (execution / 'a.bin').write_bytes(b'abc')
+        (execution / 'nested' / 'b.bin').write_bytes(b'defgh')
+        real_scandir = os.scandir
+        real_sha256 = hashlib.sha256
+        records = []
+
+        class UnusableCachedEntry:
+            def __init__(self, entry):
+                self.name = entry.name
+                self.path = entry.path
+
+            def stat(self, *, follow_symlinks=True):
+                raise AssertionError('Windows inventory used cached enumeration metadata')
+
+        @contextmanager
+        def live_entries(path):
+            with real_scandir(path) as entries:
+                yield (UnusableCachedEntry(entry) for entry in entries)
+
+        class RecordingHash:
+            def __init__(self, *args, **kwargs):
+                self.digest = real_sha256(*args, **kwargs)
+
+            def update(self, data):
+                records.append(json.loads(bytes(data).decode('ascii')))
+                return self.digest.update(data)
+
+            def __getattr__(self, name):
+                return getattr(self.digest, name)
+
+        with patch('local_runner.retention.os.scandir', live_entries):
+            with patch('local_runner.retention.hashlib.sha256', RecordingHash):
+                result = inspect_execution(execution)
+
+        self.assertEqual(result['files'], 2)
+        self.assertEqual(result['logical_bytes'], 8)
+        self.assertEqual(len(records), 3)
+        for relative, mode, size, mtime_ns, ctime_ns, inode in records:
+            current = os.lstat(execution / relative)
+            self.assertEqual((mode, size, mtime_ns, ctime_ns, inode),
+                             (current.st_mode, current.st_size, current.st_mtime_ns,
+                              current.st_ctime_ns, current.st_ino))
+            self.assertGreater(inode, 0)
 
     def test_execution_scan_cancellation_propagates_without_a_partial_plan(self):
         job = self._job('cancel-scan')
