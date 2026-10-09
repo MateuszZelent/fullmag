@@ -1137,9 +1137,11 @@ describe("geometry lifecycle resources", () => {
       releasePause();
       expect(signals).toHaveLength(1);
       expect(signals[0].aborted).toBe(false);
+      // Capture the actual resumed promise before resolving its payload. A
+      // ready snapshot can precede the in-flight promise's finally cleanup.
+      const settledLoad = paused ? runtimeStore.ensureLoad(request) : load;
       pending.resolve(committedScene(6, "loaded"));
-      await load;
-      await runtimeStore.ensureLoad(request);
+      await settledLoad;
       expect(runtimeStore.getSnapshot(MODEL_SCENE_PATH)).toMatchObject({
         data: committedScene(6, "loaded"), revision: 6, status: "ready",
       });
