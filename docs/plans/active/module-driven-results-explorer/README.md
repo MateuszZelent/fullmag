@@ -221,6 +221,12 @@ zbudowanego workspace w tym worktree). Pozostaje: jeden właściciel
 `active_quantity_id` (nakładka jako resolver wielkości), colorbar/field-meta
 dla `analysis:*`.
 
+Część 5c: **zamknięta decyzją.** Zapisane `active_quantity_id` zostaje
+wielkością modelu, bo runner strumieniuje według niego pola na żywo; pokazywaną
+wielkość (mod) wylicza się z nakładki, która jest jedynym właścicielem pola
+modu. Ribbon, HUD, Inspector obiektu i viewport są z nią spójne (5a i poprawka
+`18c151c67`). Szczegóły: spec 32 §6.
+
 Część 5b: tryb podziału w `ViewportTabHost`. Układ ma opcjonalny
 `viewportCompanion` (moduł i ułożenie obok/pod). Host renderuje wtedy aktywny
 moduł i towarzyszący w regulowanym podziale; każdy moduł ma jedną instancję,

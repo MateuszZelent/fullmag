@@ -166,7 +166,16 @@ istniejącego wyniku: prowadzą do ustawień badania.
   `kernel/api/quantityIds.ts:259`). Używa przy tym tej samej ścieżki co
   `m` czy `H_eff`: `buildViewport3DFieldRenderModel`, plany per część
   magnetyczna, colorbar.
-- **Jeden właściciel wielkości.** `visualization/state.quantity.active_quantity_id`
+- **Korekta po weryfikacji (2026-10-09):** zapisane
+  `visualization/state.quantity.active_quantity_id` zostaje wielkością modelu,
+  bo trafia do `CurrentDisplaySelection`, z której runner strumieniuje pola na
+  żywo (`router_v2/handlers/visualization/display.rs`, `apply_display_patch_to_state`).
+  Identyfikator pola modu w tym miejscu zepsułby podgląd na żywo. Jedynym
+  właścicielem pokazywanego pola modu jest `AnalysisFieldOverlayController`;
+  ribbon (pozycja „Mode”), HUD, Inspector obiektu i viewport wyliczają z niego
+  pokazywaną wielkość, a wybór innej wielkości czyści nakładkę. Akapit niżej
+  opisuje pierwotny zamiar i jest zastąpiony tą korektą.
+- **Jeden właściciel wielkości (zamiar pierwotny).** `visualization/state.quantity.active_quantity_id`
   niesie identyfikator pola modu, a jego parametry (faza harmoniczna, część
   zespolona, intencja punktu) są parametrami tej wielkości. Kontroler
   `AnalysisFieldOverlayController` przestaje być równoległym nadpisaniem
