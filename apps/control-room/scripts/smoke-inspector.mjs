@@ -28,6 +28,19 @@ const INSPECTOR_DRIVEN_RESPONSE_FIELD_ID =
 const INSPECTOR_DRIVEN_RESPONSE_POINT_INDEX = 7;
 const INSPECTOR_RESPONSE_CANCEL_REQUESTED_PATH =
   "/v2/sessions/current/analysis/frequency-domain/response/cancel-requested.v1";
+const INSPECTOR_RESPONSE_CANCEL_REQUESTED_NOT_FOUND_MESSAGE =
+  "frequency-domain response cancel-requested progress artifact is missing";
+const INSPECTOR_RESPONSE_CANCEL_REQUESTED_NOT_FOUND_BODY = Object.freeze({
+  capability_reason: null,
+  code: "not_found",
+  diagnostics: null,
+  error: INSPECTOR_RESPONSE_CANCEL_REQUESTED_NOT_FOUND_MESSAGE,
+  message: INSPECTOR_RESPONSE_CANCEL_REQUESTED_NOT_FOUND_MESSAGE,
+  request_id: null,
+  revision_context: null,
+});
+const INSPECTOR_BROWSER_RESOURCE_404_ERROR =
+  "Failed to load resource: the server responded with a status of 404 (Not Found)";
 const INSPECTOR_DRIVEN_RESPONSE_ARTIFACT_OWNER = {
   artifact_set_id: "inspector-driven-response-artifact-set-run-7",
   mesh_generation_id: "1",
@@ -124,6 +137,87 @@ function assert(condition, message) {
   if (!condition) throw new Error(message);
 }
 
+function isExactOptionalResponseAbsence(response) {
+  const body = response.body;
+  if (
+    response.method !== "GET" ||
+    response.path !== INSPECTOR_RESPONSE_CANCEL_REQUESTED_PATH ||
+    response.search !== "" ||
+    response.status !== 404 ||
+    response.bodyError !== null ||
+    !body ||
+    typeof body !== "object" ||
+    Array.isArray(body)
+  ) {
+    return false;
+  }
+
+  const actualKeys = Object.keys(body).sort();
+  const expectedKeys = Object.keys(
+    INSPECTOR_RESPONSE_CANCEL_REQUESTED_NOT_FOUND_BODY,
+  ).sort();
+  return (
+    actualKeys.length === expectedKeys.length &&
+    actualKeys.every(
+      (key, index) =>
+        key === expectedKeys[index] &&
+        body[key] === INSPECTOR_RESPONSE_CANCEL_REQUESTED_NOT_FOUND_BODY[key],
+    )
+  );
+}
+
+async function classifyInspectorBrowserErrors() {
+  await Promise.all(notFoundResponseEvidenceTasks);
+  const optional404Responses = notFoundResponseEvidence.filter(
+    isExactOptionalResponseAbsence,
+  );
+  const unexpected404Responses = notFoundResponseEvidence.filter(
+    (response) => !isExactOptionalResponseAbsence(response),
+  );
+  const optional404ConsoleErrors = consoleErrorEvents.filter(
+    (event) =>
+      event.source === "console" &&
+      event.text === INSPECTOR_BROWSER_RESOURCE_404_ERROR,
+  );
+  const expectedConflictErrors = consoleErrorEvents.filter(
+    (event) =>
+      event.source === "console" &&
+      event.text.includes("the server responded with a status of 409 (Conflict)"),
+  );
+  const unexpectedBrowserErrors = consoleErrorEvents
+    .filter((event) => {
+      if (event.source === "pageerror") return true;
+      if (event.text === INSPECTOR_BROWSER_RESOURCE_404_ERROR) return false;
+      if (event.text.includes("the server responded with a status of 409 (Conflict)")) {
+        return false;
+      }
+      return true;
+    })
+    .map((event) => event.text);
+
+  return {
+    expectedConflictErrors: expectedConflictErrors.map((event) => event.text),
+    optional404ConsoleErrors: optional404ConsoleErrors.map((event) => event.text),
+    optional404Responses,
+    unexpected404Responses,
+    unexpectedBrowserErrors,
+  };
+}
+
+function optionalResponseAbsenceSummary(classification) {
+  return {
+    matchedConsoleErrorCount: classification.optional404ConsoleErrors.length,
+    responses: classification.optional404Responses.map((response) => ({
+      bodyKeys: Object.keys(response.body).sort(),
+      code: response.body.code,
+      message: response.body.message,
+      method: response.method,
+      path: response.path,
+      status: response.status,
+    })),
+  };
+}
+
 const playwright = await loadPlaywright();
 if (!playwright?.chromium) {
   console.error("Inspector smoke requires Playwright or @playwright/test.");
@@ -134,16 +228,49 @@ await mkdir(outputDir, { recursive: true });
 const browser = await playwright.chromium.launch({ headless: true });
 const page = await browser.newPage({ viewport: { width: 1600, height: 900 } });
 const consoleErrors = [];
+const consoleErrorEvents = [];
 const notFoundResponses = [];
+const notFoundResponseEvidence = [];
+const notFoundResponseEvidenceTasks = [];
+const optionalResponseAbsenceProof = [];
 const previewRequests = [];
 
 page.on("console", (message) => {
-  if (message.type() === "error") consoleErrors.push(message.text());
+  if (message.type() === "error") {
+    const text = message.text();
+    consoleErrors.push(text);
+    consoleErrorEvents.push({ source: "console", text });
+  }
 });
-page.on("pageerror", (error) => consoleErrors.push(error.stack ?? error.message));
+page.on("pageerror", (error) => {
+  const text = error.stack ?? error.message;
+  consoleErrors.push(text);
+  consoleErrorEvents.push({ source: "pageerror", text });
+});
 page.on("response", (response) => {
   if (response.status() === 404) {
-    notFoundResponses.push(`${response.request().method()} ${response.url()}`);
+    const request = response.request();
+    const url = new URL(response.url());
+    notFoundResponses.push(`${request.method()} ${response.url()}`);
+    const evidence = {
+      body: null,
+      bodyError: null,
+      method: request.method(),
+      path: url.pathname,
+      search: url.search,
+      status: response.status(),
+    };
+    notFoundResponseEvidence.push(evidence);
+    notFoundResponseEvidenceTasks.push(
+      response
+        .json()
+        .then((body) => {
+          evidence.body = body;
+        })
+        .catch((error) => {
+          evidence.bodyError = String(error?.stack ?? error);
+        }),
+    );
   }
 });
 page.on("request", (request) => {
@@ -822,12 +949,20 @@ try {
     `Inspector fixture received unknown mutations: ${JSON.stringify(fixture.unknownMutationPaths)}`,
   );
   assert(previewRequests.length === 0, `Inspector caused preview requests: ${previewRequests.join(", ")}`);
-  const unexpectedConsoleErrors = consoleErrors.filter(
-    (message) => !message.includes("the server responded with a status of 409 (Conflict)"),
+  const finalBrowserErrors = await classifyInspectorBrowserErrors();
+  assert(
+    finalBrowserErrors.unexpected404Responses.length === 0 &&
+      finalBrowserErrors.optional404ConsoleErrors.length ===
+        finalBrowserErrors.optional404Responses.length,
+    `Unexpected optional 404 response/console evidence: ${JSON.stringify({
+      console404Errors: finalBrowserErrors.optional404ConsoleErrors,
+      expectedResponses: finalBrowserErrors.optional404Responses,
+      unexpectedResponses: finalBrowserErrors.unexpected404Responses,
+      all404Responses: notFoundResponses,
+    })}`,
   );
-  const expectedConflictErrors = consoleErrors.filter(
-    (message) => message.includes("the server responded with a status of 409 (Conflict)"),
-  );
+  const unexpectedConsoleErrors = finalBrowserErrors.unexpectedBrowserErrors;
+  const expectedConflictErrors = finalBrowserErrors.expectedConflictErrors;
   assert(
     unexpectedConsoleErrors.length === 0,
     `Browser errors:\n${unexpectedConsoleErrors.join("\n")}`,
@@ -835,6 +970,9 @@ try {
   assert(
     expectedConflictErrors.length <= 1,
     `Unexpected repeated 409 responses:\n${expectedConflictErrors.join("\n")}`,
+  );
+  optionalResponseAbsenceProof.push(
+    optionalResponseAbsenceSummary(finalBrowserErrors),
   );
 
   const viewportCanvas = page.locator('[data-testid="panel-viewport-main"] canvas, [data-testid="viewport-3d-canvas"], canvas').first();
@@ -856,6 +994,7 @@ try {
     JSON.stringify(
       {
         consoleErrors: consoleErrors.length,
+        optionalResponseAbsenceProof,
         dirtySelectionGuard: "verified",
         inspectorPanelToggle: "verified; header icon and ribbon restore",
         previewRequests: previewRequests.length,
@@ -1148,14 +1287,30 @@ async function qualifyMagneticTextureMutationStability(page, inspector, fixture)
     waitUntil: "domcontentloaded",
   }, "texture-mutation-reset");
   await page.locator(".fm-inspector").waitFor({ state: "visible", timeout: 30_000 });
-  const unexpectedResetErrors = consoleErrors.filter(
-    (message) => !message.includes("the server responded with a status of 409 (Conflict)"),
+  const resetBrowserErrors = await classifyInspectorBrowserErrors();
+  assert(
+    resetBrowserErrors.unexpected404Responses.length === 0 &&
+      resetBrowserErrors.optional404ConsoleErrors.length ===
+        resetBrowserErrors.optional404Responses.length,
+    `Unexpected optional 404 response/console evidence before fixture reset: ${JSON.stringify({
+      console404Errors: resetBrowserErrors.optional404ConsoleErrors,
+      expectedResponses: resetBrowserErrors.optional404Responses,
+      unexpectedResponses: resetBrowserErrors.unexpected404Responses,
+      all404Responses: notFoundResponses,
+    })}`,
   );
   assert(
-    unexpectedResetErrors.length === 0,
-    `Unexpected browser errors before fixture reset: ${unexpectedResetErrors.join("\n")}\n404 responses: ${notFoundResponses.join("\n")}`,
+    resetBrowserErrors.unexpectedBrowserErrors.length === 0,
+    `Unexpected browser errors before fixture reset: ${resetBrowserErrors.unexpectedBrowserErrors.join("\n")}`,
+  );
+  optionalResponseAbsenceProof.push(
+    optionalResponseAbsenceSummary(resetBrowserErrors),
   );
   consoleErrors.length = 0;
+  consoleErrorEvents.length = 0;
+  notFoundResponses.length = 0;
+  notFoundResponseEvidence.length = 0;
+  notFoundResponseEvidenceTasks.length = 0;
 }
 
 async function qualifyPhysicsScopeExclusivity(page, inspector, fixture) {
@@ -3778,17 +3933,12 @@ async function installInspectorFixtureApi(page, fixture) {
       );
       if (responsePoint) return fulfillJson(route, responsePoint);
     }
-    if (path === INSPECTOR_RESPONSE_CANCEL_REQUESTED_PATH) {
-      const message =
-        "frequency-domain response cancel-requested progress artifact is missing";
+    if (
+      request.method() === "GET" &&
+      path === INSPECTOR_RESPONSE_CANCEL_REQUESTED_PATH
+    ) {
       return fulfillJson(route, {
-        capability_reason: null,
-        code: "not_found",
-        diagnostics: null,
-        error: message,
-        message,
-        request_id: null,
-        revision_context: null,
+        ...INSPECTOR_RESPONSE_CANCEL_REQUESTED_NOT_FOUND_BODY,
       }, 404);
     }
     if (path === "/v2/sessions/current/analysis/frequency-domain/response/progress.v1") {

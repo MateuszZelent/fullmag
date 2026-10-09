@@ -2098,3 +2098,9 @@ Nie dodano nowego testu porównującego jedynie tekst implementacji panelu; mocn
 
 - ResourceRuntimeStore.hasPendingLoad jest niekreującym odczytem aktywnego/queued/retry load. Pusty snapshot loading bez rewizji i bez żadnego pending work może otrzymać ACK wyłącznie na legacy unscoped ścieżce. Client-scoped oraz stale/opaque/newer numeric fences pozostają bez zmiany.
 - Dwie nowe regresje obejmują faktyczne active i paused load o nieznanej rewizji: ACK nie anuluje pobrania, revision6 wygrywa. Pozytywne istniejące testy bootstrapu i izolacji sesji zachowano. Mock historii dostarcza wywoływane getRevision. Source review i diff PASS; GHA wykonanie NOT VERIFIED.
+
+### Korekta harnessu optional cancellation artifact (2026-10-09)
+
+- Główna bramka smoke dopasowuje legalny brak cancel-requested.v1 do dokładnego GET/path/query/status404, pełnego ApiError body/code/message i liczby exact Chromium404 console errors. Inne odpowiedzi404, niedopasowane błędy console i wszystkie pageerror nadal powodują FAIL.
+- Te same kontrole działają przed texture-reset i przy terminalnej kwalifikacji; dowód klasyfikacji jest zapisany w raporcie sukcesu. Budget12, focus/scroll/opacity/render oraz izolowany routing proof pozostają wymagane. Source review i node --check PASS; browser wykonanie nowych źródeł NOT VERIFIED.
+- Zachowano równoległy commit a39ff0ba4f21599217def3c30a96e241c3b21ada dotyczący przełączania Analysis wyłącznie przez Explorer. Stare dowody routingu nie kwalifikują automatycznie tej nowej zmiany.
