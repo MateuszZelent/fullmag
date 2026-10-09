@@ -26,6 +26,8 @@ const INSPECTOR_MODAL_FIELD_PAYLOAD_PATH =
 const INSPECTOR_DRIVEN_RESPONSE_FIELD_ID =
   "analysis:frequency-response:frequency-0007";
 const INSPECTOR_DRIVEN_RESPONSE_POINT_INDEX = 7;
+const INSPECTOR_RESPONSE_CANCEL_REQUESTED_PATH =
+  "/v2/sessions/current/analysis/frequency-domain/response/cancel-requested.v1";
 const INSPECTOR_DRIVEN_RESPONSE_ARTIFACT_OWNER = {
   artifact_set_id: "inspector-driven-response-artifact-set-run-7",
   mesh_generation_id: "1",
@@ -1539,6 +1541,7 @@ async function qualifyInspectorResonanceLeafRouting(browser, workspaceUrl, outpu
     const pageErrors = [];
     const consoleErrors = [];
     const missingApiResponses = [];
+    const expectedMissingApiResponses = [];
     page.on("console", (message) => {
       if (message.type() === "error") consoleErrors.push(message.text());
     });
@@ -1550,9 +1553,16 @@ async function qualifyInspectorResonanceLeafRouting(browser, workspaceUrl, outpu
         response.status() === 404 &&
         new URL(response.url()).pathname.startsWith("/v2/")
       ) {
-        missingApiResponses.push(
-          `${response.request().method()} ${new URL(response.url()).pathname}`,
-        );
+        const path = new URL(response.url()).pathname;
+        const request = `${response.request().method()} ${path}`;
+        if (
+          response.request().method() === "GET" &&
+          path === INSPECTOR_RESPONSE_CANCEL_REQUESTED_PATH
+        ) {
+          expectedMissingApiResponses.push(request);
+        } else {
+          missingApiResponses.push(request);
+        }
       }
     });
 
@@ -1693,6 +1703,15 @@ async function qualifyInspectorResonanceLeafRouting(browser, workspaceUrl, outpu
         pageErrors.length === 0,
         `${resultCase.label}: browser page errors: ${pageErrors.join("\n")}`,
       );
+      const expectedCancelAbsenceCount =
+        resultCase.id === "driven-frequency-points" ? 1 : 0;
+      assert(
+        expectedMissingApiResponses.length === expectedCancelAbsenceCount &&
+          expectedMissingApiResponses.every(
+            (request) => request === `GET ${INSPECTOR_RESPONSE_CANCEL_REQUESTED_PATH}`,
+          ),
+        `${resultCase.label}: unexpected optional cancellation-resource absence: ${JSON.stringify(expectedMissingApiResponses)}`,
+      );
       assert(
         missingApiResponses.length === 0 && fixture.unknownGetPaths.length === 0,
         `${resultCase.label}: missing/unknown API resources: ${JSON.stringify({ missingApiResponses, unknownGetPaths: fixture.unknownGetPaths })}`,
@@ -1724,6 +1743,7 @@ async function qualifyInspectorResonanceLeafRouting(browser, workspaceUrl, outpu
         screenshot,
         pageErrors,
         consoleErrors,
+        expectedMissingApiResponses,
         missingApiResponses,
         unknownGetPaths: [...fixture.unknownGetPaths],
       });
@@ -1750,6 +1770,8 @@ async function qualifyInspectorResonanceLeafRouting(browser, workspaceUrl, outpu
           requests: [...fixture.requests],
           pageErrors,
           consoleErrors,
+          missingApiResponses,
+          expectedMissingApiResponses,
           unknownGetPaths: [...fixture.unknownGetPaths],
         };
         await writeFile(
@@ -3736,8 +3758,18 @@ async function installInspectorFixtureApi(page, fixture) {
       );
       if (responsePoint) return fulfillJson(route, responsePoint);
     }
-    if (path === "/v2/sessions/current/analysis/frequency-domain/response/cancel-requested.v1") {
-      return fulfillEmpty(route, 204);
+    if (path === INSPECTOR_RESPONSE_CANCEL_REQUESTED_PATH) {
+      const message =
+        "frequency-domain response cancel-requested progress artifact is missing";
+      return fulfillJson(route, {
+        capability_reason: null,
+        code: "not_found",
+        diagnostics: null,
+        error: message,
+        message,
+        request_id: null,
+        revision_context: null,
+      }, 404);
     }
     if (path === "/v2/sessions/current/analysis/frequency-domain/response/progress.v1") {
       return fulfillJson(route, inspectorFrequencyResponseProgress(fixture));
