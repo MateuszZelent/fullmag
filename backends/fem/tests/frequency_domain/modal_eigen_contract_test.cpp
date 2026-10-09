@@ -1,6 +1,7 @@
 #include "cpu/frequency_domain/mfem_modal_operator_payload.hpp"
 #include "cpu/frequency_domain/contour_interval_solver.hpp"
 #include "cpu/frequency_domain/floquet_airbox_operator.hpp"
+#include "cpu/frequency_domain/modal_shared_domain_provider_status.hpp"
 #include "cpu/frequency_domain/operators/poisson_airbox_shared_domain.hpp"
 #include "frequency_domain/linearized_dynamic_pencil.hpp"
 #include "frequency_domain/linearization_state.hpp"
@@ -52,6 +53,36 @@ void check(bool condition, const char *message)
         std::fprintf(stderr, "FAIL: %s\n", message);
         std::exit(1);
     }
+}
+
+void modal_shared_domain_provider_terminal_status_fails_closed()
+{
+    constexpr std::array<fd::FrequencyDomainStatus, 6> provider_failures = {
+        fd::FrequencyDomainStatus::unavailable,
+        fd::FrequencyDomainStatus::validation_error,
+        fd::FrequencyDomainStatus::operator_error,
+        fd::FrequencyDomainStatus::solve_error,
+        fd::FrequencyDomainStatus::artifact_error,
+        fd::FrequencyDomainStatus::interrupted};
+    for (fd::FrequencyDomainStatus provider_status : provider_failures) {
+        check(
+            fd::resolve_shared_domain_provider_terminal_status(
+                provider_status, true) == provider_status,
+            "shared-domain provider terminal transition preserves each non-ok status");
+        check(
+            fd::resolve_shared_domain_provider_terminal_status(
+                provider_status, false) == provider_status,
+            "shared-domain provider failure status takes precedence over missing output");
+    }
+    check(
+        fd::resolve_shared_domain_provider_terminal_status(
+            fd::FrequencyDomainStatus::ok, true) == fd::FrequencyDomainStatus::ok,
+        "shared-domain provider accepts complete successful output");
+    check(
+        fd::resolve_shared_domain_provider_terminal_status(
+            fd::FrequencyDomainStatus::ok, false) ==
+            fd::FrequencyDomainStatus::operator_error,
+        "shared-domain provider success without required output fails closed");
 }
 
 void nonfinite_json_sanitizer_has_bounded_fail_closed_semantics()
@@ -1809,6 +1840,99 @@ FullmagFemModalEigenRequest make_floquet_contour_request(
 }
 
 #endif
+
+void modal_shared_domain_provider_failure_status_is_consistent()
+{
+#if FULLMAG_HAS_MFEM_STACK && FULLMAG_FEM_WITH_SLEPC
+    FloquetContourSharedDomainFixture fixture{};
+    fixture.initialize();
+    fixture.descriptor.term_presence_mask =
+        FULLMAG_FEM_MODAL_LINEARIZATION_TERM_FIELD;
+    fixture.descriptor.field_term_digest =
+        fixture.descriptor.linearization_state_digest;
+
+    CsrOwned magnetic_stiffness{};
+    magnetic_stiffness.rows = 10u;
+    magnetic_stiffness.columns = 10u;
+    magnetic_stiffness.row_offsets.push_back(0u);
+    for (std::uint32_t row = 0u; row < 10u; ++row) {
+        magnetic_stiffness.column_indices.push_back(row);
+        magnetic_stiffness.values.push_back(1.0);
+        magnetic_stiffness.row_offsets.push_back(
+            static_cast<std::uint32_t>(magnetic_stiffness.values.size()));
+    }
+    fixture.payload.magnetic_a_qq_csr = magnetic_stiffness.view();
+
+    const std::size_t provider_node_count = fixture.nodes.size() / 3u;
+    std::vector<double> unsupported_uniaxial_axes(3u * provider_node_count, 0.0);
+    std::vector<double> unsupported_uniaxial_fields(provider_node_count, 1.0);
+    for (std::size_t node = 0u; node < provider_node_count; ++node) {
+        unsupported_uniaxial_axes[3u * node + 2u] = 1.0;
+    }
+    fixture.descriptor.term_presence_mask |=
+        FULLMAG_FEM_MODAL_LINEARIZATION_TERM_ANISOTROPY;
+    fixture.descriptor.anisotropy_term_digest =
+        fixture.descriptor.linearization_state_digest;
+    fixture.descriptor.uniaxial_axis_xyz = unsupported_uniaxial_axes.data();
+    fixture.descriptor.uniaxial_axis_xyz_count = unsupported_uniaxial_axes.size();
+    fixture.descriptor.uniaxial_anisotropy_field_a_per_m =
+        unsupported_uniaxial_fields.data();
+    fixture.descriptor.uniaxial_anisotropy_field_count =
+        unsupported_uniaxial_fields.size();
+
+    constexpr double stiffness[] = {1.0, 0.0, 0.0, 1.0};
+    constexpr double gyrotropic[] = {0.0, -1.0, 1.0, 0.0};
+    FullmagFemModalEigenRequest sparse_provider_failure_request =
+        make_floquet_contour_request(fixture, nullptr, nullptr);
+    sparse_provider_failure_request.target_kind = "nearest_frequency";
+    sparse_provider_failure_request.target_frequency_hz = 0.16;
+    sparse_provider_failure_request.frequency_min_hz = 0.0;
+    sparse_provider_failure_request.frequency_max_hz = 0.0;
+    sparse_provider_failure_request.eigensolver_family = 1;
+    sparse_provider_failure_request.mfem_operator_enabled = 0;
+    sparse_provider_failure_request.mfem_tangent_dof_count = 0u;
+    sparse_provider_failure_request.mfem_stiffness_matrix_row_major = nullptr;
+    sparse_provider_failure_request.mfem_gyrotropic_matrix_row_major = nullptr;
+    FullmagFemFrequencyDomainResult result =
+        fullmag_fem_modal_eigen_solve(&sparse_provider_failure_request);
+    check(result.status == FULLMAG_FEM_FD_UNAVAILABLE &&
+              contains(result.diagnostics_json,
+                       "\"reason\":\"floquet_shared_domain_sparse_assembly_failed\""),
+          "C ABI sparse shared-domain provider propagates its unsupported-term status");
+    check(contains(result.diagnostics_json,
+                   "\"schema_version\":\"frequency_domain_contract_diagnostics.v1\","
+                   "\"study_product\":\"modal_eigen\",\"status\":\"unavailable\"") &&
+              contains(result.result_json,
+                       "\"schema_version\":\"frequency_domain_contract_result.v1\","
+                       "\"study_product\":\"modal_eigen\",\"status\":\"unavailable\""),
+          "C ABI sparse provider failure serializes matching diagnostics and result statuses");
+    fullmag_fem_frequency_domain_result_destroy(&result);
+
+    FullmagFemModalEigenRequest dense_provider_failure_request =
+        make_floquet_contour_request(fixture, stiffness, gyrotropic);
+    dense_provider_failure_request.target_kind = "nearest_frequency";
+    dense_provider_failure_request.target_frequency_hz = 0.16;
+    dense_provider_failure_request.frequency_min_hz = 0.0;
+    dense_provider_failure_request.frequency_max_hz = 0.0;
+    dense_provider_failure_request.eigensolver_family = 1;
+    result = fullmag_fem_modal_eigen_solve(&dense_provider_failure_request);
+    check(result.status == FULLMAG_FEM_FD_UNAVAILABLE &&
+              contains(result.diagnostics_json,
+                       "\"reason\":\"floquet_airbox_dynamic_demag_k_assembly_failed\""),
+          "C ABI dense shared-domain provider propagates its unsupported-term status");
+    check(contains(result.diagnostics_json,
+                   "\"schema_version\":\"frequency_domain_contract_diagnostics.v1\","
+                   "\"study_product\":\"modal_eigen\",\"status\":\"unavailable\"") &&
+              contains(result.result_json,
+                       "\"schema_version\":\"frequency_domain_contract_result.v1\","
+                       "\"study_product\":\"modal_eigen\",\"status\":\"unavailable\""),
+          "C ABI dense provider failure serializes matching diagnostics and result statuses");
+    fullmag_fem_frequency_domain_result_destroy(&result);
+    std::printf("PASS: modal_shared_domain_provider_failure_status_contract\n");
+#else
+    std::printf("SKIP: modal_shared_domain_provider_failure_status_requires_mfem_slepc\n");
+#endif
+}
 
 void modal_floquet_shared_domain_original_descriptor_certification_is_fail_closed()
 {
@@ -5769,6 +5893,8 @@ int main(int argc, char **argv)
         std::fprintf(stderr, "FAIL: unknown modal eigen contract test argument\n");
         return 2;
     }
+    modal_shared_domain_provider_terminal_status_fails_closed();
+    modal_shared_domain_provider_failure_status_is_consistent();
     nonfinite_json_sanitizer_has_bounded_fail_closed_semantics();
     FullmagFemFrequencyDomainResult zeroed{};
     fullmag_fem_frequency_domain_result_destroy(&zeroed);

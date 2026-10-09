@@ -9,6 +9,7 @@
 #include "cpu/frequency_domain/floquet_airbox_operator.hpp"
 #include "cpu/frequency_domain/modal/floquet_modal_solver.hpp"
 #include "cpu/frequency_domain/operators/poisson_airbox_shared_domain.hpp"
+#include "cpu/frequency_domain/modal_shared_domain_provider_status.hpp"
 #include "cpu/frequency_domain/slepc_modal_eigen.hpp"
 #include "frequency_domain/modal_gpu_krylov.hpp"
 #include "cpu/frequency_domain/window_partition.hpp"
@@ -353,6 +354,47 @@ FrequencyDomainContractResult validation_error_result(
     result.modal_execution.fallback_state = ModalResolvedFallbackState::none;
     result.modal_execution.engine_id = "validation_error";
     result.modal_execution.fallback_reason = "none";
+    return result;
+}
+
+FrequencyDomainContractResult shared_domain_provider_failure_result(
+    FrequencyDomainStatus status,
+    const char *study_product,
+    const char *message,
+    const char *reason,
+    const char *operator_diagnostics_json = nullptr) noexcept
+{
+    if (status == FrequencyDomainStatus::validation_error) {
+        return validation_error_result(
+            study_product,
+            message,
+            reason,
+            operator_diagnostics_json);
+    }
+
+    FrequencyDomainContractResult result = validation_error_result(
+        study_product,
+        message,
+        reason,
+        operator_diagnostics_json);
+    result.status = status;
+    const std::string status_label = status_to_string(status);
+    result.diagnostics_json =
+        "{\"schema_version\":\"frequency_domain_contract_diagnostics.v1\","
+        "\"study_product\":\"" +
+        std::string(study_product != nullptr ? study_product : "") +
+        "\",\"status\":\"" + status_label +
+        "\",\"complete\":false,\"reason\":\"" +
+        std::string(reason != nullptr ? reason : "shared_domain_provider_failed") +
+        "\"}";
+    result.diagnostics_json = with_operator_diagnostics(
+        result.diagnostics_json,
+        operator_diagnostics_json);
+    result.result_json =
+        "{\"schema_version\":\"frequency_domain_contract_result.v1\","
+        "\"study_product\":\"" +
+        std::string(study_product != nullptr ? study_product : "") +
+        "\",\"status\":\"" + status_label + "\"}";
     return result;
 }
 
@@ -2132,16 +2174,19 @@ FrequencyDomainContractResult solve_modal_eigen_contract(
                 &floquet_k,
                 nullptr,
                 false);
-        if (provider_status != FrequencyDomainStatus::ok ||
-            !native_floquet_sparse_assembly.floquet_sparse_operator_ready) {
-            FrequencyDomainContractResult result = validation_error_result(
+        const FrequencyDomainStatus terminal_status =
+            resolve_shared_domain_provider_terminal_status(
+                provider_status,
+                native_floquet_sparse_assembly.floquet_sparse_operator_ready);
+        if (terminal_status != FrequencyDomainStatus::ok) {
+            FrequencyDomainContractResult result = shared_domain_provider_failure_result(
+                terminal_status,
                 "modal_eigen",
                 native_floquet_sparse_assembly.error_message[0] != '\0'
                     ? native_floquet_sparse_assembly.error_message
                     : "native FEM nonzero-k Floquet shared-domain sparse provider failed to assemble",
                 "floquet_shared_domain_sparse_assembly_failed",
                 request.operator_request.operator_diagnostics_json);
-            result.status = provider_status;
             set_modal_execution(
                 result,
                 request.execution_target,
@@ -2225,16 +2270,19 @@ FrequencyDomainContractResult solve_modal_eigen_contract(
                 request.floquet_periodic_pair_count,
                 &floquet_k,
                 &provider_result);
-        if (provider_status != FrequencyDomainStatus::ok ||
-            provider_result.real_split_row_major.empty()) {
-            FrequencyDomainContractResult result = validation_error_result(
+        const FrequencyDomainStatus terminal_status =
+            resolve_shared_domain_provider_terminal_status(
+                provider_status,
+                !provider_result.real_split_row_major.empty());
+        if (terminal_status != FrequencyDomainStatus::ok) {
+            FrequencyDomainContractResult result = shared_domain_provider_failure_result(
+                terminal_status,
                 "modal_eigen",
                 provider_assembly.error_message[0] != '\0'
                     ? provider_assembly.error_message
                     : "native FEM nonzero-k Floquet shared-domain provider failed to assemble a dynamic demagnetization operator",
                 "floquet_airbox_dynamic_demag_k_assembly_failed",
                 request.operator_request.operator_diagnostics_json);
-            result.status = provider_status;
             set_modal_execution(
                 result,
                 request.execution_target,
