@@ -1,4 +1,6 @@
+import hashlib
 import json
+import platform
 import os
 from pathlib import Path
 import sys
@@ -243,8 +245,57 @@ class RetentionPlanTests(unittest.TestCase):
         (execution / 'nested' / 'b.bin').write_bytes(b'defgh')
         updates = []
 
-        baseline = inspect_execution(execution)
-        measured = inspect_execution(execution, progress=updates.append)
+        real_sha256 = hashlib.sha256
+        hash_streams = []
+
+        class RecordingHash:
+            def __init__(self, *args, **kwargs):
+                self.digest = real_sha256(*args, **kwargs)
+                self.records = []
+                hash_streams.append(self.records)
+
+            def update(self, data):
+                self.records.append(bytes(data))
+                return self.digest.update(data)
+
+            def __getattr__(self, name):
+                return getattr(self.digest, name)
+
+        # Capture exactly the producer's hash input; do not issue additional
+        # metadata reads or alter either real scan/progress callback.
+        with patch('local_runner.retention.hashlib.sha256', RecordingHash):
+            baseline = inspect_execution(execution)
+            measured = inspect_execution(execution, progress=updates.append)
+
+        if baseline != measured:
+            def metadata(info):
+                return {key: getattr(info, key, None) for key in (
+                    'st_mode', 'st_size', 'st_mtime_ns', 'st_ctime_ns', 'st_ino', 'st_dev',
+                )}
+
+            snapshots = []
+            for path in (execution / 'a.bin', execution / 'nested', execution / 'nested' / 'b.bin'):
+                with os.scandir(path.parent) as entries:
+                    entry = next(item for item in entries if item.name == path.name)
+                    directory_entry = metadata(entry.stat(follow_symlinks=False))
+                snapshots.append({
+                    'path': path.relative_to(execution).as_posix(),
+                    'direntry_stat': directory_entry,
+                    'lstat': metadata(os.lstat(path)),
+                })
+            print('FAIL-DIAGNOSTICS: retention_fingerprint_records ' + json.dumps({
+                'python': sys.version,
+                'platform': platform.platform(),
+                'baseline': baseline,
+                'measured': measured,
+                'hash_records': [
+                    [json.loads(record.decode('ascii')) for record in stream]
+                    for stream in hash_streams
+                ],
+                # This snapshot is post-failure evidence, not a substitute for
+                # the exact historical records captured above.
+                'post_failure_metadata': snapshots,
+            }, ensure_ascii=True, sort_keys=True))
 
         self.assertEqual(baseline, measured)
         self.assertGreaterEqual(len(updates), 2)

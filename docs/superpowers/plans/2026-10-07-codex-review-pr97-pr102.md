@@ -1942,3 +1942,8 @@ Count-only fixture używa rzeczywistego Context Poisson Hdemag/phi0, compensatio
 ### Runtime quarantine — Windows fixture setup zamiast słabszego guardu
 
 37882508413 Linuxjob113665133517 SUCCESS; Windowsjob113665133778 FAIL wcześniej w execution/retention suite52errors, przed nowymruntime step. Przyczyna logu: defaultTemporaryDirectory C:/Users/RUNNER~1/...resolve→runneradmin; canonicalstorage słusznie odrzuca alias path. GHA ustawia teraz TMPDIR/TMP/TEMP na resolved RUNNER_TEMP/fullmag-retention-temp dopiero po setupPython. Produkcyjnychpathguards ani testów nie poluzowano. Linuxproof pozostaje aktualny; freshWindows wykonanie wymagane.
+
+
+### Windows fingerprint — najpierw dokładne rekordy
+
+37882727880 Windowsjob113665837423: canonicalTEMP usuwa52errors;57tests mają1FAIL w progress-vs-baselinefingerprint, rootdevice/inodesame,2files8bytes. Nie ma jeszcze dowodu, które descendant metadata różnią się. Testowy SHA wrapper deleguje prawdziwyhash i przechwytuje exactupdatebytes obu realnychscans bez dodatkowegoIO w trakcie. Tylko na mismatch wypisuje historicalrecords i osobny post-failureDirEntry/lstatsnapshot +Python/platform. Strictassert i produkcyjnaguard/fingerprint pozostają bez zmian. Independent diagnosis rekomendowała taki evidence-first krok; AST/diffPASS, freshGHA pending.
