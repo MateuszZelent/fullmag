@@ -433,7 +433,7 @@ An omitted, empty or all-null policy retains reference compatibility. Structural
 legality is distinct from native provider availability; a Free Gamma frequency
 window can use the native path without an execution-resolution object. This
 policy-only gate follows [the eigen note](../physics/0600-fem-eigenmodes-linearized-llg.md);
-its implementation has passed independent source review; hosted verification is pending.
+its implementation and targeted hosted planner/reference admission regressions passed in GHA37979402458/Rust113985786699. This does not promote native provider or physical qualification.
 
 Runtime capability payloads expose five separate deferred booleans for this scope: `supports_frequency_response`, `supports_coupled_magnetoelastic_quasistatic`, `supports_coupled_magnetoelastic_elastodynamic`, `supports_frequency_domain_elastodynamics`, and `supports_coupled_eigenmodes`; all remain `false` for current engines until the matching solver family is implemented and validated. The frequency-domain analysis manifest is the precise UI gate for modal dispersion lane status and must keep `dispersion.reference_cpu`, `dispersion.production_cpu`, `dispersion.production_cpu_gamma_k_path`, and `dispersion.production_gpu` aligned with the rows above.
 

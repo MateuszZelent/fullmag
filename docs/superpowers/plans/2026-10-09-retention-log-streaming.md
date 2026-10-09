@@ -1,6 +1,6 @@
 # Plan 4207003016 — pełne strumieniowe archiwum Docker logs
 
-Status: niezależne pełne SOURCE review 11 plików PASS po Required; hosted wykonanie pozostaje NOT VERIFIED.
+Status: niezależne SOURCE review11files PASS oraz hosted Linux/Windows PASS. Real Docker/storage i power-loss pozostają NOT VERIFIED.
 
 ## Przyczyna i wynik
 
@@ -34,3 +34,7 @@ Thread start musi być potwierdzony przed wpisaniem do listy join. Cleanup proce
 ## Ukończony źródłowy fragment
 
 Domknięto parent barrier, reader-start/cleanup, unknown-live-spool retry i preflight template actual5mandatorycleanupfields. Regresja envelope używa rzeczywistego producenta, a retry validplan-fedc5678 osiąga właściwy guard. Syntetyczny drainer timeout.01 nie zmienia productiontimeout. AST11files i diff-check PASS. Bootstrap scope=retention ma dwa dodatkowe kroki Unix Engine i actual subprocess streaming na Linux/Windows. Nie wykonano lokalnych testów/buildów/Docker.
+
+## Hosted dowód
+
+[GHA37985345068](https://github.com/MateuszZelent/fullmag/actions/runs/37985345068) exact275e2bc6a:SUCCESS. Linux114005841626 i Windows114005841314:92retention tests,10Engine protocol,9actualCLI streaming PASS (platformowe skips osobno). Actual child ponad16MiB/longline/exactSHA, second-reader-start/unknown-spool no-retry PASS obuOS. Linux wykonał directory event ordering/fsync failure i actualproducer→capacity envelope; Windows pominął te niemożliwe capability i wykonał explicit unavailable/no-rm preservation. FakeDocker/rm nie kwalifikuje prawdziwego Docker. Windows cleanup nadal blocked, nie fakeNTFS power-loss proof.

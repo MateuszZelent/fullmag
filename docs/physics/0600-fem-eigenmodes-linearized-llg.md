@@ -619,7 +619,7 @@ przed bootstrapem Relax, callbackami i publikacją artefaktów. Pusty lub
 all-null policy odpowiada brakowi nadpisania. Sama obecność policy nie może
 zmienić równania referencyjnego ani automatycznie przełączyć rodziny solvera.
 Requested controls pozostają w intencji użytkownika; odmowa nie jest cichym
-fallbackiem. Implementacja tej bramki przeszła niezależne SOURCE review; hosted regresje pozostają w toku.
+fallbackiem. Implementacja tej bramki przeszła niezależne SOURCE review oraz hosted regresje GHA37979402458/Rust113985786699: planner i actual reference Single/path/all-null tests PASS. To nie kwalifikuje native provider ani fizycznych wyników.
 
 Początkowy komunikat postępu ma `max_iterations=None`, dopóki callback
 natywnego solvera nie dostarczy rozwiązanego limitu. Nie publikuje stałej 300.
