@@ -2387,3 +2387,9 @@ Nie dodano nowego testu porównującego jedynie tekst implementacji panelu; mocn
 
 - Aktualizacja obserwacji: bootstrap37959806754 pozostaje aktywny, ale Rust113919466272 zakończył się FAIL w dwóch starych testach TimelineReviewTests przed nowym test_observability.py. Oba wybierają receipt-verification przez stages[5], nie przez ID; dynamiczny plan nieznanego profilu ma mniej wierszy. Zlecono korektę testów po stable stage ID, bez usuwania assertions ani zmiany produkcyjnego kontraktu. Nowe wykonanie wymagane; fixture Air jeszcze nie został wykonany w tym jobie.
 - Refresh15 komentarzy GitHub: 271 inline, zero nowych uwag Codex względem ewidencji. PR97 nadal OPEN, PR102 CLOSED; nie zamykamy otwartego PR przed zakończeniem pełnej oceny.
+
+
+### Regresje osi czasu po stable stage ID (2026-10-09)
+
+- Poprawiono wszystkie indeksowe wybory etapów w TimelineReviewTests, również ujemny exit. Fixture'y mają zgodny profile/job_id/schema; asercja native-build=succeeded dowodzi przyjęcia receipt, a receipt-verification=running i result=pending chronią przed myleniem sukcesu workera z koordynatorem. Failure fixture ma rzeczywiste validation_error koordynatora i wymaga receipt-verification=failed, result=failed, exit 1. Nie usunięto żadnej z tych bramek.
+- AST i diff-check PASS; lokalnych testów/importów/buildów nie uruchamiano. Poprzedni job zakończył się przed nowym test_observability.py i przed fixture Air; potrzebna jest nowa hosted regresja po tej korekcie.

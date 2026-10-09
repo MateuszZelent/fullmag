@@ -152,30 +152,73 @@ class TimelineReviewTests(unittest.TestCase):
     def test_worker_receipt_does_not_finish_a_running_queue_job(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            artifacts = root / 'runs' / 'wt' / 'job' / 'artifacts'
+            run = root / 'runs' / 'wt' / 'job'
+            artifacts = run / 'artifacts'
             artifacts.mkdir(parents=True)
+            profile = 'fem-cpu-release'
+            job = {
+                'job_id': 'job',
+                'worktree_id': 'wt',
+                'profile': profile,
+                'state': 'running',
+            }
             receipt = {
                 'schema': 'fullmag.local-runner.build-receipt.v1',
+                'job_id': 'job',
+                'profile': profile,
                 'state': 'succeeded',
                 'stages': [{'name': name, 'exit_code': 0, 'duration_ms': 1000}
                            for name in ('native-build', 'frontend-dependencies', 'frontend-build')],
             }
             (artifacts / 'build-receipt.json').write_text(json.dumps(receipt))
-            stages = build_job_timeline({'job_id': 'job', 'worktree_id': 'wt', 'state': 'running'}, root)
-            self.assertEqual('running', stages[5]['status'])
-            self.assertEqual('pending', stages[6]['status'])
-            self.assertNotIn('exit_code', stages[6])
+            stages = {
+                stage['id']: stage
+                for stage in build_job_timeline(job, root)
+            }
+            self.assertIn('receipt-verification', stages)
+            self.assertIn('result', stages)
+            self.assertEqual('succeeded', stages['native-build']['status'])
+            self.assertEqual('running', stages['receipt-verification']['status'])
+            self.assertEqual('pending', stages['result']['status'])
+            self.assertNotIn('exit_code', stages['result'])
 
     def test_failed_queue_does_not_report_receipt_verification_success(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            artifacts = root / 'runs' / 'wt' / 'job' / 'artifacts'
+            run = root / 'runs' / 'wt' / 'job'
+            artifacts = run / 'artifacts'
             artifacts.mkdir(parents=True)
+            profile = 'fem-cpu-release'
+            job = {
+                'job_id': 'job',
+                'worktree_id': 'wt',
+                'profile': profile,
+                'state': 'failed',
+                'exit_code': 1,
+            }
             (artifacts / 'build-receipt.json').write_text(json.dumps({
-                'state': 'succeeded', 'stages': [{'name': 'native-build', 'exit_code': 0}]}))
-            stages = build_job_timeline({'job_id': 'job', 'worktree_id': 'wt', 'state': 'failed', 'exit_code': 1}, root)
-            self.assertEqual('failed', stages[5]['status'])
-            self.assertEqual('failed', stages[6]['status'])
+                'schema': 'fullmag.local-runner.build-receipt.v1',
+                'job_id': 'job',
+                'profile': profile,
+                'state': 'succeeded',
+                'stages': [{'name': 'native-build', 'exit_code': 0}],
+            }))
+            (run / 'coordinator.json').write_text(json.dumps({
+                'schema': 'fullmag.local-runner.coordinator.v1',
+                'job_id': 'job',
+                'state': 'failed',
+                'validation_error': 'artifact validation failed',
+            }))
+            stages = {
+                stage['id']: stage
+                for stage in build_job_timeline(job, root)
+            }
+            self.assertIn('receipt-verification', stages)
+            self.assertIn('result', stages)
+            self.assertEqual('succeeded', stages['native-build']['status'])
+            self.assertEqual('failed', stages['receipt-verification']['status'])
+            self.assertEqual('failed', stages['result']['status'])
+            self.assertEqual(1, stages['result']['exit_code'])
 
     def test_negative_stage_exit_does_not_advance_to_next_stage(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -183,7 +226,19 @@ class TimelineReviewTests(unittest.TestCase):
             run = root / 'runs' / 'wt' / 'job'
             run.mkdir(parents=True)
             (run / 'worker.log').write_text('[fullmag runner] stage native-build end exit_code=-9 duration_ms=1000\n')
-            stages = build_job_timeline({'job_id': 'job', 'worktree_id': 'wt', 'state': 'running', 'started_at': 1}, root)
-            self.assertEqual('failed', stages[2]['status'])
-            self.assertEqual(-9, stages[2]['exit_code'])
-            self.assertEqual('pending', stages[3]['status'])
+            job = {
+                'job_id': 'job',
+                'worktree_id': 'wt',
+                'profile': 'fem-cpu-release',
+                'state': 'running',
+                'started_at': 1,
+            }
+            stages = {
+                stage['id']: stage
+                for stage in build_job_timeline(job, root)
+            }
+            self.assertIn('native-build', stages)
+            self.assertIn('frontend-dependencies', stages)
+            self.assertEqual('failed', stages['native-build']['status'])
+            self.assertEqual(-9, stages['native-build']['exit_code'])
+            self.assertEqual('pending', stages['frontend-dependencies']['status'])
