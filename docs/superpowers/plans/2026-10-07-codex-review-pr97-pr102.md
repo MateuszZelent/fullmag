@@ -1915,3 +1915,10 @@ Generic 37872370420: jawny positive MFEM sparse window/nearest marker PASS; pó�
 37873787832 job113637554275:327testów Gmsh,1FAIL i1SKIP. Alias-colliding realization, coarser recipe preservation, trimmed hmax/hmin precedence, shared realizer boundary, standalone owner roster/cache oraz missing-lower reason PASS. #4207587018 implemented wyłącznie dla tego kontraktu. Exact-layer finite-cylinder ROI nadalFAIL i nie otrzymuje kwalifikacji. Zachowano ci-37873787832-mesh.log.
 
 37879663756 job113656196365:27receipt tests PASS,9startup PASS,22frozenprobe PASS. Ordered roundtrip76PASS+35subtests,2FAIL. Faktyczny błąd tracked state: _text_value(None) zwraca pusty string, więc disable-all nie czyścił pomocniczej listy; optionalquantity normalizowane teraz doNone. Nie poluzowano asercji braku redundant clear ani pełnego StudyIR. Drugi nowy fixture podawał unsupported stage_id do add_frequency_response; używa teraz istniejącego API i sprawdza właściwy generated call. Independent source review+AST/diff PASS; freshGHA pending.
+
+
+### Renderer potwierdzony i poprawa DTO testu Resonance
+
+37880206848 job113657924170: ordered roundtrip78PASS+35subtests; API314PASS,1SKIP. Naprawa exact eigen selector snapshots i disable-all tracked state ma świeży dowód, bez lokalnych testów. CałyPython jobFAIL dopiero w znanym exact-layer ROI density; nie uznano całej bramki za zieloną. Zachowano ci-37880206848-python.log.
+
+#4225198879 browser fixture: manifest payload zawiera właściwe artifacts/physics, spectrum wrapper odpowiada backendowemu v1, stage-execution identity zgodna z currentstatus. Modal nie deklaruje response sweep i otrzymuje missing/not_started progress; driven otrzymuje backend-derived ready/running (1sweep point,0point artifacts, brak completeclaim). Green Meshbuilt toast jest oddzielony od error kind; asercje resource errors/pageerrors/identity zachowane. Node syntax/diff/source DTO reviewPASS, hosted5case matrixpending. Produkcyjnego transportu i ownerguardów nie poluzowano.

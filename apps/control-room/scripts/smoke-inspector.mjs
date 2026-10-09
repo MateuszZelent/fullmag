@@ -1495,7 +1495,8 @@ async function qualifyInspectorResonanceLeafRouting(browser, workspaceUrl, outpu
       resultCase.modalResonanceQualification === true;
     const manifestPayload = inspectorFrequencyManifest(fixture).result_manifest.payload;
     const spectrumMode = inspectorFrequencySpectrum().payload.modes[0] ?? null;
-    const responsePoint = inspectorFrequencyResponseSweep().payload.points[0] ?? null;
+    const responseSweep = inspectorFrequencyResponseSweep(fixture);
+    const responsePoint = responseSweep.payload?.points?.[0] ?? null;
     const fixtureEvidence = {
       boundaryContext: manifestPayload.requested_execution.boundary_context,
       calculationMode: manifestPayload.requested_execution.calculation_mode,
@@ -1672,8 +1673,10 @@ async function qualifyInspectorResonanceLeafRouting(browser, workspaceUrl, outpu
         `${resultCase.label}: wrong Inspector owner ${after.inspectorOwner ?? "none"}`,
       );
       assert(
-        after.visibleNotifications === 0,
-        `${resultCase.label}: browser displayed a notification toast.`,
+        after.visibleErrorNotifications === 0,
+        `${resultCase.label}: browser displayed an error notification toast: ${JSON.stringify(
+          after.notifications,
+        )}`,
       );
       assert(
         pageErrors.length === 0,
@@ -1808,7 +1811,22 @@ async function inspectorResonanceLeafRoutingState(page, expectedNodeId = null) {
       inspectorOwner: inspector?.getAttribute("data-inspector-owner") ?? null,
       inspectorTitle:
         inspector?.querySelector(".fm-inspector__title")?.textContent?.trim() ?? null,
+      notifications: [...document.querySelectorAll(".fm-notifications__toast")].map(
+        (toast) => ({
+          kind: toast.getAttribute("data-kind"),
+          title:
+            toast
+              .querySelector(".fm-notifications__toast-header strong")
+              ?.textContent?.trim() ?? null,
+        }),
+      ),
+      visibleErrorNotifications: document.querySelectorAll(
+        '.fm-notifications__toast[data-kind="error"]',
+      ).length,
       visibleNotifications: document.querySelectorAll(".fm-notifications__toast").length,
+      visibleSuccessNotifications: document.querySelectorAll(
+        '.fm-notifications__toast[data-kind="success"]',
+      ).length,
     };
   }, expectedNodeId);
 }
@@ -3235,7 +3253,33 @@ async function installInspectorFixtureApi(page, fixture) {
       });
     }
     if (path === "/v2/sessions/current/meshing/region-memberships") return fulfillJson(route, { memberships: [], revision: 7 });
-    if (path === "/v2/sessions/current/simulation/stages/execution") return fulfillJson(route, { stages: [], stage_statuses: [], total_stages: 0, revision: fixture.revision });
+    if (path === "/v2/sessions/current/simulation/stages/execution") {
+      const modal = fixture.analysisProduct === "modal_eigen";
+      const stageId = modal ? "eigen-dispersion" : "frequency-response";
+      const stageKind = modal ? "eigenmodes" : "frequency_response";
+      return fulfillJson(route, {
+        active_stage_index: null,
+        active_stage_kind: null,
+        completed_stage_indexes: [0],
+        revision: fixture.revision,
+        run_id: "inspector-run",
+        runtime_state: "completed",
+        session_epoch: "inspector-session-epoch-1",
+        session_id: "inspector-routing-smoke",
+        stage_statuses: ["completed"],
+        stages: [
+          {
+            converged: true,
+            index: 0,
+            kind: stageKind,
+            label: modal ? "Finite FMR Modes" : "Frequency Response",
+            stage_id: stageId,
+            status: "completed",
+          },
+        ],
+        total_stages: 1,
+      });
+    }
     if (path === "/v2/sessions/current/simulation/solver/status") return fulfillJson(route, { can_accept_commands: true, is_busy: false, runtime_state: "idle", revision: fixture.revision });
     if (
       path === "/v2/sessions/current/simulation/commands/fixture-fdm-grid-command" &&
@@ -3310,7 +3354,7 @@ async function installInspectorFixtureApi(page, fixture) {
       requested_precision: "double",
       revision: fixture.revision,
       run_id: "inspector-run",
-      session_id: "inspector-session",
+      session_id: "inspector-routing-smoke",
       started_at: "2026-08-11T12:00:00Z",
       status: "completed",
       total_steps: 1,
@@ -3350,11 +3394,13 @@ async function installInspectorFixtureApi(page, fixture) {
       );
     }
     if (path === "/v2/sessions/current/analysis/frequency-domain/eigen/diagnostics.v2") return fulfillJson(route, inspectorFrequencyDiagnostics());
-    if (path === "/v2/sessions/current/analysis/frequency-domain/response/magnetic-sweep") return fulfillJson(route, inspectorFrequencyResponseSweep());
-    if (
-      path === "/v2/sessions/current/analysis/frequency-domain/response/cancel-requested.v1" ||
-      path === "/v2/sessions/current/analysis/frequency-domain/response/progress.v1"
-    ) return fulfillEmpty(route, 204);
+    if (path === "/v2/sessions/current/analysis/frequency-domain/response/magnetic-sweep") return fulfillJson(route, inspectorFrequencyResponseSweep(fixture));
+    if (path === "/v2/sessions/current/analysis/frequency-domain/response/cancel-requested.v1") {
+      return fulfillEmpty(route, 204);
+    }
+    if (path === "/v2/sessions/current/analysis/frequency-domain/response/progress.v1") {
+      return fulfillJson(route, inspectorFrequencyResponseProgress(fixture));
+    }
     if (path.includes("/analysis/frequency-domain/") && path.endsWith("/meta")) {
       return fulfillJson(route, inspectorFieldMeta(path, fixture));
     }
@@ -4120,9 +4166,20 @@ function inspectorFrequencyManifest(fixture = { analysisProduct: "driven_respons
               calculation_mode: "eigenmodes",
               k_sampling: { kind: "path", sample_count: 2 },
             },
+        analysis_family: "magnetic_frequency_domain",
+        artifacts: { spectrum_v2_path: "eigen/spectrum.v2.json" },
+        physics: {
+          analysis_family: "magnetic_frequency_domain",
+          field_units: "dimensionless_delta_m",
+          frequency_units: "Hz",
+          normalization: "unit_l2",
+          phase_convention: "exp_minus_i_omega_t",
+        },
         revision: "result-modal-7",
         run_id: INSPECTOR_MODAL_BRANCH_OWNER.run_id,
+        schema_version: "frequency_domain_manifest.v1",
         stage_id: "eigen-dispersion",
+        stage_kind: "eigenmodes",
         stage_label: modalResonance ? "Finite FMR Modes" : "Dispersion Eigenmodes",
         study_product: "modal_eigen",
       }
@@ -4130,8 +4187,20 @@ function inspectorFrequencyManifest(fixture = { analysisProduct: "driven_respons
         equilibrium_identity: "equilibrium-1",
         observables: [{ identity: "absorbed-power", kind: "absorbed_power", unit: "W" }],
         requested_execution: { boundary_context: "finite_open", calculation_mode: "fmr_response" },
+        analysis_family: "magnetic_frequency_domain",
+        artifacts: { response_sweep_v2_path: "response/magnetic_response_sweep.v2.json" },
+        physics: {
+          analysis_family: "magnetic_frequency_domain",
+          field_units: "dimensionless_delta_m",
+          frequency_units: "Hz",
+          normalization: "unit_l2",
+          phase_convention: "exp_minus_i_omega_t",
+        },
         revision: "result-7",
+        run_id: "inspector-run",
+        schema_version: "frequency_domain_manifest.v1",
         stage_id: "frequency-response",
+        stage_kind: "frequency_response",
         stage_label: "Frequency Response",
         study_product: "driven_response",
       };
@@ -4152,24 +4221,32 @@ function inspectorFrequencyManifest(fixture = { analysisProduct: "driven_respons
     response: { driven_response_available: true, reason: "", status: "ok", study_kind: "frequency_response" },
     result_manifest: {
       ...(modal ? INSPECTOR_MODAL_RESULT_OWNER : {}),
-      artifact_path: "result-manifest.json",
+      artifact_path: "frequency_domain/manifest.v1.json",
       missing_reason: null,
       payload: resultPayload,
       resource_key: "/v2/sessions/current/analysis/frequency-domain/manifest.v1",
-      schema_version: "frequency_domain_result_manifest.v1",
+      schema_version: "frequency_domain_manifest.v1",
       status: "ready",
     },
     requested_execution: resultPayload.requested_execution,
     response_cancel_requested: null,
-    response_progress: null,
+    response_progress: inspectorFrequencyResponseProgress(fixture),
     resources: { response_field_resources: [] },
-    artifacts: {
-      branches_v2_path: "eigen/branches.v2.json",
-      dispersion_csv_path: "eigen/dispersion.csv",
-      eigen_diagnostics_v2_path: "eigen/diagnostics.v2.json",
-      response_sweep_v2_path: "response/magnetic_response_sweep.v2.json",
-      spectrum_v2_path: "eigen/spectrum.v2.json",
-    },
+    artifacts: modal
+      ? {
+          branches_v2_path: "eigen/branches.v2.json",
+          dispersion_csv_path: "eigen/dispersion.csv",
+          eigen_diagnostics_v2_path: "eigen/diagnostics.v2.json",
+          response_sweep_v2_path: null,
+          spectrum_v2_path: "eigen/spectrum.v2.json",
+        }
+      : {
+          branches_v2_path: null,
+          dispersion_csv_path: null,
+          eigen_diagnostics_v2_path: null,
+          response_sweep_v2_path: "response/magnetic_response_sweep.v2.json",
+          spectrum_v2_path: null,
+        },
     schema_version: "frequency_domain_manifest.v1",
   };
 }
@@ -4193,8 +4270,67 @@ function inspectorFrequencySpectrum() {
       schema_version: "eigen_spectrum.v2",
     },
     resource_key: "/v2/sessions/current/analysis/frequency-domain/eigen/spectrum.v2",
-    schema_version: "frequency_domain_eigen_spectrum.v2",
+    schema_version: "frequency_domain_eigen_spectrum.v1",
     status: "ready",
+  };
+}
+
+function inspectorFrequencyResponseProgress(
+  fixture = { analysisProduct: "driven_response" },
+) {
+  const sweep = inspectorFrequencyResponseSweep(fixture);
+  const sweepPayload = sweep.status === "ready" ? sweep.payload : null;
+  const totalFrequencyPoints = sweepPayload?.points?.length ?? 0;
+  const completedFrequencyPoints = 0;
+  const writtenFrequencyPointArtifacts = completedFrequencyPoints;
+  const complete = totalFrequencyPoints > 0 &&
+    completedFrequencyPoints === totalFrequencyPoints;
+  const partialArtifactsAvailable = sweep.status === "ready";
+  const frequencies = (sweepPayload?.points ?? [])
+    .map((point) => point.frequency_hz)
+    .filter((frequency) => Number.isFinite(frequency) && frequency > 0);
+  const frequencyMinHz = frequencies.length > 0 ? Math.min(...frequencies) : null;
+  const frequencyMaxHz = frequencies.length > 0 ? Math.max(...frequencies) : null;
+  const state = complete
+    ? "completed"
+    : partialArtifactsAvailable
+      ? "running"
+      : "not_started";
+  const status = partialArtifactsAvailable ? "ready" : "missing";
+  const resource = {
+    schema_version: "frequency_domain_sweep_progress.v1",
+    status,
+    state,
+    complete,
+    total_frequency_points: totalFrequencyPoints,
+    completed_frequency_points: completedFrequencyPoints,
+    written_frequency_point_artifacts: writtenFrequencyPointArtifacts,
+    current_frequency_hz: null,
+    frequency_min_hz: frequencyMinHz,
+    frequency_max_hz: frequencyMaxHz,
+    demag_mode: null,
+    partial_artifacts_available: partialArtifactsAvailable,
+    latest_artifact_manifest_path: "frequency_domain/manifest.v1.json",
+    missing_reason: partialArtifactsAvailable
+      ? null
+      : "response sweep progress artifacts are not present",
+  };
+  return {
+    ...resource,
+    progress_json: JSON.stringify({
+      schema_version: resource.schema_version,
+      status,
+      complete,
+      state,
+      total_frequency_points: totalFrequencyPoints,
+      completed_frequency_points: completedFrequencyPoints,
+      written_frequency_point_artifacts: writtenFrequencyPointArtifacts,
+      current_frequency_hz: null,
+      frequency_min_hz: frequencyMinHz,
+      frequency_max_hz: frequencyMaxHz,
+      partial_artifacts_available: partialArtifactsAvailable,
+      latest_artifact_manifest_path: resource.latest_artifact_manifest_path,
+    }),
   };
 }
 
@@ -4329,26 +4465,31 @@ function inspectorFrequencyDiagnostics() {
   };
 }
 
-function inspectorFrequencyResponseSweep() {
+function inspectorFrequencyResponseSweep(
+  fixture = { analysisProduct: "driven_response" },
+) {
+  const modal = fixture.analysisProduct === "modal_eigen";
   return {
     artifact_path: "response/magnetic_response_sweep.v2.json",
-    missing_reason: null,
-    payload: {
-      points: [{
-        absorbed_power_density: 4.5,
-        amplitude: 0.75,
-        field_id: "response-field-7",
-        frequency_hz: 12.5e9,
-        frequency_index: 7,
-        observable_id: "mx",
-        phase_rad: 1.25,
-        residual_norm: 1e-5,
-        susceptibility_tensor: [[1, 2], [3, 4]],
-      }],
-      schema_version: "magnetic_response_sweep.v2",
-    },
+    missing_reason: modal ? "artifact is not present in the active workspace" : null,
+    payload: modal
+      ? null
+      : {
+          points: [{
+            absorbed_power_density: 4.5,
+            amplitude: 0.75,
+            field_id: "response-field-7",
+            frequency_hz: 12.5e9,
+            frequency_index: 7,
+            observable_id: "mx",
+            phase_rad: 1.25,
+            residual_norm: 1e-5,
+            susceptibility_tensor: [[1, 2], [3, 4]],
+          }],
+          schema_version: "magnetic_response_sweep.v2",
+        },
     resource_key: "/v2/sessions/current/analysis/frequency-domain/response/magnetic-sweep",
-    schema_version: "frequency_domain_response_sweep.v2",
-    status: "ready",
+    schema_version: "frequency_domain_response_sweep_resource.v1",
+    status: modal ? "missing" : "ready",
   };
 }
