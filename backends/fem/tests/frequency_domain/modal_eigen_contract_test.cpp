@@ -6367,7 +6367,6 @@ void modal_nonzero_k_floquet_shared_domain_nearest_reports_shifted_ksp_diagnosti
         check(fault_ready,
               "enable the private live-PC apply fault hook in its fresh process");
         FullmagFemModalEigenRequest fault_request = request;
-        fault_request.max_linear_iterations = 1;
         FullmagFemFrequencyDomainResult fault_result =
             fullmag_fem_modal_eigen_solve(&fault_request);
         fault_environment.restore();
@@ -6375,8 +6374,10 @@ void modal_nonzero_k_floquet_shared_domain_nearest_reports_shifted_ksp_diagnosti
                       "\"pc_apply_fault_injected\":true")) {
             std::fprintf(
                 stderr,
-                "FAIL: fresh process did not reach the injected live-PC callback; status=%d diagnostics=%s\n",
+                "FAIL: fresh process did not reach the injected live-PC callback; status=%d error=%s diagnostics=%s\n",
                 static_cast<int>(fault_result.status),
+                fault_result.error_message != nullptr
+                    ? fault_result.error_message : "<null>",
                 fault_result.diagnostics_json != nullptr
                     ? fault_result.diagnostics_json
                     : "<null>");

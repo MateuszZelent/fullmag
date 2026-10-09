@@ -2683,3 +2683,7 @@ GHA38003097013 exact12a22fb975a98db153e76248dd2211883180e691SUCCESS; control1140
 ### 4234647677 — settings odrzucane bez cichej utraty
 
 Walidator dopuszcza object/null/default, odrzuca array/string/number/bool z fullpath/kind. Dwa tests obejmują roundtrip i zachowanie niepoprawnego wejścia bez mutacji. Source ingress audit: live definition mutacje wspólny validatedcommit, authoring update/developmentrestore validate przed write/activation; sessions emptyanalysis; raw project archive nie wchodzi do liveconversion; Pythonexport nie emitujeanalysis. No schema/migration ani rewrite persisteddata. Full source review PASS; explicit hostedauthoring postprocessing_settings_ target dodano, YAML/diff PASS. Uwaga implemented_pending_ci.
+
+### Fresh PCApply fault fixture — poprawka budżetu i dokładniejszy błąd
+
+Usunięto sztuczny max_linear_iterations=1 z kopii normalnego requestu; pozostaje bazowe128, używane przez Poisson i shifted KSP. Fault assertion musi nadal dowieść wejścia do injectedPCApply, przerwania pomiarów i canonical unsafe latch; PASS marker po tych kontrolach. Null-safe failure printf zawiera teraz CABI error_message przed destroy. Full SOURCE review/diff PASS, lokalnych tests/buildów nie uruchamiano. Nie jest to dowód usunięcia observed assembly_failure: wcześniejszy adapter nie otrzymuje tego pola wprost, dokładna przyczyna pozostaje niepotwierdzona. Nowy hosted7-test diagnostic konieczny; production solver/tolerancje/window/fixture geometry/certificates niezmienione.
