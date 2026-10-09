@@ -2754,7 +2754,7 @@
       "id": "source-slepc-nonzero-diagonal-permutation",
       "path": "backends/fem/cpu/frequency_domain/slepc_modal_eigen.cpp",
       "symbol": "SLEPcTinyGyrotropicModalEigenResult solve_slepc_gyrotropic_modal_eigen_attempt",
-      "responsibility": "Configure checked nonzero-diagonal permutation for PCLU before EPS setup, preserving matrix values, shift policy and original residual gates; API errors quarantine the graph. Actual provider proof pending, NOT VERIFIED."
+      "responsibility": "Configure checked nonzero-diagonal permutation for PCLU before EPS setup, preserving matrix values, shift policy and original residual gates; API errors quarantine the graph. GHA37870357673 reached successful MFEM sparse window/nearest assertions; complete generic/refill regression still NOT VERIFIED after a later negative-fixture failure."
     }
   ],
   "public_api": {

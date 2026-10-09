@@ -4050,6 +4050,10 @@ residual tolerance. The permutation changes neither operator values nor the
 physical metric. API errors follow the existing graph quarantine and do not
 permit later PETSc queries. No dense fallback or dependency change is allowed.
 [Versioned PETSc PCLU implementation](https://raw.githubusercontent.com/petsc/petsc/v3.24.6/src/ksp/pc/impls/factor/lu/lu.c)
-provides the upstream behavior; post-correction provider execution is
-**NOT VERIFIED**. The public compact-CSR fixture and all original residual
-checks remain the required regression.
+provides the upstream behavior. GHA37870357673 at
+`95d1fcccd4df222f5d3c0c6445ad2b6eedb25e8b` reached the successful actual MFEM
+compact-CSR frequency-window and nearest assertions with the original gates;
+the suite then failed in a separate missing-CSR negative fixture whose expected
+reason was inconsistent with the upfront structural validation. This is narrow
+positive-provider evidence, not a passing complete generic/refill contract.
+Full post-correction provider regression remains **NOT VERIFIED**.
