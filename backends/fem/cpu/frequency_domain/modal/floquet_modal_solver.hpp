@@ -93,6 +93,9 @@ struct FloquetSharedDomainSparseModalOperator {
 struct FloquetSharedDomainSparseModalSolveContext {
     FloquetSharedDomainSparseModalSolveContext() noexcept;
     ~FloquetSharedDomainSparseModalSolveContext() noexcept;
+    // Close the retained PETSc graph before publishing the outer window result.
+    // False leaves the owner and process-finalization fence intact.
+    bool close() noexcept;
     FloquetSharedDomainSparseModalSolveContext(
         const FloquetSharedDomainSparseModalSolveContext &) = delete;
     FloquetSharedDomainSparseModalSolveContext &operator=(

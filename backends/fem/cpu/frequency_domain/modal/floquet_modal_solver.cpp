@@ -1,4 +1,5 @@
 #include "cpu/frequency_domain/modal/floquet_modal_solver.hpp"
+#include "core/petsc_slepc_runtime.hpp"
 #include "cpu/frequency_domain/modal_krylov_tuning.hpp"
 #include "cpu/frequency_domain/mode_deduplication.hpp"
 #include "cpu/frequency_domain/operators/poisson_airbox_shared_domain.hpp"
@@ -1277,12 +1278,6 @@ PetscErrorCode capture_floquet_shifted_ksp_progress(
     return 0;
 }
 
-std::mutex &native_floquet_solver_mutex()
-{
-    static std::mutex mutex;
-    return mutex;
-}
-
 void copy_native_floquet_error(
     NativeFloquetMatShellContext *context,
     const char *message) noexcept
@@ -2017,44 +2012,64 @@ bool run_floquet_schur_action_diagnostic(
     return true;
 }
 
-void destroy_native_floquet_context(NativeFloquetMatShellContext *context) noexcept
+bool destroy_native_floquet_context_locked(
+    NativeFloquetMatShellContext *context) noexcept
 {
     if (context == nullptr) {
-        return;
+        return true;
     }
-    if (context->feedback != nullptr) {
-        VecDestroy(&context->feedback);
+    if (context->feedback != nullptr &&
+        (VecDestroy(&context->feedback) != PETSC_SUCCESS ||
+         context->feedback != nullptr)) {
+        return false;
     }
-    if (context->q_physical_imag != nullptr) {
-        VecDestroy(&context->q_physical_imag);
+    if (context->q_physical_imag != nullptr &&
+        (VecDestroy(&context->q_physical_imag) != PETSC_SUCCESS ||
+         context->q_physical_imag != nullptr)) {
+        return false;
     }
-    if (context->q_physical_real != nullptr) {
-        VecDestroy(&context->q_physical_real);
+    if (context->q_physical_real != nullptr &&
+        (VecDestroy(&context->q_physical_real) != PETSC_SUCCESS ||
+         context->q_physical_real != nullptr)) {
+        return false;
     }
-    if (context->phi_solution != nullptr) {
-        VecDestroy(&context->phi_solution);
+    if (context->phi_solution != nullptr &&
+        (VecDestroy(&context->phi_solution) != PETSC_SUCCESS ||
+         context->phi_solution != nullptr)) {
+        return false;
     }
-    if (context->phi_rhs != nullptr) {
-        VecDestroy(&context->phi_rhs);
+    if (context->phi_rhs != nullptr &&
+        (VecDestroy(&context->phi_rhs) != PETSC_SUCCESS ||
+         context->phi_rhs != nullptr)) {
+        return false;
     }
-    if (context->p_ksp != nullptr) {
-        KSPDestroy(&context->p_ksp);
+    if (context->p_ksp != nullptr &&
+        (KSPDestroy(&context->p_ksp) != PETSC_SUCCESS ||
+         context->p_ksp != nullptr)) {
+        return false;
     }
-    if (context->p != nullptr) {
-        MatDestroy(&context->p);
+    if (context->p != nullptr &&
+        (MatDestroy(&context->p) != PETSC_SUCCESS || context->p != nullptr)) {
+        return false;
     }
-    if (context->rotated_a_qq != nullptr) {
-        MatDestroy(&context->rotated_a_qq);
+    if (context->rotated_a_qq != nullptr &&
+        (MatDestroy(&context->rotated_a_qq) != PETSC_SUCCESS ||
+         context->rotated_a_qq != nullptr)) {
+        return false;
     }
-    if (context->a_phiq != nullptr) {
-        MatDestroy(&context->a_phiq);
+    if (context->a_phiq != nullptr &&
+        (MatDestroy(&context->a_phiq) != PETSC_SUCCESS || context->a_phiq != nullptr)) {
+        return false;
     }
-    if (context->a_qphi != nullptr) {
-        MatDestroy(&context->a_qphi);
+    if (context->a_qphi != nullptr &&
+        (MatDestroy(&context->a_qphi) != PETSC_SUCCESS || context->a_qphi != nullptr)) {
+        return false;
     }
-    if (context->a_qq != nullptr) {
-        MatDestroy(&context->a_qq);
+    if (context->a_qq != nullptr &&
+        (MatDestroy(&context->a_qq) != PETSC_SUCCESS || context->a_qq != nullptr)) {
+        return false;
     }
+    return true;
 }
 
 struct ReusableFloquetWindowState {
@@ -2083,26 +2098,52 @@ struct ReusableFloquetWindowState {
     // keeps their matrices alive until OS teardown instead of destroying a
     // view still owned by SLEPc.
     bool eps_lifetime_unsafe = false;
+    bool live_cpu_graph_registered = false;
     bool demag_probe_completed = false;
     FloquetDemagOperatorProbeResult demag_probe{};
 };
 
-void destroy_reusable_floquet_window_state(
+void mark_reusable_floquet_state_unsafe_locked(
+    ReusableFloquetWindowState *state) noexcept
+{
+    if (state != nullptr) {
+        state->invalidated = true;
+        state->eps_lifetime_unsafe = true;
+    }
+    fullmag::fem::runtime::mark_petsc_slepc_process_unsafe_locked();
+}
+
+bool destroy_reusable_floquet_window_state_locked(
     ReusableFloquetWindowState *state) noexcept
 {
     if (state == nullptr) {
-        return;
+        return true;
     }
-    if (state->eps_lifetime_unsafe) {
-        return;
+    if (state->eps_lifetime_unsafe ||
+        fullmag::fem::runtime::petsc_slepc_process_is_unsafe_locked()) {
+        mark_reusable_floquet_state_unsafe_locked(state);
+        return false;
     }
-    if (state->shell != nullptr) {
-        MatDestroy(&state->shell);
+    PetscBool finalized = PETSC_FALSE;
+    if (PetscFinalized(&finalized) != PETSC_SUCCESS || finalized == PETSC_TRUE) {
+        mark_reusable_floquet_state_unsafe_locked(state);
+        return false;
     }
-    if (state->gyrotropic != nullptr) {
-        MatDestroy(&state->gyrotropic);
+    if (state->shell != nullptr &&
+        (MatDestroy(&state->shell) != PETSC_SUCCESS || state->shell != nullptr)) {
+        mark_reusable_floquet_state_unsafe_locked(state);
+        return false;
     }
-    destroy_native_floquet_context(&state->context);
+    if (state->gyrotropic != nullptr &&
+        (MatDestroy(&state->gyrotropic) != PETSC_SUCCESS ||
+         state->gyrotropic != nullptr)) {
+        mark_reusable_floquet_state_unsafe_locked(state);
+        return false;
+    }
+    if (!destroy_native_floquet_context_locked(&state->context)) {
+        mark_reusable_floquet_state_unsafe_locked(state);
+        return false;
+    }
     state->operator_identity = nullptr;
     state->boundary_kind = nullptr;
     state->gauge_policy = nullptr;
@@ -2117,30 +2158,32 @@ void destroy_reusable_floquet_window_state(
     state->poisson_ksp_max_iterations = 0;
     state->initialized = false;
     state->invalidated = false;
-    state->eps_lifetime_unsafe = false;
     state->demag_probe_completed = false;
     state->demag_probe = FloquetDemagOperatorProbeResult{};
+    return true;
 }
 
-void destroy_opaque_floquet_window_context(void *opaque) noexcept
+bool destroy_opaque_floquet_window_context_locked(void *opaque) noexcept
 {
     auto *state = static_cast<ReusableFloquetWindowState *>(opaque);
-    if (state == nullptr) {
-        return;
+    if (state == nullptr ||
+        !destroy_reusable_floquet_window_state_locked(state)) {
+        return state == nullptr;
     }
-    if (state->eps_lifetime_unsafe) {
-        // See the state comment: deleting the owner here would leave an
-        // undestroyed EPS referring to freed PETSc matrices.
-        return;
-    }
-    destroy_reusable_floquet_window_state(state);
+    const bool registered = state->live_cpu_graph_registered;
     delete state;
+    if (registered) {
+        fullmag::fem::runtime::unregister_petsc_slepc_live_cpu_graph_locked();
+    }
+    return true;
 }
 
+// The solver explicitly closes this local owner before returning a result.
+// Its deleter is a last-resort fallback while the shared lock remains held.
 struct ReusableFloquetWindowStateDeleter {
     void operator()(ReusableFloquetWindowState *state) const noexcept
     {
-        destroy_opaque_floquet_window_context(state);
+        (void)destroy_opaque_floquet_window_context_locked(state);
     }
 };
 
@@ -3268,13 +3311,29 @@ FloquetModalCandidateFinalization finalize_certified_floquet_candidates(
 
 FloquetSharedDomainSparseModalSolveContext::FloquetSharedDomainSparseModalSolveContext() noexcept = default;
 
+bool FloquetSharedDomainSparseModalSolveContext::close() noexcept
+{
+#if FULLMAG_FEM_WITH_SLEPC
+    const std::lock_guard<std::mutex> lock(
+        fullmag::fem::runtime::petsc_slepc_process_mutex());
+    if (opaque == nullptr) {
+        return true;
+    }
+    if (!destroy_opaque_floquet_window_context_locked(opaque)) {
+        return false;
+    }
+    opaque = nullptr;
+    return true;
+#else
+    opaque = nullptr;
+    return true;
+#endif
+}
+
 FloquetSharedDomainSparseModalSolveContext::
     ~FloquetSharedDomainSparseModalSolveContext() noexcept
 {
-#if FULLMAG_FEM_WITH_SLEPC
-    destroy_opaque_floquet_window_context(opaque);
-#endif
-    opaque = nullptr;
+    (void)close();
 }
 
 FloquetModalSolverAdmission admit_floquet_modal_request(
@@ -3524,11 +3583,27 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
     }
     cancellation_context_owner->user_data = spectral_request.cancel_user_data;
     cancellation_context_owner->cancel_requested = spectral_request.cancel_requested;
-    const std::lock_guard<std::mutex> lock(native_floquet_solver_mutex());
+    const std::lock_guard<std::mutex> lock(
+        fullmag::fem::runtime::petsc_slepc_process_mutex());
 
+    PetscBool petsc_finalized = PETSC_FALSE;
+    if (PetscFinalized(&petsc_finalized) != 0) {
+        result.status = "solve_error";
+        result.unsupported_reason = "petsc_finalization_query_failed";
+        return result;
+    }
+    if (petsc_finalized == PETSC_TRUE) {
+        result.status = "solve_error";
+        result.unsupported_reason = "petsc_runtime_finalized";
+        return result;
+    }
     PetscBool slepc_initialized = PETSC_FALSE;
-    if (SlepcInitialized(&slepc_initialized) != 0 ||
-        (!slepc_initialized && SlepcInitializeNoArguments() != 0)) {
+    if (SlepcInitialized(&slepc_initialized) != 0) {
+        result.status = "solve_error";
+        result.unsupported_reason = "slepc_initialization_query_failed";
+        return result;
+    }
+    if (!slepc_initialized && SlepcInitializeNoArguments() != 0) {
         result.status = "solve_error";
         result.unsupported_reason = "slepc_initialization_failed";
         return result;
@@ -3536,12 +3611,58 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
 
     const bool borrowed_reuse_state = reuse_context != nullptr;
     ReusableFloquetWindowStateOwner local_state_owner;
+    const auto close_local_state_before_return = [&]() noexcept {
+        if (!local_state_owner) {
+            return;
+        }
+        if (destroy_opaque_floquet_window_context_locked(local_state_owner.get())) {
+            (void)local_state_owner.release();
+            return;
+        }
+        const bool prior_hard_failure = result.slepc_graph_quarantined ||
+            (result.status != nullptr &&
+             (std::strcmp(result.status, "solve_error") == 0 ||
+              std::strcmp(result.status, "validation_error") == 0));
+        result.ok = false;
+        if (!prior_hard_failure) {
+            result.status = "solve_error";
+            result.unsupported_reason = "floquet_context_cleanup_failed";
+        }
+        result.slepc_graph_quarantined = true;
+        result.accepted_modes.clear();
+        result.accepted_mode_count = 0;
+        result.converged_eigenpair_count = 0;
+        result.selected_eigenpair_index = -1;
+        result.positive_frequency_candidate_count = 0;
+        result.frequency_window_candidate_count = 0;
+        const double unavailable = std::numeric_limits<double>::quiet_NaN();
+        result.lambda_real = unavailable;
+        result.lambda_imag = unavailable;
+        result.frequency_hz = unavailable;
+        result.relative_residual = unavailable;
+        result.max_relative_residual = unavailable;
+        result.max_candidate_relative_residual = unavailable;
+        result.eps_normalized_absolute_tolerance = unavailable;
+        result.max_eps_normalized_absolute_residual = unavailable;
+        result.max_floquet_magnetic_relative_residual = unavailable;
+        result.max_floquet_potential_relative_residual = unavailable;
+        result.worst_candidate_frequency_hz = unavailable;
+        result.worst_candidate_eps_normalized_absolute_residual = unavailable;
+        result.worst_candidate_floquet_magnetic_relative_residual = unavailable;
+        result.worst_candidate_floquet_potential_relative_residual = unavailable;
+        result.worst_candidate_unprojected_magnetic_relative_residual = unavailable;
+        result.worst_candidate_rotated_imaginary_rad_s = unavailable;
+        result.worst_candidate_q_projection_ratio = unavailable;
+        result.min_candidate_frequency_hz = unavailable;
+        result.max_candidate_frequency_hz = unavailable;
+    };
     ReusableFloquetWindowState *state = nullptr;
     if (!borrowed_reuse_state) {
         local_state_owner.reset(new (std::nothrow) ReusableFloquetWindowState{});
         if (!local_state_owner) {
             result.status = "solve_error";
             result.unsupported_reason = "floquet_local_state_allocation_failed";
+            close_local_state_before_return();
             return result;
         }
         state = local_state_owner.get();
@@ -3560,14 +3681,20 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
             if (created == nullptr) {
                 result.status = "solve_error";
                 result.unsupported_reason = "floquet_reuse_context_allocation_failed";
+                close_local_state_before_return();
                 return result;
             }
+            // The graph outlives this solver lease; keep finalization fenced
+            // until its public context owner is destroyed.
+            fullmag::fem::runtime::register_petsc_slepc_live_cpu_graph_locked();
+            created->live_cpu_graph_registered = true;
             reuse_context->opaque = created;
         }
         state = static_cast<ReusableFloquetWindowState *>(reuse_context->opaque);
         if (state->invalidated) {
             result.status = "solve_error";
             result.unsupported_reason = "floquet_reuse_context_invalidated";
+            close_local_state_before_return();
             return result;
         }
         if (state->initialized &&
@@ -3587,6 +3714,7 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
              state->max_linear_iterations != spectral_request.max_linear_iterations)) {
             result.status = "validation_error";
             result.unsupported_reason = "floquet_reuse_context_mismatch";
+            close_local_state_before_return();
             return result;
         }
     }
@@ -3620,6 +3748,7 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
         if (eps != nullptr) {
             state->invalidated = true;
             state->eps_lifetime_unsafe = true;
+            fullmag::fem::runtime::mark_petsc_slepc_process_unsafe_locked();
             if (shifted_ksp_true_convergence_context != nullptr &&
                 shifted_ksp_true_convergence_test_registration_attempted) {
                 (void)shifted_ksp_true_convergence_context.release();
@@ -3681,6 +3810,8 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
         }
         if (!cleanup_succeeded) {
             state->invalidated = true;
+            state->eps_lifetime_unsafe = true;
+            fullmag::fem::runtime::mark_petsc_slepc_process_unsafe_locked();
             const bool already_solve_error = result.status != nullptr &&
                 std::strcmp(result.status, "solve_error") == 0;
             result.ok = false;
@@ -3695,6 +3826,14 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
         return detail::floquet_eps_cleanup_allows_refill(
             cleanup_succeeded && eps_destroy_error == 0,
             eps != nullptr);
+    };
+
+    // These setup failures precede EPSCreate. If the retained operator graph
+    // cannot be destroyed safely, do not issue further PETSc destroys here.
+    auto cleanup_failed_initial_context = [&]() noexcept {
+        if (destroy_reusable_floquet_window_state_locked(state)) {
+            (void)destroy_all();
+        }
     };
 
     const PetscReal target_shift = static_cast<PetscReal>(
@@ -3725,8 +3864,8 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
             result.status = "solve_error";
             result.unsupported_reason =
                 "petsc_floquet_sparse_matrix_creation_failed";
-            destroy_reusable_floquet_window_state(state);
-            destroy_all();
+            cleanup_failed_initial_context();
+            close_local_state_before_return();
             return result;
         }
         if (KSPCreate(PETSC_COMM_SELF, &context.p_ksp) != 0 ||
@@ -3734,8 +3873,8 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
             KSPSetType(context.p_ksp, KSPPREONLY) != 0) {
             result.status = "solve_error";
             result.unsupported_reason = "floquet_poisson_ksp_creation_failed";
-            destroy_reusable_floquet_window_state(state);
-            destroy_all();
+            cleanup_failed_initial_context();
+            close_local_state_before_return();
             return result;
         }
         const PetscReal poisson_ksp_rtol = std::max(
@@ -3770,8 +3909,8 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
         VecCreateSeq(PETSC_COMM_SELF, context.q_split_count, &context.q_physical_imag) != 0) {
             result.status = "solve_error";
             result.unsupported_reason = "floquet_poisson_ksp_setup_failed";
-            destroy_reusable_floquet_window_state(state);
-            destroy_all();
+            cleanup_failed_initial_context();
+            close_local_state_before_return();
             return result;
         }
         PetscReal poisson_actual_rtol = 0.0;
@@ -3786,8 +3925,8 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
             &poisson_actual_max_iterations) != 0) {
             result.status = "solve_error";
             result.unsupported_reason = "floquet_poisson_ksp_tolerance_query_failed";
-            destroy_reusable_floquet_window_state(state);
-            destroy_all();
+            cleanup_failed_initial_context();
+            close_local_state_before_return();
             return result;
         }
         (void)poisson_actual_dtol;
@@ -3807,8 +3946,8 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
                 &state->demag_probe)) {
                 result.status = "solve_error";
                 result.unsupported_reason = "floquet_dynamic_demag_operator_probe_failed";
-                destroy_reusable_floquet_window_state(state);
-                destroy_all();
+                cleanup_failed_initial_context();
+                close_local_state_before_return();
                 return result;
             }
             state->demag_probe_completed = true;
@@ -3828,8 +3967,8 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
             reinterpret_cast<void (*)(void)>(native_floquet_matmult)) != 0) {
             result.status = "solve_error";
             result.unsupported_reason = "floquet_matshell_creation_failed";
-            destroy_reusable_floquet_window_state(state);
-            destroy_all();
+            cleanup_failed_initial_context();
+            close_local_state_before_return();
             return result;
         }
         state->operator_identity = &operator_view;
@@ -3860,8 +3999,8 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
         // MatScale can fail after modifying only a prefix of the pencil.  The
         // borrowed context must therefore be discarded rather than reused
         // with matrices whose relative scale is no longer known.
-        destroy_reusable_floquet_window_state(state);
-        destroy_all();
+        cleanup_failed_initial_context();
+        close_local_state_before_return();
         return result;
     }
     state->applied_normalization_scale = result.operator_normalization_scale;
@@ -3937,6 +4076,7 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
         result.status = "validation_error";
         result.unsupported_reason = "floquet_diagnostic_ksp_option_invalid";
         destroy_all();
+        close_local_state_before_return();
         return result;
     }
     const PetscReal eps_absolute_tolerance =
@@ -3967,6 +4107,7 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
             result.unsupported_reason = "user_cancelled";
             result.eps_cancellation_observed = true;
             destroy_all();
+            close_local_state_before_return();
             return result;
         }
         ++result.eps_attempt_count;
@@ -3989,6 +4130,7 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
             result.status = "solve_error";
             result.unsupported_reason = "floquet_slepc_configuration_failed";
             destroy_all();
+            close_local_state_before_return();
             return result;
         }
         const PetscInt attempt_max_outer = result.eps_attempt_count == 1
@@ -3998,6 +4140,7 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
             result.status = "solve_error";
             result.unsupported_reason = "floquet_slepc_configuration_failed";
             destroy_all();
+            close_local_state_before_return();
             return result;
         }
         result.shifted_ksp_failure_probe.eps_nev_argument =
@@ -4040,6 +4183,7 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
         result.status = "solve_error";
         result.unsupported_reason = "floquet_slepc_configuration_failed";
         destroy_all();
+        close_local_state_before_return();
         return result;
     }
     PetscReal shifted_preconditioner_norm = 0.0;
@@ -4050,6 +4194,7 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
         result.status = "solve_error";
         result.unsupported_reason = "floquet_shifted_preconditioner_norm_failed";
         destroy_all();
+        close_local_state_before_return();
         return result;
     }
     // This shift regularizes only the LU factorization used as a
@@ -4066,6 +4211,7 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
         result.status = "solve_error";
         result.unsupported_reason = "floquet_factorization_shift_invalid";
         destroy_all();
+        close_local_state_before_return();
         return result;
     }
     result.factorization_shift_policy = exact_schur_preconditioner_materialized
@@ -4129,6 +4275,7 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
         result.status = "solve_error";
         result.unsupported_reason = "floquet_slepc_configuration_failed";
         destroy_all();
+        close_local_state_before_return();
         return result;
     }
     const char *resolved_shifted_ksp_type = nullptr;
@@ -4138,6 +4285,7 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
         result.status = "solve_error";
         result.unsupported_reason = "floquet_shifted_ksp_type_mismatch";
         destroy_all();
+        close_local_state_before_return();
         return result;
     }
     result.ksp_type = requested_shifted_ksp_type; // Static token survives EPS teardown.
@@ -4158,6 +4306,7 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
         result.status = "solve_error";
         result.unsupported_reason = "floquet_shifted_ksp_tolerance_query_failed";
         destroy_all();
+        close_local_state_before_return();
         return result;
     }
     (void)shifted_actual_dtol;
@@ -4201,8 +4350,10 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
         result.unsupported_reason = "floquet_slepc_setup_failed";
         state->invalidated = true;
         state->eps_lifetime_unsafe = true;
+        fullmag::fem::runtime::mark_petsc_slepc_process_unsafe_locked();
         eps_cleanup_is_safe = false;
         (void)cancellation_context_owner.release();
+        close_local_state_before_return();
         return result;
     }
     PetscInt attempt_resolved_nev = 0;
@@ -4230,6 +4381,7 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
         result.status = "solve_error";
         result.unsupported_reason = "floquet_slepc_refill_setup_query_failed";
         destroy_all();
+        close_local_state_before_return();
         return result;
     }
     if (result.eps_attempt_count == 1) {
@@ -4252,6 +4404,7 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
         result.status = "solve_error";
         result.unsupported_reason = "floquet_slepc_refill_policy_changed";
         destroy_all();
+        close_local_state_before_return();
         return result;
     }
     const char *resolved_shifted_ksp_type_after_setup = nullptr;
@@ -4263,6 +4416,7 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
         result.status = "solve_error";
         result.unsupported_reason = "floquet_shifted_ksp_type_mismatch_after_setup";
         destroy_all();
+        close_local_state_before_return();
         return result;
     }
     detail::FloquetShiftedKspTrueConvergenceContext *raw_true_convergence_context =
@@ -4274,6 +4428,7 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
         result.unsupported_reason =
             "floquet_shifted_true_convergence_setup_failed";
         destroy_all();
+        close_local_state_before_return();
         return result;
     }
     shifted_ksp_true_convergence_context.reset(raw_true_convergence_context);
@@ -4285,6 +4440,7 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
         result.unsupported_reason =
             "floquet_shifted_ksp_tolerances_changed_during_setup";
         destroy_all();
+        close_local_state_before_return();
         return result;
     }
     shifted_ksp_true_convergence_test_registration_attempted = true;
@@ -4297,6 +4453,7 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
         result.unsupported_reason =
             "floquet_shifted_true_convergence_registration_failed";
         destroy_all();
+        close_local_state_before_return();
         return result;
     }
 
@@ -4475,12 +4632,14 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
         // leaves the process-bounded object graph alive for OS reclamation.
         state->invalidated = true;
         state->eps_lifetime_unsafe = true;
+        fullmag::fem::runtime::mark_petsc_slepc_process_unsafe_locked();
         if (shifted_ksp_true_convergence_test_registration_attempted) {
             // Keep the callback context alive with the intentionally retained
             // EPS/KSP graph after an unsafe hard failure.
             (void)shifted_ksp_true_convergence_context.release();
         }
         (void)cancellation_context_owner.release();
+        close_local_state_before_return();
         return result;
     }
     ++result.eps_solved_attempt_count;
@@ -4582,6 +4741,7 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
         result.unsupported_reason = "floquet_slepc_convergence_query_failed";
         result.eps_cumulative_iterations_available = false;
         destroy_all();
+        close_local_state_before_return();
         return result;
     }
     if (!result.eps_iteration_budget_available || outer_iterations < 0 ||
@@ -4594,6 +4754,7 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
         result.unsupported_reason = "floquet_refill_outer_iteration_budget_exceeded";
         result.eps_cumulative_iterations_available = false;
         destroy_all();
+        close_local_state_before_return();
         return result;
     }
     cumulative_outer_iterations += outer_iterations;
@@ -4907,6 +5068,7 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
             result.status = "cancelled";
             result.unsupported_reason = "user_cancelled";
             destroy_all();
+            close_local_state_before_return();
             return result;
         }
         if (converged_reason == EPS_DIVERGED_ITS &&
@@ -4916,6 +5078,7 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
             result.unsupported_reason =
                 "floquet_nev_refill_outer_iteration_budget_exhausted";
             destroy_all();
+            close_local_state_before_return();
             return result;
         }
         result.status = "solve_error";
@@ -4941,6 +5104,7 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
             result.unsupported_reason = "no_accepted_positive_frequency_mode";
         }
         destroy_all();
+        close_local_state_before_return();
         return result;
     }
     detail::FloquetModalCandidateFinalization finalization =
@@ -4954,6 +5118,7 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
         result.status = "solve_error";
         result.unsupported_reason = finalization.failure_reason;
         destroy_all();
+        close_local_state_before_return();
         return result;
     }
 
@@ -5006,6 +5171,7 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
         result.status = "cancelled";
         result.unsupported_reason = "user_cancelled";
         destroy_all();
+        close_local_state_before_return();
         return result;
     }
     const PetscInt requested_certified_modes = std::max<PetscInt>(
@@ -5016,6 +5182,7 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
         result.status = "ok";
         result.unsupported_reason = "";
         destroy_all();
+        close_local_state_before_return();
         return result;
     }
 
@@ -5048,6 +5215,7 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
                 result.status = "solve_error";
                 result.unsupported_reason =
                     "floquet_eps_refill_cleanup_failed";
+                close_local_state_before_return();
                 return result;
             }
             current_nev = next_nev;
@@ -5077,6 +5245,7 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
                         : "floquet_nev_refill_insufficient_certified_modes";
     }
     destroy_all();
+    close_local_state_before_return();
     return result;
     }
 #endif

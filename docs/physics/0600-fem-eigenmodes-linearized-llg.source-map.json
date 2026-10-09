@@ -166,6 +166,12 @@
       "path": "backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp",
       "symbol": "stop_native_floquet_eps",
       "responsibility": "Preserve negative solver reasons and poll explicit cancellation on iterating and final successful EPS iterations; pending managed runtime proof."
+    },
+    {
+      "id": "source-petsc-process-runtime-owner",
+      "path": "backends/fem/core/petsc_slepc_runtime.cpp",
+      "symbol": "petsc_slepc_process_mutex",
+      "responsibility": "Define one nonrecursive operation mutex shared by CPU and GPU PETSc/SLEPc families, preserving the unsafe retained-graph latch for shutdown."
     }
   ],
   "public_api": {

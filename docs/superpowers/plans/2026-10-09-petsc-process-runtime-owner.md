@@ -1,6 +1,6 @@
 # Wspólny właściciel runtime PETSc/SLEPc — review 4060116271
 
-Status: plan implementacji, nie dowód wykonania. Stan źródeł: branch `codex/eigensolve-dispersion-plan-20260912`, bazowy commit `2e351065da285dbbb4e7320a61135f9104ce21b5`. Nie zmieniamy równań ani polityki wyboru backendu.
+Status: implementacja źródłowa po niezależnym review; runtime i GPU NOT VERIFIED. Stan źródeł: branch `codex/eigensolve-dispersion-plan-20260912`, bazowy commit `2e351065da285dbbb4e7320a61135f9104ce21b5`. Nie zmieniamy równań ani polityki wyboru backendu.
 
 ## Potwierdzony problem
 
@@ -36,3 +36,10 @@ CPU Gamma, Floquet, PA-E2, PA-E3 i sparse-direct oraz GPU mają niezależne blok
 ## Kryteria odbioru
 
 Wspólną serializację musi dowodzić test rzeczywistych rodzin, a nie sam test nowej klasy mutexa. Nie wystarczy brak błędów kompilacji lub brak reprodukcji crashu. Dowody runtime i deterministyczności oraz dowód GPU są odrębnymi bramkami. Pozycja 4060116271 pozostaje `valid_unfixed` do implementacji, a po implementacji `implemented_pending_ci` do uzyskania adekwatnych dowodów.
+
+
+## Checkpoint source — 2026-10-09
+
+Wspólny process-lifetime mutex, sześć lane bindings, terminal-init guards, unsafe latch, live-CPU graph fence i checked public/internal close są zaimplementowane. PA-E3 zachowuje jawny borrower. Cleanup nie może nadpisać pierwotnej przyczyny hard error ani pozostawić canonical OK po pierwszej awarii teardown. GPU cache/state i sześć transient destroys są sprawdzane; błąd zachowuje ownera i blokuje kontynuację/finalizację. Niezależny review finaldiff: SOURCE PASS.
+
+Przygotowano rzeczywisty concurrency harness Gamma/Floquet z dodatnią I2 mass, balanced Schur pencil, MPI_THREAD_SERIALIZED, trzema rundami równoległymi, retained-context fence, checked close i odrzuceniem API po finalizacji. CMake/CTest oraz managed floquet-modal-slepc zawierają czwarty target z timeout120s. Nie uruchomiono lokalnych testów/buildów. Wykonanie tego fragmentu, podokna PA-E3, GPU i ścieżki destroy-error wymagają osobnych dowodów; nowy source PASS ich nie zastępuje.

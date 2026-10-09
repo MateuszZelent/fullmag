@@ -3624,6 +3624,15 @@ FrequencyDomainContractResult solve_sparse_production_modal_window_payload(
         }
     }
 
+    if (shared_domain_floquet && !floquet_window_context.close()) {
+        if (!subwindow_hard_failure) {
+            subwindow_hard_failure = true;
+            subwindow_failure_reason = "floquet_context_cleanup_failed";
+        }
+        // No candidate can be published after owner teardown failed. Preserve
+        // prior hard-failure diagnostics/reasons and suppress the aggregate modes.
+        candidate_modes.clear();
+    }
     std::vector<SLEPcModalAcceptedMode> accepted_modes;
     std::size_t accepted_mode_count_before_cap = 0;
     bool truncated_by_requested_count = false;

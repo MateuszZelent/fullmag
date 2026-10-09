@@ -16,9 +16,19 @@ Wywołania FEM Gamma, native Floquet, PA-E2, PA-E3, sparse-direct oraz GPU korzy
 - Zachowujemy GPU rozróżnienie własnej i zewnętrznej inicjalizacji oraz dotychczasowy brak finalizacji runtime przez CPU. Jawna finalizacja własnego runtime jest terminalna; następne entrypointy wykrywają PetscFinalized i zwracają błąd dostępności zamiast używać lub ponownie inicjalizować zakończony runtime. Jeśli Fullmag nie jest właścicielem inicjalizacji, nie finalizuje cudzej biblioteki.
 - Nie zmieniamy równań, residual gates, request/resolved lane, Python/ProblemIR, ABI ani fallbacków. Wspólna blokada nie serializuje różnych procesów puli; każdy proces posiada swój runtime.
 
+## Retained graph i cleanup
+
+Blokada pojedynczego solve nie wystarcza dla reusable Floquet context zachowywanego między podoknami. Owner musi rejestrować jego żywy graf CPU pod wspólną blokadą, odmawiać globalnej finalizacji do zakończenia życia grafu i wyrejestrowywać go dopiero po bezpiecznym cleanupie. Publiczny destruktor zdobywa lease, a wewnętrzny cleanup już posiadający lease nie zdobywa go ponownie. Quarantine nie jest zwolnieniem żywego grafu.
+
+Każdy GPU cleanup, w tym cache atexit i ścieżka externally initialized, sprawdza PetscFinalized przed niszczeniem obiektów PETSc. Błąd zapytania lub już zakończony runtime oznacza zachowanie cache/własności bez wywołania Mat/Vec/KSPDestroy. Nie wolno traktować samego braku aktywnego solvera jako braku żywych obiektów.
+
 ## Obowiązki implementacji
 
 Objąć generic SLEPc, native Floquet, PA-E2, PA-E3, CPU sparse-direct i GPU modal PETSc/SLEPc. Zbadać wszystkie inicjalizatory i finalizatory, włącznie z błędami inicjalizacji i cleanupem cache. Przetrzymywane obiekty i ścieżki quarantine muszą mieć jawny kontrakt; brak takiego dowodu nie pozwala ogłosić bezpieczeństwa pełnego shutdownu.
+
+## MPI i granice dowodu
+
+Wspólny mutex nie podnosi poziomu wątkowego istniejącego MPI. Test wielowątkowy jawnie inicjalizuje MPI na głównym wątku z MPI_THREAD_SERIALIZED i sprawdza otrzymany poziom przed SLEPc. Dowód tego harnessu nie kwalifikuje automatycznie wielowątkowego użycia runtime zainicjalizowanego gdzie indziej jako MPI_THREAD_SINGLE/FUNNELED ani nakładających się obcych wywołań MPI/PETSc poza granicą Fullmag. Taka trasa pozostaje NOT VERIFIED do sprawdzenia inicjalizatora i tożsamości wątku aplikacji.
 
 ## Testy i kwalifikacja
 

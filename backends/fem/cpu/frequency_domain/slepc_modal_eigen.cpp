@@ -1,4 +1,5 @@
 #include "cpu/frequency_domain/slepc_modal_eigen.hpp"
+#include "core/petsc_slepc_runtime.hpp"
 #include "frequency_domain/mode_kinematics.hpp"
 
 #include <algorithm>
@@ -23,11 +24,6 @@ namespace fullmag::fem::frequency_domain {
 namespace {
 
 #if FULLMAG_FEM_WITH_SLEPC
-std::mutex &slepc_modal_solver_mutex()
-{
-    static std::mutex mutex;
-    return mutex;
-}
 
 struct QuarantinedSlepcModalGraph {
     EPS eps = nullptr;
@@ -62,6 +58,7 @@ void quarantine_slepc_modal_objects(
         rotated_gyrotropic == nullptr) {
         return;
     }
+    fullmag::fem::runtime::mark_petsc_slepc_process_unsafe_locked();
     auto *entry = new (std::nothrow) QuarantinedSlepcModalGraph{
         eps,
         xr,
@@ -189,6 +186,7 @@ void mark_slepc_graph_quarantined(
     result->ok = false;
     result->status = "solve_error";
     result->unsupported_reason = reason;
+    fullmag::fem::runtime::mark_petsc_slepc_process_unsafe_locked();
     result->slepc_graph_quarantined = true;
     result->accepted_modes.clear();
     result->accepted_mode_count = 0;
@@ -302,6 +300,18 @@ bool create_sequential_dense_matrix(
 bool ensure_slepc_initialized(
     SLEPcTinyGyrotropicModalEigenResult *result)
 {
+    PetscBool petsc_finalized = PETSC_FALSE;
+    if (PetscFinalized(&petsc_finalized) != 0) {
+        result->status = "solve_error";
+        result->unsupported_reason = "petsc_finalization_query_failed";
+        return false;
+    }
+    if (petsc_finalized == PETSC_TRUE) {
+        result->status = "solve_error";
+        result->unsupported_reason = "petsc_runtime_finalized";
+        return false;
+    }
+
     PetscBool slepc_initialized = PETSC_FALSE;
     if (SlepcInitialized(&slepc_initialized) != 0) {
         result->status = "solve_error";
@@ -2205,7 +2215,8 @@ solve_slepc_tiny_gyrotropic_modal_eigen(
     result.unsupported_reason = "slepc_not_available";
     return result;
 #else
-    const std::lock_guard<std::mutex> lock(slepc_modal_solver_mutex());
+    const std::lock_guard<std::mutex> lock(
+        fullmag::fem::runtime::petsc_slepc_process_mutex());
     if (!ensure_slepc_initialized(&result)) {
         return result;
     }
@@ -2259,7 +2270,8 @@ solve_slepc_sparse_gyrotropic_modal_eigen(
     result.unsupported_reason = "slepc_not_available";
     return result;
 #else
-    const std::lock_guard<std::mutex> lock(slepc_modal_solver_mutex());
+    const std::lock_guard<std::mutex> lock(
+        fullmag::fem::runtime::petsc_slepc_process_mutex());
     if (!ensure_slepc_initialized(&result)) {
         return result;
     }

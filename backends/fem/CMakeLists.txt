@@ -28,6 +28,7 @@ set(FEM_PUBLIC_HEADERS
 )
 
 set(FEM_SOURCES
+    core/petsc_slepc_runtime.cpp
     core/fem_field_buffers.cpp
     core/fem_context_builder.cpp
     core/demag_linear_solve_validation.cpp
@@ -1138,6 +1139,17 @@ if(FULLMAG_USE_MFEM_STACK AND FULLMAG_FEM_WITH_SLEPC)
     )
     target_include_directories(fem_shifted_ksp_true_convergence_contract PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/cpu/frequency_domain/modal
+    )
+    add_fem_source_facade_contract(
+        fem_petsc_process_runtime_concurrency_contract
+        tests/frequency_domain/petsc_process_runtime_concurrency_test.cpp
+    )
+    find_package(Threads REQUIRED)
+    target_link_libraries(fem_petsc_process_runtime_concurrency_contract PRIVATE
+        PETSC::petsc SLEPC::slepc MPI::MPI_CXX Threads::Threads
+    )
+    set_tests_properties(fem_petsc_process_runtime_concurrency_contract
+        PROPERTIES TIMEOUT 120
     )
 endif()
 add_fem_source_facade_contract(

@@ -1,4 +1,5 @@
 #include "cpu/frequency_domain/poisson_airbox_schur_matshell.hpp"
+#include "core/petsc_slepc_runtime.hpp"
 #include "cpu/frequency_domain/mode_deduplication.hpp"
 #include "cpu/frequency_domain/modal_krylov_tuning.hpp"
 #include "cpu/frequency_domain/operators/poisson_airbox_shared_domain.hpp"
@@ -871,13 +872,7 @@ struct SchurMatShellContext {
     char error_message[256]{};
 };
 
-std::mutex &pa_e3_slepc_mutex()
-{
-    static std::mutex mutex;
-    return mutex;
-}
-
-// Access only while pa_e3_slepc_mutex() is held.  Once a production K0
+// Access only while the shared PETSc/SLEPc process mutex is held.
 // EPS solve returns a hard PETSc error, no later production K0 solve may
 // create or query another SLEPc graph in this process.
 bool &production_k0_slepc_process_quarantined()
@@ -888,6 +883,17 @@ bool &production_k0_slepc_process_quarantined()
 
 bool ensure_slepc_initialized(char error_message[256])
 {
+    PetscBool petsc_finalized = PETSC_FALSE;
+    if (PetscFinalized(&petsc_finalized) != 0) {
+        copy_message(error_message, 256, "PETSc finalization state query failed");
+        return false;
+    }
+    if (petsc_finalized == PETSC_TRUE) {
+        copy_message(error_message, 256,
+                     "PETSc/SLEPc runtime is finalized and cannot be reinitialized");
+        return false;
+    }
+
     PetscBool initialized = PETSC_FALSE;
     if (SlepcInitialized(&initialized) != 0) {
         copy_message(error_message, 256, "SLEPc initialization query failed");
@@ -3892,7 +3898,8 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
     if (requested_frequency_window &&
         problem.frequency_min_hz >= 0.0 &&
         problem.frequency_max_hz > problem.frequency_min_hz) {
-        const std::lock_guard<std::mutex> window_lock(pa_e3_slepc_mutex());
+        const std::lock_guard<std::mutex> window_lock(
+            fullmag::fem::runtime::petsc_slepc_process_mutex());
         if (production_k0_slepc_process_quarantined()) {
             out_result->slepc_process_quarantined = true;
             return fail_production_schur(
@@ -4423,6 +4430,7 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
                     out_result->accepted_modes.clear();
                     out_result->certified_spectral_guard_frequencies_hz.clear();
                     out_result->slepc_process_quarantined = true;
+                    fullmag::fem::runtime::mark_petsc_slepc_process_unsafe_locked();
                     out_result->operator_context_invalidated = true;
                     out_result->eps_lifetime_unsafe = true;
                     out_result->eps_solve_error_code_available =
@@ -5727,14 +5735,14 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
         return out_result->status;
     }
     std::unique_lock<std::mutex> lock(
-        pa_e3_slepc_mutex(),
+        fullmag::fem::runtime::petsc_slepc_process_mutex(),
         std::defer_lock);
     const bool borrowed_window_operator =
         active_cpu_window_operator_context != nullptr;
     if (!borrowed_window_operator) {
         lock.lock();
     }
-    // The window recursion already owns pa_e3_slepc_mutex(); standalone
+    // The window recursion already owns the shared process mutex; standalone
     // calls own the unique_lock above.  Read the process latch only here.
     if (production_k0_slepc_process_quarantined()) {
         out_result->slepc_process_quarantined = true;
@@ -6210,6 +6218,7 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
         operator_context->invalidated = true;
         operator_context->solve_control.disarm();
         production_k0_slepc_process_quarantined() = true;
+        fullmag::fem::runtime::mark_petsc_slepc_process_unsafe_locked();
         const char *failure_stop_reason =
             solve_interrupted ? "cancel_requested" : "slepc_solve_failed";
         out_result->eps_solve_error_code_available = true;
@@ -7043,7 +7052,8 @@ FrequencyDomainStatus certify_poisson_airbox_schur_matshell_cpu(
     }
     out_result->full_sparse_reference_frequency_hz = sparse_reference.frequency_hz;
 
-    const std::lock_guard<std::mutex> lock(pa_e3_slepc_mutex());
+    const std::lock_guard<std::mutex> lock(
+        fullmag::fem::runtime::petsc_slepc_process_mutex());
     if (!ensure_slepc_initialized(out_result->error_message)) {
         return fail(
             problem,

@@ -1,4 +1,5 @@
 #include "cpu/frequency_domain/engines/sparse_direct/cpu_sparse_direct_engine.hpp"
+#include "core/petsc_slepc_runtime.hpp"
 
 #include "cpu/frequency_domain/engines/sparse_direct/assemble_real_split_csr.hpp"
 
@@ -120,14 +121,19 @@ void compute_true_residual(
 }
 
 #if FULLMAG_FEM_WITH_SLEPC
-std::mutex &petsc_sparse_direct_mutex()
-{
-    static std::mutex mutex;
-    return mutex;
-}
 
 bool ensure_petsc_initialized(CpuSparseDirectSolveResult *result) noexcept
 {
+    PetscBool finalized = PETSC_FALSE;
+    if (PetscFinalized(&finalized) != 0) {
+        copy_error(result, "PETSc finalization state query failed");
+        return false;
+    }
+    if (finalized == PETSC_TRUE) {
+        copy_error(result, "PETSc runtime is finalized and cannot be reinitialized");
+        return false;
+    }
+
     PetscBool initialized = PETSC_FALSE;
     if (PetscInitialized(&initialized) != 0) {
         copy_error(result, "PETSc initialization query failed");
@@ -289,7 +295,8 @@ FrequencyDomainStatus solve_cpu_sparse_direct_real_split(
         "PETSc sparse/direct solver is unavailable; build with FULLMAG_FEM_WITH_SLEPC");
     return FrequencyDomainStatus::unavailable;
 #else
-    std::lock_guard<std::mutex> lock(petsc_sparse_direct_mutex());
+    std::lock_guard<std::mutex> lock(
+        fullmag::fem::runtime::petsc_slepc_process_mutex());
     if (!ensure_petsc_initialized(out_result)) {
         return FrequencyDomainStatus::solve_error;
     }

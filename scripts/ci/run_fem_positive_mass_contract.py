@@ -107,6 +107,16 @@ CONTRACT_PROFILES: dict[str, dict[str, Any]] = {
                     "-DFULLMAG_HAS_CUDA_RUNTIME=0",
                 ],
             },
+            {
+                "name": "fem_petsc_process_runtime_concurrency_contract",
+                "source_suffix": "backends/fem/tests/frequency_domain/petsc_process_runtime_concurrency_test.cpp",
+                "marker": "PASS: PETSc process runtime Gamma/Floquet concurrency contract",
+                "compile_definitions": [
+                    "-DFULLMAG_HAS_MFEM_STACK=1",
+                    "-DFULLMAG_FEM_WITH_SLEPC=1",
+                    "-DFULLMAG_HAS_CUDA_RUNTIME=0",
+                ],
+            },
         ],
         "uses_slepc": True,
         "timeout": {

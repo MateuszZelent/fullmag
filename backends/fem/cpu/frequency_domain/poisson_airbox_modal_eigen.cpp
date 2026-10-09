@@ -1,4 +1,5 @@
 #include "cpu/frequency_domain/poisson_airbox_modal_eigen.hpp"
+#include "core/petsc_slepc_runtime.hpp"
 #include "cpu/frequency_domain/poisson_airbox_schur_matshell.hpp"
 #include "frequency_domain/mode_kinematics.hpp"
 #include "frequency_domain/real_frequency_rotated_pencil.hpp"
@@ -919,14 +920,21 @@ ResidualMetrics compute_residual_metrics(
 }
 
 #if FULLMAG_FEM_WITH_SLEPC
-std::mutex &pa_e2_slepc_mutex()
-{
-    static std::mutex mutex;
-    return mutex;
-}
 
 bool ensure_slepc_initialized(PoissonAirboxModalEigenResult *result)
 {
+    PetscBool petsc_finalized = PETSC_FALSE;
+    if (PetscFinalized(&petsc_finalized) != 0) {
+        copy_message(result->error_message, sizeof(result->error_message),
+                     "PETSc finalization state query failed");
+        return false;
+    }
+    if (petsc_finalized == PETSC_TRUE) {
+        copy_message(result->error_message, sizeof(result->error_message),
+                     "PETSc/SLEPc runtime is finalized and cannot be reinitialized");
+        return false;
+    }
+
     PetscBool initialized = PETSC_FALSE;
     if (SlepcInitialized(&initialized) != 0) {
         copy_message(result->error_message, sizeof(result->error_message), "SLEPc initialization query failed");
@@ -1502,7 +1510,8 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_slepc(
         "PA-E2 Poisson-airbox modal eigensolver requires PETSc/SLEPc",
         "slepc_not_available");
 #else
-    const std::lock_guard<std::mutex> lock(pa_e2_slepc_mutex());
+    const std::lock_guard<std::mutex> lock(
+        fullmag::fem::runtime::petsc_slepc_process_mutex());
     if (!ensure_slepc_initialized(out_result)) {
         return fail(
             problem,
