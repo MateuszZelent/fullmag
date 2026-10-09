@@ -1395,201 +1395,314 @@ def _fast_dir_size(path: Path) -> tuple[int, int, bool]:
     return total_bytes, count, had_errors
 
 
+_TIMELINE_STAGE_ID = re.compile(r"[a-z0-9][a-z0-9_.-]{0,63}\Z")
+_BUILD_RECEIPT_SCHEMA = "fullmag.local-runner.build-receipt.v1"
+_COORDINATOR_RECEIPT_SCHEMA = "fullmag.local-runner.coordinator.v1"
+_WORKER_STAGE_START = re.compile(
+    r"\[fullmag runner\] stage ([a-z0-9][a-z0-9_.-]{0,63}) start command="
+)
+_WORKER_STAGE_END = re.compile(
+    r"\[fullmag runner\] stage ([a-z0-9][a-z0-9_.-]{0,63}) "
+    r"end exit_code=(None|-?\d+) duration_ms=([0-9]+(?:\.[0-9]+)?)"
+)
+_TIMELINE_STAGE_LABELS = {
+    "native-build": "Kompilacja natywna (Rust/CLI)",
+    "frontend-dependencies": "Zależności frontendu (pnpm)",
+    "frontend-build": "Kompilacja frontendu (Next/Vite)",
+}
+
+
+def _planned_build_stage_names(profile_name: object) -> list[str] | None:
+    """Derive worker stages from the trusted build profile, not a UI default."""
+    if not isinstance(profile_name, str):
+        return None
+    # Import lazily so observability remains independent during runner startup.
+    from local_runner.build_entrypoint import PROFILES
+
+    profile = PROFILES.get(profile_name)
+    if profile is None:
+        return None
+    if profile.contract_scenarios:
+        names = ["native-build"] if profile.build_runtime else []
+        names.extend(f"contract-{scenario}" for scenario in profile.contract_scenarios)
+        return names
+    if profile.runtime_only:
+        return ["native-build"]
+    return ["native-build", "frontend-dependencies", "frontend-build"]
+
+
+def _timeline_stage_name(value: object) -> str | None:
+    if isinstance(value, str) and _TIMELINE_STAGE_ID.fullmatch(value):
+        return value
+    return None
+
+
+def _timeline_json_object(path: Path) -> dict[str, Any] | None:
+    if path.is_symlink() or not path.is_file():
+        return None
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def _timeline_receipt_matches_job(receipt: Mapping[str, Any], job: Mapping[str, Any]) -> bool:
+    if receipt.get("schema") != _BUILD_RECEIPT_SCHEMA:
+        return False
+    for key in ("job_id", "profile"):
+        expected = job.get(key)
+        if not isinstance(expected, str) or receipt.get(key) != expected:
+            return False
+    source_digest = job.get("source_digest")
+    if source_digest is not None and receipt.get("source_digest") != source_digest:
+        return False
+    return isinstance(receipt.get("stages"), list)
+
+
+def _worker_stage_events(worker_log_text: str) -> tuple[list[str], set[str], dict[str, dict[str, Any]]]:
+    """Read only explicit stage start/end markers from the completed worker log."""
+    order: list[str] = []
+    started: set[str] = set()
+    ended: dict[str, dict[str, Any]] = {}
+
+    def add_name(name: str) -> None:
+        if name not in order:
+            order.append(name)
+        started.add(name)
+
+    for line in worker_log_text.splitlines():
+        start_match = _WORKER_STAGE_START.search(line)
+        if start_match:
+            name = _timeline_stage_name(start_match.group(1))
+            if name is not None:
+                add_name(name)
+        end_match = _WORKER_STAGE_END.search(line)
+        if not end_match:
+            continue
+        name = _timeline_stage_name(end_match.group(1))
+        if name is None:
+            continue
+        add_name(name)
+        code_text = end_match.group(2)
+        duration_ms = float(end_match.group(3))
+        ended[name] = {
+            "exit_code": int(code_text) if code_text != "None" else None,
+            "exit_recorded": True,
+            "duration_ms": duration_ms if math.isfinite(duration_ms) else None,
+        }
+    return order, started, ended
+
+
+def _stage_log_file_names(logs_dir: Path | None) -> list[str]:
+    if logs_dir is None or not logs_dir.is_dir():
+        return []
+    names: list[str] = []
+    try:
+        paths = sorted(logs_dir.iterdir(), key=lambda path: path.name)
+    except OSError:
+        return names
+    for path in paths:
+        if path.is_symlink() or not path.is_file():
+            continue
+        for suffix in (".stdout.log", ".stderr.log"):
+            if path.name.endswith(suffix):
+                name = _timeline_stage_name(path.name[: -len(suffix)])
+                if name is not None and name not in names:
+                    names.append(name)
+                break
+    return names
+
+
+def _timeline_duration_seconds(duration_ms: object) -> float | None:
+    if (
+        isinstance(duration_ms, bool)
+        or not isinstance(duration_ms, (int, float))
+        or not math.isfinite(duration_ms)
+        or duration_ms < 0
+    ):
+        return None
+    return round(float(duration_ms) / 1000.0, 2)
+
+
 def build_job_timeline(job: Mapping[str, Any], storage_root: Path | str) -> list[dict[str, Any]]:
-    """Construct multi-stage timeline representation of a build job with honest status."""
+    """Build a profile-aware timeline from worker evidence and coordinator state."""
     created_at = job.get("created_at")
     started_at = job.get("started_at")
-    updated_at = job.get("updated_at")
     state = job.get("state", "unknown")
     exit_code = job.get("exit_code")
-
-    stages = [
-        {"id": "queued", "name": "Kolejka (Queued)", "status": "succeeded", "started_at": created_at, "duration_seconds": None},
-        {"id": "prepare", "name": "Przygotowanie (Source & Mounts)", "status": "pending", "started_at": None, "duration_seconds": None},
-        {"id": "native-build", "name": "Kompilacja natywna (Rust/CLI)", "status": "pending", "started_at": None, "duration_seconds": None},
-        {"id": "frontend-dependencies", "name": "Zależności frontendu (pnpm)", "status": "pending", "started_at": None, "duration_seconds": None},
-        {"id": "frontend-build", "name": "Kompilacja frontendu (Next/Vite)", "status": "pending", "started_at": None, "duration_seconds": None},
-        {"id": "receipt-verification", "name": "Weryfikacja receipt i hashy", "status": "pending", "started_at": None, "duration_seconds": None},
-        {"id": "result", "name": "Wynik końcowy", "status": "pending", "started_at": None, "duration_seconds": None},
-    ]
-
-    if state == "queued":
-        stages[0]["status"] = "running"
-        return stages
-
-    stages[0]["status"] = "succeeded"
+    profile_plan = _planned_build_stage_names(job.get("profile"))
 
     storage = Path(storage_root)
-    worktree_id = job.get("worktree_id", "")
-    job_id = job.get("job_id", "")
-    job_dir = storage / "runs" / worktree_id / job_id if worktree_id and job_id else None
+    worktree_id = job.get("worktree_id")
+    job_id = job.get("job_id")
+    job_dir = (
+        storage / "runs" / worktree_id / job_id
+        if isinstance(worktree_id, str)
+        and worktree_id
+        and isinstance(job_id, str)
+        and job_id
+        else None
+    )
 
-    journal = {}
-    receipt_data = None
+    journal: dict[str, Any] = {}
+    worker_receipt: dict[str, Any] | None = None
     worker_log_text = ""
+    if job_dir is not None and job_dir.is_dir():
+        for journal_path in (job_dir / "coordinator.json", job_dir / "receipt.json"):
+            loaded_journal = _timeline_json_object(journal_path)
+            if (
+                loaded_journal is not None
+                and loaded_journal.get("schema") == _COORDINATOR_RECEIPT_SCHEMA
+                and loaded_journal.get("job_id") == job_id
+            ):
+                journal = loaded_journal
+                break
 
-    if job_dir and job_dir.exists():
-        coord_file = job_dir / "coordinator.json"
-        if coord_file.is_file():
-            try:
-                journal = json.loads(coord_file.read_text(encoding="utf-8"))
-            except Exception:
-                journal = {}
-
-        for r_path in (
+        for receipt_path in (
             job_dir / "artifacts" / "build-receipt.json",
             job_dir / "artifacts" / "receipt.json",
-            job_dir / "receipt.json",
         ):
-            if r_path.is_file():
-                try:
-                    loaded = json.loads(r_path.read_text(encoding="utf-8"))
-                    if isinstance(loaded, dict):
-                        receipt_data = loaded
-                        break
-                except Exception:
-                    pass
+            loaded_receipt = _timeline_json_object(receipt_path)
+            if (
+                loaded_receipt is not None
+                and _timeline_receipt_matches_job(loaded_receipt, job)
+            ):
+                worker_receipt = loaded_receipt
+                break
 
         worker_log_file = job_dir / "worker.log"
-        if worker_log_file.is_file():
+        if worker_log_file.is_file() and not worker_log_file.is_symlink():
             try:
                 worker_log_text = worker_log_file.read_text(encoding="utf-8")
-            except Exception:
+            except (OSError, UnicodeError):
                 worker_log_text = ""
 
-    if not started_at and journal.get("started_at"):
-        started_at = journal["started_at"]
+    receipt_stage_records = (
+        worker_receipt.get("stages", []) if worker_receipt is not None else []
+    )
+    records_by_name: dict[str, dict[str, Any]] = {}
+    recorded_stage_names: list[str] = []
+    for record in receipt_stage_records:
+        if not isinstance(record, dict):
+            continue
+        name = _timeline_stage_name(record.get("name"))
+        if name is None:
+            continue
+        records_by_name[name] = record
+        if name not in recorded_stage_names:
+            recorded_stage_names.append(name)
 
-    # Stage 1: prepare
-    stages[1]["status"] = "succeeded"
-    stages[1]["started_at"] = started_at or created_at
-    if started_at and created_at and isinstance(started_at, (int, float)) and isinstance(created_at, (int, float)):
-        stages[0]["duration_seconds"] = max(0.0, round(started_at - created_at, 2))
+    log_stage_order, logged_started, logged_ended = _worker_stage_events(worker_log_text)
+    logs_dir = job_dir / "artifacts" / "logs" if job_dir is not None else None
+    file_stage_names = _stage_log_file_names(logs_dir)
+    observed_stage_names = set(recorded_stage_names) | logged_started | set(file_stage_names)
 
-    # Case A: We have a valid build receipt with recorded stages
-    if receipt_data and isinstance(receipt_data.get("stages"), list) and receipt_data["stages"]:
-        stage_map = {
-            "native-build": 2,
-            "frontend-dependencies": 3,
-            "frontend-build": 4,
+    planned_later_stages = {
+        name: profile_plan[index + 1 :]
+        for index, name in enumerate(profile_plan or ())
+    }
+    stage_names: list[str] = []
+    for name in profile_plan or ():
+        if name not in stage_names:
+            stage_names.append(name)
+    for name in recorded_stage_names + log_stage_order + file_stage_names:
+        if name not in stage_names:
+            stage_names.append(name)
+
+    def append_stage(name: str, label: str | None = None) -> dict[str, Any]:
+        return {
+            "id": name,
+            "name": label if label is not None else _TIMELINE_STAGE_LABELS.get(name, name),
+            "status": "pending",
+            "started_at": None,
+            "duration_seconds": None,
         }
-        for st_info in receipt_data["stages"]:
-            if not isinstance(st_info, dict):
-                continue
-            s_name = st_info.get("name")
-            if s_name in stage_map:
-                idx = stage_map[s_name]
-                s_code = st_info.get("exit_code")
-                stages[idx]["status"] = (
-                    "succeeded" if s_code == 0 else
-                    "failed" if isinstance(s_code, int) else "pending"
-                )
-                stages[idx]["started_at"] = st_info.get("started_at")
-                stages[idx]["exit_code"] = s_code
-                dur_ms = st_info.get("duration_ms")
-                if dur_ms is not None:
-                    stages[idx]["duration_seconds"] = round(dur_ms / 1000.0, 2)
 
-        # Stage 5: receipt-verification
-        # A worker receipt is an input to coordinator verification, not proof
-        # that artifact hashes were accepted or the queue has completed.
-        if state == "succeeded":
-            stages[5]["status"] = "succeeded"
-            stages[5]["started_at"] = receipt_data.get("finished_at")
-        elif state in ("running", "cancel_requested"):
-            stages[5]["status"] = "running"
-        else:
-            stages[5]["status"] = state if state in ("failed", "cancelled") else "pending"
+    queue_stage = append_stage("queued", "Kolejka (Queued)")
+    queue_stage["status"] = "running" if state == "queued" else "succeeded"
+    prepare_stage = append_stage("prepare", "Przygotowanie (Source & Mounts)")
+    result_stage = append_stage("result", "Wynik końcowy")
+    receipt_verification = append_stage(
+        "receipt-verification", "Weryfikacja receipt i hashy"
+    )
 
-        # Stage 6: result
-        stages[6]["status"] = state if state in ("succeeded", "failed", "cancelled") else "pending"
-        if stages[6]["status"] != "pending":
-            stages[6]["exit_code"] = exit_code
-        return stages
-
-    # Case B: No complete build receipt yet (job is running or ended abnormally)
-    logs_dir = job_dir / "artifacts" / "logs" if job_dir else None
-
-    stage_prefixes = [
-        (2, "native-build"),
-        (3, "frontend-dependencies"),
-        (4, "frontend-build"),
-    ]
-
-    has_stage_log = {}
-    if logs_dir and logs_dir.is_dir():
-        for idx, prefix in stage_prefixes:
-            out_f = logs_dir / f"{prefix}.stdout.log"
-            err_f = logs_dir / f"{prefix}.stderr.log"
-            has_stage_log[prefix] = out_f.exists() or err_f.exists()
-    else:
-        for _, prefix in stage_prefixes:
-            has_stage_log[prefix] = False
-
-    stage_ended = {}
-    if worker_log_text:
-        for _, prefix in stage_prefixes:
-            end_match = re.search(rf"\[fullmag runner\] stage {re.escape(prefix)} end exit_code=(-?\d+)", worker_log_text)
-            if end_match:
-                code = int(end_match.group(1))
-                stage_ended[prefix] = code
-
-    if state in ("running", "cancel_requested"):
-        if started_at:
-            stages[1]["status"] = "succeeded"
-            if stage_ended:
-                for idx, prefix in stage_prefixes:
-                    if prefix in stage_ended:
-                        code = stage_ended[prefix]
-                        stages[idx]["status"] = "succeeded" if code == 0 else "failed"
-                        stages[idx]["exit_code"] = code
-                        if code != 0:
-                            break
-                    else:
-                        stages[idx]["status"] = "running"
-                        break
-                else:
-                    stages[5]["status"] = "running"
-            else:
-                if has_stage_log.get("frontend-build"):
-                    stages[2]["status"] = "succeeded"
-                    stages[3]["status"] = "succeeded"
-                    stages[4]["status"] = "running"
-                elif has_stage_log.get("frontend-dependencies"):
-                    stages[2]["status"] = "succeeded"
-                    stages[3]["status"] = "running"
-                else:
-                    stages[2]["status"] = "running"
-        else:
-            stages[1]["status"] = "running"
-    elif state == "succeeded":
-        for s in stages:
-            s["status"] = "succeeded"
-        stages[6]["exit_code"] = 0
+    execution_stages = [append_stage(name) for name in stage_names]
+    prepared_phases = {"prepared", "create-requested", "created", "start-requested", "terminal"}
+    if state == "queued":
+        prepare_stage["status"] = "pending"
+    elif observed_stage_names or journal.get("phase") in prepared_phases or state == "succeeded":
+        prepare_stage["status"] = "succeeded"
+    elif state in ("running", "cancel_requested"):
+        prepare_stage["status"] = "running"
     elif state in ("failed", "cancelled"):
-        if stage_ended:
-            for idx, prefix in stage_prefixes:
-                if prefix in stage_ended:
-                    code = stage_ended[prefix]
-                    stages[idx]["status"] = "succeeded" if code == 0 else "failed"
-                    stages[idx]["exit_code"] = code
-                elif stages[idx - 1]["status"] == "succeeded":
-                    stages[idx]["status"] = state
-                    break
-        else:
-            if has_stage_log.get("frontend-build"):
-                stages[2]["status"] = "succeeded"
-                stages[3]["status"] = "succeeded"
-                stages[4]["status"] = state
-            elif has_stage_log.get("frontend-dependencies"):
-                stages[2]["status"] = "succeeded"
-                stages[3]["status"] = state
-            elif has_stage_log.get("native-build"):
-                stages[2]["status"] = state
-            else:
-                stages[1]["status"] = state
-        stages[5]["status"] = "failed" if state == "failed" else "cancelled"
-        stages[6]["status"] = state
-        stages[6]["exit_code"] = exit_code
+        prepare_stage["status"] = state
+    prepare_stage["started_at"] = started_at
 
-    return stages
+    for stage in execution_stages:
+        name = stage["id"]
+        record = records_by_name.get(name)
+        log_end = logged_ended.get(name)
+        has_recorded_exit = record is not None and "exit_code" in record
+        has_logged_exit = log_end is not None and log_end.get("exit_recorded") is True
+        has_exit = has_recorded_exit or has_logged_exit
+        code = record.get("exit_code") if has_recorded_exit else (
+            log_end.get("exit_code") if has_logged_exit else None
+        )
+
+        if has_exit:
+            stage["status"] = (
+                "succeeded" if type(code) is int and code == 0 else "failed"
+            )
+            stage["exit_code"] = code
+        elif any(
+            later in observed_stage_names
+            for later in planned_later_stages.get(name, ())
+        ):
+            # Only a later stage in the trusted profile plan proves an earlier
+            # stage returned 0; observed extra log names do not establish order.
+            stage["status"] = "succeeded"
+            stage["exit_code"] = 0
+        elif name in observed_stage_names:
+            if state in ("running", "cancel_requested"):
+                stage["status"] = "running"
+            elif state == "cancelled":
+                stage["status"] = "cancelled"
+
+        if record is not None:
+            stage["started_at"] = record.get("started_at")
+            stage["duration_seconds"] = _timeline_duration_seconds(
+                record.get("duration_ms")
+            )
+        if stage["duration_seconds"] is None and log_end is not None:
+            stage["duration_seconds"] = _timeline_duration_seconds(
+                log_end.get("duration_ms")
+            )
+
+    if state == "succeeded" and worker_receipt is not None:
+        receipt_verification["status"] = "succeeded"
+        receipt_verification["started_at"] = journal.get("finished_at")
+    elif journal.get("validation_error"):
+        receipt_verification["status"] = "failed"
+        receipt_verification["started_at"] = journal.get("finished_at")
+    elif state in ("running", "cancel_requested") and worker_receipt is not None:
+        # A worker receipt is submitted evidence; it is not coordinator
+        # verification of source identity or artifact hashes.
+        receipt_verification["status"] = "running"
+
+    if state in ("succeeded", "failed", "cancelled"):
+        result_stage["status"] = state
+        if type(exit_code) is int:
+            result_stage["exit_code"] = exit_code
+
+    if (
+        isinstance(created_at, (int, float))
+        and not isinstance(created_at, bool)
+        and isinstance(started_at, (int, float))
+        and not isinstance(started_at, bool)
+    ):
+        queue_stage["duration_seconds"] = max(
+            0.0, round(float(started_at) - float(created_at), 2)
+        )
+
+    return [queue_stage, prepare_stage, *execution_stages, receipt_verification, result_stage]
