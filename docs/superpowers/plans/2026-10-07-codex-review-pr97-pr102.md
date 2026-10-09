@@ -6,7 +6,7 @@ Pełny rejestr obejmuje 263 komentarzy liniowych Codex oraz jedną dodatkową uw
 
 PR #102 zamknięto 2026-10-07, zachowując remote branch `codex/launcher-instance-isolation-20261002` przy `954ba797307c4cc773772d380123893210cfa447`. PR #97 pozostaje otwarty do ukończenia rozpatrzenia i uzasadnionych poprawek. Merge ani usuwanie branchy nie są częścią polecenia zamknięcia PR-ów. Wcześniejszy WIP meshing zachowany osobno.
 
-Stan rejestru: `already_fixed`: 23, `duplicate`: 90, `implemented`: 69, `implemented_pending_ci`: 16, `not_actionable`: 2, `unsupported_recommendation`: 3, `valid_unfixed`: 61. Łącznie 264 wpisów; wszystkie wpisy oceniono; zasadnych nienaprawionych i brakujących bramek nie uznaje się za zakończone.
+Stan rejestru: `already_fixed`: 23, `duplicate`: 90, `implemented`: 70, `implemented_pending_ci`: 15, `not_actionable`: 2, `unsupported_recommendation`: 3, `valid_unfixed`: 61. Łącznie 264 wpisów; wszystkie wpisy oceniono; zasadnych nienaprawionych i brakujących bramek nie uznaje się za zakończone.
 
 Legenda: `pending` — nierozpatrzona; `valid_unfixed` — zasadna, nie naprawiona; `already_fixed` — poprawka potwierdzona aktualnym kodem; `duplicate` — powtórzenie; `unsupported_recommendation` — konkretna rekomendacja nie odpowiada kontraktowi; `implemented` — poprawka z potwierdzoną regresją CI; `implemented_pending_ci` — poprawka przygotowana, regresja oczekuje CI; `implemented_pending_browser` — pokrywające CI przeszło, nadal wymaga celowanego dowodu z przeglądarki; `not_actionable` — uwaga zastąpiona późniejszą jawną decyzją użytkownika.
 
@@ -169,7 +169,7 @@ Legenda: `pending` — nierozpatrzona; `valid_unfixed` — zasadna, nie naprawio
 | [4204792253](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4204792253) / #97 | `crates/fullmag-api/src/session.rs` | valid_unfixed | Modal detection przez publiczne object_id fem_eigen_progress. |
 | [4204792263](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4204792263) / #97 | `scripts/diagnose_managed_fem_startup.py` | implemented_pending_ci | Diagnostyka wiąże schema runtime_contract z deklarowanym profilem v1/v2 zamiast wymagać zawszev2; nie akceptuje zamienionych lub obcych schematów i zachowuje pozostałe safety checks. |
 | [4204792272](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4204792272) / #97 | `packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py` | valid_unfixed | Warunek box_layered_geo_direct wybiera route dla pojedynczego Boxa z thin_film_tetrahedral niezależnie od bocznego paddingu. Generator exact-cell wywołuje _coincident_ring_airbox_bounds i rzuca ValueError, gdy lateral bounds nie są zgodne; route przez OCC nie zostaje w tym przypadku użyty. |
-| [4205039831](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4205039831) / #97 | `scripts/local_runner/runtime_references.py` | implemented_pending_ci | Każdy poprawnie rozstrzygnięty artifact_root chroni pakiet wskazanego zadania zarówno w aktywnej kolejce, jak i bounded consumer metadata. Sam fingerprint/reference nie zastępuje protect. |
+| [4205039831](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4205039831) / #97 | `scripts/local_runner/runtime_references.py` | implemented | Każdy poprawnie rozstrzygnięty artifact_root chroni pakiet wskazanego zadania zarówno w aktywnej kolejce, jak i bounded consumer metadata. Sam fingerprint/reference nie zastępuje protect. |
 | [4205039846](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4205039846) / #97 | `scripts/run_de_frozen_v2_probe.py` | implemented_pending_ci | Sonda nie publikuje completed_unqualified przy artifact_error; statusfailed obejmuje błąd początkowego inventory/case i późny błąd nativevalidation. Durable receipt i CLI pozostają spójne, qualificationNOTVERIFIED bezzmian. |
 | [4205039857](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4205039857) / #97 | `crates/fullmag-runner/src/fem/eigen_path.rs` | implemented | Akceptuje wyłącznie sample_0000, writer dostaje actual sample_index. |
 | [4205039869](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4205039869) / #97 | `apps/control-room/src/shared/domain/analysis/eigenResidualSummary.ts` | unsupported_recommendation | Komentarz miesza endpoint raw /analysis/eigen/modes z używanym przez Inspector /analysis/frequency-domain/eigen/modes, którego kontraktem jest koperta status/payload. |
@@ -1839,3 +1839,14 @@ Floquet count [37866135267](https://github.com/MateuszZelent/fullmag/actions/run
 Count job37870360729 attempt1 zakończył się przed kompilacją przez mismatch hash pobranego CMake3.30.5 (log pokazuje tylko0,7/26,9MB). Zachowano artefakty i receipt; nie zmieniono wersji ani oczekiwanego hash. Ponowiono terminalny job jako attempt2. To nie jest wynik solvera. Generic37870357673 nadal wykonywał etap pinned image/source contract podczas kontroli.
 
 Scoped mesh37867599483 potwierdził już poprawiony cache-roster fixture PASS; cały suite nadal FAIL wyłącznie na znanej actual-density fixture0ROIedges. Nowe N-OWN-HMAX pozostaje niezależnie pendingCI.
+
+
+### Potwierdzenie ochrony runtime i kolejne bramki
+
+[37871035111](https://github.com/MateuszZelent/fullmag/actions/runs/37871035111), job113628942708, aaf76d211acabb46e01b805dd3e97a3efb3b854a: SUCCESS. Retention57tests i references22tests PASS, w tym oba dokładne nowe testy absolute-root-only i active-queue-root-only. #4205039831 oznaczono implemented; nie dowodzi to wykonania usuwania danych na hoście. Log zachowany w ci-37871035111-retention.log.
+
+Pełny bootstrap [37871452458](https://github.com/MateuszZelent/fullmag/actions/runs/37871452458) zlecono na aaf76d211 dla brakujących probe/startup contracts. W chwili zapisu pending. Generic37870357673 i Floquet37870360729 attempt2 pozostają niezależnymi wykonaniami natywnymi.
+
+Końcowy review N-OWN-HMAX wykrył redundantny późny stripper shared: usuwał manual pola z GeometryName obiektu z receptą. Poprawka musi eliminować generated policy wcześniej, zachować manual/region i sprawdzić real shared composition. Nie uznajemy samego standalone case za dowód całej realizacji.
+
+#4225198879: następna bramka to macierz pięciu rzeczywistych kliknięć Results w smoke-inspector: fresh page, start Dispersion, przejście na Resonance & FMR, contextual ribbon i Inspector owner. Finite modal/rf_coupling oraz driven-response fixtures muszą wytworzyć rzeczywiste liście. Same routing unit tests pozostają dowodem źródłowym. Browser proof pending.
