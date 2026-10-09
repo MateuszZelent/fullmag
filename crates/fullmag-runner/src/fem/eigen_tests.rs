@@ -4124,6 +4124,15 @@ fn bounded_floquet_dynamic_demag_execution_plan() -> FemEigenPlanIR {
         frequency_max_hz: 5.0e9,
     };
     configure_x_floquet_request(&mut plan);
+    // The shared-domain fixture carries both x/y geometric pair sets. The
+    // authored Floquet request must match all of them, including zero phase
+    // along y when k points along x.
+    let SpinWaveBoundaryConditionIR::Config(config) = &mut plan.spin_wave_bc else {
+        unreachable!("configured Floquet fixture has explicit boundary intent");
+    };
+    config.boundary_pair_id = None;
+    config.pair_ids = vec!["x_faces".to_string(), "y_faces".to_string()];
+    assert!(native_cpu_modal_window_has_floquet_dynamic_demag_path(&plan));
     plan
 }
 
