@@ -136,6 +136,30 @@
       "path": "backends/fem/src/frequency_domain/modal_eigen_solver.cpp",
       "symbol": "solve_modal_eigen_contract",
       "responsibility": "Reject a forced production GPU request with a tiny validation fixture before the toy solver; preserve the resolved GPU target and do not fall back."
+    },
+    {
+      "id": "source-python-relax-stage-builder",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "add_relax",
+      "responsibility": "Author a distinct upstream Relax stage in the public Python DSL; add_eigenmodes equilibrium_source=relax consumes its accepted workflow handoff."
+    },
+    {
+      "id": "source-petsc-gmres-candidate-admission",
+      "path": "backends/fem/cpu/frequency_domain/modal/shifted_ksp_true_convergence.hpp",
+      "symbol": "floquet_shifted_true_convergence_test",
+      "responsibility": "Check the live KSP reason after a successful GMRES solution build; preserve negative reasons and keep candidate probes unavailable."
+    },
+    {
+      "id": "source-relax-stage-handoff",
+      "path": "crates/fullmag-cli/src/orchestrator.rs",
+      "symbol": "accepted_relax_handoff_for_eigen_stage",
+      "responsibility": "Resolve the accepted handoff from a completed upstream Relax stage for relaxed_initial_state; direct runner calls without that handoff fail closed."
+    },
+    {
+      "id": "source-relaxed-path-handoff-regression",
+      "path": "crates/fullmag-runner/src/fem/eigen_tests.rs",
+      "symbol": "relaxed_path_source_fixture_handoff_is_reused_for_each_nonzero_k_sample_without_per_sample_relaxation",
+      "responsibility": "Add a source-level real-path regression with an explicit accepted-handoff fixture, nonzero first k and per-sample binding checks; this does not qualify physical equilibrium or runtime."
     }
   ],
   "public_api": {

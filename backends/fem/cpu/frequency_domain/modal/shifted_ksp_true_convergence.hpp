@@ -31,6 +31,8 @@ struct FloquetShiftedKspTrueConvergenceContext {
     std::uint64_t true_probe_count = 0;
     std::uint64_t true_probe_measurement_failure_count = 0;
     std::uint64_t true_probe_auxiliary_measurement_failure_count = 0;
+    bool last_true_build_reason_available = false;
+    int last_true_build_reason = 0;
     bool last_true_probe_available = false;
     std::uint64_t last_true_probe_callback_ordinal = 0;
     PetscInt last_true_probe_iteration = -1;
@@ -288,6 +290,8 @@ inline PetscErrorCode floquet_shifted_true_convergence_test(
 
     ++context->true_probe_attempt_count;
     context->last_true_probe_available = false;
+    context->last_true_build_reason_available = false;
+    context->last_true_build_reason = 0;
     context->last_true_tolerance_ratio_available = false;
     context->last_true_solution_norm_available = false;
     context->last_true_solution_norm =
@@ -342,6 +346,21 @@ inline PetscErrorCode floquet_shifted_true_convergence_test(
     error = KSPBuildSolution(ksp, context->candidate_solution, nullptr);
     if (error != 0) {
         return record_probe_failure(error);
+    }
+
+    // GMRES may report a breakdown while building a solution and still
+    // return success without populating the destination vector. Preserve the
+    // live KSP reason before observing that vector or applying the true gate.
+    KSPConvergedReason build_reason = KSP_CONVERGED_ITERATING;
+    error = KSPGetConvergedReason(ksp, &build_reason);
+    if (error != 0) {
+        return record_probe_failure(error);
+    }
+    context->last_true_build_reason_available = true;
+    context->last_true_build_reason = static_cast<int>(build_reason);
+    if (build_reason < 0) {
+        *reason = build_reason;
+        return 0;
     }
 
     // Cache diagnostics from the solution vector already built for this true

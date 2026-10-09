@@ -35,6 +35,8 @@ struct FloquetShiftedKspFailureProbe {
     std::uint64_t true_probe_count = 0;
     std::uint64_t true_probe_measurement_failure_count = 0;
     std::uint64_t true_probe_auxiliary_measurement_failure_count = 0;
+    bool last_true_build_reason_available = false;
+    int last_true_build_reason = 0;
     bool last_true_probe_available = false;
     std::uint64_t last_true_probe_callback_ordinal = 0;
     std::int64_t last_true_probe_iteration = -1;

@@ -351,6 +351,13 @@ std::string floquet_shifted_ksp_diagnostics_json_fields(
             (probe.last_true_probe_default_reason_available
                 ? std::to_string(probe.last_true_probe_default_reason)
                 : std::string("null")) +
+            ",\"build_solution_reason_available\":" +
+            std::string(probe.last_true_build_reason_available
+                ? "true" : "false") +
+            ",\"build_solution_reason\":" +
+            (probe.last_true_build_reason_available
+                ? std::to_string(probe.last_true_build_reason)
+                : std::string("null")) +
             ",\"reason_after_gate_available\":" +
             std::string(probe.last_true_probe_reason_after_gate_available
                 ? "true" : "false") +

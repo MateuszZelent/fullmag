@@ -276,7 +276,9 @@ bool run_ksp_case(
     bool zero_rhs,
     PetscInt max_iterations,
     bool expect_convergence,
-    bool force_tiny_recursive_norm = false)
+    bool force_tiny_recursive_norm = false,
+    bool zero_operator = false,
+    bool expect_build_breakdown = false)
 {
     Mat matrix = nullptr;
     Vec solution = nullptr;
@@ -329,12 +331,14 @@ bool run_ksp_case(
     if (error != 0) {
         return fail("create test matrix", error);
     }
-    for (PetscInt row = 0; row < 3; ++row) {
-        error = MatSetValue(
-            matrix, row, row, static_cast<PetscScalar>(1 << row),
-            INSERT_VALUES);
-        if (error != 0) {
-            return fail("set test matrix diagonal", error);
+    if (!zero_operator) {
+        for (PetscInt row = 0; row < 3; ++row) {
+            error = MatSetValue(
+                matrix, row, row, static_cast<PetscScalar>(1 << row),
+                INSERT_VALUES);
+            if (error != 0) {
+                return fail("set test matrix diagonal", error);
+            }
         }
     }
     error = MatAssemblyBegin(matrix, MAT_FINAL_ASSEMBLY);
@@ -396,6 +400,9 @@ bool run_ksp_case(
         error = KSPSetTolerances(
             ksp, 1.0e-12, 0.0, PETSC_DEFAULT, max_iterations);
     }
+    if (error == 0 && expect_build_breakdown) {
+        error = KSPSetErrorIfNotConverged(ksp, PETSC_FALSE);
+    }
     if (error == 0) {
         error = KSPSetInitialGuessNonzero(ksp, PETSC_FALSE);
     }
@@ -435,6 +442,48 @@ bool run_ksp_case(
     if (error != 0) {
         return fail("read KSP convergence reason", error);
     }
+    KSPConvergedReason callback_reason = KSP_CONVERGED_ITERATING;
+    if (expect_build_breakdown) {
+        if (!check(reason < 0,
+                   "zero-operator KSPSolve exits with its original negative reason") ||
+            !check(context->true_probe_attempt_count == 0 &&
+                       !context->last_true_build_reason_available &&
+                       !context->last_true_probe_available,
+                   "GMRES breakdown precedes any positive-reason candidate probe")) {
+            cleanup();
+            return false;
+        }
+        const auto callback_count_before_probe = context->callback_count;
+        const PetscScalar sentinel = static_cast<PetscScalar>(17.0);
+        error = VecSet(context->candidate_solution, sentinel);
+        if (error != 0) {
+            return fail("seed the live breakdown probe destination", error);
+        }
+        error = detail::floquet_shifted_true_convergence_test(
+            ksp, 1, 0.0, &callback_reason, context);
+        if (error != 0) {
+            return fail("exercise the production callback on the live breakdown KSP", error);
+        }
+        if (!check(context->callback_count == callback_count_before_probe + 1,
+                   "explicit live probe adds exactly one production callback")) {
+            cleanup();
+            return false;
+        }
+        const PetscInt indices[3] = {0, 1, 2};
+        PetscScalar candidate_values[3] = {};
+        error = VecGetValues(context->candidate_solution, 3, indices,
+                             candidate_values);
+        if (error != 0) {
+            return fail("inspect the live breakdown probe destination", error);
+        }
+        if (!check(candidate_values[0] == sentinel &&
+                       candidate_values[1] == sentinel &&
+                       candidate_values[2] == sentinel,
+                   "successful breakdown build leaves the candidate destination untouched")) {
+            cleanup();
+            return false;
+        }
+    }
     const bool callback_snapshot_available = context->callback_count > 0;
     if (zero_rhs && !callback_snapshot_available) {
         if (!check(reason == KSP_CONVERGED_ATOL &&
@@ -450,8 +499,10 @@ bool run_ksp_case(
                           context->callback_observation_available &&
                           context->last_callback_iteration >= 0 &&
                           context->last_default_reason_available &&
-                          context->last_reason_after_gate_available,
-                      "callback snapshot retains its latest iteration and both convergence reasons")) {
+                          (expect_build_breakdown
+                               ? !context->last_reason_after_gate_available
+                               : context->last_reason_after_gate_available),
+                      "callback snapshot retains its latest iteration and only records a gate reason when the gate ran")) {
         cleanup();
         return false;
     }
@@ -483,6 +534,8 @@ bool run_ksp_case(
                 context->atol,
                 context->rtol * context->last_true_rhs_norm);
             if (!check(context->last_true_probe_available &&
+                           context->last_true_build_reason_available &&
+                           context->last_true_build_reason >= 0 &&
                            context->true_probe_count > 0 &&
                            context->last_true_probe_default_reason_available &&
                            context->last_true_probe_reason_after_gate_available &&
@@ -616,6 +669,35 @@ bool run_ksp_case(
                 return false;
             }
         }
+    } else if (expect_build_breakdown) {
+        if (!check(reason < 0,
+                   "real zero-operator KSPSolve keeps its negative exit reason") ||
+            !check(callback_reason == KSP_DIVERGED_BREAKDOWN,
+                   "production callback preserves GMRES build-solution breakdown") ||
+            !check(context->true_probe_attempt_count > 0 &&
+                       context->last_true_probe_default_reason_available &&
+                       context->last_true_probe_default_reason > 0 &&
+                       context->last_true_build_reason_available &&
+                       context->last_true_build_reason ==
+                           static_cast<int>(KSP_DIVERGED_BREAKDOWN),
+                   "successful solution-build call records its live negative KSP reason") ||
+            !check(!context->last_true_probe_available &&
+                       context->true_probe_count == 0 &&
+                       context->true_probe_measurement_failure_count == 0,
+                   "breakdown does not count as a completed or failed vector measurement") ||
+            !check(!context->last_true_solution_norm_available &&
+                       std::isnan(static_cast<double>(
+                           context->last_true_solution_norm)) &&
+                       !context->last_true_operator_action_norm_available &&
+                       std::isnan(static_cast<double>(
+                           context->last_true_operator_action_norm)),
+                   "breakdown leaves solution and operator-action norms unavailable") ||
+            !check(!context->last_true_probe_reason_after_gate_available &&
+                       !context->last_reason_after_gate_available,
+                   "breakdown exits before recording a true-residual gate result")) {
+            cleanup();
+            return false;
+        }
     } else if (!check(reason == KSP_DIVERGED_ITS,
                       "one-iteration budget must retain DIVERGED_ITS")) {
         cleanup();
@@ -639,6 +721,7 @@ int main(int argc, char **argv)
 
     bool ok = exercise_recursive_gap_gate();
     ok = run_ksp_case(KSPGMRES, false, 30, true) && ok;
+    ok = run_ksp_case(KSPGMRES, false, 30, false, false, true, true) && ok;
     ok = run_ksp_case(KSPGMRES, false, 30, true, true) && ok;
     ok = run_ksp_case(KSPFGMRES, false, 30, true) && ok;
     ok = run_ksp_case(KSPGMRES, true, 30, true) && ok;

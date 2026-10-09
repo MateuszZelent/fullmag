@@ -10565,3 +10565,139 @@ fn eigen_diagnostics_reference_single_k_executor_publishes_without_native_provid
     assert_eq!(diagnostics["residuals"]["data"]["mode_count"], diagnostics["mode_count"]);
     assert_eq!(diagnostics["tangent_leakage"]["data"]["mode_count"], diagnostics["mode_count"]);
 }
+
+#[test]
+fn relaxed_path_source_fixture_handoff_is_reused_for_each_nonzero_k_sample_without_per_sample_relaxation() {
+    let mut plan = minimal_native_modal_plan();
+    plan.operator.kind = fullmag_ir::EigenOperatorIR::Full2x2;
+    plan.target = fullmag_ir::EigenTargetIR::Lowest;
+    plan.count = 2;
+    plan.damping_policy = EigenDampingPolicyIR::Ignore;
+    add_x_floquet_pair_to_plan(&mut plan);
+
+    let expected_k_vectors = [
+        [1.0, 0.0, 0.0],
+        [2.0, 0.0, 0.0],
+        [3.0, 0.0, 0.0],
+    ];
+    plan.k_sampling = Some(KSamplingIR::Path {
+        points: expected_k_vectors
+            .iter()
+            .enumerate()
+            .map(|(index, k_vector)| fullmag_ir::KPointIR {
+                label: Some(format!("K{index}")),
+                k_vector: *k_vector,
+            })
+            .collect(),
+        samples_per_segment: vec![1, 1],
+        closed: false,
+    });
+
+    let topology = MeshTopology::from_ir(&plan.mesh).expect("Floquet path fixture topology");
+    let phase_signatures = expected_k_vectors
+        .iter()
+        .map(|k_vector| {
+            let sample_k = KSamplingIR::Single {
+                k_vector: *k_vector,
+            };
+            let reduction = build_reduction_map(
+                &topology,
+                &plan.spin_wave_bc,
+                Some(&sample_k),
+            )
+            .expect("each nonzero k should have a Floquet reduction");
+            assert!(reduction.complex_reduction);
+            reduction.node_phases
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        phase_signatures.windows(2).all(|pair| pair[0] != pair[1]),
+        "the Floquet reduction must change with each sample's k"
+    );
+
+    // This is an accepted-relax source fixture for runner integration only;
+    // it is not the result of a physical relaxation or stationarity check.
+    let handoff = relax_handoff_from_completion(&plan, &accepted_relax_completion())
+        .expect("the source fixture should create a typed accepted handoff");
+    let handoff_sha256 = handoff.content_sha256();
+    let outputs = [
+        OutputIR::EigenSpectrum {
+            quantity: "eigenfrequency".to_string(),
+        },
+        OutputIR::DispersionCurve {
+            name: "dispersion".to_string(),
+            include_branch_table: true,
+        },
+    ];
+
+    let missing_handoff_error =
+        super::execute_fem_eigen_path_with_producer_identity_and_parallel_policy(
+            PlannedFemEigenExecution::legacy(FemEigenExecutionLane::Cpu),
+            &plan,
+            &outputs,
+            None,
+            None,
+            None,
+            &fullmag_ir::ParallelExecutionPolicyIR::default(),
+            None,
+        )
+        .expect_err("a direct relaxed path without its accepted source handoff must fail closed");
+    assert_eq!(
+        missing_handoff_error.message,
+        "accepted relaxation handoff is required before FEM eigensolve"
+    );
+
+    // Each sample stage-continuation binder rejects a single-k spectrum
+    // with nonzero relaxation_steps before the path can complete.
+    let run = super::execute_fem_eigen_path_with_producer_identity_and_parallel_policy(
+        PlannedFemEigenExecution::legacy(FemEigenExecutionLane::Cpu),
+        &plan,
+        &outputs,
+        Some(&handoff),
+        None,
+        None,
+        &fullmag_ir::ParallelExecutionPolicyIR::default(),
+        None,
+    )
+    .expect("the real path runner should consume the supplied source handoff");
+    assert_eq!(run.result.status, RunStatus::Completed);
+
+    let legacy_spectrum = run
+        .auxiliary_artifacts
+        .iter()
+        .find(|artifact| artifact.relative_path == "eigen/spectrum.json")
+        .and_then(|artifact| serde_json::from_slice::<serde_json::Value>(&artifact.bytes).ok())
+        .expect("the real path publisher should emit its legacy spectrum");
+    assert_eq!(legacy_spectrum["relaxation_steps"], 0);
+    assert_eq!(
+        legacy_spectrum["equilibrium_source"]["handoff"],
+        "stage_continuation"
+    );
+
+    let spectrum_v3 = run
+        .auxiliary_artifacts
+        .iter()
+        .find(|artifact| artifact.relative_path == "eigen/spectrum.v3.json")
+        .and_then(|artifact| serde_json::from_slice::<serde_json::Value>(&artifact.bytes).ok())
+        .expect("the real path publisher should emit spectrum.v3");
+    let samples = spectrum_v3["samples"]
+        .as_array()
+        .expect("spectrum.v3 should retain all path samples");
+    assert_eq!(samples.len(), expected_k_vectors.len());
+    for (sample_index, (sample, k_vector)) in
+        samples.iter().zip(expected_k_vectors).enumerate()
+    {
+        assert_eq!(sample["sample_index"].as_u64(), Some(sample_index as u64));
+        assert_eq!(sample["k_vector"], serde_json::json!(k_vector));
+        let modes = sample["modes"]
+            .as_array()
+            .expect("each published path sample should retain its modes");
+        assert!(!modes.is_empty());
+        assert!(modes.iter().all(|mode| {
+            mode
+                .get("relax_to_eigen_handoff_sha256")
+                .and_then(serde_json::Value::as_str)
+                == Some(handoff_sha256.as_str())
+        }));
+    }
+}

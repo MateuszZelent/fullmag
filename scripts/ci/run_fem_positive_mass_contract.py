@@ -97,6 +97,16 @@ CONTRACT_PROFILES: dict[str, dict[str, Any]] = {
                     "-DFULLMAG_HAS_CUDA_RUNTIME=0",
                 ],
             },
+            {
+                "name": "fem_shifted_ksp_true_convergence_contract",
+                "source_suffix": "backends/fem/tests/frequency_domain/shifted_ksp_true_convergence_test.cpp",
+                "marker": "PASS: shifted KSP true-convergence regression",
+                "compile_definitions": [
+                    "-DFULLMAG_HAS_MFEM_STACK=1",
+                    "-DFULLMAG_FEM_WITH_SLEPC=1",
+                    "-DFULLMAG_HAS_CUDA_RUNTIME=0",
+                ],
+            },
         ],
         "uses_slepc": True,
         "timeout": {

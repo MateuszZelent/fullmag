@@ -1125,6 +1125,21 @@ add_fem_source_facade_contract(
     fem_floquet_modal_solver_contract
     tests/frequency_domain/floquet_modal_solver_test.cpp
 )
+if(FULLMAG_USE_MFEM_STACK AND FULLMAG_FEM_WITH_SLEPC)
+    add_fem_source_facade_contract(
+        fem_shifted_ksp_true_convergence_contract
+        tests/frequency_domain/shifted_ksp_true_convergence_test.cpp
+    )
+    # This regression calls PETSc directly, including the production inline
+    # convergence callback. The shared library's private linkage is insufficient.
+    find_package(MPI REQUIRED COMPONENTS CXX)
+    target_link_libraries(fem_shifted_ksp_true_convergence_contract PRIVATE
+        PETSC::petsc MPI::MPI_CXX
+    )
+    target_include_directories(fem_shifted_ksp_true_convergence_contract PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/cpu/frequency_domain/modal
+    )
+endif()
 add_fem_source_facade_contract(
     fem_poisson_airbox_shared_domain_contract
     tests/frequency_domain/poisson_airbox_shared_domain_test.cpp

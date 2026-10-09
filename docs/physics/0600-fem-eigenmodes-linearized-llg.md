@@ -17,7 +17,8 @@ public reference workflow and must not redefine that contract.
 This note defines the first executable FEM eigenmode workflow in Fullmag.
 It is intentionally narrower than the long-term MFEM/SLEPc target:
 
-- equilibrium state `m0` is taken from the provided initial state, a saved artifact, or an internal overdamped relaxation pass,
+- equilibrium state `m0` is taken from the provided initial state, a saved artifact, or an accepted upstream relaxation-stage handoff,
+- a relaxed-initial-state k path reuses one immutable accepted relaxation handoff at every sample; the eigen path does not run its own overdamped relaxation,
 - the eigenproblem is solved on the merged FEM magnetic mesh,
 - the current executable path exports spectrum, mode fields, and V2 dispersion artifacts,
 - the solver is CPU reference quality, not the final production eigensolver.
@@ -232,7 +233,53 @@ not be marketed as the route for COMSOL-class large-object eigenmode studies.
 - `artifact`
 - `relaxed_initial_state`
 
-For `relaxed_initial_state`, the current reference runner performs a short overdamped relaxation loop before assembling the operator. The number of relaxation steps is recorded in the exported metadata.
+For `relaxed_initial_state`, the runner consumes an accepted relaxation-stage handoff. In the staged CLI workflow, the handoff is resolved from a completed and accepted upstream Relax stage and binds its equilibrium, fields, mesh, and static-physics identity. This marker does not ask the eigen runner to perform an inline relaxation. A direct runner call without the accepted handoff fails closed before the eigensolve.
+
+A `KSamplingIR::Path` with `relaxed_initial_state` uses that same accepted `m0`
+and handoff for every k sample. The path keeps the declared first point,
+including a nonzero first k; it does not insert a Gamma point. The Floquet
+reduction and dynamic linearized operator are rebuilt for each sample's k,
+while the common equilibrium handoff remains fixed. Each single-k
+continuation is accepted only when its artifact reports zero relaxation
+steps; the path summary reports zero for its first sample. This records
+execution provenance; it does not independently establish physical stationarity.
+
+The current public staged-builder spelling is `study.stages.add_relax(...)`, followed by `study.stages.add_eigenmodes(..., equilibrium_source="relax", k_sampling=fm.KPath(...))`. For example, the current Python constructors are:
+
+```python
+study.stages.add_relax(
+    stage_id="relax", algorithm="llg_overdamped",
+    dt=RELAX_DT_S, relax_alpha=0.5, max_steps=RELAX_MAX_STEPS, tolA=1.0,
+).autosave(
+    fm.StageAutosave(
+        target="results", layout="separate", format="zarr",
+        fields=(fm.FieldAutosave("m", every_steps=100),),
+    )
+)
+study.stages.add_eigenmodes(
+    equilibrium_source="relax",
+    k_sampling=fm.KPath(
+        points=[fm.KPoint("K1", (1.0e6, 0.0, 0.0)),
+                fm.KPoint("K2", (2.0e6, 0.0, 0.0))],
+        samples_per_segment=[1],
+    ),
+    bc=fm.FloquetBC(["x_faces"],
+                    phase_convention="exp_minus_i_k_dot_delta_r"),
+)
+```
+
+This is a source-level API excerpt matching `StudyStagesBuilder.add_relax`, `KPath`, `KPoint`, `StageAutosave`, and `FloquetBC`; it was not executed or physically qualified for this documentation change. The existing full workflow example is `examples/fem_de_smoke_numeric.py`.
+
+
+## Candidate construction admission after PETSc GMRES
+
+In the FEM Floquet shifted-KSP path, a successful `KSPBuildSolution` call is not by itself a valid candidate. The live `KSPConvergedReason` must be checked immediately after the build and before any candidate residual probe.
+
+PETSc v3.24.6 documents why: `KSPGMRESBuildSoln` can set `KSP_DIVERGED_BREAKDOWN` and return `PETSC_SUCCESS`, while `KSPBuildSolution_GMRES` returns the builder call status. See the [PETSc 3.24.6 GMRES implementation](https://raw.githubusercontent.com/petsc/petsc/v3.24.6/src/ksp/ksp/impls/gmres/gmres.c#L263-L311) and its [solution-builder wrapper](https://raw.githubusercontent.com/petsc/petsc/v3.24.6/src/ksp/ksp/impls/gmres/gmres.c#L387-L402).
+
+If the post-build reason is negative, preserve it and leave candidate probes and their norms unavailable; do not run `MatMult` or norm queries for that candidate. Propagate errors from the reason query, and do not issue follow-up queries after a hard error. A measured zero is not a missing-data sentinel: zero right-hand side and zero solution remain legal data. This admission guard does not change residual tolerances or matrix policy.
+
+The standalone zero-operator GMRES test is registered in .github/workflows/shifted-ksp-true-convergence.yml and runs against distro PETSc; the managed Floquet CMake/CTest path is also registered. Execution of this new post-build reason guard in either workflow remains **NOT VERIFIED**.
 
 ## Normalization and modal fields
 
@@ -690,6 +737,10 @@ ferromagnetic films*, J. Phys. C 19 (1986), DOI:10.1088/0022-3719/19/35/7013.
 | `packages/fullmag-py/src/fullmag/model/study.py` | `class Eigenmodes` | Validate public modal parameters. |
 | `crates/fullmag-plan/src/fem.rs` | `plan_fem_eigen` | Lower the FEM eigen study and enforce capability policy. |
 | `crates/fullmag-runner/src/fem/eigen_path.rs` | `execute_fem_eigen_path` | Execute k samples and publish postsolve comparisons. |
+| `backends/fem/cpu/frequency_domain/modal/shifted_ksp_true_convergence.hpp` | `floquet_shifted_true_convergence_test` | Guard candidate admission after PETSc GMRES solution building; preserve negative reason and unavailable probes. |
+| `packages/fullmag-py/src/fullmag/world.py` | `add_relax` | Author a separate upstream Relax stage for a relaxed-initial-state eigen study. |
+| `crates/fullmag-cli/src/orchestrator.rs` | `accepted_relax_handoff_for_eigen_stage` | Resolve the accepted Relax-stage handoff; direct runner calls without it fail closed. |
+| `crates/fullmag-runner/src/fem/eigen_tests.rs` | `relaxed_path_source_fixture_handoff_is_reused_for_each_nonzero_k_sample_without_per_sample_relaxation` | Source-fixture regression for one reused handoff across nonzero k samples; not physical or runtime qualification. |
 | `scripts/verify_fem_frequency_domain_eigen_artifacts.py` | `p00_demag_factor` | Stable analytic P00 reference. |
 | `crates/fullmag-runner/src/eigen/tracking_subspace.rs` | `frequencies_are_degenerate` | Apply the private absolute-plus-relative complex-frequency grouping bound. |
 | `crates/fullmag-runner/src/eigen/tracking.rs` | `frequency_clusters_use_anchored_complex_distance_and_additive_tolerance` | Regress anchored grouping, complex distance, and additive/relative tolerance boundaries; does not qualify physical degeneracy. |
