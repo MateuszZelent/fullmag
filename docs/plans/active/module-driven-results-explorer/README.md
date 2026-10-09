@@ -295,6 +295,14 @@ status porównania liczony z metadanych.
 - Odbiór: dodanie modułu nie wymaga zmian w builderze, katalogu Inspectora ani
   w kodzie ribbonu kernela.
 
+Stan (a55f3a62f): katalog wyników publikuje `hysteresis_loop` dla każdego
+etapu histerezy (oś `applied-field`, rola `outer_sweep`, etap produkujący,
+rewizja z digestu `hysteresis_points.json`); punkty M(H) pozostają w zasobach
+`/analysis/hysteresis/*`. Moduł `analysis.hysteresis` dopasowuje ten zbiór i
+kieruje na powierzchnię histerezy. `analysis.transmission` jest zablokowany:
+runner nie zapisuje artefaktu transmisji, więc nie ma czego publikować —
+wymaga to najpierw noty fizycznej i implementacji w runnerze.
+
 ## Rozstrzygnięcia
 
 Szczegóły i uzasadnienie: ADR 0054, sekcja „Rozstrzygnięcia”.
