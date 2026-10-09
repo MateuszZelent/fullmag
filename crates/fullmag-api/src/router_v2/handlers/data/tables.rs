@@ -353,10 +353,7 @@ fn build_table_rows_resource(
         .first()
         .map(|index| *index as u64 + 1)
         .unwrap_or(selection.cursor_floor);
-    let cursor_end = decimated_indices
-        .last()
-        .map(|index| *index as u64 + 1)
-        .unwrap_or(selection.cursor_floor);
+    let cursor_end = selection.cursor_end;
 
     Ok(TableRowsResource {
         table_id,
@@ -400,7 +397,39 @@ fn encode_table_rows_binary(window: &TableRowsResource) -> Vec<u8> {
 struct TableRowSelection {
     indices: Vec<usize>,
     cursor_floor: u64,
+    cursor_end: u64,
     resync_required: bool,
+}
+
+fn is_hidden_legacy_table_row(row: &ScalarRow) -> bool {
+    row.per_object_scalars.contains_key("fem_eigen_progress")
+}
+
+fn table_row_passes_query_filters(
+    index: usize,
+    row: &ScalarRow,
+    query: &TableRowsQuery,
+) -> bool {
+    let cursor = index as u64 + 1;
+    if query.cursor.is_none() {
+        if let Some(from_row) = query.from_row {
+            if cursor < from_row.max(1) {
+                return false;
+            }
+        }
+        if let Some(to_row) = query.to_row {
+            if cursor > to_row {
+                return false;
+            }
+        }
+    }
+    if query.from_t.is_some_and(|from_t| row.time < from_t) {
+        return false;
+    }
+    if query.to_t.is_some_and(|to_t| row.time > to_t) {
+        return false;
+    }
+    true
 }
 
 fn select_table_rows(all_rows: &[ScalarRow], query: &TableRowsQuery) -> TableRowSelection {
@@ -415,37 +444,13 @@ fn select_table_rows(all_rows: &[ScalarRow], query: &TableRowsQuery) -> TableRow
 
     if !resync_required {
         for (index, row) in all_rows.iter().enumerate() {
-            // Keep source cursor identity while hiding diagnostic-only legacy rows.
-            if row.per_object_scalars.contains_key("fem_eigen_progress") {
+            let cursor = index as u64 + 1;
+            if query.cursor.is_some_and(|after_cursor| cursor <= after_cursor) {
                 continue;
             }
-            let cursor = index as u64 + 1;
-            if let Some(after_cursor) = query.cursor {
-                if cursor <= after_cursor {
-                    continue;
-                }
-            }
-            if query.cursor.is_none() {
-                if let Some(from_row) = query.from_row {
-                    if cursor < from_row.max(1) {
-                        continue;
-                    }
-                }
-                if let Some(to_row) = query.to_row {
-                    if cursor > to_row {
-                        continue;
-                    }
-                }
-            }
-            if let Some(from_t) = query.from_t {
-                if row.time < from_t {
-                    continue;
-                }
-            }
-            if let Some(to_t) = query.to_t {
-                if row.time > to_t {
-                    continue;
-                }
+            if is_hidden_legacy_table_row(row) ||
+                !table_row_passes_query_filters(index, row, query) {
+                continue;
             }
             indices.push(index);
         }
@@ -466,10 +471,40 @@ fn select_table_rows(all_rows: &[ScalarRow], query: &TableRowsQuery) -> TableRow
             .map(|index| *index as u64)
             .unwrap_or(total_rows)
     });
+    let mut cursor_end = indices
+        .last()
+        .map(|index| *index as u64 + 1)
+        .or(query.cursor)
+        .unwrap_or(total_rows);
+
+    if !resync_required {
+        let scan_start = indices
+            .last()
+            .map(|index| index + 1)
+            .or_else(|| query.cursor.map(|cursor| cursor as usize))
+            .unwrap_or(all_rows.len());
+        for (index, row) in all_rows.iter().enumerate().skip(scan_start) {
+            let source_cursor = index as u64 + 1;
+            if query.cursor.is_none() {
+                if query.to_row.is_some_and(|to_row| source_cursor > to_row) ||
+                    !is_hidden_legacy_table_row(row) ||
+                    !table_row_passes_query_filters(index, row, query) {
+                    break;
+                }
+            } else if !is_hidden_legacy_table_row(row) &&
+                table_row_passes_query_filters(index, row, query) {
+                // Do not advance past the next row this query could return,
+                // even if the visible-row limit has already been reached.
+                break;
+            }
+            cursor_end = source_cursor;
+        }
+    }
 
     TableRowSelection {
         indices,
         cursor_floor,
+        cursor_end,
         resync_required,
     }
 }
@@ -873,5 +908,175 @@ mod modal_history_tests {
         assert_eq!(window.rows, vec![vec![1.0, 1.25], vec![3.0, 0.0]]);
         assert_eq!(rows.len(), 3, "historical source data is preserved");
         assert!(!encode_table_rows_binary(&window).is_empty());
+    }
+
+    fn table_row(step: u64, time: f64, e_total: f64) -> ScalarRow {
+        serde_json::from_value(serde_json::json!({
+            "step": step, "time": time, "solver_dt": 0.1,
+            "mx": 1.0, "my": 0.0, "mz": 0.0,
+            "e_ex": 0.0, "e_demag": 0.0, "e_ext": 0.0, "e_total": e_total,
+            "max_dm_dt": 0.0, "max_h_eff": 0.0, "max_h_demag": 0.0
+        }))
+        .unwrap()
+    }
+
+    fn hidden_modal_row(step: u64, time: f64) -> ScalarRow {
+        let mut row = table_row(step, time, 0.0);
+        row.per_object_scalars
+            .insert("fem_eigen_progress".into(), Default::default());
+        row
+    }
+
+    fn delta_query(cursor: u64, limit: u64) -> TableRowsQuery {
+        TableRowsQuery {
+            columns: Some("e_total".into()),
+            cursor: Some(cursor),
+            limit: Some(limit),
+            ..Default::default()
+        }
+    }
+
+    fn table_window(rows: &[ScalarRow], query: &TableRowsQuery) -> TableRowsResource {
+        build_table_rows_resource(
+            "default".into(),
+            rows,
+            query,
+            vec!["step".into(), "t".into(), "e_total".into()],
+        )
+        .unwrap()
+    }
+
+    fn binary_cursor_end(window: &TableRowsResource) -> u64 {
+        let payload = encode_table_rows_binary(window);
+        u64::from_le_bytes(payload[32..40].try_into().expect("cursor_end occupies eight bytes"))
+    }
+
+    #[test]
+    fn delta_cursor_advances_past_trailing_hidden_rows_after_physical_data() {
+        let rows = vec![
+            table_row(1, 1.0, 1.25),
+            hidden_modal_row(2, 2.0),
+            hidden_modal_row(3, 3.0),
+        ];
+        let window = table_window(&rows, &delta_query(0, 1));
+
+        assert_eq!(window.rows, vec![vec![1.0, 1.25]]);
+        assert_eq!(window.cursor_start, 1);
+        assert_eq!(window.cursor_end, 3);
+        assert_eq!(window.revision, 3);
+        assert_eq!(window.total_rows, 3);
+        assert_eq!(window.returned_rows, 1);
+        assert_eq!(binary_cursor_end(&window), window.cursor_end);
+    }
+
+    #[test]
+    fn empty_delta_cursor_advances_past_a_trailing_hidden_raw_row() {
+        let rows = vec![table_row(1, 1.0, 1.25), hidden_modal_row(2, 2.0)];
+        let window = table_window(&rows, &delta_query(1, 1));
+
+        assert!(window.rows.is_empty());
+        assert_eq!(window.cursor_start, 1);
+        assert_eq!(window.cursor_end, 2);
+        assert_eq!(window.revision, 2);
+        assert_eq!(window.total_rows, 2);
+        assert_eq!(window.returned_rows, 0);
+        assert_eq!(binary_cursor_end(&window), window.cursor_end);
+    }
+
+    #[test]
+    fn all_hidden_delta_page_advances_to_the_raw_end() {
+        let rows = vec![hidden_modal_row(1, 1.0), hidden_modal_row(2, 2.0)];
+        let window = table_window(&rows, &delta_query(0, 1));
+
+        assert!(window.rows.is_empty());
+        assert_eq!(window.cursor_start, 0);
+        assert_eq!(window.cursor_end, 2);
+        assert_eq!(window.revision, 2);
+        assert_eq!(window.total_rows, 2);
+        assert_eq!(window.returned_rows, 0);
+    }
+
+    #[test]
+    fn limit_does_not_advance_over_the_next_visible_row_after_a_hidden_gap() {
+        let rows = vec![
+            table_row(1, 1.0, 1.25),
+            hidden_modal_row(2, 2.0),
+            table_row(3, 3.0, 3.25),
+        ];
+        let first = table_window(&rows, &delta_query(0, 1));
+
+        assert_eq!(first.rows, vec![vec![1.0, 1.25]]);
+        assert_eq!(first.cursor_end, 2);
+
+        let next = table_window(&rows, &delta_query(first.cursor_end, 1));
+        assert_eq!(next.rows, vec![vec![3.0, 3.25]]);
+        assert_eq!(next.cursor_start, 3);
+        assert_eq!(next.cursor_end, 3);
+    }
+
+    #[test]
+    fn row_and_time_filters_preserve_raw_source_indices_around_hidden_rows() {
+        let rows = vec![
+            table_row(1, 1.0, 1.25),
+            hidden_modal_row(2, 2.0),
+            table_row(3, 3.0, 3.25),
+            table_row(4, 4.0, 4.25),
+        ];
+        let query = TableRowsQuery {
+            columns: Some("e_total".into()),
+            from_row: Some(2),
+            to_row: Some(3),
+            from_t: Some(2.0),
+            to_t: Some(3.5),
+            limit: Some(4),
+            ..Default::default()
+        };
+        assert_eq!(select_table_rows(&rows, &query).indices, vec![2]);
+
+        let window = table_window(&rows, &query);
+        assert_eq!(window.rows, vec![vec![3.0, 3.25]]);
+        assert_eq!(window.cursor_start, 3);
+        assert_eq!(window.cursor_end, 3);
+        assert_eq!(window.total_rows, 4);
+    }
+
+    #[test]
+    fn resync_keeps_the_requested_cursor_and_decimation_keeps_raw_consumption_metadata() {
+        let resync_rows = vec![table_row(1, 1.0, 1.25), hidden_modal_row(2, 2.0)];
+        let resync = table_window(&resync_rows, &delta_query(8, 1));
+        assert!(resync.resync_required);
+        assert!(resync.rows.is_empty());
+        assert_eq!(resync.cursor_start, 8);
+        assert_eq!(resync.cursor_end, 8);
+        assert_eq!(resync.revision, 2);
+        assert_eq!(resync.total_rows, 2);
+
+        let rows = vec![
+            table_row(1, 1.0, 1.0),
+            hidden_modal_row(2, 2.0),
+            table_row(3, 3.0, 3.0),
+            table_row(4, 4.0, 4.0),
+            hidden_modal_row(5, 5.0),
+        ];
+        let query = TableRowsQuery {
+            columns: Some("e_total".into()),
+            cursor: Some(0),
+            limit: Some(10),
+            target_points: Some(2),
+            decimation: Some("minmax_lttb".into()),
+            include_tail: Some(true),
+            ..Default::default()
+        };
+        let decimated = table_window(&rows, &query);
+        assert_eq!(decimated.rows, vec![vec![1.0, 1.0], vec![4.0, 4.0]]);
+        assert_eq!(decimated.cursor_start, 1);
+        assert_eq!(decimated.cursor_end, 5);
+        assert_eq!(decimated.revision, 5);
+        assert_eq!(decimated.total_rows, 5);
+        assert_eq!(decimated.returned_rows, 2);
+        let decimation = decimated.decimation.as_ref().expect("source was decimated");
+        assert_eq!(decimation.source_rows, 3);
+        assert_eq!(decimation.returned_points, 2);
+        assert_eq!(binary_cursor_end(&decimated), decimated.cursor_end);
     }
 }

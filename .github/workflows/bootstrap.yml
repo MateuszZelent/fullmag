@@ -166,6 +166,7 @@ jobs:
           cargo test -p fullmag-api --bin fullmag-api frequency_domain_
           cargo test -p fullmag-api --bin fullmag-api authoring_study_runtime_parallel_patch
           cargo test -p fullmag-api --bin fullmag-api authoring_transaction_ack_
+          cargo test -p fullmag-api --bin fullmag-api modal_history_tests
 
       - name: Run application materialization and eigen selector contracts
         run: cargo test -p fullmag-application --no-fail-fast

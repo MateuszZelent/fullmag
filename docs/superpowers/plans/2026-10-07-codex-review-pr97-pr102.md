@@ -2072,3 +2072,24 @@ Nie dodano nowego testu porównującego jedynie tekst implementacji panelu; mocn
 - Testy PATCH ustawiają jawne requested_backend=fem i requested_device=cpu przed polityką adaptive, zgodnie z validate_for_runtime w Python DSL. Statusy 200/400/422 oraz kontrola niezmienności sceny i rewizji pozostają bez zmian. Błąd odpowiedzi pozytywnej drukuje teraz treść JSON.
 - Jest to poprawka wejścia testowego, bez zmiany polityki produkcyjnej. Nowe wykonanie HTTP w GitHub Actions jest wymagane; lokalnie testów nie uruchamiano.
 - Publikacja ACK sceny: commit 3b7197ab1 (pełny SHA zapisany w historii Git). Poprawka Robina: bd5e69cbd2ff538bf4ca19fe39313be4a69845df. Weryfikacja natywna i budżet żądań przeglądarki nadal NOT VERIFIED dla nowych źródeł.
+
+### Zdalna weryfikacja nowych poprawek (2026-10-09)
+
+- Branch opublikowany, PR97 OPEN: commit 2b53dd547792439a5429a120ee170c33232e82ef.
+- Natywna regresja Robina/count: https://github.com/MateuszZelent/fullmag/actions/runs/37898093052 — job 113714002233 rzeczywiście in_progress; brak wyniku terminalnego przy sprawdzeniu.
+- Bootstrap API/generator/UI: https://github.com/MateuszZelent/fullmag/actions/runs/37898099604 — in_progress. Kontrole nowych źródeł nadal oczekujące; poprzedni Kittel 60 PASS nie zastępuje nowych kontroli PATCH/ACK.
+- Następna poprawka źródłowa: 4207786330, terminalny kursor tabel z ukrytymi rekordami legacy. Osobny problem identyfikacji diagnostyki przez object_id (4204792253) pozostaje otwarty.
+
+- Aktualizacja dowodu: generated-api-determinism, job 113714022056 w run 37898099604, terminal SUCCESS dla 2b53dd547792439a5429a120ee170c33232e82ef. Potwierdza zgodność generowanych schematów/typów; nie potwierdza HTTP PATCH/ACK ani zachowania przeglądarki.
+
+### Nowe wyniki bootstrap i wymagane korekty (2026-10-09)
+
+- Control Room job 113714021991: 7718 PASS, 3 FAIL, 13 SKIP. Failures: AuthoringHistoryController mock bez getRevision; dwa legalne przypadki publikacji pustego cache unscoped zablokowane przez guard status=loading. Ochrona pending/stale/opaque wymaga zachowania; korekta musi odróżnić pusty bootstrap od faktycznie trwającego pobierania.
+- Browser job 113714022030: FAIL dopiero przy kontroli błędów po texture mutation/reset; wcześniejsze asercje budget<=12, focus/scroll/opacity/render przeszły, ale całej bramki nie można uznać za PASS. Dwa błędy to dokładny optional GET cancel-requested.v1 z API404. Harness wymaga ścisłego powiązania tych błędów z oczekiwanym brakiem; inne 404/pageerror nadal muszą blokować.
+- Python job 113714022112: powtórzony FAIL rzeczywistej gęstości ROI dla thin_film_tetrahedral, 108 komórek/45 węzłów, trzy prawidłowe płaszczyzny, 0 midpointów krawędzi wewnątrz finite-cylinder ROI. Nie zmieniono wymagań i nie uznano problemu za naprawiony.
+
+### Checkpoint źródłowy kursora tabel (2026-10-09)
+
+- 4207786330: API table cursor_end jest teraz raw scan frontier. Ukryty ogon i pusta delta przesuwają kursor, limit zatrzymuje przed kolejnym kwalifikującym się fizycznym wierszem, resync zachowuje cursor. Filtry i wartości decymacji bez zmiany. JSON/binary korzystają z jednego TableRowsResource.
+- Source review PASS; zapisano regresje trailing hidden/empty/all-hidden/limit/filters/resync/decimation/binary oraz dodano filter modal_history_tests do GHA. Wykonanie NOT VERIFIED.
+- Review wskazało dodatkowego konsumenta: Live Charts mergeChartTableWindows nie aktualizuje metadanych pustej strony. Pełna poprawka polling wymaga tej delty frontendowej (w realizacji); Analysis Plots już konsumuje cursorEnd niezależnie. Kolizja object_id 4204792253 pozostaje odrębną otwartą uwagą.
