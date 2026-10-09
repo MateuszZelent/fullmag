@@ -591,7 +591,11 @@ jobs:
 
   runner-retention-contracts:
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.contract_scope == 'retention' }}
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     permissions:
       contents: read
     steps:
@@ -603,5 +607,7 @@ jobs:
           python-version: "3.11"
       - name: Run execution and runtime retention regressions
         run: python -B -m unittest discover -s scripts -p 'test_local_runner_retention*.py' -v
+      - name: Run runtime package quarantine and restart regressions
+        run: python -B scripts/test_local_runner_runtime_retention.py -v
       - name: Run local runner runtime reference regressions
         run: python -B scripts/test_local_runner_runtime_references.py -v

@@ -9,7 +9,10 @@ import time
 
 from fullmag_storage import atomic_json, file_lock, validate_path
 from local_runner import retention
-from local_runner.retention_executor import CleanupBlocked, _guard_evidence, _guard_owners, _json
+from local_runner.retention_executor import (
+    CleanupBlocked, _directory_identity, _execution_identity_matches,
+    _guard_evidence, _guard_owners, _json,
+)
 from local_runner.runtime_references import plan_runtime_references
 from local_runner.runtime_use import retention_mutation_guard
 from local_runner.storage_maintenance import complete_jobs, container_inventory, guard_no_mount_users
@@ -110,7 +113,54 @@ def apply_runtime_cleanup(layout, plan, queue, *, owner, call, policy):
         if result_path.exists():
             previous = _json(result_path)
             if previous.get('status') == 'running':
-                previous.update(status='interrupted_unknown', applied=False)
+                reconciled_at = time.time()
+                previous.update(status='interrupted_unknown', applied=False,
+                                error='Deletion outcome is unknown after restart; manual reconciliation required',
+                                finished_at=reconciled_at)
+                for previous_item in previous.get('items', []):
+                    if not isinstance(previous_item, dict) or previous_item.get('status') != 'deleting':
+                        continue
+                    deletion_state = previous_item.get('deletion_state')
+                    previous_item.update(status='interrupted_unknown',
+                                         deletion_state='unknown_after_restart',
+                                         previous_deletion_state=deletion_state)
+                    try:
+                        job_id = previous_item.get('job_id')
+                        if not isinstance(job_id, str):
+                            raise CleanupBlocked('runtime_job_identity_missing_during_recovery')
+                        job = queue.get(job_id)
+                        wt = job.get('worktree_id')
+                        if not retention._valid_component(wt):
+                            raise CleanupBlocked('runtime_worktree_identity_invalid_during_recovery')
+                        tombstone_path = validate_path(
+                            storage / 'runs' / wt / job_id / 'artifacts' / 'runtime-package-retention.json',
+                            storage,
+                        )
+                        if not os.path.lexists(tombstone_path):
+                            raise CleanupBlocked('runtime_tombstone_missing_during_recovery')
+                        tombstone = _json(tombstone_path)
+                        if (tombstone.get('schema') != 'fullmag.runtime-package-retention.v1'
+                                or tombstone.get('plan_id') != plan_id
+                                or tombstone.get('job_id') != job_id
+                                or tombstone.get('worktree_id') != wt
+                                or tombstone.get('source_digest') != job.get('source_digest')
+                                or tombstone.get('build_receipt_sha256')
+                                != previous_item.get('build_receipt_sha256')
+                                or tombstone.get('package_relative') != 'outputs/.fullmag/local'
+                                or tombstone.get('receipt') != str(tombstone_path)):
+                            raise CleanupBlocked('runtime_tombstone_identity_mismatch_during_recovery')
+                        if tombstone.get('state') in ('deleting', 'partial_error'):
+                            tombstone.update(state='partial_error',
+                                             deletion_state='unknown_after_restart',
+                                             previous_deletion_state=deletion_state,
+                                             error='Deletion outcome is unknown after restart',
+                                             finished_at=reconciled_at)
+                            atomic_json(tombstone_path, tombstone)
+                        elif tombstone.get('state') != 'removed':
+                            raise CleanupBlocked('runtime_tombstone_state_invalid_during_recovery')
+                    except Exception as error:
+                        previous_item['reconciliation_error'] = f'{type(error).__name__}: {error}'
+                atomic_json(result_path, previous)
             return previous
         if queue.active():
             raise CleanupBlocked('active_queue_lease')
@@ -165,26 +215,154 @@ def apply_runtime_cleanup(layout, plan, queue, *, owner, call, policy):
                     tombstone_path = validate_path(run_root / 'artifacts/runtime-package-retention.json', storage)
                     if os.path.lexists(tombstone_path):
                         raise CleanupBlocked('existing_runtime_retention_record_requires_manual_reconciliation')
+                    run_root_identity = _directory_identity(
+                        run_root, 'unsafe_runtime_run_root_before_quarantine')
+                    if os.name not in ('nt', 'posix') or not callable(getattr(os, 'rename', None)):
+                        raise CleanupBlocked('runtime_quarantine_atomic_rename_unsupported_platform')
+                    package_device = current['package_tree'].get('root_device')
+                    if package_device in (None, 0) or package_device != run_root_identity['device']:
+                        raise CleanupBlocked('runtime_quarantine_same_filesystem_not_proven')
+                    quarantine_name = '.runtime-package-quarantine-' + plan_id
+                    quarantine_path = run_root / quarantine_name
+                    moved_path = quarantine_path / 'package'
+                    if os.path.lexists(quarantine_path):
+                        raise CleanupBlocked('runtime_quarantine_exists_requires_reconciliation')
                     tombstone = {'schema': 'fullmag.runtime-package-retention.v1', 'state': 'deleting',
                                  'plan_id': plan_id, 'job_id': job['job_id'], 'worktree_id': wt,
                                  'source_digest': job['source_digest'], 'package_relative': 'outputs/.fullmag/local',
                                  'build_receipt_sha256': current['build_receipt_sha256'],
+                                 'package_tree_identity': current['package_tree'],
+                                 'run_root_identity': run_root_identity,
+                                 'quarantine_path': str(quarantine_path), 'moved_path': str(moved_path),
+                                 'deletion_state': 'rename_pending',
                                  'started_at': time.time(), 'receipt': str(tombstone_path)}
+                    item.update(status='deleting', path=str(target), tombstone=str(tombstone_path),
+                                quarantine_path=str(quarantine_path), moved_path=str(moved_path),
+                                build_receipt_sha256=current['build_receipt_sha256'],
+                                package_tree_identity=current['package_tree'],
+                                run_root_identity=run_root_identity, deletion_state='rename_pending')
                     atomic_json(tombstone_path, tombstone)
-                    item.update(status='deleting', path=str(target), tombstone=str(tombstone_path))
                     atomic_json(result_path, result)
-                    shutil.rmtree(target)
-                    if os.path.lexists(target):
-                        raise CleanupBlocked('runtime_removal_not_confirmed')
-                    tombstone.update(state='removed', finished_at=time.time())
+
+                    # The unique quarantine is created in this run so the
+                    # rename binds the checked package on the same filesystem.
+                    os.mkdir(quarantine_path, 0o700)
+                    checked_quarantine = retention._checked_child(
+                        storage, ('runs', wt, job['job_id'], quarantine_name), kind='directory')
+                    quarantine_identity = _directory_identity(
+                        checked_quarantine, 'unsafe_runtime_quarantine')
+                    if quarantine_identity['device'] != run_root_identity['device']:
+                        raise CleanupBlocked('runtime_quarantine_filesystem_identity_mismatch')
+                    checked_run_root = retention._checked_child(
+                        storage, ('runs', wt, job['job_id']), kind='directory')
+                    if (_directory_identity(checked_run_root, 'unsafe_runtime_run_root_before_rename')
+                            != run_root_identity):
+                        raise CleanupBlocked('runtime_run_root_changed_before_quarantine')
+                    tombstone.update(deletion_state='quarantine_created',
+                                     quarantine_identity=quarantine_identity)
+                    item.update(deletion_state='quarantine_created',
+                                quarantine_identity=quarantine_identity)
                     atomic_json(tombstone_path, tombstone)
-                    item.update(status='deleted', removed_logical_bytes=current['size_bytes'])
+                    atomic_json(result_path, result)
+
+                    target = _package(storage, job)
+                    if not _execution_identity_matches(
+                            current['package_tree'], retention.inspect_execution(target)):
+                        raise CleanupBlocked('runtime_changed_before_quarantine')
+                    if os.path.lexists(moved_path):
+                        raise CleanupBlocked('runtime_quarantine_target_exists')
+                    try:
+                        os.rename(target, moved_path)
+                    except Exception:
+                        item.update(deletion_state='rename_outcome_unknown')
+                        tombstone.update(deletion_state='rename_outcome_unknown')
+                        atomic_json(tombstone_path, tombstone)
+                        atomic_json(result_path, result)
+                        raise
+                    item.update(deletion_state='moved_unverified')
+                    tombstone.update(deletion_state='moved_unverified', moved_at=time.time())
+                    atomic_json(tombstone_path, tombstone)
+                    atomic_json(result_path, result)
+
+                    checked_run_root = retention._checked_child(
+                        storage, ('runs', wt, job['job_id']), kind='directory')
+                    checked_quarantine = retention._checked_child(
+                        storage, ('runs', wt, job['job_id'], quarantine_name), kind='directory')
+                    if (_directory_identity(checked_run_root, 'unsafe_runtime_run_root_after_quarantine')
+                            != run_root_identity):
+                        raise CleanupBlocked('runtime_run_root_changed_after_quarantine')
+                    if (_directory_identity(checked_quarantine, 'unsafe_runtime_quarantine_after_move')
+                            != quarantine_identity):
+                        raise CleanupBlocked('runtime_quarantine_changed_after_move')
+                    if os.path.lexists(target):
+                        item.update(deletion_state='source_path_reappeared')
+                        tombstone.update(deletion_state='source_path_reappeared')
+                        atomic_json(tombstone_path, tombstone)
+                        atomic_json(result_path, result)
+                        raise CleanupBlocked('runtime_package_path_reappeared_after_quarantine')
+
+                    item.update(deletion_state='removal_started')
+                    tombstone.update(deletion_state='removal_started')
+                    atomic_json(tombstone_path, tombstone)
+                    atomic_json(result_path, result)
+                    checked_run_root = retention._checked_child(
+                        storage, ('runs', wt, job['job_id']), kind='directory')
+                    checked_quarantine = retention._checked_child(
+                        storage, ('runs', wt, job['job_id'], quarantine_name), kind='directory')
+                    if (_directory_identity(checked_run_root, 'unsafe_runtime_run_root_before_delete')
+                            != run_root_identity):
+                        raise CleanupBlocked('runtime_run_root_changed_before_delete')
+                    if (_directory_identity(checked_quarantine, 'unsafe_runtime_quarantine_before_delete')
+                            != quarantine_identity):
+                        raise CleanupBlocked('runtime_quarantine_changed_before_delete')
+                    if os.path.lexists(target):
+                        raise CleanupBlocked('runtime_package_path_reappeared_before_delete')
+                    moved_target = retention._checked_child(
+                        storage, ('runs', wt, job['job_id'], quarantine_name, 'package'), kind='directory')
+                    moved_tree = retention.inspect_execution(moved_target)
+                    if not _execution_identity_matches(current['package_tree'], moved_tree):
+                        item.update(deletion_state='identity_mismatch', observed_package_tree=moved_tree)
+                        tombstone.update(deletion_state='identity_mismatch', observed_package_tree=moved_tree)
+                        atomic_json(tombstone_path, tombstone)
+                        atomic_json(result_path, result)
+                        raise CleanupBlocked('runtime_package_identity_mismatch_after_quarantine')
+
+                    shutil.rmtree(moved_target)
+                    if os.path.lexists(moved_path):
+                        raise CleanupBlocked('runtime_removal_not_confirmed')
+                    if os.path.lexists(target):
+                        raise CleanupBlocked('runtime_package_path_reappeared_after_delete')
+                    item.update(deletion_state='tree_removed')
+                    tombstone.update(deletion_state='tree_removed', tree_removed_at=time.time())
+                    atomic_json(tombstone_path, tombstone)
+                    atomic_json(result_path, result)
+                    checked_run_root = retention._checked_child(
+                        storage, ('runs', wt, job['job_id']), kind='directory')
+                    checked_quarantine = retention._checked_child(
+                        storage, ('runs', wt, job['job_id'], quarantine_name), kind='directory')
+                    if (_directory_identity(checked_run_root, 'unsafe_runtime_run_root_after_delete')
+                            != run_root_identity):
+                        raise CleanupBlocked('runtime_run_root_changed_after_delete')
+                    if (_directory_identity(checked_quarantine, 'unsafe_runtime_quarantine_after_delete')
+                            != quarantine_identity):
+                        raise CleanupBlocked('runtime_quarantine_changed_after_delete')
+                    os.rmdir(checked_quarantine)
+                    if os.path.lexists(quarantine_path):
+                        raise CleanupBlocked('runtime_quarantine_removal_not_confirmed')
+                    if os.path.lexists(target):
+                        raise CleanupBlocked('runtime_package_path_reappeared_after_delete')
+                    tombstone.update(state='removed', deletion_state='deleted',
+                                     removed_logical_bytes=current['size_bytes'], finished_at=time.time())
+                    atomic_json(tombstone_path, tombstone)
+                    item.update(status='deleted', deletion_state='deleted',
+                                removed_logical_bytes=current['size_bytes'])
                     result['removed_logical_bytes'] += current['size_bytes']
             except Exception as error:
                 item.update(status='partial_error' if item['status'] == 'deleting' else 'retained',
                             reason=f'{type(error).__name__}: {error}')
                 if tombstone is not None:
-                    tombstone.update(state='partial_error', error=item['reason'], finished_at=time.time())
+                    tombstone.update(state='partial_error', error=item['reason'],
+                                     deletion_state=item.get('deletion_state'), finished_at=time.time())
                     atomic_json(Path(tombstone['receipt']), tombstone)
             atomic_json(result_path, result)
         succeeded = all(item['status'] == 'deleted' for item in result['items'])

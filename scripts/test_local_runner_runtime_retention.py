@@ -1,5 +1,6 @@
 import json
 from contextlib import closing
+import os
 import shutil
 from pathlib import Path
 import sqlite3
@@ -71,9 +72,114 @@ class RuntimeCleanupTests(unittest.TestCase):
             self.assertTrue((self.fixture.run_root / name).is_file())
         tombstone = json.loads((self.fixture.run_root / 'artifacts/runtime-package-retention.json').read_text())
         self.assertEqual('removed', tombstone['state'])
+        self.assertEqual('deleted', tombstone['deletion_state'])
+        self.assertEqual('deleted', result['items'][0]['deletion_state'])
+        self.assertEqual(self.plan['candidates'][0]['package_tree'], tombstone['package_tree_identity'])
+        self.assertEqual(self.plan['candidates'][0]['package_tree']['root_inode'],
+                         tombstone['package_tree_identity']['root_inode'])
+        self.assertFalse(Path(tombstone['quarantine_path']).exists())
         self.assertEqual(JOB_ID, tombstone['job_id'])
         self.assertEqual(result, self.apply())
         self.assertIsNone(result['reclaimed_bytes'])
+
+    def test_source_replacement_before_move_preserves_original_and_replacement(self):
+        original_package = self.fixture.run_root / 'approved-package-preserved'
+        original_rename = os.rename
+
+        def replace_before_move(source, destination):
+            if Path(source) == self.fixture.package and Path(destination).name == 'package':
+                original_rename(source, original_package)
+                Path(source).mkdir()
+                (Path(source) / 'unapproved').write_bytes(b'unapproved replacement')
+            original_rename(source, destination)
+
+        with patch('local_runner.runtime_retention.os.rename', side_effect=replace_before_move):
+            result = self.apply()
+
+        item = result['items'][0]
+        moved = Path(item['moved_path'])
+        self.assertFalse(result['applied'])
+        self.assertEqual('identity_mismatch', item['deletion_state'])
+        self.assertIn('runtime_package_identity_mismatch_after_quarantine', item['reason'])
+        self.assertEqual(b'fixture-0\n', (original_package / self.fixture.outputs[0]).read_bytes())
+        self.assertTrue(moved.is_dir())
+        self.assertEqual(b'unapproved replacement', (moved / 'unapproved').read_bytes())
+        self.assertEqual(0, result['removed_logical_bytes'])
+        self.assertIsNone(result['reclaimed_bytes'])
+
+    def test_source_replacement_after_move_preserves_both_paths(self):
+        original_rename = os.rename
+
+        def replace_after_move(source, destination):
+            original_rename(source, destination)
+            if Path(source) == self.fixture.package and Path(destination).name == 'package':
+                Path(source).mkdir()
+                (Path(source) / 'new-package').write_bytes(b'preserve source replacement')
+
+        with patch('local_runner.runtime_retention.os.rename', side_effect=replace_after_move):
+            result = self.apply()
+
+        item = result['items'][0]
+        moved = Path(item['moved_path'])
+        self.assertFalse(result['applied'])
+        self.assertEqual('source_path_reappeared', item['deletion_state'])
+        self.assertIn('runtime_package_path_reappeared_after_quarantine', item['reason'])
+        self.assertTrue(moved.is_dir())
+        self.assertEqual(b'fixture-0\n', (moved / self.fixture.outputs[0]).read_bytes())
+        self.assertEqual(b'preserve source replacement',
+                         (self.fixture.package / 'new-package').read_bytes())
+        self.assertEqual(0, result['removed_logical_bytes'])
+        self.assertIsNone(result['reclaimed_bytes'])
+
+    def test_postmove_identity_mismatch_preserves_quarantined_package(self):
+        original_rename = os.rename
+
+        def mutate_after_move(source, destination):
+            original_rename(source, destination)
+            if Path(source) == self.fixture.package and Path(destination).name == 'package':
+                (Path(destination) / 'late-unreviewed-entry').write_bytes(b'preserve')
+
+        with patch('local_runner.runtime_retention.os.rename', side_effect=mutate_after_move):
+            result = self.apply()
+
+        item = result['items'][0]
+        moved = Path(item['moved_path'])
+        self.assertFalse(result['applied'])
+        self.assertEqual('identity_mismatch', item['deletion_state'])
+        self.assertIn('runtime_package_identity_mismatch_after_quarantine', item['reason'])
+        self.assertTrue(moved.is_dir())
+        self.assertEqual(b'preserve', (moved / 'late-unreviewed-entry').read_bytes())
+        self.assertEqual(0, result['removed_logical_bytes'])
+        self.assertIsNone(result['reclaimed_bytes'])
+
+    def test_interrupted_delete_reconciles_as_unknown_without_retrying(self):
+        def interrupt_before_delete(_target):
+            raise KeyboardInterrupt('simulated process interruption')
+
+        with patch('local_runner.runtime_retention.shutil.rmtree', side_effect=interrupt_before_delete):
+            with self.assertRaises(KeyboardInterrupt):
+                self.apply()
+
+        receipt_path = self.root / 'index/retention-operations' / (self.plan['plan_id'] + '.json')
+        before_reconcile = json.loads(receipt_path.read_text())
+        item = before_reconcile['items'][0]
+        moved = Path(item['moved_path'])
+        tombstone_path = self.fixture.run_root / 'artifacts/runtime-package-retention.json'
+        self.assertEqual('running', before_reconcile['status'])
+        self.assertEqual('removal_started', item['deletion_state'])
+        self.assertTrue(moved.is_dir())
+
+        reconciled = self.apply()
+        tombstone = json.loads(tombstone_path.read_text())
+        self.assertEqual('interrupted_unknown', reconciled['status'])
+        self.assertFalse(reconciled['applied'])
+        self.assertEqual('unknown_after_restart', reconciled['items'][0]['deletion_state'])
+        self.assertEqual('partial_error', tombstone['state'])
+        self.assertEqual('unknown_after_restart', tombstone['deletion_state'])
+        self.assertEqual(0, reconciled['removed_logical_bytes'])
+        self.assertIsNone(reconciled['reclaimed_bytes'])
+        self.assertTrue(moved.is_dir())
+        self.assertEqual(0, self.preview()['candidates_count'])
 
     def test_missing_authoritative_legacy_root_registry_protects_all_packages(self):
         (self.root / 'index/runtime-reference-roots.json').unlink()
