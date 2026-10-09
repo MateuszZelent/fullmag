@@ -1,6 +1,6 @@
 # Plan naprawy 4207002965: odzyskiwanie blokady publikacji CAS
 
-Status: niezależne pełne SOURCE review PASS; hosted wykonanie pozostaje niekwalifikowane.
+Status: niezależne SOURCE PASS i hosted Linux/Windows PASS. Cross-OS/SMB oraz power-loss pozostają niekwalifikowane.
 
 ## Przyczyna
 
@@ -65,4 +65,8 @@ ich fixture'y są izolowane; lokalne testy/build/importy są zakazane.
 2. Procesy fixture przygotowują canonical parent obiektu przed prywatnym publication lock. Timeout przy brakującym katalogu nie jest dowodem crash recovery.
 3. Równoległe reclaimers raportują terminalny sukces dopiero po sprawdzonym release; exception daje niezerowy exit. Test musi wykrywać overlap rzeczywistych sekcji krytycznych i błędy teardown, nie jedynie odebrać dwa komunikaty acquired.
 
-Wszystkie trzy Required zostały domknięte i sprawdzone w ponownym pełnym SOURCE review trzech plików. AST i diff-check PASS. Istniejący bootstrap scope=retention ma dodany krok test_local_runner_source_store.py na Linux/Windows. Wykonanie hosted, cross-OS/SMB i odporność na utratę zasilania pozostają niekwalifikowane.
+Wszystkie trzy Required zostały domknięte i sprawdzone w ponownym pełnym SOURCE review trzech plików. AST i diff-check PASS. Istniejący bootstrap scope=retention ma dodany krok test_local_runner_source_store.py na Linux/Windows. Wynik hosted opisano poniżej; cross-OS/SMB i odporność na utratę zasilania pozostają niekwalifikowane.
+
+## Dowód hosted
+
+Po korekcie wyłącznie oczekiwanego kodu PID-only, [GHA37975987145](https://github.com/MateuszZelent/fullmag/actions/runs/37975987145) na `a166078fdf34c922e41db9a781986445c09da8fa`: SUCCESS. Linux job113974304560:23 testy, PASS z1skip; Windows113974304896:23 testy, PASS z4skip. Oba wykonały actual two-reclaimers i legacy/corrupt preservation; oba fork cases wykonane na Linux, pominięte jako nieobsługiwane na Windows. Właściciel/generacja/recovery są kwalifikowane w tych hosted środowiskach, nie w Windows-host/Linux-container bind ani SMB.
