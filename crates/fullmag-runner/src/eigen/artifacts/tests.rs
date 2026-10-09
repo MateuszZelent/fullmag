@@ -434,6 +434,30 @@ fn single_sample_mode_provenance_prefers_enriched_root_diagnostics() {
 
 fn sample_result_with_modal_overlap_tracking() -> PathSolveResult {
     let mut result = sample_result_with_solver_model(EigenSolverModel::ProductionCpuShiftInvert);
+    let node_mass_weights = vec![1.0, 4.0, 9.0];
+    result.samples[0].modes[0].reduced_vector = Some(vec![
+        Complex64::new(1.0, 0.0),
+        Complex64::new(0.0, 0.0),
+        Complex64::new(0.0, 0.0),
+        Complex64::new(0.0, 0.0),
+        Complex64::new(0.0, 0.0),
+        Complex64::new(0.0, 0.0),
+        Complex64::new(0.0, 0.0),
+        Complex64::new(0.0, 0.0),
+        Complex64::new(0.0, 0.0),
+    ]);
+    result.samples[0].modes[0].node_mass_weights = Some(node_mass_weights.clone());
+    result.samples[0].modes[0].norm = 1.0;
+    result.samples[0].modes[0].mass_norm = Some(1.0);
+    result.samples[0].modes[0].lifted_real = Some(vec![
+        [1.0, 0.0, 0.0],
+        [0.0, 0.0, 0.0],
+        [0.0, 0.0, 0.0],
+    ]);
+    result.samples[0].modes[0].lifted_imag = Some(vec![[0.0, 0.0, 0.0]; 3]);
+    result.samples[0].modes[0].amplitude = Some(vec![1.0, 0.0, 0.0]);
+    result.samples[0].modes[0].phase = Some(vec![0.0, 0.0, 0.0]);
+
     let mut sample_1 = result.samples[0].clone();
     sample_1.sample.sample_index = 1;
     sample_1.sample.label = Some("X".to_string());
@@ -442,6 +466,28 @@ fn sample_result_with_modal_overlap_tracking() -> PathSolveResult {
     sample_1.modes[0].frequency_real_hz = 1.25e9;
     sample_1.modes[0].angular_frequency_rad_per_s = std::f64::consts::TAU * 1.25e9;
     sample_1.modes[0].eigenvalue_imag = std::f64::consts::TAU * 1.25e9;
+    sample_1.modes[0].reduced_vector = Some(vec![
+        Complex64::new(1.0, 0.0),
+        Complex64::new(0.0, 0.0),
+        Complex64::new(0.0, 0.0),
+        Complex64::new(0.375, 0.0),
+        Complex64::new(0.0, 0.0),
+        Complex64::new(0.0, 0.0),
+        Complex64::new(0.0, 0.0),
+        Complex64::new(0.0, 0.0),
+        Complex64::new(0.0, 0.0),
+    ]);
+    sample_1.modes[0].norm = 1.140625_f64.sqrt();
+    sample_1.modes[0].mass_norm = Some(1.25);
+    sample_1.modes[0].max_amplitude = 1.0;
+    sample_1.modes[0].lifted_real = Some(vec![
+        [1.0, 0.0, 0.0],
+        [0.375, 0.0, 0.0],
+        [0.0, 0.0, 0.0],
+    ]);
+    sample_1.modes[0].lifted_imag = Some(vec![[0.0, 0.0, 0.0]; 3]);
+    sample_1.modes[0].amplitude = Some(vec![1.0, 0.375, 0.0]);
+    sample_1.modes[0].phase = Some(vec![0.0, 0.0, 0.0]);
     let mut sample_2 = sample_1.clone();
     sample_2.sample.sample_index = 2;
     sample_2.sample.label = Some("G".to_string());
@@ -450,28 +496,87 @@ fn sample_result_with_modal_overlap_tracking() -> PathSolveResult {
     sample_2.modes[0].frequency_real_hz = 1.5e9;
     sample_2.modes[0].angular_frequency_rad_per_s = std::f64::consts::TAU * 1.5e9;
     sample_2.modes[0].eigenvalue_imag = std::f64::consts::TAU * 1.5e9;
+    sample_2.modes[0].reduced_vector = Some(vec![
+        Complex64::new(0.0, 0.0),
+        Complex64::new(0.0, 0.0),
+        Complex64::new(0.0, 0.0),
+        Complex64::new(1.0, 0.0),
+        Complex64::new(0.0, 0.0),
+        Complex64::new(0.0, 0.0),
+        Complex64::new(0.0, 0.0),
+        Complex64::new(0.0, 0.0),
+        Complex64::new(0.0, 0.0),
+    ]);
+    sample_2.modes[0].norm = 1.0;
+    sample_2.modes[0].mass_norm = Some(2.0);
+    sample_2.modes[0].max_amplitude = 1.0;
+    sample_2.modes[0].lifted_real = Some(vec![
+        [0.0, 0.0, 0.0],
+        [1.0, 0.0, 0.0],
+        [0.0, 0.0, 0.0],
+    ]);
+    sample_2.modes[0].lifted_imag = Some(vec![[0.0, 0.0, 0.0]; 3]);
+    sample_2.modes[0].amplitude = Some(vec![0.0, 1.0, 0.0]);
+    sample_2.modes[0].phase = Some(vec![0.0, 0.0, 0.0]);
     result.samples.push(sample_1);
     result.samples.push(sample_2);
-    result.branches[0].points.push(TrackedBranchPoint {
-        sample_index: 1,
-        raw_mode_index: 0,
-        frequency_real_hz: 1.25e9,
-        frequency_imag_hz: 0.0,
-        tracking_confidence: 0.8,
-        overlap_prev: Some(0.8),
-        tracking_edge: None,
-    });
-    result.branches[0].points.push(TrackedBranchPoint {
-        sample_index: 2,
-        raw_mode_index: 0,
-        frequency_real_hz: 1.5e9,
-        frequency_imag_hz: 0.0,
-        tracking_confidence: 0.6,
-        overlap_prev: Some(0.6),
-        tracking_edge: None,
-    });
+
+    let tracking = fullmag_ir::ModeTrackingIR {
+        method: fullmag_ir::ModeTrackingMethodIR::OverlapHungarian,
+        frequency_window_hz: None,
+        overlap_floor: 0.5,
+        max_branch_gap: 0,
+    };
+    result.branches.clear();
+    crate::eigen::tracking::track_branches(&mut result, Some(&tracking));
     result.notes = vec!["modal overlap tracking".to_string()];
     result
+}
+
+// Keep Cartesian mode payloads, nodal summaries, and mass norms coherent when
+// selector tests replace the base Kittel mode. The X component is the same
+// fixture frame used by the declared bias-field sweep.
+fn set_kittel_fixture_x_mode(
+    mode: &mut SingleKModeResult,
+    x_components: &[f64],
+    node_mass_weights: &[f64],
+) {
+    assert_eq!(x_components.len(), node_mass_weights.len());
+    assert!(node_mass_weights
+        .iter()
+        .all(|weight| weight.is_finite() && *weight > 0.0));
+
+    let mut reduced_vector = Vec::with_capacity(x_components.len() * 3);
+    let mut lifted_real = Vec::with_capacity(x_components.len());
+    let mut lifted_imag = Vec::with_capacity(x_components.len());
+    let mut amplitude = Vec::with_capacity(x_components.len());
+    let mut phase = Vec::with_capacity(x_components.len());
+    let mut norm_squared = 0.0;
+    let mut mass_norm_squared = 0.0;
+
+    for (&x, &weight) in x_components.iter().zip(node_mass_weights) {
+        reduced_vector.extend([
+            Complex64::new(x, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+        ]);
+        lifted_real.push([x, 0.0, 0.0]);
+        lifted_imag.push([0.0, 0.0, 0.0]);
+        amplitude.push(x.abs());
+        phase.push(if x < 0.0 { std::f64::consts::PI } else { 0.0 });
+        norm_squared += x * x;
+        mass_norm_squared += weight * x * x;
+    }
+
+    mode.reduced_vector = Some(reduced_vector);
+    mode.lifted_real = Some(lifted_real);
+    mode.lifted_imag = Some(lifted_imag);
+    mode.node_mass_weights = Some(node_mass_weights.to_vec());
+    mode.amplitude = Some(amplitude.clone());
+    mode.phase = Some(phase);
+    mode.norm = norm_squared.sqrt();
+    mode.mass_norm = Some(mass_norm_squared.sqrt());
+    mode.max_amplitude = amplitude.into_iter().fold(0.0_f64, f64::max);
 }
 
 fn sample_result_with_k0_kittel_sweep() -> PathSolveResult {
@@ -480,11 +585,7 @@ fn sample_result_with_k0_kittel_sweep() -> PathSolveResult {
     let fields_a_per_m = [40_000.0, 80_000.0, 120_000.0];
 
     result.samples.clear();
-    result.branches = vec![TrackedBranch {
-        branch_id: 0,
-        label: Some("k0_kittel_uniform_branch".to_string()),
-        points: Vec::new(),
-    }];
+    result.branches.clear();
 
     for (sample_index, field_a_per_m) in fields_a_per_m.iter().copied().enumerate() {
         let frequency_hz =
@@ -500,17 +601,42 @@ fn sample_result_with_k0_kittel_sweep() -> PathSolveResult {
         sample.modes[0].angular_frequency_rad_per_s = std::f64::consts::TAU * frequency_hz;
         sample.modes[0].eigenvalue_real = 0.0;
         sample.modes[0].eigenvalue_imag = std::f64::consts::TAU * frequency_hz;
+        // Synthetic four-node mode data exercise artifact selection only; no
+        // FEM convergence or qualified metric is claimed by this fixture.
+        let uniform_mode = [
+            Complex64::new(1.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(1.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(1.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(1.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+        ];
+        sample.modes[0].reduced_vector = Some(uniform_mode.to_vec());
+        sample.modes[0].node_mass_weights = Some(vec![1.0; 4]);
+        sample.modes[0].norm = 2.0;
+        sample.modes[0].mass_norm = Some(2.0);
+        sample.modes[0].max_amplitude = 1.0;
+        sample.modes[0].lifted_real = Some(vec![[1.0, 0.0, 0.0]; 4]);
+        sample.modes[0].lifted_imag = Some(vec![[0.0, 0.0, 0.0]; 4]);
+        sample.modes[0].amplitude = Some(vec![1.0; 4]);
+        sample.modes[0].phase = Some(vec![0.0; 4]);
         result.samples.push(sample);
-        result.branches[0].points.push(TrackedBranchPoint {
-            sample_index,
-            raw_mode_index: 0,
-            frequency_real_hz: frequency_hz,
-            frequency_imag_hz: 0.0,
-            tracking_confidence: 1.0,
-            overlap_prev: (sample_index > 0).then_some(1.0),
-            tracking_edge: None,
-        });
     }
+
+    let tracking = fullmag_ir::ModeTrackingIR {
+        method: fullmag_ir::ModeTrackingMethodIR::OverlapHungarian,
+        frequency_window_hz: None,
+        overlap_floor: 0.5,
+        max_branch_gap: 0,
+    };
+    crate::eigen::tracking::track_branches(&mut result, Some(&tracking));
+    result.branches[0].label = Some("k0_kittel_uniform_branch".to_string());
 
     result.k0_kittel_validation = Some(fullmag_ir::FemEigenK0KittelValidationIR {
         kind: "k0_kittel_field_sweep".to_string(),
@@ -855,6 +981,7 @@ fn eigen_artifact_writer_keeps_missing_relative_residual_unavailable() {
     let mut result = sample_result();
     result.samples[0].modes[0].residual_relative_l2 = None;
 
+    write_path_bundle(&temp.path, &result).expect("path spectrum should write");
     write_mode_bundle(&temp.path, &result).expect("mode bundle should write");
     write_frequency_domain_eigen_manifest(&temp.path, &result, &artifact_identity())
         .expect("frequency-domain eigen manifest should write");
@@ -1107,6 +1234,20 @@ fn eigen_manifest_does_not_publish_dispersion_for_multi_sample_k0_field_sweep() 
 fn eigen_branch_writer_reports_modal_overlap_statistics() {
     let temp = TempDirGuard::new("eigen-branch-overlap-stats");
     let result = sample_result_with_modal_overlap_tracking();
+
+    for (point, expected_overlap) in result.branches[0]
+        .points
+        .iter()
+        .skip(1)
+        .zip([0.8, 0.6])
+    {
+        let edge = point
+            .tracking_edge
+            .as_ref()
+            .expect("actual tracker should record each pair edge");
+        assert_eq!(edge.score_source.as_str(), "modal_overlap_weighted_score");
+        assert!((point.overlap_prev.unwrap() - expected_overlap).abs() < 1.0e-12);
+    }
 
     write_branch_bundle(&temp.path, &result).expect("branch bundle should write");
 
@@ -1643,29 +1784,31 @@ fn k0_kittel_selector_prefers_uniform_branch_over_frequency_only_match() {
 
     for sample_result in &mut result.samples {
         let expected_frequency = sample_result.modes[0].frequency_real_hz;
+        let node_mass_weights = sample_result.modes[0]
+            .node_mass_weights
+            .clone()
+            .expect("Kittel fixture should carry nodal mass weights");
         let mut nonuniform = sample_result.modes[0].clone();
         nonuniform.raw_mode_index = 0;
         nonuniform.frequency_real_hz = expected_frequency;
         nonuniform.angular_frequency_rad_per_s = std::f64::consts::TAU * expected_frequency;
         nonuniform.eigenvalue_imag = std::f64::consts::TAU * expected_frequency;
-        nonuniform.reduced_vector = Some(vec![
-            Complex64::new(1.0, 0.0),
-            Complex64::new(-1.0, 0.0),
-            Complex64::new(1.0, 0.0),
-            Complex64::new(-1.0, 0.0),
-        ]);
+        set_kittel_fixture_x_mode(
+            &mut nonuniform,
+            &[1.0, -1.0, 1.0, -1.0],
+            &node_mass_weights,
+        );
 
         let mut uniform = sample_result.modes[0].clone();
         uniform.raw_mode_index = 1;
         uniform.frequency_real_hz = expected_frequency * 1.001;
         uniform.angular_frequency_rad_per_s = std::f64::consts::TAU * uniform.frequency_real_hz;
         uniform.eigenvalue_imag = std::f64::consts::TAU * uniform.frequency_real_hz;
-        uniform.reduced_vector = Some(vec![
-            Complex64::new(1.0, 0.0),
-            Complex64::new(1.0, 0.0),
-            Complex64::new(1.0, 0.0),
-            Complex64::new(1.0, 0.0),
-        ]);
+        set_kittel_fixture_x_mode(
+            &mut uniform,
+            &[1.0, 1.0, 1.0, 1.0],
+            &node_mass_weights,
+        );
 
         sample_result.modes = vec![nonuniform, uniform];
         let sample_index = sample_result.sample.sample_index;
@@ -1742,18 +1885,21 @@ fn k0_kittel_selector_does_not_use_expected_frequency_as_a_tiebreaker() {
 
     for sample_result in &mut result.samples {
         let expected_frequency = sample_result.modes[0].frequency_real_hz;
+        let node_mass_weights = sample_result.modes[0]
+            .node_mass_weights
+            .clone()
+            .expect("Kittel fixture should carry nodal mass weights");
         let mut branch_zero_mode = sample_result.modes[0].clone();
         branch_zero_mode.raw_mode_index = 0;
         branch_zero_mode.frequency_real_hz = expected_frequency * 1.001;
         branch_zero_mode.angular_frequency_rad_per_s =
             std::f64::consts::TAU * branch_zero_mode.frequency_real_hz;
         branch_zero_mode.eigenvalue_imag = branch_zero_mode.angular_frequency_rad_per_s;
-        branch_zero_mode.reduced_vector = Some(vec![
-            Complex64::new(1.0, 0.0),
-            Complex64::new(1.0, 0.0),
-            Complex64::new(1.0, 0.0),
-            Complex64::new(1.0, 0.0),
-        ]);
+        set_kittel_fixture_x_mode(
+            &mut branch_zero_mode,
+            &[1.0, 1.0, 1.0, 1.0],
+            &node_mass_weights,
+        );
 
         let mut analytical_match_mode = sample_result.modes[0].clone();
         analytical_match_mode.raw_mode_index = 1;
@@ -1761,12 +1907,11 @@ fn k0_kittel_selector_does_not_use_expected_frequency_as_a_tiebreaker() {
         analytical_match_mode.angular_frequency_rad_per_s =
             std::f64::consts::TAU * analytical_match_mode.frequency_real_hz;
         analytical_match_mode.eigenvalue_imag = analytical_match_mode.angular_frequency_rad_per_s;
-        analytical_match_mode.reduced_vector = Some(vec![
-            Complex64::new(1.0, 0.0),
-            Complex64::new(1.0, 0.0),
-            Complex64::new(1.0, 0.0),
-            Complex64::new(1.0, 0.0),
-        ]);
+        set_kittel_fixture_x_mode(
+            &mut analytical_match_mode,
+            &[1.0, 1.0, 1.0, 1.0],
+            &node_mass_weights,
+        );
 
         sample_result.modes = vec![branch_zero_mode, analytical_match_mode];
         let sample_index = sample_result.sample.sample_index;
@@ -1834,15 +1979,7 @@ fn k0_kittel_selector_uses_mass_weighted_uniformity_when_weights_are_available()
         unweighted_uniform.frequency_real_hz = expected_frequency;
         unweighted_uniform.angular_frequency_rad_per_s = std::f64::consts::TAU * expected_frequency;
         unweighted_uniform.eigenvalue_imag = std::f64::consts::TAU * expected_frequency;
-        unweighted_uniform.reduced_vector = Some(vec![
-            Complex64::new(0.0, 0.0),
-            Complex64::new(0.0, 0.0),
-            Complex64::new(0.0, 0.0),
-            Complex64::new(1.0, 0.0),
-            Complex64::new(0.0, 0.0),
-            Complex64::new(0.0, 0.0),
-        ]);
-        unweighted_uniform.node_mass_weights = Some(mass_weights.clone());
+        set_kittel_fixture_x_mode(&mut unweighted_uniform, &[0.0, 1.0], &mass_weights);
 
         let mut mass_weighted_uniform = sample_result.modes[0].clone();
         mass_weighted_uniform.raw_mode_index = 1;
@@ -1851,15 +1988,7 @@ fn k0_kittel_selector_uses_mass_weighted_uniformity_when_weights_are_available()
             std::f64::consts::TAU * mass_weighted_uniform.frequency_real_hz;
         mass_weighted_uniform.eigenvalue_imag =
             std::f64::consts::TAU * mass_weighted_uniform.frequency_real_hz;
-        mass_weighted_uniform.reduced_vector = Some(vec![
-            Complex64::new(1.0, 0.0),
-            Complex64::new(0.0, 0.0),
-            Complex64::new(0.0, 0.0),
-            Complex64::new(-1.0, 0.0),
-            Complex64::new(0.0, 0.0),
-            Complex64::new(0.0, 0.0),
-        ]);
-        mass_weighted_uniform.node_mass_weights = Some(mass_weights);
+        set_kittel_fixture_x_mode(&mut mass_weighted_uniform, &[1.0, -1.0], &mass_weights);
 
         sample_result.modes = vec![unweighted_uniform, mass_weighted_uniform];
         let sample_index = sample_result.sample.sample_index;
