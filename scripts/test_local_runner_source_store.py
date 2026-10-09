@@ -631,7 +631,7 @@ class LocalRunnerSourceStoreTests(unittest.TestCase):
             with patch.object(source_store, "_LOCK_WAIT_SECONDS", 0.0):
                 with self.assertRaisesRegex(
                     source_store.SourceContentStoreError,
-                    "legacy_or_incomplete_lock_record",
+                    "legacy_or_corrupt_lock_record",
                 ):
                     with store._publication_lock(object_path):
                         self.fail("legacy PID-only lock must never be reclaimed")
