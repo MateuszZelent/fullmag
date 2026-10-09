@@ -1233,6 +1233,7 @@ class ScriptBuilderRegionalDriveRoundTripTests(unittest.TestCase):
             loaded = _load_text(_SCRIPT, root, "source.py")
             source_path = root / "source.py"
             before = source_path.read_bytes()
+            before_entries = {path.name for path in root.iterdir()}
             copy_path = root / "exports" / "source.canonical.py"
             result = rewrite_loaded_problem_script(loaded, output_path=copy_path)
 
@@ -1241,7 +1242,7 @@ class ScriptBuilderRegionalDriveRoundTripTests(unittest.TestCase):
             self.assertNotIn("rendered_source", result)
             self.assertIn("study.field_drives.add(", copy_path.read_text(encoding="utf-8"))
             self.assertEqual(source_path.read_bytes(), before)
-            self.assertEqual(sorted(path.name for path in root.iterdir()), ["exports", "source.py"])
+            self.assertEqual({path.name for path in root.iterdir()}, before_entries | {"exports"})
             with self.assertRaises(ValueError):
                 rewrite_loaded_problem_script(loaded, write=True, output_path=copy_path)
             self.assertEqual(source_path.read_bytes(), before)

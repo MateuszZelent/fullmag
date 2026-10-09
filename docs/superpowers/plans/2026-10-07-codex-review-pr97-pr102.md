@@ -1850,3 +1850,8 @@ Pełny bootstrap [37871452458](https://github.com/MateuszZelent/fullmag/actions/
 Końcowy review N-OWN-HMAX wykrył redundantny późny stripper shared: usuwał manual pola z GeometryName obiektu z receptą. Poprawka musi eliminować generated policy wcześniej, zachować manual/region i sprawdzić real shared composition. Nie uznajemy samego standalone case za dowód całej realizacji.
 
 #4225198879: następna bramka to macierz pięciu rzeczywistych kliknięć Results w smoke-inspector: fresh page, start Dispersion, przejście na Resonance & FMR, contextual ribbon i Inspector owner. Finite modal/rf_coupling oraz driven-response fixtures muszą wytworzyć rzeczywiste liście. Same routing unit tests pozostają dowodem źródłowym. Browser proof pending.
+
+
+### Błąd bramki ordered round-trip — świeże źródła
+
+Bootstrap37871452458 Python113630265322 FAIL przed frozen probe. Dwa fixture mismatch: copy-writer test porównywał katalog z absolutną listą bez pycache utworzonego wcześniej przez loader; teraz porównuje exact snapshot po load z jedynym dodanym exports (nie filtruje dowolnych nowych plików). Test build-run pipeline oczekiwał tylko until mimo rzeczywistego canonical payloadu integrator/fixed_dt/sampling i pustych kompatybilnych kontrolek relax. Teraz nadal wymaga dokładnej pełnej mapy, właściwych run wartości oraz pustych kontrolek innego etapu. Nie zmieniono produkcyjnej semantyki loadera/run. AST/diffPASS, hosted executionpending. Jawny frozen probe step przeniesiono przed ordered tests, aby uzyskać niezależny diagnostyczny wynik przed kolejnym niepowiązanym failure. Cała bramka nadal wymaga wszystkich testów.
