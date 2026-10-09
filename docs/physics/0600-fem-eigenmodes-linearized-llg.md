@@ -774,8 +774,8 @@ ferromagnetic films*, J. Phys. C 19 (1986), DOI:10.1088/0022-3719/19/35/7013.
 | `crates/fullmag-runner/src/fem/eigen_path.rs` | `execute_fem_eigen_path` | Execute k samples and publish postsolve comparisons. |
 | `backends/fem/core/petsc_slepc_runtime.cpp` | `petsc_slepc_process_mutex` | Own one nonrecursive PETSc/SLEPc operation boundary for CPU/GPU, with unsafe retained-graph shutdown protection. |
 | `backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp` | `stop_native_floquet_eps` | Preserve negative EPS reasons and poll cancellation on the final successful iteration. |
-| `backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp` | `prepare_candidate_operator_diagnostic` | Prepare the bounded isolated Poisson workspace and attach its owner to the true-probe callback; source review and managed evidence pending. |
-| `backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp` | `capture_candidate_shifted_lu_comparison` | Observe isolated current/NONE LU on the actual RHS with source-calibrated operator residual; hosted measurement pending. |
+| `backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp` | `prepare_candidate_operator_diagnostic` | Prepare the bounded isolated Poisson workspace and attach its owner to the true-probe callback; hosted candidate measurements observed, full solve unqualified. |
+| `backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp` | `capture_candidate_shifted_lu_comparison` | Observe isolated current/NONE LU on the actual RHS with source-calibrated operator residual; hosted comparison observed, full production solve still fails. |
 | `backends/fem/cpu/frequency_domain/modal/shifted_ksp_true_convergence.hpp` | `run_floquet_candidate_diagnostic_capture_transaction` | Stop callback on uncertain handler push/pop; preserve honest partial diagnostic completeness. |
 | `backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp` | `run_floquet_dense_original_oracle` | Record bounded raw/rotated eigenvalues and shift distances before window filtering, with explicit truncation. |
 | `backends/fem/cpu/frequency_domain/modal/shifted_ksp_true_convergence.hpp` | `floquet_shifted_true_convergence_test` | Guard candidate admission after PETSc GMRES solution building; preserve negative reason and unavailable probes. |
@@ -852,4 +852,36 @@ To diagnostyka FEM CPU/PETSc ograniczona do istniejącego opt-in tiny bound; FDM
 
 Implementacja i niezależny pełny SOURCE review obejmują opt-in capture przed mutacją residualu. Źródłowo $P_{\mathrm{norm}}=T A_{\mathrm{shift}}$; rozwiązanie $P_{\mathrm{norm}}y=b$ jest porównywane z operatorem przy $x_A=T y$. S jest wcześniejszą wspólną normalizacją pencil i nie jest stosowane drugi raz w tym przekształceniu. Normy są diagnostyką współrzędnych wewnętrznych KSP, nie nowym obserwablem fizycznym; ratio residual/RHS oraz residual/threshold są bezwymiarowe. Requested factor shift nadal nie jest zmierzoną perturbacją.
 
-Push/pop handler failure propaguje się do quarantine przed dalszymi działaniami callbacku. Stan measured wymaga kompletnego własnego workspace, wszystkich dostępnych norm i zerowych error codes; częściowe pomiary nie udają sukcesu. Regresje używają rzeczywiście stosowanych transaction/completeness helpers oraz istniejących rzeczywistych callback fixtures. Local runtime/compile nie wykonano; hosted LU metrics i poprawne production eigenpairs pozostają NOT VERIFIED.
+Push/pop handler failure propaguje się do quarantine przed dalszymi działaniami callbacku. Stan measured wymaga kompletnego własnego workspace, wszystkich dostępnych norm i zerowych error codes; częściowe pomiary nie udają sukcesu. Regresje używają rzeczywiście stosowanych transaction/completeness helpers oraz istniejących rzeczywistych callback fixtures. Local runtime/compile nie wykonano. Hosted LU metrics obserwowano w GHA37983196239; poprawne production eigenpairs tego fixture pozostają NOT VERIFIED.
+
+
+### Pomiar LU na rzeczywistym RHS — wynik i granice diagnozy
+
+[GHA37983196239](https://github.com/MateuszZelent/fullmag/actions/runs/37983196239)
+na commicie `364d1fc7a2ca9cdcfb7686f06d57b6e27f140d56` wykonał
+porównanie w `capture_candidate_shifted_lu_comparison`. Dla tego samego
+RHS callbacku w subwindow10 obie izolowane polityki NONZERO/NONE dały
+identyczny wynik: względny residual operatora `5.150782251730459e-16`,
+stosunek do niezmienionego progu KSP `0.005150782251730459`.
+Produkcyjny kandydat GMRES miał stosunek `13693.015524958842`;
+modal provenance zakończył się błędem EPS91, a cały przebieg dał 5/6
+testów PASS. Obie wielkości są bezwymiarowymi miarami układu wewnętrznego.
+Nie stanowią residualu zaakceptowanego fizycznego modu.
+
+Wynik nie uzasadnia zmiany polityki LU, progu ani okna wyszukiwania.
+Dotychczasowe porównanie używa osobnych faktorów i nie mierzy działania
+preconditionera rzeczywiście zainstalowanego w produkcyjnym GMRES.
+Następny **planowany, jeszcze niewdrożony** pomiar ma porównać działanie
+tego żywego PC na prywatnej kopii RHS z izolowanymi faktorami oraz sprawdzić
+niezmienność kandydata przed i po obserwatorze. Musi zachować istniejącą
+kalibrację $P_{\mathrm{norm}}=T A_{\mathrm{shift}}$ i $x_A=T y$,
+availability każdej normy oraz checked cleanup. Nie wolno wykonywać
+kolejnego solve na żywym KSP ani zmieniać jego konfiguracji w obserwatorze.
+
+Mnożenie przez $T$ dotyczy diagnostycznego direct solve. Nie jest poprawką
+końcowej rekonstrukcji prawego GMRES, która musi być zgodna z operatorem
+bazy Kryłowa. Punkt odniesienia implementacyjnego: PETSc 3.24.6
+[`KSPBuildSolution_GMRES`](https://github.com/petsc/petsc/blob/v3.24.6/src/ksp/ksp/impls/gmres/gmres.c)
+oraz `floquet_shifted_true_convergence_test` w pliku wskazanym w indeksie
+źródeł tej strony. Zakres dotyczy diagnostyki FEM CPU; nie rozszerza
+publicznego Python/ProblemIR, FDM CPU/GPU ani kwalifikacji FEM GPU.
