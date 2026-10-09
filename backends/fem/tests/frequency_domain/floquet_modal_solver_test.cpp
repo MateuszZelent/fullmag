@@ -1087,9 +1087,9 @@ void refills_native_floquet_nev_before_tangent_mass_cap()
     constexpr double coefficient_scale = 1.0e-60;
     constexpr double spectral_center_hz = 1.0e6;
     constexpr double shift_frequency_hz = spectral_center_hz - 1.0e4;
-    // Keep the requested spectrum and its near-duplicate cluster unchanged,
-    // but isolate this refill/dedup fixture from the separate near-pole KSP
-    // residual-gap case. This shift change does not fix that KSP issue.
+    // Preserve the original q=8 fixture for the dimension-limited and
+    // cancellation cases below. Its real-split dimension caps NCV at 16, so
+    // the separate q=32 operator is required to exercise a real NEV refill.
     const double frequency_offsets_hz[q_dimension] = {
         -0.003, -0.001, 0.001, 0.003, 0.2, 0.4, 0.6, 0.8};
     std::vector<std::complex<double>> a_diagonal(q_dimension);
@@ -1129,40 +1129,136 @@ void refills_native_floquet_nev_before_tangent_mass_cap()
         return request;
     };
 
-    const auto refill_request = make_request(2, 160);
-    const auto refill_result = fd::solve_floquet_shared_domain_sparse_modal_spectrum(
-        operator_view, refill_request);
-    check(refill_result.ok && refill_result.accepted_mode_count == 2,
-          "native Floquet refill publishes the requested certified mode count");
-    const bool refill_attempt_telemetry_consistent =
-        refill_result.eps_attempt_count >= 2 &&
-        refill_result.eps_solved_attempt_count >= 2 &&
-        refill_result.eps_finalized_attempt_number ==
-            refill_result.eps_solved_attempt_count;
-    if (!refill_attempt_telemetry_consistent) {
-        const auto &probe = refill_result.shifted_ksp_failure_probe;
+    constexpr std::size_t refill_q_dimension = 32u;
+    constexpr double refill_spectral_center_hz = 1.0e6;
+    constexpr double refill_window_half_width_hz = 1.0e5;
+    constexpr double refill_shift_frequency_hz =
+        refill_spectral_center_hz - 1.05e5;
+    // With initial NEV=4, the four closest frequencies include only the
+    // index-1 in-window mode; index 4 is the second in-window mode, and the
+    // remaining 27 modes are explicitly separated above the window.
+    std::vector<double> refill_frequency_offsets_hz{
+        -1.1e5, -0.95e5, -1.3e5, -1.6e5, -0.35e5};
+    for (std::size_t index = refill_frequency_offsets_hz.size();
+         index < refill_q_dimension;
+         ++index) {
+        refill_frequency_offsets_hz.push_back(
+            2.0e5 + 1.0e4 * static_cast<double>(index - 5u));
+    }
+    check(refill_frequency_offsets_hz.size() == refill_q_dimension,
+          "provider refill fixture contains its full real-split spectral basis");
+    int refill_fixture_window_mode_count = 0;
+    for (std::size_t index = 0u;
+         index < refill_frequency_offsets_hz.size();
+         ++index) {
+        const double frequency_hz =
+            refill_spectral_center_hz + refill_frequency_offsets_hz[index];
+        if (frequency_hz >= refill_spectral_center_hz -
+                refill_window_half_width_hz &&
+            frequency_hz <= refill_spectral_center_hz +
+                refill_window_half_width_hz) {
+            ++refill_fixture_window_mode_count;
+        }
+        if (index >= 5u) {
+            check(refill_frequency_offsets_hz[index] >= 2.0e5 &&
+                      (index == 5u ||
+                       refill_frequency_offsets_hz[index] -
+                               refill_frequency_offsets_hz[index - 1u] >=
+                           1.0e4),
+                  "all added Floquet refill modes stay separated outside the requested window");
+        }
+    }
+    check(refill_fixture_window_mode_count == 2,
+          "only the two independently specified refill modes lie in the requested window");
+
+    std::vector<std::complex<double>> refill_a_diagonal(refill_q_dimension);
+    const std::vector<std::complex<double>> refill_b_diagonal(
+        refill_q_dimension, std::complex<double>(0.0, -coefficient_scale));
+    for (std::size_t row = 0u; row < refill_q_dimension; ++row) {
+        refill_a_diagonal[row] = coefficient_scale *
+            fd::omega_rad_s_from_frequency_hz(
+                refill_spectral_center_hz + refill_frequency_offsets_hz[row]);
+    }
+    const auto refill_a_qq = diagonal_complex_csr(
+        refill_q_dimension, refill_a_diagonal);
+    const auto refill_b_qq = diagonal_complex_csr(
+        refill_q_dimension, refill_b_diagonal);
+    const auto refill_positive_tangent_mass = diagonal_complex_csr(
+        refill_q_dimension,
+        std::vector<std::complex<double>>(
+            refill_q_dimension, std::complex<double>(1.0, 0.0)));
+    const auto refill_p = diagonal_complex_csr(1u, {1.0});
+    const auto refill_a_qphi = q_to_phi_complex_csr(refill_q_dimension, 0.0);
+    const auto refill_a_phiq = phi_to_q_complex_csr(refill_q_dimension, 0.0);
+    fd::FloquetSharedDomainSparseModalOperator refill_operator_view{};
+    refill_operator_view.a_qq = &refill_a_qq;
+    refill_operator_view.b_qq = &refill_b_qq;
+    refill_operator_view.positive_tangent_mass = &refill_positive_tangent_mass;
+    refill_operator_view.p = &refill_p;
+    refill_operator_view.a_qphi = &refill_a_qphi;
+    refill_operator_view.a_phiq = &refill_a_phiq;
+    refill_operator_view.q_complex_dof_count = refill_q_dimension;
+    refill_operator_view.phi_dof_count = 1u;
+
+    const auto make_refill_request = [=](int requested_count, int outer_budget) {
+        fd::SLEPcSparseGyrotropicModalEigenRequest request{};
+        request.tangent_dof_count = static_cast<int>(refill_q_dimension);
+        request.requested_mode_count = requested_count;
+        request.target_frequency_hz = refill_shift_frequency_hz;
+        request.frequency_min_hz = refill_spectral_center_hz -
+            refill_window_half_width_hz;
+        request.frequency_max_hz = refill_spectral_center_hz +
+            refill_window_half_width_hz;
+        request.residual_tolerance = 1.0e-10;
+        request.max_outer_iterations = outer_budget;
+        request.max_linear_iterations = 96;
+        return request;
+    };
+    const auto report_refill_diagnostics = [](
+        const char *label,
+        const fd::SLEPcTinyGyrotropicModalEigenResult &result) {
+        const auto &probe = result.shifted_ksp_failure_probe;
         std::fprintf(
             stderr,
-            "DIAG: refill telemetry ok=%d status=%s reason=%s attempts=%d "
-            "solved=%d finalized_attempt=%d initial_nev=%d current_nev=%d "
-            "finalized_nev=%d ncv=%d mpd=%d unique=%d probe_attempt=%d "
-            "probe_nev=%lld probe_ncv=%lld callback_count=%llu "
-            "callback_available=%d callback_iteration=%lld default_reason="
-            "%d:%d post_gate_reason=%d:%d probe_attempts=%llu probes=%llu "
-            "probe_measurement_failures=%llu\n",
-            refill_result.ok ? 1 : 0,
-            refill_result.status != nullptr ? refill_result.status : "",
-            refill_result.unsupported_reason != nullptr
-                ? refill_result.unsupported_reason : "",
-            refill_result.eps_attempt_count,
-            refill_result.eps_solved_attempt_count,
-            refill_result.eps_finalized_attempt_number,
-            refill_result.eps_initial_nev,
-            refill_result.eps_nev,
-            refill_result.eps_finalized_nev,
-            refill_result.eps_ncv,
-            refill_result.eps_mpd,
-            refill_result.eps_unique_certified_mode_count,
+            "DIAG: %s ok=%d status=%s reason=%s attempts=%d solved=%d "
+            "finalized_attempt=%d first_pool_available=%d first_unique=%d "
+            "initial_nev=%d current_nev=%d finalized_nev=%d "
+            "initial_ncv=%d ncv=%d initial_mpd=%d mpd=%d "
+            "positive=%d window=%d residual_eval=%d residual_rejected=%d "
+            "unique=%d accepted=%d max_residual=%.17g outer=%d/%d "
+            "converged=%d eps_reason_available=%d eps_reason=%d "
+            "probe_attempt=%d probe_nev=%lld probe_ncv=%lld "
+            "callback_count=%llu callback_available=%d callback_iteration=%lld "
+            "default_reason=%d:%d post_gate_reason=%d:%d "
+            "probe_attempts=%llu probes=%llu probe_measurement_failures=%llu\n",
+            label,
+            result.ok ? 1 : 0,
+            result.status != nullptr ? result.status : "",
+            result.unsupported_reason != nullptr ? result.unsupported_reason : "",
+            result.eps_attempt_count,
+            result.eps_solved_attempt_count,
+            result.eps_finalized_attempt_number,
+            result.eps_first_attempt_unique_certified_mode_count_available ? 1 : 0,
+            result.eps_first_attempt_unique_certified_mode_count,
+            result.eps_initial_nev,
+            result.eps_nev,
+            result.eps_finalized_nev,
+            result.eps_initial_ncv,
+            result.eps_ncv,
+            result.eps_initial_mpd,
+            result.eps_mpd,
+            result.positive_frequency_candidate_count,
+            result.frequency_window_candidate_count,
+            result.residual_evaluation_candidate_count,
+            result.residual_rejection_count,
+            result.eps_unique_certified_mode_count,
+            result.accepted_mode_count,
+            result.max_candidate_relative_residual,
+            result.outer_iterations,
+            result.max_outer_iterations,
+            result.converged_eigenpair_count,
+            result.eps_converged_reason_available ? 1 : 0,
+            result.eps_converged_reason,
             probe.eps_attempt_number,
             static_cast<long long>(probe.eps_nev_argument),
             static_cast<long long>(probe.eps_ncv_argument),
@@ -1177,14 +1273,70 @@ void refills_native_floquet_nev_before_tangent_mass_cap()
             static_cast<unsigned long long>(probe.true_probe_count),
             static_cast<unsigned long long>(
                 probe.true_probe_measurement_failure_count));
+    };
+
+    const auto refill_request = make_refill_request(2, 160);
+    const auto refill_result = fd::solve_floquet_shared_domain_sparse_modal_spectrum(
+        refill_operator_view, refill_request);
+    const double expected_first_refill_frequency_hz =
+        refill_spectral_center_hz + refill_frequency_offsets_hz[1u];
+    const double expected_second_refill_frequency_hz =
+        refill_spectral_center_hz + refill_frequency_offsets_hz[4u];
+    constexpr double expected_refill_frequency_tolerance_hz = 1.0e-3;
+    bool saw_expected_first_refill_frequency = false;
+    bool saw_expected_second_refill_frequency = false;
+    bool refill_residuals_accepted = refill_result.accepted_modes.size() == 2u;
+    for (const fd::SLEPcModalAcceptedMode &mode : refill_result.accepted_modes) {
+        saw_expected_first_refill_frequency =
+            saw_expected_first_refill_frequency ||
+            std::abs(mode.frequency_hz - expected_first_refill_frequency_hz) <=
+                expected_refill_frequency_tolerance_hz;
+        saw_expected_second_refill_frequency =
+            saw_expected_second_refill_frequency ||
+            std::abs(mode.frequency_hz - expected_second_refill_frequency_hz) <=
+                expected_refill_frequency_tolerance_hz;
+        refill_residuals_accepted = refill_residuals_accepted &&
+            mode.relative_residual <= refill_request.residual_tolerance;
     }
+    const bool refill_expected_frequencies_present =
+        refill_result.accepted_modes.size() == 2u &&
+        saw_expected_first_refill_frequency &&
+        saw_expected_second_refill_frequency;
+    const bool refill_first_pool_observed_incomplete =
+        refill_result.eps_first_attempt_unique_certified_mode_count_available &&
+        refill_result.eps_first_attempt_unique_certified_mode_count == 1;
+    const bool refill_attempt_telemetry_consistent =
+        refill_result.eps_attempt_count >= 2 &&
+        refill_result.eps_solved_attempt_count >= 2 &&
+        refill_result.eps_finalized_attempt_number ==
+            refill_result.eps_solved_attempt_count;
+    const bool refill_dimensions_resolved_and_fixed =
+        refill_result.eps_dimensions_available &&
+        refill_result.eps_initial_nev == 4 &&
+        refill_result.eps_nev > refill_result.eps_initial_nev &&
+        refill_result.eps_initial_ncv == 32 &&
+        refill_result.eps_ncv == refill_result.eps_initial_ncv &&
+        refill_result.eps_initial_mpd > 0 &&
+        refill_result.eps_mpd == refill_result.eps_initial_mpd &&
+        refill_result.eps_nev < refill_result.eps_ncv;
+    const bool refill_primary_contract =
+        refill_result.ok && refill_result.accepted_mode_count == 2 &&
+        refill_result.eps_unique_certified_mode_count == 2 &&
+        refill_first_pool_observed_incomplete &&
+        refill_attempt_telemetry_consistent &&
+        refill_dimensions_resolved_and_fixed &&
+        refill_expected_frequencies_present &&
+        refill_residuals_accepted;
+    if (!refill_primary_contract) {
+        report_refill_diagnostics("native refill", refill_result);
+    }
+    check(refill_result.ok && refill_result.accepted_mode_count == 2,
+          "native Floquet refill publishes the requested certified mode count");
     check(refill_attempt_telemetry_consistent,
           "native Floquet refill records attempts, safe solves, and the finalized pool identity");
-    check(refill_result.eps_initial_nev == 4 &&
-              refill_result.eps_nev > refill_result.eps_initial_nev &&
-              refill_result.eps_ncv == 16 &&
-              refill_result.eps_mpd == 16 &&
-              refill_result.eps_nev < refill_result.eps_ncv,
+    check(refill_first_pool_observed_incomplete,
+          "the first finalized refill pool contains one certified mode before later attempts");
+    check(refill_dimensions_resolved_and_fixed,
           "native Floquet refill grows NEV while holding the initial NCV and MPD fixed");
     check(refill_result.eps_unique_certified_mode_count == 2 &&
               refill_result.eps_cumulative_iterations_available &&
@@ -1192,24 +1344,18 @@ void refills_native_floquet_nev_before_tangent_mass_cap()
               refill_result.outer_iterations <= refill_result.max_outer_iterations &&
               refill_result.ksp_max_iterations == refill_request.max_linear_iterations,
           "native Floquet refill reports the unique certified pool within one cumulative EPS budget");
-    bool has_refilled_orthogonal_mode = false;
-    for (const fd::SLEPcModalAcceptedMode &mode : refill_result.accepted_modes) {
-        check(mode.relative_residual <= refill_request.residual_tolerance,
-              "refilled modes retain the original descriptor residual gate");
-        has_refilled_orthogonal_mode =
-            has_refilled_orthogonal_mode ||
-            mode.frequency_hz > spectral_center_hz + 0.1;
-    }
-    check(has_refilled_orthogonal_mode,
-          "the final pool includes a farther mode outside the initial duplicate cluster");
+    check(refill_expected_frequencies_present,
+          "refill returns both independently specified in-window eigenfrequencies");
+    check(refill_residuals_accepted,
+          "refilled modes retain the original descriptor residual gate");
     const auto first_mass_vector = complex_csr_matvec_for_test(
-        positive_tangent_mass, refill_result.accepted_modes[0].mode_vector);
+        refill_positive_tangent_mass, refill_result.accepted_modes[0].mode_vector);
     const auto second_mass_vector = complex_csr_matvec_for_test(
-        positive_tangent_mass, refill_result.accepted_modes[1].mode_vector);
+        refill_positive_tangent_mass, refill_result.accepted_modes[1].mode_vector);
     std::complex<double> mass_inner_product{};
     double first_mass_norm_squared = 0.0;
     double second_mass_norm_squared = 0.0;
-    for (std::size_t index = 0u; index < q_dimension; ++index) {
+    for (std::size_t index = 0u; index < refill_q_dimension; ++index) {
         mass_inner_product += std::conj(
             refill_result.accepted_modes[0].mode_vector[index]) *
             second_mass_vector[index];
@@ -1222,6 +1368,9 @@ void refills_native_floquet_nev_before_tangent_mass_cap()
     }
     const double normalized_mass_overlap = std::abs(mass_inner_product) /
         std::sqrt(first_mass_norm_squared * second_mass_norm_squared);
+    check(std::isfinite(first_mass_norm_squared) && first_mass_norm_squared > 0.0 &&
+              std::isfinite(second_mass_norm_squared) && second_mass_norm_squared > 0.0,
+          "both returned Floquet modes have positive norm in the supplied tangent mass");
     check(std::isfinite(normalized_mass_overlap) &&
               normalized_mass_overlap < 0.90,
           "the returned nearest modes remain distinct in the positive tangent mass metric");
@@ -1245,10 +1394,29 @@ void refills_native_floquet_nev_before_tangent_mass_cap()
               dimension_limited_result.eps_mpd == 16,
           "the refill ceiling never exceeds the initially admitted Krylov dimensions");
 
-    const auto budget_limited_request = make_request(2, 1);
+    const auto budget_limited_request = make_refill_request(2, 1);
     const auto budget_limited_result =
         fd::solve_floquet_shared_domain_sparse_modal_spectrum(
-            operator_view, budget_limited_request);
+            refill_operator_view, budget_limited_request);
+    const bool budget_limit_is_an_actual_partial_refill =
+        !budget_limited_result.ok &&
+        budget_limited_result.status != nullptr &&
+        std::strcmp(budget_limited_result.status, "partial") == 0 &&
+        budget_limited_result.unsupported_reason != nullptr &&
+        std::strcmp(
+            budget_limited_result.unsupported_reason,
+            "floquet_nev_refill_outer_iteration_budget_exhausted") == 0 &&
+        budget_limited_result.accepted_mode_count == 1 &&
+        budget_limited_result.eps_attempt_count == 1 &&
+        budget_limited_result.eps_solved_attempt_count == 1 &&
+        budget_limited_result.eps_first_attempt_unique_certified_mode_count_available &&
+        budget_limited_result.eps_first_attempt_unique_certified_mode_count == 1 &&
+        budget_limited_result.frequency_window_candidate_count > 0 &&
+        budget_limited_result.residual_evaluation_candidate_count > 0 &&
+        budget_limited_result.residual_rejection_count == 0;
+    if (!budget_limit_is_an_actual_partial_refill) {
+        report_refill_diagnostics("one-iteration budget", budget_limited_result);
+    }
     check(!budget_limited_result.ok &&
               budget_limited_result.status != nullptr &&
               std::strcmp(budget_limited_result.status, "partial") == 0 &&
@@ -1256,12 +1424,14 @@ void refills_native_floquet_nev_before_tangent_mass_cap()
               std::strcmp(
                   budget_limited_result.unsupported_reason,
                   "floquet_nev_refill_outer_iteration_budget_exhausted") == 0 &&
-              budget_limited_result.accepted_mode_count < 2,
-          "EPS iteration exhaustion is an explicit incomplete result, not requested-count success");
+              budget_limited_result.accepted_mode_count == 1,
+          "one EPS iteration retains the one certified in-window mode and reports budget exhaustion");
+    check(budget_limit_is_an_actual_partial_refill,
+          "budget exhaustion is observed with a certified partial pool rather than residual rejection");
     check(budget_limited_result.eps_iteration_budget_available &&
               budget_limited_result.max_outer_iterations == 1 &&
               budget_limited_result.eps_cumulative_iterations_available &&
-              budget_limited_result.outer_iterations <= 1,
+              budget_limited_result.outer_iterations == 1,
           "refill cannot reset or exceed the resolved total EPS iteration budget");
 
     CancelAfterPolls cancellation{};

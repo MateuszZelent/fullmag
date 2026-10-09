@@ -418,6 +418,10 @@ struct SLEPcTinyGyrotropicModalEigenResult {
     int eps_finalized_attempt_number = 0;
     int eps_finalized_nev = 0;
     int eps_unique_certified_mode_count = 0;
+    // Snapshot the first successfully finalized EPS pool. Availability keeps
+    // a default zero distinct from an observed empty certified pool.
+    bool eps_first_attempt_unique_certified_mode_count_available = false;
+    int eps_first_attempt_unique_certified_mode_count = 0;
     bool eps_outer_iteration_budget_exhausted = false;
     FloquetShiftedKspFailureProbe shifted_ksp_failure_probe{};
     bool eps_iteration_budget_available = false;

@@ -4231,6 +4231,14 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
     }
     if (result.eps_attempt_count == 1) {
         initial_mpd = attempt_resolved_mpd;
+        // Retain the dimensions SLEPc actually resolved after setup; refill
+        // attempts are checked against these values below.
+        result.eps_initial_ncv = static_cast<int>(std::min<PetscInt>(
+            attempt_resolved_ncv,
+            result_int_max));
+        result.eps_initial_mpd = static_cast<int>(std::min<PetscInt>(
+            attempt_resolved_mpd,
+            result_int_max));
         total_outer_iteration_budget = attempt_resolved_max_iterations;
         result.max_outer_iterations =
             static_cast<int>(total_outer_iteration_budget);
@@ -4944,6 +4952,13 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
         attempt_resolved_nev,
         result_int_max));
     result.eps_unique_certified_mode_count = result.accepted_mode_count;
+    if (result.eps_attempt_count == 1) {
+        // Cache the certified count only after this attempt's actual pool has
+        // passed the original descriptor and positive-mass finalizer.
+        result.eps_first_attempt_unique_certified_mode_count =
+            result.eps_unique_certified_mode_count;
+        result.eps_first_attempt_unique_certified_mode_count_available = true;
+    }
     if (!result.accepted_modes.empty()) {
         const SLEPcModalAcceptedMode &first = result.accepted_modes.front();
         result.selected_eigenpair_index = first.eigenpair_index;
