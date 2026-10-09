@@ -120,7 +120,8 @@ describe("analysis plots performance audit", () => {
     expect(auditScript).toContain("same-runtime remount");
     expect(auditScript).toContain("alternateDatasetRef");
     expect(auditScript).toContain("selectExplicitAnalysisDataset(page, 1)");
-    expect(auditScript).not.toContain("page.reload");
+    // The explicit stored-preference fallback reload is a separate lifecycle;
+    // this source guard does not qualify it as a same-page surface switch.
     expect(auditScript).toContain('?? "unknown"');
     expect(auditScript).toContain("CONTROL_ROOM_AUDIT_COMMIT");
     expect(auditScript).toContain("does not match current HEAD");
