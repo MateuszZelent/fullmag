@@ -353,7 +353,7 @@ class LocalRunnerSourceCompactionTests(unittest.TestCase):
             finally:
                 if swapped and moved_tree.exists() and foreign_file is not None:
                     source_root.chmod(source_root_mode | stat.S_IWUSR)
-                    original_rename(tree_path, source_root / "tree-foreign")
+                    original_rename(tree_path, root / "foreign-tree-preserved")
                     original_rename(moved_tree, tree_path)
                     source_root.chmod(source_root_mode)
 
@@ -362,6 +362,11 @@ class LocalRunnerSourceCompactionTests(unittest.TestCase):
             )
             self.assertEqual(resumed["state"], "completed")
             self.assertEqual(resumed["skipped_count"], 1)
+            preserved_foreign = root / "foreign-tree-preserved" / source_file.name
+            preserved_metadata = preserved_foreign.stat()
+            self.assertEqual((preserved_metadata.st_dev, preserved_metadata.st_ino), foreign_snapshot[0])
+            self.assertEqual(stat.S_IMODE(preserved_metadata.st_mode), foreign_snapshot[1])
+            self.assertEqual(preserved_foreign.read_bytes(), foreign_snapshot[2])
 
     @unittest.skipIf(os.name == "nt", "Windows owner handles deny direct parent rename")
     def test_parent_rename_and_replacement_before_commit_preserve_foreign_file(self) -> None:

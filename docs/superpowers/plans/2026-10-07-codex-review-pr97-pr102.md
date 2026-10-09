@@ -1962,3 +1962,15 @@ Count-only fixture używa rzeczywistego Context Poisson Hdemag/phi0, compensatio
 ### Browser branch controls — rozwinięcie rzeczywistej sekcji
 
 37884231565 FAIL wselectInspectorResultBranch: branch action istniała, ale domyślniezwinięta Dispersion Branch Table była ukryta. Harness otwiera widocznytrigger tylko gdyaria-expanded nie jesttrue, potwierdza rowbranch-0, klika realnąakcję i sprawdza detailowner/surface/heading/identity. Bez directselectionbypass ani słabszychguards. Failurecapture zachowuje originalerror +boundedDOM/screenshot. Node syntax/sourcecomponent/fixture diffreview PASS; freshGHA pending. Routing5caseproof nie powstał wtymjobie: kolejność najpierwroutingmatrix potemResonance, więc nie zaliczono5cases.
+
+### Świeże metadane Windows i poprawny recovery fixture kapsuły
+
+GHA 37886987649: Ubuntu source-compaction 19 przypadków zakończyło się 2 ERROR w recovery, ponieważ test zachowywał obce drzewo wewnątrz kapsuły, naruszając dokładny kontrakt manifest.json/tree. Fixture zachowuje teraz obce drzewo poza kapsułą i dodatkowo sprawdza inode, mode i bytes po wznowieniu; produkcyjny guard pozostaje bez zmian.
+
+Windows w tym samym przebiegu ujawnił różnicę nested.mtime_ns w rekordach rzeczywistego fingerprintu: cached DirEntry.stat zwracał także zerowe inode/device, podczas gdy os.lstat miał aktualny czas i rzeczywistą tożsamość. Inventory na Windows używa teraz świeżego os.lstat bez śledzenia linków; POSIX, wszystkie pola hasha i type/reparse guards pozostają zachowane. Nowy Windows regression zabrania cached stat i porównuje pełne rekordy z lstat. Source review PASS; wykonanie poprawionych przypadków w GHA pozostaje NOT VERIFIED. Nie jest to gwarancja atomowego snapshotu drzewa i nie wykonano sprzątania hosta.
+
+### Zakończone provider CI — rozdzielenie generic i count
+
+37882511124 SUCCESS na 47aa4620904834a21a16903c6166dcf6032f315d. Actual native-build-and-ctest.log potwierdza generic_sparse_mfem_window_and_nearest_certification, generic_modal_mass_refill_contract oraz pairwise_distinct_quality_representatives_dense_csr_legacy i generic_slepc_mass_action_finalizer_contract. Naprawa serializerowego pola wyczerpania budżetu ma rzeczywisty provider dowód; nie oznacza pełnej kwalifikacji dyspersji.
+
+37882513953 FAIL przed count oracle: native static Poisson solve zgłasza MFEM lumped mass is unavailable for Poisson demag energy evaluation. Trwa diagnoza setup fixture; nie poluzowano tolerancji/count assertions ani demag. 37886990725 browser także terminal FAIL; pełna macierz Resonance/Plot3D pozostaje NOT VERIFIED. Rust w tym przebiegu zatrzymał się przed Kittel na source-compaction recovery, więc nowych Kittel testów nie zaliczono.
