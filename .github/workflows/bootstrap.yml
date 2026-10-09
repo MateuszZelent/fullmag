@@ -624,3 +624,5 @@ jobs:
         run: python -B scripts/test_local_runner_runtime_retention.py -v
       - name: Run local runner runtime reference regressions
         run: python -B scripts/test_local_runner_runtime_references.py -v
+      - name: Run source capsule owner binding and cleanup regressions
+        run: python -B scripts/test_local_runner_source_compaction.py -v

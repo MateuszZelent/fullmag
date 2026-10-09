@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import stat
 import subprocess
 import tempfile
 import unittest
@@ -172,14 +173,23 @@ class LocalRunnerSourceCompactionTests(unittest.TestCase):
             second_file = source / "tree" / "b.txt"
             original_metadata = second_file.stat()
             original_identity = (original_metadata.st_dev, original_metadata.st_ino)
-            real_replace = os.replace
+            real_replace = source_compaction._VerifiedDirectoryOwner.rename_file_from
 
-            def fail_second_replace(source_path: os.PathLike[str] | str, destination_path: os.PathLike[str] | str) -> None:
-                if Path(destination_path) == second_file:
+            def fail_second_replace(
+                parent_owner: object,
+                stage_owner: object,
+                source_name: str,
+                destination_name: str,
+            ) -> None:
+                if Path(parent_owner.path) == second_file.parent and destination_name == second_file.name:
                     raise OSError("injected replace failure")
-                real_replace(source_path, destination_path)
+                real_replace(parent_owner, stage_owner, source_name, destination_name)
 
-            with patch.object(source_compaction.os, "replace", side_effect=fail_second_replace):
+            with patch.object(
+                source_compaction._VerifiedDirectoryOwner,
+                "rename_file_from",
+                new=fail_second_replace,
+            ):
                 with self.assertRaises(source_compaction.SourceCompactionError):
                     source_compaction.compact_source_capsule(
                         storage, source, manifest["source_digest"]
@@ -208,6 +218,10 @@ class LocalRunnerSourceCompactionTests(unittest.TestCase):
                 storage / "cache" / "source-content-v1"
             )._object_path(failed_entry["sha256"], failed_entry["mode"])
             self.assertEqual(failed_object.stat().st_nlink, 1)
+            stage_root = (
+                storage / "tmp" / "source-compaction" / "wt-1" / "capture-a"
+            )
+            self.assertEqual(list(stage_root.glob(".compact-quarantine-*")), [])
             self.assertEqual(
                 hashlib.sha256(failed_object.read_bytes()).hexdigest(), failed_entry["sha256"]
             )
@@ -215,6 +229,15 @@ class LocalRunnerSourceCompactionTests(unittest.TestCase):
                 self.assertTrue(getattr(failed_object.stat(), "st_file_attributes", 0) & 0x1)
             else:
                 self.assertEqual(failed_object.stat().st_mode & 0o777, 0o444)
+
+            source_root_mode = stat.S_IMODE(source.stat().st_mode)
+            source.chmod(source_root_mode | stat.S_IWUSR)
+            moved_tree = source / "tree-owner-release"
+            try:
+                os.rename(source / "tree", moved_tree)
+                os.rename(moved_tree, source / "tree")
+            finally:
+                source.chmod(source_root_mode)
 
             result = source_compaction.compact_source_capsule(
                 storage, source, manifest["source_digest"]
@@ -232,6 +255,652 @@ class LocalRunnerSourceCompactionTests(unittest.TestCase):
                 )
             )
 
+    def _assert_parent_replacement_isolated(self, timing: str) -> None:
+        with tempfile.TemporaryDirectory(prefix="fullmag-source-parent-race-") as raw:
+            root = Path(raw)
+            storage = root / "storage"
+            storage.mkdir()
+            repo, _ = _repository(root, one_file=True)
+            source, manifest = _capture(storage, repo, "capture-race")
+            source_file = source / "tree" / "a.txt"
+            tree_path = source_file.parent
+            source_root = tree_path.parent
+            moved_tree = source_root / "tree-original"
+            foreign_file: Path | None = None
+            foreign_snapshot: tuple[tuple[int, int], int, bytes] | None = None
+            swapped = False
+            source_root_mode = stat.S_IMODE(source_root.stat().st_mode)
+            tree_mode = stat.S_IMODE(tree_path.stat().st_mode)
+            file_metadata = source_file.stat()
+            file_mode = stat.S_IMODE(file_metadata.st_mode)
+            original_bytes = source_file.read_bytes()
+            original_rename = os.rename
+
+            def substitute_parent() -> None:
+                nonlocal foreign_file, foreign_snapshot, swapped
+                source_root.chmod(source_root_mode | stat.S_IWUSR)
+                original_rename(tree_path, moved_tree)
+                tree_path.mkdir()
+                foreign_file = tree_path / source_file.name
+                foreign_file.write_bytes(original_bytes)
+                foreign_file.chmod(file_mode)
+                tree_path.chmod(tree_mode)
+                foreign_metadata = foreign_file.stat()
+                foreign_snapshot = (
+                    (foreign_metadata.st_dev, foreign_metadata.st_ino),
+                    stat.S_IMODE(foreign_metadata.st_mode),
+                    foreign_file.read_bytes(),
+                )
+                source_root.chmod(source_root_mode)
+                swapped = True
+
+            def replace_with_parent_race(
+                source_name: str,
+                destination_name: str,
+                *,
+                src_dir_fd: int | None = None,
+                dst_dir_fd: int | None = None,
+            ) -> None:
+                nonlocal swapped
+                is_commit = (
+                    dst_dir_fd is not None
+                    and destination_name == source_file.name
+                    and source_name.startswith(".compact-")
+                )
+                if is_commit and timing == "before_commit" and not swapped:
+                    substitute_parent()
+                original_rename(
+                    source_name,
+                    destination_name,
+                    src_dir_fd=src_dir_fd,
+                    dst_dir_fd=dst_dir_fd,
+                )
+                if is_commit and timing == "before_postverify" and not swapped:
+                    substitute_parent()
+
+            try:
+                with patch.object(
+                    source_compaction.os,
+                    "rename",
+                    side_effect=replace_with_parent_race,
+                ) as rename_hook:
+                    # The hook delegates the actual descriptor-relative API;
+                    # preserve capability detection while injecting the race.
+                    with patch.object(
+                        source_compaction.os, "supports_dir_fd",
+                        source_compaction.os.supports_dir_fd | {rename_hook},
+                    ):
+                        with self.assertRaises(source_compaction.SourceCompactionError):
+                            source_compaction.compact_source_capsule(
+                                storage, source, manifest["source_digest"]
+                            )
+
+                self.assertIsNotNone(foreign_file)
+                self.assertIsNotNone(foreign_snapshot)
+                foreign_metadata = foreign_file.stat()
+                self.assertEqual(
+                    (foreign_metadata.st_dev, foreign_metadata.st_ino), foreign_snapshot[0]
+                )
+                self.assertEqual(stat.S_IMODE(foreign_metadata.st_mode), foreign_snapshot[1])
+                self.assertEqual(foreign_file.read_bytes(), foreign_snapshot[2])
+
+                receipt = json.loads(
+                    source_compaction.compaction_receipt_path(storage, source).read_text(
+                        encoding="utf-8"
+                    )
+                )
+                self.assertEqual(receipt["state"], "partial_failure")
+            finally:
+                if swapped and moved_tree.exists() and foreign_file is not None:
+                    source_root.chmod(source_root_mode | stat.S_IWUSR)
+                    original_rename(tree_path, source_root / "tree-foreign")
+                    original_rename(moved_tree, tree_path)
+                    source_root.chmod(source_root_mode)
+
+            resumed = source_compaction.compact_source_capsule(
+                storage, source, manifest["source_digest"]
+            )
+            self.assertEqual(resumed["state"], "completed")
+            self.assertEqual(resumed["skipped_count"], 1)
+
+    @unittest.skipIf(os.name == "nt", "Windows owner handles deny direct parent rename")
+    def test_parent_rename_and_replacement_before_commit_preserve_foreign_file(self) -> None:
+        self._assert_parent_replacement_isolated("before_commit")
+
+    @unittest.skipIf(os.name == "nt", "Windows owner handles deny direct parent rename")
+    def test_parent_rename_and_replacement_before_postverify_preserve_foreign_file(self) -> None:
+        self._assert_parent_replacement_isolated("before_postverify")
+
+    @unittest.skipIf(os.name == "nt", "Windows owner handles deny direct stage-parent rename")
+    def test_stage_parent_replacement_before_cleanup_preserves_foreign_inode_and_fails_closed_on_restart(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="fullmag-stage-parent-race-") as raw:
+            root = Path(raw)
+            storage = root / "storage"
+            storage.mkdir()
+            repo, _ = _repository(root, one_file=True)
+            source, manifest = _capture(storage, repo, "capture-stage-race")
+            source_file = source / "tree" / "a.txt"
+            entry = next(item for item in manifest["files"] if item["path"] == "a.txt")
+            stage_name = source_compaction._stage_name(entry)
+            stage_root = (
+                storage / "tmp" / "source-compaction" / "wt-1" / "capture-stage-race"
+            )
+            moved_stage_root = stage_root.with_name("capture-stage-race-original")
+            foreign_bytes = b"foreign replacement stage must survive\n"
+            foreign_mode = 0o640
+            source_metadata = source_file.stat()
+            source_identity = (source_metadata.st_dev, source_metadata.st_ino)
+            source_mode = stat.S_IMODE(source_metadata.st_mode)
+            source_bytes = source_file.read_bytes()
+            original_rename = os.rename
+            real_rename_file = source_compaction._VerifiedDirectoryOwner.rename_file_from
+            foreign_stage: Path | None = None
+            foreign_identity: tuple[int, int] | None = None
+
+            def replace_stage_parent(
+                parent_owner: object,
+                stage_owner: object,
+                source_name: str,
+                destination_name: str,
+            ) -> None:
+                nonlocal foreign_stage, foreign_identity
+                if (
+                    Path(parent_owner.path) == source_file.parent
+                    and destination_name == source_file.name
+                ):
+                    original_rename(stage_root, moved_stage_root)
+                    stage_root.mkdir()
+                    foreign_stage = stage_root / stage_name
+                    foreign_stage.write_bytes(foreign_bytes)
+                    foreign_stage.chmod(foreign_mode)
+                    metadata = foreign_stage.stat()
+                    foreign_identity = (metadata.st_dev, metadata.st_ino)
+                    raise OSError("injected stage-parent replacement before cleanup")
+                real_rename_file(
+                    parent_owner, stage_owner, source_name, destination_name
+                )
+
+            with patch.object(
+                source_compaction._VerifiedDirectoryOwner,
+                "rename_file_from",
+                new=replace_stage_parent,
+            ):
+                with self.assertRaisesRegex(
+                    source_compaction.SourceCompactionError,
+                    "stage parent identity changed; preserving stage",
+                ):
+                    source_compaction.compact_source_capsule(
+                        storage, source, manifest["source_digest"]
+                    )
+
+            self.assertIsNotNone(foreign_stage)
+            self.assertIsNotNone(foreign_identity)
+            first_metadata = foreign_stage.stat()
+            self.assertEqual(
+                (first_metadata.st_dev, first_metadata.st_ino), foreign_identity
+            )
+            self.assertEqual(stat.S_IMODE(first_metadata.st_mode), foreign_mode)
+            self.assertEqual(foreign_stage.read_bytes(), foreign_bytes)
+            after_source = source_file.stat()
+            self.assertEqual(
+                (after_source.st_dev, after_source.st_ino), source_identity
+            )
+            self.assertEqual(stat.S_IMODE(after_source.st_mode), source_mode)
+            self.assertEqual(source_file.read_bytes(), source_bytes)
+
+            receipt_path = source_compaction.compaction_receipt_path(storage, source)
+            receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+            self.assertEqual(receipt["state"], "partial_failure")
+            self.assertIn("stage parent identity changed", receipt["last_error"])
+
+            # A later invocation cannot adopt an unknown inode from the replacement
+            # directory as a stale private stage, even though its deterministic name
+            # matches the manifest entry.
+            with self.assertRaisesRegex(
+                source_compaction.SourceCompactionError,
+                "unowned private compaction stage remains; preserving it",
+            ):
+                source_compaction.compact_source_capsule(
+                    storage, source, manifest["source_digest"]
+                )
+            second_metadata = foreign_stage.stat()
+            self.assertEqual(
+                (second_metadata.st_dev, second_metadata.st_ino), foreign_identity
+            )
+            self.assertEqual(stat.S_IMODE(second_metadata.st_mode), foreign_mode)
+            self.assertEqual(foreign_stage.read_bytes(), foreign_bytes)
+
+    @unittest.skipIf(os.name == "nt", "POSIX file modes are asserted exactly")
+    def test_stage_identity_mismatch_before_cleanup_preserves_foreign_file(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="fullmag-stage-inode-race-") as raw:
+            root = Path(raw)
+            storage = root / "storage"
+            storage.mkdir()
+            repo, _ = _repository(root, one_file=True)
+            source, manifest = _capture(storage, repo, "capture-stage-inode")
+            source_file = source / "tree" / "a.txt"
+            entry = next(item for item in manifest["files"] if item["path"] == "a.txt")
+            stage_root = (
+                storage / "tmp" / "source-compaction" / "wt-1" / "capture-stage-inode"
+            )
+            stage_path = stage_root / source_compaction._stage_name(entry)
+            foreign_source = root / "foreign-stage-inode"
+            foreign_bytes = b"foreign stage inode must survive\n"
+            foreign_source.write_bytes(foreign_bytes)
+            foreign_source.chmod(0o640)
+            foreign_mode = 0o640
+            source_metadata = source_file.stat()
+            source_identity = (source_metadata.st_dev, source_metadata.st_ino)
+            source_mode = stat.S_IMODE(source_metadata.st_mode)
+            source_bytes = source_file.read_bytes()
+            foreign_identity: tuple[int, int] | None = None
+
+            def replace_stage_inode(
+                path: Path,
+                *,
+                source_file: Path,
+                source_owner: object,
+                source_name: str,
+                source_identity: tuple[int, int],
+                stage_owner: object,
+                store: object,
+                entry: dict[str, object],
+                private_identity: tuple[int, int],
+            ) -> None:
+                nonlocal foreign_identity
+                stage_owner.unlink_file(
+                    path.name, private_identity, expected_nlink=1
+                )
+                os.rename(foreign_source, path)
+                metadata = path.stat()
+                foreign_identity = (metadata.st_dev, metadata.st_ino)
+                if foreign_identity == private_identity:
+                    raise AssertionError("foreign fixture reused the private stage inode")
+                raise source_compaction.SourceCompactionError(
+                    "injected stage inode replacement before cleanup"
+                )
+
+            with patch.object(
+                source_compaction,
+                "_link_private_stage_to_cas",
+                side_effect=replace_stage_inode,
+            ):
+                with self.assertRaisesRegex(
+                    source_compaction.SourceCompactionError,
+                    "compaction stage identity changed; leaving it untouched",
+                ):
+                    source_compaction.compact_source_capsule(
+                        storage, source, manifest["source_digest"]
+                    )
+
+            self.assertIsNotNone(foreign_identity)
+            foreign_metadata = stage_path.stat()
+            self.assertEqual(
+                (foreign_metadata.st_dev, foreign_metadata.st_ino), foreign_identity
+            )
+            self.assertEqual(stat.S_IMODE(foreign_metadata.st_mode), foreign_mode)
+            self.assertEqual(stage_path.read_bytes(), foreign_bytes)
+            after_source = source_file.stat()
+            self.assertEqual(
+                (after_source.st_dev, after_source.st_ino), source_identity
+            )
+            self.assertEqual(stat.S_IMODE(after_source.st_mode), source_mode)
+            self.assertEqual(source_file.read_bytes(), source_bytes)
+
+            with self.assertRaisesRegex(
+                source_compaction.SourceCompactionError,
+                "unowned private compaction stage remains; preserving it",
+            ):
+                source_compaction.compact_source_capsule(
+                    storage, source, manifest["source_digest"]
+                )
+            after_retry = stage_path.stat()
+            self.assertEqual(
+                (after_retry.st_dev, after_retry.st_ino), foreign_identity
+            )
+            self.assertEqual(stat.S_IMODE(after_retry.st_mode), foreign_mode)
+            self.assertEqual(stage_path.read_bytes(), foreign_bytes)
+
+    @unittest.skipIf(os.name == "nt", "POSIX stage quarantine is required")
+    def test_initial_unknown_stage_sweep_journals_partial_failure_and_preserves_inode(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="fullmag-stage-sweep-recovery-") as raw:
+            root = Path(raw)
+            storage = root / "storage"
+            storage.mkdir()
+            repo, _ = _repository(root, one_file=True)
+            source, manifest = _capture(storage, repo, "capture-sweep-recovery")
+            source_file = source / "tree" / "a.txt"
+            entry = next(item for item in manifest["files"] if item["path"] == "a.txt")
+            stage_root = (
+                storage / "tmp" / "source-compaction" / "wt-1" / "capture-sweep-recovery"
+            )
+            stage_root.mkdir(parents=True)
+            unknown_stage = stage_root / source_compaction._stage_name(entry)
+            unknown_bytes = b"unknown private stage from an interrupted process\\n"
+            unknown_stage.write_bytes(unknown_bytes)
+            unknown_stage.chmod(0o640)
+            before = unknown_stage.stat()
+            identity = (before.st_dev, before.st_ino)
+            mode = stat.S_IMODE(before.st_mode)
+            source_before = source_file.stat()
+            source_identity = (source_before.st_dev, source_before.st_ino)
+            source_bytes = source_file.read_bytes()
+            states: list[str] = []
+            real_write_receipt = source_compaction._write_receipt
+
+            def record_receipt(path: Path, receipt: dict[str, object]) -> None:
+                states.append(str(receipt["state"]))
+                real_write_receipt(path, receipt)
+
+            with patch.object(
+                source_compaction, "_write_receipt", side_effect=record_receipt
+            ):
+                with self.assertRaisesRegex(
+                    source_compaction.SourceCompactionError,
+                    "unowned private compaction stage remains; preserving it",
+                ):
+                    source_compaction.compact_source_capsule(
+                        storage, source, manifest["source_digest"]
+                    )
+
+            self.assertEqual(states, ["running", "partial_failure"])
+            receipt = json.loads(
+                source_compaction.compaction_receipt_path(storage, source).read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertEqual(receipt["state"], "partial_failure")
+            self.assertIn("unowned private compaction stage", receipt["last_error"])
+            after = unknown_stage.stat()
+            self.assertEqual((after.st_dev, after.st_ino), identity)
+            self.assertEqual(stat.S_IMODE(after.st_mode), mode)
+            self.assertEqual(unknown_stage.read_bytes(), unknown_bytes)
+            source_after = source_file.stat()
+            self.assertEqual(
+                (source_after.st_dev, source_after.st_ino), source_identity
+            )
+            self.assertEqual(source_file.read_bytes(), source_bytes)
+
+    @unittest.skipIf(os.name == "nt", "POSIX stage quarantine is required")
+    def test_stage_child_swap_at_quarantine_rename_preserves_both_inodes_and_recovery(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="fullmag-stage-quarantine-race-") as raw:
+            root = Path(raw)
+            storage = root / "storage"
+            storage.mkdir()
+            repo, _ = _repository(root, one_file=True)
+            source, manifest = _capture(storage, repo, "capture-quarantine-race")
+            source_file = source / "tree" / "a.txt"
+            entry = next(item for item in manifest["files"] if item["path"] == "a.txt")
+            stage_name = source_compaction._stage_name(entry)
+            stage_root = (
+                storage / "tmp" / "source-compaction" / "wt-1" / "capture-quarantine-race"
+            )
+            stage_path = stage_root / stage_name
+            foreign_source = root / "foreign-stage-before-quarantine"
+            foreign_bytes = b"foreign inode moved by the last-syscall race\\n"
+            foreign_mode = 0o640
+            foreign_source.write_bytes(foreign_bytes)
+            foreign_source.chmod(foreign_mode)
+            foreign_metadata = foreign_source.stat()
+            foreign_identity = (foreign_metadata.st_dev, foreign_metadata.st_ino)
+            saved_owned_stage = root / "authorized-stage-preserved"
+            source_metadata = source_file.stat()
+            source_identity = (source_metadata.st_dev, source_metadata.st_ino)
+            source_mode = stat.S_IMODE(source_metadata.st_mode)
+            source_bytes = source_file.read_bytes()
+            original_rename = os.rename
+            swapped = False
+            commit_failed = False
+
+            def race_at_quarantine_rename(
+                source_name: str,
+                destination_name: str,
+                *,
+                src_dir_fd: int | None = None,
+                dst_dir_fd: int | None = None,
+            ) -> None:
+                nonlocal swapped, commit_failed
+                if (
+                    source_name == stage_name
+                    and destination_name == source_file.name
+                    and src_dir_fd is not None
+                    and dst_dir_fd is not None
+                ):
+                    commit_failed = True
+                    raise OSError("injected source commit failure")
+                if (
+                    source_name == stage_name
+                    and destination_name == stage_name
+                    and src_dir_fd is not None
+                    and dst_dir_fd is not None
+                    and src_dir_fd != dst_dir_fd
+                    and commit_failed
+                    and not swapped
+                ):
+                    original_rename(
+                        source_name, saved_owned_stage, src_dir_fd=src_dir_fd
+                    )
+                    original_rename(foreign_source, stage_path)
+                    original_rename(
+                        source_name,
+                        destination_name,
+                        src_dir_fd=src_dir_fd,
+                        dst_dir_fd=dst_dir_fd,
+                    )
+                    swapped = True
+                    return
+                original_rename(
+                    source_name,
+                    destination_name,
+                    src_dir_fd=src_dir_fd,
+                    dst_dir_fd=dst_dir_fd,
+                )
+
+            with patch.object(
+                source_compaction.os,
+                "rename",
+                side_effect=race_at_quarantine_rename,
+            ) as rename_hook:
+                with patch.object(
+                    source_compaction.os,
+                    "supports_dir_fd",
+                    source_compaction.os.supports_dir_fd | {rename_hook},
+                ):
+                    with self.assertRaisesRegex(
+                        source_compaction.SourceCompactionError,
+                        "preserving stage quarantine entry",
+                    ):
+                        source_compaction.compact_source_capsule(
+                            storage, source, manifest["source_digest"]
+                        )
+
+            self.assertTrue(commit_failed)
+            self.assertTrue(swapped)
+            quarantine_dirs = list(stage_root.glob(".compact-quarantine-*"))
+            self.assertEqual(len(quarantine_dirs), 1)
+            quarantined_foreign = quarantine_dirs[0] / stage_name
+            quarantined_metadata = quarantined_foreign.stat()
+            self.assertEqual(
+                (quarantined_metadata.st_dev, quarantined_metadata.st_ino),
+                foreign_identity,
+            )
+            self.assertEqual(
+                stat.S_IMODE(quarantined_metadata.st_mode), foreign_mode
+            )
+            self.assertEqual(quarantined_foreign.read_bytes(), foreign_bytes)
+
+            store = SourceContentStore(storage / "cache" / "source-content-v1")
+            object_path = store._object_path(entry["sha256"], entry["mode"])
+            self.assertTrue(os.path.samefile(saved_owned_stage, object_path))
+            store._verify_object(
+                object_path,
+                digest=entry["sha256"],
+                mode=entry["mode"],
+                size=entry["size"],
+            )
+            source_after = source_file.stat()
+            self.assertEqual(
+                (source_after.st_dev, source_after.st_ino), source_identity
+            )
+            self.assertEqual(stat.S_IMODE(source_after.st_mode), source_mode)
+            self.assertEqual(source_file.read_bytes(), source_bytes)
+
+            receipt_path = source_compaction.compaction_receipt_path(storage, source)
+            receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+            self.assertEqual(receipt["state"], "partial_failure")
+            self.assertIn(str(quarantined_foreign), receipt["last_error"])
+
+            with self.assertRaisesRegex(
+                source_compaction.SourceCompactionError,
+                "unreconciled stage quarantine remains; preserving it",
+            ):
+                source_compaction.compact_source_capsule(
+                    storage, source, manifest["source_digest"]
+                )
+            recovered_receipt = json.loads(
+                receipt_path.read_text(encoding="utf-8")
+            )
+            self.assertEqual(recovered_receipt["state"], "partial_failure")
+            self.assertIn(
+                str(quarantine_dirs[0]), recovered_receipt["last_error"]
+            )
+            final_foreign_metadata = quarantined_foreign.stat()
+            self.assertEqual(
+                (final_foreign_metadata.st_dev, final_foreign_metadata.st_ino),
+                foreign_identity,
+            )
+            self.assertEqual(
+                stat.S_IMODE(final_foreign_metadata.st_mode), foreign_mode
+            )
+            self.assertEqual(quarantined_foreign.read_bytes(), foreign_bytes)
+
+    @unittest.skipIf(os.name != "posix", "POSIX descriptor-relative APIs are required")
+    def test_missing_descriptor_relative_api_fails_closed_before_mutation(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="fullmag-source-parent-api-") as raw:
+            root = Path(raw)
+            storage = root / "storage"
+            storage.mkdir()
+            repo, _ = _repository(root, one_file=True)
+            source, manifest = _capture(storage, repo, "capture-no-dirfd")
+            source_file = source / "tree" / "a.txt"
+            before = source_file.stat()
+            content = source_file.read_bytes()
+
+            with patch.object(source_compaction.os, "supports_dir_fd", set()):
+                with self.assertRaisesRegex(
+                    source_compaction.SourceCompactionError,
+                    "descriptor-relative source-parent operations are unsupported",
+                ):
+                    source_compaction.compact_source_capsule(
+                        storage, source, manifest["source_digest"]
+                    )
+
+            after = source_file.stat()
+            self.assertEqual((after.st_dev, after.st_ino), (before.st_dev, before.st_ino))
+            self.assertEqual(stat.S_IMODE(after.st_mode), stat.S_IMODE(before.st_mode))
+            self.assertEqual(source_file.read_bytes(), content)
+
+    @unittest.skipUnless(os.name == "nt", "Win32 owner-handle behavior is Windows-specific")
+    def test_windows_owner_handle_blocks_parent_rename_and_releases_after_success(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="fullmag-source-parent-owner-") as raw:
+            root = Path(raw)
+            storage = root / "storage"
+            storage.mkdir()
+            repo, _ = _repository(root, one_file=True)
+            source, manifest = _capture(storage, repo, "capture-owner")
+            source_file = source / "tree" / "a.txt"
+            source_root = source_file.parent.parent
+            tree_path = source_file.parent
+            moved_tree = source_root / "tree-moved"
+            source_root_mode = stat.S_IMODE(source_root.stat().st_mode)
+            original_replace = os.replace
+            original_rename = os.rename
+            blocked: list[bool] = []
+
+            def observe_owner_lock(source_path: os.PathLike[str] | str,
+                                  destination_path: os.PathLike[str] | str) -> None:
+                if Path(destination_path) == source_file:
+                    source_root.chmod(source_root_mode | stat.S_IWUSR)
+                    try:
+                        original_rename(tree_path, moved_tree)
+                    except OSError:
+                        blocked.append(True)
+                    else:
+                        original_rename(moved_tree, tree_path)
+                        raise AssertionError("Windows source-parent owner allowed rename")
+                    finally:
+                        source_root.chmod(source_root_mode)
+                original_replace(source_path, destination_path)
+
+            with patch.object(
+                source_compaction.os, "replace", side_effect=observe_owner_lock
+            ):
+                result = source_compaction.compact_source_capsule(
+                    storage, source, manifest["source_digest"]
+                )
+            self.assertEqual(result["state"], "completed")
+            self.assertEqual(blocked, [True])
+
+            source_root.chmod(source_root_mode | stat.S_IWUSR)
+            original_rename(tree_path, moved_tree)
+            original_rename(moved_tree, tree_path)
+            source_root.chmod(source_root_mode)
+
+    @unittest.skipUnless(os.name == "nt", "Win32 CAS readonly attributes are required")
+    def test_cas_seal_is_restored_when_readonly_clear_changes_state_then_fails(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="fullmag-cas-reseal-error-") as raw:
+            root = Path(raw)
+            storage = root / "storage"
+            storage.mkdir()
+            repo, _ = _repository(root, one_file=True)
+            source, manifest = _capture(storage, repo, "capture-reseal-error")
+            source_file = source / "tree" / "a.txt"
+            entry = next(item for item in manifest["files"] if item["path"] == "a.txt")
+            store = SourceContentStore(storage / "cache" / "source-content-v1")
+            object_path = store._object_path(entry["sha256"], entry["mode"])
+            source_before = source_file.stat()
+            source_bytes = source_file.read_bytes()
+            original_replace = os.replace
+            original_chmod = Path.chmod
+            cleared_then_failed = False
+
+            def fail_source_commit(source_path, destination_path):
+                if Path(destination_path) == source_file:
+                    raise OSError("injected source commit failure")
+                return original_replace(source_path, destination_path)
+
+            def fail_after_readonly_clear(path, mode, *args, **kwargs):
+                nonlocal cleared_then_failed
+                result = original_chmod(path, mode, *args, **kwargs)
+                if Path(path) == object_path and mode == 0o666 and not cleared_then_failed:
+                    cleared_then_failed = True
+                    raise OSError("injected failure after clearing CAS readonly")
+                return result
+
+            with patch.object(source_compaction.os, "replace", side_effect=fail_source_commit):
+                with patch.object(Path, "chmod", new=fail_after_readonly_clear):
+                    with self.assertRaises(source_compaction.SourceCompactionError):
+                        source_compaction.compact_source_capsule(
+                            storage, source, manifest["source_digest"]
+                        )
+
+            self.assertTrue(cleared_then_failed)
+            store._verify_object(
+                object_path, digest=entry["sha256"], mode=entry["mode"], size=entry["size"]
+            )
+            self.assertTrue(source_compaction._readonly_seal(object_path.stat(), entry["mode"]))
+            source_after = source_file.stat()
+            self.assertEqual((source_after.st_dev, source_after.st_ino),
+                             (source_before.st_dev, source_before.st_ino))
+            self.assertEqual(stat.S_IMODE(source_after.st_mode), stat.S_IMODE(source_before.st_mode))
+            self.assertEqual(source_file.read_bytes(), source_bytes)
+            stage_root = storage / "tmp" / "source-compaction" / "wt-1" / "capture-reseal-error"
+            stage_path = stage_root / source_compaction._stage_name(entry)
+            self.assertTrue(stage_path.is_file())
+            self.assertTrue(os.path.samefile(stage_path, object_path))
+            receipt = json.loads(source_compaction.compaction_receipt_path(storage, source).read_text())
+            self.assertEqual(receipt["state"], "partial_failure")
+
     @unittest.skipIf(os.name == "nt", "directory fsync is not supported on Windows")
     def test_source_parent_sync_precedes_checkpoint_and_completed_receipt(self) -> None:
         with tempfile.TemporaryDirectory(prefix="fullmag-source-compaction-") as raw:
@@ -245,9 +914,9 @@ class LocalRunnerSourceCompactionTests(unittest.TestCase):
             real_sync = source_compaction._fsync_source_parent
             real_write_receipt = source_compaction._write_receipt
 
-            def observe_sync(directory: Path) -> None:
+            def observe_sync(directory: Path, *, owner: object | None = None) -> None:
                 events.append(("source_parent_fsync", directory))
-                real_sync(directory)
+                real_sync(directory, owner=owner)
 
             def observe_receipt(path: Path, receipt: dict[str, object]) -> None:
                 if receipt.get("checkpoint_files", 0) > 0:
@@ -291,10 +960,10 @@ class LocalRunnerSourceCompactionTests(unittest.TestCase):
 
             real_sync = source_compaction._fsync_source_parent
 
-            def fail_source_parent_sync(directory: Path) -> None:
+            def fail_source_parent_sync(directory: Path, *, owner: object | None = None) -> None:
                 if directory == source_file.parent:
                     raise OSError("injected source-parent fsync failure")
-                real_sync(directory)
+                real_sync(directory, owner=owner)
 
             with patch.object(
                 source_compaction,
