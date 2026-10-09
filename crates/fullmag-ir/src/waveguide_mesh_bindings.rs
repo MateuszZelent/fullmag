@@ -1196,6 +1196,10 @@ pub(crate) mod tests {
             ..
         } = original
         {
+            // The converted air object cannot retain its former material intent.
+            problem
+                .material_assignments
+                .retain(|assignment| assignment.target.object_id != object_id);
             mesh.regions[0] = WaveguideCrossSectionRegionIR::Air {
                 region_id,
                 object_id,
