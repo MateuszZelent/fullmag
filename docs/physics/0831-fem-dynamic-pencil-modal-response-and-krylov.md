@@ -2335,6 +2335,7 @@ Repository-owned related contracts:
 
 | Source path | Symbol | Responsibility |
 |---|---|---|
+| backends/fem/tests/frequency_domain/mode_deduplication_test.cpp | void mode_deduplication_keeps_pairwise_distinct_quality_representatives | Nontransitive overlap with nonuniform positive mass, dense/CSR/legacy parity, all input permutations and original strict output; hosted execution pending. |
 | docs/physics/0831-fem-dynamic-pencil-modal-response-and-krylov.md | DOC-ANCHOR:count-physical-fixture-contract | Planned physically bound count fixture; static-owner, boundary-form, digest and energy-oracle execution NOT VERIFIED. |
 | packages/fullmag-py/src/fullmag/runtime/script_builder.py | _sync_stage_output_snapshot | Reconcile immutable stage output families and preserve ordered autosave; selectors and StudyIR regression pending hosted CI. |
 | backends/fem/cpu/frequency_domain/slepc_modal_eigen.cpp | SLEPcTinyGyrotropicModalEigenResult solve_slepc_gyrotropic_modal_eigen_attempt | Configure checked nonzero-diagonal PCLU permutation before EPS setup, preserving operator values, shift policy, original residual gate and graph quarantine; provider proof pending. |
@@ -4161,3 +4162,33 @@ alone are insufficient, especially when the static owner omits periodic
 boundary traces. Do not introduce an arbitrary CSR, zero-potential assumption,
 constant placeholder hashes, or a dense fallback. This gate exercises FEM CPU;
 FEM GPU and both FDM lanes gain no qualification from it.
+
+
+(dedup-quality-order-contract)=
+### Residual-priority representatives for nontransitive overlap
+
+Source correction of review #4226154713; hosted execution **NOT VERIFIED**.
+The frequency-distance and geometric tangent-mass overlap thresholds stay
+unchanged. Their conjunction is a pairwise duplicate predicate, not an
+assumption of a transitive equivalence relation. Process candidates by increasing
+finite residual, then frequency for residual ties, retaining stable input order
+for exact ties. Accept a candidate only if it is not a duplicate of any accepted
+representative. Never replace an accepted representative during this pass;
+finally order the retained output by frequency. This preserves pairwise distinct
+survivors and prioritizes residual quality without collapsing connected chains
+of mutually nonduplicate endpoints. Exact residual/frequency ties retain the
+existing input-order tie semantics, not a claim of permutation-invariant identity.
+
+Comparison normalization remains internal: the strict mass-action path returns
+original vectors, identities, amplitudes, frequencies and residuals. The legacy
+dense comparison wrapper follows the same representative-selection policy;
+its existing normalized-output behavior is unchanged. No residual-admission,
+frequency-distance, overlap, mass-positivity, mode-count or solver-budget gate
+is relaxed. Regression uses a nonuniform positive diagonal mass and three
+vectors whose middle direction overlaps both endpoints above threshold, while
+the endpoints remain below threshold. A best-residual middle representative
+removes both endpoint duplicates; a best-residual endpoint preserves the other
+endpoint. Test all input permutations with dense and CSR mass actions, preserving
+original strict output and final frequency ordering. Source owners are
+`mode_deduplication.cpp` and `mode_deduplication_test.cpp`; this correction alone
+qualifies neither an eigensolver runtime nor a physical DE/BV dispersion curve.

@@ -2,6 +2,7 @@
 #include "cpu/frequency_domain/mode_filter.hpp"
 #include "cpu/frequency_domain/slepc_modal_eigen.hpp"
 
+#include <algorithm>
 #include <array>
 #include <complex>
 #include <cstddef>
@@ -473,6 +474,63 @@ void strict_mode_deduplication_dense_and_csr_mass_actions_are_equivalent()
     }
 }
 
+void mode_deduplication_keeps_pairwise_distinct_quality_representatives()
+{
+    const DenseMass dense{2, {{1.0, 0.0}, {0.0, 0.0}, {0.0, 0.0}, {4.0, 0.0}}};
+    const CsrMass csr{2, {0, 1, 2}, {0, 1}, {{1.0, 0.0}, {4.0, 0.0}}};
+    const double dense_real[] = {1.0, 0.0, 0.0, 4.0};
+    // In the M metric: A.C = 0.8, A.B = C.B = 3/sqrt(10) > 0.9.
+    // Distinct endpoints must not be collapsed merely because B connects them.
+    for (const bool bridge_is_best : {true, false}) {
+        const std::vector<fd::ModalCandidate> originals{
+            candidate(1.0e9, bridge_is_best ? 2.0e-8 : 1.0e-10,
+                      {5.0, 0.0}, {0.0, 0.0}, 81),
+            candidate(1.0e9 + 5.0, 3.0e-8,
+                      {4.0, 0.0}, {1.5, 0.0}, 82),
+            candidate(1.0e9 + 10.0, bridge_is_best ? 1.0e-10 : 2.0e-8,
+                      {3.0, 0.0}, {0.5, 0.0}, 83),
+        };
+        std::array<std::size_t, 3> order{0, 1, 2};
+        do {
+            const std::vector<fd::ModalCandidate> input{
+                originals[order[0]], originals[order[1]], originals[order[2]],
+            };
+            const auto dense_result =
+                fd::deduplicate_modes_by_frequency_and_overlap_with_mass_action(
+                    input, 2, apply_dense_mass, &dense, 1.0e-6, 1.0e3, 0.90);
+            const auto csr_result =
+                fd::deduplicate_modes_by_frequency_and_overlap_with_mass_action(
+                    input, 2, apply_csr_mass, &csr, 1.0e-6, 1.0e3, 0.90);
+            const auto legacy = fd::deduplicate_modes_by_frequency_and_overlap(
+                input, dense_real, 2, 1.0e-6, 1.0e3, 0.90);
+            const std::vector<std::size_t> expected = bridge_is_best
+                ? std::vector<std::size_t>{2} : std::vector<std::size_t>{0, 1};
+            check(dense_result.status == fd::ModalDeduplicationStatus::success &&
+                      csr_result.status == fd::ModalDeduplicationStatus::success,
+                  "quality dedup requires a valid nonuniform positive mass");
+            check(dense_result.modes.size() == expected.size() &&
+                      csr_result.modes.size() == expected.size() &&
+                      legacy.size() == expected.size(),
+                  "nontransitive overlap must retain exactly the quality-selected representatives");
+            for (std::size_t i = 0; i < expected.size(); ++i) {
+                const auto &original = originals[expected[i]];
+                for (const auto *result : {&dense_result, &csr_result}) {
+                    const auto &retained = result->modes[i];
+                    check(retained.source_index == original.source_index &&
+                              retained.mode == original.mode &&
+                              retained.frequency_hz == original.frequency_hz &&
+                              retained.relative_residual == original.relative_residual,
+                          "strict quality survivors preserve original identity, amplitude and certification");
+                }
+                check(legacy[i].source_index == original.source_index &&
+                          legacy[i].frequency_hz == original.frequency_hz,
+                      "legacy and mass-action paths select the same frequency-ordered representatives");
+            }
+        } while (std::next_permutation(order.begin(), order.end()));
+    }
+    std::puts("PASS: pairwise_distinct_quality_representatives_dense_csr_legacy");
+}
+
 void strict_mode_deduplication_fails_without_a_valid_mass_action()
 {
     const std::vector<fd::ModalCandidate> candidates{
@@ -733,6 +791,7 @@ int main()
     strict_mode_deduplication_is_invariant_to_finite_candidate_scale();
     strict_mode_deduplication_keeps_mass_orthogonal_degenerate_modes();
     strict_mode_deduplication_dense_and_csr_mass_actions_are_equivalent();
+    mode_deduplication_keeps_pairwise_distinct_quality_representatives();
     strict_mode_deduplication_fails_without_a_valid_mass_action();
     generic_slepc_finalizer_uses_dense_and_csr_tangent_mass_before_capping();
     generic_candidate_span_gram_rejects_indefinite_dense_and_csr_mass();

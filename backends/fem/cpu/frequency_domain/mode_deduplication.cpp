@@ -213,20 +213,25 @@ ModalDeduplicationResult deduplicate_modes_by_frequency_and_overlap_with_mass_ac
         prepared.push_back(std::move(prepared_candidate));
     }
 
-    std::vector<std::size_t> frequency_order(candidates.size());
-    std::iota(frequency_order.begin(), frequency_order.end(), 0);
+    // Prefer the best certified residual before applying the nontransitive
+    // pairwise predicate. Never replace a survivor without rechecking its peers.
+    std::vector<std::size_t> quality_order(candidates.size());
+    std::iota(quality_order.begin(), quality_order.end(), 0);
     std::stable_sort(
-        frequency_order.begin(),
-        frequency_order.end(),
+        quality_order.begin(),
+        quality_order.end(),
         [&candidates](std::size_t left, std::size_t right) {
+            if (candidates[left].relative_residual != candidates[right].relative_residual) {
+                return candidates[left].relative_residual < candidates[right].relative_residual;
+            }
             return candidates[left].frequency_hz < candidates[right].frequency_hz;
         });
 
     std::vector<std::size_t> accepted_indices;
     accepted_indices.reserve(candidates.size());
-    for (const std::size_t candidate_index : frequency_order) {
+    for (const std::size_t candidate_index : quality_order) {
         bool duplicate = false;
-        for (std::size_t &existing_index : accepted_indices) {
+        for (const std::size_t existing_index : accepted_indices) {
             const ModalCandidate &candidate = candidates[candidate_index];
             const ModalCandidate &existing = candidates[existing_index];
             if (!frequency_close(
@@ -253,9 +258,6 @@ ModalDeduplicationResult deduplicate_modes_by_frequency_and_overlap_with_mass_ac
             }
             if (overlap_magnitude >= overlap_threshold) {
                 duplicate = true;
-                if (candidate.relative_residual < existing.relative_residual) {
-                    existing_index = candidate_index;
-                }
                 break;
             }
         }
@@ -299,17 +301,20 @@ std::vector<ModalCandidate> deduplicate_modes_by_frequency_and_overlap(
         normalize_mode(candidate, mass_matrix_row_major, dof_count);
         sorted.push_back(candidate);
     }
-    std::sort(
+    std::stable_sort(
         sorted.begin(),
         sorted.end(),
         [](const ModalCandidate &left, const ModalCandidate &right) {
+            if (left.relative_residual != right.relative_residual) {
+                return left.relative_residual < right.relative_residual;
+            }
             return left.frequency_hz < right.frequency_hz;
         });
 
     std::vector<ModalCandidate> accepted;
     for (const ModalCandidate &candidate : sorted) {
         bool duplicate = false;
-        for (ModalCandidate &existing : accepted) {
+        for (const ModalCandidate &existing : accepted) {
             if (!frequency_close(
                     candidate.frequency_hz,
                     existing.frequency_hz,
@@ -324,9 +329,6 @@ std::vector<ModalCandidate> deduplicate_modes_by_frequency_and_overlap(
                 dof_count));
             if (overlap >= overlap_threshold) {
                 duplicate = true;
-                if (candidate.relative_residual < existing.relative_residual) {
-                    existing = candidate;
-                }
                 break;
             }
         }

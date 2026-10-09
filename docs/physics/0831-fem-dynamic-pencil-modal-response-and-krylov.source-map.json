@@ -1538,7 +1538,7 @@
       "id": "source-generic-modal-mass-action",
       "path": "backends/fem/cpu/frequency_domain/mode_deduplication.cpp",
       "symbol": "deduplicate_modes_by_frequency_and_overlap_with_mass_action",
-      "responsibility": "Strict comparison-only mass action validates candidate norms and retains original mode amplitudes, residuals and source indices."
+      "responsibility": "Strict comparison-only mass action validates candidate norms and retains original mode amplitudes, residuals and source indices. Residual-priority greedy admission keeps final survivors pairwise distinct without transitive closure; source correction, hosted regression pending."
     },
     {
       "id": "source-generic-slepc-mass-pool",
@@ -2893,6 +2893,12 @@
       "symbol": "DOC-ANCHOR:count-physical-fixture-contract",
       "evidence_status": "planned_contract",
       "responsibility": "Prospective physically coherent count fixture with actual static/dynamic owner forms, data digests and independent energy bound; implementation and runtime NOT VERIFIED."
+    },
+    {
+      "id": "source-dedup-quality-representative-regression",
+      "path": "backends/fem/tests/frequency_domain/mode_deduplication_test.cpp",
+      "symbol": "void mode_deduplication_keeps_pairwise_distinct_quality_representatives",
+      "responsibility": "Nontransitive overlap, positive nonuniform mass, dense/CSR/legacy parity, all permutations, original strict output and frequency ordering; source-only until GHA."
     }
   ],
   "public_api": {
