@@ -731,7 +731,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::{select_eigen_outputs, OutputSelectionError, SampleModeId};
+    use super::{select_eigen_outputs, EigenDiagnosticsRequest, OutputSelectionError, SampleModeId};
     use crate::eigen::types::{
         EigenSolverModel, KSampleDescriptor, PathSolveResult, SingleKModeResult,
         SingleKSolveResult, TrackedBranch, TrackedBranchPoint,
