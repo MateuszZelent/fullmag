@@ -2093,3 +2093,8 @@ Nie dodano nowego testu porównującego jedynie tekst implementacji panelu; mocn
 - 4207786330: API table cursor_end jest teraz raw scan frontier. Ukryty ogon i pusta delta przesuwają kursor, limit zatrzymuje przed kolejnym kwalifikującym się fizycznym wierszem, resync zachowuje cursor. Filtry i wartości decymacji bez zmiany. JSON/binary korzystają z jednego TableRowsResource.
 - Source review PASS; zapisano regresje trailing hidden/empty/all-hidden/limit/filters/resync/decimation/binary oraz dodano filter modal_history_tests do GHA. Wykonanie NOT VERIFIED.
 - Review wskazało dodatkowego konsumenta: Live Charts mergeChartTableWindows nie aktualizuje metadanych pustej strony. Pełna poprawka polling wymaga tej delty frontendowej (w realizacji); Analysis Plots już konsumuje cursorEnd niezależnie. Kolizja object_id 4204792253 pozostaje odrębną otwartą uwagą.
+
+### Korekta bootstrapu cache po GHA (2026-10-09)
+
+- ResourceRuntimeStore.hasPendingLoad jest niekreującym odczytem aktywnego/queued/retry load. Pusty snapshot loading bez rewizji i bez żadnego pending work może otrzymać ACK wyłącznie na legacy unscoped ścieżce. Client-scoped oraz stale/opaque/newer numeric fences pozostają bez zmiany.
+- Dwie nowe regresje obejmują faktyczne active i paused load o nieznanej rewizji: ACK nie anuluje pobrania, revision6 wygrywa. Pozytywne istniejące testy bootstrapu i izolacji sesji zachowano. Mock historii dostarcza wywoływane getRevision. Source review i diff PASS; GHA wykonanie NOT VERIFIED.

@@ -1107,6 +1107,46 @@ describe("geometry lifecycle resources", () => {
     unsubscribe();
   });
 
+  for (const paused of [false, true]) {
+    it(`preserves an unscoped unknown-revision ${paused ? "paused" : "active"} load`, async () => {
+      const resources = new ResourceInvalidationController(new EventBus<KernelEventMap>());
+      const runtimeStore = new ResourceRuntimeStore<SceneResource>();
+      const pending = deferred<SceneResource>();
+      const signals: AbortSignal[] = [];
+      const releasePause = paused
+        ? runtimeStore.beginPauseMatching((key) => key === MODEL_SCENE_PATH)
+        : () => {};
+      const request = {
+        externalRevision: null,
+        load: ({ signal }: { signal: AbortSignal }) => {
+          signals.push(signal);
+          return pending.promise;
+        },
+        resourceKey: MODEL_SCENE_PATH,
+        resolveRevision: (scene: SceneResource) => scene.revision ?? null,
+      };
+      const load = runtimeStore.ensureLoad(request);
+      expect(runtimeStore.hasPendingLoad(MODEL_SCENE_PATH)).toBe(true);
+      const before = runtimeStore.getSnapshot(MODEL_SCENE_PATH);
+      publishCommittedSceneResource(
+        resources, committedScene(5, "ack"), 5, runtimeStore, false,
+      );
+      expect(runtimeStore.getSnapshot(MODEL_SCENE_PATH)).toBe(before);
+      expect(runtimeStore.hasPendingLoad(MODEL_SCENE_PATH)).toBe(true);
+      expect(signals).toHaveLength(paused ? 0 : 1);
+      releasePause();
+      expect(signals).toHaveLength(1);
+      expect(signals[0].aborted).toBe(false);
+      pending.resolve(committedScene(6, "loaded"));
+      await load;
+      await runtimeStore.ensureLoad(request);
+      expect(runtimeStore.getSnapshot(MODEL_SCENE_PATH)).toMatchObject({
+        data: committedScene(6, "loaded"), revision: 6, status: "ready",
+      });
+      expect(runtimeStore.hasPendingLoad(MODEL_SCENE_PATH)).toBe(false);
+    });
+  }
+
   it("does not seed unrelated session scene caches when the owner is unknown", () => {
     const resources = new ResourceInvalidationController(
       new EventBus<KernelEventMap>(),

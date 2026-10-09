@@ -49,7 +49,7 @@ describe("AuthoringHistoryController", () => {
         scene: vi.fn(async () => current),
       },
     };
-    const resources = { invalidate: vi.fn() } as never;
+    const resources = { getRevision: vi.fn(() => null), invalidate: vi.fn() } as never;
     const history = new AuthoringHistoryController(api, resources);
     const beforeWorkspaceState: AuthoringHistoryWorkspaceState = {
       selection: {

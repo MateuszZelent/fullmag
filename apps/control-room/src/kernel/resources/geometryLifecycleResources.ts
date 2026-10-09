@@ -565,6 +565,7 @@ export function publishCommittedSceneResource(
       !canPublishCommittedSceneAtRevision({
         hasClientScope: Boolean(resourceCacheScope),
         incomingSceneRevision,
+        hasPendingLoad: runtimeStore.hasPendingLoad(runtimeResourceKey),
         requestedRevision: resources.getRevision(resourceKey),
         snapshot,
       })
@@ -621,11 +622,13 @@ function safeSceneRevision(revision: unknown): number | null {
 function canPublishCommittedSceneAtRevision({
   hasClientScope,
   incomingSceneRevision,
+  hasPendingLoad,
   requestedRevision,
   snapshot,
 }: {
   hasClientScope: boolean;
   incomingSceneRevision: number | null;
+  hasPendingLoad: boolean;
   requestedRevision: ResourceRevision | null;
   snapshot: ResourceRuntimeSnapshot<SceneResource>;
 }): boolean {
@@ -667,6 +670,17 @@ function canPublishCommittedSceneAtRevision({
     // Invalidation may reach the controller before the hook starts its load.
     // A ready snapshot for an older opaque token has not settled this request.
     return false;
+  }
+
+  // The initial snapshot is also marked loading even without a request. Only
+  // the legacy unscoped cache may be bootstrapped in this truly empty state.
+  if (
+    !hasClientScope && !hasPendingLoad && snapshot.status === "loading" &&
+    snapshot.data === null && snapshot.revision === null &&
+    snapshot.settledExternalRevision === null &&
+    snapshot.settledResourceKey === null && requestedRevision === null
+  ) {
+    return true;
   }
 
   if (snapshot.status === "loading" || snapshot.status === "stale") {
