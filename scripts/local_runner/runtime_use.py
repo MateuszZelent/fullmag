@@ -88,6 +88,13 @@ def retention_mutation_guard(layout):
 
 
 @contextmanager
+def runtime_reference_snapshot_guard(layout):
+    """Serialize the bounded reference-root snapshot with root registration."""
+    with _admission_gate(layout, 'runtime reference snapshot'):
+        yield
+
+
+@contextmanager
 def runtime_package_use(layout):
     """Hold until a durable consumer receipt and its container are established.
 

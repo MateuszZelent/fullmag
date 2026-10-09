@@ -7,9 +7,11 @@ import sqlite3
 import unittest
 from unittest.mock import patch
 
+from fullmag_storage import StorageError
 from local_runner.queue import JobQueue
 from local_runner.retention_executor import CleanupBlocked
 from local_runner.runtime_retention import apply_runtime_cleanup, plan_runtime_cleanup
+from local_runner.runtime_use import register_runtime_reference_root, runtime_package_use
 from test_export_runner_openapi import Fixture, JOB_ID, WORKTREE
 
 
@@ -187,6 +189,261 @@ class RuntimeCleanupTests(unittest.TestCase):
         self.assertEqual(0, plan['candidates_count'])
         self.assertTrue(plan['raw_runtime_plan']['unknown_scope'])
         self.assertTrue(self.fixture.package.exists())
+
+    def test_drive_qualified_registered_roots_reject_before_traversal_or_apply_mutation(self):
+        registry = self.root / 'index/runtime-reference-roots.json'
+        valid_registry = registry.read_bytes()
+        package = self.fixture.package
+        package_before = {
+            path.relative_to(package).as_posix(): (
+                'directory' if path.is_dir() else 'file',
+                None if path.is_dir() else path.read_bytes(),
+            )
+            for path in package.rglob('*')
+        }
+        tombstone_path = self.fixture.run_root / 'artifacts/runtime-package-retention.json'
+
+        for index, relative in enumerate((
+            'C:/missing/consumer',
+            'runs/absent/C:/outside',
+        )):
+            with self.subTest(relative=relative):
+                registry.write_bytes(valid_registry)
+                self.plan = self.preview()
+                self.plan['plan_id'] = ('plan-11aa2233', 'plan-44bb5566')[index]
+                self.assertEqual(1, self.plan['candidates_count'])
+                quarantine_path = self.fixture.run_root / (
+                    '.runtime-package-quarantine-' + self.plan['plan_id']
+                )
+                self.assertFalse(quarantine_path.exists())
+                self.assertFalse(tombstone_path.exists())
+
+                invalid_registry = json.dumps({
+                    'schema': 'fullmag.runtime-reference-roots.v1',
+                    'relative_roots': [relative],
+                    'legacy_inventory_complete': True,
+                }).encode('utf-8')
+                registry.write_bytes(invalid_registry)
+
+                with patch(
+                    'local_runner.runtime_retention._registered_reference_root',
+                    side_effect=AssertionError('invalid path reached component traversal'),
+                ) as resolve_root:
+                    with self.assertRaisesRegex(CleanupBlocked, 'invalid_runtime_reference_root'):
+                        self.preview()
+                    resolve_root.assert_not_called()
+
+                result = self.apply()
+
+                self.assertFalse(result['applied'])
+                self.assertEqual(0, result['removed_logical_bytes'])
+                self.assertIsNone(result['reclaimed_bytes'])
+                self.assertEqual(
+                    'CleanupBlocked: retention_operation_error: invalid_runtime_reference_root',
+                    result['items'][0]['reason'],
+                )
+                self.assertTrue(package.is_dir())
+                self.assertEqual(package_before, {
+                    path.relative_to(package).as_posix(): (
+                        'directory' if path.is_dir() else 'file',
+                        None if path.is_dir() else path.read_bytes(),
+                    )
+                    for path in package.rglob('*')
+                })
+                self.assertEqual(invalid_registry, registry.read_bytes())
+                self.assertFalse(tombstone_path.exists())
+                self.assertFalse(quarantine_path.exists())
+
+    def test_missing_registered_leaf_is_reported_stale_without_hiding_other_candidates(self):
+        output_root = self.root / 'runs' / WORKTREE / 'failed-output'
+        registry = self.root / 'index/runtime-reference-roots.json'
+        with runtime_package_use(self.layout):
+            register_runtime_reference_root(self.layout, output_root)
+        registry_before = registry.read_bytes()
+
+        preview = self.preview()
+
+        raw = preview['raw_runtime_plan']
+        self.assertEqual(1, preview['candidates_count'])
+        self.assertFalse(raw['unknown_scope'])
+        self.assertFalse(raw['complete'])
+        self.assertEqual('partial', raw['status'])
+        self.assertEqual('partial', preview['reference_status'])
+        self.assertTrue(any(
+            error.get('scope') == 'registered_root'
+            and error.get('code') == 'registered_reference_root_missing'
+            and error.get('path') == str(output_root)
+            for error in preview['reference_errors']
+        ))
+        self.assertEqual(registry_before, registry.read_bytes())
+        self.assertFalse(output_root.exists())
+
+    def test_active_runtime_ticket_still_blocks_apply_with_a_stale_root(self):
+        output_root = self.root / 'runs' / WORKTREE / 'failed-output'
+        with runtime_package_use(self.layout):
+            register_runtime_reference_root(self.layout, output_root)
+            self.plan = self.preview()
+            self.plan['plan_id'] = 'plan-1234abcd'
+            self.assertEqual(1, self.plan['candidates_count'])
+            self.assertFalse(self.plan['raw_runtime_plan']['unknown_scope'])
+            with self.assertRaisesRegex(StorageError, 'active or unknown runtime users'):
+                self.apply()
+        self.assertTrue(self.fixture.package.is_dir())
+
+    def test_active_queue_job_still_blocks_apply_with_a_stale_root(self):
+        output_root = self.root / 'runs' / WORKTREE / 'failed-output'
+        with runtime_package_use(self.layout):
+            register_runtime_reference_root(self.layout, output_root)
+        self.plan = self.preview()
+        self.plan['plan_id'] = 'plan-1234abcd'
+
+        with patch.object(self.queue, 'active', return_value=[{'job_id': JOB_ID, 'state': 'running'}]):
+            with self.assertRaisesRegex(CleanupBlocked, 'active_queue_lease'):
+                self.apply()
+        self.assertTrue(self.fixture.package.is_dir())
+
+    def test_stale_leaf_does_not_block_apply_of_unreferenced_package(self):
+        output_root = self.root / 'runs' / WORKTREE / 'failed-output'
+        registry = self.root / 'index/runtime-reference-roots.json'
+        with runtime_package_use(self.layout):
+            register_runtime_reference_root(self.layout, output_root)
+        registry_before = registry.read_bytes()
+        self.plan = self.preview()
+        self.plan['plan_id'] = 'plan-1234abcd'
+
+        result = self.apply()
+
+        self.assertTrue(result['applied'], result)
+        self.assertFalse(self.fixture.package.exists())
+        self.assertFalse(output_root.exists())
+        self.assertEqual(registry_before, registry.read_bytes())
+        tombstone = json.loads(
+            (self.fixture.run_root / 'artifacts/runtime-package-retention.json').read_text(),
+        )
+        self.assertEqual('removed', tombstone['state'])
+
+    def test_reappearing_registered_root_is_rechecked_before_apply_mutation(self):
+        output_root = self.root / 'runs' / WORKTREE / 'failed-output-parent' / 'output'
+        output_root.parent.mkdir()
+        with runtime_package_use(self.layout):
+            register_runtime_reference_root(self.layout, output_root)
+        shutil.rmtree(output_root.parent)
+        self.plan = self.preview()
+        self.plan['plan_id'] = 'plan-1234abcd'
+        self.assertEqual(1, self.plan['candidates_count'])
+        self.assertEqual('partial', self.plan['reference_status'])
+
+        output_root.parent.mkdir()
+        output_root.mkdir()
+        (output_root / 'consumer.json').write_text(json.dumps({
+            'artifact_root': str(self.fixture.package),
+        }))
+        result = self.apply()
+
+        self.assertFalse(result['applied'])
+        self.assertEqual(
+            'CleanupBlocked: retention_operation_error: runtime_now_referenced_or_inventory_changed',
+            result['items'][0]['reason'],
+        )
+        self.assertTrue(self.fixture.package.is_dir())
+        self.assertFalse((self.fixture.run_root / '.runtime-package-quarantine-plan-1234abcd').exists())
+
+    def test_missing_registered_subtree_is_reported_stale_without_hiding_candidates(self):
+        output_root = self.root / 'runs' / WORKTREE / 'failed-parent' / 'output'
+        output_root.parent.mkdir()
+        registry = self.root / 'index/runtime-reference-roots.json'
+        with runtime_package_use(self.layout):
+            register_runtime_reference_root(self.layout, output_root)
+        registry_before = registry.read_bytes()
+        shutil.rmtree(output_root.parent)
+
+        preview = self.preview()
+
+        self.assertEqual(1, preview['candidates_count'])
+        self.assertFalse(preview['raw_runtime_plan']['unknown_scope'])
+        self.assertFalse(preview['raw_runtime_plan']['complete'])
+        self.assertEqual('partial', preview['reference_status'])
+        self.assertTrue(any(
+            error.get('code') == 'registered_reference_root_missing'
+            and error.get('path') == str(output_root)
+            for error in preview['reference_errors']
+        ))
+        self.assertEqual(registry_before, registry.read_bytes())
+        self.assertFalse(output_root.parent.exists())
+        self.assertTrue(self.fixture.package.is_dir())
+
+    def test_reparse_existing_registered_prefix_remains_fail_closed(self):
+        output_root = self.root / 'runs' / WORKTREE / 'replaced-prefix' / 'output'
+        output_root.parent.mkdir()
+        outside = self.root.parent / (self.root.name + '-prefix-outside')
+        outside.mkdir()
+        self.addCleanup(shutil.rmtree, outside, ignore_errors=True)
+        with runtime_package_use(self.layout):
+            register_runtime_reference_root(self.layout, output_root)
+        shutil.rmtree(output_root.parent)
+        try:
+            output_root.parent.symlink_to(outside, target_is_directory=True)
+        except OSError as error:
+            self.skipTest(f'symlink fixture unavailable: {error}')
+
+        with self.assertRaisesRegex(Exception, 'unsafe_reparse_path'):
+            self.preview()
+        self.assertTrue(self.fixture.package.is_dir())
+
+    def test_regular_file_replacing_registered_prefix_remains_fail_closed(self):
+        output_root = self.root / 'runs' / WORKTREE / 'replaced-prefix' / 'output'
+        output_root.parent.mkdir()
+        with runtime_package_use(self.layout):
+            register_runtime_reference_root(self.layout, output_root)
+        shutil.rmtree(output_root.parent)
+        output_root.parent.write_text('foreign prefix', encoding='utf-8')
+
+        with self.assertRaisesRegex(Exception, 'invalid_run_path'):
+            self.preview()
+        self.assertTrue(self.fixture.package.is_dir())
+
+    def test_unreadable_existing_registered_prefix_remains_fail_closed(self):
+        output_root = self.root / 'runs' / WORKTREE / 'unreadable-prefix' / 'output'
+        output_root.parent.mkdir()
+        with runtime_package_use(self.layout):
+            register_runtime_reference_root(self.layout, output_root)
+        real_lstat = os.lstat
+
+        def deny_prefix(path, *args, **kwargs):
+            if Path(path) == output_root.parent:
+                raise PermissionError('fixture unreadable prefix')
+            return real_lstat(path, *args, **kwargs)
+
+        with patch('local_runner.runtime_retention.retention.os.lstat', side_effect=deny_prefix):
+            with self.assertRaisesRegex(Exception, 'unreadable_run_path'):
+                self.preview()
+        self.assertTrue(self.fixture.package.is_dir())
+
+    def test_reparse_registered_root_leaf_remains_fail_closed(self):
+        output_root = self.root / 'runs' / WORKTREE / 'reparse-output'
+        outside = self.root.parent / (self.root.name + '-outside')
+        outside.mkdir()
+        self.addCleanup(shutil.rmtree, outside, ignore_errors=True)
+        with runtime_package_use(self.layout):
+            register_runtime_reference_root(self.layout, output_root)
+        try:
+            output_root.symlink_to(outside, target_is_directory=True)
+        except OSError as error:
+            self.skipTest(f'symlink fixture unavailable: {error}')
+
+        with self.assertRaisesRegex(Exception, 'unsafe_reparse_path'):
+            self.preview()
+        self.assertTrue(self.fixture.package.is_dir())
+
+    def test_regular_file_replacing_registered_directory_leaf_remains_fail_closed(self):
+        output_root = self.root / 'runs' / WORKTREE / 'file-output'
+        with runtime_package_use(self.layout):
+            register_runtime_reference_root(self.layout, output_root)
+        output_root.write_text('{}', encoding='utf-8')
+
+        with self.assertRaisesRegex(Exception, 'invalid_run_path'):
+            self.preview()
+        self.assertTrue(self.fixture.package.is_dir())
 
     def test_latest_minimum_keeps_available_package(self):
         self.policy['min_artifacts_to_keep'] = 2

@@ -1,6 +1,7 @@
 """Retain referenced runtime packages and remove exact unreferenced old leaves."""
 from contextlib import ExitStack
 import hashlib
+import json
 import os
 from pathlib import Path
 import re
@@ -18,13 +19,83 @@ from local_runner.retention_persistence import (
     preflight_operation_evidence, read_document, write_document,
 )
 from local_runner.runtime_references import plan_runtime_references
-from local_runner.runtime_use import retention_mutation_guard
+from local_runner.runtime_use import (
+    retention_mutation_guard,
+    runtime_reference_snapshot_guard,
+)
 from local_runner.storage_maintenance import complete_jobs, container_inventory, guard_no_mount_users
 
 
-def _reference_roots(storage):
+def _registered_reference_root(storage, parts):
+    """Resolve a registered directory, reporting only a stable missing subtree."""
+    for _ in range(3):
+        first_missing = None
+        expected_prefix_identity = _directory_identity(
+            storage, 'unsafe_runtime_reference_root_prefix',
+        )
+        root = storage
+        for index in range(len(parts)):
+            try:
+                root = retention._checked_child(
+                    storage, parts[:index + 1], kind='directory',
+                )
+            except retention._PathIssue as issue:
+                if issue.reason != 'missing_run_path':
+                    raise
+                first_missing = index
+                break
+            expected_prefix_identity = _directory_identity(
+                root, 'unsafe_runtime_reference_root_prefix',
+            )
+
+        if first_missing is None:
+            return root, None
+
+        prefix_parts = parts[:first_missing]
+        first_missing_path = storage.joinpath(*parts[:first_missing + 1])
+        missing_confirmations = 0
+        appeared = False
+        for _ in range(2):
+            prefix = retention._checked_child(
+                storage, prefix_parts, kind='directory',
+            )
+            if _directory_identity(
+                prefix, 'unsafe_runtime_reference_root_prefix',
+            ) != expected_prefix_identity:
+                raise CleanupBlocked('runtime_reference_root_prefix_changed')
+            try:
+                os.lstat(first_missing_path)
+            except FileNotFoundError:
+                prefix_after = retention._checked_child(
+                    storage, prefix_parts, kind='directory',
+                )
+                if _directory_identity(
+                    prefix_after, 'unsafe_runtime_reference_root_prefix',
+                ) != expected_prefix_identity:
+                    raise CleanupBlocked('runtime_reference_root_prefix_changed')
+                missing_confirmations += 1
+            except OSError as error:
+                raise CleanupBlocked('unreadable_runtime_reference_root_prefix') from error
+            else:
+                appeared = True
+                break
+
+        if missing_confirmations == 2:
+            return None, {
+                'scope': 'registered_root',
+                'code': 'registered_reference_root_missing',
+                'path': str(storage.joinpath(*parts)),
+            }
+        if not appeared:
+            raise CleanupBlocked('runtime_reference_root_changed_during_snapshot')
+
+    raise CleanupBlocked('runtime_reference_root_changed_during_snapshot')
+
+
+def _read_reference_roots(storage):
     """Read authoritative extra roots; absence never attests legacy coverage."""
     roots = []
+    stale_roots = []
     complete = False
     if os.path.lexists(storage / 'results'):
         roots.append(retention._checked_child(storage, ('results',), kind='directory'))
@@ -39,12 +110,29 @@ def _reference_roots(storage):
             if not isinstance(relative, str) or relative.startswith('/') or '\\' in relative:
                 raise CleanupBlocked('invalid_runtime_reference_root')
             parts = tuple(relative.split('/'))
-            if not parts or any(part in ('', '.', '..') for part in parts):
+            # Registry entries are portable, slash-separated relative paths.
+            # A colon can introduce a Windows drive (including in a later
+            # component) or an alternate data stream, so reject it before
+            # resolving any component on every platform.
+            if not parts or any(part in ('', '.', '..') or ':' in part for part in parts):
                 raise CleanupBlocked('invalid_runtime_reference_root')
             if parts[0] in ('builds', 'cache', 'locks', 'index'):
                 raise CleanupBlocked('payload_or_control_root_is_not_consumer_metadata')
-            roots.append(retention._checked_child(storage, parts))
-    return roots, complete
+            root, stale = _registered_reference_root(storage, parts)
+            if stale is not None:
+                stale_roots.append(stale)
+                continue
+            roots.append(root)
+    return roots, complete, stale_roots
+
+
+def _reference_roots(storage, layout, *, admission_gate_held=False):
+    if admission_gate_held is True:
+        return _read_reference_roots(storage)
+    # Preview root inventory and its double absence check share the gate with
+    # registry writers. Active runtime tickets remain a separate apply guard.
+    with runtime_reference_snapshot_guard(layout):
+        return _read_reference_roots(storage)
 
 
 def _receipt_hash(storage, job):
@@ -60,7 +148,16 @@ def _package(storage, job):
                                               'artifacts', 'outputs', '.fullmag', 'local'), kind='directory')
 
 
-def plan_runtime_cleanup(layout, queue, *, owner, call, policy, job_ids=None):
+def plan_runtime_cleanup(
+    layout,
+    queue,
+    *,
+    owner,
+    call,
+    policy,
+    job_ids=None,
+    _admission_gate_held=False,
+):
     storage = retention._canonical_storage(layout['storage_root'])
     jobs = complete_jobs(queue)
     wanted = set(job_ids) if job_ids is not None else None
@@ -68,12 +165,27 @@ def plan_runtime_cleanup(layout, queue, *, owner, call, policy, job_ids=None):
     if wanted is not None and (not wanted <= set(by_id) or any(by_id[jid]['owner'] != owner for jid in wanted)):
         raise CleanupBlocked('unknown_or_foreign_runtime_job')
     inspections, coordinator_id = container_inventory(layout, call)
-    reference_roots, complete_roots = _reference_roots(storage)
+    reference_roots, complete_roots, stale_roots = _reference_roots(
+        storage,
+        layout,
+        admission_gate_held=_admission_gate_held,
+    )
     raw = plan_runtime_references(storage, jobs, inspections, reference_roots,
                                   min_artifacts_to_keep=policy['min_artifacts_to_keep'],
                                   jobs_complete=True, containers_complete=True,
                                   reference_roots_complete=complete_roots,
                                   current_coordinator_id=coordinator_id)
+    if stale_roots:
+        # This is an explicit absent leaf, not unknown inventory. Keep the
+        # plan visibly partial; apply still holds the admission gate and
+        # rechecks the graph before it can mutate any candidate.
+        errors = raw['errors'] + stale_roots
+        raw['errors'] = sorted(
+            {json.dumps(item, sort_keys=True): item for item in errors}.values(),
+            key=lambda item: (item.get('scope', ''), item.get('code', ''), item.get('path', '')),
+        )
+        raw['status'] = 'blocked' if raw['unknown_scope'] else 'partial'
+        raw['complete'] = False
     candidates, retained = [], list(raw['retained'])
     for candidate in raw['candidates']:
         jid = candidate['job_id']
@@ -231,8 +343,15 @@ def apply_runtime_cleanup(layout, plan, queue, *, owner, call, policy):
                     raise CleanupBlocked('runtime_owner_or_worktree_changed')
                 with file_lock(validate_path(storage / 'locks' / (wt + '.lock'), storage), wt):
                     _guard_owners(storage, wt)
-                    fresh = plan_runtime_cleanup(layout, queue, owner=owner, call=call, policy=policy,
-                                                 job_ids=[job['job_id']])
+                    fresh = plan_runtime_cleanup(
+                        layout,
+                        queue,
+                        owner=owner,
+                        call=call,
+                        policy=policy,
+                        job_ids=[job['job_id']],
+                        _admission_gate_held=True,
+                    )
                     matches = [row for row in fresh['candidates'] if row['job_id'] == job['job_id']]
                     if fresh['raw_runtime_plan']['unknown_scope'] or len(matches) != 1:
                         raise CleanupBlocked('runtime_now_referenced_or_inventory_changed')
@@ -259,8 +378,15 @@ def apply_runtime_cleanup(layout, plan, queue, *, owner, call, policy):
                         raise CleanupBlocked('runtime_changed_during_validation')
                     # The gate blocks every managed result publisher. This fresh
                     # graph also catches pins and references added before admission.
-                    final = plan_runtime_cleanup(layout, queue, owner=owner, call=call, policy=policy,
-                                                 job_ids=[job['job_id']])
+                    final = plan_runtime_cleanup(
+                        layout,
+                        queue,
+                        owner=owner,
+                        call=call,
+                        policy=policy,
+                        job_ids=[job['job_id']],
+                        _admission_gate_held=True,
+                    )
                     if not any(row == current for row in final['candidates']):
                         raise CleanupBlocked('runtime_references_changed_during_validation')
                     tombstone_path = validate_path(run_root / 'artifacts/runtime-package-retention.json', storage)

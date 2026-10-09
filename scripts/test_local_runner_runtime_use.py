@@ -2,9 +2,13 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from fullmag_storage import StorageError
-from local_runner.runtime_use import register_runtime_reference_root, retention_mutation_guard, runtime_package_use
+from local_runner.runtime_use import (
+    register_runtime_reference_root, retention_mutation_guard,
+    runtime_package_use, runtime_reference_snapshot_guard,
+)
 
 
 class RuntimeAdmissionTests(unittest.TestCase):
@@ -50,6 +54,15 @@ class RuntimeAdmissionTests(unittest.TestCase):
                     self.fail('reader entered during deletion')
         with runtime_package_use(self.layout):
             pass
+
+    def test_reference_snapshot_guard_serializes_root_registration(self):
+        output = self.root / 'runs' / 'pending-output'
+        with runtime_reference_snapshot_guard(self.layout):
+            with patch('local_runner.runtime_use.time.monotonic', side_effect=(0.0, 4.0)):
+                with self.assertRaisesRegex(StorageError, 'admission is busy'):
+                    register_runtime_reference_root(self.layout, output)
+        self.assertFalse((self.root / 'index/runtime-reference-roots.json').exists())
+        self.assertFalse(output.exists())
 
     def test_unknown_reader_survives_and_blocks_cleanup(self):
         unknown = self.root / 'locks/runtime-users/unknown'

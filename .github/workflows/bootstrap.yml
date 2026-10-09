@@ -700,6 +700,8 @@ jobs:
         run: python -B -m unittest discover -s scripts -p 'test_local_runner_retention*.py' -v
       - name: Run runtime package quarantine and restart regressions
         run: python -B scripts/test_local_runner_runtime_retention.py -v
+      - name: Run runtime admission and reference snapshot guard regressions
+        run: python -B scripts/test_local_runner_runtime_use.py -v
       - name: Run local runner runtime reference regressions
         run: python -B scripts/test_local_runner_runtime_references.py -v
       - name: Run source capsule owner binding and cleanup regressions
