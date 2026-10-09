@@ -185,6 +185,7 @@ export type ExplorerNodeKind =
   | "results.dispersion.driven.provenance"
   | "results.hysteresis.root"
   | "results.observation_frames.root"
+  | "results.pinned_visualizations.root"
   | "results.observation_frame"
   | "results.analysis_views.root"
   | "results.analysis_views.definition"

@@ -1,5 +1,10 @@
 import type { AnalysisModuleId } from "@/kernel/analysis-modules/analysisModuleContract";
 import {
+  PIN_MODE_VISUALIZATION_COMMAND,
+  UNPIN_POSTPROCESSING_DEFINITION_COMMAND,
+} from "@/kernel/analysis-modules/postprocessingCommandContributions";
+import type { PostprocessingDefinition as AnalysisPostprocessingDefinition } from "@/kernel/api/apiTypes";
+import {
   classifyFrequencyDomainResult,
   type FrequencyDomainResultEvidence,
 } from "@/shared/domain/analysis/frequencyDomainResultClassification";
@@ -669,6 +674,7 @@ function analysisFieldTargetNodes(
         ...(target.sampleIndex !== undefined ? { sampleIndex: target.sampleIndex } : {}),
         studyProduct: entry.studyProduct,
         ...(target.wavevectorKf ? { wavevectorKf: target.wavevectorKf } : {}),
+        contextCommands: [PIN_MODE_VISUALIZATION_COMMAND],
       },
     ),
   );
@@ -870,6 +876,82 @@ function kResolvedStage(
     studyProduct: entry.studyProduct,
     },
   );
+}
+
+/**
+ * Adds a "Pinned visualizations" group to each analysis family for the
+ * user-created definitions it owns (ADR 0054, spec 32 §8). A pinned node is a
+ * copy of the published mode node with the same field identity, so selecting
+ * it behaves exactly like selecting that mode. A definition whose field is no
+ * longer published stays visible as unavailable instead of disappearing.
+ */
+export function withPinnedAnalysisDefinitions(
+  tree: readonly ExplorerNode[],
+  definitions: readonly AnalysisPostprocessingDefinition[],
+): ExplorerNode[] {
+  if (definitions.length === 0) return [...tree];
+  return tree.map((resultsRoot) => ({
+    ...resultsRoot,
+    children: resultsRoot.children?.map((family) => {
+      const moduleId = family.analysisModuleId;
+      if (!moduleId) return family;
+      const owned = definitions.filter(
+        (definition) =>
+          definition.module_id === moduleId &&
+          definition.data_ref.run_id === resultsRoot.analysisRunId,
+      );
+      if (owned.length === 0) return family;
+      const groupId = `${family.id}:pinned`;
+      const publishedByField = new Map<string, ExplorerNode>();
+      const collect = (nodes: readonly ExplorerNode[] | undefined) => {
+        for (const candidate of nodes ?? []) {
+          if (candidate.fieldId && !publishedByField.has(candidate.fieldId)) {
+            publishedByField.set(candidate.fieldId, candidate);
+          }
+          collect(candidate.children);
+        }
+      };
+      collect(family.children);
+      const pinned = owned.map((definition): ExplorerNode => {
+        const id = `${groupId}:${key(definition.definition_id)}`;
+        const published = definition.data_ref.field_id
+          ? publishedByField.get(definition.data_ref.field_id)
+          : undefined;
+        const unpin = {
+          contextCommandInputs: {
+            [UNPIN_POSTPROCESSING_DEFINITION_COMMAND]: { definitionId: definition.definition_id },
+          },
+          contextCommands: [UNPIN_POSTPROCESSING_DEFINITION_COMMAND],
+        };
+        if (!published) {
+          return node(id, "results.pinned_visualizations.root", definition.label, groupId, {
+            ...unpin,
+            analysisModuleId: moduleId,
+            availability: "unavailable",
+            badge: "not published",
+            executionState: "not_started",
+            resourceState: "idle",
+            status: "unavailable",
+          });
+        }
+        return {
+          ...published,
+          ...unpin,
+          children: undefined,
+          id,
+          label: definition.label,
+          parentId: groupId,
+        };
+      });
+      const group = node(groupId, "results.pinned_visualizations.root", "Pinned visualizations", family.id, {
+        analysisModuleId: moduleId,
+        badge: String(pinned.length),
+        children: pinned,
+        icon: "wave",
+      });
+      return { ...family, children: [...(family.children ?? []), group] };
+    }),
+  }));
 }
 
 /** Keeps an analysis family only when it has published children, tagged with its owning module. */

@@ -7,6 +7,7 @@ import {
   AirboxMeshTopologyLanePanel,
   AirboxOverviewLanePanel,
 } from "./panels/airbox/AirboxInspectorLanePanel";
+import { PinnedVisualizationsInspectorPanel } from "./panels/analysis-results/PinnedVisualizationsInspectorPanel";
 import { FdmMultilayerAirboxTargetPanel } from "./panels/airbox/FdmMultilayerAirboxTargetPanel";
 import { AirboxVisualizationDebugInspectorPanel } from "./panels/airbox/AirboxVisualizationDebugInspectorPanel";
 import { AntennaObjectPanel } from "./panels/AntennaObjectPanel";
@@ -675,6 +676,12 @@ const INSPECTOR_ROUTE_CONTRIBUTIONS: InspectorPanelContribution[] = [
     title: "State Snapshots",
     selectionKinds: ["results.observation_frames.root"],
     component: ObservationFramesOverviewPanel,
+  },
+  {
+    id: "pinned-visualizations",
+    title: "Pinned Visualizations",
+    selectionKinds: ["results.pinned_visualizations.root"],
+    component: PinnedVisualizationsInspectorPanel,
   },
   {
     id: "observation-frame",

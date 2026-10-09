@@ -78,6 +78,7 @@ import { CameraRegistryController } from "./visualization/CameraRegistryControll
 import { AnalysisFieldOverlayController } from "./visualization/AnalysisFieldOverlayController";
 import { ModeCompositionController } from "./visualization/ModeCompositionController";
 import { ANALYSIS_FIELD_OVERLAY_COMMANDS } from "./visualization/analysisFieldOverlayCommandContributions";
+import { POSTPROCESSING_DEFINITION_COMMANDS } from "./analysis-modules/postprocessingCommandContributions";
 import {
   ObjectVisualizationController,
   type VisualizationTargetPatch,
@@ -205,6 +206,9 @@ function createKernel(options: DevelopmentKernelFactoryOptions, developmentWorks
     commands.register(cmd);
   }
   for (const cmd of ANALYSIS_FIELD_OVERLAY_COMMANDS) {
+    commands.register(cmd);
+  }
+  for (const cmd of POSTPROCESSING_DEFINITION_COMMANDS) {
     commands.register(cmd);
   }
 

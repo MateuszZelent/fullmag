@@ -1,3 +1,4 @@
+import type { PostprocessingDefinition } from "@/kernel/api/apiTypes";
 import type {
   ArtifactResource,
   CurrentRunResource,
@@ -17,6 +18,8 @@ import type { PinnedQuickChart } from "@/kernel/workspace/quickChartWorkspace";
 import type { ExplorerNode, ExplorerNodeStatus } from "../explorerTypes";
 import type { RuntimeResourceSnapshot } from "./runtimeExplorerSnapshot";
 export interface ExplorerTreeResources {
+  /** User-created Results nodes saved with the project (ADR 0054). */
+  analysisDefinitions?: readonly PostprocessingDefinition[] | null;
   resultContextContractGaps?: readonly string[];
   resultContextRunId?: string | null;
   activeAnalysisFieldOverlay?: AnalysisFieldOverlayState | null;

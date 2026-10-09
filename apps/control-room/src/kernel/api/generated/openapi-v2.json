@@ -25578,6 +25578,7 @@
             "type": "integer"
           },
           "settings": {
+            "additionalProperties": true,
             "description": "Module-owned settings validated by `definition_schema` on the client.",
             "type": "object"
           }

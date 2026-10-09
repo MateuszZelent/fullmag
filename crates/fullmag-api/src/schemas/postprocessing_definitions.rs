@@ -4,7 +4,8 @@
 
 use fullmag_authoring::{ScenePostprocessingDataRef, ScenePostprocessingDefinition};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Map, Value};
+use std::collections::BTreeMap;
 use utoipa::ToSchema;
 
 /// Published data identity a definition refers to; never array indices.
@@ -41,9 +42,9 @@ pub struct PostprocessingDefinition {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_definition_id: Option<String>,
     /// Module-owned settings validated by `definition_schema` on the client.
-    #[serde(default, skip_serializing_if = "Value::is_null")]
-    #[schema(value_type = Object)]
-    pub settings: Value,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    #[schema(additional_properties)]
+    pub settings: BTreeMap<String, Value>,
 }
 
 impl From<PostprocessingDefinition> for ScenePostprocessingDefinition {
@@ -66,7 +67,11 @@ impl From<PostprocessingDefinition> for ScenePostprocessingDefinition {
                 field_id: value.data_ref.field_id,
             },
             parent_definition_id: value.parent_definition_id,
-            settings: value.settings,
+            settings: if value.settings.is_empty() {
+                Value::Null
+            } else {
+                Value::Object(value.settings.into_iter().collect::<Map<String, Value>>())
+            },
         }
     }
 }
@@ -91,7 +96,10 @@ impl From<ScenePostprocessingDefinition> for PostprocessingDefinition {
                 field_id: value.data_ref.field_id,
             },
             parent_definition_id: value.parent_definition_id,
-            settings: value.settings,
+            settings: match value.settings {
+                Value::Object(map) => map.into_iter().collect(),
+                _ => BTreeMap::new(),
+            },
         }
     }
 }

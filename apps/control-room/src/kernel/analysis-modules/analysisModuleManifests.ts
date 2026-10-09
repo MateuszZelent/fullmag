@@ -110,9 +110,19 @@ export const RESONANCE_ANALYSIS_MANIFEST: AnalysisFeatureManifest = {
       title: "Mode visualizations",
       instantiation: "auto",
     },
+    {
+      kind: "analysis.resonance.mode_visualization",
+      parent: "analysis.resonance.mode_visualizations",
+      role: "field-visualization",
+      title: "Mode visualization",
+      instantiation: "user",
+      availableWhen: { productKinds: ["modal_eigen", "driven_response"], requiredCapabilities: ["fields"] },
+    },
     { kind: "analysis.resonance.quality", parent: "dataset", role: "quality", title: "Quality & provenance", instantiation: "auto" },
   ],
-  definitionSchemas: {},
+  definitionSchemas: {
+    "analysis.resonance.mode_visualization": "analysis.resonance.mode_visualization.v1",
+  },
   load: () => import("@/modules/analysis-resonance/public"),
 };
 

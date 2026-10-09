@@ -10983,7 +10983,9 @@ export interface components {
              */
             revision?: number;
             /** @description Module-owned settings validated by `definition_schema` on the client. */
-            settings?: Record<string, never>;
+            settings?: {
+                [key: string]: unknown;
+            };
         };
         PostprocessingDefinitionCollectionResource: {
             count: number;

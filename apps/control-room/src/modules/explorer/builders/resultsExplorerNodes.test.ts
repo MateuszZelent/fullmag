@@ -10,6 +10,7 @@ import type { ArtifactResource, TableResource } from "@/kernel/api/apiTypes";
 import { buildExplorerTree, flattenExplorerNodes } from "./buildModelTree";
 import {
   buildPhysicsFirstResultsTree,
+  withPinnedAnalysisDefinitions,
   physicsFirstResultsSnapshotFromResources,
   type PhysicsFirstResultEntry,
 } from "./resultsExplorerNodes";
@@ -1178,3 +1179,66 @@ describe("physicsFirstResultsSnapshotFromResources", () => {
       .toContain("gamma");
   });
 });
+
+describe("withPinnedAnalysisDefinitions", () => {
+  const kPath = { kind: "path", label: "Γ–X", sampleCount: 2 } as const;
+  const fieldId = "analysis:eigen:sample-0001:mode-0000";
+  const tree = () =>
+    buildPhysicsFirstResultsTree({
+      entries: [
+        {
+          ...modalFinite,
+          analysisFieldTargets: [
+            {
+              fieldId,
+              frequencyHz: 12e9,
+              label: "Sample 1 · Mode 0",
+              representation: "complex-vector-xyz",
+              resourceRef: "eigen/modes/sample_0001/mode_0000.json",
+              source: "eigen-mode",
+              view: "phase_rotated_real",
+            },
+          ],
+          boundaryContext: "floquet_periodic",
+          kSampling: kPath,
+          products: { modeShapes: true, spectrum: true },
+        },
+      ],
+      resultContextRunId: modalFinite.runId,
+    });
+  const definition = (field: string) => ({
+    data_ref: { dataset_id: modalFinite.stageId, dataset_revision: "1", field_id: field, run_id: modalFinite.runId },
+    definition_id: `analysis.dispersion:mode-visualization:${field}`,
+    definition_schema: "analysis.dispersion.mode_visualization.v1",
+    label: "Pinned mode",
+    module_id: "analysis.dispersion",
+    module_version: "0.1.0",
+    node_kind: "analysis.dispersion.mode_visualization",
+    revision: 1,
+  });
+
+  it("adds pinned copies of published mode nodes under the owning family", () => {
+    const nodes = flattenExplorerNodes(withPinnedAnalysisDefinitions(tree(), [definition(fieldId)]));
+    const group = nodes.find((node) => node.kind === "results.pinned_visualizations.root" && node.label === "Pinned visualizations");
+    expect(group?.analysisModuleId).toBe("analysis.dispersion");
+    const pinned = group?.children?.[0];
+    expect(pinned).toMatchObject({ fieldId, kind: "results.dispersion.modal.mode_at_k", label: "Pinned mode" });
+    expect(pinned?.contextCommands).toEqual(["analysis.postprocessing.unpin-definition"]);
+  });
+
+  it("keeps a definition whose field is no longer published visible as unavailable", () => {
+    const nodes = flattenExplorerNodes(
+      withPinnedAnalysisDefinitions(tree(), [definition("analysis:eigen:sample-0009:mode-0009")]),
+    );
+    expect(nodes.find((node) => node.label === "Pinned mode")).toMatchObject({
+      availability: "unavailable",
+      kind: "results.pinned_visualizations.root",
+    });
+  });
+
+  it("leaves the tree unchanged without definitions", () => {
+    const base = tree();
+    expect(withPinnedAnalysisDefinitions(base, [])).toEqual(base);
+  });
+});
+
