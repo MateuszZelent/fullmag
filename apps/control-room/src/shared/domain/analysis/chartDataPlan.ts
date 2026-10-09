@@ -210,14 +210,42 @@ export function mergeChartTableWindows(
   if (
     !current ||
     incoming.resyncRequired ||
-    incoming.cursorStart <= 1 ||
-    !sameColumns(current, incoming)
+    (incoming.cursorStart <= 1 && incoming.rowCount > 0)
   ) {
     return trimChartTableWindow(incoming);
   }
+  if (
+    incoming.tableId !== current.tableId ||
+    incoming.schemaRevision !== current.schemaRevision
+  ) {
+    return trimChartTableWindow(incoming);
+  }
+  if (
+    incoming.revision < current.revision ||
+    incoming.cursorEnd < current.cursorEnd
+  ) {
+    return current;
+  }
+  if (!sameColumns(current, incoming)) {
+    return trimChartTableWindow(incoming);
+  }
+
   const overlap = Math.max(0, current.cursorEnd - incoming.cursorStart + 1);
   const appendedRows = Math.max(0, incoming.rowCount - overlap);
-  if (appendedRows === 0) return current;
+  if (appendedRows === 0) {
+    if (
+      incoming.cursorEnd === current.cursorEnd &&
+      incoming.revision === current.revision
+    ) {
+      return current;
+    }
+    return {
+      ...current,
+      cursorEnd: incoming.cursorEnd,
+      revision: incoming.revision,
+      totalRows: incoming.totalRows,
+    };
+  }
 
   const combinedRows = current.rowCount + appendedRows;
   const keptRows = Math.min(combinedRows, MAX_CHART_ROWS);

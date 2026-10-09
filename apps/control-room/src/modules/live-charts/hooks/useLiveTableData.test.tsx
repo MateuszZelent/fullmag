@@ -35,6 +35,68 @@ describe("useLiveTableData", () => {
     });
   });
 
+  it("advances the follow cursor for the empty raw [1,2] delta and retains row one", () => {
+    const columns = [{ column_id: "step", label: "Step", unit: "1" }];
+    const currentValues = new Float64Array([4]);
+    const currentTable: ChartTableWindow = {
+      columnCount: 1,
+      columns,
+      cursorEnd: 1,
+      cursorStart: 1,
+      resyncRequired: false,
+      revision: 1,
+      rowCount: 1,
+      schemaRevision: 1,
+      tableId: "default",
+      totalRows: 1,
+      values: currentValues,
+    };
+    const emptyDelta: ChartTableWindow = {
+      ...currentTable,
+      cursorEnd: 2,
+      cursorStart: 1,
+      revision: 2,
+      rowCount: 0,
+      totalRows: 2,
+      values: new Float64Array(0),
+    };
+    const initial = {
+      cursor: 1,
+      queryKey: "follow",
+      table: currentTable,
+    };
+
+    const advanced = liveTableReducer(initial, {
+      queryKey: "follow",
+      table: emptyDelta,
+    });
+
+    expect(advanced.cursor).toBe(2);
+    expect(advanced.table).toMatchObject({
+      cursorEnd: 2,
+      rowCount: 1,
+      totalRows: 2,
+    });
+    expect(advanced.table?.values).toBe(currentValues);
+
+    const resync: ChartTableWindow = {
+      ...emptyDelta,
+      cursorEnd: 1,
+      cursorStart: 1,
+      resyncRequired: true,
+      revision: 1,
+      totalRows: 1,
+    };
+    const reset = liveTableReducer(advanced, {
+      queryKey: "follow",
+      table: resync,
+    });
+
+    expect(reset.cursor).toBe(1);
+    expect(reset.table).toBe(resync);
+    expect(reset.table?.rowCount).toBe(0);
+  });
+
   it("replaces sparse-cursor snapshot windows instead of merging their decimated rows", () => {
     const makeSnapshot = (cursorStart: number, cursorEnd: number): ChartTableWindow => ({
       columnCount: 1,
