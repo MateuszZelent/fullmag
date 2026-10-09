@@ -2097,6 +2097,80 @@ class ProblemApiTests(unittest.TestCase):
             },
         )
 
+    def test_eigen_diagnostics_flags_require_exact_bools_and_preserve_state(self) -> None:
+        defaults = fm.SaveEigenDiagnostics().to_ir()
+        self.assertEqual(
+            defaults,
+            {
+                "kind": "eigen_diagnostics",
+                "include_tracking": True,
+                "include_residuals": True,
+                "include_overlaps": True,
+                "include_tangent_leakage": True,
+                "include_orthogonality": True,
+            },
+        )
+        explicit = {
+            "include_tracking": False,
+            "include_residuals": True,
+            "include_overlaps": False,
+            "include_tangent_leakage": True,
+            "include_orthogonality": False,
+        }
+        self.assertEqual(
+            fm.SaveEigenDiagnostics(**explicit).to_ir(),
+            {"kind": "eigen_diagnostics", **explicit},
+        )
+
+        for flag in explicit:
+            for invalid in ("false", 0, 1, None):
+                with self.subTest(flag=flag, invalid=invalid):
+                    with self.assertRaises(ValueError):
+                        fm.SaveEigenDiagnostics(**{flag: invalid})
+
+                    with flat_world.ExecutionContext() as context:
+                        builder = fm.study("invalid_eigen_diagnostics_flag")
+                        state = context.state
+                        existing_output = fm.SaveSpectrum(scope="global")
+                        state._outputs.append(existing_output)
+                        state._outputs_explicit = False
+                        stage_draft = object()
+                        state._declared_stages.append(stage_draft)
+                        state._extra_runtime_metadata["execution_profile"] = {
+                            "requested_backend": "fem"
+                        }
+                        state._legacy_execution_selection_calls.add("device")
+                        last_result = object()
+                        last_step = object()
+                        state._last_result = last_result
+                        state._last_step = last_step
+
+                        outputs_before = state._outputs
+                        stages_before = state._declared_stages
+                        runtime_metadata_before = copy.deepcopy(
+                            state._extra_runtime_metadata
+                        )
+                        runtime_aliases_before = set(
+                            state._legacy_execution_selection_calls
+                        )
+                        with self.assertRaises(ValueError):
+                            builder.save("diagnostics", **{flag: invalid})
+                        self.assertIs(state._outputs, outputs_before)
+                        self.assertEqual(state._outputs, [existing_output])
+                        self.assertFalse(state._outputs_explicit)
+                        self.assertIs(state._declared_stages, stages_before)
+                        self.assertEqual(state._declared_stages, [stage_draft])
+                        self.assertEqual(
+                            state._extra_runtime_metadata,
+                            runtime_metadata_before,
+                        )
+                        self.assertEqual(
+                            state._legacy_execution_selection_calls,
+                            runtime_aliases_before,
+                        )
+                        self.assertIs(state._last_result, last_result)
+                        self.assertIs(state._last_step, last_step)
+
     def test_eigen_output_selectors_round_trip_through_script_builder(self) -> None:
         script = """
         import fullmag as fm

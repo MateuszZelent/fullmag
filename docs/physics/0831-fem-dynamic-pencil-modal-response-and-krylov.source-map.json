@@ -2590,6 +2590,91 @@
       "evidence_status": "source_visible",
       "responsibility": "Project ordered, compact per-sample execution metadata; summarize only common resolved and validation values, and distinguish homogeneous, mixed, partial, missing, and orchestrator-only reference evidence without copying raw diagnostics."
     },
+{
+      "id": "source-eigen-diagnostics-python",
+      "path": "packages/fullmag-py/src/fullmag/model/outputs.py",
+      "symbol": "class SaveEigenDiagnostics",
+      "evidence_status": "source_visible",
+      "responsibility": "Public five-flag bool contract with strict validation and true defaults."
+    },
+    {
+      "id": "source-eigen-diagnostics-ir",
+      "path": "crates/fullmag-ir/src/study.rs",
+      "symbol": "OutputIR",
+      "evidence_status": "source_visible",
+      "responsibility": "Active IR true defaults preserve explicit false and reject null."
+    },
+    {
+      "id": "source-eigen-diagnostics-v04",
+      "path": "crates/fullmag-ir/src/v04_spectral_wire.rs",
+      "symbol": "OutputV04Wire",
+      "evidence_status": "source_visible",
+      "responsibility": "V0.4 wire defaults and strict nullable-boolean behavior match Python and active IR."
+    },
+    {
+      "id": "source-eigen-diagnostics-selection",
+      "path": "crates/fullmag-runner/src/eigen/output_selection.rs",
+      "symbol": "select_eigen_outputs",
+      "evidence_status": "source_visible",
+      "responsibility": "Merge five flags by OR, keep diagnostic mode IDs separate, and distinguish internal tracking from requested tracking output."
+    },
+    {
+      "id": "source-eigen-diagnostics-artifact",
+      "path": "crates/fullmag-runner/src/eigen/diagnostic_artifact.rs",
+      "symbol": "build_eigen_diagnostics_v2",
+      "evidence_status": "source_visible",
+      "responsibility": "Project typed optional residual and leakage metrics, measured tracking edges, mass-inner-product rows, five flag-gated sections, and common-only root transport fields."
+    },
+    {
+      "id": "source-eigen-diagnostics-transport-geometry",
+      "path": "crates/fullmag-runner/src/fem/eigen_output.rs",
+      "symbol": "modal_tangent_transport_diagnostics",
+      "evidence_status": "source_visible",
+      "responsibility": "Produce basis-transport policy and Floquet tangent geometry values; project missing values onto existing sample records without mutating raw solver diagnostics."
+    },
+    {
+      "id": "source-eigen-diagnostics-fem-path",
+      "path": "crates/fullmag-runner/src/fem/eigen_path.rs",
+      "symbol": "execute_fem_eigen_path_with_producer_identity_and_parallel_policy",
+      "evidence_status": "source_visible",
+      "responsibility": "Existing v2 resource exposes root common transport fields and flag-gated diagnostic sections without spectrum/field selection leakage."
+    },
+    {
+      "id": "source-eigen-diagnostics-native",
+      "path": "crates/fullmag-runner/src/fem/eigen_native_artifacts.rs",
+      "symbol": "native_modal_artifacts",
+      "evidence_status": "source_visible",
+      "responsibility": "Manual single-k v2 emission only for an explicit diagnostics request; preserve mandatory raw summary evidence."
+    },
+    {
+      "id": "source-eigen-diagnostics-reference",
+      "path": "crates/fullmag-runner/src/fem/eigen_execution.rs",
+      "symbol": "execute_fem_eigen_inner",
+      "evidence_status": "source_visible",
+      "responsibility": "Manual reference single-k diagnostics use typed optional metrics and mass evidence only when requested; single-sample tracking edges remain not applicable."
+    },
+    {
+      "id": "source-eigen-diagnostics-generic",
+      "path": "crates/fullmag-runner/src/eigen/artifacts/modal_manifest.rs",
+      "symbol": "write_frequency_domain_eigen_manifest_with_outputs",
+      "evidence_status": "source_visible",
+      "responsibility": "Use explicit output request context for v2 publication while keeping solver.v1 diagnostics independent."
+    },
+    {
+      "id": "source-eigen-diagnostics-resource",
+      "path": "apps/control-room/src/kernel/resources/studyRuntimeResources.ts",
+      "symbol": "useFrequencyDomainEigenDiagnosticsResource",
+      "evidence_status": "source_visible",
+      "responsibility": "Continue using the existing resource-first endpoint for the v2 payload."
+    },
+    {
+      "id": "source-eigen-diagnostics-frontend-shape",
+      "path": "apps/control-room/src/modules/inspector/panels/frequency-domain/FrequencyDomainResultInspectors.tsx",
+      "symbol": "eigenDiagnosticTransportSummary",
+      "evidence_status": "source_visible",
+      "responsibility": "Consume root-level transport fields independently of the dispersion subsection."
+    },
+
     {
       "id": "source-nearest-floquet-capability",
       "path": "crates/fullmag-runner/src/fem/eigen_capability.rs",
@@ -3448,7 +3533,56 @@
         "validation": "Same validation as `SaveSpectrum.quantity`.",
         "meaning": "Public stage selector for the eigenfrequency spectrum.",
         "backend_support": "Common authoring; runtime capability-gated",
-        "problem_ir": "Preserved as `sampling.outputs[].quantity`."
+        "problem_ir": "Preserved as `sampling.outputs[].quantity`."},
+{
+        "python": "`SaveEigenDiagnostics.include_tracking` / `study.save.include_tracking`",
+        "type": "`bool`",
+        "default": "`True`",
+        "si_unit": "$1$",
+        "validation": "Wyłącznie wartość typu `bool`; inne typy są błędem.",
+        "meaning": "Publikuje podsumowanie i rekordy śledzenia gałęzi w dedykowanej diagnostyce.",
+        "backend_support": "Wspólna authoring surface; dostępność danych zależy od writer/runtime.",
+        "problem_ir": "`sampling.outputs[].include_tracking`"
+      },
+      {
+        "python": "`SaveEigenDiagnostics.include_residuals` / `study.save.include_residuals`",
+        "type": "`bool`",
+        "default": "`True`",
+        "si_unit": "$1$",
+        "validation": "Wyłącznie wartość typu `bool`; inne typy są błędem.",
+        "meaning": "Publikuje raportowane residuale absolutne L2, względne L2 i L∞ dla obliczonych modów.",
+        "backend_support": "Wspólna authoring surface; metryki zależą od raportu solvera.",
+        "problem_ir": "`sampling.outputs[].include_residuals`"
+      },
+      {
+        "python": "`SaveEigenDiagnostics.include_overlaps` / `study.save.include_overlaps`",
+        "type": "`bool`",
+        "default": "`True`",
+        "si_unit": "$1$",
+        "validation": "Wyłącznie wartość typu `bool`; inne typy są błędem.",
+        "meaning": "Publikuje zmierzone nakładanie modów wraz z identyfikatorami prób i modów oraz definicją metryki.",
+        "backend_support": "Wspólna authoring surface; wymaga poprzednika i pomiaru krawędzi śledzenia.",
+        "problem_ir": "`sampling.outputs[].include_overlaps`"
+      },
+      {
+        "python": "`SaveEigenDiagnostics.include_tangent_leakage` / `study.save.include_tangent_leakage`",
+        "type": "`bool`",
+        "default": "`True`",
+        "si_unit": "$1$",
+        "validation": "Wyłącznie wartość typu `bool`; inne typy są błędem.",
+        "meaning": "Publikuje raportowane średnie, maksymalne i ważone względne przecieki styczne.",
+        "backend_support": "Wspólna authoring surface; metryki zależą od dostępnych danych modów.",
+        "problem_ir": "`sampling.outputs[].include_tangent_leakage`"
+      },
+      {
+        "python": "`SaveEigenDiagnostics.include_orthogonality` / `study.save.include_orthogonality`",
+        "type": "`bool`",
+        "default": "`True`",
+        "si_unit": "$1$",
+        "validation": "Wyłącznie wartość typu `bool`; inne typy są błędem.",
+        "meaning": "Publikuje wyłącznie dostępne iloczyny skalarne modów obliczone z właściwą macierzą masy.",
+        "backend_support": "Wspólna authoring surface; dostępność zależy od solvera.",
+        "problem_ir": "`sampling.outputs[].include_orthogonality`"
       }
     ]
   }

@@ -1740,15 +1740,15 @@ pub enum OutputIR {
         observable: FrequencyResponseOutputIR,
     },
     EigenDiagnostics {
-        #[serde(default)]
+        #[serde(default = "default_include_eigen_diagnostic_flag")]
         include_tracking: bool,
-        #[serde(default)]
+        #[serde(default = "default_include_eigen_diagnostic_flag")]
         include_residuals: bool,
-        #[serde(default)]
+        #[serde(default = "default_include_eigen_diagnostic_flag")]
         include_overlaps: bool,
-        #[serde(default)]
+        #[serde(default = "default_include_eigen_diagnostic_flag")]
         include_tangent_leakage: bool,
-        #[serde(default)]
+        #[serde(default = "default_include_eigen_diagnostic_flag")]
         include_orthogonality: bool,
     },
     /// Generic quantity save — canonical QuantityId-driven output.
@@ -1767,6 +1767,10 @@ pub enum OutputIR {
 }
 
 fn default_include_branch_table() -> bool {
+    true
+}
+
+fn default_include_eigen_diagnostic_flag() -> bool {
     true
 }
 

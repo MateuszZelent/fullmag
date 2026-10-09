@@ -47,7 +47,8 @@ pub(crate) use kittel::{
 };
 pub use modal_manifest::{
     write_branch_bundle, write_branch_bundle_with_sample_namespace,
-    write_frequency_domain_eigen_manifest, write_path_bundle,
+    write_frequency_domain_eigen_manifest, write_frequency_domain_eigen_manifest_with_outputs,
+    write_path_bundle,
     write_path_bundle_with_sample_namespace,
 };
 pub use mode_bundle::write_mode_bundle;

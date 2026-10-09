@@ -10,6 +10,17 @@ pub(super) fn build_eigen_path_frequency_domain_manifest(
     outputs: &[OutputIR],
 ) -> serde_json::Value {
     let wants_dispersion = eigen_path_wants_dispersion(outputs);
+    let wants_spectrum_artifact = outputs.iter().any(|output| {
+        matches!(
+            output,
+            OutputIR::EigenSpectrum { .. }
+                | OutputIR::EigenMode { .. }
+                | OutputIR::DispersionCurve { .. }
+        )
+    });
+    let wants_eigen_diagnostics = outputs
+        .iter()
+        .any(|output| matches!(output, OutputIR::EigenDiagnostics { .. }));
     let wants_branches = outputs.iter().any(|output| {
         matches!(
             output,
@@ -143,7 +154,9 @@ pub(super) fn build_eigen_path_frequency_domain_manifest(
         production_periodic_airbox_k0 && engine == FemEngine::CpuNative;
     let production_native_solver =
         production_shift_invert || production_gpu_k0_kittel || production_periodic_airbox_k0;
-    let execution_provenance = eigen_path_sample_execution_provenance(result);
+    let transport_geometry = crate::fem::eigen_output::modal_tangent_transport_diagnostics(plan);
+    let execution_provenance =
+        eigen_path_sample_execution_provenance(result, Some(&transport_geometry));
     let native_diagnostics = Some(&execution_provenance.common_diagnostics);
     let orchestrator_only_reference =
         execution_provenance.status == "orchestrator_only_reference";
@@ -351,10 +364,10 @@ pub(super) fn build_eigen_path_frequency_domain_manifest(
         },
         "artifacts": {
             "solver_diagnostics_path": "eigen/diagnostics/solver.v1.json",
-            "spectrum_v2_path": "eigen/spectrum.v2.json",
+            "spectrum_v2_path": if wants_spectrum_artifact { serde_json::json!("eigen/spectrum.v2.json") } else { serde_json::Value::Null },
             "branches_v2_path": if wants_branches { serde_json::json!("eigen/branches.v2.json") } else { serde_json::Value::Null },
             "dispersion_csv_path": if wants_dispersion { serde_json::json!("eigen/dispersion.csv") } else { serde_json::Value::Null },
-            "eigen_diagnostics_v2_path": "eigen/diagnostics.v2.json",
+            "eigen_diagnostics_v2_path": if wants_eigen_diagnostics { serde_json::json!("eigen/diagnostics.v2.json") } else { serde_json::Value::Null },
             "response_sweep_v1_path": null,
             "response_sweep_v2_path": null,
             "response_map_v1_path": null,
@@ -381,11 +394,11 @@ pub(super) fn build_eigen_path_frequency_domain_manifest(
             "frequency_point_paths": [],
         },
         "resources": {
-            "spectrum_resource_key": "/v2/sessions/current/analysis/frequency-domain/eigen/spectrum.v2",
+            "spectrum_resource_key": if wants_spectrum_artifact { serde_json::json!("/v2/sessions/current/analysis/frequency-domain/eigen/spectrum.v2") } else { serde_json::Value::Null },
             "branches_resource_key": if wants_branches { serde_json::json!("/v2/sessions/current/analysis/frequency-domain/eigen/branches.v2") } else { serde_json::Value::Null },
             "dispersion_resource_key": if wants_dispersion { serde_json::json!("/v2/sessions/current/analysis/frequency-domain/eigen/dispersion") } else { serde_json::Value::Null },
             "diagnostics_resource_key": null,
-            "eigen_diagnostics_resource_key": "/v2/sessions/current/analysis/frequency-domain/eigen/diagnostics.v2",
+            "eigen_diagnostics_resource_key": if wants_eigen_diagnostics { serde_json::json!("/v2/sessions/current/analysis/frequency-domain/eigen/diagnostics.v2") } else { serde_json::Value::Null },
             "response_sweep_resource_key": null,
             "response_map_resource_key": null,
             "response_progress_resource_key": null,
@@ -1003,6 +1016,7 @@ struct EigenPathSampleExecutionProvenance {
 
 fn eigen_path_sample_execution_provenance(
     result: &crate::eigen::PathSolveResult,
+    transport_geometry: Option<&Value>,
 ) -> EigenPathSampleExecutionProvenance {
     let diagnostics = result
         .samples
@@ -1032,7 +1046,7 @@ fn eigen_path_sample_execution_provenance(
                 eigen_path_diag_string(diagnostics, key)
                     .or_else(|| eigen_path_diag_string(root_diagnostics, key))
             };
-            serde_json::json!({
+            let mut record = serde_json::json!({
                 "sample_index": sample.sample.sample_index,
                 "label": sample.sample.label,
                 "k_vector": sample.sample.k_vector,
@@ -1044,8 +1058,18 @@ fn eigen_path_sample_execution_provenance(
                     "relax_to_eigen_source_mesh_topology_sha256": binding_value("relax_to_eigen_source_mesh_topology_sha256"),
                     "source_mesh_topology_sha256": binding_value("source_mesh_topology_sha256"),
                 },
+                "basis_transport_policy": eigen_path_diag_string(diagnostics, "basis_transport_policy"),
+                "floquet_tangent_frame_max_mismatch": eigen_path_diag_number(diagnostics, "floquet_tangent_frame_max_mismatch"),
+                "floquet_tangent_transport_max_nonunitarity": eigen_path_diag_number(diagnostics, "floquet_tangent_transport_max_nonunitarity"),
+                "demag_kind": eigen_path_diag_string(diagnostics, "demag_kind"),
                 "solver_adapter": eigen_path_diag_string(diagnostics, "solver_adapter"),
                 "execution_lane": eigen_path_diag_string(diagnostics, "execution_lane"),
+                "solver_family": eigen_path_diag_string(diagnostics, "solver_family"),
+                "resolved_solver_family": eigen_path_diag_string(diagnostics, "resolved_solver_family"),
+                "spectral_transform": eigen_path_diag_string(diagnostics, "spectral_transform"),
+                "production_solver_available": eigen_path_diag_bool(diagnostics, "production_solver_available"),
+                "production_cpu_rejection_reason": eigen_path_diag_string(diagnostics, "production_cpu_rejection_reason"),
+                "production_cpu_rejection_scope": eigen_path_diag_string(diagnostics, "production_cpu_rejection_scope"),
                 "requested_execution": {
                     "solver_method": eigen_path_nested_string(diagnostics, "requested_execution", "solver_method"),
                     "preconditioner": eigen_path_nested_string(diagnostics, "requested_execution", "preconditioner"),
@@ -1089,15 +1113,44 @@ fn eigen_path_sample_execution_provenance(
                     "linearization_state_sha256": eigen_path_diag_string(diagnostics, "linearization_state_sha256"),
                     "periodic_mesh_certificate_sha256": eigen_path_diag_string(diagnostics, "periodic_mesh_certificate_sha256"),
                 },
-            })
+            });
+            if let Some(geometry) = transport_geometry {
+                if let Some(object) = record.as_object_mut() {
+                    for key in [
+                        "basis_transport_policy",
+                        "floquet_tangent_frame_max_mismatch",
+                        "floquet_tangent_transport_max_nonunitarity",
+                    ] {
+                        let has_sample_value = diagnostics
+                            .and_then(|diagnostics| diagnostics.get(key))
+                            .is_some();
+                        if diagnostics.is_some() && !has_sample_value {
+                            if let Some(value) = geometry.get(key) {
+                                object.insert(key.to_string(), value.clone());
+                            }
+                        }
+                    }
+                }
+            }
+            record
         })
         .collect::<Vec<_>>();
 
     // Homogeneity compares execution descriptors, not per-k coordinates or
     // identity hashes that are expected to vary along a path.
     const EXECUTION_FIELDS: &[&[&str]] = &[
+        &["basis_transport_policy"],
+        &["floquet_tangent_frame_max_mismatch"],
+        &["floquet_tangent_transport_max_nonunitarity"],
+        &["demag_kind"],
         &["solver_adapter"],
         &["execution_lane"],
+        &["solver_family"],
+        &["resolved_solver_family"],
+        &["spectral_transform"],
+        &["production_solver_available"],
+        &["production_cpu_rejection_reason"],
+        &["production_cpu_rejection_scope"],
         &["requested_execution", "solver_method"],
         &["requested_execution", "preconditioner"],
         &["requested_execution", "magnetostatic_bc"],
@@ -1132,8 +1185,15 @@ fn eigen_path_sample_execution_provenance(
         &["validation", "spectral"],
     ];
     const EXECUTION_METADATA_FIELDS: &[&[&str]] = &[
+        &["demag_kind"],
         &["solver_adapter"],
         &["execution_lane"],
+        &["solver_family"],
+        &["resolved_solver_family"],
+        &["spectral_transform"],
+        &["production_solver_available"],
+        &["production_cpu_rejection_reason"],
+        &["production_cpu_rejection_scope"],
         &["resolved_execution", "device"],
         &["resolved_execution", "engine"],
         &["resolved_execution", "native_backend"],
@@ -1179,6 +1239,18 @@ fn eigen_path_sample_execution_provenance(
     let requested_magnetostatic_bc_present =
         eigen_path_record_has_value(&sample_records, &["requested_execution", "magnetostatic_bc"]);
     let common_diagnostics = serde_json::json!({
+        "basis_transport_policy": eigen_path_common_record_value(&sample_records, &["basis_transport_policy"]),
+        "floquet_tangent_frame_max_mismatch": eigen_path_common_record_value(&sample_records, &["floquet_tangent_frame_max_mismatch"]),
+        "floquet_tangent_transport_max_nonunitarity": eigen_path_common_record_value(&sample_records, &["floquet_tangent_transport_max_nonunitarity"]),
+        "demag_kind": eigen_path_common_record_value(&sample_records, &["demag_kind"]),
+        "solver_adapter": eigen_path_common_record_value(&sample_records, &["solver_adapter"]),
+        "execution_lane": eigen_path_common_record_value(&sample_records, &["execution_lane"]),
+        "solver_family": eigen_path_common_record_value(&sample_records, &["solver_family"]),
+        "resolved_solver_family": eigen_path_common_record_value(&sample_records, &["resolved_solver_family"]),
+        "spectral_transform": eigen_path_common_record_value(&sample_records, &["spectral_transform"]),
+        "production_solver_available": eigen_path_common_record_value(&sample_records, &["production_solver_available"]),
+        "production_cpu_rejection_reason": eigen_path_common_record_value(&sample_records, &["production_cpu_rejection_reason"]),
+        "production_cpu_rejection_scope": eigen_path_common_record_value(&sample_records, &["production_cpu_rejection_scope"]),
         "requested_execution": {
             "solver_method": eigen_path_common_record_value(&sample_records, &["requested_execution", "solver_method"]),
             "preconditioner": eigen_path_common_record_value(&sample_records, &["requested_execution", "preconditioner"]),
@@ -1236,6 +1308,36 @@ fn eigen_path_sample_execution_provenance(
         requested_preconditioner_present,
         requested_magnetostatic_bc_present,
     }
+}
+
+pub(super) fn eigen_path_diagnostics_transport_metadata(
+    result: &crate::eigen::PathSolveResult,
+    plan: Option<&FemEigenPlanIR>,
+) -> Value {
+    let transport_geometry =
+        plan.map(crate::fem::eigen_output::modal_tangent_transport_diagnostics);
+    let provenance =
+        eigen_path_sample_execution_provenance(result, transport_geometry.as_ref());
+    let mut metadata = provenance.common_diagnostics;
+    if let Some(object) = metadata.as_object_mut() {
+        object.insert(
+            "solver_model".to_string(),
+            serde_json::json!(result.solver_model.as_str()),
+        );
+        object.insert(
+            "solver_model_scope".to_string(),
+            serde_json::json!("path_orchestrator"),
+        );
+        object.insert(
+            "sample_execution_provenance".to_string(),
+            provenance.manifest_value,
+        );
+        object.insert(
+            "sample_execution_provenance_status".to_string(),
+            serde_json::json!(provenance.status),
+        );
+    }
+    metadata
 }
 
 fn eigen_path_sample_native_modal_diagnostics(
@@ -1342,6 +1444,18 @@ pub(super) fn eigen_path_diag_string(diagnostics: Option<&Value>, key: &str) -> 
         .and_then(|value| value.get(key))
         .and_then(Value::as_str)
         .map(ToOwned::to_owned)
+}
+
+pub(super) fn eigen_path_diag_bool(diagnostics: Option<&Value>, key: &str) -> Option<bool> {
+    diagnostics
+        .and_then(|value| value.get(key))
+        .and_then(Value::as_bool)
+}
+
+pub(super) fn eigen_path_diag_number(diagnostics: Option<&Value>, key: &str) -> Option<f64> {
+    diagnostics
+        .and_then(|value| value.get(key))
+        .and_then(Value::as_f64)
 }
 
 pub(super) fn eigen_path_nested_string(

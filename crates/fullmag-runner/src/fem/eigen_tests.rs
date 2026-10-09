@@ -10321,3 +10321,247 @@ fn spectrum_quantity_manual_single_k_planned_entry_rejects_before_callbacks() {
     );
     assert_eq!(outputs, before, "selection validation must not mutate inputs");
 }
+
+
+fn eigen_diagnostics_native_mode_fixture() -> NativeModalEigenpair {
+    let mut vector = vec![Complex64::new(0.0, 0.0); 8];
+    vector[0] = Complex64::new(1.0, 0.0);
+    NativeModalEigenpair {
+        cluster_id: 0,
+        frequency_hz: 1.25e9,
+        omega_rad_s: std::f64::consts::TAU * 1.25e9,
+        eigenvalue_real: 0.0,
+        eigenvalue_imag: std::f64::consts::TAU * 1.25e9,
+        residual_absolute_l2: Some(1.25e-5),
+        residual_relative_l2: 2.5e-8,
+        residual_linf: Some(3.75e-4),
+        mass_norm: 1.0,
+        block_residual_q: 2.5e-8,
+        block_residual_phi: 0.0,
+        block_residual_gauge: None,
+        backend_reported_residual: Some(2.5e-8),
+        vector,
+        q_vector: Vec::new(),
+        phi_vector: Vec::new(),
+        floquet_descriptor_certified: false,
+        floquet_full_descriptor_certified: false,
+        floquet_seam_frame_certified: false,
+        floquet_gauge_policy_satisfied: false,
+        floquet_geometric_bc_certified: false,
+        floquet_poisson_boundary_kind: None,
+        floquet_poisson_gauge_policy: None,
+        floquet_potential_representation: None,
+        floquet_magnetic_relative_residual: None,
+        floquet_potential_relative_residual: None,
+        floquet_full_magnetic_relative_residual: None,
+        floquet_full_potential_relative_residual: None,
+        floquet_scalar_phase_seam_relative_residual: None,
+        floquet_tangent_frame_seam_relative_residual: None,
+        floquet_cartesian_magnetic_seam_relative_residual: None,
+        floquet_equilibrium_pair_relative_residual: None,
+        floquet_potential_real_split: Vec::new(),
+    }
+}
+
+fn eigen_diagnostics_only_native_modal_artifacts(outputs: &[OutputIR]) -> Vec<AuxiliaryArtifact> {
+    let plan = minimal_native_modal_plan();
+    let equilibrium = plan.equilibrium_magnetization.clone();
+    let active_nodes = (0..equilibrium.len()).collect::<Vec<_>>();
+    let reduction = ReductionMap {
+        active_nodes: active_nodes.clone(),
+        node_map: active_nodes.iter().copied().map(Some).collect(),
+        node_phases: vec![Complex64::new(1.0, 0.0); equilibrium.len()],
+        complex_reduction: false,
+    };
+    let bases = tangent_bases(&equilibrium);
+    let modes = vec![eigen_diagnostics_native_mode_fixture()];
+    let mass_weights = vec![1.0; equilibrium.len()];
+
+    super::eigen_native_artifacts::native_modal_artifacts(
+        &plan,
+        outputs,
+        &equilibrium,
+        &reduction,
+        &bases,
+        &modes,
+        Some(&mass_weights),
+        serde_json::json!({
+            "solver_model": "native_modal_diagnostics_fixture",
+            "solver_adapter": "native_modal_diagnostics_fixture",
+            "production_solver_available": true,
+        }),
+        0,
+        None,
+        None,
+        None,
+        None,
+        0,
+        None,
+    )
+    .expect("native modal publisher should emit diagnostics artifacts")
+}
+
+fn eigen_diagnostics_published_json(
+    artifacts: &[AuxiliaryArtifact],
+    relative_path: &str,
+) -> serde_json::Value {
+    let artifact = artifacts
+        .iter()
+        .find(|artifact| artifact.relative_path == relative_path)
+        .unwrap_or_else(|| panic!("expected published artifact {relative_path}"));
+    serde_json::from_slice(&artifact.bytes)
+        .unwrap_or_else(|error| panic!("{relative_path} should be JSON: {error}"))
+}
+
+fn assert_eigen_diagnostics_only_artifacts(artifacts: &[AuxiliaryArtifact]) {
+    assert!(
+        artifacts.iter().any(|artifact| {
+            artifact.relative_path == "eigen/diagnostics/solver.v1.json"
+        }),
+        "mandatory raw solver diagnostics must remain published"
+    );
+    assert!(
+        artifacts.iter().all(|artifact| {
+            !matches!(
+                artifact.relative_path.as_str(),
+                "eigen/spectrum.json" | "eigen/spectrum.v2.json" | "eigen/spectrum.v3.json"
+            ) && !artifact.relative_path.starts_with("eigen/modes/")
+        }),
+        "diagnostics-only output must not publish a spectrum or per-mode fields"
+    );
+}
+
+#[test]
+fn eigen_diagnostics_native_modal_publisher_all_false_preserves_counts_without_mode_fields() {
+    let outputs = [OutputIR::EigenDiagnostics {
+        include_tracking: false,
+        include_residuals: false,
+        include_overlaps: false,
+        include_tangent_leakage: false,
+        include_orthogonality: false,
+    }];
+    let artifacts = eigen_diagnostics_only_native_modal_artifacts(&outputs);
+    assert_eigen_diagnostics_only_artifacts(&artifacts);
+
+    let diagnostics = eigen_diagnostics_published_json(&artifacts, "eigen/diagnostics.v2.json");
+    assert_eq!(diagnostics["schema_version"], "eigen_diagnostics.v2");
+    assert_eq!(diagnostics["sample_count"], 1);
+    assert_eq!(diagnostics["mode_count"], 1);
+    assert_eq!(diagnostics["dispersion"]["mode_count_requested"], 6);
+    for section_name in [
+        "tracking",
+        "residuals",
+        "overlaps",
+        "tangent_leakage",
+        "orthogonality",
+    ] {
+        let section = &diagnostics[section_name];
+        assert_eq!(section["status"], "not_requested", "{section_name}");
+        assert_eq!(section["available"], false, "{section_name}");
+        assert!(section["data"].is_null(), "{section_name}");
+    }
+
+    let raw = eigen_diagnostics_published_json(&artifacts, "eigen/diagnostics/solver.v1.json");
+    assert_eq!(raw["solver_model"], "native_modal_diagnostics_fixture");
+    assert_eq!(raw["mode_count"], 1);
+    assert_eq!(raw["requested_mode_count"], 6);
+}
+
+#[test]
+fn eigen_diagnostics_native_modal_publisher_emits_enabled_residual_and_leakage_records() {
+    let outputs = [OutputIR::EigenDiagnostics {
+        include_tracking: false,
+        include_residuals: true,
+        include_overlaps: false,
+        include_tangent_leakage: true,
+        include_orthogonality: false,
+    }];
+    let artifacts = eigen_diagnostics_only_native_modal_artifacts(&outputs);
+    assert_eigen_diagnostics_only_artifacts(&artifacts);
+
+    let diagnostics = eigen_diagnostics_published_json(&artifacts, "eigen/diagnostics.v2.json");
+    assert_eq!(diagnostics["mode_count"], 1);
+    assert_eq!(diagnostics["dispersion"]["mode_count_requested"], 6);
+
+    let residuals = &diagnostics["residuals"];
+    assert_eq!(residuals["status"], "available");
+    assert_eq!(residuals["available"], true);
+    assert_eq!(residuals["data"]["mode_count"], 1);
+    let residual = &residuals["data"]["records"][0];
+    assert_eq!(residual["residual_absolute_l2"], 1.25e-5);
+    assert_eq!(residual["residual_relative_l2"], 2.5e-8);
+    assert_eq!(residual["residual_linf"], 3.75e-4);
+
+    let leakage = &diagnostics["tangent_leakage"];
+    assert_eq!(leakage["status"], "available");
+    assert_eq!(leakage["available"], true);
+    assert_eq!(leakage["data"]["mode_count"], 1);
+    let leakage_record = &leakage["data"]["records"][0];
+    for metric in ["mean_abs", "max_abs", "weighted_relative_l2"] {
+        assert!(
+            leakage_record[metric].is_number(),
+            "native publisher should provide measured {metric}: {leakage_record}"
+        );
+    }
+    assert_eq!(diagnostics["tracking"]["status"], "not_requested");
+    assert_eq!(diagnostics["overlaps"]["status"], "not_requested");
+    assert_eq!(diagnostics["orthogonality"]["status"], "not_requested");
+}
+
+#[test]
+fn eigen_diagnostics_reference_single_k_executor_publishes_without_native_provider() {
+    let mut plan = minimal_native_modal_plan();
+    plan.equilibrium = EquilibriumSourceIR::Provided;
+    plan.operator.kind = fullmag_ir::EigenOperatorIR::Full2x2;
+    plan.operator.include_demag = false;
+    plan.enable_demag = false;
+    plan.damping_policy = EigenDampingPolicyIR::Ignore;
+    plan.material.uniaxial_anisotropy = Some(1.0e4);
+    plan.material.anisotropy_axis = Some([1.0, 0.0, 0.0]);
+    plan.target = fullmag_ir::EigenTargetIR::Lowest;
+    plan.count = 1;
+    let handoff = AcceptedFemEigenEquilibriumHandoff::from_accepted_linearization(
+        &plan,
+        plan.equilibrium_magnetization.clone(),
+        format!("sha256:{}", "a".repeat(64)),
+        format!("sha256:{}", "b".repeat(64)),
+    )
+    .expect("the small in-memory plan should create an accepted-equilibrium fixture");
+    let outputs = [OutputIR::EigenDiagnostics {
+        include_tracking: false,
+        include_residuals: true,
+        include_overlaps: false,
+        include_tangent_leakage: true,
+        include_orthogonality: false,
+    }];
+
+    let run = execute_fem_eigen_inner(
+        &plan,
+        &outputs,
+        false,
+        false,
+        None,
+        0,
+        None,
+        None,
+        Some(&handoff),
+        None,
+        None,
+    )
+    .expect("reference CPU entry should execute without a native provider");
+    assert!(run.provenance.execution_engine.contains("cpu_baseline_fem_eigen"));
+    assert_eigen_diagnostics_only_artifacts(&run.auxiliary_artifacts);
+
+    let diagnostics = eigen_diagnostics_published_json(
+        &run.auxiliary_artifacts,
+        "eigen/diagnostics.v2.json",
+    );
+    assert_eq!(diagnostics["schema_version"], "eigen_diagnostics.v2");
+    assert_eq!(diagnostics["sample_count"], 1);
+    assert_eq!(diagnostics["dispersion"]["mode_count_requested"], 1);
+    assert!(diagnostics["mode_count"].as_u64().unwrap_or_default() > 0);
+    assert_eq!(diagnostics["residuals"]["status"], "available");
+    assert_eq!(diagnostics["tangent_leakage"]["status"], "available");
+    assert_eq!(diagnostics["residuals"]["data"]["mode_count"], diagnostics["mode_count"]);
+    assert_eq!(diagnostics["tangent_leakage"]["data"]["mode_count"], diagnostics["mode_count"]);
+}

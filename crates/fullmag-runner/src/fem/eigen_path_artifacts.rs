@@ -1002,6 +1002,8 @@ mod output_publication_tests {
                 FemEngine::CpuNative, &result, &artifacts,
                 &residual_transport_test_plan(), &[]);
             assert_eq!(manifest["requested_execution"]["outputs"], serde_json::json!([]));
+            assert!(manifest["artifacts"]["eigen_diagnostics_v2_path"].is_null());
+            assert!(manifest["resources"]["eigen_diagnostics_resource_key"].is_null());
             let diagnostic_manifest = build_eigen_path_frequency_domain_manifest(
                 FemEngine::CpuNative, &result, &artifacts,
                 &residual_transport_test_plan(),
@@ -1015,6 +1017,15 @@ mod output_publication_tests {
             );
             assert_eq!(diagnostic_manifest["requested_execution"]["outputs"],
                        serde_json::json!(["diagnostics"]));
+            assert_eq!(
+                diagnostic_manifest["artifacts"]["eigen_diagnostics_v2_path"],
+                "eigen/diagnostics.v2.json"
+            );
+            assert_eq!(
+                diagnostic_manifest["resources"]["eigen_diagnostics_resource_key"],
+                "/v2/sessions/current/analysis/frequency-domain/eigen/diagnostics.v2"
+            );
+            assert!(diagnostic_manifest["artifacts"]["spectrum_v2_path"].is_null());
             for stem in ["accepted_fem_equilibrium_fields", "certified_fem_equilibrium_fields",
                          "recomputed_fem_linearization_certificate"] {
                 let key = format!("{stem}_{version}_paths");
@@ -1148,9 +1159,20 @@ mod output_publication_tests {
         let model = crate::eigen::EigenSolverModel::ProductionCpuShiftInvert;
         let reference_model = crate::eigen::EigenSolverModel::ReferenceScalarTangent;
         let diagnostic = |engine: &str, algorithm: &str, phasor: &str, signature: &str| {
+            let floquet = engine.contains("floquet");
             serde_json::json!({
                 "solver_adapter": algorithm,
-                "execution_lane": "production_cpu",
+                "basis_transport_policy": if floquet { "tangent_frame_transport" } else { "tangent_frame_identity" },
+                "floquet_tangent_frame_max_mismatch": if floquet { 0.125 } else { 0.0 },
+                "floquet_tangent_transport_max_nonunitarity": if floquet { 0.25 } else { 0.0 },
+                "demag_kind": if floquet { "floquet_airbox" } else { "periodic_airbox_k0" },
+                "solver_family": if floquet { "floquet_modal_solver" } else { "k0_modal_solver" },
+                "resolved_solver_family": algorithm,
+                "spectral_transform": "shift_invert",
+                "production_solver_available": floquet,
+                "production_cpu_rejection_reason": null,
+                "production_cpu_rejection_scope": null,
+                "execution_lane": if floquet { "production_cpu" } else { "reference_cpu" },
                 "requested_execution": {
                     "solver_method": "targeted_spectrum",
                     "preconditioner": "jacobi",
@@ -1161,7 +1183,7 @@ mod output_publication_tests {
                     "precision": "double",
                     "engine": engine,
                     "native_backend": "native_cpu",
-                    "reference_or_production": "production",
+                    "reference_or_production": if floquet { "production" } else { "reference" },
                     "demag_realization": "floquet_airbox",
                     "solver_library": "slepc",
                     "solver_algorithm": algorithm,
@@ -1282,6 +1304,61 @@ mod output_publication_tests {
         let mixed = manifest(&mixed_result);
         let serialized = serde_json::to_vec_pretty(&mixed).unwrap();
         let mixed: serde_json::Value = serde_json::from_slice(&serialized).unwrap();
+        let mixed_transport =
+            crate::fem::eigen_diagnostics_transport_metadata(&mixed_result, None);
+        assert_eq!(mixed_transport["solver_model_scope"], "path_orchestrator");
+        assert!(mixed_transport["basis_transport_policy"].is_null());
+        assert!(mixed_transport["floquet_tangent_frame_max_mismatch"].is_null());
+        assert!(mixed_transport["solver_family"].is_null());
+        assert!(mixed_transport["production_solver_available"].is_null());
+        assert_eq!(
+            mixed_transport["sample_execution_provenance"]["samples"][0]["basis_transport_policy"],
+            "tangent_frame_identity"
+        );
+        assert_eq!(
+            mixed_transport["sample_execution_provenance"]["samples"][0]["production_solver_available"],
+            false,
+            "an explicit false remains false in a per-sample record"
+        );
+        let mut geometry_diagnostics = diagnostic(
+            "single_path_adapter",
+            "same_solver",
+            "exp_i_omega_t",
+            "geometry-derived",
+        );
+        for key in [
+            "basis_transport_policy",
+            "floquet_tangent_frame_max_mismatch",
+            "floquet_tangent_transport_max_nonunitarity",
+        ] {
+            geometry_diagnostics
+                .as_object_mut()
+                .unwrap()
+                .remove(key);
+        }
+        let mut geometry_result = path_result(
+            vec![sample(
+                9,
+                [0.0, 0.0, 0.0],
+                model,
+                Some(geometry_diagnostics),
+            )],
+            model,
+        );
+        let geometry_transport = crate::fem::eigen_diagnostics_transport_metadata(
+            &geometry_result,
+            Some(&plan),
+        );
+        assert_eq!(geometry_transport["basis_transport_policy"], "not_applicable");
+        assert_eq!(geometry_transport["floquet_tangent_frame_max_mismatch"], 0.0);
+        assert_eq!(
+            geometry_transport["sample_execution_provenance"]["samples"][0]
+                ["floquet_tangent_transport_max_nonunitarity"],
+            0.0
+        );
+        assert!(geometry_result.samples[0].solver_diagnostics.as_ref().unwrap()
+            .get("basis_transport_policy")
+            .is_none(), "projection must not mutate raw sample diagnostics");
         assert_eq!(
             mixed["sample_execution_provenance"]["status"],
             "mixed"
@@ -1623,6 +1700,13 @@ mod output_publication_tests {
         assert_eq!(homogeneous["resolved_execution"]["solver_algorithm"], "same_solver");
         assert_eq!(homogeneous["physics"]["phase_convention"], "exp_i_omega_t");
         assert!(homogeneous["operator_input_signature_sha256"].is_null());
+        let homogeneous_transport =
+            crate::fem::eigen_diagnostics_transport_metadata(&homogeneous_result, None);
+        assert_eq!(homogeneous_transport["basis_transport_policy"], "tangent_frame_identity");
+        assert_eq!(homogeneous_transport["floquet_tangent_frame_max_mismatch"], 0.0);
+        assert_eq!(homogeneous_transport["demag_kind"], "periodic_airbox_k0");
+        assert_eq!(homogeneous_transport["production_solver_available"], false);
+        assert_eq!(homogeneous_transport["sample_execution_provenance_status"], "homogeneous");
 
         let partial_result = path_result(
             vec![
@@ -1665,6 +1749,11 @@ mod output_publication_tests {
             missing["sample_execution_provenance"]["status"],
             "missing"
         );
+        let missing_transport =
+            crate::fem::eigen_diagnostics_transport_metadata(&missing_result, Some(&plan));
+        assert!(missing_transport["basis_transport_policy"].is_null());
+        assert!(missing_transport["production_solver_available"].is_null());
+        assert_eq!(missing_transport["sample_execution_provenance_status"], "missing");
         assert!(missing["resolved_execution"]["engine"].is_null());
         assert!(missing["resolved_execution"]["solver_algorithm"].is_null());
         assert!(missing["physics"]["phase_convention"].is_null());
@@ -1932,6 +2021,13 @@ mod output_publication_tests {
     #[test]
     fn internal_tracking_requests_all_modes_without_public_path_selectors() {
         let outputs = vec![
+            OutputIR::EigenDiagnostics {
+                include_tracking: false,
+                include_residuals: true,
+                include_overlaps: true,
+                include_tangent_leakage: false,
+                include_orthogonality: false,
+            },
             OutputIR::EigenMode {
                 field: "selected".into(),
                 all_modes: false,
@@ -1948,6 +2044,9 @@ mod output_publication_tests {
             },
         ];
         let internal = eigen_path_tracking_outputs(&outputs, 3);
+        assert!(!internal
+            .iter()
+            .any(|output| matches!(output, OutputIR::EigenDiagnostics { .. })));
         assert!(internal
             .iter()
             .any(|output| matches!(output, OutputIR::EigenSpectrum { .. })));
@@ -2357,7 +2456,9 @@ pub(super) fn eigen_path_tracking_outputs(outputs: &[OutputIR], mode_count: u32)
         .filter(|output| {
             !matches!(
                 output,
-                OutputIR::EigenMode { .. } | OutputIR::DispersionCurve { .. }
+                OutputIR::EigenMode { .. }
+                    | OutputIR::DispersionCurve { .. }
+                    | OutputIR::EigenDiagnostics { .. }
             )
         })
         .cloned()

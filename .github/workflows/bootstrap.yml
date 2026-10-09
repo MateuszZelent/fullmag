@@ -104,6 +104,12 @@ jobs:
           cargo test -p fullmag-runner eigen_path_single_k_solver_model_ --lib
           cargo test -p fullmag-runner spectrum_quantity_ --lib
 
+      - name: Run diagnostic flag contracts through real single-k publishers
+        run: |
+          cargo test -p fullmag-runner eigen::output_selection::tests --lib
+          cargo test -p fullmag-runner eigen::diagnostic_artifact::tests --lib
+          cargo test -p fullmag-runner eigen_diagnostics_ --lib
+
       - name: Run sample-scoped eigen artifact contracts
         run: cargo test -p fullmag-runner output_publication_tests --lib
 

@@ -1572,7 +1572,7 @@ fn v04_sampling_preserves_every_output_variant_autosave_and_defaults() {
             { "kind": "eigen_mode", "field": "mode", "indices": [], "sample_selector": { "sample_indices": [0, 2], "sample_labels": ["Γ", "X"] } },
             { "kind": "dispersion_curve", "name": "branches", "include_branch_table": true },
             { "kind": "frequency_response_output", "observable": "response_amplitude" },
-            { "kind": "eigen_diagnostics", "include_tracking": true, "include_residuals": false, "include_overlaps": false, "include_tangent_leakage": false, "include_orthogonality": false },
+            { "kind": "eigen_diagnostics", "include_tracking": true, "include_residuals": true, "include_overlaps": true, "include_tangent_leakage": true, "include_orthogonality": true },
             { "kind": "save_quantity", "quantity_id": "M", "every_seconds": 6.25e-12, "reduction": "average", "component": "magnitude" }
         ],
         "table_autosave": {
@@ -1610,6 +1610,70 @@ fn v04_sampling_preserves_every_output_variant_autosave_and_defaults() {
         let root: ProblemIRV04 =
             serde_json::from_value(problem_value_with_study(study)).unwrap();
         assert_eq!(serde_json::to_value(root).unwrap()["study"]["sampling"], expected);
+    }
+}
+
+#[test]
+fn v04_eigen_diagnostics_defaults_true_preserves_false_and_rejects_null() {
+    let flags = [
+        "include_tracking",
+        "include_residuals",
+        "include_overlaps",
+        "include_tangent_leakage",
+        "include_orthogonality",
+    ];
+    for base in all_sampling_v04_studies() {
+        let mut defaults = base.clone();
+        defaults["sampling"] = json!({ "outputs": [{ "kind": "eigen_diagnostics" }] });
+        let standalone: StudyIRV04 = serde_json::from_value(defaults.clone()).unwrap();
+        for flag in flags {
+            assert_eq!(
+                serde_json::to_value(&standalone).unwrap()["sampling"]["outputs"][0][flag],
+                true,
+                "standalone V0.4 missing {flag} should match Python"
+            );
+        }
+        let root: ProblemIRV04 =
+            serde_json::from_value(problem_value_with_study(defaults.clone())).unwrap();
+        for flag in flags {
+            assert_eq!(
+                serde_json::to_value(&root).unwrap()["study"]["sampling"]["outputs"][0][flag],
+                true,
+                "root V0.4 missing {flag} should match Python"
+            );
+        }
+
+        for flag in flags {
+            let mut explicit_false = defaults.clone();
+            explicit_false["sampling"]["outputs"][0][flag] = json!(false);
+            let standalone: StudyIRV04 = serde_json::from_value(explicit_false.clone()).unwrap();
+            assert_eq!(
+                serde_json::to_value(standalone).unwrap()["sampling"]["outputs"][0][flag],
+                false,
+                "standalone V0.4 explicit false for {flag} must survive"
+            );
+            let root: ProblemIRV04 =
+                serde_json::from_value(problem_value_with_study(explicit_false)).unwrap();
+            assert_eq!(
+                serde_json::to_value(root).unwrap()["study"]["sampling"]["outputs"][0][flag],
+                false,
+                "root V0.4 explicit false for {flag} must survive"
+            );
+        }
+
+        for flag in flags {
+            let mut explicit_null = defaults.clone();
+            explicit_null["sampling"]["outputs"][0][flag] = serde_json::Value::Null;
+            assert!(
+                serde_json::from_value::<StudyIRV04>(explicit_null.clone()).is_err(),
+                "standalone V0.4 null for {flag} must fail"
+            );
+            assert!(
+                serde_json::from_value::<ProblemIRV04>(problem_value_with_study(explicit_null))
+                    .is_err(),
+                "root V0.4 null for {flag} must fail"
+            );
+        }
     }
 }
 

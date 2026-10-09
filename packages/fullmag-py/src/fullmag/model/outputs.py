@@ -344,6 +344,17 @@ class SaveEigenDiagnostics:
     include_tangent_leakage: bool = True
     include_orthogonality: bool = True
 
+    def __post_init__(self) -> None:
+        for name in (
+            "include_tracking",
+            "include_residuals",
+            "include_overlaps",
+            "include_tangent_leakage",
+            "include_orthogonality",
+        ):
+            if type(getattr(self, name)) is not bool:
+                raise ValueError(f"{name} must be a boolean")
+
     def to_ir(self) -> dict[str, object]:
         return {
             "kind": "eigen_diagnostics",

@@ -12,14 +12,20 @@ use super::eigen_output::{
     classify_polarization, damping_policy_label, demag_realization_label, dispersion_csv,
     dispersion_v2_csv, equilibrium_source_json, floquet_potential_payload_bytes,
     floquet_potential_payload_path, json_artifact, k_vector_json, modal_sample_id,
-    normalization_label, requested_mode_indices_for_result, solver_kind_label, spin_wave_bc_json,
-    spin_wave_bc_label, write_eigen_v2_bundle,
+    modal_tangent_transport_diagnostics, normalization_label,
+    requested_mode_indices_for_result, solver_kind_label, spin_wave_bc_json, spin_wave_bc_label,
+    write_eigen_v2_bundle_with_outputs,
 };
 use super::eigen_policy::resolved_demag_realization;
 use super::eigen_projection::project_complex_2x2_mode_to_tangent_basis_with_periodic_map;
 use super::eigen_reduction::ReductionMap;
 use super::eigen_solve::mode_tangent_leakage;
 use super::eigen_types::SharedDomainLinearizationState;
+use crate::eigen::diagnostic_artifact::{
+    build_eigen_diagnostics_v2, canonical_mass_orthogonality_rows, common_transport_metadata,
+    sample_transport_metadata, EigenDiagnosticModeRecord, EigenDiagnosticSampleRecord,
+};
+use crate::eigen::output_selection::eigen_diagnostics_request;
 use crate::native_fem;
 use crate::types::AuxiliaryArtifact;
 use crate::types::RunError;
@@ -315,6 +321,7 @@ pub(super) fn native_modal_artifacts(
     let wants_dispersion = outputs
         .iter()
         .any(|output| matches!(output, OutputIR::DispersionCurve { .. }));
+    let diagnostics_request = eigen_diagnostics_request(outputs);
     let gamma0_rad_s_per_a_m = crate::eigen::artifacts::validated_modal_gamma0(plan.gyromagnetic_ratio)
         .map_err(|error| RunError { message: error.to_string() })?;
     let gamma_rad_s_t = gamma0_rad_s_per_a_m / MU0;
@@ -525,6 +532,7 @@ pub(super) fn native_modal_artifacts(
         }
     }
     let mut modes_summary = Vec::with_capacity(modes.len());
+    let mut diagnostic_modes = Vec::with_capacity(modes.len());
     let solver_backend = solver_diagnostics
         .get("solver_backend")
         .and_then(|value| value.as_str())
@@ -762,6 +770,17 @@ pub(super) fn native_modal_artifacts(
             &reduction.active_nodes,
             node_mass_weights,
         );
+        diagnostic_modes.push(EigenDiagnosticModeRecord {
+            sample_index,
+            raw_mode_index: mode_index,
+            branch_id: None,
+            residual_absolute_l2: mode.residual_absolute_l2,
+            residual_relative_l2: Some(mode.residual_relative_l2),
+            residual_linf: mode.residual_linf,
+            tangent_leakage_mean_abs: Some(tangent_leakage_mean_abs),
+            tangent_leakage_max_abs: Some(tangent_leakage_max_abs),
+            tangent_leakage_weighted_relative_l2,
+        });
         let component_participation = modal_participation_for_mode(
             &participation_context,
             plan,
@@ -1127,12 +1146,50 @@ pub(super) fn native_modal_artifacts(
             .into_bytes(),
         });
     }
-    write_eigen_v2_bundle(
+    if let Some(request) = diagnostics_request {
+        let native_diagnostics = summary_payload.get("solver_diagnostics");
+        let sample = EigenDiagnosticSampleRecord {
+            sample_index,
+            computed_mode_count: diagnostic_modes.len(),
+            modes: diagnostic_modes,
+            mass_orthogonality: canonical_mass_orthogonality_rows(
+                native_diagnostics,
+                sample_index,
+            ),
+        };
+        let transport_geometry = modal_tangent_transport_diagnostics(plan);
+        let sample_transport = sample_transport_metadata(
+            sample_index,
+            solver_kind,
+            native_diagnostics,
+            Some(&transport_geometry),
+        );
+        let transport = common_transport_metadata(
+            solver_kind,
+            "single_sample_solver",
+            &[sample_transport],
+        );
+        let diagnostics = build_eigen_diagnostics_v2(
+            solver_kind,
+            "single_sample_solver",
+            &[sample],
+            &[],
+            request,
+            Some(plan.count as usize),
+            Some(&transport),
+        );
+        auxiliary_artifacts.push(json_artifact(
+            "eigen/diagnostics.v2.json",
+            &diagnostics,
+        )?);
+    }
+    write_eigen_v2_bundle_with_outputs(
         plan,
         &summary_payload,
         &requested_modes,
         &mut auxiliary_artifacts,
         sample_index,
+        outputs,
     )?;
     auxiliary_artifacts
         .retain(|artifact| artifact.relative_path != "eigen/diagnostics/solver.v1.json");

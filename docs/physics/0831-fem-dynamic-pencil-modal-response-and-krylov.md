@@ -4423,3 +4423,92 @@ i regresje są source-level; pełne testy Rust i wykonanie naukowe pozostają
 | Source ID | Path + symbol | Odpowiedzialność i dowód |
 |---|---|---|
 | source-eigen-path-sample-execution-provenance | `crates/fullmag-runner/src/fem/eigen_path_manifest.rs` :: `eigen_path_sample_execution_provenance` | Globalne wartości tylko dla wspólnych jawnych metadanych; kompaktowe rekordy per próbka zachowują mieszane/brakujące provenance i kolejność. Source review pending; Rust/GHA i runtime NOT VERIFIED. |
+
+## Kontrakt publikacji diagnostyki eigen
+
+`SaveEigenDiagnostics` oraz `study.save("diagnostics", ...)` przyjmują pięć
+niezależnych flag typu `bool`: `include_tracking`, `include_residuals`,
+`include_overlaps`, `include_tangent_leakage` i `include_orthogonality`.
+W Pythonie i w aktywnym IR brak flagi oznacza `True`; jawne `False` pozostaje
+intencją użytkownika, a `null` jest błędem. Wartości spoza `bool`, w tym
+napisy takie jak `"false"`, nie są konwertowane truthy/falsy. V0.4 zachowuje
+te same domyślne wartości przy braku pól i odrzuca jawne `null`. Gdy wejście
+zawiera kilka `eigen_diagnostics`, każda flaga jest łączona operacją OR.
+
+| Python parameter | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
+|---|---|---|---|---|---|---|---|
+| `SaveEigenDiagnostics.include_tracking` / `study.save.include_tracking` | `bool` | `True` | $1$ | Wyłącznie wartość typu `bool`; inne typy są błędem. | Publikuje podsumowanie i rekordy śledzenia gałęzi w dedykowanej diagnostyce. | Wspólna authoring surface; dostępność danych zależy od writer/runtime. | `sampling.outputs[].include_tracking` dla `kind="eigen_diagnostics"`. |
+| `SaveEigenDiagnostics.include_residuals` / `study.save.include_residuals` | `bool` | `True` | $1$ | Wyłącznie wartość typu `bool`; inne typy są błędem. | Publikuje raportowane residuale absolutne L2, względne L2 i L∞ dla obliczonych modów. | Wspólna authoring surface; metryki zależą od raportu solvera. | `sampling.outputs[].include_residuals`. |
+| `SaveEigenDiagnostics.include_overlaps` / `study.save.include_overlaps` | `bool` | `True` | $1$ | Wyłącznie wartość typu `bool`; inne typy są błędem. | Publikuje zmierzone nakładanie modów wraz z identyfikatorami prób i modów oraz definicją metryki. | Wspólna authoring surface; wymaga poprzednika i pomiaru krawędzi śledzenia. | `sampling.outputs[].include_overlaps`. |
+| `SaveEigenDiagnostics.include_tangent_leakage` / `study.save.include_tangent_leakage` | `bool` | `True` | $1$ | Wyłącznie wartość typu `bool`; inne typy są błędem. | Publikuje raportowane średnie, maksymalne i ważone względne przecieki styczne. | Wspólna authoring surface; metryki zależą od dostępnych danych modów. | `sampling.outputs[].include_tangent_leakage`. |
+| `SaveEigenDiagnostics.include_orthogonality` / `study.save.include_orthogonality` | `bool` | `True` | $1$ | Wyłącznie wartość typu `bool`; inne typy są błędem. | Publikuje wyłącznie dostępne iloczyny skalarne modów obliczone z właściwą macierzą masy. | Wspólna authoring surface; dostępność zależy od solvera. | `sampling.outputs[].include_orthogonality`. |
+
+Flagi filtrują wyłącznie dedykowaną publikację `eigen/diagnostics.v2.json`.
+Nie zmieniają rozwiązania widma, żądanej liczby modów, admission residuali,
+obowiązkowego solver diagnostics v1, manifestu wykonania ani innych
+źródłowych danych naukowych. Brak `eigen_diagnostics` nie jest domyślnym
+żądaniem diagnostyki. Dla istniejącego żądania z pięcioma flagami `False`
+writer publikuje pięć sekcji ze statusem `not_requested`, `available: false`
+i `data: null`. Gdy flaga jest włączona, sekcja zawiera wyłącznie dane
+rzeczywiście dostępne albo jawny status i powód braku.
+
+Sekcje `tracking`, `residuals`, `overlaps`, `tangent_leakage` i
+`orthogonality` mają pola `status`, `available`, `data` oraz
+`unavailable_reason`. Status `available` nie jest kwalifikacją naukową ani
+dowodem wykonania urządzenia. Diagnostyka wyłącznie raportuje źródłowe dane.
+Dla `residuals` i `tangent_leakage` każda składowa pozostaje typowanym
+`Option` i jest publikowana tylko jako skończona, nieujemna liczba. Jawne zero
+jest wartością, ale brak, NaN i liczba ujemna dają `null` z dostępnością lub
+powodem właściwym dla tej składowej; writer nigdy nie zastępuje braku zerem.
+Orthogonality pochodzi wyłącznie z kanonicznych wierszy iloczynu `uᵢᵀ M uⱼ`
+z solverowego raportu opartego na macierzy masy. Bez takiego raportu sekcja
+jest niedostępna; nie obliczamy iloczynu euklidesowego ani nie podstawiamy
+zera.
+
+Nakładania są raportowane wyłącznie dla rzeczywistych krawędzi śledzenia z
+poprzednim i bieżącym `sample_index` oraz `raw_mode_index`, wartością pomiaru
+i jawnie wskazaną metryką. `frequency_score_fallback` nie jest nakładaniem i
+nie zwiększa jego dostępności. Gdy nie ma poprzednika, nakładanie ma status
+`not_applicable` albo jawny powód braku, nigdy wartość zero. Żądanie
+`include_overlaps=True` może uruchomić wewnętrzne śledzenie potrzebne do
+pomiaru; nie zmienia wtedy `include_tracking=False` ani nie publikuje rekordów
+śledzenia. W diagnostyce wyłącznie diagnostycznej wybierane są własne
+identyfikatory wszystkich obliczonych modów, lecz nie powstaje publiczne
+widmo ani payload pola modu.
+
+Envelope v2 zachowuje istniejący resource i sekcję `dispersion` z podstawowymi
+licznikami próbek i żądanych modów. Wyłączenie śledzenia nie publikuje metryk
+ani rekordów śledzenia. Root `solver_model` ma jawny scope modelu ścieżki
+orkiestratora. Polityka transportu bazy i geometria Floqueta pochodzą z
+`modal_tangent_transport_diagnostics` dla każdej próbki mającej już rekord
+diagnostics; pola adaptera i wykonania pozostają przypisane do źródłowych
+rekordów solvera. Root publikuje wartość tylko wtedy, gdy jawne wartości są
+wspólne dla wszystkich próbek. Brak lub rozbieżność pozostawia `null`;
+kompaktowe rekordy prób zachowują per-sample dostępność. Root nie odtwarza pól
+wykonania z pierwszego adaptera ani nie zastępuje requested intent wynikami
+wykonania.
+
+FEM path, ręczny single-k oraz generic manifest używają jawnego kontekstu
+rzeczywistych outputów do utworzenia envelope v2. Manual single-k tworzy go
+tylko przy obecnym `eigen_diagnostics`; tracking i nakładanie jednej próbki
+nie mają krawędzi z poprzednikiem. Generic `eigen/diagnostics/solver.v1.json`
+pozostaje niezależnym obowiązkowym artefaktem i nie jest filtrowany tymi
+flagami. Frontend korzysta z istniejącego resource-first hooka i endpointu
+`/v2/sessions/current/analysis/frequency-domain/eigen/diagnostics.v2`; zmiana
+kształtu payloadu nie dodaje surowego endpointu ani nowego transportu.
+
+| Source ID | Path + symbol | Odpowiedzialność i dowód |
+|---|---|---|
+| source-eigen-diagnostics-python | `packages/fullmag-py/src/fullmag/model/outputs.py` :: `class SaveEigenDiagnostics` | Pięć flag `bool`, domyślnie `True`, bez truthy-coercion; Python tests/GHA NOT VERIFIED. |
+| source-eigen-diagnostics-ir | `crates/fullmag-ir/src/study.rs` :: `OutputIR::EigenDiagnostics` | Domyślne flagi V0.3 i zachowanie jawnego `False`; Rust/GHA NOT VERIFIED. |
+| source-eigen-diagnostics-v04 | `crates/fullmag-ir/src/v04_spectral_wire.rs` :: `OutputV04Wire::EigenDiagnostics` | Zgodne defaulty V0.4 i odrzucenie `null`; Rust/GHA NOT VERIFIED. |
+| source-eigen-diagnostics-selection | `crates/fullmag-runner/src/eigen/output_selection.rs` :: `select_eigen_outputs` | Łączenie flag OR, oddzielne IDs diagnostyki i tracking wewnętrzny; Rust/GHA NOT VERIFIED. |
+| source-eigen-diagnostics-artifact | `crates/fullmag-runner/src/eigen/diagnostic_artifact.rs` :: `build_eigen_diagnostics_v2` | Projekcja typed optional metrics, measured tracking edges, pięciu sekcji i common-only root transport metadata; Rust/GHA NOT VERIFIED. |
+| source-eigen-diagnostics-transport-geometry | `crates/fullmag-runner/src/fem/eigen_output.rs` :: `modal_tangent_transport_diagnostics` | Źródłowy producer polityki i geometrii transportu baz Floquet; projekcja uzupełnia tylko brakujące klucze istniejących rekordów, bez mutacji raw solver diagnostics; Rust/GHA NOT VERIFIED. |
+| source-eigen-diagnostics-common-provenance | `crates/fullmag-runner/src/fem/eigen_path_manifest.rs` :: `eigen_path_sample_execution_provenance` | Common-only observed fields oraz per-sample availability bez first-sample fallback; Rust/GHA NOT VERIFIED. |
+| source-eigen-diagnostics-fem-path | `crates/fullmag-runner/src/fem/eigen_path.rs` :: `execute_fem_eigen_path_with_producer_identity_and_parallel_policy` | Istniejący v2 resource i ścieżka diagnostyczna dla pełnego k-path; Rust/GHA NOT VERIFIED. |
+| source-eigen-diagnostics-native | `crates/fullmag-runner/src/fem/eigen_native_artifacts.rs` :: `native_modal_artifacts` | Dedykowany v2 dla rzeczywistego single-k request; raw summary pozostaje bez zmian; Rust/GHA NOT VERIFIED. |
+| source-eigen-diagnostics-reference | `crates/fullmag-runner/src/fem/eigen_execution.rs` :: `execute_fem_eigen_inner` | Ręczny single-k reference writer publikuje tylko żądane sekcje z typed values i bez krawędzi poprzednika; Rust/GHA NOT VERIFIED. |
+| source-eigen-diagnostics-generic | `crates/fullmag-runner/src/eigen/artifacts/modal_manifest.rs` :: `write_frequency_domain_eigen_manifest_with_outputs` | Jawny output i requested-mode context dla v2; raw solver v1 pozostaje niezależny; Rust/GHA NOT VERIFIED. |
+| source-eigen-diagnostics-resource | `apps/control-room/src/kernel/resources/studyRuntimeResources.ts` :: `useFrequencyDomainEigenDiagnosticsResource` | Istniejący resource-first hook i endpoint; bez nowego endpointu. |
+| source-eigen-diagnostics-frontend-shape | `apps/control-room/src/modules/inspector/panels/frequency-domain/FrequencyDomainResultInspectors.tsx` :: `eigenDiagnosticTransportSummary` | Konsument oczekuje root-level transport fields, niezależnych od sekcji `dispersion`. |

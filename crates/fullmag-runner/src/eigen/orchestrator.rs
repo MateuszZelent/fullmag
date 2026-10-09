@@ -11,10 +11,12 @@
 //! tangent-plane LLG assembly is ready.
 
 use crate::eigen::artifacts::{
-    write_branch_bundle_with_sample_namespace, write_frequency_domain_eigen_manifest,
+    write_branch_bundle_with_sample_namespace,
+    write_frequency_domain_eigen_manifest_with_outputs,
     write_mode_bundle, write_path_bundle_with_sample_namespace, FrequencyDomainArtifactIdentity,
 };
 use crate::eigen::path::expand_k_sampling;
+use crate::eigen::output_selection::eigen_diagnostics_request;
 use crate::eigen::tracking::track_branches;
 use crate::eigen::types::{
     DispersionAnalyticReferenceContext, KSampleDescriptor, PathSolveResult, SingleKSolveResult,
@@ -115,26 +117,46 @@ pub fn run_path_or_single<S: SingleKSolver>(
         artifact_identity.validate().map_err(|error| RunError {
             message: format!("invalid frequency-domain artifact identity: {error}"),
         })?;
-        write_path_bundle_with_sample_namespace(
+        let has_public_spectral_output = outputs.iter().any(|output| {
+            matches!(
+                output,
+                OutputIR::EigenSpectrum { .. }
+                    | OutputIR::EigenMode { .. }
+                    | OutputIR::DispersionCurve { .. }
+            )
+        });
+        let diagnostics_only =
+            eigen_diagnostics_request(outputs).is_some() && !has_public_spectral_output;
+        if !diagnostics_only {
+            write_path_bundle_with_sample_namespace(
+                output_dir,
+                &result,
+                !plan.bias_field_samples.is_empty(),
+            )
+            .map_err(|error| RunError {
+                message: format!("failed to write path bundle: {error}"),
+            })?;
+            write_branch_bundle_with_sample_namespace(
+                output_dir,
+                &result,
+                !plan.bias_field_samples.is_empty(),
+            )
+            .map_err(|error| RunError {
+                message: format!("failed to write branch bundle: {error}"),
+            })?;
+            write_mode_bundle(output_dir, &result).map_err(|error| RunError {
+                message: format!("failed to write mode bundle: {error}"),
+            })?;
+        }
+        write_frequency_domain_eigen_manifest_with_outputs(
             output_dir,
             &result,
-            !plan.bias_field_samples.is_empty(),
+            artifact_identity,
+            outputs,
+            Some(plan.count as usize),
+            Some(plan),
         )
-        .map_err(|error| RunError {
-            message: format!("failed to write path bundle: {error}"),
-        })?;
-        write_branch_bundle_with_sample_namespace(
-            output_dir,
-            &result,
-            !plan.bias_field_samples.is_empty(),
-        )
-        .map_err(|error| RunError {
-            message: format!("failed to write branch bundle: {error}"),
-        })?;
-        write_mode_bundle(output_dir, &result).map_err(|error| RunError {
-            message: format!("failed to write mode bundle: {error}"),
-        })?;
-        write_frequency_domain_eigen_manifest(output_dir, &result, artifact_identity).map_err(
+        .map_err(
             |error| RunError {
                 message: format!("failed to write frequency-domain eigen manifest: {error}"),
             },

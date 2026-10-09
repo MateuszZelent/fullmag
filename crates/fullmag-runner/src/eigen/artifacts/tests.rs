@@ -976,6 +976,75 @@ fn eigen_artifact_writer_emits_v2_contract_files() {
 }
 
 #[test]
+fn generic_diagnostics_writer_uses_flags_and_does_not_publish_a_spectrum() {
+    let temp = TempDirGuard::new("eigen-diagnostics-v2-flags");
+    let result = sample_result();
+    let outputs = [fullmag_ir::OutputIR::EigenDiagnostics {
+        include_tracking: false,
+        include_residuals: true,
+        include_overlaps: false,
+        include_tangent_leakage: true,
+        include_orthogonality: false,
+    }];
+
+    write_frequency_domain_eigen_manifest_with_outputs(
+        &temp.path,
+        &result,
+        &artifact_identity(),
+        &outputs,
+        Some(1),
+        None,
+    )
+    .expect("generic writer should publish requested diagnostics");
+
+    let manifest: Value = serde_json::from_slice(
+        &std::fs::read(temp.path.join("frequency_domain/manifest.v1.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        manifest["artifacts"]["eigen_diagnostics_v2_path"],
+        "eigen/diagnostics.v2.json"
+    );
+    assert_eq!(
+        manifest["resources"]["eigen_diagnostics_resource_key"],
+        "/v2/sessions/current/analysis/frequency-domain/eigen/diagnostics.v2"
+    );
+    assert!(manifest["artifacts"]["spectrum_v2_path"].is_null());
+    assert!(manifest["artifacts"]["mode_metadata_paths"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+    assert!(!temp.path.join("eigen/spectrum.v2.json").exists());
+
+    let diagnostics: Value = serde_json::from_slice(
+        &std::fs::read(temp.path.join("eigen/diagnostics.v2.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(diagnostics["schema_version"], "eigen_diagnostics.v2");
+    assert_eq!(diagnostics["solver_model_scope"], "path_orchestrator");
+    assert_eq!(diagnostics["solver_model"], "reference_scalar_tangent");
+    assert_eq!(diagnostics["sample_count"], 1);
+    assert!(diagnostics["basis_transport_policy"].is_null());
+    assert!(diagnostics["solver_adapter"].is_null());
+    assert_eq!(
+        diagnostics["sample_execution_provenance_status"],
+        "orchestrator_only_reference"
+    );
+    assert_eq!(
+        diagnostics["sample_execution_provenance"]["samples"][0]["sample_index"],
+        0
+    );
+    assert_eq!(diagnostics["dispersion"]["mode_count"], 1);
+    assert_eq!(diagnostics["tracking"]["status"], "not_requested");
+    assert_eq!(diagnostics["residuals"]["status"], "available");
+    assert_eq!(diagnostics["residuals"]["data"]["records"][0]["residual_absolute_l2"], 1.25e-9);
+    assert_eq!(diagnostics["overlaps"]["status"], "not_requested");
+    assert_eq!(diagnostics["tangent_leakage"]["status"], "available");
+    assert_eq!(diagnostics["tangent_leakage"]["data"]["records"][0]["mean_abs"], 3.0e-12);
+    assert_eq!(diagnostics["orthogonality"]["status"], "not_requested");
+}
+
+#[test]
 fn eigen_artifact_writer_keeps_missing_relative_residual_unavailable() {
     let temp = TempDirGuard::new("eigen-artifacts-missing-relative-residual");
     let mut result = sample_result();

@@ -2210,6 +2210,42 @@ pub(super) fn write_eigen_v2_bundle(
     auxiliary_artifacts: &mut Vec<AuxiliaryArtifact>,
     sample_index: usize,
 ) -> Result<(), RunError> {
+    write_eigen_v2_bundle_with_outputs(
+        plan,
+        summary_payload,
+        requested_modes,
+        auxiliary_artifacts,
+        sample_index,
+        &[],
+    )
+}
+
+pub(super) fn write_eigen_v2_bundle_with_outputs(
+    plan: &FemEigenPlanIR,
+    summary_payload: &serde_json::Value,
+    requested_modes: &std::collections::BTreeSet<u32>,
+    auxiliary_artifacts: &mut Vec<AuxiliaryArtifact>,
+    sample_index: usize,
+    outputs: &[OutputIR],
+) -> Result<(), RunError> {
+    let has_diagnostics_request = outputs
+        .iter()
+        .any(|output| matches!(output, OutputIR::EigenDiagnostics { .. }));
+    let has_public_spectrum = outputs
+        .iter()
+        .any(|output| matches!(output, OutputIR::EigenSpectrum { .. }));
+    let has_public_modes = outputs
+        .iter()
+        .any(|output| matches!(output, OutputIR::EigenMode { .. }));
+    let has_public_dispersion = outputs
+        .iter()
+        .any(|output| matches!(output, OutputIR::DispersionCurve { .. }));
+    let diagnostics_only = has_diagnostics_request
+        && !has_public_spectrum
+        && !has_public_modes
+        && !has_public_dispersion;
+    let publish_spectrum_bundle = !diagnostics_only;
+    let publish_branches_bundle = !diagnostics_only;
     let producer_provenance_v1_paths =
         sample_scoped_producer_provenance_paths(auxiliary_artifacts);
     let producer_provenance_v1_path = match producer_provenance_v1_paths.as_slice() {
@@ -2359,9 +2395,15 @@ pub(super) fn write_eigen_v2_bundle(
         }],
     });
     insert_modal_publication_contract(&mut spectrum_v2, &publication_contract);
-    auxiliary_artifacts.push(json_artifact("eigen/spectrum.v2.json", &spectrum_v2)?);
-    let spectrum_v2_revision =
-        published_artifact_sha256(auxiliary_artifacts, "eigen/spectrum.v2.json")?;
+    let spectrum_v2_revision = if publish_spectrum_bundle {
+        auxiliary_artifacts.push(json_artifact("eigen/spectrum.v2.json", &spectrum_v2)?);
+        Some(published_artifact_sha256(
+            auxiliary_artifacts,
+            "eigen/spectrum.v2.json",
+        )?)
+    } else {
+        None
+    };
 
     let participation_solver_device = if solver_model.contains("gpu") {
         "gpu"
@@ -2456,7 +2498,9 @@ pub(super) fn write_eigen_v2_bundle(
         }],
     });
     insert_modal_publication_contract(&mut spectrum_v3, &publication_contract);
-    auxiliary_artifacts.push(json_artifact("eigen/spectrum.v3.json", &spectrum_v3)?);
+    if publish_spectrum_bundle {
+        auxiliary_artifacts.push(json_artifact("eigen/spectrum.v3.json", &spectrum_v3)?);
+    }
 
     let branches: Vec<serde_json::Value> = modes
         .iter()
@@ -2502,21 +2546,23 @@ pub(super) fn write_eigen_v2_bundle(
             point
         })
         .collect();
-    auxiliary_artifacts.push(json_artifact(
-        "eigen/branches.v2.json",
-        &serde_json::json!({
-            "schema_version": "eigen_branches.v2",
-            "solver_model": summary_payload["solver_kind"],
-            "tracking_score_source": "seed_only",
-            "modal_overlap_available": false,
-            "branches": branches,
-            "diagnostics": {
+    if publish_branches_bundle {
+        auxiliary_artifacts.push(json_artifact(
+            "eigen/branches.v2.json",
+            &serde_json::json!({
+                "schema_version": "eigen_branches.v2",
+                "solver_model": summary_payload["solver_kind"],
                 "tracking_score_source": "seed_only",
                 "modal_overlap_available": false,
-            },
-        }),
-    )?);
-    if !auxiliary_artifacts
+                "branches": branches,
+                "diagnostics": {
+                    "tracking_score_source": "seed_only",
+                    "modal_overlap_available": false,
+                },
+            }),
+        )?);
+    }
+    if publish_spectrum_bundle && !auxiliary_artifacts
         .iter()
         .any(|artifact| artifact.relative_path == "eigen/dispersion.csv")
     {
@@ -2842,9 +2888,33 @@ pub(super) fn write_eigen_v2_bundle(
         );
 
     let has_mode_fields = !mode_metadata_paths.is_empty();
-    let spectrum_revision = spectrum_v2_revision;
-    let branches_revision =
-        published_artifact_sha256(auxiliary_artifacts, "eigen/branches.v2.json")?;
+    let spectrum_revision = spectrum_v2_revision.clone();
+    let branches_revision = if publish_branches_bundle {
+        Some(published_artifact_sha256(
+            auxiliary_artifacts,
+            "eigen/branches.v2.json",
+        )?)
+    } else {
+        None
+    };
+    let eigen_diagnostics_v2_available = auxiliary_artifacts
+        .iter()
+        .any(|artifact| artifact.relative_path == "eigen/diagnostics.v2.json");
+    let mut cross_artifact_refs = Vec::new();
+    if let Some(revision) = spectrum_revision.as_ref() {
+        cross_artifact_refs.push(serde_json::json!({
+            "relation": "source_spectrum",
+            "artifact": "eigen/spectrum.v2.json",
+            "revision": revision,
+        }));
+    }
+    if let Some(revision) = branches_revision.as_ref() {
+        cross_artifact_refs.push(serde_json::json!({
+            "relation": "source_branches",
+            "artifact": "eigen/branches.v2.json",
+            "revision": revision,
+        }));
+    }
     let mut manifest = serde_json::json!({
         "schema_version": "frequency_domain_manifest.v1",
         "analysis_family": "magnetic_frequency_domain",
@@ -2868,9 +2938,10 @@ pub(super) fn write_eigen_v2_bundle(
             "normalization": normalization_label(plan.normalization),
         },
         "artifacts": {
-            "spectrum_v2_path": "eigen/spectrum.v2.json",
-            "branches_v2_path": "eigen/branches.v2.json",
-            "dispersion_csv_path": "eigen/dispersion.csv",
+            "spectrum_v2_path": if publish_spectrum_bundle { serde_json::json!("eigen/spectrum.v2.json") } else { serde_json::Value::Null },
+            "branches_v2_path": if publish_branches_bundle { serde_json::json!("eigen/branches.v2.json") } else { serde_json::Value::Null },
+            "dispersion_csv_path": if publish_spectrum_bundle { serde_json::json!("eigen/dispersion.csv") } else { serde_json::Value::Null },
+            "eigen_diagnostics_v2_path": if eigen_diagnostics_v2_available { serde_json::json!("eigen/diagnostics.v2.json") } else { serde_json::Value::Null },
             "solver_diagnostics_path": "eigen/diagnostics/solver.v1.json",
             "mode_field_zarr_store_path": if has_mode_fields {
                 serde_json::json!(mode_zarr_store_path())
@@ -2892,27 +2963,17 @@ pub(super) fn write_eigen_v2_bundle(
             "linearization_identity_sha256_by_sample": serde_json::json!({}),
         },
         "resources": {
-            "spectrum_resource_key": "/v2/sessions/current/analysis/frequency-domain/eigen/spectrum.v2",
-            "branches_resource_key": "/v2/sessions/current/analysis/frequency-domain/eigen/branches.v2",
-            "dispersion_resource_key": "/v2/sessions/current/analysis/frequency-domain/eigen/dispersion",
+            "spectrum_resource_key": if publish_spectrum_bundle { serde_json::json!("/v2/sessions/current/analysis/frequency-domain/eigen/spectrum.v2") } else { serde_json::Value::Null },
+            "branches_resource_key": if publish_branches_bundle { serde_json::json!("/v2/sessions/current/analysis/frequency-domain/eigen/branches.v2") } else { serde_json::Value::Null },
+            "dispersion_resource_key": if publish_spectrum_bundle { serde_json::json!("/v2/sessions/current/analysis/frequency-domain/eigen/dispersion") } else { serde_json::Value::Null },
+            "eigen_diagnostics_resource_key": if eigen_diagnostics_v2_available { serde_json::json!("/v2/sessions/current/analysis/frequency-domain/eigen/diagnostics.v2") } else { serde_json::Value::Null },
             "mode_field_resources": mode_resource_keys,
         },
         "diagnostics": {
             "tracking_score_source": "seed_only",
             "modal_overlap_available": false,
         },
-        "cross_artifact_refs": [
-            {
-                "relation": "source_spectrum",
-                "artifact": "eigen/spectrum.v2.json",
-                "revision": spectrum_revision,
-            },
-            {
-                "relation": "source_branches",
-                "artifact": "eigen/branches.v2.json",
-                "revision": branches_revision,
-            },
-        ],
+        "cross_artifact_refs": cross_artifact_refs,
     });
     if summary_payload
         .get("solver_diagnostics")

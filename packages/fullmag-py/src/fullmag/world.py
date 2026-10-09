@@ -8819,6 +8819,17 @@ def save(
         _state._outputs_explicit = True
         _state._outputs.append(output)
         return
+    if quantity == "diagnostics":
+        output = SaveEigenDiagnostics(
+            include_tracking=include_tracking,
+            include_residuals=include_residuals,
+            include_overlaps=include_overlaps,
+            include_tangent_leakage=include_tangent_leakage,
+            include_orthogonality=include_orthogonality,
+        )
+        _state._outputs_explicit = True
+        _state._outputs.append(output)
+        return
     _state._outputs_explicit = True
     if quantity in _EIGEN_QUANTITIES:
         if quantity == "mode":
@@ -8845,16 +8856,6 @@ def save(
                 SaveDispersion(
                     name=name,
                     include_branch_table=include_branch_table,
-                )
-            )
-        elif quantity == "diagnostics":
-            _state._outputs.append(
-                SaveEigenDiagnostics(
-                    include_tracking=include_tracking,
-                    include_residuals=include_residuals,
-                    include_overlaps=include_overlaps,
-                    include_tangent_leakage=include_tangent_leakage,
-                    include_orthogonality=include_orthogonality,
                 )
             )
         return

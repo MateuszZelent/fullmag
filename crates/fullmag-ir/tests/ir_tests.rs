@@ -6343,6 +6343,51 @@ fn eigen_output_selectors_round_trip_through_canonical_ir() {
 }
 
 #[test]
+fn eigen_diagnostics_v03_defaults_true_preserves_false_and_rejects_null() {
+    let default_output: OutputIR = serde_json::from_value(serde_json::json!({
+        "kind": "eigen_diagnostics"
+    }))
+    .expect("legacy diagnostic output should use Python defaults");
+    let expected = serde_json::json!({
+        "kind": "eigen_diagnostics",
+        "include_tracking": true,
+        "include_residuals": true,
+        "include_overlaps": true,
+        "include_tangent_leakage": true,
+        "include_orthogonality": true,
+    });
+    assert_eq!(serde_json::to_value(default_output).unwrap(), expected);
+
+    let explicit_false: OutputIR = serde_json::from_value(serde_json::json!({
+        "kind": "eigen_diagnostics",
+        "include_tracking": false,
+        "include_residuals": true,
+        "include_overlaps": false,
+        "include_tangent_leakage": true,
+        "include_orthogonality": false,
+    }))
+    .expect("explicit false is preserved");
+    let encoded = serde_json::to_value(&explicit_false).unwrap();
+    assert_eq!(encoded["include_tracking"], false);
+    assert_eq!(encoded["include_residuals"], true);
+    assert_eq!(encoded["include_overlaps"], false);
+    assert_eq!(encoded["include_tangent_leakage"], true);
+    assert_eq!(encoded["include_orthogonality"], false);
+
+    for flag in [
+        "include_tracking",
+        "include_residuals",
+        "include_overlaps",
+        "include_tangent_leakage",
+        "include_orthogonality",
+    ] {
+        let mut explicit_null = serde_json::json!({ "kind": "eigen_diagnostics" });
+        explicit_null[flag] = serde_json::Value::Null;
+        assert!(serde_json::from_value::<OutputIR>(explicit_null).is_err(), "{flag}");
+    }
+}
+
+#[test]
 fn eigen_mode_branch_only_output_is_valid_and_empty_selector_is_rejected() {
     let mut ir = ProblemIR::bootstrap_example();
     let dynamics = ir.study.dynamics().clone();

@@ -7,6 +7,10 @@ use std::collections::{BTreeSet, HashMap};
 use std::path::Path;
 
 use crate::dispatch::FemEngine;
+use crate::eigen::diagnostic_artifact::{
+    build_eigen_diagnostics_v2, canonical_mass_orthogonality_rows,
+    EigenDiagnosticModeRecord, EigenDiagnosticSampleRecord,
+};
 use crate::eigen::output_selection::{select_eigen_outputs, EigenOutputSelection, SampleModeId};
 use crate::eigen::{KSampleDescriptor, SingleKModeResult, SingleKSolveResult};
 use crate::fem::eigen_capability::native_cpu_modal_window_enabled;
@@ -18,6 +22,13 @@ use crate::fem::eigen_reduction::{build_reduction_map, ReductionMap};
 use crate::fem_eigen;
 use crate::types::{AuxiliaryArtifact, ExecutedRun, RunError, RunStatus, StepStats};
 use fullmag_engine::fem::MeshTopology;
+
+pub(crate) fn eigen_diagnostics_transport_metadata(
+    result: &crate::eigen::PathSolveResult,
+    plan: Option<&FemEigenPlanIR>,
+) -> Value {
+    eigen_path_diagnostics_transport_metadata(result, plan)
+}
 
 #[path = "eigen_path_artifacts.rs"]
 mod eigen_path_artifacts;
@@ -1616,6 +1627,15 @@ pub(crate) fn execute_fem_eigen_path_with_producer_identity_and_parallel_policy(
     let selection = select_eigen_outputs(&path_result, outputs).map_err(|error| RunError {
         message: format!("invalid eigen output selection: {error}"),
     })?;
+    let has_public_spectrum_output = outputs.iter().any(|output| {
+        matches!(
+            output,
+            OutputIR::EigenSpectrum { .. }
+                | OutputIR::EigenMode { .. }
+                | OutputIR::DispersionCurve { .. }
+        )
+    });
+    let diagnostics_only = selection.diagnostics_request().is_some() && !has_public_spectrum_output;
     let published_mode_ids: BTreeSet<SampleModeId> = selection
         .spectrum_mode_ids()
         .union(selection.field_mode_ids())
@@ -1721,7 +1741,7 @@ pub(crate) fn execute_fem_eigen_path_with_producer_identity_and_parallel_policy(
         .map(|branch| v2_samples.len().saturating_sub(branch.points.len()))
         .sum::<usize>();
     let public_mode_count = eigen_path_public_mode_count(&path_result, &published_mode_ids);
-    let diagnostics_v2 = serde_json::json!({
+    let dispersion_diagnostics_summary = serde_json::json!({
         "schema_version": "eigen_diagnostics.v2",
         "dispersion": {
             "sample_count": path_result.samples.len(),
@@ -1739,6 +1759,49 @@ pub(crate) fn execute_fem_eigen_path_with_producer_identity_and_parallel_policy(
                 "assignment_ambiguity_metric_not_computed",
         },
     });
+    let diagnostics_v2 = selection.diagnostics_request().map(|request| {
+        let samples = path_result
+            .samples
+            .iter()
+            .map(|sample| {
+                let modes = sample
+                    .modes
+                    .iter()
+                    .filter(|mode| {
+                        request.any_enabled()
+                            && selection
+                                .diagnostic_mode_ids()
+                                .contains(&SampleModeId::new(
+                                    sample.sample.sample_index,
+                                    mode.raw_mode_index,
+                                ))
+                    })
+                    .map(|mode| {
+                        EigenDiagnosticModeRecord::from_mode(sample.sample.sample_index, mode)
+                    })
+                    .collect();
+                EigenDiagnosticSampleRecord {
+                    sample_index: sample.sample.sample_index,
+                    computed_mode_count: sample.modes.len(),
+                    modes,
+                    mass_orthogonality: canonical_mass_orthogonality_rows(
+                        sample.solver_diagnostics.as_ref(),
+                        sample.sample.sample_index,
+                    ),
+                }
+            })
+            .collect::<Vec<_>>();
+        let transport = eigen_path_diagnostics_transport_metadata(&path_result, Some(plan));
+        build_eigen_diagnostics_v2(
+            path_result.solver_model.as_str(),
+            "path_orchestrator",
+            &samples,
+            &path_result.branches,
+            request,
+            Some(plan.count as usize),
+            Some(&transport),
+        )
+    });
     let spectrum_v2 = serde_json::json!({
         "schema_version": "eigen_spectrum.v2",
         "solver_id": path_result.solver_model.as_str(),
@@ -1746,7 +1809,7 @@ pub(crate) fn execute_fem_eigen_path_with_producer_identity_and_parallel_policy(
         "sample_count": v2_samples.len(),
         "mode_count": public_mode_count,
         "samples": v2_samples.clone(),
-        "diagnostics_summary": diagnostics_v2["dispersion"].clone(),
+        "diagnostics_summary": dispersion_diagnostics_summary["dispersion"].clone(),
     });
     let spectrum_v3_samples = path_result
         .samples
@@ -1784,16 +1847,18 @@ pub(crate) fn execute_fem_eigen_path_with_producer_identity_and_parallel_policy(
         "sample_count": spectrum_v3_samples.len(),
         "mode_count": public_mode_count,
         "samples": spectrum_v3_samples,
-        "diagnostics_summary": diagnostics_v2["dispersion"].clone(),
+        "diagnostics_summary": dispersion_diagnostics_summary["dispersion"].clone(),
     });
-    auxiliary_artifacts.push(AuxiliaryArtifact {
-        relative_path: "eigen/spectrum.v2.json".to_string(),
-        bytes: serde_json::to_vec_pretty(&spectrum_v2).unwrap_or_default(),
-    });
-    auxiliary_artifacts.push(AuxiliaryArtifact {
-        relative_path: "eigen/spectrum.v3.json".to_string(),
-        bytes: serde_json::to_vec_pretty(&spectrum_v3).unwrap_or_default(),
-    });
+    if !diagnostics_only {
+        auxiliary_artifacts.push(AuxiliaryArtifact {
+            relative_path: "eigen/spectrum.v2.json".to_string(),
+            bytes: serde_json::to_vec_pretty(&spectrum_v2).unwrap_or_default(),
+        });
+        auxiliary_artifacts.push(AuxiliaryArtifact {
+            relative_path: "eigen/spectrum.v3.json".to_string(),
+            bytes: serde_json::to_vec_pretty(&spectrum_v3).unwrap_or_default(),
+        });
+    }
     auxiliary_artifacts.push(AuxiliaryArtifact {
         relative_path: "eigen/path.json".to_string(),
         bytes: serde_json::to_vec_pretty(&path_json).unwrap_or_default(),
@@ -1890,10 +1955,12 @@ pub(crate) fn execute_fem_eigen_path_with_producer_identity_and_parallel_policy(
             bytes: serde_json::to_vec_pretty(&branches_v2).unwrap_or_default(),
         });
     }
-    auxiliary_artifacts.push(AuxiliaryArtifact {
-        relative_path: "eigen/diagnostics.v2.json".to_string(),
-        bytes: serde_json::to_vec_pretty(&diagnostics_v2).unwrap_or_default(),
-    });
+    if let Some(diagnostics) = diagnostics_v2.as_ref() {
+        auxiliary_artifacts.push(AuxiliaryArtifact {
+            relative_path: "eigen/diagnostics.v2.json".to_string(),
+            bytes: serde_json::to_vec_pretty(diagnostics).unwrap_or_default(),
+        });
+    }
     if branch_table_requested {
         auxiliary_artifacts.push(AuxiliaryArtifact {
             relative_path: "eigen/branches.json".to_string(),
@@ -1910,8 +1977,16 @@ pub(crate) fn execute_fem_eigen_path_with_producer_identity_and_parallel_policy(
         });
     }
 
+    let solver_diagnostics =
+        eigen_path_solver_diagnostics(engine, plan, &path_result, &published_mode_ids);
+    auxiliary_artifacts.push(AuxiliaryArtifact {
+        relative_path: "eigen/diagnostics/solver.v1.json".to_string(),
+        bytes: serde_json::to_vec_pretty(&solver_diagnostics).unwrap_or_default(),
+    });
+
     // Legacy-compatible spectrum.json from the first sample
-    if let Some(first_sample) = path_result.samples.first() {
+    if !diagnostics_only {
+        if let Some(first_sample) = path_result.samples.first() {
         let modes_summary: Vec<serde_json::Value> = first_sample
             .modes
             .iter()
@@ -1936,8 +2011,6 @@ pub(crate) fn execute_fem_eigen_path_with_producer_identity_and_parallel_policy(
                 )
             })
             .collect();
-        let solver_diagnostics =
-            eigen_path_solver_diagnostics(engine, plan, &path_result, &published_mode_ids);
         let production_path = matches!(
             path_result.solver_model,
             crate::eigen::EigenSolverModel::ProductionCpuShiftInvert
@@ -1980,11 +2053,6 @@ pub(crate) fn execute_fem_eigen_path_with_producer_identity_and_parallel_policy(
             relative_path: "eigen/metadata/eigen_summary.json".to_string(),
             bytes: serde_json::to_vec_pretty(&legacy_spectrum).unwrap_or_default(),
         });
-        auxiliary_artifacts.push(AuxiliaryArtifact {
-            relative_path: "eigen/diagnostics/solver.v1.json".to_string(),
-            bytes: serde_json::to_vec_pretty(&solver_diagnostics).unwrap_or_default(),
-        });
-
         if wants_dispersion {
             // Legacy dispersion CSV with all samples × modes
             let mut csv_lines = vec![
@@ -2109,6 +2177,7 @@ pub(crate) fn execute_fem_eigen_path_with_producer_identity_and_parallel_policy(
                 .unwrap_or_default(),
             });
         }
+    }
     }
     append_eigen_path_k0_kittel_validation_artifacts(&mut auxiliary_artifacts, &path_result)?;
     auxiliary_artifacts.push(AuxiliaryArtifact {

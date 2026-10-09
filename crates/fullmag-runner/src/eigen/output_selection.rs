@@ -25,6 +25,54 @@ impl SampleModeId {
     }
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct EigenDiagnosticsRequest {
+    pub(crate) include_tracking: bool,
+    pub(crate) include_residuals: bool,
+    pub(crate) include_overlaps: bool,
+    pub(crate) include_tangent_leakage: bool,
+    pub(crate) include_orthogonality: bool,
+}
+
+impl EigenDiagnosticsRequest {
+    fn merge(self, other: Self) -> Self {
+        Self {
+            include_tracking: self.include_tracking || other.include_tracking,
+            include_residuals: self.include_residuals || other.include_residuals,
+            include_overlaps: self.include_overlaps || other.include_overlaps,
+            include_tangent_leakage: self.include_tangent_leakage || other.include_tangent_leakage,
+            include_orthogonality: self.include_orthogonality || other.include_orthogonality,
+        }
+    }
+
+    pub(crate) fn any_enabled(self) -> bool {
+        self.include_tracking
+            || self.include_residuals
+            || self.include_overlaps
+            || self.include_tangent_leakage
+            || self.include_orthogonality
+    }
+}
+
+pub(crate) fn eigen_diagnostics_request(outputs: &[OutputIR]) -> Option<EigenDiagnosticsRequest> {
+    outputs.iter().filter_map(|output| match output {
+        OutputIR::EigenDiagnostics {
+            include_tracking,
+            include_residuals,
+            include_overlaps,
+            include_tangent_leakage,
+            include_orthogonality,
+        } => Some(EigenDiagnosticsRequest {
+            include_tracking: *include_tracking,
+            include_residuals: *include_residuals,
+            include_overlaps: *include_overlaps,
+            include_tangent_leakage: *include_tangent_leakage,
+            include_orthogonality: *include_orthogonality,
+        }),
+        _ => None,
+    })
+    .reduce(EigenDiagnosticsRequest::merge)
+}
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct DispersionCurveSelection {
     name: String,
@@ -201,6 +249,8 @@ pub(crate) struct EigenOutputSelection {
     spectrum_mode_ids: BTreeSet<SampleModeId>,
     field_mode_ids: BTreeSet<SampleModeId>,
     tracking_mode_ids: BTreeSet<SampleModeId>,
+    diagnostic_mode_ids: BTreeSet<SampleModeId>,
+    diagnostics_request: Option<EigenDiagnosticsRequest>,
     field_mode_ids_by_field: BTreeMap<String, BTreeSet<SampleModeId>>,
     selected_sample_ids: BTreeSet<usize>,
     tracked_branch_ids: BTreeSet<usize>,
@@ -220,6 +270,14 @@ impl EigenOutputSelection {
 
     pub(crate) fn tracking_mode_ids(&self) -> &BTreeSet<SampleModeId> {
         &self.tracking_mode_ids
+    }
+
+    pub(crate) fn diagnostic_mode_ids(&self) -> &BTreeSet<SampleModeId> {
+        &self.diagnostic_mode_ids
+    }
+
+    pub(crate) fn diagnostics_request(&self) -> Option<EigenDiagnosticsRequest> {
+        self.diagnostics_request
     }
 
     pub(crate) fn field_mode_ids_for_field(&self, field: &str) -> Option<&BTreeSet<SampleModeId>> {
@@ -347,6 +405,7 @@ pub(crate) fn select_eigen_outputs(
     validate_eigen_spectrum_quantities(outputs)?;
     let available = AvailableModes::from_result(path_result)?;
     let mut selection = EigenOutputSelection::default();
+    selection.diagnostics_request = eigen_diagnostics_request(outputs);
     let mut mode_requests = Vec::new();
 
     for output in outputs {
@@ -367,13 +426,7 @@ pub(crate) fn select_eigen_outputs(
                     include_branch_table: *include_branch_table,
                 });
             }
-            OutputIR::EigenDiagnostics {
-                include_tracking, ..
-            } => {
-                if *include_tracking {
-                    selection.requires_branch_tracking = true;
-                }
-            }
+            OutputIR::EigenDiagnostics { .. } => {}
             OutputIR::EigenMode {
                 field,
                 all_modes,
@@ -465,6 +518,14 @@ pub(crate) fn select_eigen_outputs(
         }
     }
 
+    if let Some(request) = selection.diagnostics_request {
+        if request.include_tracking || request.include_overlaps {
+            selection.requires_branch_tracking = true;
+        }
+        if request.any_enabled() {
+            selection.diagnostic_mode_ids = available.mode_ids.clone();
+        }
+    }
     if selection.has_spectrum_output {
         selection.spectrum_mode_ids = available.mode_ids.clone();
     }
@@ -939,6 +1000,70 @@ mod tests {
         assert_eq!(selection.tracked_branch_ids().len(), 2);
         assert!(selection.spectrum_mode_ids().is_empty());
         assert!(!selection.has_spectrum_output());
+        assert_eq!(selection.diagnostic_mode_ids().len(), 4);
+        assert_eq!(selection.diagnostics_request().unwrap().include_tracking, true);
+    }
+
+    #[test]
+    fn diagnostic_requests_merge_flags_and_keep_internal_overlap_tracking_private() {
+        let outputs = [
+            OutputIR::EigenDiagnostics {
+                include_tracking: false,
+                include_residuals: true,
+                include_overlaps: false,
+                include_tangent_leakage: false,
+                include_orthogonality: false,
+            },
+            OutputIR::EigenDiagnostics {
+                include_tracking: false,
+                include_residuals: false,
+                include_overlaps: true,
+                include_tangent_leakage: false,
+                include_orthogonality: false,
+            },
+        ];
+        let selection = select_eigen_outputs(&result(), &outputs)
+            .expect("diagnostic requests merge independently");
+        let request = selection.diagnostics_request().expect("request is retained");
+
+        assert!(!request.include_tracking);
+        assert!(request.include_residuals);
+        assert!(request.include_overlaps);
+        assert!(selection.requires_branch_tracking());
+        assert_eq!(selection.diagnostic_mode_ids().len(), 4);
+        assert_eq!(selection.tracking_mode_ids().len(), 4);
+        assert!(selection.spectrum_mode_ids().is_empty());
+        assert!(selection.field_mode_ids().is_empty());
+    }
+
+    #[test]
+    fn all_disabled_diagnostic_request_is_retained_without_selecting_modes() {
+        let selection = select_eigen_outputs(
+            &result(),
+            &[OutputIR::EigenDiagnostics {
+                include_tracking: false,
+                include_residuals: false,
+                include_overlaps: false,
+                include_tangent_leakage: false,
+                include_orthogonality: false,
+            }],
+        )
+        .expect("disabled diagnostics request is valid");
+
+        assert_eq!(selection.diagnostics_request(), Some(EigenDiagnosticsRequest::default()));
+        assert!(selection.diagnostic_mode_ids().is_empty());
+        assert!(!selection.requires_branch_tracking());
+        assert!(selection.tracking_mode_ids().is_empty());
+        assert!(selection.spectrum_mode_ids().is_empty());
+        assert!(selection.field_mode_ids().is_empty());
+    }
+
+    #[test]
+    fn missing_diagnostic_output_does_not_create_a_request() {
+        let selection = select_eigen_outputs(&result(), &[])
+            .expect("an empty public output list remains valid");
+        assert_eq!(selection.diagnostics_request(), None);
+        assert!(selection.diagnostic_mode_ids().is_empty());
     }
 
     #[test]

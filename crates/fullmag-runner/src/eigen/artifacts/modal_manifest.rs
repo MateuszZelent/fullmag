@@ -10,6 +10,11 @@ use crate::eigen::types::{
     EigenSolverModel, KSampleDescriptor, PathSolveResult, SingleKModeResult, SingleKSolveResult,
     TrackedBranch,
 };
+use crate::eigen::diagnostic_artifact::{
+    build_eigen_diagnostics_v2, canonical_mass_orthogonality_rows, EigenDiagnosticSampleRecord,
+};
+use crate::eigen::output_selection::eigen_diagnostics_request;
+use fullmag_ir::OutputIR;
 use serde::Serialize;
 use std::fs;
 use std::io::Write;
@@ -439,8 +444,65 @@ pub fn write_frequency_domain_eigen_manifest(
     result: &PathSolveResult,
     identity: &FrequencyDomainArtifactIdentity,
 ) -> std::io::Result<()> {
+    write_frequency_domain_eigen_manifest_with_outputs(base_dir, result, identity, &[], None, None)
+}
+
+pub fn write_frequency_domain_eigen_manifest_with_outputs(
+    base_dir: &Path,
+    result: &PathSolveResult,
+    identity: &FrequencyDomainArtifactIdentity,
+    outputs: &[OutputIR],
+    requested_mode_count: Option<usize>,
+    plan: Option<&fullmag_ir::FemEigenPlanIR>,
+) -> std::io::Result<()> {
     identity.validate()?;
     write_eigen_solver_diagnostics_artifact(base_dir, result)?;
+    let diagnostics_request = eigen_diagnostics_request(outputs);
+    let eigen_diagnostics_v2_path = if let Some(request) = diagnostics_request {
+        let samples = result
+            .samples
+            .iter()
+            .map(|sample| {
+                EigenDiagnosticSampleRecord::from_result_sample(
+                    sample,
+                    canonical_mass_orthogonality_rows(
+                        sample.solver_diagnostics.as_ref(),
+                        sample.sample.sample_index,
+                    ),
+                )
+            })
+            .collect::<Vec<_>>();
+        let transport = crate::fem::eigen_diagnostics_transport_metadata(result, plan);
+        let diagnostics = build_eigen_diagnostics_v2(
+            result.solver_model.as_str(),
+            "path_orchestrator",
+            &samples,
+            &result.branches,
+            request,
+            requested_mode_count.or_else(|| result
+                .samples
+                .iter()
+                .find_map(|sample| {
+                    sample_native_solver_diagnostics(sample)
+                        .and_then(|diagnostics| diagnostics.get("requested_mode_count"))
+                        .and_then(serde_json::Value::as_u64)
+                        .and_then(|count| usize::try_from(count).ok())
+                })),
+            Some(&transport),
+        );
+        let diagnostics_dir = base_dir.join("eigen");
+        fs::create_dir_all(&diagnostics_dir)?;
+        let diagnostics_bytes = serde_json::to_vec_pretty(&diagnostics).map_err(|error| {
+            std::io::Error::new(std::io::ErrorKind::InvalidData, error)
+        })?;
+        fs::write(
+            diagnostics_dir.join("diagnostics.v2.json"),
+            diagnostics_bytes,
+        )?;
+        Some("eigen/diagnostics.v2.json")
+    } else {
+        None
+    };
     let manifest_dir = base_dir.join("frequency_domain");
     fs::create_dir_all(&manifest_dir)?;
     let created_at = SystemTime::now()
@@ -456,7 +518,22 @@ pub fn write_frequency_domain_eigen_manifest(
         .is_some()
         .then_some("fmr/kittel_fit.v1.json");
     let calculation_mode = eigen_calculation_mode(result);
-    let dispersion_published = calculation_mode == "dispersion_modal";
+    let diagnostics_only = diagnostics_request.is_some()
+        && !outputs.iter().any(|output| {
+            matches!(
+                output,
+                OutputIR::EigenSpectrum { .. }
+                    | OutputIR::EigenMode { .. }
+                    | OutputIR::DispersionCurve { .. }
+            )
+        });
+    let spectrum_published = !diagnostics_only;
+    let dispersion_published = calculation_mode == "dispersion_modal" && !diagnostics_only;
+    let mode_metadata_paths = if diagnostics_only {
+        Vec::new()
+    } else {
+        mode_metadata_paths
+    };
     let tracking = tracking_summary(result);
     let solver_classification = modal_solver_classification(result.solver_model);
     let (requested_execution, resolved_execution) =
@@ -543,10 +620,10 @@ pub fn write_frequency_domain_eigen_manifest(
         },
         artifacts: FrequencyDomainArtifactIndex {
             solver_diagnostics_path: Some("eigen/diagnostics/solver.v1.json"),
-            spectrum_v2_path: Some("eigen/spectrum.v2.json"),
+            spectrum_v2_path: spectrum_published.then_some("eigen/spectrum.v2.json"),
             branches_v2_path: dispersion_published.then_some("eigen/branches.v2.json"),
             dispersion_csv_path: dispersion_published.then_some("eigen/dispersion.csv"),
-            eigen_diagnostics_v2_path: None,
+            eigen_diagnostics_v2_path,
             response_sweep_v1_path: None,
             response_sweep_v2_path: None,
             response_map_v1_path: None,
@@ -561,7 +638,12 @@ pub fn write_frequency_domain_eigen_manifest(
             mode_metadata_paths,
             frequency_point_paths: Vec::new(),
         },
-        resources: FrequencyDomainResourceIndex::default(),
+        resources: FrequencyDomainResourceIndex {
+            eigen_diagnostics_resource_key: diagnostics_request.map(|_| {
+                "/v2/sessions/current/analysis/frequency-domain/eigen/diagnostics.v2"
+            }),
+            ..FrequencyDomainResourceIndex::default()
+        },
         validation: FrequencyDomainValidation {
             dispersion_validation: dispersion_published
                 .then(|| result.dispersion_validation.as_ref())
