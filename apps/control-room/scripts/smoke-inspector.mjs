@@ -1,4 +1,4 @@
-import { mkdir } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
 import {
@@ -248,6 +248,12 @@ try {
   const screenshotFiles = [];
   await qualifyExplorerKeyboardNavigation(page);
   await qualifyInspectorRoutingMatrix(page, inspector, screenshotFiles, fixture);
+  const resonanceLeafRoutingProof = await qualifyInspectorResonanceLeafRouting(
+    browser,
+    workspaceUrl,
+    outputDir,
+  );
+  screenshotFiles.push(...resonanceLeafRoutingProof.screenshots);
   await qualifyMagneticTextureMutationStability(page, inspector, fixture);
 
   await ensureModelNodeVisible(page, "model:object:film:visualization");
@@ -841,6 +847,10 @@ try {
         inspectorPanelToggle: "verified; header icon and ribbon restore",
         previewRequests: previewRequests.length,
         physicsScopeExclusivity: "verified; both directions blocked before mutation",
+        resonanceLeafRouting: {
+          proofFile: resonanceLeafRoutingProof.proofFile,
+          cases: resonanceLeafRoutingProof.cases.length,
+        },
         screenshots: screenshotFiles,
         tabs: expectedTabs,
         themes: ["light", "dark"],
@@ -1402,6 +1412,367 @@ async function qualifyInspectorRoutingMatrix(page, inspector, screenshotFiles, f
   });
   await assertHealthyViewportCanvas(page, "return to object viewport");
   await qualifyModalDispersionAndPostprocessing(page, inspector, screenshotFiles, fixture);
+}
+
+async function qualifyInspectorResonanceLeafRouting(browser, workspaceUrl, outputDir) {
+  const proofFile = "analysis-resonance-leaf-routing-proof.json";
+  const cases = [
+    {
+      id: "modal-mode-field",
+      analysisProduct: "modal_eigen",
+      modalResonanceQualification: true,
+      studyProduct: "modal_eigen",
+      stageId: "eigen-dispersion",
+      kind: "results.resonance.modal.mode",
+      suffix: "modes",
+      childGroup: "modes",
+      fieldSource: "eigen-mode",
+      fieldId: "analysis:eigen:sample-0000:mode-0002",
+      owner: "frequency-domain-results-resonance-modal-mode",
+      heading: "Eigenmode Field",
+      label: "Modal eigenmode field",
+    },
+    {
+      id: "modal-rf-coupling",
+      analysisProduct: "modal_eigen",
+      modalResonanceQualification: true,
+      studyProduct: "modal_eigen",
+      stageId: "eigen-dispersion",
+      kind: "results.resonance.modal.coupling",
+      suffix: "rf-coupling",
+      owner: "frequency-domain-results-resonance-modal-coupling",
+      heading: "RF Coupling / FMR Activity",
+      label: "Modal RF coupling",
+    },
+    {
+      id: "driven-response-field",
+      analysisProduct: "driven_response",
+      studyProduct: "driven_response",
+      stageId: "frequency-response",
+      kind: "results.resonance.driven.field",
+      suffix: "response-fields",
+      childGroup: "response-fields",
+      fieldSource: "frequency-response",
+      fieldId: "response-field-7",
+      owner: "frequency-domain-results-resonance-driven-field",
+      heading: "Response Field",
+      label: "Driven response field",
+    },
+    {
+      id: "driven-frequency-points",
+      analysisProduct: "driven_response",
+      studyProduct: "driven_response",
+      stageId: "frequency-response",
+      kind: "results.resonance.driven.frequency_points",
+      suffix: "frequency-points",
+      owner: "frequency-domain-results-resonance-driven-frequency_points",
+      heading: "Response Frequency Points",
+      label: "Driven response frequency points",
+    },
+    {
+      id: "driven-peaks",
+      analysisProduct: "driven_response",
+      studyProduct: "driven_response",
+      stageId: "frequency-response",
+      kind: "results.resonance.driven.peaks",
+      suffix: "peaks",
+      owner: "frequency-domain-results-resonance-driven-peaks",
+      heading: "Resonance Peaks",
+      label: "Driven resonance peaks",
+    },
+  ];
+  const proof = {
+    schema_version: "analysis_resonance_leaf_routing_browser_proof.v1",
+    cases: [],
+  };
+  const screenshots = [];
+  const proofPath = resolve(outputDir, proofFile);
+
+  for (const resultCase of cases) {
+    const fixture = createInspectorFixture();
+    fixture.analysisProduct = resultCase.analysisProduct;
+    fixture.modalResonanceQualification =
+      resultCase.modalResonanceQualification === true;
+    const manifestPayload = inspectorFrequencyManifest(fixture).result_manifest.payload;
+    const spectrumMode = inspectorFrequencySpectrum().payload.modes[0] ?? null;
+    const responsePoint = inspectorFrequencyResponseSweep().payload.points[0] ?? null;
+    const fixtureEvidence = {
+      boundaryContext: manifestPayload.requested_execution.boundary_context,
+      calculationMode: manifestPayload.requested_execution.calculation_mode,
+      observables: manifestPayload.observables,
+      modeFieldId: spectrumMode?.mode_field_id ?? null,
+      responseFieldId: responsePoint?.field_id ?? null,
+      responseFrequencyIndex: responsePoint?.frequency_index ?? null,
+    };
+    if (resultCase.analysisProduct === "modal_eigen") {
+      assert(
+        fixtureEvidence.boundaryContext === "finite_open" &&
+          fixtureEvidence.calculationMode === "fmr_modal" &&
+          fixtureEvidence.observables.some((observable) => observable.kind === "rf_coupling") &&
+          Boolean(fixtureEvidence.modeFieldId),
+        `Modal resonance case is missing finite-FMR, rf_coupling, or mode-field evidence: ${JSON.stringify(fixtureEvidence)}`,
+      );
+    } else {
+      assert(
+        fixtureEvidence.boundaryContext === "finite_open" &&
+          fixtureEvidence.calculationMode === "fmr_response" &&
+          Boolean(fixtureEvidence.responseFieldId),
+        `Driven resonance case is missing finite response-sweep field evidence: ${JSON.stringify(fixtureEvidence)}`,
+      );
+    }
+    const context = await browser.newContext({
+      viewport: { width: 1600, height: 900 },
+    });
+    const page = await context.newPage();
+    const pageErrors = [];
+    const consoleErrors = [];
+    const missingApiResponses = [];
+    page.on("console", (message) => {
+      if (message.type() === "error") consoleErrors.push(message.text());
+    });
+    page.on("pageerror", (error) => {
+      pageErrors.push(error.stack ?? error.message);
+    });
+    page.on("response", (response) => {
+      if (
+        response.status() === 404 &&
+        new URL(response.url()).pathname.startsWith("/v2/")
+      ) {
+        missingApiResponses.push(
+          `${response.request().method()} ${new URL(response.url()).pathname}`,
+        );
+      }
+    });
+
+    try {
+      await page.addInitScript((baseUrl) => {
+        window.__FULLMAG_CONFIG__ = {
+          ...(window.__FULLMAG_CONFIG__ ?? {}),
+          allowMissingSessionSmoke: true,
+          controlRoomApiBase: baseUrl,
+          disableRealtime: true,
+        };
+      }, new URL(workspaceUrl).origin);
+      await installInspectorFixtureApi(page, fixture);
+      await gotoInspectorDocument(
+        page,
+        fixture,
+        workspaceUrl,
+        { waitUntil: "domcontentloaded", timeout: 60_000 },
+        `resonance-leaf-${resultCase.id}`,
+      );
+      const inspector = page.locator(".fm-inspector");
+      await inspector.waitFor({ state: "visible", timeout: 30_000 });
+      await openAnalysisPlotsForResonanceLeafProof(page);
+
+      const analysisTabs = page.locator(".fm-analysis-plots__tabs");
+      const dispersionTab = analysisTabs.getByRole("tab", {
+        exact: true,
+        name: "Dispersion",
+      });
+      await dispersionTab.waitFor({ state: "visible", timeout: 60_000 });
+      await dispersionTab.click();
+      await page.waitForFunction(
+        () =>
+          document
+            .querySelector(".fm-analysis-plots [data-analysis-surface]")
+            ?.getAttribute("data-analysis-surface") === "dispersion",
+        undefined,
+        { timeout: 60_000 },
+      );
+      const before = await inspectorResonanceLeafRoutingState(page);
+      assert(
+        before.activeViewportModule === "analysis-plots" &&
+          before.analysisSurface === "dispersion" &&
+          before.dispersionSelected === true &&
+          before.resonanceSelected === false,
+        `${resultCase.label}: Analysis did not start on the selected Dispersion surface: ${JSON.stringify(before)}`,
+      );
+
+      const resultsTab = page
+        .locator(".fm-explorer .fm-tabs-trigger")
+        .filter({ hasText: /^Results$/ });
+      await resultsTab.waitFor({ state: "visible", timeout: 60_000 });
+      await resultsTab.click();
+      const resultRootId = "results:run:inspector-run";
+      const resonanceRootId = `${resultRootId}:resonance`;
+      const stageId =
+        `${resonanceRootId}:stage:${resultCase.stageId}:${resultCase.studyProduct}`;
+      await expandInspectorNode(page, resultRootId, fixture);
+      await expandInspectorNode(page, resonanceRootId, fixture);
+      await expandInspectorNode(page, stageId, fixture);
+
+      const nodeId = resultCase.fieldSource
+        ? `${stageId}:${resultCase.childGroup}:${resultCase.fieldSource}:${encodeURIComponent(resultCase.fieldId)}`
+        : `${stageId}:${resultCase.suffix}`;
+      if (resultCase.childGroup) {
+        await expandInspectorNode(
+          page,
+          `${stageId}:${resultCase.childGroup}`,
+          fixture,
+        );
+      }
+      await selectResultInspectorNode(page, inspector, nodeId, {
+        owner: resultCase.owner,
+        heading: resultCase.heading,
+        label: resultCase.label,
+      });
+      await page.waitForFunction(
+        () =>
+          document
+            .querySelector(".fm-analysis-plots [data-analysis-surface]")
+            ?.getAttribute("data-analysis-surface") === "resonance-fmr",
+        undefined,
+        { timeout: 60_000 },
+      );
+      await page.waitForFunction(
+        () =>
+          document
+            .querySelector("#fm-ribbon-tab-analysis-context")
+            ?.getAttribute("aria-selected") === "true",
+        undefined,
+        { timeout: 60_000 },
+      );
+      await waitForInspectorRequestQuiet(page, fixture);
+
+      const requiredAnalysisPath =
+        resultCase.analysisProduct === "modal_eigen"
+          ? "/v2/sessions/current/analysis/frequency-domain/eigen/spectrum.v2"
+          : "/v2/sessions/current/analysis/frequency-domain/response/magnetic-sweep";
+      assert(
+        fixture.requests.some((request) => request.startsWith(`GET ${requiredAnalysisPath}`)),
+        `${resultCase.label}: required frequency artifact was not requested: ${requiredAnalysisPath}`,
+      );
+      assert(
+        fixture.requestBudgetViolation === null && fixture.unknownMutationPaths.length === 0,
+        `${resultCase.label}: fixture request/mutation budget was violated: ${JSON.stringify({ budget: fixture.requestBudgetViolation, mutations: fixture.unknownMutationPaths })}`,
+      );
+
+      const after = await inspectorResonanceLeafRoutingState(page, nodeId);
+      assert(
+        after.analysisSurface === "resonance-fmr" &&
+          after.resonanceSelected === true &&
+          after.dispersionSelected === false,
+        `${resultCase.label}: selected Results leaf did not route Analysis to Resonance & FMR: ${JSON.stringify(after)}`,
+      );
+      assert(
+        after.ribbonContextual === "true" &&
+          after.ribbonSelected === "true" &&
+          after.ribbonLabel === "Resonance & FMR",
+        `${resultCase.label}: Analysis Ribbon context is incorrect: ${JSON.stringify(after)}`,
+      );
+      assert(
+        after.selectedNodeId === nodeId && after.selectedNodeAriaSelected === "true",
+        `${resultCase.label}: the clicked Results leaf is not the selected tree node: ${JSON.stringify(after)}`,
+      );
+      assert(
+        after.inspectorOwner === resultCase.owner,
+        `${resultCase.label}: wrong Inspector owner ${after.inspectorOwner ?? "none"}`,
+      );
+      assert(
+        after.visibleNotifications === 0,
+        `${resultCase.label}: browser displayed a notification toast.`,
+      );
+      assert(
+        pageErrors.length === 0,
+        `${resultCase.label}: browser page errors: ${pageErrors.join("\n")}`,
+      );
+      assert(
+        missingApiResponses.length === 0 && fixture.unknownGetPaths.length === 0,
+        `${resultCase.label}: missing/unknown API resources: ${JSON.stringify({ missingApiResponses, unknownGetPaths: fixture.unknownGetPaths })}`,
+      );
+
+      const screenshot = `analysis-resonance-leaf-${resultCase.id}.png`;
+      await page.screenshot({ path: resolve(outputDir, screenshot) });
+      screenshots.push(screenshot);
+      proof.cases.push({
+        id: resultCase.id,
+        kind: resultCase.kind,
+        fieldId: resultCase.fieldId ?? null,
+        fieldSource: resultCase.fieldSource ?? null,
+        fixtureEvidence,
+        frequencyResourceRequests: fixture.requests.filter((request) =>
+          request.includes("/analysis/frequency-domain/"),
+        ),
+        expectedNodeId: nodeId,
+        before: {
+          ...before,
+          resultKind: null,
+          resultNodeId: null,
+        },
+        after: {
+          ...after,
+          resultKind: resultCase.kind,
+          resultNodeId: after.selectedNodeId,
+        },
+        screenshot,
+        pageErrors,
+        consoleErrors,
+        missingApiResponses,
+        unknownGetPaths: [...fixture.unknownGetPaths],
+      });
+      await writeFile(proofPath, `${JSON.stringify(proof, null, 2)}\n`, "utf8");
+    } finally {
+      await context.close();
+    }
+  }
+
+  assert(proof.cases.length === 5, `Expected five resonance leaf cases, got ${proof.cases.length}.`);
+  return { cases: proof.cases, proofFile, screenshots };
+}
+
+async function openAnalysisPlotsForResonanceLeafProof(page) {
+  const analysisTab = page
+    .locator(".fm-viewport-tabs__trigger")
+    .filter({ hasText: /^Analysis$/ });
+  await analysisTab
+    .first()
+    .waitFor({ state: "visible", timeout: 60_000 });
+  await analysisTab.first().click({ timeout: 60_000 });
+  await page
+    .locator("[data-slot-id='viewport-main'][data-active-module-id='analysis-plots']")
+    .waitFor({ state: "attached", timeout: 60_000 });
+  await page.locator(".fm-analysis-plots").waitFor({
+    state: "visible",
+    timeout: 60_000,
+  });
+}
+
+async function inspectorResonanceLeafRoutingState(page, expectedNodeId = null) {
+  return page.evaluate((expectedNodeId) => {
+    const surface = document.querySelector(
+      ".fm-analysis-plots [data-analysis-surface]",
+    );
+    const analysisTabs = document.querySelector(".fm-analysis-plots__tabs");
+    const tabSelected = (label) =>
+      [...(analysisTabs?.querySelectorAll('[role="tab"]') ?? [])].find(
+        (tab) => tab.textContent?.trim() === label,
+      )?.getAttribute("aria-selected") === "true";
+    const ribbon = document.querySelector("#fm-ribbon-tab-analysis-context");
+    const selectedNode = expectedNodeId
+      ? document.querySelector(`[data-node-id="${expectedNodeId}"]`)
+      : document.querySelector(
+          '.fm-explorer [role="treeitem"][aria-selected="true"]',
+        );
+    const inspector = document.querySelector(".fm-inspector");
+    const viewport = document.querySelector('[data-slot-id="viewport-main"]');
+    return {
+      activeViewportModule: viewport?.getAttribute("data-active-module-id") ?? null,
+      analysisSurface: surface?.getAttribute("data-analysis-surface") ?? null,
+      resonanceSelected: tabSelected("Resonance & FMR"),
+      dispersionSelected: tabSelected("Dispersion"),
+      ribbonContextual: ribbon?.getAttribute("data-contextual") ?? null,
+      ribbonSelected: ribbon?.getAttribute("aria-selected") ?? null,
+      ribbonLabel: ribbon?.textContent?.trim() ?? null,
+      selectedNodeId: selectedNode?.getAttribute("data-node-id") ?? null,
+      selectedNodeAriaSelected: selectedNode?.getAttribute("aria-selected") ?? null,
+      selectedNodeLabel: selectedNode?.textContent?.trim() ?? null,
+      inspectorOwner: inspector?.getAttribute("data-inspector-owner") ?? null,
+      inspectorTitle:
+        inspector?.querySelector(".fm-inspector__title")?.textContent?.trim() ?? null,
+      visibleNotifications: document.querySelectorAll(".fm-notifications__toast").length,
+    };
+  }, expectedNodeId);
 }
 
 async function qualifyModalDispersionAndPostprocessing(page, inspector, screenshotFiles, fixture) {
@@ -2102,7 +2473,7 @@ async function ensureModelNodeVisible(page, nodeId) {
   await node.scrollIntoViewIfNeeded();
 }
 
-async function expandInspectorNode(page, nodeId) {
+async function expandInspectorNode(page, nodeId, fixtureState = fixture) {
   const node = page.locator(`[data-node-id="${nodeId}"]`);
   try {
     await node.waitFor({ state: "visible", timeout: 60_000 });
@@ -2116,7 +2487,7 @@ async function expandInspectorNode(page, nodeId) {
     );
     throw new Error(
       `Explorer node ${nodeId} did not become visible. Tree snapshot: ${JSON.stringify(treeState)}. ` +
-        `Fixture diagnostics: ${JSON.stringify(inspectorRequestBudgetDiagnostics(fixture))}. ${error}`,
+        `Fixture diagnostics: ${JSON.stringify(inspectorRequestBudgetDiagnostics(fixtureState))}. ${error}`,
     );
   }
   if ((await node.getAttribute("aria-expanded")) !== "false") return;
@@ -2325,6 +2696,7 @@ function createInspectorFixture() {
     requestBudgetViolation: null,
     sceneResponseTrace: [],
     analysisProduct: "driven_response",
+    modalResonanceQualification: false,
     modalDispersionOwnershipRegression: false,
     modalDispersionRace: null,
     unknownMutationPaths: [],
@@ -3696,19 +4068,24 @@ function inspectorFrequencyCapability(status) {
 
 function inspectorFrequencyManifest(fixture = { analysisProduct: "driven_response" }) {
   const modal = fixture.analysisProduct === "modal_eigen";
+  const modalResonance = modal && fixture.modalResonanceQualification === true;
   const resultPayload = modal
     ? {
         equilibrium_identity: "equilibrium-1",
-        observables: [],
-        requested_execution: {
-          boundary_context: "floquet_periodic",
-          calculation_mode: "eigenmodes",
-          k_sampling: { kind: "path", sample_count: 2 },
-        },
+        observables: modalResonance
+          ? [{ identity: "rf-coupling", kind: "rf_coupling", unit: "1" }]
+          : [],
+        requested_execution: modalResonance
+          ? { boundary_context: "finite_open", calculation_mode: "fmr_modal" }
+          : {
+              boundary_context: "floquet_periodic",
+              calculation_mode: "eigenmodes",
+              k_sampling: { kind: "path", sample_count: 2 },
+            },
         revision: "result-modal-7",
         run_id: INSPECTOR_MODAL_BRANCH_OWNER.run_id,
         stage_id: "eigen-dispersion",
-        stage_label: "Dispersion Eigenmodes",
+        stage_label: modalResonance ? "Finite FMR Modes" : "Dispersion Eigenmodes",
         study_product: "modal_eigen",
       }
     : {
@@ -3865,6 +4242,7 @@ function inspectorFrequencyDispersion(
   ownerOverride = null,
 ) {
   const modal = fixture.analysisProduct === "modal_eigen";
+  const modalResonance = modal && fixture.modalResonanceQualification === true;
   const owner = modal
     ? ownerOverride ?? INSPECTOR_MODAL_DISPERSION_OWNER_B
     : null;
@@ -3875,7 +4253,7 @@ function inspectorFrequencyDispersion(
     artifact_path: "eigen/dispersion.csv",
     content_type: "text/csv",
     missing_reason: null,
-    path_metadata: modal
+    path_metadata: modal && !modalResonance
       ? {
           sampling: {
             kind: "path",
@@ -3890,13 +4268,15 @@ function inspectorFrequencyDispersion(
     resource_key: "/v2/sessions/current/analysis/frequency-domain/eigen/dispersion",
     schema_version: "frequency_domain_eigen_dispersion.csv",
     status: "ready",
-    text: modal
+    text: modal && !modalResonance
       ? [
           "sample_index,raw_mode_index,branch_id,path_s_rad_per_m,frequency_hz,mode_field_id,mode_field_resource_key",
           "0,2,branch-0,0,12.5e9,analysis:eigen:sample-0000:mode-0002,/v2/sessions/current/data/fields/analysis%3Aeigen%3Asample-0000%3Amode-0002/samples/vector?view=phase_rotated_real&phase_rad=0",
           `1,2,branch-0,${regression && isRunA ? "2e7" : "3e7"},13e9,analysis:eigen:sample-0001:mode-0002,/v2/sessions/current/data/fields/analysis%3Aeigen%3Asample-0001%3Amode-0002/samples/vector?view=phase_rotated_real&phase_rad=0`,
         ].join("\n")
-      : "sample_index,raw_mode_index,branch_id,path_s_rad_per_m,frequency_hz\n0,2,branch-0,0,12.5e9",
+      : modal
+        ? ""
+        : "sample_index,raw_mode_index,branch_id,path_s_rad_per_m,frequency_hz\n0,2,branch-0,0,12.5e9",
   };
 }
 
