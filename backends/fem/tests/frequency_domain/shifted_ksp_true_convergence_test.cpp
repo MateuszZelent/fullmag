@@ -454,11 +454,6 @@ bool run_ksp_case(
             return false;
         }
         const auto callback_count_before_probe = context->callback_count;
-        const PetscScalar sentinel = static_cast<PetscScalar>(17.0);
-        error = VecSet(context->candidate_solution, sentinel);
-        if (error != 0) {
-            return fail("seed the live breakdown probe destination", error);
-        }
         error = detail::floquet_shifted_true_convergence_test(
             ksp, 1, 0.0, &callback_reason, context);
         if (error != 0) {
@@ -469,20 +464,7 @@ bool run_ksp_case(
             cleanup();
             return false;
         }
-        const PetscInt indices[3] = {0, 1, 2};
-        PetscScalar candidate_values[3] = {};
-        error = VecGetValues(context->candidate_solution, 3, indices,
-                             candidate_values);
-        if (error != 0) {
-            return fail("inspect the live breakdown probe destination", error);
-        }
-        if (!check(candidate_values[0] == sentinel &&
-                       candidate_values[1] == sentinel &&
-                       candidate_values[2] == sentinel,
-                   "successful breakdown build leaves the candidate destination untouched")) {
-            cleanup();
-            return false;
-        }
+
     }
     const bool callback_snapshot_available = context->callback_count > 0;
     if (zero_rhs && !callback_snapshot_available) {
@@ -535,7 +517,9 @@ bool run_ksp_case(
                 context->rtol * context->last_true_rhs_norm);
             if (!check(context->last_true_probe_available &&
                            context->last_true_build_reason_available &&
-                           context->last_true_build_reason >= 0 &&
+                           context->last_true_build_reason == static_cast<int>(KSP_CONVERGED_ITERATING) &&
+                           (zero_rhs || (context->last_true_solution_norm_available &&
+                                         context->last_true_solution_norm > 0.0)) &&
                            context->true_probe_count > 0 &&
                            context->last_true_probe_default_reason_available &&
                            context->last_true_probe_reason_after_gate_available &&

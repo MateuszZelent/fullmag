@@ -269,19 +269,24 @@ inline PetscErrorCode floquet_shifted_true_convergence_test(
             : std::numeric_limits<PetscReal>::quiet_NaN();
     context->last_callback_iteration = iteration;
 
+    // The callback pointer aliases KSP's live reason. Keep a provisional
+    // positive result local: PETSc 3.24 otherwise copies the stored solution
+    // instead of building the current Krylov candidate in KSPBuildSolution.
+    KSPConvergedReason default_reason = KSP_CONVERGED_ITERATING;
     PetscErrorCode error = KSPConvergedDefault(
         ksp,
         iteration,
         recursive_residual_norm,
-        reason,
+        &default_reason,
         context->default_context);
     if (error != 0) {
         return error;
     }
     context->callback_observation_available = true;
     context->last_default_reason_available = true;
-    context->last_default_reason = static_cast<int>(*reason);
-    if (*reason <= 0) {
+    context->last_default_reason = static_cast<int>(default_reason);
+    if (default_reason <= 0) {
+        *reason = default_reason;
         context->last_reason_after_gate_available = true;
         context->last_reason_after_gate = static_cast<int>(*reason);
         return 0;
@@ -310,7 +315,7 @@ inline PetscErrorCode floquet_shifted_true_convergence_test(
     context->last_true_tolerance_ratio =
         std::numeric_limits<PetscReal>::quiet_NaN();
     context->last_true_probe_default_reason_available = true;
-    context->last_true_probe_default_reason = static_cast<int>(*reason);
+    context->last_true_probe_default_reason = static_cast<int>(default_reason);
     context->last_true_probe_reason_after_gate_available = false;
     context->last_true_probe_recursive_residual_available =
         std::isfinite(static_cast<double>(recursive_residual_norm));
@@ -412,7 +417,7 @@ inline PetscErrorCode floquet_shifted_true_convergence_test(
     }
 
     PetscReal threshold = std::numeric_limits<PetscReal>::quiet_NaN();
-    const int default_reason = static_cast<int>(*reason);
+    *reason = default_reason;
     error = apply_floquet_shifted_true_residual_gate(
         iteration,
         rhs_norm,
@@ -430,7 +435,7 @@ inline PetscErrorCode floquet_shifted_true_convergence_test(
     context->last_true_rhs_norm = rhs_norm;
     context->last_true_residual_norm = residual_norm;
     context->last_true_residual_threshold = threshold;
-    context->last_default_reason = default_reason;
+    context->last_default_reason = static_cast<int>(default_reason);
     context->last_reason_after_gate_available = true;
     context->last_reason_after_gate = static_cast<int>(*reason);
     context->last_true_probe_reason_after_gate_available = true;
