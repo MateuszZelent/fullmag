@@ -699,6 +699,9 @@ jobs:
                   environment.write(f"{name}={scratch}\n")
       - name: Run execution and runtime retention regressions
         run: python -B -m unittest discover -s scripts -p 'test_local_runner_retention*.py' -v
+      - name: Run archive receipt and verified runtime tombstone regressions
+        if: ${{ !cancelled() }}
+        run: python -B scripts/test_local_runner_archive_receipt.py -v
       - name: Run runtime package quarantine and restart regressions
         if: ${{ !cancelled() }}
         run: python -B scripts/test_local_runner_runtime_retention.py -v

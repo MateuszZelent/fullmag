@@ -2,7 +2,9 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import shutil
 import stat
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -168,6 +170,256 @@ class ExecutionCleanupTests(unittest.TestCase):
         self.prepare_historical_archive()
         (self.run / 'artifacts/outputs/result.bin').write_bytes(b'corruption')
         self.assert_retained('Archive artifact size/hash mismatch')
+
+    def prepare_runtime_retired_execution_plan(self):
+        from test_export_runner_openapi import Fixture, JOB_ID, WORKTREE
+        from local_runner.queue import JobQueue
+        from local_runner.runtime_retention import apply_runtime_cleanup, plan_runtime_cleanup
+
+        fixture = Fixture()
+        self.addCleanup(fixture.close)
+        storage = fixture.storage
+        (storage / 'locks').mkdir()
+        journal = {
+            **fixture.journal,
+            'container_id': 'd' * 64,
+            'worktree_id': WORKTREE,
+            'finished_at': 1,
+        }
+        for name in ('receipt.json', 'coordinator.json'):
+            (fixture.run_root / name).write_text(json.dumps(journal))
+        (fixture.run_root / 'worker.log').write_text('preserved worker log')
+        execution = fixture.run_root / 'execution'
+        execution.mkdir()
+        (execution / 'scratch').write_bytes(b'execution bytes')
+
+        newer_id = 'a' * 32
+        newer_root = fixture.run_root.parent / newer_id
+        shutil.copytree(fixture.run_root, newer_root)
+        receipt_path = newer_root / 'artifacts' / 'build-receipt.json'
+        receipt = json.loads(receipt_path.read_text())
+        receipt['job_id'] = newer_id
+        receipt_path.write_text(json.dumps(receipt))
+        for name in ('receipt.json', 'coordinator.json'):
+            path = newer_root / name
+            record = json.loads(path.read_text())
+            record['job_id'] = newer_id
+            path.write_text(json.dumps(record))
+        database = sqlite3.connect(storage / 'index' / 'runner-jobs.sqlite', isolation_level=None)
+        try:
+            database.execute(
+                'INSERT INTO jobs (job_id,owner,request_key,request_hash,worktree_id,source_digest,'
+                'profile,operation,payload,state,created_at,updated_at,exit_code) '
+                'SELECT ?,owner,?,request_hash,worktree_id,source_digest,profile,operation,payload,'
+                'state,2,2,exit_code FROM jobs WHERE job_id=?',
+                (newer_id, 'runtime-retention-newer-request', JOB_ID),
+            )
+        finally:
+            database.close()
+
+        (storage / 'index' / 'runtime-reference-roots.json').write_text(json.dumps({
+            'schema': 'fullmag.runtime-reference-roots.v1',
+            'relative_roots': [],
+            'legacy_inventory_complete': True,
+        }))
+        queue = JobQueue(storage / 'index' / 'runner-jobs.sqlite', readonly=True)
+
+        def no_containers(argv):
+            if argv[0] == 'ps':
+                return ''
+            raise AssertionError(argv)
+
+        runtime_plan = plan_runtime_cleanup(
+            fixture.layout,
+            queue,
+            owner='fixture',
+            call=no_containers,
+            policy={'min_artifacts_to_keep': 1},
+        )
+        self.assertEqual([JOB_ID], [item['job_id'] for item in runtime_plan['candidates']])
+        runtime_plan['plan_id'] = 'plan-1234abcd'
+        runtime_result = apply_runtime_cleanup(
+            fixture.layout,
+            runtime_plan,
+            queue,
+            owner='fixture',
+            call=no_containers,
+            policy={'min_artifacts_to_keep': 1},
+        )
+        self.assertTrue(runtime_result['applied'], runtime_result)
+        self.assertFalse(fixture.package.exists())
+
+        job = queue.get(JOB_ID)
+        raw = plan(storage, [job], 2_000_000, success_hours=24, failed_hours=168)
+        self.assertEqual(1, len(raw['candidates']))
+        execution_plan = {
+            'plan_id': 'plan-fedc5678',
+            'raw_engine_plan': raw,
+            'candidates': [{'job_id': JOB_ID}],
+        }
+        return fixture, queue, execution_plan, no_containers
+
+    def test_runtime_removal_tombstone_allows_execution_cleanup_and_live_users_still_block(self):
+        fixture, queue, execution_plan, no_containers = self.prepare_runtime_retired_execution_plan()
+        from local_runner.runtime_use import runtime_package_use
+
+        execution = fixture.run_root / 'execution'
+        with runtime_package_use(fixture.layout):
+            with self.assertRaisesRegex(StorageError, 'active or unknown runtime users'):
+                apply_execution_plan(
+                    fixture.layout,
+                    execution_plan,
+                    queue,
+                    owner='fixture',
+                    call=no_containers,
+                    policy=self.policy,
+                    now=2_000_000,
+                )
+            self.assertTrue(execution.is_dir())
+
+        result = apply_execution_plan(
+            fixture.layout,
+            execution_plan,
+            queue,
+            owner='fixture',
+            call=no_containers,
+            policy=self.policy,
+            now=2_000_000,
+        )
+        self.assertTrue(result['applied'], result)
+        self.assertFalse(execution.exists())
+        self.assertFalse(fixture.package.exists())
+        tombstone = json.loads(
+            (fixture.run_root / 'artifacts' / 'runtime-package-retention.json').read_text(),
+        )
+        self.assertEqual('removed', tombstone['state'])
+        self.assertEqual('deleted', tombstone['deletion_state'])
+
+    def test_runtime_removed_package_mount_blocks_execution_cleanup_with_absent_host_path(self):
+        fixture, queue, execution_plan, _no_containers = self.prepare_runtime_retired_execution_plan()
+        identifier = 'f' * 64
+
+        def mounted_package(argv):
+            if argv[0] == 'ps':
+                return identifier
+            if argv[0] == 'inspect':
+                return json.dumps([{
+                    'Id': identifier,
+                    'State': {'Status': 'running', 'Running': True},
+                    'Config': {'Labels': {}},
+                    'Mounts': [{'Type': 'bind', 'Source': str(fixture.package)}],
+                }])
+            self.fail(str(argv))
+
+        execution = fixture.run_root / 'execution'
+        result = apply_execution_plan(
+            fixture.layout,
+            execution_plan,
+            queue,
+            owner='fixture',
+            call=mounted_package,
+            policy=self.policy,
+            now=2_000_000,
+        )
+
+        self.assertFalse(result['applied'])
+        self.assertIn('container_references_retired_runtime_package', result['items'][0]['reason'])
+        self.assertTrue(execution.is_dir())
+        self.assertFalse(fixture.package.exists())
+        self.assertFalse((fixture.run_root / '.retention-quarantine-plan-fedc5678').exists())
+
+    def test_runtime_package_reappearance_blocks_execution_cleanup(self):
+        fixture, queue, execution_plan, no_containers = self.prepare_runtime_retired_execution_plan()
+        fixture.package.mkdir(parents=True)
+        (fixture.package / 'unreviewed.bin').write_bytes(b'preserve reappeared package')
+
+        result = apply_execution_plan(
+            fixture.layout,
+            execution_plan,
+            queue,
+            owner='fixture',
+            call=no_containers,
+            policy=self.policy,
+            now=2_000_000,
+        )
+
+        self.assertFalse(result['applied'])
+        self.assertIn('Runtime package reappeared after removal', result['items'][0]['reason'])
+        self.assertTrue((fixture.run_root / 'execution').is_dir())
+        self.assertEqual(b'preserve reappeared package',
+                         (fixture.package / 'unreviewed.bin').read_bytes())
+
+    def test_changed_archive_receipt_during_container_inventory_blocks_execution_cleanup(self):
+        fixture, queue, execution_plan, _no_containers = self.prepare_runtime_retired_execution_plan()
+        receipt_path = fixture.run_root / 'artifacts' / 'build-receipt.json'
+
+        def change_receipt_during_inventory(argv):
+            if argv[0] == 'ps':
+                receipt_path.write_bytes(receipt_path.read_bytes() + b' ')
+                return ''
+            self.fail(str(argv))
+
+        result = apply_execution_plan(
+            fixture.layout,
+            execution_plan,
+            queue,
+            owner='fixture',
+            call=change_receipt_during_inventory,
+            policy=self.policy,
+            now=2_000_000,
+        )
+
+        self.assertFalse(result['applied'])
+        self.assertIn('Runtime package tombstone identity mismatch', result['items'][0]['reason'])
+        self.assertTrue((fixture.run_root / 'execution').is_dir())
+        self.assertFalse(fixture.package.exists())
+
+    def _assert_archive_document_open_race_blocks_before_execution_quarantine(self, name):
+        from local_runner import retention_persistence
+
+        fixture, queue, execution_plan, no_containers = self.prepare_runtime_retired_execution_plan()
+        execution = fixture.run_root / 'execution'
+        document_path = fixture.run_root / 'artifacts' / name
+        replacement = document_path.with_name(name + '.foreign')
+        replacement.write_bytes(b'foreign archive document replacement')
+        real_open = retention_persistence._open_nofollow_file
+        state = {'swapped': False}
+
+        def replace_before_open(candidate):
+            if Path(candidate) == document_path and not state['swapped']:
+                state['swapped'] = True
+                document_path.unlink()
+                os.replace(replacement, document_path)
+            return real_open(candidate)
+
+        with patch.object(
+            retention_persistence, '_open_nofollow_file', side_effect=replace_before_open,
+        ):
+            result = apply_execution_plan(
+                fixture.layout,
+                execution_plan,
+                queue,
+                owner='fixture',
+                call=no_containers,
+                policy=self.policy,
+                now=2_000_000,
+            )
+
+        self.assertTrue(state['swapped'])
+        self.assertFalse(result['applied'])
+        self.assertTrue(execution.is_dir())
+        self.assertFalse((fixture.run_root / ('.retention-quarantine-' + execution_plan['plan_id'])).exists())
+        self.assertEqual(b'foreign archive document replacement', document_path.read_bytes())
+
+    def test_build_receipt_open_race_blocks_before_execution_quarantine(self):
+        self._assert_archive_document_open_race_blocks_before_execution_quarantine(
+            'build-receipt.json',
+        )
+
+    def test_runtime_tombstone_open_race_blocks_before_execution_quarantine(self):
+        self._assert_archive_document_open_race_blocks_before_execution_quarantine(
+            'runtime-package-retention.json',
+        )
 
     def test_live_operation_reports_validation_before_expensive_source_check(self):
         from local_runner.worker_entrypoint import verify_source

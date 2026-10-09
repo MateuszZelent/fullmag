@@ -321,12 +321,39 @@ def guard_containers(
     *,
     stream_logs=None,
     run_root_identity,
+    retired_runtime_package=None,
 ):
     """Remove only this exact exited worker, then reject every other mount user."""
     storage = Path(layout['storage_root'])
     suffix = target.relative_to(storage).as_posix()
     roots = [str(storage), layout.get('daemon_storage_root'), layout.get('host_storage_root')]
-    targets = [_path_key(root) + '/' + suffix.casefold() for root in roots if root]
+    execution_targets = [_path_key(root) + '/' + suffix.casefold() for root in roots if root]
+    retired_runtime_targets = []
+    if retired_runtime_package is not None:
+        runtime_package = Path(retired_runtime_package)
+        try:
+            runtime_suffix_path = runtime_package.relative_to(storage)
+        except ValueError as error:
+            raise CleanupBlocked('invalid_retired_runtime_package_path') from error
+        if runtime_suffix_path.parts[-4:] != ('artifacts', 'outputs', '.fullmag', 'local'):
+            raise CleanupBlocked('invalid_retired_runtime_package_path')
+        try:
+            retention._checked_child(storage, runtime_suffix_path.parts[:-2], kind='directory')
+            retention._checked_child(storage, runtime_suffix_path.parts[:-1], kind='directory')
+        except retention._PathIssue as error:
+            raise CleanupBlocked('retired_runtime_package_prefix_changed') from error
+        try:
+            retention._checked_child(storage, runtime_suffix_path.parts, kind='directory')
+        except retention._PathIssue as error:
+            if error.reason != 'missing_run_path':
+                raise CleanupBlocked('retired_runtime_package_path_changed') from error
+        else:
+            raise CleanupBlocked('retired_runtime_package_reappeared_before_execution_cleanup')
+        runtime_suffix = runtime_suffix_path.as_posix()
+        retired_runtime_targets = [
+            _path_key(root) + '/' + runtime_suffix.casefold()
+            for root in roots if root
+        ]
     coordinator_id = layout.get('coordinator_container_id')
     items = _containers(call)
     if layout.get('container_coordinator'):
@@ -359,7 +386,9 @@ def guard_containers(
             if mount.get('Type') != 'bind':
                 continue
             source = _path_key(mount.get('Source'))
-            if any(_overlap(source, target_key) for target_key in targets):
+            if any(_overlap(source, target_key) for target_key in retired_runtime_targets):
+                raise CleanupBlocked('container_references_retired_runtime_package:' + item['Id'])
+            if any(_overlap(source, target_key) for target_key in execution_targets):
                 raise CleanupBlocked('container_references_execution:' + item['Id'])
     if own is not None:
         # A buffered call could truncate or exhaust memory. Keep deletion gated
@@ -455,10 +484,14 @@ def _guard_evidence(storage, job, run_root, journal):
 
 
 def _guard_archive_evidence(storage, job, run_root, journal):
-    from local_runner.archive_receipt import validate_archive_receipt
+    from local_runner.archive_receipt import validate_archive_receipt_with_runtime_package
     artifacts = _guard_terminal_evidence(storage, job, run_root, journal)
     if artifacts is not None:
-        validate_archive_receipt(artifacts, job, journal)
+        _receipt, retired_runtime_package = validate_archive_receipt_with_runtime_package(
+            artifacts, job, journal,
+        )
+        return retired_runtime_package
+    return None
 
 
 def apply_execution_plan(layout, plan, queue, *, owner, call, policy, now=None, stream_logs=None):
@@ -633,7 +666,9 @@ def apply_execution_plan(layout, plan, queue, *, owner, call, policy, now=None, 
                     )
                     _guard_pins(storage, run_root, job)
                     journal = _json(run_root / 'coordinator.json')
-                    _guard_archive_evidence(storage, job, run_root, journal)
+                    retired_runtime_package = _guard_archive_evidence(
+                        storage, job, run_root, journal,
+                    )
                     item['container_cleanup'] = guard_containers(
                         layout,
                         job,
@@ -642,6 +677,7 @@ def apply_execution_plan(layout, plan, queue, *, owner, call, policy, now=None, 
                         call,
                         stream_logs=stream_logs,
                         run_root_identity=run_root_identity,
+                        retired_runtime_package=retired_runtime_package,
                     )
                     persist_result()
                     # Recheck after potentially slow hashing and Docker calls.
@@ -664,6 +700,13 @@ def apply_execution_plan(layout, plan, queue, *, owner, call, policy, now=None, 
                         current['tree_identity'], retention.inspect_execution(target),
                     ):
                         raise CleanupBlocked('execution_changed_during_validation')
+
+                    if retired_runtime_package is not None:
+                        revalidated_package = _guard_archive_evidence(
+                            storage, job, run_root, journal,
+                        )
+                        if revalidated_package != retired_runtime_package:
+                            raise CleanupBlocked('runtime_archive_retirement_changed_during_validation')
 
                     quarantine_name = '.retention-quarantine-' + plan_id
                     quarantine_path = run_root / quarantine_name
