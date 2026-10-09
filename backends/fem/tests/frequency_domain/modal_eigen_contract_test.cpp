@@ -9,11 +9,18 @@
 #include "frequency_domain/mesh_symmetry_certificate.hpp"
 #include "frequency_domain/modal_eigen_solver.hpp"
 #include "frequency_domain/nonfinite_json_sanitizer.hpp"
+#include "frequency_domain/canonical_digest.hpp"
+#include "context.hpp"
+#include "core/fem_mesh.hpp"
+#include "cpu/mfem/interactions/demag_poisson_lifecycle.hpp"
+#include "cpu/mfem/interactions/demag_poisson_solve.hpp"
+#include "cpu/mfem/runtime/mfem_mesh_builder.hpp"
 #include "fullmag_fem.h"
 
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <complex>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -23,6 +30,7 @@
 #include <fstream>
 #include <iterator>
 #include <limits>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <type_traits>
@@ -1232,6 +1240,20 @@ struct FloquetContourSharedDomainFixture {
     std::array<fd::FrequencyDomainFloquetPeriodicPair, 3> native_pairs{};
     std::array<double, 3> k_vector{{1.0, 0.0, 0.0}};
     FullmagFemModalSharedDomainPayload payload{};
+    std::string magnetic_topology_fingerprint{};
+    std::string scalar_topology_fingerprint{};
+    std::string equilibrium_content_digest{};
+    std::string equilibrium_digest{};
+    std::string linearization_state_digest{};
+    std::string operator_input_digest{};
+    std::string field_term_digest{};
+    std::string demag_term_digest{};
+    std::string acceptance_certificate_digest{};
+    std::string boundary_gauge_digest{};
+    std::string bias_field_sample_signature{};
+    double reference_frequency_hz = 0.0;
+    std::vector<double> static_reduced_poisson_matrix{};
+    std::vector<std::uint32_t> static_scalar_class_representatives{};
 
     FullmagFemModalCertificateV6View make_c_view(
         std::uint32_t view_kind,
@@ -1294,6 +1316,69 @@ struct FloquetContourSharedDomainFixture {
             const fd::MeshSymmetryCertificateV6ClassDigest *>(source.expected_class_digests);
         view.expected_class_digest_count = source.expected_class_digest_count;
         return view;
+    }
+
+    std::string mesh_topology_fingerprint(std::string_view scope) const
+    {
+        fd::CanonicalDigestBuilder digest("modal_count_fixture.mesh_topology.v1");
+        digest.add_string("scope", scope);
+        digest.add_u64("node_count", nodes.size() / 3u);
+        for (double coordinate : nodes) {
+            digest.add_double("node_xyz", coordinate);
+        }
+        digest.add_u64("cell_type_count", cell_types.size());
+        for (std::uint32_t value : cell_types) {
+            digest.add_u64("cell_type", value);
+        }
+        digest.add_u64("cell_offset_count", cell_offsets.size());
+        for (std::uint32_t value : cell_offsets) {
+            digest.add_u64("cell_offset", value);
+        }
+        digest.add_u64("cell_node_count", cell_nodes.size());
+        for (std::uint32_t value : cell_nodes) {
+            digest.add_u64("cell_node", value);
+        }
+        digest.add_u64("cell_ordinal_count", cell_ordinals.size());
+        for (std::uint64_t value : cell_ordinals) {
+            digest.add_u64("cell_ordinal", value);
+        }
+        digest.add_u64("cell_marker_count", cell_markers.size());
+        for (std::uint32_t value : cell_markers) {
+            digest.add_u64("cell_marker", value);
+        }
+        digest.add_u64("facet_type_count", facet_types.size());
+        for (std::uint32_t value : facet_types) {
+            digest.add_u64("facet_type", value);
+        }
+        digest.add_u64("facet_role_count", facet_roles.size());
+        for (std::uint32_t value : facet_roles) {
+            digest.add_u64("facet_role", value);
+        }
+        digest.add_u64("facet_offset_count", facet_offsets.size());
+        for (std::uint32_t value : facet_offsets) {
+            digest.add_u64("facet_offset", value);
+        }
+        digest.add_u64("facet_node_count", facet_nodes.size());
+        for (std::uint32_t value : facet_nodes) {
+            digest.add_u64("facet_node", value);
+        }
+        digest.add_u64("facet_ordinal_count", facet_ordinals.size());
+        for (std::uint64_t value : facet_ordinals) {
+            digest.add_u64("facet_ordinal", value);
+        }
+        digest.add_u64("facet_marker_count", facet_markers.size());
+        for (std::uint32_t value : facet_markers) {
+            digest.add_u64("facet_marker", value);
+        }
+        digest.add_u64("periodic_pair_value_count", mesh_periodic_node_pairs.size());
+        for (std::uint32_t value : mesh_periodic_node_pairs) {
+            digest.add_u64("periodic_node_pair", value);
+        }
+        digest.add_u64("periodic_boundary_marker_count", periodic_boundary_markers.size());
+        for (std::uint32_t value : periodic_boundary_markers) {
+            digest.add_u64("periodic_boundary_marker", value);
+        }
+        return "sha256:" + digest.sha256_hex();
     }
 
     void expand_with_internal_magnetic_nodes(std::size_t internal_node_count)
@@ -1427,7 +1512,9 @@ struct FloquetContourSharedDomainFixture {
         scalar_boundary_axes[airbox_node] = 4u;
     }
 
-    void initialize(std::size_t internal_magnetic_nodes = 0u)
+    void initialize(
+        std::size_t internal_magnetic_nodes = 0u,
+        bool bind_topology_fingerprints_to_mesh = false)
     {
         expand_with_internal_magnetic_nodes(internal_magnetic_nodes);
         const std::uint64_t mesh_node_count =
@@ -1451,6 +1538,12 @@ struct FloquetContourSharedDomainFixture {
             facet_markers.data(), facet_markers.size(),
             mesh_periodic_node_pairs.data(), mesh_periodic_node_pairs.size(),
             periodic_boundary_markers.data(), periodic_boundary_markers.size()};
+        magnetic_topology_fingerprint = bind_topology_fingerprints_to_mesh
+            ? mesh_topology_fingerprint("magnetic:film")
+            : "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        scalar_topology_fingerprint = bind_topology_fingerprints_to_mesh
+            ? mesh_topology_fingerprint("airbox:shared")
+            : "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
         for (std::uint64_t node = 0u; node < mesh_node_count; ++node) {
             descriptor_frames[6u * node] = 1.0;
             descriptor_frames[6u * node + 4u] = 1.0;
@@ -1465,8 +1558,9 @@ struct FloquetContourSharedDomainFixture {
         descriptor.time_unit = "s";
         descriptor.frequency_unit = "Hz";
         descriptor.angular_frequency_unit = "rad/s";
-        descriptor.linearization_state_digest =
-            "sha256:1111111111111111111111111111111111111111111111111111111111111111";
+        descriptor.linearization_state_digest = bind_topology_fingerprints_to_mesh
+            ? magnetic_topology_fingerprint.c_str()
+            : "sha256:1111111111111111111111111111111111111111111111111111111111111111";
         descriptor.equilibrium_digest = descriptor.linearization_state_digest;
         descriptor.operator_input_digest = descriptor.linearization_state_digest;
         descriptor.term_presence_mask = 0u;
@@ -1485,25 +1579,25 @@ struct FloquetContourSharedDomainFixture {
         c_certificate.schema_version = "periodic_mesh_certificate.v6";
         c_certificate.mesh_magnetic = make_c_view(
             1u, 1u, "magnetic:film",
-            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            magnetic_topology_fingerprint.c_str(),
             static_cast<std::uint64_t>(magnetic_certificate_regions.size()),
             magnetic_certificate_regions.data(), magnetic_boundary_axes.data(),
             magnetic_roles, 1u, magnetic_generators, 3u, magnetic_closure, 6u);
         c_certificate.payload_magnetic = make_c_view(
             2u, 1u, "magnetic:film",
-            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            magnetic_topology_fingerprint.c_str(),
             static_cast<std::uint64_t>(magnetic_certificate_regions.size()),
             magnetic_certificate_regions.data(), magnetic_boundary_axes.data(),
             magnetic_roles, 1u, magnetic_generators, 3u, magnetic_closure, 6u);
         c_certificate.mesh_scalar = make_c_view(
             1u, 2u, "airbox:shared",
-            "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            scalar_topology_fingerprint.c_str(),
             static_cast<std::uint64_t>(scalar_certificate_regions.size()),
             scalar_certificate_regions.data(), scalar_boundary_axes.data(),
             scalar_roles, 1u, scalar_generators, 3u, scalar_closure, 6u);
         c_certificate.payload_scalar = make_c_view(
             2u, 2u, "airbox:shared",
-            "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            scalar_topology_fingerprint.c_str(),
             static_cast<std::uint64_t>(scalar_certificate_regions.size()),
             scalar_certificate_regions.data(), scalar_boundary_axes.data(),
             scalar_roles, 1u, scalar_generators, 3u, scalar_closure, 6u);
@@ -1519,8 +1613,9 @@ struct FloquetContourSharedDomainFixture {
         binding_request.payload_magnetic = typed_view(c_views[1]);
         binding_request.mesh_scalar = typed_view(c_views[2]);
         binding_request.payload_scalar = typed_view(c_views[3]);
-        binding_request.payload_binding_digest =
-            "sha256:0000000000000000000000000000000000000000000000000000000000000000";
+        binding_request.payload_binding_digest = bind_topology_fingerprints_to_mesh
+            ? magnetic_topology_fingerprint.c_str()
+            : "sha256:0000000000000000000000000000000000000000000000000000000000000000";
         fd::MeshSymmetryCertificateV6Binding bootstrap{};
         check(fd::verify_mesh_symmetry_certificate_v6(binding_request, bootstrap) !=
                   fd::FrequencyDomainStatus::ok,
@@ -1623,10 +1718,15 @@ struct FloquetContourSharedDomainFixture {
         payload.robin_beta = 1.0;
         payload.boundary_marker = 1u;
         payload.mesh_certificate_schema = c_certificate.schema_version;
-        payload.equilibrium_digest =
-            "sha256:1111111111111111111111111111111111111111111111111111111111111111";
-        payload.mesh_certificate_digest = payload.equilibrium_digest;
-        payload.linearization_state_digest = payload.equilibrium_digest;
+        payload.equilibrium_digest = bind_topology_fingerprints_to_mesh
+            ? magnetic_topology_fingerprint.c_str()
+            : "sha256:1111111111111111111111111111111111111111111111111111111111111111";
+        payload.mesh_certificate_digest = bind_topology_fingerprints_to_mesh
+            ? canonical_preimage_digest.c_str()
+            : payload.equilibrium_digest;
+        payload.linearization_state_digest = bind_topology_fingerprints_to_mesh
+            ? scalar_topology_fingerprint.c_str()
+            : payload.equilibrium_digest;
         payload.equilibrium_id = "equilibrium_artifact.v7:contour-fixture";
         payload.mesh_snapshot_id = "mesh-snapshot:contour-fixture";
         payload.material_snapshot_id = "material-snapshot:contour-fixture";
@@ -1637,9 +1737,13 @@ struct FloquetContourSharedDomainFixture {
         payload.demag_model = "floquet_airbox";
         payload.m0_norm_tolerance = 1.0e-8;
         payload.equilibrium_torque_relative_tolerance = 0.0;
-        payload.boundary_gauge_digest = payload.equilibrium_digest;
+        payload.boundary_gauge_digest = bind_topology_fingerprints_to_mesh
+            ? scalar_topology_fingerprint.c_str()
+            : payload.equilibrium_digest;
         payload.bias_field_sample_id = "bias-field-sample:contour-fixture";
-        payload.bias_field_sample_signature = payload.equilibrium_digest;
+        payload.bias_field_sample_signature = bind_topology_fingerprints_to_mesh
+            ? magnetic_topology_fingerprint.c_str()
+            : payload.equilibrium_digest;
         payload.magnetic_part_identity = "magnetic:film";
         payload.airbox_part_identity = "airbox:shared";
         payload.mesh_generation_identity = "mesh-generation:fixture";
@@ -1657,8 +1761,9 @@ struct FloquetContourSharedDomainFixture {
         payload.acceptance_unit = "J";
         payload.acceptance_metric_value = 2.5e-19;
         payload.acceptance_threshold = 1.0e-18;
-        payload.acceptance_certificate_sha256 =
-            "sha256:2222222222222222222222222222222222222222222222222222222222222222";
+        payload.acceptance_certificate_sha256 = bind_topology_fingerprints_to_mesh
+            ? canonical_preimage_digest.c_str()
+            : "sha256:2222222222222222222222222222222222222222222222222222222222222222";
         char map_error[256]{};
         check(fd::compute_modal_shared_domain_map_binding_digest(
                   payload, accepted_certificate,
@@ -1693,109 +1798,984 @@ struct FloquetContourSharedDomainFixture {
     }
 };
 
-CsrOwned mass_scaled_floquet_stiffness(
-    const FloquetContourSharedDomainFixture &fixture)
+constexpr std::uint32_t kFixtureInactiveClass =
+    std::numeric_limits<std::uint32_t>::max();
+
+struct CanonicalFixturePartition {
+    std::vector<std::uint32_t> node_class{};
+    std::vector<std::uint32_t> class_representatives{};
+    std::vector<std::uint32_t> raw_class_ids_by_canonical{};
+};
+
+CanonicalFixturePartition canonical_fixture_partition(
+    const std::vector<std::uint32_t> &raw_classes,
+    std::uint32_t inactive_class = kFixtureInactiveClass)
 {
-    const std::size_t node_count = fixture.nodes.size() / 3u;
-    const std::size_t tangent_dof_count = 2u * node_count;
-    std::vector<double> consistent_mass(node_count * node_count, 0.0);
-    for (std::size_t element = 0u; element < fixture.cell_markers.size(); ++element) {
-        if (fixture.cell_markers[element] != 1u) {
+    CanonicalFixturePartition result{};
+    result.node_class.assign(raw_classes.size(), inactive_class);
+    std::uint32_t maximum_class = 0u;
+    bool has_active_class = false;
+    for (std::uint32_t class_id : raw_classes) {
+        if (class_id == inactive_class) {
             continue;
         }
-        const std::size_t begin = fixture.cell_offsets[element];
-        const std::size_t end = fixture.cell_offsets[element + 1u];
-        check(end - begin == 4u, "expanded Floquet mass fixture uses Tet4 cells");
-        std::array<std::uint32_t, 4> cell{};
-        std::copy_n(fixture.cell_nodes.begin() + static_cast<std::ptrdiff_t>(begin),
-                    4u,
-                    cell.begin());
-        const auto coordinate = [&fixture](
-                                    std::uint32_t node,
-                                    std::size_t axis) {
-            return fixture.nodes[3u * static_cast<std::size_t>(node) + axis];
-        };
-        const double ax = coordinate(cell[1], 0u) - coordinate(cell[0], 0u);
-        const double ay = coordinate(cell[1], 1u) - coordinate(cell[0], 1u);
-        const double az = coordinate(cell[1], 2u) - coordinate(cell[0], 2u);
-        const double bx = coordinate(cell[2], 0u) - coordinate(cell[0], 0u);
-        const double by = coordinate(cell[2], 1u) - coordinate(cell[0], 1u);
-        const double bz = coordinate(cell[2], 2u) - coordinate(cell[0], 2u);
-        const double cx = coordinate(cell[3], 0u) - coordinate(cell[0], 0u);
-        const double cy = coordinate(cell[3], 1u) - coordinate(cell[0], 1u);
-        const double cz = coordinate(cell[3], 2u) - coordinate(cell[0], 2u);
-        const double volume = std::abs(
-            ax * (by * cz - bz * cy) -
-            ay * (bx * cz - bz * cx) +
-            az * (bx * cy - by * cx)) / 6.0;
-        check(std::isfinite(volume) && volume > 0.0,
-              "expanded Floquet mass fixture must contain positive-volume cells");
-        for (std::size_t local_row = 0u; local_row < 4u; ++local_row) {
-            for (std::size_t local_column = 0u; local_column < 4u; ++local_column) {
-                const std::size_t row = cell[local_row];
-                const std::size_t column = cell[local_column];
-                const double local_mass =
-                    volume * (local_row == local_column ? 2.0 : 1.0) / 20.0;
-                consistent_mass[row * node_count + column] += local_mass;
+        maximum_class = std::max(maximum_class, class_id);
+        has_active_class = true;
+    }
+    if (!has_active_class) {
+        return result;
+    }
+
+    std::vector<std::uint32_t> representative_by_raw(
+        static_cast<std::size_t>(maximum_class) + 1u,
+        inactive_class);
+    for (std::size_t node = 0u; node < raw_classes.size(); ++node) {
+        const std::uint32_t class_id = raw_classes[node];
+        if (class_id == inactive_class) {
+            continue;
+        }
+        std::uint32_t &representative = representative_by_raw[class_id];
+        representative = representative == inactive_class
+            ? static_cast<std::uint32_t>(node)
+            : std::min(representative, static_cast<std::uint32_t>(node));
+    }
+
+    std::vector<std::pair<std::uint32_t, std::uint32_t>> ordered_classes;
+    for (std::uint32_t class_id = 0u;
+         class_id < representative_by_raw.size();
+         ++class_id) {
+        if (representative_by_raw[class_id] != inactive_class) {
+            ordered_classes.emplace_back(representative_by_raw[class_id], class_id);
+        }
+    }
+    std::sort(ordered_classes.begin(), ordered_classes.end());
+    std::vector<std::uint32_t> canonical_by_raw(representative_by_raw.size(), inactive_class);
+    for (std::size_t canonical = 0u; canonical < ordered_classes.size(); ++canonical) {
+        result.class_representatives.push_back(ordered_classes[canonical].first);
+        result.raw_class_ids_by_canonical.push_back(ordered_classes[canonical].second);
+        canonical_by_raw[ordered_classes[canonical].second] =
+            static_cast<std::uint32_t>(canonical);
+    }
+    for (std::size_t node = 0u; node < raw_classes.size(); ++node) {
+        if (raw_classes[node] != inactive_class) {
+            result.node_class[node] = canonical_by_raw[raw_classes[node]];
+        }
+    }
+    return result;
+}
+
+void add_digest_doubles(
+    fd::CanonicalDigestBuilder &digest,
+    std::string_view field,
+    const std::vector<double> &values)
+{
+    const std::string count_field = std::string(field) + ".count";
+    digest.add_u64(count_field, values.size());
+    for (double value : values) {
+        digest.add_double(field, value);
+    }
+}
+
+void add_digest_u32s(
+    fd::CanonicalDigestBuilder &digest,
+    std::string_view field,
+    const std::vector<std::uint32_t> &values)
+{
+    const std::string count_field = std::string(field) + ".count";
+    digest.add_u64(count_field, values.size());
+    for (std::uint32_t value : values) {
+        digest.add_u64(field, value);
+    }
+}
+
+std::vector<double> dense_real_csr(
+    const fd::PoissonAirboxSharedDomainCsrMatrix &matrix)
+{
+    std::vector<double> dense(
+        static_cast<std::size_t>(matrix.row_count * matrix.column_count), 0.0);
+    if (matrix.row_offsets.size() != static_cast<std::size_t>(matrix.row_count + 1u)) {
+        return {};
+    }
+    for (std::uint64_t row = 0u; row < matrix.row_count; ++row) {
+        for (std::uint32_t entry = matrix.row_offsets[static_cast<std::size_t>(row)];
+             entry < matrix.row_offsets[static_cast<std::size_t>(row + 1u)];
+             ++entry) {
+            if (entry >= matrix.values.size() || entry >= matrix.column_indices.size() ||
+                matrix.column_indices[entry] >= matrix.column_count) {
+                return {};
             }
+            dense[static_cast<std::size_t>(
+                row * matrix.column_count + matrix.column_indices[entry])] =
+                matrix.values[entry];
+        }
+    }
+    return dense;
+}
+
+std::complex<double> complex_csr_value(
+    const fd::PoissonAirboxSharedDomainComplexCsrMatrix &matrix,
+    std::uint64_t row,
+    std::uint64_t column)
+{
+    if (row >= matrix.row_count || column >= matrix.column_count ||
+        matrix.row_offsets.size() != static_cast<std::size_t>(matrix.row_count + 1u)) {
+        return {};
+    }
+    for (std::uint32_t entry = matrix.row_offsets[static_cast<std::size_t>(row)];
+         entry < matrix.row_offsets[static_cast<std::size_t>(row + 1u)];
+         ++entry) {
+        if (entry >= matrix.values.size() || entry >= matrix.column_indices.size()) {
+            return {};
+        }
+        if (matrix.column_indices[entry] == column) {
+            return matrix.values[entry];
+        }
+    }
+    return {};
+}
+
+std::vector<double> complex_csr_to_real_split(
+    const fd::PoissonAirboxSharedDomainComplexCsrMatrix &matrix)
+{
+    if (matrix.row_count == 0u || matrix.row_count != matrix.column_count ||
+        matrix.row_count > std::numeric_limits<std::size_t>::max() / 2u) {
+        return {};
+    }
+    const std::size_t complex_dimension = static_cast<std::size_t>(matrix.row_count);
+    const std::size_t dimension = 2u * complex_dimension;
+    std::vector<double> real_split(dimension * dimension, 0.0);
+    for (std::size_t row = 0u; row < complex_dimension; ++row) {
+        for (std::size_t column = 0u; column < complex_dimension; ++column) {
+            const std::complex<double> value = complex_csr_value(
+                matrix, row, column);
+            real_split[row * dimension + column] = value.real();
+            real_split[row * dimension + complex_dimension + column] = -value.imag();
+            real_split[(complex_dimension + row) * dimension + column] = value.imag();
+            real_split[(complex_dimension + row) * dimension + complex_dimension + column] =
+                value.real();
+        }
+    }
+    return real_split;
+}
+
+bool symmetric_min_eigenvalue(
+    std::vector<double> matrix,
+    std::size_t dimension,
+    double &out_minimum,
+    double &out_scale,
+    double &out_asymmetry)
+{
+    if (dimension == 0u || matrix.size() != dimension * dimension) {
+        return false;
+    }
+    out_scale = 0.0;
+    out_asymmetry = 0.0;
+    for (std::size_t row = 0u; row < dimension; ++row) {
+        for (std::size_t column = 0u; column < dimension; ++column) {
+            const double value = matrix[row * dimension + column];
+            if (!std::isfinite(value)) {
+                return false;
+            }
+            out_scale = std::max(out_scale, std::abs(value));
+        }
+    }
+    for (std::size_t row = 0u; row < dimension; ++row) {
+        for (std::size_t column = row + 1u; column < dimension; ++column) {
+            double &upper = matrix[row * dimension + column];
+            double &lower = matrix[column * dimension + row];
+            out_asymmetry = std::max(out_asymmetry, std::abs(upper - lower));
+            upper = lower = 0.5 * (upper + lower);
         }
     }
 
-    double reduced_corner_mass = 0.0;
-    std::array<double, 4> corner_phase_rad{};
-    for (std::size_t node = 0u; node < 4u; ++node) {
-        for (std::size_t axis = 0u; axis < 3u; ++axis) {
-            corner_phase_rad[node] -= fixture.k_vector[axis] *
-                fixture.nodes[3u * node + axis];
-        }
+    if (out_scale == 0.0) {
+        out_minimum = 0.0;
+        return true;
     }
-    for (std::size_t row = 0u; row < 4u; ++row) {
-        for (std::size_t column = 0u; column < 4u; ++column) {
-            reduced_corner_mass +=
-                consistent_mass[row * node_count + column] *
-                std::cos(corner_phase_rad[column] - corner_phase_rad[row]);
-        }
-    }
-    check(std::isfinite(reduced_corner_mass) && reduced_corner_mass > 0.0,
-          "expanded Floquet fixture has a positive phase-reduced corner mass");
-    const double base_stiffness_scale = 4.0 / reduced_corner_mass;
-    std::vector<double> class_scale(node_count, 0.0);
-    const std::uint32_t no_magnetic_class =
-        std::numeric_limits<std::uint32_t>::max();
-    for (std::size_t node = 0u; node < node_count; ++node) {
-        const std::uint32_t class_id = fixture.magnetic_classes[node];
-        if (class_id != no_magnetic_class) {
-            class_scale[node] =
-                base_stiffness_scale * (1.0 + 0.02 * static_cast<double>(class_id));
-        }
-    }
-
-    std::vector<double> stiffness(
-        tangent_dof_count * tangent_dof_count, 0.0);
-    for (std::size_t row_node = 0u; row_node < node_count; ++row_node) {
-        if (class_scale[row_node] == 0.0) {
-            for (std::size_t tangent = 0u; tangent < 2u; ++tangent) {
-                const std::size_t dof = 2u * row_node + tangent;
-                stiffness[dof * tangent_dof_count + dof] = 1.0;
+    const double stopping_tolerance = 1.0e-14 * out_scale;
+    const std::size_t iteration_limit = 100u * dimension * dimension;
+    bool converged = false;
+    for (std::size_t iteration = 0u; iteration < iteration_limit; ++iteration) {
+        std::size_t p = 0u;
+        std::size_t q = 0u;
+        double largest_off_diagonal = 0.0;
+        for (std::size_t row = 0u; row < dimension; ++row) {
+            for (std::size_t column = row + 1u; column < dimension; ++column) {
+                const double magnitude =
+                    std::abs(matrix[row * dimension + column]);
+                if (magnitude > largest_off_diagonal) {
+                    largest_off_diagonal = magnitude;
+                    p = row;
+                    q = column;
+                }
             }
-            continue;
         }
-        for (std::size_t column_node = 0u; column_node < node_count; ++column_node) {
-            if (class_scale[column_node] == 0.0) {
+        if (largest_off_diagonal <= stopping_tolerance) {
+            converged = true;
+            break;
+        }
+        const double app = matrix[p * dimension + p];
+        const double aqq = matrix[q * dimension + q];
+        const double apq = matrix[p * dimension + q];
+        const double tau = (aqq - app) / (2.0 * apq);
+        const double t = std::copysign(
+            1.0 / (std::abs(tau) + std::sqrt(1.0 + tau * tau)), tau);
+        const double cosine = 1.0 / std::sqrt(1.0 + t * t);
+        const double sine = t * cosine;
+        matrix[p * dimension + p] = app - t * apq;
+        matrix[q * dimension + q] = aqq + t * apq;
+        matrix[p * dimension + q] = 0.0;
+        matrix[q * dimension + p] = 0.0;
+        for (std::size_t index = 0u; index < dimension; ++index) {
+            if (index == p || index == q) {
                 continue;
             }
-            const double value =
-                std::sqrt(class_scale[row_node] * class_scale[column_node]) *
-                consistent_mass[row_node * node_count + column_node];
-            for (std::size_t tangent = 0u; tangent < 2u; ++tangent) {
-                const std::size_t row = 2u * row_node + tangent;
-                const std::size_t column = 2u * column_node + tangent;
-                stiffness[row * tangent_dof_count + column] = value;
-            }
+            const double aip = matrix[index * dimension + p];
+            const double aiq = matrix[index * dimension + q];
+            const double rotated_p = cosine * aip - sine * aiq;
+            const double rotated_q = sine * aip + cosine * aiq;
+            matrix[index * dimension + p] = rotated_p;
+            matrix[p * dimension + index] = rotated_p;
+            matrix[index * dimension + q] = rotated_q;
+            matrix[q * dimension + index] = rotated_q;
         }
     }
-    return dense_to_csr(
-        tangent_dof_count, tangent_dof_count, stiffness.data());
+    if (!converged) {
+        return false;
+    }
+    out_minimum = matrix[0];
+    for (std::size_t index = 1u; index < dimension; ++index) {
+        out_minimum = std::min(out_minimum, matrix[index * dimension + index]);
+    }
+    return std::isfinite(out_minimum);
+}
+
+void initialize_native_count_fixture(FloquetContourSharedDomainFixture &fixture)
+{
+    constexpr double saturation_a_per_m = 2.0;
+    constexpr double gamma0_m_per_a_s = 3.0;
+    constexpr double bias_a_per_m = 100.0;
+    constexpr double mu0_t_m_a = 4.0e-7 * 3.14159265358979323846;
+    const std::size_t node_count = fixture.nodes.size() / 3u;
+    const std::size_t magnetic_node_count = node_count - 1u;
+
+    fullmag::fem::Context context{};
+    std::string error;
+    check(
+        fullmag::fem::initialize_mesh_plan_fields(context, fixture.mesh, error),
+        error.c_str());
+    check(context.mesh.n_nodes == node_count &&
+              context.mesh.n_elements == fixture.cell_markers.size() &&
+              context.mesh.periodic_reduced_node.size() == node_count,
+          "native static fixture imports the exact shared-domain mesh and periodic classes");
+
+    context.mesh.magnetic_element_mask.assign(context.mesh.n_elements, 0u);
+    context.mesh.magnetic_node_mask.assign(context.mesh.n_nodes, 0u);
+    for (std::size_t element = 0u; element < context.mesh.cell_markers.size(); ++element) {
+        if (context.mesh.cell_markers[element] != 1u) {
+            continue;
+        }
+        context.mesh.magnetic_element_mask[element] = 1u;
+        const std::uint32_t begin = context.mesh.cell_offsets[element];
+        const std::uint32_t end = context.mesh.cell_offsets[element + 1u];
+        for (std::uint32_t cursor = begin; cursor < end; ++cursor) {
+            context.mesh.magnetic_node_mask[context.mesh.cell_nodes[cursor]] = 1u;
+        }
+    }
+    check(
+        std::count(
+            context.mesh.magnetic_node_mask.begin(),
+            context.mesh.magnetic_node_mask.end(),
+            static_cast<std::uint8_t>(1u)) ==
+            static_cast<std::ptrdiff_t>(magnetic_node_count),
+        "native static fixture marks the same magnetic node prefix as the payload");
+
+    const CanonicalFixturePartition static_partition =
+        canonical_fixture_partition(context.mesh.periodic_reduced_node);
+    const CanonicalFixturePartition payload_partition =
+        canonical_fixture_partition(fixture.scalar_classes);
+    const CanonicalFixturePartition magnetic_partition =
+        canonical_fixture_partition(fixture.magnetic_classes);
+    check(static_partition.node_class == payload_partition.node_class &&
+              static_partition.class_representatives ==
+                  payload_partition.class_representatives,
+          "static Context and modal payload share the same canonical scalar equivalence partition");
+    check(static_partition.class_representatives.size() == 7u &&
+              magnetic_partition.class_representatives.size() == 6u,
+          "physical count fixture preserves six magnetic and seven scalar classes");
+    for (std::size_t node = 0u; node < magnetic_node_count; ++node) {
+        check(static_partition.node_class[node] == magnetic_partition.node_class[node],
+              "static scalar and magnetic partitions agree on every magnetic node");
+    }
+    fixture.static_scalar_class_representatives =
+        static_partition.class_representatives;
+
+    std::unique_ptr<mfem::Mesh> native_mesh;
+    check(
+        fullmag::fem::build_mfem_mesh(context.mesh, native_mesh, error),
+        error.c_str());
+    check(native_mesh != nullptr && native_mesh->GetNV() == static_cast<int>(node_count),
+          "native static Poisson uses the same expanded MFEM mesh as the modal importer");
+
+    const int maximum_boundary_attribute = native_mesh->bdr_attributes.Max();
+    check(maximum_boundary_attribute >= 8,
+          "physical fixture contains the explicit Robin and periodic seam attributes");
+    std::vector<int> static_robin_marker(
+        static_cast<std::size_t>(maximum_boundary_attribute), 0);
+    std::vector<int> dynamic_robin_marker(
+        static_cast<std::size_t>(maximum_boundary_attribute), 0);
+    static_robin_marker[0] = 1;
+    dynamic_robin_marker[0] = 1;
+    for (std::uint32_t periodic_marker : context.mesh.periodic_boundary_marker_set) {
+        if (periodic_marker == 0u || periodic_marker >
+                static_cast<std::uint32_t>(maximum_boundary_attribute)) {
+            continue;
+        }
+        static_robin_marker[periodic_marker - 1u] = 0;
+        dynamic_robin_marker[periodic_marker - 1u] = 0;
+    }
+    check(static_robin_marker == dynamic_robin_marker,
+          "static and shared-domain owners select Robin boundaries with the same marker policy");
+
+    std::vector<std::array<std::uint32_t, 3>> expected_active_faces;
+    for (std::size_t facet = 0u; facet < fixture.facet_markers.size(); ++facet) {
+        if (fixture.facet_roles[facet] != FULLMAG_FEM_FACET_ROLE_EXTERIOR ||
+            fixture.facet_markers[facet] != 1u) {
+            continue;
+        }
+        std::array<std::uint32_t, 3> vertices{};
+        const std::size_t offset = fixture.facet_offsets[facet];
+        std::copy_n(fixture.facet_nodes.begin() +
+                        static_cast<std::ptrdiff_t>(offset),
+                    3u,
+                    vertices.begin());
+        std::sort(vertices.begin(), vertices.end());
+        expected_active_faces.push_back(vertices);
+    }
+    std::vector<std::array<std::uint32_t, 3>> actual_active_faces;
+    std::size_t marker1_face_count = 0u;
+    std::size_t marker7_face_count = 0u;
+    std::size_t marker8_face_count = 0u;
+    for (int boundary = 0; boundary < native_mesh->GetNBE(); ++boundary) {
+        const int attribute = native_mesh->GetBdrAttribute(boundary);
+        marker1_face_count += attribute == 1 ? 1u : 0u;
+        marker7_face_count += attribute == 7 ? 1u : 0u;
+        marker8_face_count += attribute == 8 ? 1u : 0u;
+        if (attribute <= 0 ||
+            static_robin_marker[static_cast<std::size_t>(attribute - 1)] == 0) {
+            continue;
+        }
+        mfem::Array<int> vertices;
+        native_mesh->GetBdrElementVertices(boundary, vertices);
+        check(vertices.Size() == 3,
+              "physical Robin boundary contains only the fixture's triangular facets");
+        std::array<std::uint32_t, 3> face{{
+            static_cast<std::uint32_t>(vertices[0]),
+            static_cast<std::uint32_t>(vertices[1]),
+            static_cast<std::uint32_t>(vertices[2])}};
+        std::sort(face.begin(), face.end());
+        actual_active_faces.push_back(face);
+    }
+    std::sort(expected_active_faces.begin(), expected_active_faces.end());
+    std::sort(actual_active_faces.begin(), actual_active_faces.end());
+    check(marker1_face_count == 4u && marker7_face_count == 1u &&
+              marker8_face_count == 1u &&
+              actual_active_faces == expected_active_faces,
+          "Robin marker 1 selects exactly the four exterior faces and excludes seam markers 7/8");
+
+    context.base_plan.fe_order = 1u;
+    context.mfem_context.mesh = native_mesh.get();
+    std::unique_ptr<mfem::H1_FECollection> state_fec =
+        std::make_unique<mfem::H1_FECollection>(1, native_mesh->Dimension());
+    std::unique_ptr<mfem::FiniteElementSpace> state_fes =
+        std::make_unique<mfem::FiniteElementSpace>(native_mesh.get(), state_fec.get());
+    context.mfem_context.fec = state_fec.get();
+    context.mfem_context.fes = state_fes.get();
+    check(state_fes->GetNDofs() == static_cast<int>(node_count),
+          "native static magnetization space remains global-node P1");
+    context.demag.enabled = true;
+    context.demag.realization = FULLMAG_FEM_DEMAG_AIRBOX_ROBIN;
+    context.demag.solver.solver = FULLMAG_FEM_LINEAR_SOLVER_CG;
+    context.demag.solver.preconditioner = FULLMAG_FEM_PRECONDITIONER_NONE;
+    context.demag.solver.relative_tolerance = 1.0e-12;
+    context.demag.solver.max_iterations = 500;
+    context.material_fields.material.saturation_magnetisation = saturation_a_per_m;
+    context.poisson_demag.boundary_marker = 1;
+    context.poisson_demag.robin_beta_mode = 0;
+    context.poisson_demag.robin_beta_factor = 1.0;
+    context.cpu_threads.effective_omp_threads = 1;
+    const bool initialized = fullmag::fem::context_initialize_poisson(context, error);
+    if (!initialized) {
+        std::fprintf(stderr, "FAIL: native static Poisson initialization: %s\n", error.c_str());
+    }
+    check(initialized, "native static Poisson owner initializes for the count mesh");
+    check(context.poisson_demag.potential_order == 1 &&
+              context.poisson_demag.periodic_reduced_ready &&
+              std::abs(context.poisson_demag.robin_effective_beta - 1.0) <= 1.0e-14,
+          "static Poisson uses P1 periodic reduction and the shared Robin beta without a gauge pin");
+
+    const std::size_t scalar_class_count =
+        context.mesh.periodic_reduced_node_count;
+    auto *static_poisson_matrix =
+        static_cast<mfem::SparseMatrix *>(context.poisson_demag.periodic_matrix);
+    check(static_poisson_matrix != nullptr &&
+              static_poisson_matrix->Height() == static_cast<int>(scalar_class_count) &&
+              static_poisson_matrix->Width() == static_cast<int>(scalar_class_count),
+          "static Poisson owner exposes the actual periodic-reduced Robin operator");
+    std::vector<double> static_poisson_raw(
+        scalar_class_count * scalar_class_count, 0.0);
+    mfem::Array<int> row_columns;
+    mfem::Vector row_values;
+    for (int row = 0; row < static_poisson_matrix->Height(); ++row) {
+        static_poisson_matrix->GetRow(row, row_columns, row_values);
+        for (int entry = 0; entry < row_columns.Size(); ++entry) {
+            static_poisson_raw[static_cast<std::size_t>(
+                row * static_poisson_matrix->Width() + row_columns[entry])] =
+                row_values[entry];
+        }
+    }
+    fixture.static_reduced_poisson_matrix.assign(
+        scalar_class_count * scalar_class_count, 0.0);
+    for (std::size_t row = 0u; row < scalar_class_count; ++row) {
+        const std::uint32_t raw_row =
+            static_partition.raw_class_ids_by_canonical[row];
+        for (std::size_t column = 0u; column < scalar_class_count; ++column) {
+            const std::uint32_t raw_column =
+                static_partition.raw_class_ids_by_canonical[column];
+            fixture.static_reduced_poisson_matrix[
+                row * scalar_class_count + column] = static_poisson_raw[
+                    static_cast<std::size_t>(raw_row) * scalar_class_count + raw_column];
+        }
+    }
+
+    mfem::Array<int> magnetic_attributes(native_mesh->attributes.Max());
+    check(magnetic_attributes.Size() >= 1,
+          "native static fixture has the magnetic MFEM volume attribute");
+    magnetic_attributes = 0;
+    magnetic_attributes[0] = 1;
+    mfem::ConstantCoefficient unit_density(1.0);
+    mfem::LinearForm lumped_mass_form(state_fes.get());
+    lumped_mass_form.AddDomainIntegrator(
+        new mfem::DomainLFIntegrator(unit_density), magnetic_attributes);
+    lumped_mass_form.Assemble();
+    check(lumped_mass_form.Size() == static_cast<int>(node_count),
+          "native static state produces a geometric P1 lumped mass on the same mesh");
+    std::vector<double> magnetic_lumped_mass(magnetic_node_count, 0.0);
+    for (std::size_t node = 0u; node < magnetic_node_count; ++node) {
+        magnetic_lumped_mass[node] = lumped_mass_form[static_cast<int>(node)];
+        check(std::isfinite(magnetic_lumped_mass[node]) &&
+                  magnetic_lumped_mass[node] > 0.0,
+              "native magnetic P1 lumped-mass weight is finite and positive");
+    }
+
+    std::vector<double> unit_magnetization(3u * node_count, 0.0);
+    for (std::size_t node = 0u; node < magnetic_node_count; ++node) {
+        unit_magnetization[3u * node + 2u] = 1.0;
+    }
+    std::vector<double> static_h_demag;
+    double static_demag_energy_j = 0.0;
+    const bool solved = fullmag::fem::context_compute_demag_poisson(
+        context,
+        unit_magnetization,
+        static_h_demag,
+        static_demag_energy_j,
+        false,
+        nullptr,
+        error);
+    if (!solved) {
+        std::fprintf(stderr, "FAIL: native static Poisson solve: %s\n", error.c_str());
+    }
+    check(solved && static_h_demag.size() == 3u * node_count &&
+              std::isfinite(static_demag_energy_j) && static_demag_energy_j > 0.0,
+          "native static Poisson owner returns nonzero H_demag and positive energy");
+    auto *potential_grid =
+        static_cast<mfem::GridFunction *>(context.poisson_demag.gf_potential);
+    check(potential_grid != nullptr,
+          "native static Poisson owner retains the solved phi0 grid function");
+    mfem::Vector potential_true_dofs;
+    potential_grid->GetTrueDofs(potential_true_dofs);
+    check(potential_true_dofs.Size() == static_cast<int>(node_count),
+          "native static periodic P1 phi0 lifts to the shared global-node order");
+
+    std::copy(static_h_demag.begin(), static_h_demag.end(), fixture.h_demag.begin());
+    for (std::size_t node = 0u; node < node_count; ++node) {
+        fixture.h_eff[3u * node] = 0.0;
+        fixture.h_eff[3u * node + 1u] = 0.0;
+        fixture.h_eff[3u * node + 2u] = bias_a_per_m;
+        fixture.descriptor_external[3u * node] = -fixture.h_demag[3u * node];
+        fixture.descriptor_external[3u * node + 1u] =
+            -fixture.h_demag[3u * node + 1u];
+        fixture.descriptor_external[3u * node + 2u] =
+            bias_a_per_m - fixture.h_demag[3u * node + 2u];
+        for (std::size_t axis = 0u; axis < 3u; ++axis) {
+            const std::size_t index = 3u * node + axis;
+            check(std::abs(
+                      fixture.descriptor_external[index] + fixture.h_demag[index] -
+                      fixture.h_eff[index]) <= 1.0e-12 * bias_a_per_m,
+                  "compensating H_ext and native H_demag reproduce the prescribed H_eff");
+        }
+    }
+    fixture.phi0.resize(node_count);
+    double max_abs_phi0 = 0.0;
+    for (std::size_t node = 0u; node < node_count; ++node) {
+        fixture.phi0[node] = potential_true_dofs[static_cast<int>(node)];
+        check(std::isfinite(fixture.phi0[node]),
+              "native static phi0 contains only finite nodal values");
+        max_abs_phi0 = std::max(max_abs_phi0, std::abs(fixture.phi0[node]));
+    }
+    check(max_abs_phi0 > 0.0,
+          "native static Poisson fixture must not substitute a zero-potential assumption");
+    std::fill(fixture.descriptor_alpha.begin(), fixture.descriptor_alpha.end(), 0.0);
+    context_destroy_poisson(context);
+
+    fd::CanonicalDigestBuilder content_digest(
+        "modal_count_fixture.equilibrium_content.v1");
+    content_digest.add_string("source", "context_compute_demag_poisson");
+    content_digest.add_string("mesh_topology", fixture.scalar_topology_fingerprint);
+    content_digest.add_u64("magnetic_node_count", magnetic_node_count);
+    content_digest.add_u64("global_node_count", node_count);
+    content_digest.add_double("saturation_magnetisation_a_per_m", saturation_a_per_m);
+    content_digest.add_double("gamma0_m_per_a_s", gamma0_m_per_a_s);
+    content_digest.add_double("prescribed_total_bias_a_per_m", bias_a_per_m);
+    content_digest.add_double("robin_beta_m_inv", 1.0);
+    content_digest.add_double("m0_norm_tolerance", fixture.payload.m0_norm_tolerance);
+    content_digest.add_double("equilibrium_torque_relative_tolerance", 0.0);
+    add_digest_doubles(content_digest, "m0_unit_xyz", fixture.equilibrium);
+    add_digest_doubles(content_digest, "h_eff0_apm_xyz", fixture.h_eff);
+    add_digest_doubles(content_digest, "h_demag0_apm_xyz", fixture.h_demag);
+    add_digest_doubles(content_digest, "h_ext0_apm_xyz", fixture.descriptor_external);
+    add_digest_doubles(content_digest, "phi0_a", fixture.phi0);
+    add_digest_doubles(content_digest, "alpha_per_node", fixture.descriptor_alpha);
+    add_digest_doubles(content_digest, "magnetic_lumped_mass_m3", magnetic_lumped_mass);
+    content_digest.add_double("static_demag_energy_j", static_demag_energy_j);
+    fixture.equilibrium_content_digest = "sha256:" + content_digest.sha256_hex();
+
+    const char *equilibrium_id = "equilibrium_artifact.v7:native-count-fixture";
+    const char *mesh_snapshot_id = "mesh-snapshot:native-count-fixture";
+    const char *material_snapshot_id = "material-snapshot:Ms-2-apm";
+    const char *physics_snapshot_id = "physics-snapshot:field-demag-alpha-zero";
+    const char *boundary_snapshot_id = "boundary-snapshot:robin-1-periodic";
+    const char *producer_run_id = "native-static-poisson-count-fixture";
+    fixture.payload.equilibrium_id = equilibrium_id;
+    fixture.payload.mesh_snapshot_id = mesh_snapshot_id;
+    fixture.payload.material_snapshot_id = material_snapshot_id;
+    fixture.payload.physics_snapshot_id = physics_snapshot_id;
+    fixture.payload.boundary_snapshot_id = boundary_snapshot_id;
+    fixture.payload.producer_run_id = producer_run_id;
+    fixture.payload.bias_field_sample_id =
+        "bias-field-sample:native-count-fixture";
+    const char *acceptance_criterion = "torque";
+    const char *acceptance_metric_kind = "max_torque_apm";
+    const char *acceptance_unit = "A/m";
+    constexpr double acceptance_metric_value = 0.0;
+    constexpr double acceptance_threshold = 0.0;
+    fd::CanonicalDigestBuilder acceptance_digest(
+        "modal_count_fixture.acceptance_certificate.v1");
+    acceptance_digest.add_string("criterion", acceptance_criterion);
+    acceptance_digest.add_string("metric_kind", acceptance_metric_kind);
+    acceptance_digest.add_string("unit", acceptance_unit);
+    acceptance_digest.add_double("metric_value", acceptance_metric_value);
+    acceptance_digest.add_double("threshold", acceptance_threshold);
+    acceptance_digest.add_string(
+        "equilibrium_content_sha256", fixture.equilibrium_content_digest);
+    fixture.acceptance_certificate_digest =
+        "sha256:" + acceptance_digest.sha256_hex();
+
+    fd::CanonicalDigestBuilder equilibrium_binding_digest(
+        "modal_count_fixture.equilibrium_binding.v1");
+    equilibrium_binding_digest.add_string("equilibrium_id", equilibrium_id);
+    equilibrium_binding_digest.add_string("mesh_snapshot_id", mesh_snapshot_id);
+    equilibrium_binding_digest.add_string("material_snapshot_id", material_snapshot_id);
+    equilibrium_binding_digest.add_string("physics_snapshot_id", physics_snapshot_id);
+    equilibrium_binding_digest.add_string("boundary_snapshot_id", boundary_snapshot_id);
+    equilibrium_binding_digest.add_string("producer_run_id", producer_run_id);
+    equilibrium_binding_digest.add_string(
+        "equilibrium_content_sha256", fixture.equilibrium_content_digest);
+    equilibrium_binding_digest.add_string(
+        "acceptance_certificate_sha256", fixture.acceptance_certificate_digest);
+    fixture.equilibrium_digest =
+        "sha256:" + equilibrium_binding_digest.sha256_hex();
+
+    fd::CanonicalDigestBuilder boundary_digest(
+        "modal_count_fixture.boundary_gauge.v1");
+    boundary_digest.add_string("boundary_kind", "robin");
+    boundary_digest.add_u64("boundary_marker", 1u);
+    boundary_digest.add_double("robin_beta_m_inv", 1.0);
+    boundary_digest.add_string("gauge_policy", "none_robin_is_invertible");
+    boundary_digest.add_string("mesh_topology", fixture.scalar_topology_fingerprint);
+    add_digest_u32s(boundary_digest, "periodic_boundary_markers", fixture.periodic_boundary_markers);
+    add_digest_u32s(boundary_digest, "facet_roles", fixture.facet_roles);
+    add_digest_u32s(boundary_digest, "facet_markers", fixture.facet_markers);
+    add_digest_u32s(boundary_digest, "scalar_reduced_node", fixture.scalar_classes);
+    fixture.boundary_gauge_digest = "sha256:" + boundary_digest.sha256_hex();
+
+    fd::CanonicalDigestBuilder bias_digest("modal_count_fixture.bias_field_sample.v1");
+    bias_digest.add_string("sample_id", "bias-field-sample:native-count-fixture");
+    bias_digest.add_string("equilibrium_digest", fixture.equilibrium_digest);
+    bias_digest.add_double("prescribed_total_bias_a_per_m", bias_a_per_m);
+    add_digest_doubles(bias_digest, "h_ext0_apm_xyz", fixture.descriptor_external);
+    add_digest_doubles(bias_digest, "h_eff0_apm_xyz", fixture.h_eff);
+    fixture.bias_field_sample_signature = "sha256:" + bias_digest.sha256_hex();
+
+    constexpr std::uint32_t physical_terms =
+        FULLMAG_FEM_MODAL_LINEARIZATION_TERM_FIELD |
+        FULLMAG_FEM_MODAL_LINEARIZATION_TERM_DEMAG;
+    fd::CanonicalDigestBuilder field_digest("modal_count_fixture.field_term.v1");
+    field_digest.add_u64("term_presence_mask", physical_terms);
+    field_digest.add_double("uniform_saturation_magnetisation_a_per_m", saturation_a_per_m);
+    add_digest_doubles(field_digest, "m0_unit_xyz", fixture.equilibrium);
+    add_digest_doubles(field_digest, "h_ext0_apm_xyz", fixture.descriptor_external);
+    add_digest_doubles(field_digest, "h_eff0_apm_xyz", fixture.h_eff);
+    fixture.field_term_digest = "sha256:" + field_digest.sha256_hex();
+
+    fd::CanonicalDigestBuilder demag_digest("modal_count_fixture.demag_term.v1");
+    demag_digest.add_u64("term_presence_mask", physical_terms);
+    demag_digest.add_string("demag_model", "floquet_airbox");
+    demag_digest.add_string("mesh_topology", fixture.scalar_topology_fingerprint);
+    demag_digest.add_string("boundary_gauge_digest", fixture.boundary_gauge_digest);
+    demag_digest.add_double("uniform_saturation_magnetisation_a_per_m", saturation_a_per_m);
+    add_digest_doubles(demag_digest, "h_demag0_apm_xyz", fixture.h_demag);
+    add_digest_doubles(demag_digest, "phi0_a", fixture.phi0);
+    fixture.demag_term_digest = "sha256:" + demag_digest.sha256_hex();
+
+    fd::CanonicalDigestBuilder operator_digest("modal_count_fixture.operator_input.v1");
+    operator_digest.add_u64("term_presence_mask", physical_terms);
+    operator_digest.add_string("mesh_topology", fixture.scalar_topology_fingerprint);
+    operator_digest.add_string("equilibrium_digest", fixture.equilibrium_digest);
+    operator_digest.add_string("field_term_digest", fixture.field_term_digest);
+    operator_digest.add_string("demag_term_digest", fixture.demag_term_digest);
+    operator_digest.add_string("boundary_gauge_digest", fixture.boundary_gauge_digest);
+    operator_digest.add_double("uniform_saturation_magnetisation_a_per_m", saturation_a_per_m);
+    operator_digest.add_double("gamma0_m_per_a_s", gamma0_m_per_a_s);
+    operator_digest.add_double("mu0_T_m_A", mu0_t_m_a);
+    operator_digest.add_double("robin_beta_m_inv", 1.0);
+    add_digest_doubles(operator_digest, "alpha_per_node", fixture.descriptor_alpha);
+    add_digest_doubles(operator_digest, "tangent_frame_xyz", fixture.descriptor_frames);
+    for (double value : fixture.k_vector) {
+        operator_digest.add_double("floquet_k_rad_per_m", value);
+    }
+    for (const auto &pair : fixture.native_pairs) {
+        operator_digest.add_u64("floquet_pair_node_a", pair.node_a);
+        operator_digest.add_u64("floquet_pair_node_b", pair.node_b);
+        for (double value : pair.translation_m) {
+            operator_digest.add_double("floquet_pair_translation_m", value);
+        }
+    }
+    fixture.operator_input_digest = "sha256:" + operator_digest.sha256_hex();
+
+    std::vector<double> m0_x(magnetic_node_count, 0.0);
+    std::vector<double> m0_y(magnetic_node_count, 0.0);
+    std::vector<double> m0_z(magnetic_node_count, 0.0);
+    std::vector<double> h_eff_x(magnetic_node_count, 0.0);
+    std::vector<double> h_eff_y(magnetic_node_count, 0.0);
+    std::vector<double> h_eff_z(magnetic_node_count, 0.0);
+    std::vector<double> h_demag_x(magnetic_node_count, 0.0);
+    std::vector<double> h_demag_y(magnetic_node_count, 0.0);
+    std::vector<double> h_demag_z(magnetic_node_count, 0.0);
+    for (std::size_t node = 0u; node < magnetic_node_count; ++node) {
+        const std::size_t source = 3u * node;
+        m0_x[node] = fixture.equilibrium[source];
+        m0_y[node] = fixture.equilibrium[source + 1u];
+        m0_z[node] = fixture.equilibrium[source + 2u];
+        h_eff_x[node] = fixture.h_eff[source];
+        h_eff_y[node] = fixture.h_eff[source + 1u];
+        h_eff_z[node] = fixture.h_eff[source + 2u];
+        h_demag_x[node] = fixture.h_demag[source];
+        h_demag_y[node] = fixture.h_demag[source + 1u];
+        h_demag_z[node] = fixture.h_demag[source + 2u];
+    }
+
+    fd::EquilibriumArtifactDescriptor artifact{};
+    artifact.equilibrium_id = equilibrium_id;
+    artifact.mesh_snapshot_id = mesh_snapshot_id;
+    artifact.material_snapshot_id = material_snapshot_id;
+    artifact.physics_snapshot_id = physics_snapshot_id;
+    artifact.boundary_snapshot_id = boundary_snapshot_id;
+    artifact.producer_run_id = producer_run_id;
+    artifact.content_sha256 = fixture.equilibrium_content_digest.c_str();
+    artifact.m0_unit = {m0_x.data(), m0_y.data(), m0_z.data(), magnetic_node_count};
+    artifact.h_eff0_a_per_m = {
+        h_eff_x.data(), h_eff_y.data(), h_eff_z.data(), magnetic_node_count};
+    artifact.h_demag0_a_per_m = {
+        h_demag_x.data(), h_demag_y.data(), h_demag_z.data(), magnetic_node_count};
+    artifact.phi0 = fixture.phi0.data();
+    artifact.tangent_lumped_mass = magnetic_lumped_mass.data();
+    artifact.magnetic_node_count = magnetic_node_count;
+    artifact.airbox_node_count = node_count;
+    artifact.tangent_lumped_mass_count = magnetic_lumped_mass.size();
+    artifact.accepted_for_linearization = true;
+    artifact.acceptance = {
+        acceptance_criterion,
+        acceptance_metric_kind,
+        acceptance_unit,
+        acceptance_metric_value,
+        acceptance_threshold,
+        fixture.acceptance_certificate_digest.c_str()};
+    artifact.demag_model = "floquet_airbox";
+    fd::LinearizationBuildOptions build_options{};
+    build_options.m0_norm_tolerance = fixture.payload.m0_norm_tolerance;
+    build_options.allow_m0_renormalization = false;
+    fd::LinearizationStateNative linearization_state{};
+    fd::LinearizationDiagnostics linearization_diagnostics{};
+    const fd::FrequencyDomainStatus linearization_status =
+        fd::build_linearization_state_from_equilibrium(
+            artifact,
+            build_options,
+            linearization_state,
+            linearization_diagnostics);
+    if (linearization_status != fd::FrequencyDomainStatus::ok) {
+        std::fprintf(stderr,
+                     "FAIL: native count linearization state: reject=%s error=%s\n",
+                     linearization_diagnostics.reject_reason,
+                     linearization_diagnostics.error_message);
+    }
+    check(linearization_status == fd::FrequencyDomainStatus::ok &&
+              linearization_state.tangent_frames.size() == magnetic_node_count,
+          "canonical linearization builder accepts the owner-produced static state");
+    for (std::size_t node = 0u; node < magnetic_node_count; ++node) {
+        const auto &frame = linearization_state.tangent_frames[node];
+        check(std::abs(frame.e1[0] - 1.0) <= 1.0e-14 &&
+                  std::abs(frame.e1[1]) <= 1.0e-14 &&
+                  std::abs(frame.e1[2]) <= 1.0e-14 &&
+                  std::abs(frame.e2[0]) <= 1.0e-14 &&
+                  std::abs(frame.e2[1] - 1.0) <= 1.0e-14 &&
+                  std::abs(frame.e2[2]) <= 1.0e-14,
+              "native m0=z tangent basis is e1=x and e2=y");
+        for (std::size_t axis = 0u; axis < 3u; ++axis) {
+            fixture.descriptor_frames[6u * node + axis] = frame.e1[axis];
+            fixture.descriptor_frames[6u * node + 3u + axis] = frame.e2[axis];
+        }
+    }
+    fixture.linearization_state_digest =
+        linearization_state.linearization_signature_hash;
+    fixture.reference_frequency_hz =
+        gamma0_m_per_a_s * bias_a_per_m / (2.0 * 3.14159265358979323846);
+
+    fixture.descriptor.linearization_state_digest =
+        fixture.linearization_state_digest.c_str();
+    fixture.descriptor.equilibrium_digest = fixture.equilibrium_digest.c_str();
+    fixture.descriptor.operator_input_digest = fixture.operator_input_digest.c_str();
+    fixture.descriptor.term_presence_mask = physical_terms;
+    fixture.descriptor.field_term_digest = fixture.field_term_digest.c_str();
+    fixture.descriptor.demag_term_digest = fixture.demag_term_digest.c_str();
+    fixture.descriptor.demag_provider_signature =
+        fixture.operator_input_digest.c_str();
+    fixture.descriptor.uniform_saturation_magnetisation_a_per_m = saturation_a_per_m;
+    std::fill(fixture.descriptor_alpha.begin(), fixture.descriptor_alpha.end(), 0.0);
+
+    fixture.payload.magnetic_a_qq_csr = FullmagFemCsrMatrixView{};
+    fixture.payload.equilibrium_digest = fixture.equilibrium_digest.c_str();
+    fixture.payload.mesh_certificate_digest = fixture.canonical_preimage_digest.c_str();
+    fixture.payload.linearization_state_digest =
+        fixture.linearization_state_digest.c_str();
+    fixture.payload.equilibrium_content_sha256 =
+        fixture.equilibrium_content_digest.c_str();
+    fixture.payload.boundary_gauge_digest = fixture.boundary_gauge_digest.c_str();
+    fixture.payload.bias_field_sample_signature =
+        fixture.bias_field_sample_signature.c_str();
+    fixture.payload.acceptance_criterion = acceptance_criterion;
+    fixture.payload.acceptance_metric_kind = acceptance_metric_kind;
+    fixture.payload.acceptance_unit = acceptance_unit;
+    fixture.payload.acceptance_metric_value = acceptance_metric_value;
+    fixture.payload.acceptance_threshold = acceptance_threshold;
+    fixture.payload.acceptance_certificate_sha256 =
+        fixture.acceptance_certificate_digest.c_str();
+}
+
+void verify_native_count_fixture_composed_operator(
+    const FloquetContourSharedDomainFixture &fixture)
+{
+    fd::PoissonAirboxSharedDomainAssemblyResult assembled{};
+    fd::FloquetAirboxDynamicDemagKResult dynamic_demag{};
+    const fd::FrequencyDomainStatus status =
+        fd::assemble_poisson_airbox_shared_domain_payload(
+            fixture.payload,
+            &assembled,
+            fixture.native_pairs.data(),
+            fixture.native_pairs.size(),
+            &fixture.k_vector,
+            &dynamic_demag,
+            true);
+    if (status != fd::FrequencyDomainStatus::ok) {
+        std::fprintf(stderr,
+                     "FAIL: physical count shared-domain assembly: %s; demag: %s\n",
+                     assembled.error_message,
+                     dynamic_demag.diagnostics.error_message);
+    }
+    check(status == fd::FrequencyDomainStatus::ok &&
+              assembled.floquet_sparse_operator_ready &&
+              dynamic_demag.diagnostics.potential_solve_certified &&
+              dynamic_demag.reconstruction.gauge_policy ==
+                  fd::FloquetDynamicDemagKGaugePolicy::require_invertible,
+          "physical count oracle uses the native composed shared-domain and Schur owners");
+    check(std::strcmp(assembled.boundary_kind, "poisson_robin") == 0 &&
+              std::strcmp(assembled.gauge_policy, "none") == 0 &&
+              assembled.floquet_full_field_blocks.scalar_robin_coefficient != nullptr,
+          "dynamic k0 and Floquet blocks retain the same ungauged Robin form as static phi0");
+
+    const CanonicalFixturePartition payload_partition =
+        canonical_fixture_partition(fixture.scalar_classes);
+    const std::size_t scalar_class_count =
+        fixture.static_scalar_class_representatives.size();
+    check(payload_partition.class_representatives ==
+              fixture.static_scalar_class_representatives &&
+              assembled.p.row_count == scalar_class_count &&
+              assembled.p.column_count == scalar_class_count &&
+              fixture.static_reduced_poisson_matrix.size() ==
+                  scalar_class_count * scalar_class_count,
+          "static and shared-domain Poisson owners use the same canonical scalar partition");
+    const std::vector<double> shared_p = dense_real_csr(assembled.p);
+    check(shared_p.size() == scalar_class_count * scalar_class_count,
+          "shared-domain Poisson block is valid CSR on the reduced scalar classes");
+    double poisson_scale = 0.0;
+    double poisson_error = 0.0;
+    for (std::size_t row = 0u; row < scalar_class_count; ++row) {
+        const std::uint32_t raw_row = payload_partition.raw_class_ids_by_canonical[row];
+        for (std::size_t column = 0u; column < scalar_class_count; ++column) {
+            const std::uint32_t raw_column =
+                payload_partition.raw_class_ids_by_canonical[column];
+            const double actual = shared_p[
+                static_cast<std::size_t>(raw_row) * scalar_class_count + raw_column];
+            const double expected =
+                fixture.static_reduced_poisson_matrix[row * scalar_class_count + column];
+            poisson_scale = std::max(poisson_scale, std::abs(expected));
+            poisson_error = std::max(poisson_error, std::abs(actual - expected));
+        }
+    }
+    check(poisson_scale > 0.0 && poisson_error <= 1.0e-10 * poisson_scale,
+          "native static and dynamic k0 Poisson owners assemble the same Robin weak form and gauge");
+    double poisson_minimum = 0.0;
+    double poisson_eigen_scale = 0.0;
+    double poisson_asymmetry = 0.0;
+    check(symmetric_min_eigenvalue(
+              shared_p,
+              scalar_class_count,
+              poisson_minimum,
+              poisson_eigen_scale,
+              poisson_asymmetry) &&
+              poisson_asymmetry <= 1.0e-10 * poisson_eigen_scale &&
+              poisson_minimum > 0.0,
+          "positive Robin boundary removes the periodic Poisson constant nullspace without a pin");
+
+    const auto &positive_mass = assembled.floquet_positive_tangent_mass;
+    const std::size_t q_dimension = static_cast<std::size_t>(positive_mass.row_count);
+    const std::size_t real_dimension = 2u * q_dimension;
+    const std::vector<double> mass_real_split =
+        complex_csr_to_real_split(positive_mass);
+    const std::vector<double> &demag_real_split = dynamic_demag.real_split_row_major;
+    check(q_dimension == 2u * fixture.magnetic_reduced_node_count &&
+              real_dimension * real_dimension == demag_real_split.size() &&
+              mass_real_split.size() == demag_real_split.size() &&
+              assembled.floquet_a_qq.row_count == q_dimension &&
+              assembled.floquet_b_qq.row_count == q_dimension,
+          "composed Schur, geometric mass, FIELD, and gyrotropic blocks share one reduced basis");
+
+    double mass_minimum = 0.0;
+    double mass_scale = 0.0;
+    double mass_asymmetry = 0.0;
+    check(symmetric_min_eigenvalue(
+              mass_real_split,
+              real_dimension,
+              mass_minimum,
+              mass_scale,
+              mass_asymmetry) &&
+              mass_scale > 0.0 && mass_asymmetry <= 1.0e-10 * mass_scale &&
+              mass_minimum > 0.0,
+          "composed phase-reduced geometric tangent mass is positive definite");
+
+    double demag_minimum = 0.0;
+    double demag_scale = 0.0;
+    double demag_asymmetry = 0.0;
+    check(symmetric_min_eigenvalue(
+              demag_real_split,
+              real_dimension,
+              demag_minimum,
+              demag_scale,
+              demag_asymmetry) &&
+              demag_scale > 0.0 && demag_asymmetry <= 1.0e-8 * demag_scale &&
+              demag_minimum >= -1.0e-8 * demag_scale,
+          "native dynamic-demag Schur block is a positive semidefinite energy contribution");
+    constexpr double mu0_t_m_a = 4.0e-7 * 3.14159265358979323846;
+    constexpr double saturation_a_per_m = 2.0;
+    const double upper_coefficient =
+        mu0_t_m_a * saturation_a_per_m * saturation_a_per_m;
+    std::vector<double> upper_minus_demag(mass_real_split.size(), 0.0);
+    for (std::size_t entry = 0u; entry < mass_real_split.size(); ++entry) {
+        upper_minus_demag[entry] =
+            upper_coefficient * mass_real_split[entry] - demag_real_split[entry];
+    }
+    double upper_minimum = 0.0;
+    double upper_scale = 0.0;
+    double upper_asymmetry = 0.0;
+    check(symmetric_min_eigenvalue(
+              upper_minus_demag,
+              real_dimension,
+              upper_minimum,
+              upper_scale,
+              upper_asymmetry) &&
+              upper_scale > 0.0 && upper_asymmetry <= 1.0e-8 * upper_scale &&
+              upper_minimum >= -1.0e-8 * upper_scale,
+          "native Schur block obeys D <= mu0 Ms^2 times the composed geometric mass");
+
+    constexpr double bias_a_per_m = 100.0;
+    constexpr double gamma0_m_per_a_s = 3.0;
+    const double field_curvature =
+        mu0_t_m_a * saturation_a_per_m * bias_a_per_m;
+    const double gyrotropic_scale =
+        mu0_t_m_a * saturation_a_per_m / gamma0_m_per_a_s;
+    double field_error = 0.0;
+    double field_scale = 0.0;
+    double gyrotropic_error = 0.0;
+    double gyrotropic_matrix_scale = 0.0;
+    for (std::size_t row = 0u; row < q_dimension; ++row) {
+        for (std::size_t column = 0u; column < q_dimension; ++column) {
+            const std::complex<double> mass_entry =
+                complex_csr_value(positive_mass, row, column);
+            const std::complex<double> expected_field =
+                field_curvature * mass_entry;
+            const std::complex<double> actual_field =
+                complex_csr_value(assembled.floquet_a_qq, row, column);
+            field_error = std::max(field_error,
+                                   std::abs(actual_field - expected_field));
+            field_scale = std::max(field_scale, std::abs(expected_field));
+
+            const std::size_t column_component = column % 2u;
+            std::complex<double> expected_gyro{};
+            for (std::size_t inner_component = 0u;
+                 inner_component < 2u;
+                 ++inner_component) {
+                double rotation = 0.0;
+                if (inner_component == 0u && column_component == 1u) {
+                    rotation = 1.0;
+                } else if (inner_component == 1u && column_component == 0u) {
+                    rotation = -1.0;
+                }
+                expected_gyro += gyrotropic_scale * rotation * complex_csr_value(
+                    positive_mass,
+                    row,
+                    (column / 2u) * 2u + inner_component);
+            }
+            const std::complex<double> actual_gyro =
+                complex_csr_value(assembled.floquet_b_qq, row, column);
+            gyrotropic_error = std::max(
+                gyrotropic_error,
+                std::abs(actual_gyro - expected_gyro));
+            gyrotropic_matrix_scale = std::max(
+                gyrotropic_matrix_scale,
+                std::abs(expected_gyro));
+        }
+    }
+    check(field_scale > 0.0 && field_error <= 1.0e-10 * field_scale,
+          "native FIELD block matches the independent mu0 Ms H0 geometric-mass baseline");
+    check(gyrotropic_matrix_scale > 0.0 &&
+              gyrotropic_error <= 1.0e-10 * gyrotropic_matrix_scale,
+          "native zero-damping gyrotropic block matches mu0 Ms/gamma0 times M_T J");
+    const double upper_frequency_hz =
+        gamma0_m_per_a_s * (bias_a_per_m + saturation_a_per_m) /
+        (2.0 * 3.14159265358979323846);
+    check(fixture.reference_frequency_hz > 0.0 &&
+              upper_frequency_hz > fixture.reference_frequency_hz,
+          "independent positive Kittel baseline and demag energetic frequency bound are ordered");
 }
 
 FullmagFemModalEigenRequest make_floquet_contour_request(
@@ -5055,17 +6035,19 @@ void modal_nonzero_k_floquet_shared_domain_nearest_reports_shifted_ksp_diagnosti
 {
 #if FULLMAG_HAS_MFEM_STACK && FULLMAG_FEM_WITH_SLEPC
     FloquetContourSharedDomainFixture fixture{};
-    fixture.initialize(count_certificate_only ? 5u : 0u);
+    fixture.initialize(count_certificate_only ? 5u : 0u, count_certificate_only);
+    if (count_certificate_only) {
+        initialize_native_count_fixture(fixture);
+        verify_native_count_fixture_composed_operator(fixture);
+    }
 
     // The shared-domain production path consumes the full magnetic A_qq
     // block from the immutable payload and does not materialize K/G through
-    // the legacy dense request fields. The default compact fixture uses a
-    // positive diagonal block; the focused count case uses a positive
-    // consistent-mass-scaled block on additional physical magnetic nodes.
+    // the legacy dense request fields. The default compact fixture retains
+    // its historical bounded diagonal carrier; the count case leaves the
+    // legacy CSR empty and consumes the native FIELD/DEMAG owner.
     CsrOwned magnetic_stiffness{};
-    if (count_certificate_only) {
-        magnetic_stiffness = mass_scaled_floquet_stiffness(fixture);
-    } else {
+    if (!count_certificate_only) {
         magnetic_stiffness.rows = 10u;
         magnetic_stiffness.columns = 10u;
         magnetic_stiffness.row_offsets.push_back(0u);
@@ -5075,13 +6057,15 @@ void modal_nonzero_k_floquet_shared_domain_nearest_reports_shifted_ksp_diagnosti
             magnetic_stiffness.row_offsets.push_back(
                 static_cast<std::uint32_t>(magnetic_stiffness.values.size()));
         }
+        fixture.payload.magnetic_a_qq_csr = magnetic_stiffness.view();
     }
-    fixture.payload.magnetic_a_qq_csr = magnetic_stiffness.view();
 
     FullmagFemModalEigenRequest request =
         make_floquet_contour_request(fixture, nullptr, nullptr);
     request.target_kind = "nearest_frequency";
-    request.target_frequency_hz = 0.16;
+    request.target_frequency_hz = count_certificate_only
+        ? fixture.reference_frequency_hz
+        : 0.16;
     request.frequency_min_hz = 0.0;
     request.frequency_max_hz = 0.0;
     request.eigensolver_family = 1;
@@ -5221,10 +6205,21 @@ void modal_nonzero_k_floquet_shared_domain_nearest_reports_shifted_ksp_diagnosti
     // path uses one narrow subwindow to isolate certificate admission.
     FullmagFemModalEigenRequest window_request = request;
     window_request.target_kind = "frequency_window";
-    window_request.frequency_min_hz =
-        count_certificate_only ? 0.145 : 0.05;
-    window_request.frequency_max_hz =
-        count_certificate_only ? 0.195 : 0.30;
+    if (count_certificate_only) {
+        constexpr double upper_factor = (100.0 + 2.0) / 100.0;
+        window_request.frequency_min_hz = 0.90 * fixture.reference_frequency_hz;
+        window_request.frequency_max_hz = 1.03 * fixture.reference_frequency_hz;
+        const double midpoint_hz = 0.5 * (
+            window_request.frequency_min_hz + window_request.frequency_max_hz);
+        check(window_request.frequency_min_hz < fixture.reference_frequency_hz &&
+                  midpoint_hz < fixture.reference_frequency_hz &&
+                  window_request.frequency_max_hz >
+                      upper_factor * fixture.reference_frequency_hz,
+              "physical count window brackets the oracle band with its sole midpoint below it");
+    } else {
+        window_request.frequency_min_hz = 0.05;
+        window_request.frequency_max_hz = 0.30;
+    }
     window_request.requested_mode_count = 1;
     window_request.completeness_policy = 0;
     FullmagFemFrequencyDomainResult window_result =
@@ -5240,6 +6235,35 @@ void modal_nonzero_k_floquet_shared_domain_nearest_reports_shifted_ksp_diagnosti
     }
     check(window_result.status == FULLMAG_FEM_FD_OK,
           "native Floquet production frequency window accepts a certified mode");
+    if (count_certificate_only) {
+        const double selected_frequency_hz = extract_json_number(
+            window_result.result_json,
+            "\"frequency_hz\":",
+            "native_count_fixture_selected_frequency");
+        const double selected_omega_rad_s = extract_json_number(
+            window_result.result_json,
+            "\"omega_rad_s\":",
+            "native_count_fixture_selected_omega");
+        const double selected_branch_sign = extract_json_number(
+            window_result.result_json,
+            "\"branch_sign\":",
+            "native_count_fixture_selected_branch");
+        constexpr double gamma0_m_per_a_s = 3.0;
+        constexpr double saturation_a_per_m = 2.0;
+        constexpr double bias_a_per_m = 100.0;
+        const double upper_frequency_hz =
+            gamma0_m_per_a_s * (bias_a_per_m + saturation_a_per_m) /
+            (2.0 * 3.14159265358979323846);
+        const double lower_frequency_hz = fixture.reference_frequency_hz;
+        check(selected_frequency_hz > 0.0 && selected_omega_rad_s > 0.0 &&
+                  selected_branch_sign == 1.0 &&
+                  selected_frequency_hz >= lower_frequency_hz * (1.0 - 1.0e-8) &&
+                  selected_frequency_hz <= upper_frequency_hz * (1.0 + 1.0e-8) &&
+                  std::abs(selected_omega_rad_s -
+                           2.0 * 3.14159265358979323846 * selected_frequency_hz) <=
+                      1.0e-10 * selected_omega_rad_s,
+              "native count mode has the positive branch and lies inside the independent energy bracket");
+    }
     check(contains(window_result.diagnostics_json,
                    "\"deduplication_inner_product\":\"floquet_positive_tangent_mass\""),
           "native window merge reports its physical reduced tangent mass");

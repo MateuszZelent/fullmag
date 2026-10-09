@@ -1927,3 +1927,8 @@ Generic 37872370420: jawny positive MFEM sparse window/nearest marker PASS; pó�
 ### Generic budget: brakujące pole, nie zmiana solvera
 
 37879661027 terminalFAIL. Actual native log270: budget available1/cumulative1, EPS positive reason1,0certified modes i explicit refill-budget stopreason. Generic refill serializer pomijał outer_iteration_budget_exhausted, podczas gdy innyformatter już go publikował. Dodano tylko istniejący adapterbool obok availability; źródłowe independentreviewPASS. To wyczerpanie budżetu na kolejny refill po konwergentnej próbie EPS, nie dowód EPS_DIVERGED_ITS; residual1e-30 pozostał bez zmian. Existing CABI assertion/no canonicalpartialmode i root failure diagnostics zachowane. Source-map validator/diff PASS, fresh providerGHA pending.
+
+
+### Fizyczny count fixture — source review przed provider CI
+
+Count-only fixture używa rzeczywistego Context Poisson Hdemag/phi0, compensation Hext=100ez−Hdemag, actual data/topology/term digests i native FIELD|DEMAG bez fakeCSR. Oracle porównuje aktywne Robin facets/staticdynamicP/canonicalpartition, dodatnią masę,FIELD/gyro scaling oraz0≤D≤μ0Ms²MT przed solve. Window wynika z niezależnego fZ; existing≥4independent pre-cap + best-effort cap1 i strict missingcountcertificate rejection zachowane. CałyCPPdiff i importer/linearization/assembly konsumenci przeszli niezależny source review; actual oracles/CABI runtimeNOT VERIFIED. Pozostałefixturedefaults i genericbudget diagnostics zachowane. Diff/source-mapvalidator pendingbeforecommit; freshcountGHA required.

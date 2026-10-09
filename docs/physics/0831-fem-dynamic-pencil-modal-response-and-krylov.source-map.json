@@ -647,7 +647,8 @@
         "count_fixture_effective"
       ],
       "sources": [
-        "source-count-physical-fixture-contract"
+        "source-count-physical-fixture-contract",
+        "source-count-composed-operator-oracle"
       ]
     },
     {
@@ -664,7 +665,8 @@
         "modal_tangent_mass"
       ],
       "sources": [
-        "source-count-physical-fixture-contract"
+        "source-count-physical-fixture-contract",
+        "source-count-composed-operator-oracle"
       ]
     },
     {
@@ -681,7 +683,8 @@
         "modal_tangent_mass"
       ],
       "sources": [
-        "source-count-physical-fixture-contract"
+        "source-count-physical-fixture-contract",
+        "source-count-composed-operator-oracle"
       ]
     }
   ],
@@ -2889,16 +2892,22 @@
     },
     {
       "id": "source-count-physical-fixture-contract",
-      "path": "docs/physics/0831-fem-dynamic-pencil-modal-response-and-krylov.md",
-      "symbol": "DOC-ANCHOR:count-physical-fixture-contract",
-      "evidence_status": "planned_contract",
-      "responsibility": "Prospective physically coherent count fixture with actual static/dynamic owner forms, data digests and independent energy bound; implementation and runtime NOT VERIFIED."
+      "path": "backends/fem/tests/frequency_domain/modal_eigen_contract_test.cpp",
+      "symbol": "void initialize_native_count_fixture",
+      "evidence_status": "source_visible_pending_provider_execution",
+      "responsibility": "Actual Context static demag/potential and compensating external field bind the physically coherent native count descriptor; hosted execution pending."
     },
     {
       "id": "source-dedup-quality-representative-regression",
       "path": "backends/fem/tests/frequency_domain/mode_deduplication_test.cpp",
       "symbol": "void mode_deduplication_keeps_pairwise_distinct_quality_representatives",
       "responsibility": "Nontransitive overlap, positive nonuniform mass, dense/CSR/legacy parity, all permutations, original strict output and frequency ordering; source-only until GHA."
+    },
+    {
+      "id": "source-count-composed-operator-oracle",
+      "path": "backends/fem/tests/frequency_domain/modal_eigen_contract_test.cpp",
+      "symbol": "void verify_native_count_fixture_composed_operator",
+      "responsibility": "Actual active Robin faces, canonical periodic partitions, reduced static/dynamic P and composed mass/Zeeman/gyro/demag energy-bound checks; source-reviewed, GHA execution pending."
     }
   ],
   "public_api": {

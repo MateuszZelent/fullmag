@@ -2336,7 +2336,8 @@ Repository-owned related contracts:
 | Source path | Symbol | Responsibility |
 |---|---|---|
 | backends/fem/tests/frequency_domain/mode_deduplication_test.cpp | void mode_deduplication_keeps_pairwise_distinct_quality_representatives | Nontransitive overlap with nonuniform positive mass, dense/CSR/legacy parity, all input permutations and original strict output; hosted execution pending. |
-| docs/physics/0831-fem-dynamic-pencil-modal-response-and-krylov.md | DOC-ANCHOR:count-physical-fixture-contract | Planned physically bound count fixture; static-owner, boundary-form, digest and energy-oracle execution NOT VERIFIED. |
+| backends/fem/tests/frequency_domain/modal_eigen_contract_test.cpp | void initialize_native_count_fixture | Native static H/phi owner and actual data/term digests for the physical count fixture; hosted execution pending. |
+| backends/fem/tests/frequency_domain/modal_eigen_contract_test.cpp | void verify_native_count_fixture_composed_operator | Active boundary faces, canonical partitions, static/dynamic P, mass/Zeeman/gyro and demag energy-bound oracle; hosted execution pending. |
 | packages/fullmag-py/src/fullmag/runtime/script_builder.py | _sync_stage_output_snapshot | Reconcile immutable stage output families and preserve ordered autosave; selectors and StudyIR regression pending hosted CI. |
 | backends/fem/cpu/frequency_domain/slepc_modal_eigen.cpp | SLEPcTinyGyrotropicModalEigenResult solve_slepc_gyrotropic_modal_eigen_attempt | Configure checked nonzero-diagonal PCLU permutation before EPS setup, preserving operator values, shift policy, original residual gate and graph quarantine; provider proof pending. |
 | backends/fem/cpu/frequency_domain/slepc_modal_eigen.cpp | bool create_real_frequency_rotated_pencil | Retain exact zero structural diagonal slots in both real-split AIJ matrices for symbolic LU; preserve the operator and quarantine on hard assembly errors. Actual-provider regression pending. |
@@ -4088,14 +4089,14 @@ correction is **NOT VERIFIED**.
 
 
 (count-physical-fixture-contract)=
-### Prospective physical contract for the native count fixture
+### Physical source contract for the native count fixture
 
-Status: planned correction, **NOT VERIFIED**. The current count fixture has an
+Status: source correction reviewed, hosted execution **NOT VERIFIED**. The original count fixture failed with an
 empty term mask. The shared production importer assembles native magnetic Aqq
 from the descriptor and replaces the supplied synthetic CSR; changing only the
 mask would not establish physical consistency.
 
-The bounded CPU fixture will use the same expanded conforming mesh, periodic
+The bounded CPU fixture uses the same expanded conforming mesh, periodic
 partition and geometric tangent mass, uniform magnetization along z, zero
 Gilbert damping, $M_s=2\,\mathrm{A\,m^{-1}}$,
 $\gamma_0=3\,\mathrm{m\,A^{-1}\,s^{-1}}$ and
@@ -4147,7 +4148,7 @@ inequality must be checked on the actual assembled blocks:
 \qquad f_Z\le f_j\le\frac{\gamma_0(H_0+M_s)}{2\pi}.
 ```
 
-The planned search window $[0.90f_Z,1.03f_Z]$ is derived before observing any
+The source-defined search window $[0.90f_Z,1.03f_Z]$ is derived before observing any
 spectrum and has one partition with its midpoint below this bracket. Preserve
 all residual and canonical-admission gates; best-effort mode cap and rejection
 of unsupported certified-count policy remain distinct controls.
