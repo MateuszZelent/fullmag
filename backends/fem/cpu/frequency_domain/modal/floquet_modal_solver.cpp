@@ -1791,7 +1791,7 @@ PetscErrorCode capture_candidate_live_pc_observation(
             []() {
                 return PetscPushErrorHandler(PetscReturnErrorHandler, nullptr);
             },
-            [&]() {
+            [&]() -> PetscErrorCode {
                 if (live_ksp == nullptr) {
                     observation.reason = "live_ksp_unavailable";
                     return PETSC_SUCCESS;
