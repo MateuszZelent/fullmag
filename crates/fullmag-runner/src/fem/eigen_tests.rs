@@ -10661,6 +10661,8 @@ fn relaxed_path_source_fixture_handoff_is_reused_for_each_nonzero_k_sample_witho
     )
     .expect("the real path runner should consume the supplied source handoff");
     assert_eq!(run.result.status, RunStatus::Completed);
+    assert_eq!(run.initial_magnetization, plan.equilibrium_magnetization);
+    assert_eq!(run.result.final_magnetization, plan.equilibrium_magnetization);
 
     let legacy_spectrum = run
         .auxiliary_artifacts
@@ -10670,8 +10672,8 @@ fn relaxed_path_source_fixture_handoff_is_reused_for_each_nonzero_k_sample_witho
         .expect("the real path publisher should emit its legacy spectrum");
     assert_eq!(legacy_spectrum["relaxation_steps"], 0);
     assert_eq!(
-        legacy_spectrum["equilibrium_source"]["handoff"],
-        "stage_continuation"
+        legacy_spectrum["equilibrium_source"]["kind"],
+        "relaxed_initial_state"
     );
 
     let spectrum_v3 = run
