@@ -353,7 +353,15 @@ class LocalRunnerSourceCompactionTests(unittest.TestCase):
             finally:
                 if swapped and moved_tree.exists() and foreign_file is not None:
                     source_root.chmod(source_root_mode | stat.S_IWUSR)
-                    original_rename(tree_path, root / "foreign-tree-preserved")
+                    preserved_tree = root / "foreign-tree-preserved"
+                    # Moving a directory to a different parent also updates
+                    # its '..' entry: grant only the fixture's temporary write
+                    # permission, then restore the original directory mode.
+                    tree_path.chmod(tree_mode | stat.S_IWUSR)
+                    try:
+                        original_rename(tree_path, preserved_tree)
+                    finally:
+                        (preserved_tree if preserved_tree.exists() else tree_path).chmod(tree_mode)
                     original_rename(moved_tree, tree_path)
                     source_root.chmod(source_root_mode)
 
