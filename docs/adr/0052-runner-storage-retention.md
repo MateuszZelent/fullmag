@@ -89,3 +89,40 @@ CMake według dzisiejszego profilu. Archiwalnych plików nie wykonuje.
 To nie kwalifikuje starego runtime ani fizyki. Walidacja zakończenia nowego
 buildu, dopuszczenie runtime i retencja pakietów runtime zachowują aktualne,
 ścisłe wymagania. Kompakcja źródeł nadal ma własną weryfikację kapsuły.
+
+
+## Duże plany i dowody wykonania — rozszerzenie 2026-10-09
+
+Status implementacji tego rozszerzenia: planowane; brak kwalifikacji runtime.
+
+Plan i wynik wykonania nie mogą być zapisane w formacie, którego własny loader
+nie umie odczytać. Dla danych większych niż limit pojedynczego metadata JSON
+stosujemy prywatny manifest oraz niezmienne części. Limit 4 MiB pojedynczego
+pliku i odmowa symlink/reparse pozostają obowiązujące. Nie obcinamy kandydatów,
+fingerprintów, wyników częściowych ani raw planu.
+
+Manifest wiąże plan_id, scope, rodzaj dokumentu (plan/operation), kolejność
+części, dokładne rozmiary UTF-8, counts i SHA-256. Najpierw publikowane są
+niezmienne części, następnie atomowo manifest. Loader przed apply sprawdza
+wszystkie części, ich integralność i tożsamość. Błąd lub niekompletność oznacza
+odmowę przed mutacją, bez automatycznego retry.
+
+Ten sam writer/reader obsługuje RetentionService i wszystkie trzy executory,
+łącznie z rosnącym receipt po częściowym usunięciu. Budżet liczby części,
+całkowitych danych i pojedynczego wpisu jest jawny i sprawdzany przed mutacją;
+przekroczenie wymaga małego trwałego wyniku odmowy, a nie nieczytelnego receiptu.
+Odmowa nie zmienia danych objętych retencją ani nie udaje ukończonego planowania.
+Sam trwały wynik odmowy jest kontrolowanym zapisem metadanych.
+
+Dotychczasowe inline dokumenty do 4 MiB są nadal czytelne. Istniejący oversized
+legacy dokument pozostaje zachowany i jawnie niekwalifikowany; ta zmiana nie
+migruje ani nie usuwa historycznych danych. Wycofanie do poprzedniego programu
+wymaga zatrzymania apply dla nowych manifestów; stary loader nie może ich
+interpretować jako puste plany. Paginacja publicznego API i UI jest oddzielnym
+kontraktem; prywatne części nie są nowymi endpointami.
+
+Weryfikacja obejmuje pełny roundtrip/restart planu większego niż 4 MiB,
+granice rozmiaru UTF-8, brak/tamper/reorder/link części, fail-closed przed
+wywołaniem executora oraz czytelny wynik częściowej awarii bez retry.
+Testy wykonywane wyłącznie w GitHub Actions; SOURCE checks nie kwalifikują
+sprzątania rzeczywistych danych.
