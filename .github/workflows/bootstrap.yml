@@ -605,6 +605,16 @@ jobs:
         uses: actions/setup-python@v7
         with:
           python-version: "3.11"
+      - name: Use canonical temporary storage for retention fixtures
+        shell: python
+        run: |
+          import os
+          from pathlib import Path
+          scratch = Path(os.environ["RUNNER_TEMP"]).resolve() / "fullmag-retention-temp"
+          scratch.mkdir(parents=True, exist_ok=True)
+          with Path(os.environ["GITHUB_ENV"]).open("a", encoding="utf-8") as environment:
+              for name in ("TMPDIR", "TMP", "TEMP"):
+                  environment.write(f"{name}={scratch}\n")
       - name: Run execution and runtime retention regressions
         run: python -B -m unittest discover -s scripts -p 'test_local_runner_retention*.py' -v
       - name: Run runtime package quarantine and restart regressions

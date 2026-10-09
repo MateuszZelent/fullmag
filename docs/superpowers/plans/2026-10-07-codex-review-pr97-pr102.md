@@ -1937,3 +1937,8 @@ Count-only fixture używa rzeczywistego Context Poisson Hdemag/phi0, compensatio
 ### Browser: nowy endpoint i rzeczywista invalidacja retained snapshots
 
 37880819555 terminalFAIL wyłącznie na Resource load failed: unknownGET /analysis/postprocessing/definitions (nowy startupfeature), podczas wszystkie firstleaf route/Ribbon/Inspector assertions PASS. Fixture ma dokładny emptycollectionDTO scene_revision/count/definitions; unknownGET/404/error gates zachowane. Nowy matchedRunB Plot3D case handshakeuje routedWS, wysyła scoped resource.batch_changed dla exactmanifest+branches, wstrzymuje oba realGETrefreshes, klika realnyPlot3D przedrelease i sprawdza ownedmode metadata/vector/wavevector oraz healthycanvas. Existing RunA owner mismatch zachowany. Playwright WebSocketRoute.protocols jest dostępne od1.60 według official API https://playwright.dev/docs/api/class-websocketroute#web-socket-route-protocols; repo używa playwright^1.60. Node syntax/source review/diff PASS, actualbrowser pendingGHA.
+
+
+### Runtime quarantine — Windows fixture setup zamiast słabszego guardu
+
+37882508413 Linuxjob113665133517 SUCCESS; Windowsjob113665133778 FAIL wcześniej w execution/retention suite52errors, przed nowymruntime step. Przyczyna logu: defaultTemporaryDirectory C:/Users/RUNNER~1/...resolve→runneradmin; canonicalstorage słusznie odrzuca alias path. GHA ustawia teraz TMPDIR/TMP/TEMP na resolved RUNNER_TEMP/fullmag-retention-temp dopiero po setupPython. Produkcyjnychpathguards ani testów nie poluzowano. Linuxproof pozostaje aktualny; freshWindows wykonanie wymagane.
