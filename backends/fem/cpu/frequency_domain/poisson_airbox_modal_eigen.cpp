@@ -923,6 +923,12 @@ ResidualMetrics compute_residual_metrics(
 
 bool ensure_slepc_initialized(PoissonAirboxModalEigenResult *result)
 {
+    if (fullmag::fem::runtime::petsc_slepc_process_is_unsafe_locked()) {
+        copy_message(result->error_message, sizeof(result->error_message),
+                     "petsc_runtime_unsafe: PETSc/SLEPc graph is quarantined");
+        return false;
+    }
+
     PetscBool petsc_finalized = PETSC_FALSE;
     if (PetscFinalized(&petsc_finalized) != 0) {
         copy_message(result->error_message, sizeof(result->error_message),
@@ -1512,6 +1518,11 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_slepc(
 #else
     const std::lock_guard<std::mutex> lock(
         fullmag::fem::runtime::petsc_slepc_process_mutex());
+    if (fullmag::fem::runtime::petsc_slepc_process_is_unsafe_locked()) {
+        return fail(problem, out_result, FrequencyDomainStatus::solve_error,
+                    "PETSc/SLEPc graph is quarantined; process restart required",
+                    "petsc_runtime_unsafe");
+    }
     if (!ensure_slepc_initialized(out_result)) {
         return fail(
             problem,

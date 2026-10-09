@@ -429,10 +429,51 @@ void require_finalization_allowed_before_cleanup(const char *reason)
     }
 }
 
+bool quarantine_admission_without_initialization()
+{
+    int mpi_initialized = 0;
+    check(MPI_Initialized(&mpi_initialized) == MPI_SUCCESS && mpi_initialized == 0,
+          "quarantine regression starts before MPI initialization");
+    {
+        const std::lock_guard<std::mutex> lock(runtime::petsc_slepc_process_mutex());
+        runtime::mark_petsc_slepc_process_unsafe_locked();
+        check(!runtime::petsc_slepc_global_finalization_allowed_locked(),
+              "quarantine closes the process finalization gate");
+    }
+    GammaFixture gamma_fixture;
+    FloquetFixture floquet_fixture;
+    const auto gamma = fd::solve_slepc_tiny_gyrotropic_modal_eigen(gamma_fixture.request());
+    const auto floquet = fd::solve_floquet_shared_domain_sparse_modal_spectrum(
+        floquet_fixture.operator_view(), floquet_fixture.request());
+    check(!gamma.ok && gamma.accepted_modes.empty() &&
+              same_text(gamma.status, "solve_error") &&
+              same_text(gamma.unsupported_reason, "petsc_runtime_unsafe"),
+          "actual Gamma entrypoint refuses process quarantine before initialization");
+    check(!floquet.ok && floquet.accepted_modes.empty() &&
+              same_text(floquet.status, "solve_error") &&
+              same_text(floquet.unsupported_reason, "petsc_runtime_unsafe") &&
+              floquet.eps_attempt_count == 0 &&
+              !floquet.ksp_diagnostics_available &&
+              !floquet.eps_converged_reason_available,
+          "actual Floquet entrypoint refuses process quarantine without solver attempts");
+    check(MPI_Initialized(&mpi_initialized) == MPI_SUCCESS && mpi_initialized == 0,
+          "cross-family quarantine admission does not initialize MPI indirectly");
+    // Deliberately do not initialize, finalize or reset this poisoned process.
+    // CTest runs this admission proof separately from the healthy concurrency case.
+    return failures == 0;
+}
+
 } // namespace
 
 int main(int argc, char **argv)
 {
+    if (argc == 2 && std::strcmp(argv[1], "--quarantine-admission") == 0) {
+        if (!quarantine_admission_without_initialization()) {
+            return 1;
+        }
+        std::printf("PASS: PETSc process runtime quarantine admission contract\n");
+        return 0;
+    }
     int provided_thread_level = MPI_THREAD_SINGLE;
     const int mpi_init_error = MPI_Init_thread(
         &argc, &argv, MPI_THREAD_SERIALIZED, &provided_thread_level);

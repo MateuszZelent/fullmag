@@ -124,6 +124,11 @@ void compute_true_residual(
 
 bool ensure_petsc_initialized(CpuSparseDirectSolveResult *result) noexcept
 {
+    if (fullmag::fem::runtime::petsc_slepc_process_is_unsafe_locked()) {
+        copy_error(result, "petsc_runtime_unsafe: PETSc graph is quarantined");
+        return false;
+    }
+
     PetscBool finalized = PETSC_FALSE;
     if (PetscFinalized(&finalized) != 0) {
         copy_error(result, "PETSc finalization state query failed");

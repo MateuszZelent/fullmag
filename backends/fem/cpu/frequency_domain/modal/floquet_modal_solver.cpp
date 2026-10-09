@@ -41,6 +41,8 @@ bool floquet_schur_action_diagnostic_requested() noexcept
     return value != nullptr && std::strcmp(value, "1") == 0;
 }
 
+bool floquet_candidate_operator_diagnostic_requested() noexcept;
+
 void initialize_floquet_schur_action_diagnostic(
     SLEPcTinyGyrotropicModalEigenResult *result) noexcept
 {
@@ -1643,6 +1645,919 @@ PetscErrorCode native_floquet_matmult(Mat matrix, Vec x, Vec y)
     return 0;
 }
 
+using FloquetCandidateOperatorDiagnostic =
+    FloquetShiftedKspFailureProbe::CandidateOperatorDiagnostic;
+
+struct FloquetCandidateOperatorDiagnosticWorkspace {
+    FloquetCandidateOperatorDiagnostic summary{};
+    NativeFloquetMatShellContext isolated_context{};
+    const NativeFloquetMatShellContext *production_context = nullptr;
+    Mat exact_shifted_matrix = nullptr;
+    Mat gyrotropic = nullptr; // Borrowed from the reusable production graph.
+    PetscScalar shift = 0.0;
+    bool exact_shifted_matrix_available = false;
+    bool cleanup_failed = false;
+    PetscErrorCode cleanup_error = PETSC_SUCCESS;
+    Vec q_template_input = nullptr;
+    Vec q_template_output = nullptr;
+    Vec candidate_input = nullptr;
+    Vec secondary_input = nullptr;
+    Vec sum_input = nullptr;
+    Vec production_action = nullptr;
+    Vec isolated_action = nullptr;
+    Vec isolated_repeat_action = nullptr;
+    Vec isolated_secondary_action = nullptr;
+    Vec isolated_sum_action = nullptr;
+    Vec isolated_gyrotropic_action = nullptr;
+    Vec exact_matrix_action = nullptr;
+    Vec difference = nullptr;
+    Vec production_phi_rhs = nullptr;
+    Vec production_phi_solution = nullptr;
+    Vec production_poisson_residual = nullptr;
+};
+
+void begin_candidate_operator_diagnostic_sample(
+    void *raw_workspace,
+    PetscInt iteration,
+    std::uint64_t callback_ordinal) noexcept;
+void capture_candidate_operator_diagnostic_sample(
+    void *raw_workspace,
+    PetscInt iteration,
+    std::uint64_t callback_ordinal,
+    Mat shifted_operator,
+    Vec candidate_solution,
+    Vec shifted_operator_action) noexcept;
+
+void record_candidate_diagnostic_error(
+    FloquetCandidateOperatorDiagnosticWorkspace *workspace,
+    PetscErrorCode error) noexcept
+{
+    if (workspace == nullptr) {
+        return;
+    }
+    ++workspace->summary.measurement_failure_count;
+    workspace->summary.last_error_code = static_cast<int>(
+        error != PETSC_SUCCESS ? error : PETSC_ERR_LIB);
+    workspace->summary.status = "partial";
+    workspace->summary.reason = "one_or_more_measurements_unavailable";
+}
+
+PetscErrorCode destroy_candidate_operator_diagnostic_workspace(
+    void **raw_workspace)
+{
+    if (raw_workspace == nullptr || *raw_workspace == nullptr) {
+        return PETSC_SUCCESS;
+    }
+    auto *workspace =
+        static_cast<FloquetCandidateOperatorDiagnosticWorkspace *>(*raw_workspace);
+    if (workspace->cleanup_failed) {
+        return workspace->cleanup_error != PETSC_SUCCESS
+            ? workspace->cleanup_error
+            : PETSC_ERR_LIB;
+    }
+    const auto fail_cleanup = [workspace](PetscErrorCode error) {
+        workspace->cleanup_failed = true;
+        workspace->cleanup_error = error != PETSC_SUCCESS ? error : PETSC_ERR_LIB;
+        return workspace->cleanup_error;
+    };
+    if (workspace->isolated_context.p_ksp != nullptr) {
+        KSP owned = workspace->isolated_context.p_ksp;
+        const PetscErrorCode error = KSPDestroy(&owned);
+        if (error != PETSC_SUCCESS || owned != nullptr) {
+            return fail_cleanup(error);
+        }
+        workspace->isolated_context.p_ksp = nullptr;
+    }
+    const auto destroy_vec = [&](Vec *slot) {
+        if (slot == nullptr || *slot == nullptr) {
+            return PETSC_SUCCESS;
+        }
+        Vec owned = *slot;
+        const PetscErrorCode error = VecDestroy(&owned);
+        if (error != PETSC_SUCCESS || owned != nullptr) {
+            return fail_cleanup(error);
+        }
+        *slot = nullptr;
+        return PETSC_SUCCESS;
+    };
+    const auto destroy_mat = [&](Mat *slot) {
+        if (slot == nullptr || *slot == nullptr) {
+            return PETSC_SUCCESS;
+        }
+        Mat owned = *slot;
+        const PetscErrorCode error = MatDestroy(&owned);
+        if (error != PETSC_SUCCESS || owned != nullptr) {
+            return fail_cleanup(error);
+        }
+        *slot = nullptr;
+        return PETSC_SUCCESS;
+    };
+    Vec *vectors[] = {
+        &workspace->isolated_context.phi_rhs,
+        &workspace->isolated_context.phi_solution,
+        &workspace->isolated_context.feedback,
+        &workspace->q_template_input,
+        &workspace->q_template_output,
+        &workspace->candidate_input,
+        &workspace->secondary_input,
+        &workspace->sum_input,
+        &workspace->production_action,
+        &workspace->isolated_action,
+        &workspace->isolated_repeat_action,
+        &workspace->isolated_secondary_action,
+        &workspace->isolated_sum_action,
+        &workspace->isolated_gyrotropic_action,
+        &workspace->exact_matrix_action,
+        &workspace->difference,
+        &workspace->production_phi_rhs,
+        &workspace->production_phi_solution,
+        &workspace->production_poisson_residual};
+    for (Vec *vector : vectors) {
+        const PetscErrorCode error = destroy_vec(vector);
+        if (error != PETSC_SUCCESS) {
+            return error;
+        }
+    }
+    PetscErrorCode error = destroy_mat(&workspace->exact_shifted_matrix);
+    if (error != PETSC_SUCCESS) {
+        return error;
+    }
+    error = destroy_mat(&workspace->isolated_context.p);
+    if (error != PETSC_SUCCESS) {
+        return error;
+    }
+    delete workspace;
+    *raw_workspace = nullptr;
+    return PETSC_SUCCESS;
+}
+
+PetscErrorCode initialize_candidate_operator_diagnostic_workspace(
+    FloquetCandidateOperatorDiagnosticWorkspace *workspace,
+    const NativeFloquetMatShellContext *production_context,
+    Mat exact_shifted_matrix,
+    bool exact_shifted_matrix_available,
+    Mat gyrotropic,
+    PetscScalar shift,
+    double preconditioner_normalization_scale)
+{
+    if (workspace == nullptr || production_context == nullptr ||
+        production_context->a_qq == nullptr || production_context->a_qphi == nullptr ||
+        production_context->a_phiq == nullptr || production_context->p == nullptr ||
+        production_context->p_ksp == nullptr || gyrotropic == nullptr ||
+        production_context->q_split_count <= 0 ||
+        production_context->phi_split_count <= 0 ||
+        production_context->q_split_count > 512 ||
+        production_context->phi_split_count > 512 ||
+        (exact_shifted_matrix_available && exact_shifted_matrix == nullptr) ||
+        !std::isfinite(preconditioner_normalization_scale) ||
+        preconditioner_normalization_scale <= 0.0) {
+        return PETSC_ERR_ARG_WRONGSTATE;
+    }
+    workspace->summary.requested = true;
+    workspace->summary.status = "unavailable";
+    workspace->summary.reason = "workspace_setup_incomplete";
+    workspace->summary.preconditioner_normalization_scale =
+        preconditioner_normalization_scale;
+    workspace->isolated_context = *production_context;
+    workspace->production_context = production_context;
+    workspace->isolated_context.p = nullptr;
+    workspace->isolated_context.p_ksp = nullptr;
+    workspace->isolated_context.phi_rhs = nullptr;
+    workspace->isolated_context.phi_solution = nullptr;
+    workspace->isolated_context.feedback = nullptr;
+    workspace->isolated_context.q_physical_real = nullptr;
+    workspace->isolated_context.q_physical_imag = nullptr;
+    workspace->isolated_context.error_message[0] = '\0';
+    workspace->gyrotropic = gyrotropic;
+    workspace->shift = shift;
+
+    PetscErrorCode error = MatDuplicate(
+        production_context->p,
+        MAT_COPY_VALUES,
+        &workspace->isolated_context.p);
+    if (error != PETSC_SUCCESS) {
+        return error;
+    }
+    error = KSPCreate(PETSC_COMM_SELF, &workspace->isolated_context.p_ksp);
+    if (error != PETSC_SUCCESS) {
+        return error;
+    }
+    error = KSPSetOperators(
+        workspace->isolated_context.p_ksp,
+        workspace->isolated_context.p,
+        workspace->isolated_context.p);
+    if (error != PETSC_SUCCESS) {
+        return error;
+    }
+    error = KSPSetType(workspace->isolated_context.p_ksp, KSPPREONLY);
+    if (error != PETSC_SUCCESS) {
+        return error;
+    }
+    PC poisson_pc = nullptr;
+    error = KSPGetPC(workspace->isolated_context.p_ksp, &poisson_pc);
+    if (error != PETSC_SUCCESS || poisson_pc == nullptr) {
+        return error != PETSC_SUCCESS ? error : PETSC_ERR_ARG_WRONGSTATE;
+    }
+    error = PCSetType(poisson_pc, PCLU);
+    if (error != PETSC_SUCCESS) {
+        return error;
+    }
+    error = PCFactorSetShiftType(poisson_pc, MAT_SHIFT_NONE);
+    if (error != PETSC_SUCCESS) {
+        return error;
+    }
+    PetscReal rtol = 0.0;
+    PetscReal atol = 0.0;
+    PetscReal dtol = 0.0;
+    PetscInt max_iterations = 0;
+    error = KSPGetTolerances(
+        production_context->p_ksp,
+        &rtol,
+        &atol,
+        &dtol,
+        &max_iterations);
+    if (error != PETSC_SUCCESS) {
+        return error;
+    }
+    error = KSPSetTolerances(
+        workspace->isolated_context.p_ksp,
+        rtol,
+        atol,
+        dtol,
+        max_iterations);
+    if (error != PETSC_SUCCESS) {
+        return error;
+    }
+    // This changes only how an isolated measurement reports a failed linear
+    // solve. Production keeps its ErrorIfNotConverged policy unchanged.
+    error = KSPSetErrorIfNotConverged(
+        workspace->isolated_context.p_ksp,
+        PETSC_FALSE);
+    if (error != PETSC_SUCCESS) {
+        return error;
+    }
+    error = KSPSetUp(workspace->isolated_context.p_ksp);
+    if (error != PETSC_SUCCESS) {
+        return error;
+    }
+    error = MatCreateVecs(
+        workspace->isolated_context.p,
+        &workspace->isolated_context.phi_solution,
+        &workspace->isolated_context.phi_rhs);
+    if (error != PETSC_SUCCESS) {
+        return error;
+    }
+    error = MatCreateVecs(
+        production_context->a_qq,
+        &workspace->q_template_input,
+        &workspace->q_template_output);
+    if (error != PETSC_SUCCESS) {
+        return error;
+    }
+    error = VecDuplicate(
+        workspace->q_template_output,
+        &workspace->isolated_context.feedback);
+    if (error != PETSC_SUCCESS) {
+        return error;
+    }
+    Vec *q_vectors[] = {
+        &workspace->candidate_input,
+        &workspace->secondary_input,
+        &workspace->sum_input,
+        &workspace->production_action,
+        &workspace->isolated_action,
+        &workspace->isolated_repeat_action,
+        &workspace->isolated_secondary_action,
+        &workspace->isolated_sum_action,
+        &workspace->isolated_gyrotropic_action,
+        &workspace->exact_matrix_action,
+        &workspace->difference};
+    for (Vec *vector : q_vectors) {
+        error = VecDuplicate(workspace->q_template_output, vector);
+        if (error != PETSC_SUCCESS) {
+            return error;
+        }
+    }
+    error = VecDuplicate(
+        workspace->isolated_context.phi_rhs,
+        &workspace->production_phi_rhs);
+    if (error != PETSC_SUCCESS) {
+        return error;
+    }
+    error = VecDuplicate(
+        workspace->isolated_context.phi_solution,
+        &workspace->production_phi_solution);
+    if (error != PETSC_SUCCESS) {
+        return error;
+    }
+    error = VecDuplicate(
+        workspace->isolated_context.phi_rhs,
+        &workspace->production_poisson_residual);
+    if (error != PETSC_SUCCESS) {
+        return error;
+    }
+    if (exact_shifted_matrix_available) {
+        error = MatDuplicate(
+            exact_shifted_matrix,
+            MAT_COPY_VALUES,
+            &workspace->exact_shifted_matrix);
+        if (error == PETSC_SUCCESS) {
+            workspace->exact_shifted_matrix_available = true;
+        } else {
+            // A failure in this optional comparison does not disable the
+            // independent Poisson replay or change the production solve.
+            record_candidate_diagnostic_error(workspace, error);
+        }
+    }
+    error = VecSet(workspace->secondary_input, static_cast<PetscScalar>(0.0));
+    if (error != PETSC_SUCCESS) {
+        return error;
+    }
+    PetscInt secondary_size = 0;
+    error = VecGetSize(workspace->secondary_input, &secondary_size);
+    if (error != PETSC_SUCCESS || secondary_size <= 0) {
+        return error != PETSC_SUCCESS ? error : PETSC_ERR_ARG_SIZ;
+    }
+    PetscScalar *secondary_values = nullptr;
+    error = VecGetArray(workspace->secondary_input, &secondary_values);
+    if (error != PETSC_SUCCESS || secondary_values == nullptr) {
+        return error != PETSC_SUCCESS ? error : PETSC_ERR_LIB;
+    }
+    for (PetscInt index = 0; index < secondary_size; ++index) {
+        const int pattern = static_cast<int>(
+            (static_cast<std::uint64_t>(index) * 19u + 7u) % 31u) - 15;
+        secondary_values[index] = static_cast<PetscScalar>(pattern) / 15.0;
+    }
+    error = VecRestoreArray(workspace->secondary_input, &secondary_values);
+    if (error != PETSC_SUCCESS) {
+        return error;
+    }
+    workspace->summary.workspace_available = true;
+    workspace->summary.status = "ready";
+    workspace->summary.reason = "awaiting_true_probe_candidate";
+    return PETSC_SUCCESS;
+}
+
+bool prepare_candidate_operator_diagnostic(
+    const NativeFloquetMatShellContext *production_context,
+    Mat exact_shifted_matrix,
+    bool exact_shifted_matrix_available,
+    Mat gyrotropic,
+    PetscScalar shift,
+    double preconditioner_normalization_scale,
+    FloquetShiftedKspTrueConvergenceContext *callback_context,
+    FloquetCandidateOperatorDiagnostic *out_summary,
+    PetscErrorCode *out_fatal_error)
+{
+    if (out_summary == nullptr || out_fatal_error == nullptr) {
+        return true;
+    }
+    *out_fatal_error = PETSC_SUCCESS;
+    *out_summary = FloquetCandidateOperatorDiagnostic{};
+    if (!floquet_candidate_operator_diagnostic_requested()) {
+        return false;
+    }
+    out_summary->requested = true;
+    out_summary->status = "unavailable";
+    out_summary->reason = "candidate_diagnostic_not_started";
+    out_summary->preconditioner_normalization_scale =
+        preconditioner_normalization_scale;
+    if (production_context == nullptr || callback_context == nullptr ||
+        production_context->q_split_count <= 0 ||
+        production_context->phi_split_count <= 0) {
+        out_summary->reason = "invalid_candidate_diagnostic_context";
+        out_summary->last_error_code = PETSC_ERR_ARG_WRONGSTATE;
+        return false;
+    }
+    if (production_context->q_split_count > 512 ||
+        production_context->phi_split_count > 512) {
+        out_summary->reason = "real_split_dimension_exceeds_512";
+        return false;
+    }
+    auto *workspace = new (std::nothrow)
+        FloquetCandidateOperatorDiagnosticWorkspace{};
+    if (workspace == nullptr) {
+        out_summary->reason = "candidate_diagnostic_workspace_allocation_failed";
+        out_summary->last_error_code = PETSC_ERR_MEM;
+        return false;
+    }
+    workspace->summary.requested = true;
+    workspace->summary.status = "unavailable";
+    workspace->summary.reason = "workspace_setup_incomplete";
+    workspace->summary.preconditioner_normalization_scale =
+        preconditioner_normalization_scale;
+    void *raw_workspace = workspace;
+    PetscErrorCode setup_error = PETSC_SUCCESS;
+    const auto transaction =
+        detail::run_floquet_candidate_diagnostic_setup_transaction(
+            [&]() {
+                return PetscPushErrorHandler(PetscReturnErrorHandler, nullptr);
+            },
+            [&]() {
+                setup_error = initialize_candidate_operator_diagnostic_workspace(
+                    workspace,
+                    production_context,
+                    exact_shifted_matrix,
+                    exact_shifted_matrix_available,
+                    gyrotropic,
+                    shift,
+                    preconditioner_normalization_scale);
+                return setup_error;
+            },
+            [&]() {
+                workspace->summary.workspace_available = false;
+                workspace->summary.status = "unavailable";
+                workspace->summary.reason =
+                    "candidate_diagnostic_workspace_setup_failed";
+                workspace->summary.last_error_code =
+                    static_cast<int>(setup_error);
+                *out_summary = workspace->summary;
+                return destroy_candidate_operator_diagnostic_workspace(
+                    &raw_workspace);
+            },
+            [&]() { return PetscPopErrorHandler(); });
+
+    if (transaction.push_error != PETSC_SUCCESS) {
+        workspace->summary.reason = "petsc_return_error_handler_push_failed";
+        workspace->summary.last_error_code =
+            static_cast<int>(transaction.push_error);
+        *out_summary = workspace->summary;
+        delete workspace;
+        *out_fatal_error = transaction.fatal_error;
+        return true;
+    }
+    if (transaction.cleanup_error != PETSC_SUCCESS) {
+        workspace->summary.reason =
+            "candidate_diagnostic_workspace_cleanup_failed";
+        workspace->summary.last_error_code =
+            static_cast<int>(transaction.cleanup_error);
+        *out_summary = workspace->summary;
+        callback_context->candidate_operator_diagnostic_context = raw_workspace;
+        callback_context->candidate_operator_diagnostic_destroy =
+            destroy_candidate_operator_diagnostic_workspace;
+        *out_fatal_error = transaction.fatal_error;
+        return true;
+    }
+    if (transaction.pop_error != PETSC_SUCCESS) {
+        out_summary->status = "unavailable";
+        out_summary->reason = "petsc_return_error_handler_restore_failed";
+        out_summary->last_error_code = static_cast<int>(transaction.pop_error);
+        if (raw_workspace != nullptr) {
+            // A failed handler restoration leaves the PETSc workspace unsafe
+            // for the ordinary callback cleanup path to retry.
+            workspace->cleanup_failed = true;
+            workspace->cleanup_error = transaction.pop_error;
+            workspace->summary.status = "unavailable";
+            workspace->summary.reason =
+                "petsc_return_error_handler_restore_failed";
+            workspace->summary.last_error_code =
+                static_cast<int>(transaction.pop_error);
+            *out_summary = workspace->summary;
+            callback_context->candidate_operator_diagnostic_context = raw_workspace;
+            callback_context->candidate_operator_diagnostic_destroy =
+                destroy_candidate_operator_diagnostic_workspace;
+        }
+        *out_fatal_error = transaction.fatal_error;
+        return true;
+    }
+    if (transaction.setup_error != PETSC_SUCCESS) {
+        return false;
+    }
+    callback_context->candidate_operator_diagnostic_context = workspace;
+    callback_context->candidate_operator_diagnostic_begin =
+        begin_candidate_operator_diagnostic_sample;
+    callback_context->candidate_operator_diagnostic_capture =
+        capture_candidate_operator_diagnostic_sample;
+    callback_context->candidate_operator_diagnostic_destroy =
+        destroy_candidate_operator_diagnostic_workspace;
+    *out_summary = workspace->summary;
+    return false;
+}
+
+PetscErrorCode floquet_candidate_relative_vector_defect(
+    Vec lhs,
+    Vec rhs,
+    Vec difference,
+    double *out)
+{
+    if (lhs == nullptr || rhs == nullptr || difference == nullptr || out == nullptr) {
+        return PETSC_ERR_ARG_NULL;
+    }
+    PetscErrorCode error = VecCopy(lhs, difference);
+    if (error != PETSC_SUCCESS) {
+        return error;
+    }
+    error = VecAXPY(difference, static_cast<PetscScalar>(-1.0), rhs);
+    if (error != PETSC_SUCCESS) {
+        return error;
+    }
+    PetscReal lhs_norm = 0.0;
+    PetscReal rhs_norm = 0.0;
+    PetscReal difference_norm = 0.0;
+    error = VecNorm(lhs, NORM_2, &lhs_norm);
+    if (error != PETSC_SUCCESS) {
+        return error;
+    }
+    error = VecNorm(rhs, NORM_2, &rhs_norm);
+    if (error != PETSC_SUCCESS) {
+        return error;
+    }
+    error = VecNorm(difference, NORM_2, &difference_norm);
+    if (error != PETSC_SUCCESS) {
+        return error;
+    }
+    const double denominator = std::max(
+        {static_cast<double>(lhs_norm),
+         static_cast<double>(rhs_norm),
+         std::numeric_limits<double>::min()});
+    *out = static_cast<double>(difference_norm) / denominator;
+    return std::isfinite(*out) ? PETSC_SUCCESS : PETSC_ERR_FP;
+}
+
+PetscErrorCode apply_isolated_candidate_shifted_action(
+    FloquetCandidateOperatorDiagnosticWorkspace *workspace,
+    Vec input,
+    Vec output)
+{
+    if (workspace == nullptr || input == nullptr || output == nullptr ||
+        workspace->isolated_context.p_ksp == nullptr) {
+        return PETSC_ERR_ARG_NULL;
+    }
+    PetscInt size = 0;
+    PetscErrorCode error = VecGetSize(input, &size);
+    if (error != PETSC_SUCCESS || size != workspace->isolated_context.q_split_count) {
+        return error != PETSC_SUCCESS ? error : PETSC_ERR_ARG_SIZ;
+    }
+    error = VecGetSize(workspace->isolated_context.phi_rhs, &size);
+    if (error != PETSC_SUCCESS || size != workspace->isolated_context.phi_split_count) {
+        return error != PETSC_SUCCESS ? error : PETSC_ERR_ARG_SIZ;
+    }
+    error = MatMult(
+        workspace->isolated_context.a_phiq,
+        input,
+        workspace->isolated_context.phi_rhs);
+    if (error != PETSC_SUCCESS) {
+        return error;
+    }
+    error = VecScale(
+        workspace->isolated_context.phi_rhs,
+        static_cast<PetscScalar>(-1.0));
+    if (error != PETSC_SUCCESS) {
+        return error;
+    }
+    error = KSPSolve(
+        workspace->isolated_context.p_ksp,
+        workspace->isolated_context.phi_rhs,
+        workspace->isolated_context.phi_solution);
+    if (error != PETSC_SUCCESS) {
+        return error;
+    }
+    KSPConvergedReason poisson_reason = KSP_CONVERGED_ITERATING;
+    error = KSPGetConvergedReason(
+        workspace->isolated_context.p_ksp,
+        &poisson_reason);
+    if (error != PETSC_SUCCESS) {
+        return error;
+    }
+    if (poisson_reason <= KSP_CONVERGED_ITERATING) {
+        return PETSC_ERR_NOT_CONVERGED;
+    }
+    error = MatMult(
+        workspace->isolated_context.a_qq,
+        input,
+        output);
+    if (error != PETSC_SUCCESS) {
+        return error;
+    }
+    error = MatMult(
+        workspace->isolated_context.a_qphi,
+        workspace->isolated_context.phi_solution,
+        workspace->isolated_context.feedback);
+    if (error != PETSC_SUCCESS) {
+        return error;
+    }
+    error = VecAXPY(
+        output,
+        static_cast<PetscScalar>(1.0),
+        workspace->isolated_context.feedback);
+    if (error != PETSC_SUCCESS) {
+        return error;
+    }
+    error = rotate_native_floquet_vector_in_place(
+        &workspace->isolated_context,
+        output);
+    if (error != PETSC_SUCCESS) {
+        return error;
+    }
+    if (PetscAbsScalar(workspace->shift) != 0.0) {
+        error = MatMult(workspace->gyrotropic, input,
+                        workspace->isolated_gyrotropic_action);
+        if (error != PETSC_SUCCESS) {
+            return error;
+        }
+        error = VecAXPY(
+            output,
+            -workspace->shift,
+            workspace->isolated_gyrotropic_action);
+        if (error != PETSC_SUCCESS) {
+            return error;
+        }
+    }
+    return PETSC_SUCCESS;
+}
+
+void begin_candidate_operator_diagnostic_sample(
+    void *raw_workspace,
+    PetscInt iteration,
+    std::uint64_t callback_ordinal) noexcept
+{
+    auto *workspace =
+        static_cast<FloquetCandidateOperatorDiagnosticWorkspace *>(raw_workspace);
+    if (workspace == nullptr) {
+        return;
+    }
+    const double preconditioner_scale =
+        workspace->summary.preconditioner_normalization_scale;
+    const std::uint64_t setup_failure_count =
+        workspace->summary.measurement_failure_count;
+    const int setup_error_code = workspace->summary.last_error_code;
+    workspace->summary = FloquetCandidateOperatorDiagnostic{};
+    workspace->summary.requested = true;
+    workspace->summary.workspace_available = true;
+    workspace->summary.measurement_failure_count = setup_failure_count;
+    workspace->summary.last_error_code = setup_error_code;
+    workspace->summary.status = "unavailable";
+    workspace->summary.reason = "candidate_action_not_observed";
+    workspace->summary.callback_ordinal = callback_ordinal;
+    workspace->summary.iteration = static_cast<std::int64_t>(iteration);
+    workspace->summary.preconditioner_normalization_scale = preconditioner_scale;
+}
+
+void capture_candidate_operator_diagnostic_sample(
+    void *raw_workspace,
+    PetscInt iteration,
+    std::uint64_t callback_ordinal,
+    Mat,
+    Vec candidate_solution,
+    Vec shifted_operator_action) noexcept
+{
+    auto *workspace =
+        static_cast<FloquetCandidateOperatorDiagnosticWorkspace *>(raw_workspace);
+    if (workspace == nullptr || !workspace->summary.workspace_available) {
+        return;
+    }
+    workspace->summary.callback_ordinal = callback_ordinal;
+    workspace->summary.iteration = static_cast<std::int64_t>(iteration);
+    workspace->summary.sample_available = false;
+    workspace->summary.status = "unavailable";
+    workspace->summary.reason = "production_candidate_capture_failed";
+
+    // Copy the exact production phi inputs/results first. No production
+    // Poisson solve is repeated; the later isolated replay owns its own P/KSP.
+    PetscErrorCode error = VecCopy(
+        workspace->production_context->phi_rhs,
+        workspace->production_phi_rhs);
+    if (error != PETSC_SUCCESS) {
+        record_candidate_diagnostic_error(workspace, error);
+        return;
+    }
+    error = VecCopy(
+        workspace->production_context->phi_solution,
+        workspace->production_phi_solution);
+    if (error != PETSC_SUCCESS) {
+        record_candidate_diagnostic_error(workspace, error);
+        return;
+    }
+    error = VecCopy(shifted_operator_action, workspace->production_action);
+    if (error != PETSC_SUCCESS) {
+        record_candidate_diagnostic_error(workspace, error);
+        return;
+    }
+    workspace->summary.sample_available = true;
+    workspace->summary.status = "partial";
+    workspace->summary.reason = "measurements_pending";
+
+    PetscReal phi_rhs_norm = 0.0;
+    error = VecNorm(workspace->production_phi_rhs, NORM_2, &phi_rhs_norm);
+    if (error == PETSC_SUCCESS &&
+        std::isfinite(static_cast<double>(phi_rhs_norm)) && phi_rhs_norm >= 0.0) {
+        workspace->summary.production_phi_rhs_norm_available = true;
+        workspace->summary.production_phi_rhs_norm = static_cast<double>(phi_rhs_norm);
+    } else {
+        record_candidate_diagnostic_error(workspace,
+            error != PETSC_SUCCESS ? error : PETSC_ERR_FP);
+    }
+    PetscReal phi_norm = 0.0;
+    error = VecNorm(workspace->production_phi_solution, NORM_2, &phi_norm);
+    if (error == PETSC_SUCCESS &&
+        std::isfinite(static_cast<double>(phi_norm)) && phi_norm >= 0.0) {
+        workspace->summary.production_phi_norm_available = true;
+        workspace->summary.production_phi_norm = static_cast<double>(phi_norm);
+    } else {
+        record_candidate_diagnostic_error(workspace,
+            error != PETSC_SUCCESS ? error : PETSC_ERR_FP);
+    }
+    error = MatMult(
+        workspace->production_context->p,
+        workspace->production_phi_solution,
+        workspace->production_poisson_residual);
+    if (error == PETSC_SUCCESS) {
+        error = VecAXPY(
+            workspace->production_poisson_residual,
+            static_cast<PetscScalar>(-1.0),
+            workspace->production_phi_rhs);
+    }
+    if (error == PETSC_SUCCESS) {
+        PetscReal residual_norm = 0.0;
+        error = VecNorm(
+            workspace->production_poisson_residual,
+            NORM_2,
+            &residual_norm);
+        if (error == PETSC_SUCCESS &&
+            std::isfinite(static_cast<double>(residual_norm)) &&
+            residual_norm >= 0.0) {
+            workspace->summary.production_poisson_residual_available = true;
+            workspace->summary.production_poisson_residual_norm =
+                static_cast<double>(residual_norm);
+            if (workspace->summary.production_phi_rhs_norm_available) {
+                PetscReal relative_residual =
+                    std::numeric_limits<PetscReal>::quiet_NaN();
+                const PetscErrorCode relative_error =
+                    detail::calculate_floquet_relative_residual(
+                        residual_norm,
+                        static_cast<PetscReal>(
+                            workspace->summary.production_phi_rhs_norm),
+                        &relative_residual);
+                workspace->summary.production_poisson_relative_residual_available =
+                    relative_error == PETSC_SUCCESS;
+                if (workspace->summary.production_poisson_relative_residual_available) {
+                    workspace->summary.production_poisson_relative_residual =
+                        static_cast<double>(relative_residual);
+                } else {
+                    record_candidate_diagnostic_error(workspace, relative_error);
+                }
+            }
+        } else if (error == PETSC_SUCCESS) {
+            error = PETSC_ERR_FP;
+        }
+    }
+    if (error != PETSC_SUCCESS) {
+        record_candidate_diagnostic_error(workspace,
+            error != PETSC_SUCCESS ? error : PETSC_ERR_FP);
+    }
+
+    const PetscErrorCode candidate_copy_error = VecCopy(
+        candidate_solution,
+        workspace->candidate_input);
+    const bool candidate_copy_available =
+        candidate_copy_error == PETSC_SUCCESS;
+    if (!candidate_copy_available) {
+        record_candidate_diagnostic_error(workspace, candidate_copy_error);
+    } else {
+        PetscErrorCode replay_error = apply_isolated_candidate_shifted_action(
+            workspace,
+            workspace->candidate_input,
+            workspace->isolated_action);
+        if (replay_error == PETSC_SUCCESS) {
+            replay_error = floquet_candidate_relative_vector_defect(
+                workspace->production_action,
+                workspace->isolated_action,
+                workspace->difference,
+                &workspace->summary.production_vs_isolated_replay_relative_defect);
+            workspace->summary.production_vs_isolated_replay_available =
+                replay_error == PETSC_SUCCESS;
+        }
+        if (replay_error != PETSC_SUCCESS) {
+            record_candidate_diagnostic_error(workspace, replay_error);
+        } else {
+            replay_error = apply_isolated_candidate_shifted_action(
+                workspace,
+                workspace->candidate_input,
+                workspace->isolated_repeat_action);
+            if (replay_error == PETSC_SUCCESS) {
+                replay_error = floquet_candidate_relative_vector_defect(
+                    workspace->isolated_action,
+                    workspace->isolated_repeat_action,
+                    workspace->difference,
+                    &workspace->summary.isolated_repeatability_relative_defect);
+                workspace->summary.isolated_repeatability_available =
+                    replay_error == PETSC_SUCCESS;
+            }
+            if (replay_error != PETSC_SUCCESS) {
+                record_candidate_diagnostic_error(workspace, replay_error);
+            }
+        }
+        if (replay_error == PETSC_SUCCESS) {
+            replay_error = VecCopy(workspace->candidate_input, workspace->sum_input);
+            if (replay_error == PETSC_SUCCESS) {
+                replay_error = VecAXPY(
+                    workspace->sum_input,
+                    static_cast<PetscScalar>(1.0),
+                    workspace->secondary_input);
+            }
+            if (replay_error == PETSC_SUCCESS) {
+                replay_error = apply_isolated_candidate_shifted_action(
+                    workspace,
+                    workspace->secondary_input,
+                    workspace->isolated_secondary_action);
+            }
+            if (replay_error == PETSC_SUCCESS) {
+                replay_error = apply_isolated_candidate_shifted_action(
+                    workspace,
+                    workspace->sum_input,
+                    workspace->isolated_sum_action);
+            }
+            if (replay_error == PETSC_SUCCESS) {
+                replay_error = VecCopy(
+                    workspace->isolated_sum_action,
+                    workspace->difference);
+            }
+            if (replay_error == PETSC_SUCCESS) {
+                replay_error = VecAXPY(
+                    workspace->difference,
+                    static_cast<PetscScalar>(-1.0),
+                    workspace->isolated_action);
+            }
+            if (replay_error == PETSC_SUCCESS) {
+                replay_error = VecAXPY(
+                    workspace->difference,
+                    static_cast<PetscScalar>(-1.0),
+                    workspace->isolated_secondary_action);
+            }
+            PetscReal additivity_error = 0.0;
+            PetscReal sum_norm = 0.0;
+            PetscReal first_norm = 0.0;
+            PetscReal second_norm = 0.0;
+            if (replay_error == PETSC_SUCCESS) {
+                replay_error = VecNorm(workspace->difference, NORM_2,
+                                       &additivity_error);
+            }
+            if (replay_error == PETSC_SUCCESS) {
+                replay_error = VecNorm(workspace->isolated_sum_action, NORM_2,
+                                       &sum_norm);
+            }
+            if (replay_error == PETSC_SUCCESS) {
+                replay_error = VecNorm(workspace->isolated_action, NORM_2,
+                                       &first_norm);
+            }
+            if (replay_error == PETSC_SUCCESS) {
+                replay_error = VecNorm(workspace->isolated_secondary_action,
+                                       NORM_2, &second_norm);
+            }
+            if (replay_error == PETSC_SUCCESS) {
+                const double denominator = std::max(
+                    {static_cast<double>(sum_norm),
+                     static_cast<double>(first_norm) +
+                         static_cast<double>(second_norm),
+                     std::numeric_limits<double>::min()});
+                workspace->summary.isolated_additivity_relative_defect =
+                    static_cast<double>(additivity_error) / denominator;
+                workspace->summary.isolated_additivity_available =
+                    std::isfinite(
+                        workspace->summary.isolated_additivity_relative_defect);
+                if (!workspace->summary.isolated_additivity_available) {
+                    replay_error = PETSC_ERR_FP;
+                }
+            }
+            if (replay_error != PETSC_SUCCESS) {
+                record_candidate_diagnostic_error(workspace, replay_error);
+            }
+        }
+    }
+
+    if (workspace->exact_shifted_matrix_available && candidate_copy_available) {
+        error = MatMult(
+            workspace->exact_shifted_matrix,
+            workspace->candidate_input,
+            workspace->exact_matrix_action);
+        if (error == PETSC_SUCCESS) {
+            error = VecScale(
+                workspace->exact_matrix_action,
+                static_cast<PetscScalar>(
+                    1.0 / workspace->summary.preconditioner_normalization_scale));
+        }
+        if (error == PETSC_SUCCESS) {
+            error = floquet_candidate_relative_vector_defect(
+                workspace->production_action,
+                workspace->exact_matrix_action,
+                workspace->difference,
+                &workspace->summary.exact_shifted_matrix_relative_defect);
+        }
+        workspace->summary.exact_shifted_matrix_comparison_available =
+            error == PETSC_SUCCESS;
+        if (error != PETSC_SUCCESS) {
+            record_candidate_diagnostic_error(workspace, error);
+        }
+    }
+    if (workspace->summary.measurement_failure_count == 0u) {
+        workspace->summary.status = "measured";
+        workspace->summary.reason = "bounded_candidate_operator_observation";
+    } else {
+        workspace->summary.status = "partial";
+        workspace->summary.reason = "one_or_more_measurements_unavailable";
+    }
+}
+
 bool run_floquet_schur_action_diagnostic(
     NativeFloquetMatShellContext *context,
     double operator_normalization_scale,
@@ -2528,6 +3443,12 @@ bool floquet_dense_oracle_requested() noexcept
     return value != nullptr && std::strcmp(value, "1") == 0;
 }
 
+bool floquet_candidate_operator_diagnostic_requested() noexcept
+{
+    return floquet_dense_oracle_requested() ||
+        floquet_schur_action_diagnostic_requested();
+}
+
 bool copy_sparse_matrix_to_dense(
     Mat sparse,
     PetscInt dimension,
@@ -3005,6 +3926,14 @@ bool run_floquet_dense_original_oracle(
     out_diagnostics->eps_converged_count = static_cast<int>(converged_count);
     out_diagnostics->eps_converged_reason_available = true;
     out_diagnostics->eps_converged_reason = static_cast<int>(converged_reason);
+    out_diagnostics->raw_spectrum_count_available = true;
+    out_diagnostics->raw_spectrum_total_count = static_cast<int>(converged_count);
+    out_diagnostics->raw_spectrum_entry_count = static_cast<int>(std::min<PetscInt>(
+        converged_count,
+        static_cast<PetscInt>(FloquetDenseOracleDiagnostics::kRawSpectrumCapacity)));
+    out_diagnostics->raw_spectrum_truncated =
+        converged_count > static_cast<PetscInt>(
+            FloquetDenseOracleDiagnostics::kRawSpectrumCapacity);
     if (converged_reason <= EPS_CONVERGED_ITERATING) {
         return fail("dense_oracle_eps_not_converged");
     }
@@ -3038,6 +3967,31 @@ bool run_floquet_dense_original_oracle(
         }
         const double omega = static_cast<double>(PetscRealPart(kr));
         const double imaginary = static_cast<double>(PetscRealPart(ki));
+        if (index < static_cast<PetscInt>(
+                FloquetDenseOracleDiagnostics::kRawSpectrumCapacity)) {
+            auto &raw = out_diagnostics->raw_spectrum[
+                static_cast<std::size_t>(index)];
+            raw.eps_index = static_cast<int>(index);
+            raw.rotated_real_rad_s = omega;
+            raw.rotated_imaginary_rad_s = imaginary;
+            raw.raw_lambda_real_per_s =
+                -static_cast<double>(context->phase_sign) * imaginary;
+            raw.raw_lambda_imag_rad_s =
+                static_cast<double>(context->phase_sign) * omega;
+            raw.available = std::isfinite(omega) && std::isfinite(imaginary);
+            if (raw.available) {
+                const auto shift_distance =
+                    detail::floquet_complex_spectral_shift_distance(
+                        omega,
+                        imaginary,
+                        target_omega);
+                raw.shift_distance_available = shift_distance.available;
+                if (raw.shift_distance_available) {
+                    raw.shift_distance_rad_s = shift_distance.rad_s;
+                    raw.shift_distance_hz = shift_distance.hz;
+                }
+            }
+        }
         if (!std::isfinite(omega) || !std::isfinite(imaginary) ||
             std::abs(imaginary) > eigenvalue_imaginary_limit *
                 std::max(1.0, std::abs(omega))) {
@@ -3586,6 +4540,12 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
     const std::lock_guard<std::mutex> lock(
         fullmag::fem::runtime::petsc_slepc_process_mutex());
 
+    if (fullmag::fem::runtime::petsc_slepc_process_is_unsafe_locked()) {
+        result.status = "solve_error";
+        result.unsupported_reason = "petsc_runtime_unsafe";
+        return result;
+    }
+
     PetscBool petsc_finalized = PETSC_FALSE;
     if (PetscFinalized(&petsc_finalized) != 0) {
         result.status = "solve_error";
@@ -3611,24 +4571,7 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
 
     const bool borrowed_reuse_state = reuse_context != nullptr;
     ReusableFloquetWindowStateOwner local_state_owner;
-    const auto close_local_state_before_return = [&]() noexcept {
-        if (!local_state_owner) {
-            return;
-        }
-        if (destroy_opaque_floquet_window_context_locked(local_state_owner.get())) {
-            (void)local_state_owner.release();
-            return;
-        }
-        const bool prior_hard_failure = result.slepc_graph_quarantined ||
-            (result.status != nullptr &&
-             (std::strcmp(result.status, "solve_error") == 0 ||
-              std::strcmp(result.status, "validation_error") == 0));
-        result.ok = false;
-        if (!prior_hard_failure) {
-            result.status = "solve_error";
-            result.unsupported_reason = "floquet_context_cleanup_failed";
-        }
-        result.slepc_graph_quarantined = true;
+    const auto clear_accepted_payload = [&]() noexcept {
         result.accepted_modes.clear();
         result.accepted_mode_count = 0;
         result.converged_eigenpair_count = 0;
@@ -3655,6 +4598,27 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
         result.worst_candidate_q_projection_ratio = unavailable;
         result.min_candidate_frequency_hz = unavailable;
         result.max_candidate_frequency_hz = unavailable;
+    };
+    const auto close_local_state_before_return = [&]() noexcept {
+        if (!local_state_owner) {
+            return;
+        }
+        if (destroy_opaque_floquet_window_context_locked(local_state_owner.get())) {
+            (void)local_state_owner.release();
+            return;
+        }
+        const bool prior_hard_failure = result.slepc_graph_quarantined ||
+            (result.status != nullptr &&
+             (std::strcmp(result.status, "solve_error") == 0 ||
+              std::strcmp(result.status, "validation_error") == 0 ||
+              std::strcmp(result.status, "cancelled") == 0));
+        result.ok = false;
+        if (!prior_hard_failure) {
+            result.status = "solve_error";
+            result.unsupported_reason = "floquet_context_cleanup_failed";
+        }
+        result.slepc_graph_quarantined = true;
+        clear_accepted_payload();
     };
     ReusableFloquetWindowState *state = nullptr;
     if (!borrowed_reuse_state) {
@@ -3734,6 +4698,27 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
     std::unique_ptr<detail::FloquetShiftedKspTrueConvergenceContext>
         shifted_ksp_true_convergence_context{};
     bool shifted_ksp_true_convergence_test_registration_attempted = false;
+    const auto quarantine_cleanup_failure = [&](const char *reason) noexcept {
+        const bool primary_failure = result.status != nullptr &&
+            (std::strcmp(result.status, "solve_error") == 0 ||
+             std::strcmp(result.status, "validation_error") == 0 ||
+             std::strcmp(result.status, "cancelled") == 0);
+        result.ok = false;
+        if (!primary_failure) {
+            result.status = "solve_error";
+            result.unsupported_reason = reason;
+        }
+        result.slepc_graph_quarantined = true;
+        state->invalidated = true;
+        state->eps_lifetime_unsafe = true;
+        fullmag::fem::runtime::mark_petsc_slepc_process_unsafe_locked();
+        clear_accepted_payload();
+        if (shifted_ksp_true_convergence_context != nullptr) {
+            (void)shifted_ksp_true_convergence_context.release();
+        }
+        (void)cancellation_context_owner.release();
+        (void)local_state_owner.release();
+    };
     auto destroy_all = [&]() noexcept {
         bool cleanup_succeeded = eps_cleanup_is_safe;
         PetscErrorCode eps_destroy_error = 0;
@@ -3746,17 +4731,25 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
         // reachable state and fail closed instead of freeing callback owners
         // or allowing a later EPSCreate to overwrite this handle.
         if (eps != nullptr) {
-            state->invalidated = true;
-            state->eps_lifetime_unsafe = true;
-            fullmag::fem::runtime::mark_petsc_slepc_process_unsafe_locked();
-            if (shifted_ksp_true_convergence_context != nullptr &&
-                shifted_ksp_true_convergence_test_registration_attempted) {
-                (void)shifted_ksp_true_convergence_context.release();
-            }
-            (void)cancellation_context_owner.release();
-            result.ok = false;
-            result.status = "solve_error";
-            result.unsupported_reason = "floquet_eps_cleanup_failed";
+            const bool diagnostic_cleanup_failed =
+                shifted_ksp_true_convergence_context != nullptr &&
+                shifted_ksp_true_convergence_context->
+                    candidate_operator_diagnostic_cleanup_failed;
+            quarantine_cleanup_failure(
+                diagnostic_cleanup_failed
+                    ? "floquet_diagnostic_cleanup_failed"
+                    : "floquet_eps_cleanup_failed");
+            return false;
+        }
+        if (eps_destroy_error != PETSC_SUCCESS) {
+            const bool diagnostic_cleanup_failed =
+                shifted_ksp_true_convergence_context != nullptr &&
+                shifted_ksp_true_convergence_context->
+                    candidate_operator_diagnostic_cleanup_failed;
+            quarantine_cleanup_failure(
+                diagnostic_cleanup_failed
+                    ? "floquet_diagnostic_cleanup_failed"
+                    : "floquet_eps_cleanup_failed");
             return false;
         }
         if (shifted_ksp_true_convergence_context != nullptr) {
@@ -3767,6 +4760,16 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
                 const PetscErrorCode clear_error =
                     detail::clear_floquet_shifted_ksp_true_convergence_context(
                         shifted_ksp_true_convergence_context.get());
+                if (clear_error != PETSC_SUCCESS) {
+                    const bool diagnostic_cleanup_failed =
+                        shifted_ksp_true_convergence_context->
+                            candidate_operator_diagnostic_cleanup_failed;
+                    quarantine_cleanup_failure(
+                        diagnostic_cleanup_failed
+                            ? "floquet_diagnostic_cleanup_failed"
+                            : "floquet_eps_cleanup_failed");
+                    return false;
+                }
                 cleanup_succeeded = cleanup_succeeded && clear_error == 0;
             }
         }
@@ -4114,6 +5117,18 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
         result.shifted_ksp_failure_probe = {};
         result.shifted_ksp_failure_probe.eps_attempt_number =
             result.eps_attempt_count;
+        auto &candidate_diagnostic =
+            result.shifted_ksp_failure_probe.candidate_operator_diagnostic;
+        candidate_diagnostic.requested =
+            floquet_candidate_operator_diagnostic_requested();
+        candidate_diagnostic.status = candidate_diagnostic.requested
+            ? "unavailable"
+            : "disabled";
+        candidate_diagnostic.reason = candidate_diagnostic.requested
+            ? "candidate_diagnostic_not_reached"
+            : "";
+        candidate_diagnostic.preconditioner_normalization_scale =
+            std::numeric_limits<double>::quiet_NaN();
         eps_cleanup_is_safe = true;
         context.error_message[0] = '\0';
         exact_schur_preconditioner_materialized = false;
@@ -4421,17 +5436,33 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
     }
     detail::FloquetShiftedKspTrueConvergenceContext *raw_true_convergence_context =
         nullptr;
-    if (detail::create_floquet_shifted_ksp_true_convergence_context(
-            shifted_ksp, &raw_true_convergence_context) != 0 ||
-        raw_true_convergence_context == nullptr) {
+    const PetscErrorCode true_convergence_setup_error =
+        detail::create_floquet_shifted_ksp_true_convergence_context(
+            shifted_ksp,
+            &raw_true_convergence_context);
+    if (raw_true_convergence_context != nullptr) {
+        shifted_ksp_true_convergence_context.reset(raw_true_convergence_context);
+    }
+    if (true_convergence_setup_error != PETSC_SUCCESS ||
+        shifted_ksp_true_convergence_context == nullptr) {
         result.status = "solve_error";
         result.unsupported_reason =
             "floquet_shifted_true_convergence_setup_failed";
+        if (shifted_ksp_true_convergence_context != nullptr &&
+            shifted_ksp_true_convergence_context->cleanup_failed) {
+            const bool diagnostic_cleanup_failed =
+                shifted_ksp_true_convergence_context->
+                    candidate_operator_diagnostic_cleanup_failed;
+            quarantine_cleanup_failure(
+                diagnostic_cleanup_failed
+                    ? "floquet_diagnostic_cleanup_failed"
+                    : "floquet_eps_cleanup_failed");
+            return result;
+        }
         destroy_all();
         close_local_state_before_return();
         return result;
     }
-    shifted_ksp_true_convergence_context.reset(raw_true_convergence_context);
     if (shifted_ksp_true_convergence_context->rtol != shifted_actual_rtol ||
         shifted_ksp_true_convergence_context->atol != shifted_actual_atol ||
         shifted_ksp_true_convergence_context->max_iterations !=
@@ -4441,6 +5472,23 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
             "floquet_shifted_ksp_tolerances_changed_during_setup";
         destroy_all();
         close_local_state_before_return();
+        return result;
+    }
+    PetscErrorCode candidate_diagnostic_setup_error = PETSC_SUCCESS;
+    if (prepare_candidate_operator_diagnostic(
+            &context,
+            shifted_preconditioner,
+            exact_schur_preconditioner_materialized,
+            gyrotropic,
+            static_cast<PetscScalar>(target_shift),
+            result.preconditioner_normalization_scale,
+            shifted_ksp_true_convergence_context.get(),
+            &candidate_diagnostic,
+            &candidate_diagnostic_setup_error)) {
+        // A handler-stack restoration or diagnostic-owner teardown failure
+        // makes further PETSc calls unsafe. Keep the entire graph alive.
+        (void)candidate_diagnostic_setup_error;
+        quarantine_cleanup_failure("floquet_diagnostic_cleanup_failed");
         return result;
     }
     shifted_ksp_true_convergence_test_registration_attempted = true;
@@ -4498,6 +5546,8 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
     result.ksp_last_true_relative_residual =
         std::numeric_limits<double>::quiet_NaN();
     const PetscErrorCode eps_solve_error = EPSSolve(eps);
+    result.eps_solve_error_available = true;
+    result.eps_solve_error_code = static_cast<int>(eps_solve_error);
     // A KSP error can unwind through Krylov--Schur while SLEPc owns a
     // DSGetMat() view.  SLEPc 3.24 then cannot safely destroy that EPS because
     // DSReset() attempts to destroy the still-borrowed dense parent.  Keep the
@@ -4509,6 +5559,12 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
     if (shifted_ksp_true_convergence_context != nullptr) {
         const auto &source = *shifted_ksp_true_convergence_context;
         auto &probe = result.shifted_ksp_failure_probe;
+        if (source.candidate_operator_diagnostic_context != nullptr) {
+            const auto *candidate_workspace =
+                static_cast<const FloquetCandidateOperatorDiagnosticWorkspace *>(
+                    source.candidate_operator_diagnostic_context);
+            probe.candidate_operator_diagnostic = candidate_workspace->summary;
+        }
         probe.callback_count = source.callback_count;
         probe.callback_observation_available =
             source.callback_observation_available;
@@ -5212,9 +6268,12 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
                     cleanup_succeeded,
                     eps != nullptr)) {
                 result.ok = false;
-                result.status = "solve_error";
-                result.unsupported_reason =
-                    "floquet_eps_refill_cleanup_failed";
+                if (result.status == nullptr ||
+                    std::strcmp(result.status, "solve_error") != 0) {
+                    result.status = "solve_error";
+                    result.unsupported_reason =
+                        "floquet_eps_refill_cleanup_failed";
+                }
                 close_local_state_before_return();
                 return result;
             }

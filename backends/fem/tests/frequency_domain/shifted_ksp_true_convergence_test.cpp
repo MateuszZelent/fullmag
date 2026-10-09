@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <limits>
 
 
 namespace detail = fullmag::fem::frequency_domain::detail;
@@ -25,6 +26,116 @@ bool check_petsc(PetscErrorCode error, const char *message)
     std::fprintf(stderr, "FAIL: %s (PETSc error %d)\n",
                  message, static_cast<int>(error));
     return false;
+}
+
+struct CandidateDiagnosticCleanupProbe {
+    int destroy_calls = 0;
+};
+
+PetscErrorCode fail_candidate_diagnostic_cleanup(void **raw_context)
+{
+    if (raw_context == nullptr || *raw_context == nullptr) {
+        return PETSC_ERR_ARG_NULL;
+    }
+    auto *probe = static_cast<CandidateDiagnosticCleanupProbe *>(*raw_context);
+    ++probe->destroy_calls;
+    return PETSC_ERR_LIB;
+}
+
+bool candidate_diagnostic_cleanup_failure_is_not_retried()
+{
+    detail::FloquetShiftedKspTrueConvergenceContext context{};
+    CandidateDiagnosticCleanupProbe probe{};
+    context.candidate_operator_diagnostic_context = &probe;
+    context.candidate_operator_diagnostic_destroy =
+        fail_candidate_diagnostic_cleanup;
+
+    const PetscErrorCode first_error =
+        detail::clear_floquet_shifted_ksp_true_convergence_context(&context);
+    const bool first_preserved =
+        first_error == PETSC_ERR_LIB &&
+        context.candidate_operator_diagnostic_cleanup_failed &&
+        context.cleanup_failed && context.cleanup_error == PETSC_ERR_LIB &&
+        context.candidate_operator_diagnostic_context == &probe &&
+        probe.destroy_calls == 1;
+    const PetscErrorCode repeated_error =
+        detail::clear_floquet_shifted_ksp_true_convergence_context(&context);
+    const bool retry_blocked =
+        repeated_error == PETSC_ERR_LIB && probe.destroy_calls == 1 &&
+        context.candidate_operator_diagnostic_context == &probe;
+    return check(first_preserved,
+                 "candidate diagnostic cleanup failure retains its opaque owner") &&
+        check(retry_blocked,
+              "failed candidate diagnostic cleanup is not retried or dereferenced");
+}
+
+bool candidate_diagnostic_setup_transaction_fails_closed()
+{
+    int push_calls = 0;
+    int setup_calls = 0;
+    int cleanup_calls = 0;
+    int pop_calls = 0;
+    const auto push_failure = detail::run_floquet_candidate_diagnostic_setup_transaction(
+        [&]() { ++push_calls; return PETSC_ERR_LIB; },
+        [&]() { ++setup_calls; return PETSC_SUCCESS; },
+        [&]() { ++cleanup_calls; return PETSC_SUCCESS; },
+        [&]() { ++pop_calls; return PETSC_SUCCESS; });
+    const bool push_failed_closed =
+        push_failure.fatal_error == PETSC_ERR_LIB &&
+        push_calls == 1 && setup_calls == 0 && cleanup_calls == 0 && pop_calls == 0;
+
+    push_calls = setup_calls = cleanup_calls = pop_calls = 0;
+    const auto cleanup_and_pop_failure =
+        detail::run_floquet_candidate_diagnostic_setup_transaction(
+            [&]() { ++push_calls; return PETSC_SUCCESS; },
+            [&]() { ++setup_calls; return PETSC_ERR_ARG_WRONGSTATE; },
+            [&]() { ++cleanup_calls; return PETSC_ERR_LIB; },
+            [&]() { ++pop_calls; return PETSC_ERR_FP; });
+    const bool first_cleanup_error_preserved =
+        cleanup_and_pop_failure.setup_error == PETSC_ERR_ARG_WRONGSTATE &&
+        cleanup_and_pop_failure.cleanup_error == PETSC_ERR_LIB &&
+        cleanup_and_pop_failure.pop_error == PETSC_ERR_FP &&
+        cleanup_and_pop_failure.fatal_error == PETSC_ERR_LIB &&
+        push_calls == 1 && setup_calls == 1 && cleanup_calls == 1 && pop_calls == 1;
+
+    push_calls = setup_calls = cleanup_calls = pop_calls = 0;
+    const auto pop_only_failure =
+        detail::run_floquet_candidate_diagnostic_setup_transaction(
+            [&]() { ++push_calls; return PETSC_SUCCESS; },
+            [&]() { ++setup_calls; return PETSC_SUCCESS; },
+            [&]() { ++cleanup_calls; return PETSC_SUCCESS; },
+            [&]() { ++pop_calls; return PETSC_ERR_FP; });
+    const bool pop_failure_is_fatal =
+        pop_only_failure.fatal_error == PETSC_ERR_FP &&
+        push_calls == 1 && setup_calls == 1 && cleanup_calls == 0 && pop_calls == 1;
+
+    return check(push_failed_closed,
+                 "failed diagnostic error-handler push does not run setup or continue") &&
+        check(first_cleanup_error_preserved,
+              "diagnostic cleanup error stays primary when error-handler pop also fails") &&
+        check(pop_failure_is_fatal,
+              "diagnostic error-handler pop failure is terminal after successful setup");
+}
+
+bool candidate_poisson_relative_residual_rejects_overflow()
+{
+    PetscReal relative = std::numeric_limits<PetscReal>::quiet_NaN();
+    const PetscErrorCode finite_error =
+        detail::calculate_floquet_relative_residual(0.5, 1.0, &relative);
+    const bool finite_operands_are_reported =
+        finite_error == PETSC_SUCCESS && relative == 0.5;
+
+    relative = std::numeric_limits<PetscReal>::quiet_NaN();
+    const PetscErrorCode overflow_error = detail::calculate_floquet_relative_residual(
+        std::numeric_limits<PetscReal>::max(),
+        std::numeric_limits<PetscReal>::min(),
+        &relative);
+    const bool overflow_is_unavailable =
+        overflow_error == PETSC_ERR_FP && std::isnan(static_cast<double>(relative));
+    return check(finite_operands_are_reported,
+                 "finite Poisson residual operands produce their relative ratio") &&
+        check(overflow_is_unavailable,
+              "finite Poisson residual operands whose ratio overflows remain unavailable");
 }
 
 
@@ -703,7 +814,10 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    bool ok = exercise_recursive_gap_gate();
+    bool ok = candidate_diagnostic_cleanup_failure_is_not_retried();
+    ok = candidate_diagnostic_setup_transaction_fails_closed() && ok;
+    ok = candidate_poisson_relative_residual_rejects_overflow() && ok;
+    ok = exercise_recursive_gap_gate() && ok;
     ok = run_ksp_case(KSPGMRES, false, 30, true) && ok;
     ok = run_ksp_case(KSPGMRES, false, 30, false, false, true, true) && ok;
     ok = run_ksp_case(KSPGMRES, false, 30, true, true) && ok;

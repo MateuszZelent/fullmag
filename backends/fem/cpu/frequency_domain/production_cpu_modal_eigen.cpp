@@ -121,6 +121,90 @@ std::string floquet_shifted_ksp_configuration_json_field(
         std::to_string(result.shifted_ksp_norm_type_before_eps) + "}";
 }
 
+std::string candidate_operator_diagnostic_json(
+    const FloquetShiftedKspFailureProbe::CandidateOperatorDiagnostic &diagnostic)
+{
+    if (!diagnostic.requested) {
+        return "null";
+    }
+    return std::string("{\"schema_version\":\"floquet_candidate_operator_diagnostic.v1\",") +
+        "\"requested\":true,"
+        "\"measurement_scope\":\"true_probe_callback_candidate_pre_residual_mutation\"," +
+        "\"status\":\"" +
+        escape_json_string(diagnostic.status != nullptr ? diagnostic.status : "unknown") +
+        "\",\"reason\":\"" +
+        escape_json_string(diagnostic.reason != nullptr ? diagnostic.reason : "") +
+        "\",\"workspace_available\":" +
+        std::string(diagnostic.workspace_available ? "true" : "false") +
+        ",\"sample_available\":" +
+        std::string(diagnostic.sample_available ? "true" : "false") +
+        ",\"callback_ordinal\":" +
+        (diagnostic.callback_ordinal > 0
+            ? std::to_string(diagnostic.callback_ordinal)
+            : std::string("null")) +
+        ",\"iteration\":" +
+        (diagnostic.iteration >= 0
+            ? std::to_string(diagnostic.iteration)
+            : std::string("null")) +
+        ",\"production_phi_rhs_l2_norm_available\":" +
+        std::string(diagnostic.production_phi_rhs_norm_available ? "true" : "false") +
+        ",\"production_phi_rhs_l2_norm\":" +
+        (diagnostic.production_phi_rhs_norm_available
+            ? format_double(diagnostic.production_phi_rhs_norm)
+            : std::string("null")) +
+        ",\"production_phi_l2_norm_available\":" +
+        std::string(diagnostic.production_phi_norm_available ? "true" : "false") +
+        ",\"production_phi_l2_norm\":" +
+        (diagnostic.production_phi_norm_available
+            ? format_double(diagnostic.production_phi_norm)
+            : std::string("null")) +
+        ",\"production_poisson_residual_l2_norm_available\":" +
+        std::string(diagnostic.production_poisson_residual_available ? "true" : "false") +
+        ",\"production_poisson_residual_l2_norm\":" +
+        (diagnostic.production_poisson_residual_available
+            ? format_double(diagnostic.production_poisson_residual_norm)
+            : std::string("null")) +
+        ",\"production_poisson_relative_residual_available\":" +
+        std::string(diagnostic.production_poisson_relative_residual_available
+            ? "true" : "false") +
+        ",\"production_poisson_relative_residual\":" +
+        (diagnostic.production_poisson_relative_residual_available
+            ? format_double(diagnostic.production_poisson_relative_residual)
+            : std::string("null")) +
+        ",\"production_vs_isolated_replay_available\":" +
+        std::string(diagnostic.production_vs_isolated_replay_available
+            ? "true" : "false") +
+        ",\"production_vs_isolated_replay_relative_defect\":" +
+        (diagnostic.production_vs_isolated_replay_available
+            ? format_double(diagnostic.production_vs_isolated_replay_relative_defect)
+            : std::string("null")) +
+        ",\"isolated_repeatability_available\":" +
+        std::string(diagnostic.isolated_repeatability_available ? "true" : "false") +
+        ",\"isolated_repeatability_relative_defect\":" +
+        (diagnostic.isolated_repeatability_available
+            ? format_double(diagnostic.isolated_repeatability_relative_defect)
+            : std::string("null")) +
+        ",\"isolated_additivity_available\":" +
+        std::string(diagnostic.isolated_additivity_available ? "true" : "false") +
+        ",\"isolated_additivity_relative_defect\":" +
+        (diagnostic.isolated_additivity_available
+            ? format_double(diagnostic.isolated_additivity_relative_defect)
+            : std::string("null")) +
+        ",\"exact_shifted_matrix_comparison_available\":" +
+        std::string(diagnostic.exact_shifted_matrix_comparison_available
+            ? "true" : "false") +
+        ",\"exact_shifted_matrix_relative_defect\":" +
+        (diagnostic.exact_shifted_matrix_comparison_available
+            ? format_double(diagnostic.exact_shifted_matrix_relative_defect)
+            : std::string("null")) +
+        ",\"preconditioner_normalization_scale\":" +
+        format_double(diagnostic.preconditioner_normalization_scale) +
+        ",\"measurement_failure_count\":" +
+        std::to_string(diagnostic.measurement_failure_count) +
+        ",\"last_error_code\":" +
+        std::to_string(diagnostic.last_error_code) + "}";
+}
+
 // Serialize cached measurements only: a hard EPSSolve error can invalidate
 // the PETSc object graph, so publication must never query solver handles.
 std::string floquet_shifted_ksp_diagnostics_json_fields(
@@ -208,6 +292,12 @@ std::string floquet_shifted_ksp_diagnostics_json_fields(
         ",\"eps_converged_reason\":" +
         (result.eps_converged_reason_available
             ? std::to_string(result.eps_converged_reason)
+            : std::string("null")) +
+        ",\"eps_solve_error_available\":" +
+        std::string(result.eps_solve_error_available ? "true" : "false") +
+        ",\"eps_solve_error_code\":" +
+        (result.eps_solve_error_available
+            ? std::to_string(result.eps_solve_error_code)
             : std::string("null")) +
         ",\"eps_dimensions_available\":" +
         std::string(result.eps_dimensions_available ? "true" : "false") +
@@ -407,7 +497,10 @@ std::string floquet_shifted_ksp_diagnostics_json_fields(
             ",\"true_residual_to_threshold_ratio\":" +
             (probe.last_true_tolerance_ratio_available
                 ? format_double(probe.last_true_tolerance_ratio)
-                : std::string("null")) + "}}";
+                : std::string("null")) +
+            ",\"candidate_operator_diagnostic\":" +
+            candidate_operator_diagnostic_json(
+                probe.candidate_operator_diagnostic) + "}}";
     }
     // Sparse nearest success already publishes these configuration fields.
     // Window and nearest failure need them here; emit each key exactly once.
@@ -465,7 +558,7 @@ std::string floquet_dense_oracle_json_field(
     if (!oracle.requested) {
         return "\"floquet_dense_oracle\":null";
     }
-    return std::string("\"floquet_dense_oracle\":{") +
+    std::string json = std::string("\"floquet_dense_oracle\":{") +
         "\"schema_version\":\"floquet_dense_original_schur_oracle.v1\"," +
         "\"status\":\"" + std::string(oracle.status != nullptr ? oracle.status : "unknown") +
         "\",\"reason\":\"" + std::string(oracle.reason != nullptr ? oracle.reason : "") +
@@ -519,7 +612,67 @@ std::string floquet_dense_oracle_json_field(
         ",\"potential_residual\":" +
         format_double(oracle.potential_residual) +
         ",\"q_projection_ratio\":" +
-        format_double(oracle.q_projection_ratio) + "}";
+        format_double(oracle.q_projection_ratio);
+    json += ",\"raw_spectrum\":{\"count_available\":" +
+        std::string(oracle.raw_spectrum_count_available ? "true" : "false") +
+        ",\"total_count\":" +
+        (oracle.raw_spectrum_count_available
+            ? std::to_string(oracle.raw_spectrum_total_count)
+            : std::string("null")) +
+        ",\"entry_count\":" +
+        (oracle.raw_spectrum_count_available
+            ? std::to_string(oracle.raw_spectrum_entry_count)
+            : std::string("null")) +
+        ",\"truncated\":" +
+        (oracle.raw_spectrum_count_available
+            ? std::string(oracle.raw_spectrum_truncated ? "true" : "false")
+            : std::string("null")) +
+        ",\"entries\":[";
+    const int entry_count = std::max(
+        0,
+        std::min(
+            oracle.raw_spectrum_entry_count,
+            static_cast<int>(FloquetDenseOracleDiagnostics::kRawSpectrumCapacity)));
+    for (int index = 0; index < entry_count; ++index) {
+        if (index != 0) {
+            json += ",";
+        }
+        const auto &entry = oracle.raw_spectrum[static_cast<std::size_t>(index)];
+        json += "{\"available\":" +
+            std::string(entry.available ? "true" : "false") +
+            ",\"eps_index\":" +
+            (entry.eps_index >= 0
+                ? std::to_string(entry.eps_index)
+                : std::string("null")) +
+            ",\"rotated_eps_real_rad_s\":" +
+            (entry.available
+                ? format_double(entry.rotated_real_rad_s)
+                : std::string("null")) +
+            ",\"rotated_eps_imaginary_rad_s\":" +
+            (entry.available
+                ? format_double(entry.rotated_imaginary_rad_s)
+                : std::string("null")) +
+            ",\"raw_lambda_real_per_s\":" +
+            (entry.available
+                ? format_double(entry.raw_lambda_real_per_s)
+                : std::string("null")) +
+            ",\"raw_lambda_imag_rad_per_s\":" +
+            (entry.available
+                ? format_double(entry.raw_lambda_imag_rad_s)
+                : std::string("null")) +
+            ",\"shift_distance_available\":" +
+            std::string(entry.shift_distance_available ? "true" : "false") +
+            ",\"shift_distance_rad_s\":" +
+            (entry.shift_distance_available
+                ? format_double(entry.shift_distance_rad_s)
+                : std::string("null")) +
+            ",\"shift_distance_hz\":" +
+            (entry.shift_distance_available
+                ? format_double(entry.shift_distance_hz)
+                : std::string("null")) + "}";
+    }
+    json += "]}}";
+    return json;
 }
 
 std::string floquet_schur_action_diagnostic_json_field(

@@ -172,6 +172,18 @@
       "path": "backends/fem/core/petsc_slepc_runtime.cpp",
       "symbol": "petsc_slepc_process_mutex",
       "responsibility": "Define one nonrecursive operation mutex shared by CPU and GPU PETSc/SLEPc families, preserving the unsafe retained-graph latch for shutdown."
+    },
+    {
+      "id": "source-floquet-candidate-diagnostic-workspace",
+      "path": "backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp",
+      "symbol": "prepare_candidate_operator_diagnostic",
+      "responsibility": "Create the bounded opt-in isolated Poisson workspace without changing the production solver or candidate admission; source implementation and managed proof pending."
+    },
+    {
+      "id": "source-floquet-dense-raw-spectrum",
+      "path": "backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp",
+      "symbol": "run_floquet_dense_original_oracle",
+      "responsibility": "Record bounded raw and rotated eigenvalues and shift distances before window filtering, with explicit count and truncation; not candidate identity or physics qualification."
     }
   ],
   "public_api": {

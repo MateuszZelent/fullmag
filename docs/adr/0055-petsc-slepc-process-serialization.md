@@ -37,3 +37,23 @@ Wymagane są rzeczywiste równoczesne entrypointy Gamma/Floquet i porównanie wy
 ## Wycofanie
 
 Powrót do niezależnych mutexów przywraca potwierdzony race, więc nie jest bezpiecznym fallbackiem. Jeśli CI wykaże brakującą granicę lub deadlock, poprawiamy zakres lease i wstrzymujemy kwalifikację, zachowując dane i historię. Rozwiązanie nie wymaga migracji zapisanych wyników ani kontraktów użytkownika.
+
+
+## Admission po kwarantannie — korekta 2026-10-09
+
+Globalny latch odczytujemy pod wspólnym ownerem przed pierwszym zapytaniem
+PETSc, również przed PetscFinalized. Kwarantanna blokuje nowe solve/init,
+nie tylko końcową finalizację i teardown. Odmowa CPU ma przyczynę
+petsc_runtime_unsafe i nie zawiera zaakceptowanych modów; sparse-direct
+zachowuje swój istniejący kanał błędu, a istniejący kod GPU pozostaje zgodny.
+PA-E3 borrower korzysta z outer ownera bez ponownego locka.
+
+Testy, które świadomie zatruwają proces, mają osobne procesy CLI/CTest.
+Nie resetujemy latcha w celu uzyskania kolejnego zielonego testu. Dodatkowa
+regresja cross-family Gamma/Floquet zatrzaskuje rzeczywisty scalar ownera
+przed inicjalizacją i wymaga odmowy bez pośredniej inicjalizacji MPI.
+
+GHA37959833852 na bee2ef37b potwierdziło bounded CPU concurrency i real KSP,
+ale pełny profil miał 2/4. Admission i izolowane terminalne cases po tej
+korekcie wymagają nowego hosted dowodu. Wynik CPU nie kwalifikuje GPU,
+PA-E3, destrukcji z fault injection ani innych trybów MPI aplikacji.

@@ -2399,3 +2399,49 @@ Nie dodano nowego testu porównującego jedynie tekst implementacji panelu; mocn
 
 - GHA37960500632 / Rust113921831312 wykonało starszą suite11 bez błędów, następnie nowe23 testy zgłosiły trzy niepowodzenia receipt: runtimev1/v2 oraz partialcontracts. Helper joba deklarował source_digest, ale helper receipt pomijał to pole. Produkcyjny identity guard prawidłowo odrzucił te fixture'y; nie jest osłabiany.
 - Helper receipt teraz zapisuje dokładny digest joba. Nowa regresja mismatch digest wymaga native-build=pending bez exit_code i receipt-verification=pending mimo exit0 w odrzuconym receipt; zapisany terminalny status koordynatora pozostaje osobnym źródłem wyniku. SOURCE review root, AST i diff-check PASS; hostedexecution po korekcie wymagane. Fixture Air nadal nie wykonany w tym jobie, bo wcześniejszy krok zatrzymał job.
+
+
+### Review opt-in diagnostyki i dalsze bramki (2026-10-09)
+
+- Pełny źródłowy diff diagnostyki przeszedł niezależne review znaków Pphi-rhs,
+  undo normalization, izolacji PREONLY/LU, pairing callbacków, cap512 i cache-only
+  publication. Required pozostają: push handler failure musi być fatal/quarantine;
+  dual cleanup/pop failure zachowuje pierwszą awarię; względny residual wymaga
+  finite guard po dzieleniu; odległość surowego complex eigenvalue od shiftu
+  musi uwzględnić część urojoną. Worker implementuje korekty i regresje. Nie ma
+  SOURCE approval całego fragmentu ani hosted dowodu tej diagnostyki.
+- GHA37961001253/head8b7f88223: krok obu suite osi czasu SUCCESS; Rust113923508618
+  nadal aktywny i przechodzi dalsze kontrakty. Końcowy log wymagany przed zmianą
+  disposition. Python113923508554 terminal FAIL: multi-object sizing trafia do
+  fallback component_aware po degenerate tet4 na współpłaszczyznowych punktach;
+  direct layered ROI ma zero krawędzi w cylindrze. Dwa przypadki pozostają
+  nierozwiązane; nie obniżono progów siatki ani nie usunięto komórek/testów.
+- Uwaga4206911501: pełny prywatny chunked persistence dla service i trzech
+  executorów w implementacji. ADR0052 i plan2026-10-09-retention-persistence
+  committed b0808977d. Wymagane dane i partial outcomes nie są obcinane;
+  nieograniczony opcjonalny tekst wyjątku ma jawny budżet, omission flag,
+  dokładny bytecount i hash oraz zachowany primary code/type. Before-mutation
+  capacity wynika z actual candidate templates, nie arbitralnego count1000.
+  Ta uwaga pozostaje valid_unfixed do źródeł i odpowiedniej weryfikacji.
+
+
+### Native diagnostyka i quarantine admission — SOURCE PASS (2026-10-09)
+
+- Domknięto Required P1/P2: handler push failure jest fatal przed EPS, pierwszy
+  cleanup error ma pierwszeństwo nad pop; ratio overflow nie publikuje dostępnego
+  null; odległość widma jest pełną complex distance. Produkcyjne helpers mają
+  regresje, bez zmiany residual gate, tolerancji, okna ani fallbacku.
+- Wykryto source błąd admission: global quarantine blokowała teardown/finalizację,
+  ale nowe CPU solve nadal pytały PETSc. Wszystkie sześć rodzin mają scalar-first
+  odmowę przed pierwszym query/init pod tym samym ownerem. PA-E3 borrower nie
+  relockuje; sparse-direct zachowuje istniejący DTO/kanał błędu, GPU istniejący kod.
+- Default Floquet test kończy near-pole terminalnym case; forced-inner jest
+  oddzielnym CLI/CTest procesem i zapisuje przyczynowy trace. EPSSolve return code
+  jest cache-only, bez dodatkowego zapytania. Ścisła asercja unavailable pozostaje.
+- Nowa regresja cross-family quarantine używa rzeczywistych Gamma/Floquet fixtures
+  przed MPI initialization; wymaga typed refusal, empty modes, zero attempts
+  i braku pośredniej MPI initialization. Latch nie jest resetowany.
+- Niezależny SOURCE review całego native fragmentu i trzech nowych hooków PASS.
+  Profil managed Floquet wymaga teraz sześciu osobnych testów/markerów. AST profilu,
+  naukowy source-map validator i diff-check PASS; lokalnego wykonania nie było.
+  Hosted execution nowych cases oraz produkcyjne provenance pozostają pending.

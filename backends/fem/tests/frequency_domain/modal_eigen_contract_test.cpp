@@ -63,6 +63,72 @@ void check(bool condition, const char *message)
     }
 }
 
+int set_floquet_diagnostic_environment(const char *name, const char *value)
+{
+#if defined(_WIN32)
+    return _putenv_s(name, value);
+#else
+    return setenv(name, value, 1);
+#endif
+}
+
+int clear_floquet_diagnostic_environment(const char *name)
+{
+#if defined(_WIN32)
+    return _putenv_s(name, "");
+#else
+    return unsetenv(name);
+#endif
+}
+
+struct SavedEnvironmentValue {
+    const char *name = nullptr;
+    bool was_present = false;
+    std::string previous_value;
+
+    explicit SavedEnvironmentValue(const char *environment_name)
+        : name(environment_name)
+    {
+        const char *current = std::getenv(name);
+        was_present = current != nullptr;
+        if (was_present) {
+            previous_value = current;
+        }
+    }
+
+    void restore() const
+    {
+        if (was_present) {
+            (void)set_floquet_diagnostic_environment(
+                name,
+                previous_value.c_str());
+        } else {
+            (void)clear_floquet_diagnostic_environment(name);
+        }
+    }
+};
+
+struct ScopedFloquetDiagnosticEnvironment {
+    SavedEnvironmentValue dense_oracle{"FULLMAG_FLOQUET_DENSE_ORACLE"};
+    SavedEnvironmentValue schur_action{
+        "FULLMAG_FLOQUET_SCHUR_ACTION_DIAGNOSTIC"};
+    bool ready = false;
+
+    ScopedFloquetDiagnosticEnvironment()
+    {
+        ready = set_floquet_diagnostic_environment(
+                    dense_oracle.name, "1") == 0 &&
+            set_floquet_diagnostic_environment(
+                    schur_action.name, "1") == 0;
+    }
+
+    ~ScopedFloquetDiagnosticEnvironment()
+    {
+        dense_oracle.restore();
+        schur_action.restore();
+    }
+};
+
 void modal_shared_domain_provider_terminal_status_fails_closed()
 {
     constexpr std::array<fd::FrequencyDomainStatus, 6> provider_failures = {
@@ -6745,14 +6811,44 @@ void modal_nonzero_k_floquet_shared_domain_nearest_reports_shifted_ksp_diagnosti
 
     FullmagFemModalEigenRequest hard_ksp_nearest_request = request;
     hard_ksp_nearest_request.max_linear_iterations = 1;
-    FullmagFemFrequencyDomainResult hard_ksp_nearest_result =
-        fullmag_fem_modal_eigen_solve(&hard_ksp_nearest_request);
+    FullmagFemFrequencyDomainResult hard_ksp_nearest_result{};
+    {
+        const ScopedFloquetDiagnosticEnvironment diagnostic_environment{};
+        check(diagnostic_environment.ready,
+              "enable and restore the existing opt-in Floquet diagnostics for the hard-KSP serializer fixture");
+        hard_ksp_nearest_result =
+            fullmag_fem_modal_eigen_solve(&hard_ksp_nearest_request);
+    }
+    const bool candidate_diagnostic_serialized =
+        contains(hard_ksp_nearest_result.diagnostics_json,
+                 "\"candidate_operator_diagnostic\":{\"schema_version\":\"floquet_candidate_operator_diagnostic.v1\"") &&
+        contains(hard_ksp_nearest_result.diagnostics_json,
+                 "\"requested\":true");
+    if (!candidate_diagnostic_serialized) {
+        std::fprintf(
+            stderr,
+            "INFO: hard-KSP candidate diagnostic missing; full diagnostics=%s\n"
+            "INFO: hard-KSP result JSON=%s\n",
+            hard_ksp_nearest_result.diagnostics_json != nullptr
+                ? hard_ksp_nearest_result.diagnostics_json
+                : "",
+            hard_ksp_nearest_result.result_json != nullptr
+                ? hard_ksp_nearest_result.result_json
+                : "");
+    }
     check(hard_ksp_nearest_result.status == FULLMAG_FEM_FD_SOLVE_ERROR &&
               contains(hard_ksp_nearest_result.diagnostics_json,
                        "\"unsupported_reason\":\"floquet_slepc_solve_failed\"") &&
               contains(hard_ksp_nearest_result.diagnostics_json,
                        "\"shifted_ksp_failure_probe\":{\"schema_version\":\"shifted_ksp_failure_probe.v1\""),
           "nearest hard KSP failure serializes its failure-only scalar probe");
+    check(candidate_diagnostic_serialized,
+          "nearest hard KSP failure serializes its bounded opt-in candidate diagnostics without clipping the native result evidence");
+    check(contains(hard_ksp_nearest_result.diagnostics_json,
+                   "\"raw_spectrum\":{\"count_available\":") &&
+              contains(hard_ksp_nearest_result.diagnostics_json,
+                       "\"rotated_eps_real_rad_s\":"),
+          "hard-KSP provenance carries the bounded unfiltered dense EPS raw spectrum when the existing dense oracle is requested");
     check(extract_json_number(
               hard_ksp_nearest_result.diagnostics_json,
               "\"eps_attempt_number\":",

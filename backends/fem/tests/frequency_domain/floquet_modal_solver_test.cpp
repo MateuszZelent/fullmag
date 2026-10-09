@@ -1,5 +1,6 @@
 #include "cpu/frequency_domain/modal/floquet_modal_solver.hpp"
 #include "cpu/frequency_domain/operators/poisson_airbox_shared_domain.hpp"
+#include "core/petsc_slepc_runtime.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -9,6 +10,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <limits>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -91,6 +93,33 @@ void cleanup_and_cancellation_gates_fail_closed()
           "an EPS stopping-callback cancellation remains observed after solve");
 }
 
+void floquet_complex_spectral_shift_distance_keeps_imaginary_offset()
+{
+    const auto imaginary_offset =
+        fd::detail::floquet_complex_spectral_shift_distance(1.0, 1000.0, 1.0);
+    const double expected_hz = 1000.0 / (2.0 * std::acos(-1.0));
+    check(imaginary_offset.available &&
+              imaginary_offset.rad_s == 1000.0 &&
+              std::isfinite(imaginary_offset.hz) &&
+              std::abs(imaginary_offset.hz - expected_hz) <=
+                  std::numeric_limits<double>::epsilon() * expected_hz,
+          "complex shift distance includes the rotated imaginary component and finite Hz conversion");
+
+    const auto zero_offset =
+        fd::detail::floquet_complex_spectral_shift_distance(1.0, 0.0, 1.0);
+    check(zero_offset.available && zero_offset.rad_s == 0.0 &&
+              zero_offset.hz == 0.0,
+          "zero complex spectral shift distance remains available in both units");
+
+    const auto overflow = fd::detail::floquet_complex_spectral_shift_distance(
+        std::numeric_limits<double>::max(),
+        0.0,
+        -std::numeric_limits<double>::max());
+    check(!overflow.available && std::isnan(overflow.rad_s) &&
+              std::isnan(overflow.hz),
+          "finite raw eigenvalue operands whose distance overflows remain unavailable");
+}
+
 int set_action_diagnostic_environment(const char *value)
 {
 #if defined(_WIN32)
@@ -108,6 +137,75 @@ int clear_action_diagnostic_environment()
     return unsetenv("FULLMAG_FLOQUET_SCHUR_ACTION_DIAGNOSTIC");
 #endif
 }
+
+int set_floquet_diagnostic_environment_value(
+    const char *name,
+    const char *value)
+{
+#if defined(_WIN32)
+    return _putenv_s(name, value);
+#else
+    return setenv(name, value, 1);
+#endif
+}
+
+int clear_floquet_diagnostic_environment_value(const char *name)
+{
+#if defined(_WIN32)
+    return _putenv_s(name, "");
+#else
+    return unsetenv(name);
+#endif
+}
+
+struct SavedEnvironmentValue {
+    const char *name = nullptr;
+    bool was_present = false;
+    std::string previous_value;
+
+    explicit SavedEnvironmentValue(const char *environment_name)
+        : name(environment_name)
+    {
+        const char *current = std::getenv(name);
+        was_present = current != nullptr;
+        if (was_present) {
+            previous_value = current;
+        }
+    }
+
+    void restore() const
+    {
+        if (was_present) {
+            (void)set_floquet_diagnostic_environment_value(
+                name,
+                previous_value.c_str());
+        } else {
+            (void)clear_floquet_diagnostic_environment_value(name);
+        }
+    }
+};
+
+struct ScopedFloquetDiagnosticEnvironment {
+    SavedEnvironmentValue dense_oracle{
+        "FULLMAG_FLOQUET_DENSE_ORACLE"};
+    SavedEnvironmentValue schur_action{
+        "FULLMAG_FLOQUET_SCHUR_ACTION_DIAGNOSTIC"};
+    bool ready = false;
+
+    ScopedFloquetDiagnosticEnvironment()
+    {
+        ready = set_floquet_diagnostic_environment_value(
+                    dense_oracle.name, "1") == 0 &&
+            set_floquet_diagnostic_environment_value(
+                    schur_action.name, "1") == 0;
+    }
+
+    ~ScopedFloquetDiagnosticEnvironment()
+    {
+        dense_oracle.restore();
+        schur_action.restore();
+    }
+};
 
 fd::ModalEigenRequest valid_request()
 {
@@ -702,6 +800,14 @@ void executes_native_sparse_matshell_above_dense_bound(bool force_inner_failure 
     spectral.max_outer_iterations = 160;
     spectral.max_linear_iterations = force_inner_failure ? 1 : 96;
 
+    bool process_unsafe_before_solve = false;
+    {
+        const std::lock_guard<std::mutex> lock(
+            fullmag::fem::runtime::petsc_slepc_process_mutex());
+        process_unsafe_before_solve =
+            fullmag::fem::runtime::petsc_slepc_process_is_unsafe_locked();
+    }
+
     const char *previous_action_diagnostic =
         std::getenv("FULLMAG_FLOQUET_SCHUR_ACTION_DIAGNOSTIC");
     const bool had_previous_action_diagnostic = previous_action_diagnostic != nullptr;
@@ -731,6 +837,41 @@ void executes_native_sparse_matshell_above_dense_bound(bool force_inner_failure 
               result.floquet_schur_action_diagnostic.action_count <= 9,
           "action-only diagnostic is bounded, pre-EPS, and does not materialize a dense operator");
     if (force_inner_failure) {
+        const auto &failure_probe = result.shifted_ksp_failure_probe;
+        std::fprintf(
+            stderr,
+            "FORCED_INNER_FAILURE_DIAGNOSTIC status=%s failure_reason=%s "
+            "process_unsafe_before_solve=%d "
+            "eps_api_error_available=%d eps_api_error=%d "
+            "eps_stop_reason_available=%d eps_stop_reason=%d "
+            "ksp_diagnostics_available=%d ksp_reason_available=%d ksp_reason=%d "
+            "ksp_true_residual_available=%d true_probe_attempts=%llu "
+            "true_probes=%llu true_probe_measurement_failures=%llu "
+            "true_probe_auxiliary_failures=%llu true_build_reason_available=%d "
+            "true_build_reason=%d\n",
+            result.status != nullptr ? result.status : "(null)",
+            result.unsupported_reason != nullptr
+                ? result.unsupported_reason
+                : "(null)",
+            process_unsafe_before_solve ? 1 : 0,
+            result.eps_solve_error_available ? 1 : 0,
+            result.eps_solve_error_code,
+            result.eps_converged_reason_available ? 1 : 0,
+            result.eps_converged_reason,
+            result.ksp_diagnostics_available ? 1 : 0,
+            result.ksp_converged_reason_available ? 1 : 0,
+            result.ksp_converged_reason,
+            result.ksp_last_true_residual_available ? 1 : 0,
+            static_cast<unsigned long long>(failure_probe.true_probe_attempt_count),
+            static_cast<unsigned long long>(failure_probe.true_probe_count),
+            static_cast<unsigned long long>(
+                failure_probe.true_probe_measurement_failure_count),
+            static_cast<unsigned long long>(
+                failure_probe.true_probe_auxiliary_measurement_failure_count),
+            failure_probe.last_true_build_reason_available ? 1 : 0,
+            failure_probe.last_true_build_reason);
+        check(!process_unsafe_before_solve,
+              "forced inner failure scenario must start before any process-unsafe solver state");
         check(!result.ok && result.accepted_modes.empty(),
               "inner KSP failure must remain fail-closed");
         check(!result.ksp_diagnostics_available &&
@@ -1523,6 +1664,9 @@ void refills_native_floquet_nev_before_tangent_mass_cap()
 void captures_near_pole_failure_probe()
 {
 #if FULLMAG_FEM_WITH_SLEPC
+    const ScopedFloquetDiagnosticEnvironment diagnostic_environment;
+    check(diagnostic_environment.ready,
+          "enable and later restore the existing opt-in Floquet diagnostics");
     constexpr std::size_t q_dimension = 8u;
     constexpr double coefficient_scale = 1.0e-60;
     constexpr double spectral_center_hz = 1.0e6;
@@ -1580,6 +1724,8 @@ void captures_near_pole_failure_probe()
         std::strcmp(result.unsupported_reason,
                     "floquet_slepc_solve_failed") == 0) {
         const auto &probe = result.shifted_ksp_failure_probe;
+        const auto &candidate_diagnostic =
+            probe.candidate_operator_diagnostic;
         check(result.eps_attempt_count >= 1 &&
                   probe.eps_attempt_number == result.eps_attempt_count &&
                   probe.eps_dimension_arguments_available &&
@@ -1587,6 +1733,11 @@ void captures_near_pole_failure_probe()
                   probe.eps_nev_argument < probe.eps_ncv_argument &&
                   probe.eps_ncv_argument == 16,
               "near-pole failure probe records the actual failing attempt dimensions");
+        check(candidate_diagnostic.requested &&
+                  candidate_diagnostic.workspace_available &&
+                  candidate_diagnostic.preconditioner_normalization_scale ==
+                      result.preconditioner_normalization_scale,
+              "near-pole candidate diagnostics use the bounded isolated workspace and actual preconditioner scale");
         check(probe.callback_count > 0 &&
                   probe.last_recursive_residual_available &&
                   probe.last_default_reason_available &&
@@ -1609,6 +1760,22 @@ void captures_near_pole_failure_probe()
                           probe.last_reason_after_gate,
                       "same-event near-pole callback and true-probe reasons agree");
             }
+            check(candidate_diagnostic.callback_ordinal ==
+                          probe.last_true_probe_callback_ordinal &&
+                      candidate_diagnostic.iteration ==
+                          probe.last_true_probe_iteration &&
+                      candidate_diagnostic.sample_available,
+                  "candidate operator evidence is paired with the exact final true-probe callback");
+            check(candidate_diagnostic.production_phi_rhs_norm_available &&
+                      candidate_diagnostic.production_phi_norm_available &&
+                      candidate_diagnostic.production_poisson_residual_available &&
+                      candidate_diagnostic.production_poisson_relative_residual_available,
+                  "candidate evidence captures the production phi RHS, solution, and Pphi minus RHS residual");
+            check(candidate_diagnostic.production_vs_isolated_replay_available &&
+                      candidate_diagnostic.isolated_repeatability_available &&
+                      candidate_diagnostic.isolated_additivity_available &&
+                      candidate_diagnostic.exact_shifted_matrix_comparison_available,
+                  "isolated candidate replay, repeatability, additivity, and exact shifted-matrix comparisons are available");
             if (probe.last_true_probe_available) {
                 const double expected_threshold = std::max(
                     probe.last_true_atol,
@@ -1625,6 +1792,32 @@ void captures_near_pole_failure_probe()
                           "near-pole probe ratio is paired with the same shifted-system norms");
                 }
             }
+        }
+        const auto &raw_spectrum = result.floquet_dense_oracle;
+        check(raw_spectrum.requested && raw_spectrum.raw_spectrum_count_available &&
+                  raw_spectrum.raw_spectrum_total_count ==
+                      raw_spectrum.eps_converged_count &&
+                  raw_spectrum.raw_spectrum_entry_count == std::min(
+                      raw_spectrum.raw_spectrum_total_count,
+                      static_cast<int>(fd::FloquetDenseOracleDiagnostics::
+                          kRawSpectrumCapacity)) &&
+                  raw_spectrum.raw_spectrum_truncated ==
+                      (raw_spectrum.raw_spectrum_total_count >
+                       static_cast<int>(fd::FloquetDenseOracleDiagnostics::
+                           kRawSpectrumCapacity)),
+              "dense oracle retains the total and truncation count before mode filtering");
+        for (int index = 0; index < raw_spectrum.raw_spectrum_entry_count; ++index) {
+            const auto &entry = raw_spectrum.raw_spectrum[
+                static_cast<std::size_t>(index)];
+            check(entry.available && entry.eps_index == index &&
+                      std::isfinite(entry.rotated_real_rad_s) &&
+                      std::isfinite(entry.rotated_imaginary_rad_s) &&
+                      std::isfinite(entry.raw_lambda_real_per_s) &&
+                      std::isfinite(entry.raw_lambda_imag_rad_s) &&
+                      entry.shift_distance_available &&
+                      std::isfinite(entry.shift_distance_rad_s) &&
+                      std::isfinite(entry.shift_distance_hz),
+                  "each retained pre-filter raw EPS entry keeps its mapped pair and shift distance");
         }
         std::printf(
             "NEAR_POLE_SHIFTED_KSP_FAILURE attempt=%d nev=%lld ncv=%lld callback_count=%llu callback_iter=%lld recursive_available=%d recursive=%.17g default_reason_available=%d default_reason=%d post_gate_available=%d post_gate_reason=%d true_probe_attempts=%llu true_probes=%llu true_probe_failures=%llu true_probe_available=%d true_probe_iter=%lld rhs=%.17g true_residual=%.17g rtol=%.17g atol=%.17g threshold=%.17g ratio_available=%d ratio=%.17g\n",
@@ -1665,9 +1858,20 @@ void captures_near_pole_failure_probe()
 
 } // namespace
 
-int main()
+int main(int argc, char **argv)
 {
+    if (argc == 2 &&
+        std::strcmp(argv[1], "--forced-inner-failure") == 0) {
+        executes_native_sparse_matshell_above_dense_bound(true);
+        std::printf("PASS: fem_floquet_forced_inner_failure_contract\n");
+        return 0;
+    }
+    if (argc != 1) {
+        std::fprintf(stderr, "unknown fem_floquet_modal_solver_contract argument\n");
+        return 2;
+    }
     cleanup_and_cancellation_gates_fail_closed();
+    floquet_complex_spectral_shift_distance_keeps_imaginary_offset();
     accepts_finite_nonzero_k_cpu_contract();
     rejects_missing_dynamic_payload_and_gpu();
     rejects_zero_k_and_missing_pairs();
@@ -1681,7 +1885,6 @@ int main()
     normalizes_si_scale_floquet_pencil();
     refills_native_floquet_nev_before_tangent_mass_cap();
     captures_near_pole_failure_probe();
-    executes_native_sparse_matshell_above_dense_bound(true);
     std::printf("PASS: fem_floquet_modal_solver_contract\n");
     return 0;
 }

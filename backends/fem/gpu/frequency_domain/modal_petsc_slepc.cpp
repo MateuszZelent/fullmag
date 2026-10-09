@@ -218,6 +218,12 @@ void finalize_owned_slepc() noexcept
 
 bool ensure_slepc_initialized(char error_message[256]) noexcept
 {
+    if (fullmag::fem::runtime::petsc_slepc_process_is_unsafe_locked()) {
+        copy_message(error_message, 256,
+                     "petsc_runtime_unsafe: PETSc/SLEPc graph is quarantined");
+        return false;
+    }
+
     PetscBool finalized = PETSC_FALSE;
     if (PetscFinalized(&finalized) != PETSC_SUCCESS) {
         copy_message(error_message, 256, "GPU K0 could not query PETSc finalization state");

@@ -4,6 +4,7 @@
 #include "frequency_domain/modal_eigen_request.hpp"
 
 #include <array>
+#include <cmath>
 #include <cstddef>
 #include <complex>
 #include <cstdint>
@@ -11,6 +12,46 @@
 #include <vector>
 
 namespace fullmag::fem::frequency_domain {
+
+namespace detail {
+
+struct FloquetComplexSpectralShiftDistance {
+    bool available = false;
+    double rad_s = std::numeric_limits<double>::quiet_NaN();
+    double hz = std::numeric_limits<double>::quiet_NaN();
+};
+
+inline FloquetComplexSpectralShiftDistance
+floquet_complex_spectral_shift_distance(
+    double rotated_real_rad_s,
+    double rotated_imaginary_rad_s,
+    double target_omega_rad_s) noexcept
+{
+    FloquetComplexSpectralShiftDistance result{};
+    if (!std::isfinite(rotated_real_rad_s) ||
+        !std::isfinite(rotated_imaginary_rad_s) ||
+        !std::isfinite(target_omega_rad_s)) {
+        return result;
+    }
+    const double real_offset = rotated_real_rad_s - target_omega_rad_s;
+    const double distance_rad_s = std::hypot(
+        real_offset,
+        rotated_imaginary_rad_s);
+    if (!std::isfinite(real_offset) || !std::isfinite(distance_rad_s) ||
+        distance_rad_s < 0.0) {
+        return result;
+    }
+    const double distance_hz = distance_rad_s / (2.0 * std::acos(-1.0));
+    if (!std::isfinite(distance_hz) || distance_hz < 0.0) {
+        return result;
+    }
+    result.available = true;
+    result.rad_s = distance_rad_s;
+    result.hz = distance_hz;
+    return result;
+}
+
+} // namespace detail
 
 struct FloquetSharedDomainSparseModalOperator;
 
@@ -63,6 +104,41 @@ struct FloquetShiftedKspFailureProbe {
     bool last_true_tolerance_ratio_available = false;
     double last_true_tolerance_ratio =
         std::numeric_limits<double>::quiet_NaN();
+    struct CandidateOperatorDiagnostic {
+        bool requested = false;
+        bool workspace_available = false;
+        bool sample_available = false;
+        const char *status = "disabled";
+        const char *reason = "";
+        std::uint64_t callback_ordinal = 0;
+        std::int64_t iteration = -1;
+        bool production_phi_rhs_norm_available = false;
+        double production_phi_rhs_norm = std::numeric_limits<double>::quiet_NaN();
+        bool production_phi_norm_available = false;
+        double production_phi_norm = std::numeric_limits<double>::quiet_NaN();
+        bool production_poisson_residual_available = false;
+        double production_poisson_residual_norm =
+            std::numeric_limits<double>::quiet_NaN();
+        bool production_poisson_relative_residual_available = false;
+        double production_poisson_relative_residual =
+            std::numeric_limits<double>::quiet_NaN();
+        bool production_vs_isolated_replay_available = false;
+        double production_vs_isolated_replay_relative_defect =
+            std::numeric_limits<double>::quiet_NaN();
+        bool isolated_repeatability_available = false;
+        double isolated_repeatability_relative_defect =
+            std::numeric_limits<double>::quiet_NaN();
+        bool isolated_additivity_available = false;
+        double isolated_additivity_relative_defect =
+            std::numeric_limits<double>::quiet_NaN();
+        bool exact_shifted_matrix_comparison_available = false;
+        double exact_shifted_matrix_relative_defect =
+            std::numeric_limits<double>::quiet_NaN();
+        double preconditioner_normalization_scale =
+            std::numeric_limits<double>::quiet_NaN();
+        std::uint64_t measurement_failure_count = 0;
+        int last_error_code = 0;
+    } candidate_operator_diagnostic{};
 };
 
 struct SLEPcModalEigenAdapterStatus {
@@ -277,6 +353,19 @@ struct FloquetDemagOperatorProbeResult {
  * mode selection or the public solver contract.
  */
 struct FloquetDenseOracleDiagnostics {
+    struct RawSpectrumEntry {
+        bool available = false;
+        int eps_index = -1;
+        double rotated_real_rad_s = std::numeric_limits<double>::quiet_NaN();
+        double rotated_imaginary_rad_s = std::numeric_limits<double>::quiet_NaN();
+        double raw_lambda_real_per_s = std::numeric_limits<double>::quiet_NaN();
+        double raw_lambda_imag_rad_s = std::numeric_limits<double>::quiet_NaN();
+        bool shift_distance_available = false;
+        double shift_distance_rad_s = std::numeric_limits<double>::quiet_NaN();
+        double shift_distance_hz = std::numeric_limits<double>::quiet_NaN();
+    };
+
+    static constexpr std::size_t kRawSpectrumCapacity = 4u;
     bool requested = false;
     bool available = false;
     bool candidate_found = false;
@@ -293,6 +382,11 @@ struct FloquetDenseOracleDiagnostics {
     int real_split_dimension = 0;
     int eps_converged_count = 0;
     int eps_converged_reason = 0;
+    bool raw_spectrum_count_available = false;
+    int raw_spectrum_total_count = 0;
+    int raw_spectrum_entry_count = 0;
+    bool raw_spectrum_truncated = false;
+    std::array<RawSpectrumEntry, kRawSpectrumCapacity> raw_spectrum{};
     int action_probe_count = 0;
     double operator_normalization_scale = 1.0;
     double action_relative_error_max = std::numeric_limits<double>::quiet_NaN();
@@ -399,6 +493,10 @@ struct SLEPcTinyGyrotropicModalEigenResult {
     const char *nullspace_policy = "none";
     const char *unsupported_reason = "";
     int converged_eigenpair_count = 0;
+    // Cached return value from the completed EPSSolve call; serializing this
+    // scalar never requires querying an EPS after a hard error.
+    bool eps_solve_error_available = false;
+    int eps_solve_error_code = 0;
     bool eps_converged_reason_available = false;
     int eps_converged_reason = 0;
     bool eps_dimensions_available = false;

@@ -883,6 +883,12 @@ bool &production_k0_slepc_process_quarantined()
 
 bool ensure_slepc_initialized(char error_message[256])
 {
+    if (fullmag::fem::runtime::petsc_slepc_process_is_unsafe_locked()) {
+        copy_message(error_message, 256,
+                     "petsc_runtime_unsafe: PETSc/SLEPc graph is quarantined");
+        return false;
+    }
+
     PetscBool petsc_finalized = PETSC_FALSE;
     if (PetscFinalized(&petsc_finalized) != 0) {
         copy_message(error_message, 256, "PETSc finalization state query failed");
@@ -3900,6 +3906,13 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
         problem.frequency_max_hz > problem.frequency_min_hz) {
         const std::lock_guard<std::mutex> window_lock(
             fullmag::fem::runtime::petsc_slepc_process_mutex());
+        if (fullmag::fem::runtime::petsc_slepc_process_is_unsafe_locked()) {
+            out_result->slepc_process_quarantined = true;
+            return fail_production_schur(
+                problem, out_result, FrequencyDomainStatus::solve_error,
+                "PETSc/SLEPc graph is quarantined; process restart required",
+                "petsc_runtime_unsafe");
+        }
         if (production_k0_slepc_process_quarantined()) {
             out_result->slepc_process_quarantined = true;
             return fail_production_schur(
@@ -5744,6 +5757,13 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
     }
     // The window recursion already owns the shared process mutex; standalone
     // calls own the unique_lock above.  Read the process latch only here.
+    if (fullmag::fem::runtime::petsc_slepc_process_is_unsafe_locked()) {
+        out_result->slepc_process_quarantined = true;
+        return fail_production_schur(
+            problem, out_result, FrequencyDomainStatus::solve_error,
+            "PETSc/SLEPc graph is quarantined; process restart required",
+            "petsc_runtime_unsafe");
+    }
     if (production_k0_slepc_process_quarantined()) {
         out_result->slepc_process_quarantined = true;
         return fail_production_schur(
@@ -7054,6 +7074,11 @@ FrequencyDomainStatus certify_poisson_airbox_schur_matshell_cpu(
 
     const std::lock_guard<std::mutex> lock(
         fullmag::fem::runtime::petsc_slepc_process_mutex());
+    if (fullmag::fem::runtime::petsc_slepc_process_is_unsafe_locked()) {
+        return fail(problem, out_result, FrequencyDomainStatus::solve_error,
+                    "PETSc/SLEPc graph is quarantined; process restart required",
+                    "petsc_runtime_unsafe");
+    }
     if (!ensure_slepc_initialized(out_result->error_message)) {
         return fail(
             problem,

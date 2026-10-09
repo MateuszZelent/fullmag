@@ -10,6 +10,81 @@
 
 namespace fullmag::fem::frequency_domain::detail {
 
+using FloquetCandidateOperatorDiagnosticBegin = void (*)(
+    void *user_context,
+    PetscInt iteration,
+    std::uint64_t callback_ordinal) noexcept;
+using FloquetCandidateOperatorDiagnosticCapture = void (*)(
+    void *user_context,
+    PetscInt iteration,
+    std::uint64_t callback_ordinal,
+    Mat shifted_operator,
+    Vec candidate_solution,
+    Vec shifted_operator_action) noexcept;
+using FloquetCandidateOperatorDiagnosticDestroy = PetscErrorCode (*)(
+    void **user_context);
+
+struct FloquetCandidateDiagnosticSetupTransaction {
+    PetscErrorCode push_error = PETSC_SUCCESS;
+    PetscErrorCode setup_error = PETSC_SUCCESS;
+    PetscErrorCode cleanup_error = PETSC_SUCCESS;
+    PetscErrorCode pop_error = PETSC_SUCCESS;
+    PetscErrorCode fatal_error = PETSC_SUCCESS;
+};
+
+template <typename Push, typename Setup, typename Cleanup, typename Pop>
+inline FloquetCandidateDiagnosticSetupTransaction
+run_floquet_candidate_diagnostic_setup_transaction(
+    Push push,
+    Setup setup,
+    Cleanup cleanup,
+    Pop pop)
+{
+    FloquetCandidateDiagnosticSetupTransaction result{};
+    result.push_error = push();
+    if (result.push_error != PETSC_SUCCESS) {
+        result.fatal_error = result.push_error;
+        return result;
+    }
+    result.setup_error = setup();
+    if (result.setup_error != PETSC_SUCCESS) {
+        result.cleanup_error = cleanup();
+    }
+    // Pop even after cleanup failure so the global PETSc handler stack is
+    // restored. The first cleanup error remains authoritative over a later
+    // handler-pop failure.
+    result.pop_error = pop();
+    result.fatal_error = result.cleanup_error != PETSC_SUCCESS
+        ? result.cleanup_error
+        : result.pop_error;
+    return result;
+}
+
+inline PetscErrorCode calculate_floquet_relative_residual(
+    PetscReal residual_norm,
+    PetscReal rhs_norm,
+    PetscReal *relative_residual) noexcept
+{
+    if (relative_residual == nullptr) {
+        return PETSC_ERR_ARG_NULL;
+    }
+    *relative_residual = std::numeric_limits<PetscReal>::quiet_NaN();
+    if (!std::isfinite(static_cast<double>(residual_norm)) ||
+        !std::isfinite(static_cast<double>(rhs_norm)) ||
+        residual_norm < 0.0 || rhs_norm < 0.0) {
+        return PETSC_ERR_FP;
+    }
+    const PetscReal denominator = std::max(
+        rhs_norm,
+        std::numeric_limits<PetscReal>::min());
+    const PetscReal ratio = residual_norm / denominator;
+    if (!std::isfinite(static_cast<double>(ratio)) || ratio < 0.0) {
+        return PETSC_ERR_FP;
+    }
+    *relative_residual = ratio;
+    return PETSC_SUCCESS;
+}
+
 struct FloquetShiftedKspTrueConvergenceContext {
     void *default_context = nullptr;
     Vec candidate_solution = nullptr;
@@ -60,6 +135,16 @@ struct FloquetShiftedKspTrueConvergenceContext {
     bool last_true_tolerance_ratio_available = false;
     PetscReal last_true_tolerance_ratio =
         std::numeric_limits<PetscReal>::quiet_NaN();
+    void *candidate_operator_diagnostic_context = nullptr;
+    FloquetCandidateOperatorDiagnosticBegin candidate_operator_diagnostic_begin =
+        nullptr;
+    FloquetCandidateOperatorDiagnosticCapture candidate_operator_diagnostic_capture =
+        nullptr;
+    FloquetCandidateOperatorDiagnosticDestroy candidate_operator_diagnostic_destroy =
+        nullptr;
+    bool candidate_operator_diagnostic_cleanup_failed = false;
+    bool cleanup_failed = false;
+    PetscErrorCode cleanup_error = PETSC_SUCCESS;
 };
 
 inline PetscErrorCode destroy_floquet_ksp_default_convergence_context(
@@ -72,12 +157,19 @@ inline PetscErrorCode destroy_floquet_ksp_default_convergence_context(
 // address of the context pointer. Keep the default-convergence resource helper
 // compatible with the older runtime toolchain as well.
 #if PETSC_VERSION_LT(3, 24, 0)
-    const PetscErrorCode error =
-        KSPConvergedDefaultDestroy(*default_context);
+    void *owned_context = *default_context;
+    const PetscErrorCode error = KSPConvergedDefaultDestroy(owned_context);
 #else
-    const PetscErrorCode error = KSPConvergedDefaultDestroy(default_context);
+    void *owned_context = *default_context;
+    const PetscErrorCode error = KSPConvergedDefaultDestroy(&owned_context);
 #endif
-    *default_context = nullptr;
+    if (error == PETSC_SUCCESS) {
+#if PETSC_VERSION_LT(3, 24, 0)
+        *default_context = nullptr;
+#else
+        *default_context = owned_context;
+#endif
+    }
     return error;
 }
 
@@ -87,31 +179,61 @@ inline PetscErrorCode clear_floquet_shifted_ksp_true_convergence_context(
     if (context == nullptr) {
         return 0;
     }
+    if (context->cleanup_failed) {
+        return context->cleanup_error != PETSC_SUCCESS
+            ? context->cleanup_error
+            : PETSC_ERR_LIB;
+    }
 
-    PetscErrorCode first_error = 0;
-    if (context->true_residual != nullptr) {
-        const PetscErrorCode error = VecDestroy(&context->true_residual);
-        context->true_residual = nullptr;
-        if (first_error == 0) {
-            first_error = error;
+    if (context->candidate_operator_diagnostic_destroy != nullptr) {
+        const PetscErrorCode error =
+            context->candidate_operator_diagnostic_destroy(
+                &context->candidate_operator_diagnostic_context);
+        if (error != PETSC_SUCCESS ||
+            context->candidate_operator_diagnostic_context != nullptr) {
+            context->candidate_operator_diagnostic_cleanup_failed = true;
+            context->cleanup_failed = true;
+            context->cleanup_error = error != PETSC_SUCCESS
+                ? error
+                : PETSC_ERR_LIB;
+            return context->cleanup_error;
         }
+        context->candidate_operator_diagnostic_begin = nullptr;
+        context->candidate_operator_diagnostic_capture = nullptr;
+        context->candidate_operator_diagnostic_destroy = nullptr;
+    }
+
+    if (context->true_residual != nullptr) {
+        Vec owned = context->true_residual;
+        const PetscErrorCode error = VecDestroy(&owned);
+        if (error != PETSC_SUCCESS || owned != nullptr) {
+            context->cleanup_failed = true;
+            context->cleanup_error = error != PETSC_SUCCESS ? error : PETSC_ERR_LIB;
+            return context->cleanup_error;
+        }
+        context->true_residual = nullptr;
     }
     if (context->candidate_solution != nullptr) {
-        const PetscErrorCode error = VecDestroy(&context->candidate_solution);
-        context->candidate_solution = nullptr;
-        if (first_error == 0) {
-            first_error = error;
+        Vec owned = context->candidate_solution;
+        const PetscErrorCode error = VecDestroy(&owned);
+        if (error != PETSC_SUCCESS || owned != nullptr) {
+            context->cleanup_failed = true;
+            context->cleanup_error = error != PETSC_SUCCESS ? error : PETSC_ERR_LIB;
+            return context->cleanup_error;
         }
+        context->candidate_solution = nullptr;
     }
     if (context->default_context != nullptr) {
         const PetscErrorCode error =
             destroy_floquet_ksp_default_convergence_context(
                 &context->default_context);
-        if (first_error == 0) {
-            first_error = error;
+        if (error != PETSC_SUCCESS || context->default_context != nullptr) {
+            context->cleanup_failed = true;
+            context->cleanup_error = error != PETSC_SUCCESS ? error : PETSC_ERR_LIB;
+            return context->cleanup_error;
         }
     }
-    return first_error;
+    return PETSC_SUCCESS;
 }
 
 inline PetscErrorCode destroy_floquet_shifted_ksp_true_convergence_context_value(
@@ -137,7 +259,9 @@ inline PetscErrorCode destroy_floquet_shifted_ksp_true_convergence_context(
     const PetscErrorCode error =
         destroy_floquet_shifted_ksp_true_convergence_context_value(
             static_cast<FloquetShiftedKspTrueConvergenceContext *>(*raw_context));
-    *raw_context = nullptr;
+    if (error == PETSC_SUCCESS) {
+        *raw_context = nullptr;
+    }
     return error;
 }
 #endif
@@ -186,7 +310,15 @@ inline PetscErrorCode create_floquet_shifted_ksp_true_convergence_context(
         error = KSPConvergedDefaultCreate(&context->default_context);
     }
     if (error != 0) {
-        (void)clear_floquet_shifted_ksp_true_convergence_context(context);
+        const PetscErrorCode cleanup_error =
+            clear_floquet_shifted_ksp_true_convergence_context(context);
+        if (cleanup_error != PETSC_SUCCESS) {
+            // The caller must retain this context with its unreleased PETSc
+            // handles and quarantine the containing graph. Never delete the
+            // C++ owner after an unsuccessful checked teardown.
+            *result = context;
+            return error;
+        }
         delete context;
         return error;
     }
@@ -323,6 +455,12 @@ inline PetscErrorCode floquet_shifted_true_convergence_test(
         context->last_true_probe_recursive_residual_available
             ? recursive_residual_norm
             : std::numeric_limits<PetscReal>::quiet_NaN();
+    if (context->candidate_operator_diagnostic_begin != nullptr) {
+        context->candidate_operator_diagnostic_begin(
+            context->candidate_operator_diagnostic_context,
+            iteration,
+            context->last_true_probe_callback_ordinal);
+    }
 
     const auto record_probe_failure = [context](PetscErrorCode probe_error) {
         if (probe_error != 0) {
@@ -387,6 +525,18 @@ inline PetscErrorCode floquet_shifted_true_convergence_test(
         context->true_residual);
     if (error != 0) {
         return record_probe_failure(error);
+    }
+    // This observer receives the actual production action and candidate before
+    // the callback mutates true_residual into b - A*x. Its return path is
+    // intentionally void: optional measurement cannot change the true gate.
+    if (context->candidate_operator_diagnostic_capture != nullptr) {
+        context->candidate_operator_diagnostic_capture(
+            context->candidate_operator_diagnostic_context,
+            iteration,
+            context->last_true_probe_callback_ordinal,
+            operator_matrix,
+            context->candidate_solution,
+            context->true_residual);
     }
     PetscReal operator_action_norm = std::numeric_limits<PetscReal>::quiet_NaN();
     const PetscErrorCode operator_action_norm_error = VecNorm(

@@ -300,6 +300,12 @@ bool create_sequential_dense_matrix(
 bool ensure_slepc_initialized(
     SLEPcTinyGyrotropicModalEigenResult *result)
 {
+    if (fullmag::fem::runtime::petsc_slepc_process_is_unsafe_locked()) {
+        result->status = "solve_error";
+        result->unsupported_reason = "petsc_runtime_unsafe";
+        return false;
+    }
+
     PetscBool petsc_finalized = PETSC_FALSE;
     if (PetscFinalized(&petsc_finalized) != 0) {
         result->status = "solve_error";

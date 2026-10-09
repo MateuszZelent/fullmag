@@ -1158,6 +1158,19 @@ if(FULLMAG_USE_MFEM_STACK AND FULLMAG_FEM_WITH_SLEPC)
     set_tests_properties(fem_petsc_process_runtime_concurrency_contract
         PROPERTIES TIMEOUT 120
     )
+    add_custom_target(fem_petsc_process_runtime_quarantine_contract
+        DEPENDS fem_petsc_process_runtime_concurrency_contract)
+    add_test(NAME fem_petsc_process_runtime_quarantine_contract
+        COMMAND fem_petsc_process_runtime_concurrency_contract --quarantine-admission)
+    set_tests_properties(fem_petsc_process_runtime_quarantine_contract
+        PROPERTIES TIMEOUT 120)
+    add_custom_target(fem_floquet_forced_inner_failure_contract
+        DEPENDS fem_floquet_modal_solver_contract)
+    add_test(NAME fem_floquet_forced_inner_failure_contract
+        COMMAND fem_floquet_modal_solver_contract --forced-inner-failure)
+    set_tests_properties(fem_floquet_forced_inner_failure_contract
+        PROPERTIES TIMEOUT 120)
+
 endif()
 add_fem_source_facade_contract(
     fem_poisson_airbox_shared_domain_contract
