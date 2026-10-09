@@ -4,6 +4,7 @@ import {
   REFERENCE_COMPARISON_LABELS,
   referenceComparisonStatus,
   referenceModelBoundaryAssumption,
+  runBoundaryAssumptionFromMagnetostaticBc,
 } from "@/shared/domain/analysis/referenceComparisonStatus";
 import {
   ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DISPERSION_PATH,
@@ -137,7 +138,9 @@ function dispersionReferenceComparison(
     referenceBoundaryAssumption: referenceModelBoundaryAssumption(
       stringValue(validation?.analytic_model) ?? null,
     ),
-    runBoundaryAssumption: stringValue(requested?.boundary_assumption) ?? null,
+    runBoundaryAssumption:
+      stringValue(requested?.boundary_assumption) ??
+      runBoundaryAssumptionFromMagnetostaticBc(stringValue(requested?.magnetostatic_bc) ?? null),
     validityMaxWavevectorRadPerM: finiteNumber(validation?.max_k_rad_per_m) ?? null,
   });
 }

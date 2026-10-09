@@ -42,6 +42,23 @@ export function referenceModelBoundaryAssumption(analyticModel: string | null): 
   return analyticModel ? ANALYTIC_MODEL_ASSUMPTIONS[analyticModel] ?? null : null;
 }
 
+/**
+ * Boundary assumption of a run from its published magnetostatic boundary
+ * condition (`requested_execution.magnetostatic_bc`). Airbox truncations are
+ * finite domains and never equal an open-film reference.
+ */
+const MAGNETOSTATIC_BC_ASSUMPTIONS: Readonly<Record<string, string>> = {
+  open: "open_film",
+  floquet_airbox: "finite_floquet_airbox",
+  periodic_airbox_k0: "finite_periodic_airbox",
+};
+
+export function runBoundaryAssumptionFromMagnetostaticBc(
+  magnetostaticBc: string | null,
+): string | null {
+  return magnetostaticBc ? MAGNETOSTATIC_BC_ASSUMPTIONS[magnetostaticBc] ?? null : null;
+}
+
 export function referenceComparisonStatus(input: ReferenceComparisonInput): ReferenceComparisonResult {
   if (!input.hasReferencePoints) {
     return { reasons: ["No reference values are published for these samples."], status: "no_data" };

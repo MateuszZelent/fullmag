@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { referenceComparisonStatus, referenceModelBoundaryAssumption } from "./referenceComparisonStatus";
+import {
+  referenceComparisonStatus,
+  referenceModelBoundaryAssumption,
+  runBoundaryAssumptionFromMagnetostaticBc,
+} from "./referenceComparisonStatus";
 
 const base = {
   branchTrackingConfirmed: true,
@@ -32,5 +36,11 @@ describe("reference comparison status", () => {
   it("maps the published analytic model to its assumption", () => {
     expect(referenceModelBoundaryAssumption("kalinikos_slab_n0")).toBe("open_film");
     expect(referenceModelBoundaryAssumption("unknown")).toBeNull();
+  });
+
+  it("derives the run assumption from the published magnetostatic boundary", () => {
+    expect(runBoundaryAssumptionFromMagnetostaticBc("open")).toBe("open_film");
+    expect(runBoundaryAssumptionFromMagnetostaticBc("floquet_airbox")).toBe("finite_floquet_airbox");
+    expect(runBoundaryAssumptionFromMagnetostaticBc("not_applicable")).toBeNull();
   });
 });
