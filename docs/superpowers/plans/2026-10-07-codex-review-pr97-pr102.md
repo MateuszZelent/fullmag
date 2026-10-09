@@ -2393,3 +2393,9 @@ Nie dodano nowego testu porównującego jedynie tekst implementacji panelu; mocn
 
 - Poprawiono wszystkie indeksowe wybory etapów w TimelineReviewTests, również ujemny exit. Fixture'y mają zgodny profile/job_id/schema; asercja native-build=succeeded dowodzi przyjęcia receipt, a receipt-verification=running i result=pending chronią przed myleniem sukcesu workera z koordynatorem. Failure fixture ma rzeczywiste validation_error koordynatora i wymaga receipt-verification=failed, result=failed, exit 1. Nie usunięto żadnej z tych bramek.
 - AST i diff-check PASS; lokalnych testów/importów/buildów nie uruchamiano. Poprzedni job zakończył się przed nowym test_observability.py i przed fixture Air; potrzebna jest nowa hosted regresja po tej korekcie.
+
+
+### Fixture receipt wiąże tożsamość źródeł (2026-10-09)
+
+- GHA37960500632 / Rust113921831312 wykonało starszą suite11 bez błędów, następnie nowe23 testy zgłosiły trzy niepowodzenia receipt: runtimev1/v2 oraz partialcontracts. Helper joba deklarował source_digest, ale helper receipt pomijał to pole. Produkcyjny identity guard prawidłowo odrzucił te fixture'y; nie jest osłabiany.
+- Helper receipt teraz zapisuje dokładny digest joba. Nowa regresja mismatch digest wymaga native-build=pending bez exit_code i receipt-verification=pending mimo exit0 w odrzuconym receipt; zapisany terminalny status koordynatora pozostaje osobnym źródłem wyniku. SOURCE review root, AST i diff-check PASS; hostedexecution po korekcie wymagane. Fixture Air nadal nie wykonany w tym jobie, bo wcześniejszy krok zatrzymał job.

@@ -58,6 +58,7 @@ class ObservabilityTests(unittest.TestCase):
             "schema": "fullmag.local-runner.build-receipt.v1",
             "job_id": job["job_id"],
             "profile": job["profile"],
+            "source_digest": job["source_digest"],
             "state": state,
             "stages": stages,
             "finished_at": "2026-10-09T12:00:00Z",
@@ -299,6 +300,41 @@ class ObservabilityTests(unittest.TestCase):
                 succeeded = self._stages_by_id(build_job_timeline(job, self.root))
                 self.assertEqual("succeeded", succeeded["receipt-verification"]["status"])
                 self.assertEqual("succeeded", succeeded["result"]["status"])
+
+    def test_timeline_rejects_receipt_with_mismatched_source_digest(self):
+        job = self._timeline_job(
+            "fem-cpu-slepc-runtime-v1",
+            state="succeeded",
+            job_id="receipt-source-digest-mismatch",
+        )
+        job["exit_code"] = 0
+        self._write_timeline_journal(
+            job,
+            phase="terminal",
+            state="succeeded",
+            exit_code=0,
+        )
+        receipt = self._write_timeline_receipt(
+            job,
+            [{"name": "native-build", "exit_code": 0}],
+        )
+        receipt["source_digest"] = "b" * 64
+        receipt_path = (
+            self.root
+            / "runs"
+            / job["worktree_id"]
+            / job["job_id"]
+            / "artifacts"
+            / "build-receipt.json"
+        )
+        receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
+
+        stages = self._stages_by_id(build_job_timeline(job, self.root))
+        self.assertNotEqual(job["source_digest"], receipt["source_digest"])
+        self.assertEqual("pending", stages["native-build"]["status"])
+        self.assertNotIn("exit_code", stages["native-build"])
+        self.assertEqual("pending", stages["receipt-verification"]["status"])
+        self.assertEqual("succeeded", stages["result"]["status"])
 
     def test_timeline_partial_contract_failure_keeps_unexecuted_stages_pending(self):
         job = self._timeline_job(
