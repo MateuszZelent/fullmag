@@ -50,6 +50,23 @@
         "policy-adr",
         "scoped-lower-composition-owner"
       ]
+    },
+    {
+      "id": "eq-thin-film-exact-plane-local-target",
+      "symbols": [
+        "thickness",
+        "layer_count",
+        "layer_height",
+        "k",
+        "z_k",
+        "layer_section",
+        "h_section_target"
+      ],
+      "sources": [
+        "scoped-layer-meshed-extrusion",
+        "scoped-lower-composition-owner",
+        "scoped-layer-density-regression"
+      ]
     }
   ],
   "symbols": [
@@ -93,6 +110,30 @@
       "id": "h_target",
       "latex": "h_\\mathrm{target}",
       "meaning": "resolved target size",
+      "si_unit": "\\mathrm m"
+    },
+    {
+      "id": "k",
+      "latex": "k",
+      "meaning": "exact layer-plane index",
+      "si_unit": "1"
+    },
+    {
+      "id": "z_k",
+      "latex": "z_k",
+      "meaning": "requested exact layer-plane coordinate",
+      "si_unit": "\\mathrm m"
+    },
+    {
+      "id": "layer_section",
+      "latex": "\\Sigma_k",
+      "meaning": "body-owned cross-section at $z_k$",
+      "si_unit": "\\mathrm{m^2}"
+    },
+    {
+      "id": "h_section_target",
+      "latex": "h_{\\Sigma,k}",
+      "meaning": "resolved target size evaluated on $\\Sigma_k$",
       "si_unit": "\\mathrm m"
     }
   ],
@@ -157,8 +198,22 @@
       "id": "scoped-lower-composition-owner",
       "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_fields.py",
       "symbol": "_configure_mesh_size_fields",
-      "responsibility": "Existing upper/lower aggregator; scoped lower producer and ownership binding remediation is in progress.",
-      "evidence_status": "planned_contract_runtime_not_verified"
+      "responsibility": "Composes owner-scoped upper/lower fields; GHA status applied is not proof of layered local density.",
+      "evidence_status": "existing_source_actual_density_failed"
+    },
+    {
+      "id": "scoped-layer-meshed-extrusion",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py",
+      "symbol": "_generate_coincident_ring_airbox_mesh",
+      "responsibility": "Uses fixed meshed extrusion that copies one source-face triangulation through exact z levels; current finite ROI density gate fails.",
+      "evidence_status": "source_mechanism_reviewed_actual_density_failed"
+    },
+    {
+      "id": "scoped-layer-density-regression",
+      "path": "packages/fullmag-py/tests/test_meshing.py",
+      "symbol": "test_direct_layered_box_region_floor_beats_eligible_upper_actual_density",
+      "responsibility": "Checks actual local ROI and bulk edge-density limits while preserving exact layer count and coordinates.",
+      "evidence_status": "existing_github_actions_regression_pending"
     },
     {
       "id": "quality-si-conversion",

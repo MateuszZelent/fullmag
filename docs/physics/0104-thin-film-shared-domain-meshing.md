@@ -1,7 +1,7 @@
 # Thin-film shared-domain meshing
 
 - Status: terminal contract
-- Ostatnia aktualizacja: 2026-08-27
+- Ostatnia aktualizacja: 2026-10-09
 - Decyzje: [ADR 0021](../adr/0021-native-mixed-p1-fem-topology.md), [ADR 0027](../adr/0027-canonical-fem-mesh-policy-and-quality-evidence.md)
 - Gate produkcyjny: [0105](0105-fem-meshing-production-acceptance.md)
 
@@ -35,6 +35,35 @@ h_{\mathrm{target}}(\mathbf x)=
              \max_{\ell\in\mathcal L(\mathbf x)}\ell\right).
 ```
 
+(thin-film-exact-plane-local-target)=
+### Local target on exact layer cross-sections
+
+One candidate for realizing a finite regional target in a layered tetrahedral
+Box is to evaluate the existing 3D target at the actual coordinates of each
+exact, body-owned layer cross-section. It must not project values through the
+film thickness:
+
+```{math}
+:label: eq-thin-film-exact-plane-local-target
+z_k=-\frac{t}{2}+k h_z,\qquad
+k\in\{0,\ldots,N_z\},\qquad
+h_{\Sigma,k}(x,y)=h_{\mathrm{target}}(x,y,z_k),
+\quad (x,y)\in\Sigma_k .
+```
+
+Here $\Sigma_k$ is the 2D cross-section of the exact body-layer GEO volumes
+at the requested plane $z_k$. The intended method keeps the existing
+upper/lower composition and evaluates it at that plane; a shared internal
+plane must be triangulated once and reused by both adjacent slabs. This is a
+testable implementation hypothesis, not evidence that the current Gmsh
+generation path actually evaluates those regional fields there.
+
+If realized, cross-section-local sizing would let a finite region intersecting
+an exact plane receive local in-plane edges before the adjacent slab
+tetrahedra are formed. It would not change $N_z$, introduce intermediate $z$
+levels, enlarge the ROI, or refine the whole source cap through unrelated air.
+The actual field-evaluation and layer-mesh timing still require GHA evidence.
+
 (thin-film-mesh-symbols-and-si-units)=
 ## Symbols and SI units
 
@@ -47,6 +76,10 @@ h_{\mathrm{target}}(\mathbf x)=
 | $\mathcal U$ | eligible upper targets | $\mathrm m$ |
 | $\mathcal L$ | eligible lower bounds | $\mathrm m$ |
 | $h_\mathrm{target}$ | resolved target size | $\mathrm m$ |
+| $k$ | exact layer-plane index | $1$ |
+| $z_k$ | requested exact layer-plane coordinate | $\mathrm m$ |
+| $\Sigma_k$ | body-owned cross-section at $z_k$ | $\mathrm{m^2}$ |
+| $h_{\Sigma,k}$ | resolved target size evaluated on $\Sigma_k$ | $\mathrm m$ |
 
 (thin-film-mesh-assumptions-and-validity)=
 ## Assumptions and validity
@@ -116,16 +149,35 @@ Dotyczy to także trasy scoped, lecz meshed extrusion nadal replikuje jedną
 triangulację źródłowego capu airboxu. Samo odłożenie meshingu do czasu owner tags
 nie realizuje lokalnego pola 3D wewnątrz filmu, którego zakres nie obejmuje capu.
 Źródła zachowują definicję regionalną, ale geometria nie zapewnia jej realizacji.
-Actual density gate pozostaje **FAILED**: w badanym regionie nie ma żadnych
-próbek midpoint. Poprawne exact layer planes nie dowodzą lokalnego zagęszczenia.
-Naprawa musi triangulować przekroje w rzeczywistych współrzędnych i owner scopes
-oraz łączyć zgodnie warstwy bez nowych poziomów z. Przeniesienie lub projekcja
-jednej siatki przez powietrze, rozszerzenie ROI i poluzowanie progów nie stanowią
-naprawy. Obecny geometry admission jest szerszy niż potwierdzona realizacja;
-pełna obsługa tej kombinacji pozostaje zadaniem otwartym.
-Pomijanie parametrów warstwy pozwalało Gmsh dodać poziomy z i kończyło się
-odmową exact-count. Poprawka zachowuje bramki liczby płaszczyzn i gęstości;
-jej świeża regresja actualGmsh pozostaje **NOT VERIFIED** do wykonania w CI.
+Actual density gate pozostaje **FAILED** w GHA 37911565494/job113757705367.
+Regresja test_direct_layered_box_region_floor_beats_eligible_upper_actual_density
+zwróciła 108 tetraedrów i 45 węzłów dla dwóch warstw na dokładnych płaszczyznach
+$-10,0,+10\,\mathrm{nm}$, po 15 węzłów na płaszczyznę. W cylindrycznym ROI
+promienia $15\,\mathrm{nm}$ i półwysokości $4\,\mathrm{nm}$ nie było żadnego
+środka krawędzi; najbliższy miał $z=5\,\mathrm{nm}$, czyli leżał $1\,\mathrm{nm}$
+poza zakresem regionalnym. Poprawne exact layer planes nie dowodzą lokalnego
+zagęszczenia.
+
+W GHA wszystkie pięć pól scoped ma status `applied`, lecz pole nie realizuje
+lokalnej topologii w ROI. Źródła wskazują na meshed extrusion z jedną warstwą
+na przedział: kopiuje triangulację początkowej ściany airboxu, położonej poza
+skończonym ROI. Jest to zgodne z jednakową liczbą węzłów na płaszczyznach
+w wyniku CI; komentarz producenta opisuje to ograniczenie wprost.
+
+Nie wystarcza rozszerzenie `SurfacesList`: `Restrict` i `Constant` obejmują
+granice owner-volumes przy domyślnym `IncludeBoundary=1`, zgodnie z
+[manualem Gmsh](https://gmsh.info/doc/texinfo/gmsh.html#Gmsh-mesh-size-fields).
+Odrzucono także swobodne tetrahedralizowanie bez parametrów meshed extrusion,
+ponieważ mogłoby wprowadzić węzły poza zadanymi płaszczyznami i naruszyć
+istniejący guard oraz regresję exact-plane.
+
+Naprawa musi umożliwić konformne przejście między lokalnymi triangulacjami
+przekrojów, przy węzłach wyłącznie na istniejących płaszczyznach. Potrzebuje
+zgodnej aktualizacji incydentnych tet4, faset, interfejsów właścicieli i PBC
+oraz zachowania pointwise upper/lower bounds. Projekcja jednego pola przez
+całą grubość, rozszerzenie ROI, nowe poziomy z i poluzowanie progów nie są
+naprawą tego kontraktu. Działająca realizacja tej metody pozostaje do
+zaimplementowania; runtime oraz świeża actualGmsh regresja są **NOT VERIFIED**.
 Regresja gęstości cienkiej warstwy klasyfikuje próbki według środków krawędzi
 w zadanym regionie, mierząc pełne długości tych krawędzi; centroid tetraedru
 może leżeć poza regionem przecinającym środkową płaszczyznę warstwy.
@@ -263,11 +315,19 @@ Mixed prism pozostaje ograniczony do jawnie wspieranej geometrii i P1. Exact
 layers nie stanowią dowodu uporządkowania in-plane. Sama obecność fixture Gmsh
 nie kwalifikuje operatora ani managed runtime.
 
+Scoped layer-plane producer uses Gmsh `Constant` and `Restrict` fields on
+exact owner volumes. `VolumesList`, `SurfacesList`, and the default
+`IncludeBoundary=1` are defined in the [official Gmsh reference manual](https://gmsh.info/doc/texinfo/gmsh.html).
+That API contract does not override the current meshed-extrusion topology or
+prove that the final mesh satisfies the ROI density gate; only hosted
+actual-Gmsh evidence can qualify a transition implementation.
+
 (thin-film-mesh-scientific-bibliography)=
 ## Scientific bibliography
 
 - P. Monk, *Finite Element Methods for Maxwell's Equations*, 2003.
 - Gmsh reference manual, transfinite and extrusion meshing.
+- [Gmsh reference manual, mesh size fields](https://gmsh.info/doc/texinfo/gmsh.html).
 
 (thin-film-mesh-source-code-index)=
 ## Source-code index
@@ -276,8 +336,11 @@ nie kwalifikuje operatora ani managed runtime.
 |---|---|---|---|
 | Python API | `packages/fullmag-py/src/fullmag/world.py` | `class GeometryMeshHandle` | publiczny thin-film contract |
 | Sweep | `packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py` | `generate_swept_box_mesh` | ograniczona mixed-P1 realizacja box |
+| Layered GEO producer | `packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py` | `_generate_coincident_ring_airbox_mesh` | meshed extrusion replikuje źródłową triangulację; conforming scoped in-plane transition pozostaje do implementacji |
 | Tetra fields | `packages/fullmag-py/src/fullmag/meshing/_size_field_plan.py` | `_build_field_stack` | strefy surface/edge/corner/air |
+| Scoped field composition | `packages/fullmag-py/src/fullmag/meshing/_gmsh_fields.py` | `_configure_mesh_size_fields` | składa upper/lower pola; ich lokalna ewaluacja w layered GEO wymaga dalszej diagnostyki |
 | Owner binding | `packages/fullmag-py/src/fullmag/meshing/_mesh_targets.py` | `_geometry_owner_alias_index` | exact-name-first roster, jednoznaczne aliasy i izolacja polityk obiektów |
+| Actual density regression | `packages/fullmag-py/tests/test_meshing.py` | `test_direct_layered_box_region_floor_beats_eligible_upper_actual_density` | rzeczywisty ROI/bulk density i dokładne planes; wynik GHA oczekiwany po poprawce |
 | Quality | `packages/fullmag-py/src/fullmag/meshing/_gmsh_extraction.py` | `_extract_quality_metrics` | bieżące metryki Gmsh |
 
 
