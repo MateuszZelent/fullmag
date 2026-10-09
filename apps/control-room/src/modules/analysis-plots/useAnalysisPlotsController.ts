@@ -193,7 +193,10 @@ export function useAnalysisPlotsController(kernel: KernelApi) {
     setSelectedPoint(point);
     const chartId = frequencyChartId ?? sourceChartId ?? descriptorId;
     analysisWorkspaceStore.setFocusedChartId(chartId);
-    if (activeSurface === "resonance-fmr" || activeSurface === "dispersion") {
+    // A reference point (analytic or imported) is not a computed mode: it must
+    // not select a mode nor imply a 3D field (ADR 0054, spec 32 §9).
+    const referencePoint = isReferenceChartQuantity(point.quantity);
+    if (!referencePoint && (activeSurface === "resonance-fmr" || activeSurface === "dispersion")) {
       const mapped = frequencyDomainSelectionFromPoint({
         artifactRevision: frequencyArtifactRevision,
         dispersionModel: frequency.frequencyDomainDispersionModel,
@@ -290,6 +293,10 @@ export function useAnalysisPlotsController(kernel: KernelApi) {
 
 function selectionAnalysisSurface(selection: Selection) {
   return analysisSurfaceForSelectionKind(selection.kind);
+}
+
+export function isReferenceChartQuantity(quantity: string): boolean {
+  return quantity === "analytic_frequency" || quantity.startsWith("reference_");
 }
 
 export function selectedHysteresisStageIdFromSelection(selection: Selection | null): string | null {
