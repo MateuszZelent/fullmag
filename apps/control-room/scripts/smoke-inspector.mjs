@@ -2349,28 +2349,124 @@ async function selectInspectorResultBranch(
   dispersionRootId,
   modalStageId,
 ) {
-  const resultsTab = page
-    .locator(".fm-explorer .fm-tabs-trigger")
-    .filter({ hasText: /^Results$/ });
-  if ((await resultsTab.getAttribute("aria-selected")) !== "true") {
-    await resultsTab.click();
+  let phase = "select-dispersion-result";
+  try {
+    const resultsTab = page
+      .locator(".fm-explorer .fm-tabs-trigger")
+      .filter({ hasText: /^Results$/ });
+    if ((await resultsTab.getAttribute("aria-selected")) !== "true") {
+      await resultsTab.click();
+    }
+    await expandInspectorNode(page, resultRootId);
+    await expandInspectorNode(page, dispersionRootId);
+    await expandInspectorNode(page, modalStageId);
+    await selectResultInspectorNode(page, inspector, `${modalStageId}:dispersion`, {
+      owner: "frequency-domain-results-dispersion-modal-relation",
+      heading: "Dispersion Relation",
+      label: "Modal dispersion relation before branch selection",
+    });
+
+    phase = "expand-branch-table-section";
+    const branchTableSection = inspector.getByRole("button", {
+      name: /^Dispersion Branch Table/,
+    });
+    assert(
+      await branchTableSection.count() === 1,
+      "Dispersion Inspector must expose its branch-table navigation section.",
+    );
+    if ((await branchTableSection.getAttribute("aria-expanded")) !== "true") {
+      await branchTableSection.click();
+    }
+    await page.waitForFunction(
+      () => [...document.querySelectorAll('.fm-inspector [data-slot="inspector-group"]')]
+        .some((section) => {
+          const trigger = section.querySelector('[data-slot="inspector-group-trigger"]');
+          const content = section.querySelector('[data-slot="inspector-group-content"]');
+          return trigger?.textContent?.includes("Dispersion Branch Table") &&
+            trigger.getAttribute("aria-expanded") === "true" &&
+            content instanceof HTMLElement && !content.hidden;
+        }),
+      undefined,
+      { timeout: 60_000 },
+    );
+
+    phase = "assert-rendered-branch-row";
+    const branchTable = inspector.getByRole("table", {
+      name: "Frequency-domain branch table",
+      exact: true,
+    });
+    await branchTable.waitFor({ state: "visible", timeout: 60_000 });
+    const branchRow = branchTable.getByRole("row").filter({ hasText: "branch-0" });
+    assert(
+      await branchRow.count() === 1,
+      "The visible dispersion branch table must contain the fixture-owned branch-0 row.",
+    );
+
+    phase = "select-rendered-branch-row";
+    await branchRow.getByRole("button", {
+      name: "Select branch branch-0 for inspector controls",
+      exact: true,
+    }).click();
+    const branchInspector = inspector.locator(
+      '[data-inspector-owner="frequency-domain.eigen-branch"][data-inspector-surface="eigen-branch-detail"]',
+    );
+    await branchInspector.waitFor({ state: "visible", timeout: 60_000 });
+    await branchInspector.getByRole("heading", {
+      exact: true,
+      level: 3,
+      name: "Eigen Branch Detail",
+    }).waitFor();
+    await branchInspector.getByText("branch-0; Acoustic branch", {
+      exact: true,
+    }).waitFor();
+    assert(
+      (await branchInspector.getAttribute("data-inspector-owner")) ===
+        "frequency-domain.eigen-branch" &&
+        (await branchInspector.getAttribute("data-inspector-surface")) ===
+          "eigen-branch-detail",
+      "The branch-table action did not select the owned branch detail Inspector.",
+    );
+  } catch (error) {
+    try {
+      const failure = {
+        phase,
+        error: String(error?.stack ?? error),
+        inspectorOwner: await inspector.getAttribute("data-inspector-owner"),
+        inspectorHtml: (await inspector.evaluate((element) => element.outerHTML)).slice(0, 30_000),
+        branchGroups: await inspector.evaluate((element) =>
+          [...element.querySelectorAll('[data-slot="inspector-group"]')].map((section) => {
+            const trigger = section.querySelector('[data-slot="inspector-group-trigger"]');
+            const content = section.querySelector('[data-slot="inspector-group-content"]');
+            return {
+              expanded: trigger?.getAttribute("aria-expanded") ?? null,
+              hidden: content?.hasAttribute("hidden") ?? null,
+              title: trigger?.textContent?.trim() ?? null,
+            };
+          }),
+        ),
+        branchActions: await inspector.locator('button[aria-label^="Select branch "]')
+          .evaluateAll((buttons) => buttons.map((button) => {
+            const rect = button.getBoundingClientRect();
+            const content = button.closest('[data-slot="inspector-group-content"]');
+            return {
+              label: button.getAttribute("aria-label"),
+              visible: rect.width > 0 && rect.height > 0 && !content?.hasAttribute("hidden"),
+            };
+          })),
+      };
+      await writeFile(
+        resolve(outputDir, "modal-branch-selection-failure.json"),
+        `${JSON.stringify(failure, null, 2)}\n`,
+        "utf8",
+      );
+      await page.screenshot({
+        path: resolve(outputDir, "modal-branch-selection-failure.png"),
+      });
+    } catch (captureError) {
+      console.error("Modal branch selection failure capture failed:", captureError);
+    }
+    throw error;
   }
-  await expandInspectorNode(page, resultRootId);
-  await expandInspectorNode(page, dispersionRootId);
-  await expandInspectorNode(page, modalStageId);
-  await selectResultInspectorNode(page, inspector, `${modalStageId}:dispersion`, {
-    owner: "frequency-domain-results-dispersion-modal-relation",
-    heading: "Dispersion Relation",
-    label: "Modal dispersion relation before branch selection",
-  });
-  await inspector.getByRole("button", {
-    name: "Select branch branch-0 for inspector controls",
-    exact: true,
-  }).click();
-  await inspector.locator(
-    '[data-inspector-owner="frequency-domain.eigen-branch"][data-inspector-surface="eigen-branch-detail"]',
-  ).waitFor({ state: "visible", timeout: 60_000 });
-  await inspector.getByRole("heading", { exact: true, level: 3, name: "Eigen Branch Detail" }).waitFor();
 }
 
 async function exportBranchSampleCsv(page, inspector, sampleIndex, rawModeIndex) {

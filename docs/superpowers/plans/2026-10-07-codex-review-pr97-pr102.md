@@ -1957,3 +1957,8 @@ Count-only fixture używa rzeczywistego Context Poisson Hdemag/phi0, compensatio
 ### Driven fixture point7 — zgodność całego owner chain
 
 37882516810 FAIL na drivenfield po2modalPASS: unknownGET response/frequency-points/7, pozostałe route/Ribbon/Inspector assertionsPASS. Fixture udostępnia teraz owned FrequencyDomainJsonArtifactResource point7/frequency_response_point.v1, matchingartifactpath/session/run/stage/artifactset; sweep+point+fieldmetadata+leaf używają canonical analysis:frequency-response:frequency-0007. Progresscounts wyliczane z rzeczywiście dostępnego pointartifact, nie syntheticcomplete. Inneindices/products pozostają404/unknownguard. Source DTO/consumer review+nodesyntax+diff PASS; pełna5casebrowsermatrix i stalePlot3D actualtest nadalGHA pending.
+
+
+### Browser branch controls — rozwinięcie rzeczywistej sekcji
+
+37884231565 FAIL wselectInspectorResultBranch: branch action istniała, ale domyślniezwinięta Dispersion Branch Table była ukryta. Harness otwiera widocznytrigger tylko gdyaria-expanded nie jesttrue, potwierdza rowbranch-0, klika realnąakcję i sprawdza detailowner/surface/heading/identity. Bez directselectionbypass ani słabszychguards. Failurecapture zachowuje originalerror +boundedDOM/screenshot. Node syntax/sourcecomponent/fixture diffreview PASS; freshGHA pending. Routing5caseproof nie powstał wtymjobie: kolejność najpierwroutingmatrix potemResonance, więc nie zaliczono5cases.
