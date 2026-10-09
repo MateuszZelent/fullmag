@@ -1922,3 +1922,8 @@ Generic 37872370420: jawny positive MFEM sparse window/nearest marker PASS; pó�
 37880206848 job113657924170: ordered roundtrip78PASS+35subtests; API314PASS,1SKIP. Naprawa exact eigen selector snapshots i disable-all tracked state ma świeży dowód, bez lokalnych testów. CałyPython jobFAIL dopiero w znanym exact-layer ROI density; nie uznano całej bramki za zieloną. Zachowano ci-37880206848-python.log.
 
 #4225198879 browser fixture: manifest payload zawiera właściwe artifacts/physics, spectrum wrapper odpowiada backendowemu v1, stage-execution identity zgodna z currentstatus. Modal nie deklaruje response sweep i otrzymuje missing/not_started progress; driven otrzymuje backend-derived ready/running (1sweep point,0point artifacts, brak completeclaim). Green Meshbuilt toast jest oddzielony od error kind; asercje resource errors/pageerrors/identity zachowane. Node syntax/diff/source DTO reviewPASS, hosted5case matrixpending. Produkcyjnego transportu i ownerguardów nie poluzowano.
+
+
+### Generic budget: brakujące pole, nie zmiana solvera
+
+37879661027 terminalFAIL. Actual native log270: budget available1/cumulative1, EPS positive reason1,0certified modes i explicit refill-budget stopreason. Generic refill serializer pomijał outer_iteration_budget_exhausted, podczas gdy innyformatter już go publikował. Dodano tylko istniejący adapterbool obok availability; źródłowe independentreviewPASS. To wyczerpanie budżetu na kolejny refill po konwergentnej próbie EPS, nie dowód EPS_DIVERGED_ITS; residual1e-30 pozostał bez zmian. Existing CABI assertion/no canonicalpartialmode i root failure diagnostics zachowane. Source-map validator/diff PASS, fresh providerGHA pending.

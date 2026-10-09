@@ -4167,7 +4167,7 @@ FEM GPU and both FDM lanes gain no qualification from it.
 (dedup-quality-order-contract)=
 ### Residual-priority representatives for nontransitive overlap
 
-Source correction of review #4226154713; hosted execution **NOT VERIFIED**.
+Source correction of review #4226154713: GHA37881590033 native algebraic regression **PASS**. MFEM/SLEPc-provider and physical-dispersion qualification remain **NOT VERIFIED**.
 The frequency-distance and geometric tangent-mass overlap thresholds stay
 unchanged. Their conjunction is a pairwise duplicate predicate, not an
 assumption of a transitive equivalence relation. Process candidates by increasing
@@ -4192,3 +4192,20 @@ endpoint. Test all input permutations with dense and CSR mass actions, preservin
 original strict output and final frequency ordering. Source owners are
 `mode_deduplication.cpp` and `mode_deduplication_test.cpp`; this correction alone
 qualifies neither an eigensolver runtime nor a physical DE/BV dispersion curve.
+
+
+### Generic refill budget telemetry: available exhaustion is explicit
+
+The generic NEV-refill diagnostic publishes the adapter's
+`outer_iteration_budget_exhausted` beside `iteration_budget_available` and the
+cumulative count, as the other formatter already does. Interpret exhaustion
+only with availability evidence. It means no cumulative outer-iteration budget
+remains for a further attempt; it does not necessarily mean EPS diverged.
+GHA37879661027 returned positive EPS reason1 with budget1/cumulative1, zero
+certified modes and an explicit refill-budget stop reason. The diagnostic omitted
+the bool, causing the existing unchanged C-ABI regression to fail. The proposed
+serializer correction does not change the budget, residual gate, admission,
+mode output or EPS termination policy. The fixture's residual1e-30 rejects
+candidates and exercises lack of remaining refill budget after a converged EPS
+attempt; it is not proof of EPS_DIVERGED_ITS. Fresh hosted execution of the
+serializer correction is **NOT VERIFIED**.

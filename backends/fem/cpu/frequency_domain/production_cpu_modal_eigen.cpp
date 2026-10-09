@@ -1155,6 +1155,8 @@ std::string generic_slepc_nev_refill_json_field(
             : std::string("null")) +
         ",\"iteration_budget_available\":" +
         std::string(result.eps_iteration_budget_available ? "true" : "false") +
+        ",\"outer_iteration_budget_exhausted\":" +
+        std::string(result.eps_outer_iteration_budget_exhausted ? "true" : "false") +
         ",\"outer_iteration_budget\":" +
         (result.eps_iteration_budget_available
             ? std::to_string(result.max_outer_iterations)
