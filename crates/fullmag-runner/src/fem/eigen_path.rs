@@ -7,7 +7,7 @@ use std::collections::{BTreeSet, HashMap};
 use std::path::Path;
 
 use crate::dispatch::FemEngine;
-use crate::eigen::output_selection::{select_eigen_outputs, SampleModeId};
+use crate::eigen::output_selection::{select_eigen_outputs, EigenOutputSelection, SampleModeId};
 use crate::eigen::{KSampleDescriptor, SingleKModeResult, SingleKSolveResult};
 use crate::fem::eigen_capability::native_cpu_modal_window_enabled;
 use crate::fem::eigen_execution_resolution::{FemEigenExecutionLane, PlannedFemEigenExecution};
@@ -307,6 +307,23 @@ fn eigen_path_mode_id(sample_index: usize, raw_mode_index: usize) -> String {
     format!("sample-{sample_index:04}/mode-{raw_mode_index:04}")
 }
 
+fn eigen_path_overlap_values(
+    path_result: &crate::eigen::PathSolveResult,
+    selection: &EigenOutputSelection,
+) -> Vec<f64> {
+    path_result
+        .branches
+        .iter()
+        .flat_map(|branch| &branch.points)
+        .filter(|point| {
+            selection.contains_spectrum_mode(point.sample_index, point.raw_mode_index)
+                || selection.contains_field_mode(point.sample_index, point.raw_mode_index)
+                || selection.contains_tracking_mode(point.sample_index, point.raw_mode_index)
+        })
+        .filter_map(|point| point.overlap_prev)
+        .collect()
+}
+
 pub(super) fn relax_stage_handoff_for_path_sample<'a>(
     path_plan: &FemEigenPlanIR,
     source_relax_handoff: Option<&'a fem_eigen::AcceptedFemRelaxStageHandoff>,
@@ -328,6 +345,100 @@ pub(super) fn reuse_promoted_eigen_handoff(
 #[cfg(test)]
 pub(crate) mod test_support {
     use super::*;
+
+    #[test]
+    fn tracking_only_mode_contributes_to_overlap_summary_without_public_mode_selection() {
+        let sample_index = 12;
+        let raw_mode_index = 7;
+        let branch_id = 3;
+        let path_result = crate::eigen::PathSolveResult {
+            gamma0_rad_s_per_a_m: 2.211e5,
+            samples: vec![SingleKSolveResult {
+                sample: KSampleDescriptor {
+                    sample_index,
+                    label: Some("X".to_string()),
+                    segment_index: Some(0),
+                    path_s: 1.0,
+                    t_in_segment: 0.5,
+                    k_vector: [1.0e7, 0.0, 0.0],
+                },
+                modes: vec![SingleKModeResult {
+                    raw_mode_index,
+                    branch_id: Some(branch_id),
+                    frequency_real_hz: 2.0e9,
+                    frequency_imag_hz: 0.0,
+                    angular_frequency_rad_per_s: 2.0e9 * std::f64::consts::TAU,
+                    eigenvalue_real: 0.0,
+                    eigenvalue_imag: 2.0e9,
+                    norm: 1.0,
+                    mass_norm: Some(1.0),
+                    max_amplitude: 1.0,
+                    residual_relative_l2: None,
+                    residual_norm: None,
+                    residual_linf: None,
+                    tangent_leakage_mean_abs: None,
+                    tangent_leakage_max_abs: None,
+                    tangent_leakage_weighted_relative_l2: None,
+                    dominant_polarization: "x".to_string(),
+                    reduced_vector: None,
+                    lifted_real: None,
+                    lifted_imag: None,
+                    amplitude: None,
+                    phase: None,
+                    node_mass_weights: None,
+                    consistent_p1_metric: None,
+                    component_participation:
+                        crate::eigen::ModalParticipationObservable::unavailable_without_context(
+                            "test",
+                        ),
+                }],
+                relaxation_steps: 0,
+                solver_model: crate::eigen::EigenSolverModel::ReferenceFull2x2Tangent,
+                solver_notes: Vec::new(),
+                solver_diagnostics: None,
+            }],
+            branches: vec![crate::eigen::TrackedBranch {
+                branch_id,
+                label: Some("tracked-only".to_string()),
+                points: vec![crate::eigen::TrackedBranchPoint {
+                    sample_index,
+                    raw_mode_index,
+                    frequency_real_hz: 2.0e9,
+                    frequency_imag_hz: 0.0,
+                    tracking_confidence: 0.8,
+                    overlap_prev: Some(0.625),
+                    tracking_edge: None,
+                }],
+            }],
+            solver_model: crate::eigen::EigenSolverModel::ReferenceFull2x2Tangent,
+            notes: Vec::new(),
+            include_demag: false,
+            dispersion_validation: None,
+            k0_kittel_validation: None,
+            solver_policy: None,
+            dispersion_analytic_reference: None,
+            k0_kittel_periodic_airbox_demag: None,
+        };
+        let selection = select_eigen_outputs(
+            &path_result,
+            &[OutputIR::EigenDiagnostics {
+                include_tracking: true,
+                include_residuals: false,
+                include_overlaps: false,
+                include_tangent_leakage: false,
+                include_orthogonality: false,
+            }],
+        )
+        .expect("tracking diagnostics selection is valid");
+
+        assert!(selection.spectrum_mode_ids().is_empty());
+        assert!(selection.field_mode_ids().is_empty());
+        assert!(selection.contains_tracking_mode(sample_index, raw_mode_index));
+        assert_eq!(
+            super::eigen_path_overlap_values(&path_result, &selection),
+            vec![0.625],
+        );
+    }
 
     #[test]
     fn native_mode_identity_rejects_missing_fields_and_duplicates() {
@@ -1575,20 +1686,7 @@ pub(crate) fn execute_fem_eigen_path_with_producer_identity_and_parallel_policy(
         .ok()
         .and_then(|value| value.as_str().map(ToOwned::to_owned))
         .unwrap_or_else(|| "exp_minus_i_k_dot_delta_r".to_string());
-    let overlap_values = path_result
-        .branches
-        .iter()
-        .flat_map(|branch| {
-            branch
-                .points
-                .iter()
-                .filter(|point| {
-                    published_mode_ids
-                        .contains(&SampleModeId::new(point.sample_index, point.raw_mode_index))
-                })
-                .filter_map(|point| point.overlap_prev)
-        })
-        .collect::<Vec<_>>();
+    let overlap_values = eigen_path_overlap_values(&path_result, &selection);
     let min_overlap = overlap_values
         .iter()
         .copied()

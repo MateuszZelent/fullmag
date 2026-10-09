@@ -109,6 +109,7 @@ jobs:
         run: |
           cargo test -p fullmag-runner eigen::tracking::tests --lib --no-fail-fast
           cargo test -p fullmag-runner tracked_pair_overlap_is_published_as_confidence_in_json_and_csv --lib
+          cargo test -p fullmag-runner tracking_only_mode_contributes_to_overlap_summary_without_public_mode_selection --lib
 
       - name: Run eigen path terminal sample admission contracts
         run: |
