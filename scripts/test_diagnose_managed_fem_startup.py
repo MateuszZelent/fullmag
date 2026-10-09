@@ -93,12 +93,13 @@ class DiagnosticDriverTests(unittest.TestCase):
     def test_create_command_is_fixed_and_confined(self) -> None:
         image = "sha256:" + "a" * 64
         expected_env = _driver._diagnostic_environment("/image/lib")
+        root = Path(tempfile.gettempdir()).resolve() / "fullmag-startup-fixture"
         command = _driver.build_create_command(
             image=image,
             name="fullmag-startup-diagnostic-test",
-            execution=Path("C:/failed/execution"),
-            driver=Path("C:/repo/scripts/diagnose_managed_fem_startup.py"),
-            output=Path("C:/diagnostics/output"),
+            execution=root / "failed" / "execution",
+            driver=root / "repo" / "diagnose_managed_fem_startup.py",
+            output=root / "diagnostics" / "output",
             image_library_path="/image/lib",
         )
         self.assertIn("--read-only", command)
@@ -125,9 +126,10 @@ class DiagnosticDriverTests(unittest.TestCase):
 
     def test_container_record_requires_owned_policy(self) -> None:
         image = "sha256:" + "b" * 64
-        execution = Path("C:/failed/execution")
-        driver = Path("C:/repo/scripts/diagnose_managed_fem_startup.py")
-        output = Path("C:/diagnostics/output")
+        root = Path(tempfile.gettempdir()).resolve() / "fullmag-startup-fixture"
+        execution = root / "failed" / "execution"
+        driver = root / "repo" / "diagnose_managed_fem_startup.py"
+        output = root / "diagnostics" / "output"
         expected_env = _driver._diagnostic_environment("/image/lib")
         record = {
             "Image": image,

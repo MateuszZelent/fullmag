@@ -11477,7 +11477,7 @@ class RegionMeshPolicyTests(unittest.TestCase):
             rebuilt.append(geometry.geometry_name)
             return fake_mesh
 
-        with TemporaryDirectory() as tmp_dir:
+        with tempfile.TemporaryDirectory() as tmp_dir:
             cache_dir = Path(tmp_dir)
             (cache_dir / f"{legacy_key}.npz").write_bytes(b"old roster mesh")
             with (
