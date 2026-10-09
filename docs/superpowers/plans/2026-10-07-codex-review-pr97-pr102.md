@@ -6,7 +6,7 @@ Pełny rejestr obejmuje 268 komentarzy liniowych Codex oraz jedną dodatkową uw
 
 PR #102 zamknięto 2026-10-07, zachowując remote branch `codex/launcher-instance-isolation-20261002` przy `954ba797307c4cc773772d380123893210cfa447`. PR #97 pozostaje otwarty do ukończenia rozpatrzenia i uzasadnionych poprawek. Merge ani usuwanie branchy nie są częścią polecenia zamknięcia PR-ów. Wcześniejszy WIP meshing zachowany osobno.
 
-Stan rejestru: `already_fixed`: 24, `duplicate`: 90, `implemented`: 98, `implemented_pending_ci`: 8, `not_actionable`: 2, `unsupported_recommendation`: 3, `valid_unfixed`: 44. Łącznie 269 wpisów; wszystkie wpisy oceniono; zasadnych nienaprawionych i brakujących bramek nie uznaje się za zakończone.
+Stan rejestru: `already_fixed`: 24, `duplicate`: 90, `implemented`: 100, `implemented_pending_ci`: 6, `not_actionable`: 2, `unsupported_recommendation`: 3, `valid_unfixed`: 44. Łącznie 269 wpisów; wszystkie wpisy oceniono; zasadnych nienaprawionych i brakujących bramek nie uznaje się za zakończone.
 
 Legenda: `pending` — nierozpatrzona; `valid_unfixed` — zasadna, nie naprawiona; `already_fixed` — poprawka potwierdzona aktualnym kodem; `duplicate` — powtórzenie; `unsupported_recommendation` — konkretna rekomendacja nie odpowiada kontraktowi; `implemented` — poprawka z potwierdzoną regresją CI; `implemented_pending_ci` — poprawka przygotowana, regresja oczekuje CI; `implemented_pending_browser` — pokrywające CI przeszło, nadal wymaga celowanego dowodu z przeglądarki; `not_actionable` — uwaga zastąpiona późniejszą jawną decyzją użytkownika.
 
@@ -141,7 +141,7 @@ Legenda: `pending` — nierozpatrzona; `valid_unfixed` — zasadna, nie naprawio
 | [4105055299](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4105055299) / #97 | `scripts/compare_comsol_a1_frequency_reference.py` | implemented | Pusty/whitespace residual opcjonalny jest None; porównanie pozostaje frequency_only_unqualified. Niepusty nonfinite,negative,invalid odrzucany. |
 | [4106577136](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4106577136) / #97 | `scripts/validate_comsol_dispersion_scientific_gate.py` | implemented | Spójny próg airbox i blokada kwalifikacji przy failed check |
 | [4106577156](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4106577156) / #97 | `apps/control-room/src/modules/field-map/FieldMapModule.tsx` | duplicate | Aktualny HEAD ma retencję klatki oraz regresję identity-scoped; zgłoszone pending refresh nie odmontowuje już PlanarSurface. Powtórzenie 4060687814. |
-| [4106577193](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4106577193) / #97 | `scripts/local_runner/observability.py` | implemented_pending_ci | Oś czasu wyprowadza uczestniczące etapy z istniejącego Profile i receipt/logów. Nieznany profil i obce logi nie fabrykują sukcesu. Worker receipt pozostaje oddzielony od weryfikacji koordynatora. |
+| [4106577193](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4106577193) / #97 | `scripts/local_runner/observability.py` | implemented | Oś czasu wyprowadza uczestniczące etapy z istniejącego Profile i receipt/logów. Nieznany profil i obce logi nie fabrykują sukcesu. Worker receipt pozostaje oddzielony od weryfikacji koordynatora. |
 | [4106577202](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4106577202) / #97 | `apps/control-room/src/shared/domain/analysis/frequencyDomainChartModels.ts` | implemented | Zwykły wynik free_modes/frequency_response odrzucany jest przez odpowiadający mu subview mimo zgodnej rodziny wykresu. Powtórzenie 4060116236. |
 | [4106577220](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4106577220) / #97 | `crates/fullmag-runner/src/fem/eigen_path_manifest.rs` | implemented | Full path manifest requested_execution.outputs zawiera diagnostics dla rzeczywistego EigenDiagnostics; emptyoutputs nie deklaruje diagnostics. Nie zmienia selekcji publikowanych modów/flag writera. |
 | [4106577229](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4106577229) / #97 | `packages/fullmag-py/src/fullmag/world.py` | duplicate | Powtarza problem utraconego spectrum_scope opisany w #4060116242. Powtórzenie 4060116242. |
@@ -179,7 +179,7 @@ Legenda: `pending` — nierozpatrzona; `valid_unfixed` — zasadna, nie naprawio
 | [4205406982](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4205406982) / #97 | `apps/control-room/src/modules/inspector/panels/StudyGlobalAuthoringModel.ts` | valid_unfixed | Adaptive validation sprawdza lane FEM CPU i limity, ale global draft nie przenosi etapów/workflow. commitGlobalDraft zapisuje wartość, którą runtime odrzuca m.in. dla FrequencyResponse, bias-field continuation i FEM bez eigen k-path. |
 | [4205406986](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4205406986) / #97 | `scripts/local_runner/source_compaction.py` | implemented | Po os.replace pliku źródłowego nie ma fsync jego katalogu. Receipt jest fsyncowany w innym katalogu, więc checkpoint lub completed może przetrwać awarię, podczas gdy zmieniony wpis katalogowy kapsuły nie. |
 | [4205406991](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4205406991) / #97 | `crates/fullmag-runner/src/fem/eigen_native_window.rs` | implemented | native_modal_artifacts dobiera dense_operator_payload po shift_invert bez rozróżnienia Floquet sparse Schur adaptera. Faktyczny adapter ma natywne sparse blocks; dense limitation fałszuje provenance. Nie wykazano rzeczywistego downstream rejection. |
-| [4205406998](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4205406998) / #97 | `crates/fullmag-ir/src/waveguide_mesh_bindings.rs` | implemented_pending_ci | ExplicitWaveguideAir odrzuca actual material assignments do obiektu (whole/regional/listed/unlisted), zamiast gubić intent przy material_assignment=None. SortedIDs i istniejąca magnetization-error precedence; magnetic/cleanAir bindings bez zmian. |
+| [4205406998](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4205406998) / #97 | `crates/fullmag-ir/src/waveguide_mesh_bindings.rs` | implemented | ExplicitWaveguideAir odrzuca actual material assignments do obiektu (whole/regional/listed/unlisted), zamiast gubić intent przy material_assignment=None. SortedIDs i istniejąca magnetization-error precedence; magnetic/cleanAir bindings bez zmian. |
 | [4205652646](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4205652646) / #97 | `apps/control-room/src/shared/domain/analysis/frequencyDomainChartModels.ts` | duplicate | To samo dopuszczenie free_modes/fmr_modal dla modal-spectrum co #4106577202 (implemented_pending_ci_browser). Bieżący predykat już akceptuje obie wartości. Powtórzenie 4106577202. |
 | [4205652663](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4205652663) / #97 | `scripts/local_runner/container_main.py` | duplicate | Ta sama luka async polling UI co #4204074481 (valid_unfixed). Preview zwraca planning, apply wymaga preview, a klient robi POST raz i nie pobiera planu po ID. Powtórzenie 4204074481. |
 | [4205652672](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4205652672) / #97 | `scripts/local_runner/build_executor.py` | not_actionable | Modal-v1 rzeczywiście buduje i uruchamia CTest, ale ten profil nie jest wybierany automatycznie: domyślna allow-lista go pomija, enable_slepc_modal jest jawnym opt-in, enable_slepc_runtime_v2 dodaje wyłącznie runtime-v2, a submit wymaga dokładnego profilu z allow-listy. Jawny lokalny zakaz ogranicza działania agenta, nie systemowy kontrakt ani istniejące profile operatora; usuwanie modal-v1 byłoby sprzeczne z decyzją o zachowaniu profili. |
@@ -2445,3 +2445,17 @@ Nie dodano nowego testu porównującego jedynie tekst implementacji panelu; mocn
   Profil managed Floquet wymaga teraz sześciu osobnych testów/markerów. AST profilu,
   naukowy source-map validator i diff-check PASS; lokalnego wykonania nie było.
   Hosted execution nowych cases oraz produkcyjne provenance pozostają pending.
+
+
+### Dwie bramki review domknięte rzeczywistym CI (2026-10-09)
+
+- GHA37961001253 / exact8b7f88223 / Rust113923508618 SUCCESS. 4106577193
+  implemented: oba timeline suites11+24 PASS, w tym niezgodny source digest,
+  nieznane/obce etapy oraz rozdzielenie worker receipt od coordinator verification.
+- 4205406998 implemented: named Air listed/whole/regional assignments rejection,
+  clean magnetic/Air bindings oraz poprawiony Dirichlet converted fixture PASS.
+  Cały job Rust zakończył się sukcesem. To kontrakt IR/bindings, nie fizyka FEM.
+- Whole workflow FAIL w odrębnym Python meshing jobie (dwa udokumentowane przypadki).
+  Nie przenosimy tego failure na zielone named gates, nie nazywamy całego CI zielonym.
+- GHA37964705722 / exactad2e34b83 / PETSc-real113936042226 SUCCESS z nowymi helper
+  regression i shifted KSP markerem. Managed6-case37964701814 nadal active.
