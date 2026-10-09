@@ -5314,8 +5314,8 @@ fn frequency_response_round_trips_as_first_class_study() {
         sampling: SamplingIR {
             table_autosave: None,
             stage_autosave: None,
-            outputs: vec![OutputIR::EigenSpectrum {
-                quantity: "susceptibility".to_string(),
+            outputs: vec![OutputIR::FrequencyResponseOutput {
+                observable: FrequencyResponseOutputIR::SusceptibilityTensor,
             }],
         },
     };
@@ -5331,10 +5331,18 @@ fn frequency_response_round_trips_as_first_class_study() {
             excitation,
             frequencies_hz,
             solver_policy,
+            sampling,
             ..
         } => {
             assert_eq!(excitation.field_au_per_m, [0.0, 0.0, 1.0]);
             assert_eq!(frequencies_hz.values_hz, vec![1.0e9, 2.0e9]);
+            assert_eq!(
+                sampling.outputs,
+                vec![OutputIR::FrequencyResponseOutput {
+                    observable: FrequencyResponseOutputIR::SusceptibilityTensor,
+                }],
+                "round-trip must preserve the dedicated driven-response output"
+            );
             let solver_policy = solver_policy
                 .as_ref()
                 .expect("solver policy should round-trip");
