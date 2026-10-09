@@ -2200,3 +2200,10 @@ Nie dodano nowego testu porównującego jedynie tekst implementacji panelu; mocn
 - Refill fixture wymaga deterministycznego nonempty initial candidate pool poniżej count oraz rzeczywistych >=2 prób, wzrostu NEV i stałego NCV/MPD. Nie poluzowano assertion na allow1; wariant o większym wymiarze i rozdzielonych konkurentach poza oknem podlega ocenie.
 - Dodatkowe otwarte ryzyko z review (poza liczbą269 wpisów): tiny_enabled jest sprawdzane przed productionGPU dispatch w v20. Dotychczasowe dowody nie pozwalają stwierdzić poprawnego odrzucenia conflicting tiny+forcedGPU. Wymaga osobnego przeglądu/guardu/testu; naprawa metryki nie zamyka tego kontraktu.
 -4204792253: brak istniejącego semantic sample kind. Propozycja wspólnego enum PhysicalState/ModalProgress oraz jawnego legacy unspecified. Decyzja prezentacji starszych rekordów jest skierowana do użytkownika; nie wykonuje się cichej migracji ani klasyfikacji po object_id/zerach/observation_frameNone. Pozostałe prace nie zależą od tej odpowiedzi.
+
+### Tiny-validation: jawna dodatnia metryka adaptera
+
+- Source-reviewed poprawka w slepc_tiny_validation_result przekazuje jawne I2 przez istniejące tangent_mass_matrix_row_major. Jedyny caller wymaga dokładnie2dof, konsumpcja jest synchroniczna; contour pozostaje odrębnym solverem toy. Nie zmieniono execution target, K/G, tolerancji ani strict genericproduction mass guard.
+- Pełny failure-only status/error/diagnostics/result dopisano do rzeczywistego macrospin CABI testu, bez zmiany jego success/numeric asercji. Nota0600 i source-map zapisane przed kodem, validatorPASS. Source review poprawił zbyt silne zdanie o forcedGPU: ten fragment nie dowodzi odrzucenia conflicting tiny+GPU i nie zamyka oddzielnego ryzyka.
+- Source/diff/scientificvalidator PASS; nativeGHA nowych źródeł NOT VERIFIED. Refill provider coverage pozostaje odrębnym niezrealizowanym wymaganiem, bez allow1 relaxation.
+- Checkpoint fragment zapisany w5148c61c6c3749f11e82120ed81e3ad7765f4614; Ubuntu/Windows gates nadal potrzebują wykonania.

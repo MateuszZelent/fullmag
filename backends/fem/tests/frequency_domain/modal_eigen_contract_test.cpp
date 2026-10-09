@@ -4142,6 +4142,14 @@ void modal_shift_invert_finds_macrospin_mode()
     request.tiny_validation_mass_matrix_row_major = gyrotropic_mass_row_major;
 
     FullmagFemFrequencyDomainResult result = fullmag_fem_modal_eigen_solve(&request);
+    if (result.status != FULLMAG_FEM_FD_OK) {
+        std::fprintf(stderr,
+                     "DIAG: tiny macrospin status=%d error=%s diagnostics=%s result=%s\n",
+                     static_cast<int>(result.status),
+                     result.error_message != nullptr ? result.error_message : "",
+                     result.diagnostics_json != nullptr ? result.diagnostics_json : "",
+                     result.result_json != nullptr ? result.result_json : "");
+    }
     check(result.status == FULLMAG_FEM_FD_OK, "macrospin modal validation should succeed");
     check(contains(result.diagnostics_json, "\"tiny_validation_solver\":true"),
           "macrospin modal validation diagnostics identify validation lane");

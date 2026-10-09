@@ -41,6 +41,18 @@
       "id": "eq-eigenmode-branch-degeneracy-policy",
       "symbols": ["delta_f", "f_r", "f_i", "f_r_prime", "f_i_prime"],
       "sources": ["source-tracking-frequency-cluster-policy", "source-tracking-frequency-cluster-tests"]
+    },
+    {
+      "id": "eq-0600-tiny-reference-metric",
+      "symbols": [
+        "M_toy",
+        "I2",
+        "q"
+      ],
+      "sources": [
+        "source-tiny-slepc-reference-metric",
+        "source-tiny-slepc-reference-regression"
+      ]
     }
   ],
   "symbols": [
@@ -56,7 +68,19 @@
     {"id": "f_i_prime", "latex": "$f'_i$", "meaning": "imaginary component of comparison complex frequency", "si_unit": "$\\mathrm{Hz}$"},
     {"id": "P00", "latex": "$P_{00}$", "meaning": "thin-film demagnetizing factor", "si_unit": "$1$"},
     {"id": "k", "latex": "$k$", "meaning": "in-plane wave vector magnitude", "si_unit": "$\\mathrm{rad\\,m^{-1}}$"},
-    {"id": "t", "latex": "$t$", "meaning": "film thickness", "si_unit": "$\\mathrm{m}$"}
+    {"id": "t", "latex": "$t$", "meaning": "film thickness", "si_unit": "$\\mathrm{m}$"},
+    {
+      "id": "M_toy",
+      "latex": "$M_{\\mathrm{toy}}$",
+      "meaning": "jawna dodatnia metryka referencyjnego problemu dwuwymiarowego",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "I2",
+      "latex": "$I_2$",
+      "meaning": "macierz jednostkowa o wymiarze dwa",
+      "si_unit": "$1$"
+    }
   ],
   "sources": [
     {
@@ -94,6 +118,18 @@
       "path": "scripts/verify_fem_frequency_domain_eigen_artifacts.py",
       "symbol": "p00_demag_factor",
       "responsibility": "Provide the stable analytic P00 reference."
+    },
+    {
+      "id": "source-tiny-slepc-reference-metric",
+      "path": "backends/fem/src/frequency_domain/modal_eigen_solver.cpp",
+      "symbol": "slepc_tiny_validation_result",
+      "responsibility": "Supply explicit positive identity metric only for two-DOF validation reference; generic production mass remains mandatory."
+    },
+    {
+      "id": "source-tiny-slepc-reference-regression",
+      "path": "backends/fem/tests/frequency_domain/modal_eigen_contract_test.cpp",
+      "symbol": "main",
+      "responsibility": "Actual CABI macrospin validation solve and failure-only raw diagnostics; new runtime proof pending GHA."
     }
   ],
   "public_api": {

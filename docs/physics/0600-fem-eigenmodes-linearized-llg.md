@@ -693,3 +693,48 @@ ferromagnetic films*, J. Phys. C 19 (1986), DOI:10.1088/0022-3719/19/35/7013.
 | `scripts/verify_fem_frequency_domain_eigen_artifacts.py` | `p00_demag_factor` | Stable analytic P00 reference. |
 | `crates/fullmag-runner/src/eigen/tracking_subspace.rs` | `frequencies_are_degenerate` | Apply the private absolute-plus-relative complex-frequency grouping bound. |
 | `crates/fullmag-runner/src/eigen/tracking.rs` | `frequency_clusters_use_anchored_complex_distance_and_additive_tolerance` | Regress anchored grouping, complex distance, and additive/relative tolerance boundaries; does not qualify physical degeneracy. |
+
+
+## Jawna metryka tiny-validation SLEPc
+
+Adapter `slepc_tiny_validation_result` jest ograniczony do referencyjnego
+problemu o dokładnie dwóch współrzędnych stycznych. Jego macierz
+giroskopowa w pencil nie jest dodatnią metryką normowania modów. W tym
+zadanym problemie algebraicznym dodatnią metrykę definiuje się jawnie jako
+macierz jednostkową w współrzędnych toy:
+
+```{math}
+:label: eq-0600-tiny-reference-metric
+M_{\mathrm{toy}}=I_2,\qquad
+\lVert q\rVert_{M_{\mathrm{toy}}}^{2}=q^{\dagger}M_{\mathrm{toy}}q.
+```
+
+| Symbol | Znaczenie | Jednostka SI |
+|---|---|---|
+| $M_{\mathrm{toy}}$ | jawna dodatnia metryka referencyjnego problemu dwuwymiarowego | $1$ |
+| $I_2$ | macierz jednostkowa o wymiarze dwa | $1$ |
+| $q$ | współrzędne trybu w zadanej bazie toy, zgodne z tabelą symboli strony | $1$ |
+
+To definicja ograniczonego fixture referencyjnego, nie zastępnik macierzy
+masy FEM. Adapter przekazuje ją jako rzeczywiste dane wejściowe SLEPc;
+wspólny solver nadal odrzuca brakującą lub niepoprawną dodatnią metrykę
+produkcji. Nie dodaje się fallbacku identity w generic production, nie
+zmienia się pencil K/G, konwencji czasowej, progu residualu ani wyboru
+CPU/GPU. Tiny-validation nie kwalifikuje demag, siatki ani dyspersji FEM.
+
+Publiczny Python/ProblemIR nie otrzymuje nowego parametru. Kontrakt dotyczy
+wewnętrznego adaptera CABI: istniejące jawne tiny input wybiera validation
+lane. Ta poprawka nie zmienia istniejącego wyboru execution target ani
+dispatchu CPU/GPU; tiny-validation jawnie raportuje validation lane.
+FDM CPU/GPU i produkcyjny FEM GPU nie korzystają z tej referencyjnej metryki.
+
+GHA37915874849 wykazało odmowę macrospin validation; source trace wskazuje
+na nieprzekazaną metrykę do strict SLEPc preparation. Do potwierdzenia
+przyczyny i poprawki potrzeba failure-only diagnostics oraz wykonania
+pełnego natywnego kontraktu z MFEM/SLEPc w GitHub Actions. Runtime i
+kwalifikacja naukowa nowych źródeł pozostają **NOT VERIFIED**.
+
+| Source ID | Path + symbol | Odpowiedzialność |
+|---|---|---|
+| source-tiny-slepc-reference-metric | `backends/fem/src/frequency_domain/modal_eigen_solver.cpp` :: `slepc_tiny_validation_result` | jawna metryka wyłącznie dwuwymiarowej validation lane |
+| source-tiny-slepc-reference-regression | `backends/fem/tests/frequency_domain/modal_eigen_contract_test.cpp` :: `main` (wywołuje `modal_shift_invert_finds_macrospin_mode`) | rzeczywisty CABI solve i failure-only diagnostics; GHA NOT VERIFIED |

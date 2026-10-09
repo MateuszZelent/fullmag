@@ -1437,6 +1437,11 @@ FrequencyDomainContractResult slepc_tiny_validation_result(
         static_cast<int>(request.tiny_validation_tangent_dof_count);
     slepc_request.stiffness_matrix_row_major = stiffness;
     slepc_request.gyrotropic_matrix_row_major = gyrotropic_mass;
+    // This adapter is restricted to two toy tangent coordinates. Its explicit
+    // positive reference metric is separate from the gyrotropic pencil mass;
+    // generic production callers must still supply their physical FE metric.
+    constexpr double toy_tangent_mass[4] = {1.0, 0.0, 0.0, 1.0};
+    slepc_request.tangent_mass_matrix_row_major = toy_tangent_mass;
     slepc_request.requested_mode_count = request.requested_mode_count;
     slepc_request.target_frequency_hz = shift_frequency_hz;
     slepc_request.frequency_min_hz = request.frequency_min_hz;
