@@ -1,5 +1,7 @@
 "use client";
 
+import { Database, GitCommit, Table2, TriangleAlert, Waves } from "lucide-react";
+
 import {
   useAnalysisResultBranchResource,
   useAnalysisResultDatasetManifestResource,
@@ -24,6 +26,7 @@ import { ModeVisualizationPhaseControl } from "../ModeVisualizationInspectorPane
 import { ScientificInspectorTemplate } from "../../components/ScientificInspectorTemplate";
 import { FieldRow } from "../../primitives/FieldRow";
 import { InspectorGroup } from "../../primitives/InspectorGroup";
+import { InspectorOverviewFrame } from "../../primitives/InspectorOverviewFrame";
 import type { InspectorPanelProps } from "../../inspectorTypes";
 import {
   type AnalysisResultSelectionRef,
@@ -153,85 +156,97 @@ export function AnalysisResultInspectorPanel({
     manifest: manifestData,
   });
 
+  const properties: readonly { label: string; mono?: boolean; unit?: string; value: string }[] = [
+    { label: "Run", mono: true, value: resultRef.runId },
+    { label: "Stage", mono: true, value: resultRef.stageId },
+    { label: "Dataset", mono: true, value: resultRef.datasetId },
+    { label: "Dataset revision", mono: true, value: resultRef.datasetRevision },
+    { label: "Sample", mono: true, value: display(resultRef.sampleId) },
+    { label: "Item", mono: true, value: display(resultRef.itemId) },
+    { label: "Item kind", value: display(resultRef.itemKind) },
+    { label: "Frequency", unit: "Hz", value: display(itemData?.frequency_hz) },
+    { label: "Branch", mono: true, value: display(resultRef.branchId ?? itemData?.branch_id) },
+    { label: "Branch points", value: display(branchData?.point_count) },
+    { label: "Field", mono: true, value: display(resultRef.fieldId ?? itemData?.field_ref?.field_id) },
+    { label: "Projection", mono: true, value: display(resultRef.projectionId) },
+    { label: "Projection point", value: display(resultRef.projectionOrdinal) },
+    {
+      label: "Sample coordinates",
+      value:
+        sampleData?.coordinates
+          .map((coordinate) => `${coordinate.axis_id}=${coordinate.label ?? coordinate.token}`)
+          .join(" · ") ?? "Unavailable",
+    },
+  ];
+  const provenance = [
+    { label: "Selection node", mono: true, value: resultRef.nodeId },
+    {
+      label: "Source revision",
+      mono: true,
+      value: display(itemData?.source_revision ?? branchData?.source_revision),
+    },
+    {
+      label: "Field revision",
+      mono: true,
+      value: display(resultRef.fieldRevision ?? itemData?.field_ref?.field_revision),
+    },
+    { label: "Resource transport", value: transportStatus },
+    { label: "Selection source", value: selection.moduleSource },
+  ];
+
   return (
-    <>
-      <ScientificInspectorTemplate
-        breadcrumbs={["Results", manifestData?.title ?? resultRef.datasetId, focusLabel(resultRef.focus)]}
-        diagnostics={diagnostics}
-        methodLabel="Run-scoped result dataset"
-        physicalLabel={focusLabel(resultRef.focus)}
-        properties={[
-          { label: "Run", mono: true, value: resultRef.runId },
-          { label: "Stage", mono: true, value: resultRef.stageId },
-          { label: "Dataset", mono: true, value: resultRef.datasetId },
-          { label: "Dataset revision", mono: true, value: resultRef.datasetRevision },
-          { label: "Sample", mono: true, value: display(resultRef.sampleId) },
-          { label: "Item", mono: true, value: display(resultRef.itemId) },
-          { label: "Item kind", value: display(resultRef.itemKind) },
+    <div className="fm-inspector-panel" data-inspector-owner="results.analysis_result">
+      <InspectorOverviewFrame
+        metrics={[
+          { label: "Focus", value: focusLabel(resultRef.focus) },
           {
-            label: "Frequency",
-            unit: "Hz",
-            value: display(itemData?.frequency_hz),
+            label: "Status",
+            value: status?.completeness ?? transportStatus,
+            tone: status?.completeness === "complete" ? "success" : "neutral",
+          },
+          { label: "Residual L2", value: display(itemData?.quality.residual_relative_l2) },
+          { label: "Axes", value: display(manifestData?.axes.length) },
+        ]}
+        primary={properties.map((row) => <FieldRow key={row.label} {...row} />)}
+        primaryIcon={<Database size={18} strokeWidth={1.5} />}
+        primaryTitle={selection.label ?? resultRef.itemId ?? resultRef.sampleId ?? resultRef.datasetId}
+        sections={[
+          {
+            id: "field",
+            title: "Result field visualization",
+            icon: <Waves size={16} strokeWidth={1.5} />,
+            defaultOpen: true,
+            content: <AnalysisResultFieldControls selectionRef={resultRef} />,
           },
           {
-            label: "Residual relative L2",
-            value: display(itemData?.quality.residual_relative_l2),
+            id: "metadata",
+            title: "Dataset metadata",
+            icon: <Table2 size={16} strokeWidth={1.5} />,
+            summary: manifestData?.title,
+            content: <AnalysisResultMetadata model={inspectorModel} />,
           },
           {
-            label: "Branch tracking score",
-            value: display(itemData?.quality.tracking_score),
-          },
-          { label: "Branch", mono: true, value: display(resultRef.branchId ?? itemData?.branch_id) },
-          {
-            label: "Branch points",
-            value: display(branchData?.point_count),
-          },
-          {
-            label: "Field",
-            mono: true,
-            value: display(resultRef.fieldId ?? itemData?.field_ref?.field_id),
-          },
-          {
-            label: "Projection",
-            mono: true,
-            value: display(resultRef.projectionId),
+            id: "diagnostics",
+            title: "Diagnostics",
+            icon: <TriangleAlert size={16} strokeWidth={1.5} />,
+            summary: diagnostics.length > 0 ? `${diagnostics.length} notes` : "none",
+            defaultOpen: diagnostics.length > 0,
+            content:
+              diagnostics.length > 0 ? (
+                diagnostics.map((line) => <FieldRow key={line} label="Note" value={line} />)
+              ) : (
+                <FieldRow label="Diagnostics" value="None" />
+              ),
           },
           {
-            label: "Projection point",
-            value: display(resultRef.projectionOrdinal),
-          },
-          {
-            label: "Published axes",
-            value: display(manifestData?.axes.length),
-          },
-          {
-            label: "Sample coordinates",
-            value: sampleData?.coordinates
-              .map((coordinate) => `${coordinate.axis_id}=${coordinate.label ?? coordinate.token}`)
-              .join(" · ") ?? "Unavailable",
+            id: "provenance",
+            title: "Provenance",
+            icon: <GitCommit size={16} strokeWidth={1.5} />,
+            content: provenance.map((row) => <FieldRow key={row.label} {...row} />),
           },
         ]}
-        provenance={[
-          { label: "Selection node", mono: true, value: resultRef.nodeId },
-          {
-            label: "Source revision",
-            mono: true,
-            value: display(itemData?.source_revision ?? branchData?.source_revision),
-          },
-          { label: "Field revision", mono: true, value: display(resultRef.fieldRevision ?? itemData?.field_ref?.field_revision) },
-          { label: "Resource transport", value: transportStatus },
-          { label: "Selection source", value: selection.moduleSource },
-        ]}
-        status={{
-          availability: status?.completeness ?? "unknown",
-          execution: status?.execution ?? "unknown",
-          resource: status?.resource ?? transportStatus,
-        }}
-        title={selection.label ?? resultRef.itemId ?? resultRef.sampleId ?? resultRef.datasetId}
       />
-      <AnalysisResultMetadata model={inspectorModel} />
-      <AnalysisResultFieldControls selectionRef={resultRef} />
-    </>
+    </div>
   );
 }
 
