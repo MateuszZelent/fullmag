@@ -1103,6 +1103,28 @@ fn spectral_v04_study_builders() -> [fn(Value, Option<Value>) -> Value; 2] {
     [eigenmodes_v04, frequency_response_v04]
 }
 
+fn all_sampling_v04_studies() -> Vec<Value> {
+    let bootstrap = serde_json::to_value(ProblemIRV04::bootstrap_example()).unwrap();
+    vec![
+        bootstrap["study"].clone(),
+        json!({
+            "kind": "relaxation",
+            "algorithm": "projected_gradient_bb",
+            "dynamics": null,
+            "stop": { "max_steps": 100 },
+            "sampling": { "outputs": [] },
+            "spatial_representation": full_3d()
+        }),
+        eigenmodes_v04(full_3d(), Some(json!("open"))),
+        frequency_response_v04(full_3d(), Some(json!("open"))),
+        json!({
+            "kind": "hysteresis",
+            "sampling": { "outputs": [] },
+            "spatial_representation": full_3d()
+        }),
+    ]
+}
+
 #[test]
 fn v04_equilibrium_variants_reject_unknown_fields_in_standalone_and_root_wires() {
     let unknown_sources = [
@@ -1381,4 +1403,273 @@ fn migration_rejects_unknown_spectral_intent_without_mutating_input() {
         assert!(error.contains(unknown_field), "{error}");
         assert_eq!(value, original);
     }
+}
+
+#[test]
+fn v04_sampling_rejects_unknown_fields_at_every_level_for_all_studies() {
+    let unknown_cases = [
+        (
+            json!({ "outputs": [], "future_sampling_flag": true }),
+            "/study/sampling",
+            "future_sampling_flag",
+        ),
+        (
+            json!({
+                "outputs": [{
+                    "kind": "field",
+                    "name": "M",
+                    "every_seconds": 1e-12,
+                    "future_output_flag": true
+                }]
+            }),
+            "/study/sampling/outputs/0",
+            "future_output_flag",
+        ),
+        (
+            json!({
+                "outputs": [{
+                    "kind": "field_auto",
+                    "name": "M",
+                    "sample_period_policy": {
+                        "kind": "auto_sinc_cutoff",
+                        "future_policy_flag": true
+                    }
+                }]
+            }),
+            "/study/sampling/outputs/0/sample_period_policy",
+            "future_policy_flag",
+        ),
+        (
+            json!({
+                "outputs": [],
+                "table_autosave": {
+                    "quantities": ["m"],
+                    "future_table_flag": true
+                }
+            }),
+            "/study/sampling/table_autosave",
+            "future_table_flag",
+        ),
+        (
+            json!({
+                "outputs": [],
+                "table_autosave": {
+                    "quantities": ["m"],
+                    "sample_period_policy": {
+                        "kind": "auto_sinc_cutoff",
+                        "future_policy_flag": true
+                    }
+                }
+            }),
+            "/study/sampling/table_autosave/sample_period_policy",
+            "future_policy_flag",
+        ),
+        (
+            json!({
+                "outputs": [{
+                    "kind": "eigen_mode",
+                    "field": "M",
+                    "sample_selector": {
+                        "sample_indices": [0],
+                        "future_selector_flag": true
+                    }
+                }]
+            }),
+            "/study/sampling/outputs/0/sample_selector",
+            "future_selector_flag",
+        ),
+        (
+            json!({
+                "outputs": [],
+                "stage_autosave": {
+                    "target": "run",
+                    "layout": "continuous",
+                    "format": "zarr",
+                    "fields": [{
+                        "quantity": "M",
+                        "every_steps": 2,
+                        "future_field_flag": true
+                    }]
+                }
+            }),
+            "/study/sampling/stage_autosave/fields/0",
+            "future_field_flag",
+        ),
+    ];
+
+    for base_study in all_sampling_v04_studies() {
+        for (sampling, pointer, unknown_field) in unknown_cases.iter() {
+            let mut study = base_study.clone();
+            study["sampling"] = sampling.clone();
+
+            let standalone_error = serde_json::from_value::<StudyIRV04>(study.clone())
+                .unwrap_err()
+                .to_string();
+            assert!(standalone_error.contains(*pointer), "{standalone_error}");
+            assert!(standalone_error.contains(*unknown_field), "{standalone_error}");
+
+            let root_error =
+                serde_json::from_value::<ProblemIRV04>(problem_value_with_study(study))
+                    .unwrap_err()
+                    .to_string();
+            assert!(root_error.contains(*pointer), "{root_error}");
+            assert!(root_error.contains(*unknown_field), "{root_error}");
+        }
+    }
+}
+
+#[test]
+fn v04_sampling_preserves_every_output_variant_autosave_and_defaults() {
+    let sampling = json!({
+        "outputs": [
+            { "kind": "field", "name": "M", "every_seconds": 1.25e-12 },
+            { "kind": "field_auto", "name": "H_ex", "sample_period_policy": { "kind": "auto_sinc_cutoff" } },
+            { "kind": "field_resolved_auto", "name": "H_demag", "every_seconds": 2.5e-12, "requested_policy": { "kind": "auto_sinc_cutoff", "nyquist_guard_factor": 1.7 } },
+            { "kind": "scalar", "name": "E_ex", "every_seconds": 3.75e-12 },
+            { "kind": "scalar_auto", "name": "energy", "sample_period_policy": { "kind": "auto_sinc_cutoff", "nyquist_guard_factor": 1.4 } },
+            { "kind": "scalar_resolved_auto", "name": "m_z", "every_seconds": 4.5e-12, "requested_policy": { "kind": "auto_sinc_cutoff" } },
+            { "kind": "snapshot", "field": "M", "component": "z", "every_seconds": 5e-12 },
+            { "kind": "eigen_spectrum", "quantity": "frequency_hz" },
+            { "kind": "eigen_mode", "field": "mode", "sample_selector": { "sample_indices": [0, 2], "sample_labels": ["Γ", "X"] } },
+            { "kind": "dispersion_curve", "name": "branches" },
+            { "kind": "frequency_response_output", "observable": "response_amplitude" },
+            { "kind": "eigen_diagnostics", "include_tracking": true },
+            { "kind": "save_quantity", "quantity_id": "M", "every_seconds": 6.25e-12, "reduction": "average", "component": "magnitude" }
+        ],
+        "table_autosave": {
+            "sample_period_policy": { "kind": "auto_sinc_cutoff" },
+            "quantities": ["E_ex"],
+            "expressions": ["E_ex + E_anis"]
+        },
+        "stage_autosave": {
+            "target": "run-01",
+            "layout": "separate",
+            "format": "hdf5",
+            "table": {
+                "every_steps": 3,
+                "quantities": ["m_z"]
+            },
+            "fields": [{
+                "quantity": "M",
+                "every_steps": 2
+            }]
+        }
+    });
+
+    let expected = json!({
+        "outputs": [
+            { "kind": "field", "name": "M", "every_seconds": 1.25e-12 },
+            { "kind": "field_auto", "name": "H_ex", "sample_period_policy": { "kind": "auto_sinc_cutoff", "nyquist_guard_factor": 1.3 } },
+            { "kind": "field_resolved_auto", "name": "H_demag", "every_seconds": 2.5e-12, "requested_policy": { "kind": "auto_sinc_cutoff", "nyquist_guard_factor": 1.7 } },
+            { "kind": "scalar", "name": "E_ex", "every_seconds": 3.75e-12 },
+            { "kind": "scalar_auto", "name": "energy", "sample_period_policy": { "kind": "auto_sinc_cutoff", "nyquist_guard_factor": 1.4 } },
+            { "kind": "scalar_resolved_auto", "name": "m_z", "every_seconds": 4.5e-12, "requested_policy": { "kind": "auto_sinc_cutoff", "nyquist_guard_factor": 1.3 } },
+            { "kind": "snapshot", "field": "M", "component": "z", "every_seconds": 5e-12 },
+            { "kind": "eigen_spectrum", "quantity": "frequency_hz" },
+            { "kind": "eigen_mode", "field": "mode", "indices": [], "sample_selector": { "sample_indices": [0, 2], "sample_labels": ["Γ", "X"] } },
+            { "kind": "dispersion_curve", "name": "branches", "include_branch_table": true },
+            { "kind": "frequency_response_output", "observable": "response_amplitude" },
+            { "kind": "eigen_diagnostics", "include_tracking": true, "include_residuals": false, "include_overlaps": false, "include_tangent_leakage": false, "include_orthogonality": false },
+            { "kind": "save_quantity", "quantity_id": "M", "every_seconds": 6.25e-12, "reduction": "average", "component": "magnitude" }
+        ],
+        "table_autosave": {
+            "kind": "table_autosave",
+            "table_id": "default",
+            "sample_period_policy": { "kind": "auto_sinc_cutoff", "nyquist_guard_factor": 1.3 },
+            "quantities": ["E_ex"],
+            "expressions": ["E_ex + E_anis"]
+        },
+        "stage_autosave": {
+            "kind": "stage_autosave",
+            "target": "run-01",
+            "layout": "separate",
+            "format": "hdf5",
+            "table": {
+                "kind": "table_autosave",
+                "table_id": "default",
+                "every_steps": 3,
+                "quantities": ["m_z"]
+            },
+            "fields": [{
+                "kind": "field_autosave",
+                "quantity": "M",
+                "every_steps": 2
+            }]
+        }
+    });
+
+    for mut study in all_sampling_v04_studies() {
+        study["sampling"] = sampling.clone();
+
+        let standalone: StudyIRV04 = serde_json::from_value(study.clone()).unwrap();
+        assert_eq!(serde_json::to_value(standalone).unwrap()["sampling"], expected);
+
+        let root: ProblemIRV04 =
+            serde_json::from_value(problem_value_with_study(study)).unwrap();
+        assert_eq!(serde_json::to_value(root).unwrap()["study"]["sampling"], expected);
+    }
+}
+
+#[test]
+fn v04_sampling_optional_autosaves_keep_missing_and_null_semantics() {
+    for mut study in all_sampling_v04_studies() {
+        for use_null in [false, true] {
+            let mut sampling = json!({ "outputs": [] });
+            if use_null {
+                sampling["table_autosave"] = Value::Null;
+                sampling["stage_autosave"] = Value::Null;
+            }
+            study["sampling"] = sampling;
+
+            let standalone: StudyIRV04 = serde_json::from_value(study.clone()).unwrap();
+            let encoded = serde_json::to_value(standalone).unwrap();
+            assert!(encoded["sampling"].get("table_autosave").is_none());
+            assert!(encoded["sampling"].get("stage_autosave").is_none());
+
+            let root: ProblemIRV04 =
+                serde_json::from_value(problem_value_with_study(study.clone())).unwrap();
+            let encoded = serde_json::to_value(root).unwrap();
+            assert!(encoded["study"]["sampling"]
+                .get("table_autosave")
+                .is_none());
+            assert!(encoded["study"]["sampling"]
+                .get("stage_autosave")
+                .is_none());
+        }
+    }
+}
+
+#[test]
+fn legacy_sampling_decoder_stays_lenient_and_v04_migration_is_atomic() {
+    let legacy_sampling = json!({
+        "outputs": [{
+            "kind": "field_auto",
+            "name": "M",
+            "sample_period_policy": {
+                "kind": "auto_sinc_cutoff",
+                "future_policy_flag": true
+            },
+            "future_output_flag": true
+        }],
+        "table_autosave": {
+            "quantities": ["M"],
+            "future_table_flag": true
+        },
+        "future_sampling_flag": true
+    });
+    let mut legacy = serde_json::to_value(ProblemIR::bootstrap_example()).unwrap();
+    legacy["study"]["sampling"] = legacy_sampling.clone();
+    let legacy: ProblemIR = serde_json::from_value(legacy).unwrap();
+    assert_eq!(
+        serde_json::to_value(legacy).unwrap()["study"]["sampling"]["outputs"][0]["name"],
+        "M"
+    );
+
+    let mut migration_input = serde_json::to_value(ProblemIR::bootstrap_example()).unwrap();
+    migration_input["study"]["sampling"] = legacy_sampling;
+    let original = migration_input.clone();
+    let error = migrate_v0_3_problem_ir_to_v0_4(&mut migration_input).unwrap_err();
+    assert!(error.contains("/study/sampling"), "{error}");
+    assert!(error.contains("future_sampling_flag"), "{error}");
+    assert_eq!(migration_input, original);
 }

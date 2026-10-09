@@ -94,6 +94,7 @@ where
 pub enum StudyIRV04 {
     TimeEvolution {
         dynamics: DynamicsIR,
+        #[serde(deserialize_with = "crate::v04_spectral_wire::deserialize_sampling")]
         sampling: SamplingIR,
         spatial_representation: SpatialRepresentationIR,
     },
@@ -102,6 +103,7 @@ pub enum StudyIRV04 {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         dynamics: Option<DynamicsIR>,
         stop: RelaxStopIR,
+        #[serde(deserialize_with = "crate::v04_spectral_wire::deserialize_sampling")]
         sampling: SamplingIR,
         spatial_representation: SpatialRepresentationIR,
     },
@@ -132,6 +134,7 @@ pub enum StudyIRV04 {
         magnetostatic_bc: Option<MagnetostaticBoundaryConditionIR>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         mode_tracking: Option<ModeTrackingIR>,
+        #[serde(deserialize_with = "crate::v04_spectral_wire::deserialize_sampling")]
         sampling: SamplingIR,
         spatial_representation: SpatialRepresentationIR,
     },
@@ -160,6 +163,7 @@ pub enum StudyIRV04 {
         frequencies_hz: FrequencySweepIR,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         solver_policy: Option<FrequencyResponseSolverPolicyIR>,
+        #[serde(deserialize_with = "crate::v04_spectral_wire::deserialize_sampling")]
         sampling: SamplingIR,
         spatial_representation: SpatialRepresentationIR,
     },
@@ -202,6 +206,7 @@ pub enum StudyIRV04 {
         adaptive_refinement: Option<AdaptiveRefinementIR>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         minor_loops: Option<Vec<MinorLoopIR>>,
+        #[serde(deserialize_with = "crate::v04_spectral_wire::deserialize_sampling")]
         sampling: SamplingIR,
         spatial_representation: SpatialRepresentationIR,
     },
