@@ -432,7 +432,7 @@ class _VerifiedDirectoryOwner:
         if os.name == "nt":
             self._ctypes, _wintypes, self._kernel32, self.handle = _windows_open_handle(
                 self.path,
-                access=0x0080,  # FILE_READ_ATTRIBUTES
+                access=0x0001 | 0x0080,  # FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES
                 share=0x0001 | 0x0002,  # FILE_SHARE_READ | FILE_SHARE_WRITE; deny delete/rename
                 flags=0x02000000 | 0x00200000,  # BACKUP_SEMANTICS | OPEN_REPARSE_POINT
                 label=self.label,
