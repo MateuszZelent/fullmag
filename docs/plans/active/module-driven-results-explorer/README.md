@@ -242,6 +242,20 @@ ma akcję „Chart + 3D”.
 
 ### Etap 6 — trwałe definicje (backend + frontend)
 
+Stan: **wdrożone w źródłach, CI zielone** (`rust-contracts`,
+`generated-api-determinism`, `control-room-contracts`). Zasób
+`/v2/sessions/current/analysis/postprocessing/definitions` (list/get/create/
+patch/delete, rewizja sceny) zapisuje definicje w opcjonalnej sekcji
+`analysis` dokumentu sceny, więc są zapisywane i odtwarzane z projektem, nie
+trafiają do skryptu ani fizyki. Walidacja: unikalne id, `node_kind` należący
+do modułu, opublikowana tożsamość danych, brak cykli rodziców; zmiana
+właściciela i usunięcie rodzica z dziećmi są odrzucane. W UI: „Pin mode
+visualization” na węźle modu, grupa „Pinned visualizations” w rodzinie
+modułu (węzły są kopiami opublikowanych węzłów modu; nieopublikowane pole
+zostaje widoczne jako niedostępne) i „Remove pinned visualization”.
+Ograniczenie: ponowny import skryptu, który tworzy nowy dokument sceny,
+nie przenosi definicji.
+
 - Zasób z spec 32 §8 w OpenAPI, zapis w projekcie, transakcje z rewizją.
   Komendy „Create mode visualization”, „Add reference”, „Save view”.
 - Odbiór: definicja przetrwa ponowne otwarcie projektu; nieznany schemat daje
@@ -249,6 +263,15 @@ ma akcję „Chart + 3D”.
   indeksów.
 
 ### Etap 7 — zasób referencji i porównania
+
+Stan: **częściowo wdrożone.** Punkty referencji nie wybierają już
+policzonego modu. Import COMSOL/CSV w Inspectorze relacji dyspersji
+(jawne mapowanie kolumn i jednostek na SI) zapisuje referencję jako
+definicję postprocessingu; wykres dyspersji rysuje ją jako serię
+referencyjną. Pierwsza kolumna jest czytana jako współrzędna ścieżki
+wykresu, bo punkty dyspersji w tym branchu nie mają wektora k. Pozostaje:
+backendowy zasób referencji analitycznej z modelem i zakresem ważności oraz
+status porównania liczony z metadanych.
 
 - Referencja jako osobny zasób backendu z modelem, założeniami i zakresem
   ważności; status porównania liczony z metadanych; import COMSOL/CSV.
