@@ -164,11 +164,10 @@ inline PetscErrorCode destroy_floquet_ksp_default_convergence_context(
     const PetscErrorCode error = KSPConvergedDefaultDestroy(&owned_context);
 #endif
     if (error == PETSC_SUCCESS) {
-#if PETSC_VERSION_LT(3, 24, 0)
+        // PETSc 3.24 frees its local cctx without clearing the caller's slot.
+        // A successful release transfers no remaining ownership, regardless
+        // of whether that version also nulls its pointer-to-pointer argument.
         *default_context = nullptr;
-#else
-        *default_context = owned_context;
-#endif
     }
     return error;
 }

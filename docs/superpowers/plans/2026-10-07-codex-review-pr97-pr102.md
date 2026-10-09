@@ -6,7 +6,7 @@ Pełny rejestr obejmuje 268 komentarzy liniowych Codex oraz jedną dodatkową uw
 
 PR #102 zamknięto 2026-10-07, zachowując remote branch `codex/launcher-instance-isolation-20261002` przy `954ba797307c4cc773772d380123893210cfa447`. PR #97 pozostaje otwarty do ukończenia rozpatrzenia i uzasadnionych poprawek. Merge ani usuwanie branchy nie są częścią polecenia zamknięcia PR-ów. Wcześniejszy WIP meshing zachowany osobno.
 
-Stan rejestru: `already_fixed`: 24, `duplicate`: 90, `implemented`: 100, `implemented_pending_ci`: 6, `not_actionable`: 2, `unsupported_recommendation`: 3, `valid_unfixed`: 44. Łącznie 269 wpisów; wszystkie wpisy oceniono; zasadnych nienaprawionych i brakujących bramek nie uznaje się za zakończone.
+Stan rejestru: `already_fixed`: 25, `duplicate`: 90, `implemented`: 100, `implemented_pending_ci`: 6, `not_actionable`: 2, `unsupported_recommendation`: 3, `valid_unfixed`: 43. Łącznie 269 wpisów; wszystkie wpisy oceniono; zasadnych nienaprawionych i brakujących bramek nie uznaje się za zakończone.
 
 Legenda: `pending` — nierozpatrzona; `valid_unfixed` — zasadna, nie naprawiona; `already_fixed` — poprawka potwierdzona aktualnym kodem; `duplicate` — powtórzenie; `unsupported_recommendation` — konkretna rekomendacja nie odpowiada kontraktowi; `implemented` — poprawka z potwierdzoną regresją CI; `implemented_pending_ci` — poprawka przygotowana, regresja oczekuje CI; `implemented_pending_browser` — pokrywające CI przeszło, nadal wymaga celowanego dowodu z przeglądarki; `not_actionable` — uwaga zastąpiona późniejszą jawną decyzją użytkownika.
 
@@ -51,7 +51,7 @@ Legenda: `pending` — nierozpatrzona; `valid_unfixed` — zasadna, nie naprawio
 | [4061061301](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4061061301) / #97 | `apps/runner-console/browser-smoke.cjs` | implemented | Smoke kolejki rozwiązuje Playwright z istniejącego workspace Control Room; zachowuje jawne override i używa bundlowanego Chromium/os.tmpdir zamiast prywatnych ścieżek hosta. |
 | [4061061308](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4061061308) / #97 | `backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp` | valid_unfixed | To odrębny entrypoint od generic SLEPc, ten sam mechanizm utraty gałęzi. |
 | [4061061315](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4061061315) / #97 | `crates/fullmag-runner/src/eigen/output_selection.rs` | implemented | Kanoniczne eigenfrequency jest sprawdzane w Python authoring, IR V0.3/V0.4, plannerze i runnerze path oraz manual single-k. Nieznane quantity nie może być cicho interpretowane jako częstotliwość. Surowy historyczny wire String pozostaje czytelny; whitespace normalizuje się jak wcześniej. |
-| [4061061322](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4061061322) / #97 | `apps/runner-console/src/api.js` | valid_unfixed | createRetentionPlan dziedziczy globalny 15s timeout; długi serwerowy scan może kontynuować po abort klienta, a ręczne ponowienie może utworzyć kolejny plan. |
+| [4061061322](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4061061322) / #97 | `apps/runner-console/src/api.js` | already_fixed | Pierwotny POST timeout obejmował synchroniczny scan. Aktualny committed RetentionService.preview zapisuje planning i uruchamia worker, zwracając plan_id przed skanem; handler nie czeka na scan. Dirty UI polling jest odrębną nadal otwartą uwagą4204074481. Nie znosimy transportowych timeoutów i nie twierdzimy, że dowolny lost-ACK ma idempotency. |
 | [4061061326](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4061061326) / #97 | `crates/fullmag-runner/src/fem/eigen_path_manifest.rs` | implemented | Native production bez validation wpada do analytic_comparison tokenu. |
 | [4061343690](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4061343690) / #97 | `apps/control-room/src/shared/domain/analysis/frequencyDomainChartModels.ts` | implemented | Zwykły wynik free_modes/frequency_response odrzucany jest przez odpowiadający mu subview mimo zgodnej rodziny wykresu. Powtórzenie 4060116236. |
 | [4061343698](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4061343698) / #97 | `backends/fem/include/frequency_domain/mode_kinematics.hpp` | valid_unfixed | Założenie benchmarku o najmniejszej interesującej częstotliwości nie jest kontraktem publicznego eigensolvera. |
@@ -2471,3 +2471,34 @@ Nie dodano nowego testu porównującego jedynie tekst implementacji panelu; mocn
   nie zmienia się ownership, zachowanie ani żaden residual gate. Statyczny
   diff/source-map PASS; nowy managed przebieg jest wymagany. Portable realKSP
  37964705722 SUCCESS pozostaje dowodem niezmienionego headera, nie tego CPP.
+
+
+### Persistence 4206911501 — SOURCE PASS (2026-10-09)
+
+- Sześć plików zreviewowane w całości, wszystkie Required domknięte. Loader
+  sprawdza kompletny katalog descriptorów/count/bytes/payload_size przed IO;
+  preflight obejmuje pełny first reason i mandatory second omission prefix.
+  Immutable części używają exclusive os.link, zachowując konflikt i stary manifest.
+- Odczyt pin/no-follow obejmuje Windows OPEN_REPARSE_POINT i before/after identity.
+  POSIX O_NONBLOCK zapobiega FIFO hang przed fstat; rzeczywista bounded child
+  regression wymaga odmowy przed fdopen. Primary identity jest canonical,
+  arbitrary human prefix nie jest machine code. Optional omission ma jawny hash/bytes.
+- Operation evidence wszystkich trzech executorów pozostaje pełne i restartable,
+  capacity odmowa poprzedza queue/Docker/mutacje. Legacy oversized zachowane,
+  bez automatycznej migracji/prune. AST i diff-check PASS; Linux/Windows GHA wymagane.
+  Uwaga przechodzi do implemented_pending_ci po commicie, nie do implemented.
+
+### Opaque PETSc context — potwierdzona regresja ownership (2026-10-09)
+
+- Native37968439128 / exacta91ff3bf0 / artifact11634674230: 2PASS/4FAIL.
+  Quarantine admission i isolated forced-inner PASS; forced EPSSolve code91,
+  processunsafe przed solve0 i wszystkie final KSP query flags unavailable.
+  Healthy Floquet cleanup FAIL, real KSP abort w DefaultDestroy, concurrency FAIL.
+- Primary PETSc3.24.6 iterativ.c1493–1499 zwalnia lokalne cctx, bez zerowania *ctx:
+  https://github.com/petsc/petsc/blob/v3.24.6/src/ksp/ksp/interface/iterativ.c#L1493-L1499
+  Nasz adapter po sukcesie kopiował dangling owned_context z powrotem i traktował
+  niezerowy slot jako cleanup error. To regresja ad2, nie problem residual gate.
+- Poprawka jawnie zeruje własny slot po sukcesie obu wersji API; nonzero zachowuje
+  owner do fail-closed. Real Create/Destroy/no-op regression z _Exit przy niepewnym
+  teardown zapobiega unsafe retry. Niezależny SOURCE review PASS, nowe hosted proof
+  obu stosów wymagane. Nie obniżono tolerancji ani nie usunięto testów.

@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <limits>
 
 
@@ -26,6 +27,32 @@ bool check_petsc(PetscErrorCode error, const char *message)
     std::fprintf(stderr, "FAIL: %s (PETSc error %d)\n",
                  message, static_cast<int>(error));
     return false;
+}
+
+bool default_convergence_context_release_clears_ownership_once()
+{
+    void *context = nullptr;
+    const PetscErrorCode create_error = KSPConvergedDefaultCreate(&context);
+    if (!check_petsc(create_error, "create a real PETSc default-convergence context")) {
+        std::_Exit(1);
+    }
+    if (!check(context != nullptr, "PETSc publishes its real default-convergence context")) {
+        std::_Exit(1);
+    }
+    const PetscErrorCode destroy_error =
+        detail::destroy_floquet_ksp_default_convergence_context(&context);
+    if (!check_petsc(destroy_error, "release the real default-convergence context")) {
+        // Do not retry or finalize an uncertain real PETSc ownership graph.
+        std::_Exit(1);
+    }
+    if (!check(context == nullptr,
+               "successful opaque-context release clears the owned caller slot")) {
+        // A stale slot may already point to freed memory. Never retry it.
+        std::_Exit(1);
+    }
+    return check_petsc(
+        detail::destroy_floquet_ksp_default_convergence_context(&context),
+        "an already-cleared default context release is idempotent");
 }
 
 struct CandidateDiagnosticCleanupProbe {
@@ -814,7 +841,8 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    bool ok = candidate_diagnostic_cleanup_failure_is_not_retried();
+    bool ok = default_convergence_context_release_clears_ownership_once();
+    ok = candidate_diagnostic_cleanup_failure_is_not_retried() && ok;
     ok = candidate_diagnostic_setup_transaction_fails_closed() && ok;
     ok = candidate_poisson_relative_residual_rejects_overflow() && ok;
     ok = exercise_recursive_gap_gate() && ok;
