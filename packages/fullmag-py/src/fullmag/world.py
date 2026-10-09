@@ -8814,13 +8814,14 @@ def save(
         raise ValueError("all_modes must be a boolean")
     if all_modes and quantity != "mode":
         raise ValueError("all_modes applies only to mode output")
+    if quantity == "spectrum":
+        output = SaveSpectrum(quantity=spectrum_quantity, scope=spectrum_scope)
+        _state._outputs_explicit = True
+        _state._outputs.append(output)
+        return
     _state._outputs_explicit = True
     if quantity in _EIGEN_QUANTITIES:
-        if quantity == "spectrum":
-            _state._outputs.append(
-                SaveSpectrum(quantity=spectrum_quantity, scope=spectrum_scope)
-            )
-        elif quantity == "mode":
+        if quantity == "mode":
             _state._outputs.append(
                 SaveMode(
                     field=field,

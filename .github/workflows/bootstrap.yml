@@ -102,6 +102,7 @@ jobs:
           cargo test -p fullmag-runner native_modal_manifest_distinguishes_numeric_solve_from_comparison --lib
           cargo test -p fullmag-runner actual_path_manifest_distinguishes_numeric_solve_from_comparison --lib
           cargo test -p fullmag-runner eigen_path_single_k_solver_model_ --lib
+          cargo test -p fullmag-runner spectrum_quantity_ --lib
 
       - name: Run sample-scoped eigen artifact contracts
         run: cargo test -p fullmag-runner output_publication_tests --lib
@@ -134,6 +135,7 @@ jobs:
           cargo test -p fullmag-plan fem_eigen_branch --lib
           cargo test -p fullmag-plan fem_eigen_raw_mode_indices_remain_valid_without_path_sampling --lib
           cargo test -p fullmag-plan eigen_output_validation_tests --lib
+          cargo test -p fullmag-plan eigen_spectrum_quantity_validation_tests --lib
 
       - name: Run modal solver policy planning contracts
         run: |

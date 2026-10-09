@@ -234,6 +234,11 @@ class SaveSpectrum:
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "quantity", require_non_empty(self.quantity, "quantity"))
+        if self.quantity != "eigenfrequency":
+            raise ValueError(
+                "eigen_spectrum quantity must be 'eigenfrequency', "
+                f"got {self.quantity!r}"
+            )
         _SUPPORTED_SCOPES = {"global", "per_sample"}
         if self.scope not in _SUPPORTED_SCOPES:
             supported = ", ".join(sorted(_SUPPORTED_SCOPES))

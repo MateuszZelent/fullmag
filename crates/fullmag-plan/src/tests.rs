@@ -19263,3 +19263,60 @@ mod eigen_output_validation_tests {
         );
     }
 }
+
+mod eigen_spectrum_quantity_validation_tests {
+    use crate::validate::validate_eigen_outputs;
+    use fullmag_ir::OutputIR;
+
+    fn spectrum(quantity: &str) -> OutputIR {
+        OutputIR::EigenSpectrum {
+            quantity: quantity.to_string(),
+        }
+    }
+
+    #[test]
+    fn canonical_spectrum_quantity_passes_without_mutating_outputs() {
+        let outputs = [spectrum("eigenfrequency")];
+        let before = outputs.clone();
+        let mut errors = Vec::new();
+
+        validate_eigen_outputs(&outputs, None, &mut errors);
+
+        assert!(errors.is_empty(), "{errors:?}");
+        assert_eq!(outputs, before);
+    }
+
+    #[test]
+    fn unsupported_spectrum_quantities_and_mixed_outputs_are_rejected() {
+        for quantity in ["", "eigenvalue", "amplitude", "frequency_hz"] {
+            let outputs = [spectrum(quantity)];
+            let before = outputs.clone();
+            let mut errors = Vec::new();
+
+            validate_eigen_outputs(&outputs, None, &mut errors);
+
+            assert!(
+                errors.iter().any(|error| {
+                    error.contains("eigen_spectrum quantity")
+                        && error.contains("unsupported")
+                }),
+                "expected unsupported quantity {quantity:?}, got {errors:?}"
+            );
+            assert_eq!(outputs, before);
+        }
+
+        let mixed = [spectrum("eigenfrequency"), spectrum("amplitude")];
+        let before = mixed.clone();
+        let mut errors = Vec::new();
+
+        validate_eigen_outputs(&mixed, None, &mut errors);
+
+        assert!(
+            errors.iter().any(|error| {
+                error.contains("eigen_spectrum quantity") && error.contains("unsupported")
+            }),
+            "mixed canonical and unsupported quantities must fail: {errors:?}"
+        );
+        assert_eq!(mixed, before);
+    }
+}

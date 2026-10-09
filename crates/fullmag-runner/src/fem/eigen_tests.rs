@@ -6602,7 +6602,7 @@ fn eigen_path_single_k_floquet_shared_domain_production_summary_artifacts(
     super::eigen_native_artifacts::native_modal_artifacts(
         plan,
         &[OutputIR::EigenSpectrum {
-            quantity: "frequency_hz".to_string(),
+            quantity: "eigenfrequency".to_string(),
         }],
         &plan.equilibrium_magnetization,
         &empty_reduction,
@@ -6651,7 +6651,7 @@ fn eigen_path_single_k_publish_solver_model(
         dispersion_analytic_reference: None,
         k0_kittel_periodic_airbox_demag: None,
     };
-    super::eigen_path::eigen_path_solver_diagnostics(
+    super::eigen_path::test_support::eigen_path_solver_diagnostics(
         crate::dispatch::FemEngine::CpuNative,
         plan,
         &result,
@@ -6699,7 +6699,7 @@ fn eigen_path_single_k_solver_model_classifies_and_publishes_floquet_cpu_sparse_
         assert_eq!(diagnostics["window_completeness"]["status"], "not_certified");
 
         let solver_model =
-            super::eigen_path::eigen_path_single_k_solver_model(&plan, &artifacts);
+            super::eigen_path::test_support::eigen_path_single_k_solver_model(&plan, &artifacts);
         assert_eq!(
             solver_model,
             crate::eigen::EigenSolverModel::ProductionCpuShiftInvert
@@ -6707,7 +6707,7 @@ fn eigen_path_single_k_solver_model_classifies_and_publishes_floquet_cpu_sparse_
         let mut include_demag_mismatch = plan.clone();
         include_demag_mismatch.operator.include_demag = false;
         assert_eq!(
-            super::eigen_path::eigen_path_single_k_solver_model(
+            super::eigen_path::test_support::eigen_path_single_k_solver_model(
                 &include_demag_mismatch,
                 &artifacts,
             ),
@@ -6717,7 +6717,7 @@ fn eigen_path_single_k_solver_model_classifies_and_publishes_floquet_cpu_sparse_
         let mut enabled_demag_mismatch = plan.clone();
         enabled_demag_mismatch.enable_demag = false;
         assert_eq!(
-            super::eigen_path::eigen_path_single_k_solver_model(
+            super::eigen_path::test_support::eigen_path_single_k_solver_model(
                 &enabled_demag_mismatch,
                 &artifacts,
             ),
@@ -6792,7 +6792,7 @@ fn eigen_path_single_k_solver_model_requires_floquet_producer_flags_and_payload_
         let invalid_artifact =
             eigen_path_single_k_summary_artifact_for_diagnostics(&diagnostics);
         assert_eq!(
-            super::eigen_path::eigen_path_single_k_solver_model(&plan, &[invalid_artifact]),
+            super::eigen_path::test_support::eigen_path_single_k_solver_model(&plan, &[invalid_artifact]),
             crate::eigen::EigenSolverModel::ReferenceFull2x2Tangent,
             "invalid {field} must fail closed"
         );
@@ -6823,7 +6823,7 @@ fn eigen_path_single_k_solver_model_keeps_legacy_bloch_no_demag_guard() {
     let legacy_artifact =
         eigen_path_single_k_summary_artifact_for_diagnostics(&diagnostics);
     assert_eq!(
-        super::eigen_path::eigen_path_single_k_solver_model(&plan, &[legacy_artifact]),
+        super::eigen_path::test_support::eigen_path_single_k_solver_model(&plan, &[legacy_artifact]),
         crate::eigen::EigenSolverModel::ProductionCpuShiftInvert
     );
 
@@ -6832,7 +6832,7 @@ fn eigen_path_single_k_solver_model_keeps_legacy_bloch_no_demag_guard() {
     let demag_artifact =
         eigen_path_single_k_summary_artifact_for_diagnostics(&diagnostics);
     assert_eq!(
-        super::eigen_path::eigen_path_single_k_solver_model(&plan, &[demag_artifact]),
+        super::eigen_path::test_support::eigen_path_single_k_solver_model(&plan, &[demag_artifact]),
         crate::eigen::EigenSolverModel::ReferenceFull2x2Tangent
     );
 }
@@ -6852,7 +6852,7 @@ fn eigen_path_single_k_solver_model_keeps_generic_cpu_and_k0_classifiers() {
         });
         let artifact = eigen_path_single_k_summary_artifact_for_diagnostics(&diagnostics);
         assert_eq!(
-            super::eigen_path::eigen_path_single_k_solver_model(&plan, &[artifact]),
+            super::eigen_path::test_support::eigen_path_single_k_solver_model(&plan, &[artifact]),
             crate::eigen::EigenSolverModel::ProductionCpuShiftInvert
         );
     }
@@ -6867,7 +6867,7 @@ fn eigen_path_single_k_solver_model_keeps_generic_cpu_and_k0_classifiers() {
     });
     let k0_artifact = eigen_path_single_k_summary_artifact_for_diagnostics(&k0_diagnostics);
     assert_eq!(
-        super::eigen_path::eigen_path_single_k_solver_model(&k0_plan, &[k0_artifact]),
+        super::eigen_path::test_support::eigen_path_single_k_solver_model(&k0_plan, &[k0_artifact]),
         crate::eigen::EigenSolverModel::ProductionCpuShiftInvert
     );
 }
@@ -9419,7 +9419,7 @@ fn cpu_full_2x2_frequency_window_uses_native_modal_artifact_path() {
         &plan,
         &[
             OutputIR::EigenSpectrum {
-                quantity: "frequency_hz".to_string(),
+                quantity: "eigenfrequency".to_string(),
             },
             OutputIR::EigenMode {
                 field: "mode".to_string(),
@@ -9622,7 +9622,7 @@ fn cpu_full_2x2_nonzero_floquet_window_uses_native_bloch_payload_artifact_path()
         &plan,
         &[
             OutputIR::EigenSpectrum {
-                quantity: "frequency_hz".to_string(),
+                quantity: "eigenfrequency".to_string(),
             },
             OutputIR::EigenMode {
                 field: "mode".to_string(),
@@ -9728,7 +9728,7 @@ fn cpu_full_2x2_frequency_window_progress_and_provenance_report_shift_invert() {
     let run = execute_cpu_fem_eigen_with_progress(
         &plan,
         &[OutputIR::EigenSpectrum {
-            quantity: "frequency_hz".to_string(),
+            quantity: "eigenfrequency".to_string(),
         }],
         &mut progress,
     )
@@ -10271,4 +10271,40 @@ fn complex_modal_norm_interval_rejects_rectangular_metric_atomically() {
     assert!(super::eigen_native_result::normalize_complex_block_mode(
         &mut q, &metric, EigenNormalizationIR::UnitL2).is_err());
     assert_eq!(q, before);
+}
+
+
+#[test]
+fn spectrum_quantity_manual_single_k_planned_entry_rejects_before_callbacks() {
+    let plan = bounded_k0_execution_plan();
+    let resolution = exact_k0_resolution(fullmag_ir::ExecutionDevice::Cpu);
+    let execution = resolve_fem_eigen_execution_resolution(&plan, Some(&resolution))
+        .expect("bounded single-k CPU resolution should be accepted")
+        .expect("bounded single-k CPU resolution should produce a planned execution");
+    let outputs = [OutputIR::EigenSpectrum {
+        quantity: "frequency_hz".to_string(),
+    }];
+    let before = outputs.clone();
+    let callback_count = std::cell::Cell::new(0);
+    let mut callback = |_event: FemEigenProgress| {
+        callback_count.set(callback_count.get() + 1);
+        StepAction::Continue
+    };
+
+    let error = execute_planned_fem_eigen_with_progress(
+        execution,
+        &plan,
+        &outputs,
+        &mut callback,
+    )
+    .expect_err("manual single-k runner entry must reject noncanonical spectrum quantity");
+
+    assert!(
+        error.message.contains("eigen_spectrum quantity")
+            && error.message.contains("unsupported"),
+        "expected the spectrum contract error before equilibrium/provider work, got {}",
+        error.message
+    );
+    assert_eq!(callback_count.get(), 0, "invalid output must not emit progress");
+    assert_eq!(outputs, before, "selection validation must not mutate inputs");
 }

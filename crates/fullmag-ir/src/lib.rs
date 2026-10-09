@@ -79,6 +79,14 @@ pub const CURRENT_IR_VERSION: &str = IR_VERSION;
 pub const PREVIOUS_PUBLIC_IR_VERSION: &str = "0.2.0";
 pub const LEGACY_PUBLIC_IR_VERSION: &str = "0.1.0";
 pub const SUPPORTED_READ_IR_VERSIONS: &[&str] = &[CURRENT_IR_VERSION, PREVIOUS_PUBLIC_IR_VERSION];
+
+/// Canonical quantity produced by the eigen spectrum output.
+pub const CANONICAL_EIGEN_SPECTRUM_QUANTITY: &str = "eigenfrequency";
+
+/// Whether an eigen spectrum quantity uses the supported canonical name.
+pub fn is_supported_eigen_spectrum_quantity(quantity: &str) -> bool {
+    quantity.trim() == CANONICAL_EIGEN_SPECTRUM_QUANTITY
+}
 /// Canonical scalar spin-susceptibility adapter for the non-magnetic transient
 /// reduction.  Other strings are not enough to establish the DOS convention
 /// and therefore remain unsupported until a tensor/charge-spin contract exists.
@@ -990,6 +998,10 @@ impl ProblemIR {
                 OutputIR::EigenSpectrum { quantity } => {
                     if quantity.trim().is_empty() {
                         errors.push("eigen_spectrum quantity must not be empty".to_string());
+                    } else if !is_supported_eigen_spectrum_quantity(quantity) {
+                        errors.push(format!(
+                            "eigen_spectrum quantity '{quantity}' is unsupported; supported quantity is '{CANONICAL_EIGEN_SPECTRUM_QUANTITY}'"
+                        ));
                     }
                 }
                 OutputIR::EigenMode {

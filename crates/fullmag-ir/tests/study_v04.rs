@@ -1676,3 +1676,96 @@ fn legacy_sampling_decoder_stays_lenient_and_v04_migration_is_atomic() {
     assert!(error.contains("future_sampling_flag"), "{error}");
     assert_eq!(migration_input, original);
 }
+
+#[test]
+fn spectrum_quantity_v04_standalone_and_root_validate_all_five_studies() {
+    for base_study in all_sampling_v04_studies() {
+        let study_kind = base_study["kind"].as_str().unwrap();
+
+        for quantity in ["eigenfrequency", " eigenfrequency "] {
+            let mut study = base_study.clone();
+            study["sampling"]["outputs"] =
+                json!([{ "kind": "eigen_spectrum", "quantity": quantity }]);
+
+            let standalone: StudyIRV04 = serde_json::from_value(study.clone()).unwrap();
+            assert_eq!(
+                serde_json::to_value(&standalone).unwrap()["sampling"]["outputs"][0]["quantity"],
+                quantity,
+                "standalone {study_kind} should preserve the raw string"
+            );
+            let standalone_errors = standalone.validate().err().unwrap_or_default();
+            assert!(
+                !standalone_errors
+                    .iter()
+                    .any(|error| error.contains("eigen_spectrum quantity")),
+                "canonical quantity should pass standalone {study_kind}: {standalone_errors:?}"
+            );
+
+            let root: ProblemIRV04 =
+                serde_json::from_value(problem_value_with_study(study)).unwrap();
+            assert_eq!(
+                serde_json::to_value(&root).unwrap()["study"]["sampling"]["outputs"][0]
+                    ["quantity"],
+                quantity,
+                "root {study_kind} should preserve the raw string"
+            );
+            let root_errors = root.validate().err().unwrap_or_default();
+            assert!(
+                !root_errors
+                    .iter()
+                    .any(|error| error.contains("eigen_spectrum quantity")),
+                "canonical quantity should pass root {study_kind}: {root_errors:?}"
+            );
+        }
+
+        for quantity in ["", "   ", "frequency_hz", "eigenvalue", "amplitude"] {
+            let mut study = base_study.clone();
+            study["sampling"]["outputs"] =
+                json!([{ "kind": "eigen_spectrum", "quantity": quantity }]);
+
+            let standalone: StudyIRV04 = serde_json::from_value(study.clone()).unwrap();
+            assert_eq!(
+                serde_json::to_value(&standalone).unwrap()["sampling"]["outputs"][0]["quantity"],
+                quantity,
+                "standalone {study_kind} should preserve unsupported raw value"
+            );
+            let standalone_errors = standalone
+                .validate()
+                .expect_err("standalone V04 must reject unsupported spectrum quantities");
+            assert!(
+                standalone_errors.iter().any(|error| {
+                    error.contains("eigen_spectrum quantity")
+                        && (if quantity.trim().is_empty() {
+                            error.contains("must not be empty")
+                        } else {
+                            error.contains("unsupported")
+                        })
+                }),
+                "expected standalone {study_kind} quantity rejection, got {standalone_errors:?}"
+            );
+
+            let root: ProblemIRV04 =
+                serde_json::from_value(problem_value_with_study(study)).unwrap();
+            assert_eq!(
+                serde_json::to_value(&root).unwrap()["study"]["sampling"]["outputs"][0]
+                    ["quantity"],
+                quantity,
+                "root {study_kind} should preserve unsupported raw value"
+            );
+            let root_errors = root
+                .validate()
+                .expect_err("ProblemIRV04 must reject unsupported spectrum quantities");
+            assert!(
+                root_errors.iter().any(|error| {
+                    error.contains("eigen_spectrum quantity")
+                        && (if quantity.trim().is_empty() {
+                            error.contains("must not be empty")
+                        } else {
+                            error.contains("unsupported")
+                        })
+                }),
+                "expected root {study_kind} quantity rejection, got {root_errors:?}"
+            );
+        }
+    }
+}

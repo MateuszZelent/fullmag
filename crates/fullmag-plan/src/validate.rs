@@ -958,7 +958,14 @@ pub(crate) fn validate_eigen_outputs(
     for output in outputs {
         match output {
             OutputIR::EigenSpectrum { quantity } => {
-                let key = format!("eigen_spectrum:{quantity}");
+                if !fullmag_ir::is_supported_eigen_spectrum_quantity(quantity) {
+                    errors.push(format!(
+                        "eigen_spectrum quantity '{quantity}' is unsupported; supported quantity is '{}'",
+                        fullmag_ir::CANONICAL_EIGEN_SPECTRUM_QUANTITY
+                    ));
+                    continue;
+                }
+                let key = format!("eigen_spectrum:{}", quantity.trim());
                 if !seen.insert(key) {
                     errors.push(format!(
                         "eigen spectrum output '{}' is declared more than once",

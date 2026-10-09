@@ -1,5 +1,8 @@
 use crate::eigen::types::PathSolveResult;
-use fullmag_ir::{OutputIR, SampleSelectorIR};
+use fullmag_ir::{
+    is_supported_eigen_spectrum_quantity, OutputIR, SampleSelectorIR,
+    CANONICAL_EIGEN_SPECTRUM_QUANTITY,
+};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
@@ -41,6 +44,7 @@ impl DispersionCurveSelection {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum OutputSelectionError {
     EmptyEigenModeField,
+    UnsupportedSpectrumQuantity(String),
     EmptyEigenModeSelector,
     ConflictingAllModeSelector,
     EmptySampleSelector,
@@ -90,6 +94,10 @@ impl fmt::Display for OutputSelectionError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::EmptyEigenModeField => formatter.write_str("eigen_mode field must not be empty"),
+            Self::UnsupportedSpectrumQuantity(quantity) => write!(
+                formatter,
+                "eigen_spectrum quantity {quantity:?} is unsupported; supported quantity is '{CANONICAL_EIGEN_SPECTRUM_QUANTITY}'"
+            ),
             Self::ConflictingAllModeSelector => formatter.write_str("eigen_mode all_modes cannot be combined with indices or branches"),
             Self::EmptyEigenModeSelector => formatter.write_str(
                 "eigen_mode must contain at least one raw mode index or tracked branch index",
@@ -315,11 +323,28 @@ impl EigenOutputSelection {
     }
 }
 
-/// Resolve all eigen-related outputs against `path_result`.
+/// Reject unsupported spectrum quantities before solving or selecting outputs.
+pub(crate) fn validate_eigen_spectrum_quantities(
+    outputs: &[OutputIR],
+) -> Result<(), OutputSelectionError> {
+    for output in outputs {
+        if let OutputIR::EigenSpectrum { quantity } = output {
+            if !is_supported_eigen_spectrum_quantity(quantity) {
+                return Err(OutputSelectionError::UnsupportedSpectrumQuantity(
+                    quantity.clone(),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Resolve all eigen-related outputs against the supplied path result.
 pub(crate) fn select_eigen_outputs(
     path_result: &PathSolveResult,
     outputs: &[OutputIR],
 ) -> Result<EigenOutputSelection, OutputSelectionError> {
+    validate_eigen_spectrum_quantities(outputs)?;
     let available = AvailableModes::from_result(path_result)?;
     let mut selection = EigenOutputSelection::default();
     let mut mode_requests = Vec::new();
@@ -738,6 +763,31 @@ mod tests {
             dispersion_analytic_reference: None,
             k0_kittel_periodic_airbox_demag: None,
         }
+    }
+
+    #[test]
+    fn spectrum_quantity_validation_fails_closed_for_manual_outputs() {
+        let path_result = result();
+        for quantity in ["", "eigenvalue", "amplitude", "frequency_hz"] {
+            let outputs = [OutputIR::EigenSpectrum {
+                quantity: quantity.to_string(),
+            }];
+            let before = outputs.clone();
+
+            assert_eq!(
+                select_eigen_outputs(&path_result, &outputs),
+                Err(OutputSelectionError::UnsupportedSpectrumQuantity(
+                    quantity.to_string()
+                ))
+            );
+            assert_eq!(outputs, before);
+        }
+
+        let outputs = [OutputIR::EigenSpectrum {
+            quantity: " eigenfrequency ".to_string(),
+        }];
+        let selection = select_eigen_outputs(&path_result, &outputs).unwrap();
+        assert!(selection.has_spectrum_output());
     }
 
     #[test]

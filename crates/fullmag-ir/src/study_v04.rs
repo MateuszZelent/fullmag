@@ -297,6 +297,15 @@ impl StudyIRV04 {
             );
         }
 
+        let sampling = match self {
+            Self::TimeEvolution { sampling, .. }
+            | Self::Relaxation { sampling, .. }
+            | Self::Eigenmodes { sampling, .. }
+            | Self::FrequencyResponse { sampling, .. }
+            | Self::Hysteresis { sampling, .. } => sampling,
+        };
+        validate_v04_spectrum_quantities(sampling, &mut errors);
+
         let spectral_boundary = match self {
             Self::Eigenmodes {
                 magnetostatic_bc, ..
@@ -333,6 +342,22 @@ impl StudyIRV04 {
             errors.extend(sampling.validation_errors(&format!("{prefix}.k_sampling")));
         }
         errors
+    }
+}
+
+fn validate_v04_spectrum_quantities(sampling: &SamplingIR, errors: &mut Vec<String>) {
+    for output in &sampling.outputs {
+        let crate::OutputIR::EigenSpectrum { quantity } = output else {
+            continue;
+        };
+        if quantity.trim().is_empty() {
+            errors.push("eigen_spectrum quantity must not be empty".to_string());
+        } else if !crate::is_supported_eigen_spectrum_quantity(quantity) {
+            errors.push(format!(
+                "eigen_spectrum quantity '{quantity}' is unsupported; supported quantity is '{}'",
+                crate::CANONICAL_EIGEN_SPECTRUM_QUANTITY
+            ));
+        }
     }
 }
 

@@ -3033,6 +3033,42 @@
       "path": "backends/fem/cpu/mfem/interactions/demag_poisson_boundary.cpp",
       "symbol": "bool initialize_demag_poisson_boundary_operator",
       "responsibility": "Statyczny Poisson Robin składa K+beta B z unią grafów MFEM; full-node fill-in regression oraz niezmieniona static/shared equality. Source/scientific review PASS, native execution NOT VERIFIED."
+    },
+    {
+      "id": "source-eigen-spectrum-python-quantity",
+      "path": "packages/fullmag-py/src/fullmag/model/outputs.py",
+      "symbol": "class SaveSpectrum",
+      "responsibility": "Publiczny selector spectrum quantity; jedynie eigenfrequency po istniejącej normalizacji whitespace. Source review PASS; GHA NOT VERIFIED."
+    },
+    {
+      "id": "source-eigen-spectrum-runner-quantity",
+      "path": "crates/fullmag-runner/src/eigen/output_selection.rs",
+      "symbol": "select_eigen_outputs",
+      "responsibility": "Selekcja outputów i wczesny guard FEM Single-k odrzucają nieobsługiwane quantity zamiast cichego scalenia; source review PASS, GHA NOT VERIFIED."
+    },
+    {
+      "id": "source-eigen-spectrum-ir-quantity",
+      "path": "crates/fullmag-ir/src/lib.rs",
+      "symbol": "is_supported_eigen_spectrum_quantity",
+      "responsibility": "Wspólny canonical predicate; semantic V0.3 validation. Source review PASS, GHA NOT VERIFIED."
+    },
+    {
+      "id": "source-eigen-spectrum-v04-quantity",
+      "path": "crates/fullmag-ir/src/study_v04.rs",
+      "symbol": "validate_v04_spectrum_quantities",
+      "responsibility": "Semantic V0.4 sampling validation bez zmiany raw serde. Source review PASS, GHA NOT VERIFIED."
+    },
+    {
+      "id": "source-eigen-spectrum-plan-quantity",
+      "path": "crates/fullmag-plan/src/validate.rs",
+      "symbol": "validate_eigen_outputs",
+      "responsibility": "Planner reject unsupported spectrum quantity, canonical duplicate identity. Source review PASS, GHA NOT VERIFIED."
+    },
+    {
+      "id": "source-eigen-spectrum-single-quantity",
+      "path": "crates/fullmag-runner/src/fem/eigen_execution.rs",
+      "symbol": "execute_fem_eigen_inner",
+      "responsibility": "Guard przed handoff/providerem dla ręcznego Single-k; source review PASS, GHA NOT VERIFIED."
     }
   ],
   "public_api": {
@@ -3386,6 +3422,26 @@
         "meaning": "Legacy spelling of the iteration limit.",
         "backend_support": "FEM CPU/GPU authoring; runtime capability-gated",
         "problem_ir": "Normalized to `study.solver_policy.max_iterations`; never retained as a separate field."
+      },
+      {
+        "python": "`SaveSpectrum.quantity`",
+        "type": "`str`",
+        "default": "`\"eigenfrequency\"`",
+        "si_unit": "$1$",
+        "validation": "Only `eigenfrequency`; other values raise a descriptive error.",
+        "meaning": "Identifies the eigenfrequency spectrum; numeric values remain in Hz.",
+        "backend_support": "Common authoring; runtime capability-gated",
+        "problem_ir": "`sampling.outputs[].quantity` for `kind=\"eigen_spectrum\"`."
+      },
+      {
+        "python": "`study.save.spectrum_quantity`",
+        "type": "`str`",
+        "default": "`\"eigenfrequency\"`",
+        "si_unit": "$1$",
+        "validation": "Same validation as `SaveSpectrum.quantity`.",
+        "meaning": "Public stage selector for the eigenfrequency spectrum.",
+        "backend_support": "Common authoring; runtime capability-gated",
+        "problem_ir": "Preserved as `sampling.outputs[].quantity`."
       }
     ]
   }

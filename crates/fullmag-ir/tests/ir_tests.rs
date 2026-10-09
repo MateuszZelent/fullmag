@@ -1072,7 +1072,7 @@ fn periodic_airbox_k0_rejections_use_stable_reason_tokens() {
         "count": 1, "target": {"kind": "frequency_window", "frequency_min_hz": 1.0e9, "frequency_max_hz": 2.0e9},
         "equilibrium": {"kind": "provided"}, "k_sampling": {"kind": "single", "k_vector": [0.0, 0.0, 0.0]},
         "normalization": "unit_l2", "damping_policy": "ignore", "spin_wave_bc": "periodic",
-        "magnetostatic_bc": "periodic_airbox_k0", "sampling": {"outputs": [{"kind": "eigen_spectrum", "quantity": "frequency_hz"}]}
+        "magnetostatic_bc": "periodic_airbox_k0", "sampling": {"outputs": [{"kind": "eigen_spectrum", "quantity": "eigenfrequency"}]}
     });
     let cases = [
         (
@@ -5114,7 +5114,7 @@ fn eigenmodes_k0_kittel_validation_runtime_metadata_deserializes_to_typed_ir() {
             table_autosave: None,
             stage_autosave: None,
             outputs: vec![OutputIR::EigenSpectrum {
-                quantity: "frequency_hz".to_string(),
+                quantity: "eigenfrequency".to_string()
             }],
         },
         mode_tracking: None,
@@ -5208,7 +5208,7 @@ fn eigenmodes_closed_k_path_sample_count_and_segment_length_validate() {
             stage_autosave: None,
             outputs: vec![
                 OutputIR::EigenSpectrum {
-                    quantity: "frequency_hz".to_string(),
+                    quantity: "eigenfrequency".to_string()
                 },
                 OutputIR::DispersionCurve {
                     name: "dispersion".to_string(),
@@ -5263,7 +5263,7 @@ fn eigenmodes_rejects_closed_k_path_with_open_segment_count() {
             table_autosave: None,
             stage_autosave: None,
             outputs: vec![OutputIR::EigenSpectrum {
-                quantity: "frequency_hz".to_string(),
+                quantity: "eigenfrequency".to_string()
             }],
         },
         mode_tracking: None,
@@ -8765,4 +8765,65 @@ fn sample_selector_rejects_labels_that_are_equal_after_trimming() {
         selector.validation_errors("selection"),
         vec!["selection.sample_indices must be unique"]
     );
+}
+
+fn eigenmodes_problem_with_spectrum_quantity(quantity: &str) -> ProblemIR {
+    let mut value = serde_json::to_value(ProblemIR::bootstrap_example()).unwrap();
+    let dynamics = value["study"]["dynamics"].clone();
+    value["study"] = serde_json::json!({
+        "kind": "eigenmodes",
+        "dynamics": dynamics,
+        "operator": {"kind": "linearized_llg", "include_demag": false},
+        "count": 1,
+        "target": {"kind": "lowest"},
+        "equilibrium": {"kind": "provided"},
+        "normalization": "unit_l2",
+        "damping_policy": "ignore",
+        "sampling": {
+            "outputs": [{"kind": "eigen_spectrum", "quantity": quantity}]
+        }
+    });
+    serde_json::from_value(value).expect("eigenmodes fixture should deserialize")
+}
+
+#[test]
+fn eigen_spectrum_quantity_is_semantically_canonical_and_raw_wire_round_trips() {
+    for quantity in ["eigenfrequency", " eigenfrequency "] {
+        let errors = eigenmodes_problem_with_spectrum_quantity(quantity)
+            .validate()
+            .err()
+            .unwrap_or_default();
+        assert!(
+            !errors
+                .iter()
+                .any(|error| error.contains("eigen_spectrum quantity")),
+            "canonical quantity should pass spectrum validation: {errors:?}"
+        );
+    }
+
+    for quantity in ["", "   ", "eigenvalue", "amplitude", "frequency_hz"] {
+        let encoded =
+            serde_json::to_value(eigenmodes_problem_with_spectrum_quantity(quantity)).unwrap();
+        let decoded: ProblemIR =
+            serde_json::from_value(encoded.clone()).expect("raw quantity remains readable");
+        assert_eq!(
+            serde_json::to_value(&decoded).unwrap(),
+            encoded,
+            "serde must preserve raw quantity {quantity:?}"
+        );
+        let errors = decoded
+            .validate()
+            .expect_err("unsupported spectrum quantities must fail semantic validation");
+        let expected = if quantity.trim().is_empty() {
+            "eigen_spectrum quantity must not be empty".to_string()
+        } else {
+            format!(
+                "eigen_spectrum quantity '{quantity}' is unsupported; supported quantity is 'eigenfrequency'"
+            )
+        };
+        assert!(
+            errors.iter().any(|error| error == &expected),
+            "expected {expected:?}, got {errors:?}"
+        );
+    }
 }

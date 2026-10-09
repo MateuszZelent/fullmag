@@ -1546,6 +1546,11 @@ pub(super) fn execute_fem_eigen_inner(
     source_relax_handoff: Option<&AcceptedFemRelaxStageHandoff>,
     planned_execution: Option<PlannedFemEigenExecution<'_>>,
 ) -> Result<ExecutedRun, RunError> {
+    crate::eigen::output_selection::validate_eigen_spectrum_quantities(outputs).map_err(
+        |error| RunError {
+            message: format!("invalid eigen output selection: {error}"),
+        },
+    )?;
     validate_eigen_equilibrium_certificate(plan, expected_handoff, source_relax_handoff)?;
     let gamma0_rad_s_per_a_m = crate::eigen::artifacts::validated_modal_gamma0(plan.gyromagnetic_ratio)
         .map_err(|error| RunError { message: error.to_string() })?;

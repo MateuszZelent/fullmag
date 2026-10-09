@@ -4311,3 +4311,55 @@ artefakty i ich source/runtime identity pozostają zachowane; nie podnosimy
 retroaktywnie ich statusu i nie uznajemy nowego source review za potwierdzenie
 wcześniejszych wyników. Zgodność nowej macierzy nie zastępuje zbieżności
 siatki/airboxu i porównania z analityką lub COMSOL.
+
+
+## Kontrakt quantity dla zapisu widma eigen
+
+Publiczny selector `spectrum_quantity` (oraz `SaveSpectrum.quantity`) ma
+obsługiwać wyłącznie token `eigenfrequency`. Istniejący writer zapisuje
+częstotliwości własne; nie implementuje odrębnego widma dla dowolnej nazwy
+quantity. Nazwy kolumn wynikowych `frequency_hz` i `frequency_real_hz` nie
+są aliasami wejściowymi. Nie zmieniamy wartości częstotliwości, jednostek
+Hz, normalizacji modów ani sposobu rozwiązywania problemu eigen.
+
+| Python parameter | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
+|---|---|---|---|---|---|---|---|
+| `SaveSpectrum.quantity` | `str` | `"eigenfrequency"` | $1$ | Only `eigenfrequency`; other values raise a descriptive error. | Identifies the eigenfrequency spectrum; numeric values remain in Hz. | Common authoring; runtime capability-gated | `sampling.outputs[].quantity` for `kind="eigen_spectrum"`. |
+| `study.save.spectrum_quantity` | `str` | `"eigenfrequency"` | $1$ | Same validation as `SaveSpectrum.quantity`. | Public stage selector for the eigenfrequency spectrum. | Common authoring; runtime capability-gated | Preserved as `sampling.outputs[].quantity`. |
+
+Zamierzona walidacja obejmuje konstruktor Python, semantyczną walidację IR,
+planner i selekcję runnera. Nie normalizujemy nieobsługiwanej nazwy do
+wartości domyślnej ani nie łączymy różnych quantity w jedno żądanie bez
+błędu. Format pola IR pozostaje stringiem; odczyt i serializacja historycznych
+dokumentów nie są automatyczną kwalifikacją do wykonania. Błąd walidacji
+nie usuwa ani nie przepisuje historycznych artefaktów. `scope` pozostaje
+odrębnym kontraktem i nie jest naprawiany przez ten selector quantity.
+
+| Realizacja | Walidacja quantity | Dowód wykonania nowych kontroli |
+|---|---|---|
+| FDM CPU | wspólny kontrakt authoring/IR; bez zmiany dostępności solvera | NOT VERIFIED |
+| FDM GPU | wspólny kontrakt authoring/IR; bez CPU fallback | NOT VERIFIED |
+| FEM CPU | wspólny kontrakt i runner output selection | NOT VERIFIED |
+| FEM GPU | wspólny kontrakt i runner output selection; bez CPU fallback | NOT VERIFIED |
+
+Bramki mają sprawdzać zachowanie domyślnego/canonical żądania,
+Python→IR, odrzucenie pustego i nieobsługiwanego quantity, walidację
+bez zmiany wejścia, przejrzysty błąd planner/runner oraz zachowanie
+kanonicznego eksportu skryptu. Obowiązkowe dowody jakości modów nie mogą
+zostać usunięte z wyników w celu obejścia tej walidacji. Walidatory Python, V0.3/V0.4, planner i selektor ścieżki oraz ręczny
+FEM Single-k mają wspólną semantykę canonical token. Zachowana jest istniejąca
+normalizacja whitespace z Python API; nie jest to nowy alias quantity.
+Source review i walidator dokumentacji: PASS; wykonanie nowych regresji
+w GitHub Actions jest **NOT VERIFIED**.
+
+| Source ID | Path + symbol | Odpowiedzialność i dowód |
+|---|---|---|
+| source-eigen-spectrum-python-quantity | `packages/fullmag-py/src/fullmag/model/outputs.py` :: `class SaveSpectrum` | Publiczny selector; source review PASS, wykonanie nowych regresji GHA NOT VERIFIED |
+| source-eigen-spectrum-runner-quantity | `crates/fullmag-runner/src/eigen/output_selection.rs` :: `select_eigen_outputs` | Nie scala nieobsługiwanych quantity do boola; source review PASS, GHA NOT VERIFIED |
+
+| Source ID | Path + symbol | Odpowiedzialność i dowód |
+|---|---|---|
+| source-eigen-spectrum-ir-quantity | `crates/fullmag-ir/src/lib.rs` :: `is_supported_eigen_spectrum_quantity` | Wspólny canonical predicate; semantic V0.3 validation. Source review PASS, GHA NOT VERIFIED. |
+| source-eigen-spectrum-v04-quantity | `crates/fullmag-ir/src/study_v04.rs` :: `validate_v04_spectrum_quantities` | Semantic V0.4 sampling validation bez zmiany raw serde. Source review PASS, GHA NOT VERIFIED. |
+| source-eigen-spectrum-plan-quantity | `crates/fullmag-plan/src/validate.rs` :: `validate_eigen_outputs` | Planner reject unsupported spectrum quantity, canonical duplicate identity. Source review PASS, GHA NOT VERIFIED. |
+| source-eigen-spectrum-single-quantity | `crates/fullmag-runner/src/fem/eigen_execution.rs` :: `execute_fem_eigen_inner` | Guard przed handoff/providerem dla ręcznego Single-k; source review PASS, GHA NOT VERIFIED. |

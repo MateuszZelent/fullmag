@@ -6531,7 +6531,7 @@ mod tests {
             legacy_fem_eigen_execution(FemEngine::CpuNative),
             &plan,
             &[OutputIR::EigenSpectrum {
-                quantity: "frequency_hz".to_string(),
+                quantity: "eigenfrequency".to_string()
             }],
         )
         .expect_err("provided equilibrium without a certified handoff must fail closed");
@@ -8352,7 +8352,7 @@ mod tests {
             legacy_fem_eigen_execution(FemEngine::CpuNative),
             &plan,
             &[OutputIR::EigenSpectrum {
-                quantity: "frequency_hz".to_string(),
+                quantity: "eigenfrequency".to_string()
             }],
         )
         .expect("K0-3a synthetic demag factor path should bypass Floquet dynamic-demag guard");
@@ -8718,7 +8718,7 @@ mod tests {
             &plan,
             &[
                 OutputIR::EigenSpectrum {
-                    quantity: "frequency_hz".to_string(),
+                    quantity: "eigenfrequency".to_string()
                 },
                 OutputIR::DispersionCurve {
                     name: "dispersion".to_string(),

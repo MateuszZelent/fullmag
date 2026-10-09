@@ -2108,7 +2108,11 @@ class ProblemApiTests(unittest.TestCase):
         body.Aex = 13e-12
         body.alpha = 0.01
         body.m = fm.texture.uniform(1, 0, 0)
-        study.save("spectrum", spectrum_scope="global")
+        study.save(
+            "spectrum",
+            spectrum_quantity=" eigenfrequency ",
+            spectrum_scope="global",
+        )
         study.save(
             "mode",
             field="mode_complex",
@@ -2153,6 +2157,63 @@ class ProblemApiTests(unittest.TestCase):
             rendered,
         )
         self.assertEqual(reloaded.stages[0].problem.study.to_ir(), original_ir)
+
+    def test_eigen_spectrum_quantity_rejects_unsupported_values_without_state_mutation(
+        self,
+    ) -> None:
+        invalid_quantities = ("", "   ", "eigenvalue", "amplitude", "frequency_hz")
+        for invalid_quantity in invalid_quantities:
+            with self.subTest(quantity=invalid_quantity):
+                with self.assertRaises(ValueError):
+                    fm.SaveSpectrum(quantity=invalid_quantity)
+
+                with flat_world.ExecutionContext() as context:
+                    fm.study("rejected_spectrum_quantity")
+                    state = context.state
+                    existing_output = fm.SaveSpectrum(scope="global")
+                    state._outputs.append(existing_output)
+                    state._outputs_explicit = False
+                    stage_draft = object()
+                    state._declared_stages.append(stage_draft)
+                    state._extra_runtime_metadata["execution_profile"] = {
+                        "requested_backend": "fem"
+                    }
+                    state._legacy_execution_selection_calls.add("device")
+                    last_result = object()
+                    last_step = object()
+                    state._last_result = last_result
+                    state._last_step = last_step
+
+                    outputs_before = state._outputs
+                    stages_before = state._declared_stages
+                    runtime_metadata_before = copy.deepcopy(
+                        state._extra_runtime_metadata
+                    )
+                    runtime_aliases_before = set(
+                        state._legacy_execution_selection_calls
+                    )
+
+                    with self.assertRaises(ValueError):
+                        flat_world.save(
+                            "spectrum",
+                            spectrum_quantity=invalid_quantity,
+                        )
+
+                    self.assertIs(state._outputs, outputs_before)
+                    self.assertEqual(state._outputs, [existing_output])
+                    self.assertFalse(state._outputs_explicit)
+                    self.assertIs(state._declared_stages, stages_before)
+                    self.assertEqual(state._declared_stages, [stage_draft])
+                    self.assertEqual(
+                        state._extra_runtime_metadata,
+                        runtime_metadata_before,
+                    )
+                    self.assertEqual(
+                        state._legacy_execution_selection_calls,
+                        runtime_aliases_before,
+                    )
+                    self.assertIs(state._last_result, last_result)
+                    self.assertIs(state._last_step, last_step)
 
     def test_study_save_mode_accepts_numpy_and_sequence_selectors(self) -> None:
         cases = (
