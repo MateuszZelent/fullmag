@@ -6,7 +6,7 @@ Pełny rejestr obejmuje 279 komentarzy liniowych Codex oraz jedną dodatkową uw
 
 PR #102 zamknięto 2026-10-07, zachowując remote branch `codex/launcher-instance-isolation-20261002` przy `954ba797307c4cc773772d380123893210cfa447`. PR #97 pozostaje otwarty do ukończenia rozpatrzenia i uzasadnionych poprawek. Merge ani usuwanie branchy nie są częścią polecenia zamknięcia PR-ów. Wcześniejszy WIP meshing zachowany osobno.
 
-Stan rejestru: `already_fixed`: 25, `duplicate`: 90, `implemented`: 107, `implemented_pending_ci`: 8, `not_actionable`: 2, `pending`: 11, `unsupported_recommendation`: 3, `valid_unfixed`: 34. Łącznie 280 wpisów; 269 wpisow oceniono; 11 oczekuje oceny; zasadnych nienaprawionych i brakujących bramek nie uznaje się za zakończone.
+Stan rejestru: `already_fixed`: 25, `duplicate`: 90, `implemented`: 107, `implemented_pending_ci`: 9, `not_actionable`: 2, `pending`: 10, `unsupported_recommendation`: 3, `valid_unfixed`: 34. Łącznie 280 wpisów; 270 wpisow oceniono; 10 oczekuje oceny; zasadnych nienaprawionych i brakujących bramek nie uznaje się za zakończone.
 
 Legenda: `pending` — nierozpatrzona; `valid_unfixed` — zasadna, nie naprawiona; `already_fixed` — poprawka potwierdzona aktualnym kodem; `duplicate` — powtórzenie; `unsupported_recommendation` — konkretna rekomendacja nie odpowiada kontraktowi; `implemented` — poprawka z potwierdzoną regresją CI; `implemented_pending_ci` — poprawka przygotowana, regresja oczekuje CI; `implemented_pending_browser` — pokrywające CI przeszło, nadal wymaga celowanego dowodu z przeglądarki; `not_actionable` — uwaga zastąpiona późniejszą jawną decyzją użytkownika.
 
@@ -292,7 +292,7 @@ Legenda: `pending` — nierozpatrzona; `valid_unfixed` — zasadna, nie naprawio
 | [4234647677](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4234647677) / #97 | `crates/fullmag-api/src/schemas/postprocessing_definitions.rs` | pending | Nowa uwaga z ponownego pobrania GitHub; trwa ocena aktualnych źródeł. |
 | [4234647688](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4234647688) / #97 | `crates/fullmag-api/src/router_v2/handlers/analysis/results.rs` | pending | Nowa uwaga z ponownego pobrania GitHub; trwa ocena aktualnych źródeł. |
 | [4234647695](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4234647695) / #97 | `apps/control-room/src/kernel/analysis-modules/postprocessingDefinitions.ts` | pending | Nowa uwaga z ponownego pobrania GitHub; trwa ocena aktualnych źródeł. |
-| [4234647706](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4234647706) / #97 | `apps/control-room/src/shared/domain/analysis/referenceImport.ts` | pending | Nowa uwaga z ponownego pobrania GitHub; trwa ocena aktualnych źródeł. |
+| [4234647706](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4234647706) / #97 | `apps/control-room/src/shared/domain/analysis/referenceImport.ts` | implemented_pending_ci | Parser odrzuca puste lub whitespace-only komórki przed Number; zachowuje explicit0, COMSOL headers i jednostki. Regression middle/end/whitespace/zero oraz existing skipped-row UI. Root source review i diff PASS, hosted test pending. |
 | [4234647720](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4234647720) / #97 | `packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py` | pending | Nowa uwaga z ponownego pobrania GitHub; trwa ocena aktualnych źródeł. |
 
 ## Przygotowane przyrosty
@@ -2627,3 +2627,9 @@ GHA37996812646/job114044880684, exact d4e0b4421fa58c6cd8041e06d7d9ede6c66f549a, 
 ### Runtime→execution CI — rzeczywista wersja fixture kolejki
 
 GHA37998904463 exact a226728249180e4f75feb17a77b624573cfb50e8 zakończył się FAIL na Linux114051867300 i Windows114051867666. Sześć nowych integration/race testów zatrzymało się w setup: ręcznie utworzona tabela jobs miała user_version=0, a prawidłowy readonly JobQueue wymaga inicjalizacji. Fixture ustawia teraz user_version=1, zgodnie z istniejącym actual runtime fixture. Produkcyjna walidacja kolejki, tombstone i cleanup niezmieniona. Root SOURCE review, AST/diff-check PASS; wykonanie tych sześciu przypadków nadal NOT VERIFIED. Oddzielne kroki archive receipt12, runtime retention26 i runtime use10 PASS obu OS w poprzednim jobie. Nie usuwano rzeczywistych danych i nie uruchamiano testów lokalnie.
+
+### 4234647706 — brakujące komórki CSV nie tworzą zerowych punktów
+
+Przed konwersją Number parser sprawdza puste/whitespace komórki. Wadliwy wiersz trafia do istniejącej ścieżki skipped-row, którą UI jawnie prezentuje; jawne zero pozostaje poprawną liczbą. Regresja obejmuje środek/koniec/whitespace i zero, bez zmian konwersji SI lub nagłówka COMSOL. Root review parsera, testu i ReferenceImportSection SOURCE PASS; diff-check PASS. Testy lokalne nieuruchamiane; uwaga implemented_pending_ci.
+
+Trzy wcześniejsze naprawy zapisano i wysłano: f67ca8797 (canonical browser phase), 0cd672b6801af98327e914df1cb0c410d62139fb (PETSc type), 997a75adc4f1337934fc7470e7ea1deb7e6c19c9 (queue fixture). Na exact997a75adc uruchomiono GHA browser38000156090, retention38000159347 oraz managed Floquet38000162802. Ostatnia obserwacja: browser in_progress, pozostałe queued; nie jest to dowód sukcesu.

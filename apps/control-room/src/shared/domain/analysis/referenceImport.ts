@@ -59,8 +59,9 @@ export function parseReferenceTable(text: string): ReferenceTable {
       continue;
     }
     const cells = splitLine(line);
-    const values = cells.map((cell) => Number(cell));
-    if (values.every((value) => Number.isFinite(value))) {
+    const hasEmptyCell = cells.some((cell) => cell.trim().length === 0);
+    const values: number[] = hasEmptyCell ? [] : cells.map((cell) => Number(cell));
+    if (!hasEmptyCell && values.every((value) => Number.isFinite(value))) {
       if (columns.length === 0) {
         columns = lastComment.length === values.length
           ? lastComment

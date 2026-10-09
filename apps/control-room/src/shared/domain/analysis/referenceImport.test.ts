@@ -25,6 +25,15 @@ describe("reference import", () => {
     expect(table.skippedRowCount).toBe(1);
   });
 
+  it("skips empty CSV cells without treating explicit zero as missing", () => {
+    const table = parseReferenceTable(
+      "s,f,g\n1,2,3\n4,,6\n7,8,\n9,   ,11\n12,0,14\n",
+    );
+    expect(table.columns).toEqual(["s", "f", "g"]);
+    expect(table.rows).toEqual([[1, 2, 3], [12, 0, 14]]);
+    expect(table.skippedRowCount).toBe(3);
+  });
+
   it("converts the mapped columns to SI and sorts along the path", () => {
     const result = referencePointsFromTable(parseReferenceTable(comsolExport), {
       frequencyColumn: 1,
