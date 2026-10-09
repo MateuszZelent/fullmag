@@ -390,9 +390,26 @@ def test_required_contexts_and_proof_output_are_fail_closed() -> None:
         assert context in matrix
 
 
-def test_browser_audit_build_keeps_next_env_source_identity_stable() -> None:
-    next_env = (REPO_ROOT / "apps/control-room/next-env.d.ts").read_text()
-    assert 'import "./.next-audit/types/routes.d.ts";' in next_env
+def test_browser_audit_build_uses_isolated_dist_dir_and_restores_next_env() -> None:
+    app_root = REPO_ROOT / "apps/control-room"
+    next_env = (app_root / "next-env.d.ts").read_text()
+    next_config = (app_root / "next.config.ts").read_text()
+    package = json.loads((app_root / "package.json").read_text())
+    audit_build = (app_root / "scripts/build-audit-control-room.mjs").read_text()
+
+    assert (
+        'import "./.next/types/routes.d.ts";' in next_env
+        or 'import "./.next/dev/types/routes.d.ts";' in next_env
+    )
+    assert package["scripts"]["build:audit:webpack"] == (
+        "node scripts/build-audit-control-room.mjs"
+    )
+    assert 'const auditBuild = process.env.NEXT_PUBLIC_AUDIT_BUILD === "1";' in next_config
+    assert "const distDir = resolveControlRoomDistDir({\n  auditBuild," in next_config
+    assert 'return auditBuild ? ".next-audit" : ".next";' in next_config
+    assert 'NEXT_PUBLIC_AUDIT_BUILD: "1"' in audit_build
+    assert 'const nextEnvSnapshot = readFileSync(nextEnvPath, "utf8");' in audit_build
+    assert "} finally {\n  writeFileSync(nextEnvPath, nextEnvSnapshot);" in audit_build
 
 
 def test_browser_source_verify_emits_dirty_paths_before_comparison() -> None:
