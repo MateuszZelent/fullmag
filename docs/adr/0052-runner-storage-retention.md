@@ -114,6 +114,35 @@ przekroczenie wymaga małego trwałego wyniku odmowy, a nie nieczytelnego receip
 Odmowa nie zmienia danych objętych retencją ani nie udaje ukończonego planowania.
 Sam trwały wynik odmowy jest kontrolowanym zapisem metadanych.
 
+Wymagane statusy, kody błędu, tożsamości, fingerprints oraz wszystkie częściowe
+outcomes są pełne. Dowolnie długa ludzka wiadomość wyjątku jest opcjonalną
+diagnostyką: jeśli nie mieści się w zarezerwowanym budżecie wpisu, pomijamy ją
+jawnie, zapisując error_message_omitted, dokładną liczbę bajtów UTF-8 oraz SHA-256
+pełnej wiadomości. Zwykłe wiadomości zachowujemy w całości. Typ błędu i stabilny
+kod primary failure pozostają czytelne. Nie przedstawiamy tego jako pełnego
+archiwum ludzkich komunikatów; żaden mandatory fingerprint ani status nie jest
+ucinany. Dzięki jawnej granicy przyszłych opcjonalnych tekstów preflight może
+wyliczyć budżet wyników przed mutacją. Liczba dopuszczalnych mutacji wynika
+z tego budżetu, a nie z historycznego limitu queue.list(1000).
+
+Jawne budżety prywatnego formatu: inline do 4 MiB, logiczny dokument do
+256 MiB, pojedyncza część do 256 KiB, pełny wpis do 128 KiB, do 16 384
+referencji części oraz manifest do 4 MiB. Opcjonalne ludzkie teksty mają
+łącznie do 16 KiB na wpis, nie osobny limit na każde pole. Rozmiar odnosi
+się do dokładnych bajtów UTF-8 po JSON escaping. Przed mutacją sumujemy
+per-scope maksymalne szablony outcomes dla rzeczywistych kandydatów,
+stałe pola wyniku, separatory oraz najgorszy rozmiar referencji i manifestu.
+Zbyt duże wymagane dane blokują cały zakres, bez wykonywania mniejszego
+podzbioru. Omission metadata muszą być zachowane w odpowiedzi API/UI; hash
+nie oznacza możliwości odzyskania pełnego tekstu.
+
+Ten capacity preflight nie rezerwuje fizycznego miejsca ani nie gwarantuje
+I/O. Późniejsza awaria utrwalenia nadal oznacza unknown/partial z zachowaniem
+wcześniejszych trwałych dowodów i odmową automatycznego ponowienia. Nie wolno
+zamienić jej na succeeded tylko dlatego, że dokument mieścił się w budżecie.
+
+
+
 Dotychczasowe inline dokumenty do 4 MiB są nadal czytelne. Istniejący oversized
 legacy dokument pozostaje zachowany i jawnie niekwalifikowany; ta zmiana nie
 migruje ani nie usuwa historycznych danych. Wycofanie do poprzedniego programu

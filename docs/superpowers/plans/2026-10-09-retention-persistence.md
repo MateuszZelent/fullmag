@@ -1,6 +1,6 @@
 # Plan naprawy 4206911501: trwałe duże plany retencji
 
-Status: implementacja w toku; SOURCE i hosted runtime niekwalifikowane.
+Status źródeł: SOURCE PASS po niezależnym review. Hosted wykonanie i realstorage pozostają niekwalifikowane.
 
 ## Przyczyna i zakres
 
@@ -43,3 +43,17 @@ integralności musi dać zero wywołań mutacji. Przed delete mamy zdolność
 utrwalenia outcomes; failure po częściowej mutacji pozostaje odczytywalny.
 Paginacja UI/API i realstorage qualification są oddzielnymi otwartymi bramkami;
 nie przedstawiamy prywatnego persistence jako ich zamknięcia.
+
+
+## Ukończony fragment źródłowy i bramki
+
+Wspólny helper, RetentionService i trzy executory korzystają z jednego writer/reader.
+Po review domknięto: katalog/budżet przed IO, pełny runtime recovery envelope,
+no-clobber części, pinned/no-follow uchwyt (Windows OPEN_REPARSE_POINT), stabilne
+primary code/type oraz nieblokujący POSIX open przeciw podmianie na FIFO.
+Regresje obejmują rzeczywistą podmianę FIFO w procesie z watchdogiem, konflikty
+publikacji bez zmiany starego manifestu i before-mutation capacity refusal.
+AST i diff-check PASS. Wymagane wykonanie: istniejący runner-retention-contracts
+w bootstrap scope=retention, matrix Linux/Windows. Nowy plik testów obejmuje
+istniejący discovery test_local_runner_retention*.py. Nie uruchomiono lokalnych
+testów ani operacji sprzątania; SOURCE PASS nie zamyka bramek API/UI i realstorage.

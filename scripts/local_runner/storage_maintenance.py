@@ -8,11 +8,15 @@ import shutil
 import socket
 import time
 
-from fullmag_storage import atomic_json, file_lock, validate_path
+from fullmag_storage import file_lock, validate_path
 from local_runner import retention
 from local_runner.build_executor import capsule_path
 from local_runner.retention_executor import (
     CleanupBlocked, _containers, _guard_owners, _json, _overlap, _path_key,
+)
+from local_runner.retention_persistence import (
+    RetentionPersistenceError, failure_fields, operation_outcome_template,
+    preflight_operation_evidence, read_document, write_document,
 )
 from local_runner.runtime_use import retention_mutation_guard
 
@@ -112,13 +116,19 @@ def plan_source_compaction(layout, queue, *, owner, job_ids=None):
                 raise CleanupBlocked('source_identity_or_owner_mismatch')
             for other in shared:
                 _guard_source_pins(storage, other)
-            row.update(path=str(source), source_digest=job['source_digest'],
-                       manifest_sha256=_manifest_hash(source),
-                       resource_id=f"src-{job['worktree_id']}-{job['payload']['capture_id']}",
-                       name=source.relative_to(storage).as_posix(), reason='share_verified_source_content')
+            row.update(
+                path=str(source),
+                source_digest=job['source_digest'],
+                resource_id=f"src-{job['worktree_id']}-{job['payload']['capture_id']}",
+                name=source.relative_to(storage).as_posix(),
+            )
+            row['manifest_sha256'] = _manifest_hash(source)
+            row['reason'] = 'share_verified_source_content'
             candidates.append(row)
         except Exception as error:
-            row['why_retained'] = f'{type(error).__name__}: {error}'
+            row.update(failure_fields(
+                error, summary_key='why_retained', label='retention_failure',
+            ))
             retained.append(row)
     return {'scope': 'sources', 'status': 'preview', 'candidates': candidates,
             'candidates_count': len(candidates), 'retained': retained, 'retained_count': len(retained),
@@ -136,20 +146,54 @@ def apply_source_compaction(layout, plan, queue, *, owner, call, policy=None):
     result = {'plan_id': plan_id, 'scope': 'sources', 'status': 'running', 'applied': False,
               'started_at': time.time(), 'items': [], 'removed_logical_bytes': 0, 'reclaimed_bytes': None,
               'disk_free_before_bytes': shutil.disk_usage(storage).free}
+
+    def persist_result(value=None):
+        write_document(
+            storage, result_path, result if value is None else value,
+            kind='operation', scope='sources',
+        )
+
     with ExitStack() as locks:
         locks.enter_context(retention_mutation_guard(layout))
         for name in ('local-runner-coordinator', 'fullmag-heavy', 'retention'):
             locks.enter_context(file_lock(validate_path(storage / 'locks' / (name + '.lock'), storage), name))
         if result_path.exists():
-            previous = _json(result_path)
+            previous = read_document(
+                storage, result_path, plan_id=plan_id, kind='operation', scope='sources',
+            )
             if previous.get('status') == 'running':
-                previous.update(status='interrupted_unknown', applied=False)
+                previous.update(status='interrupted_unknown', applied=False,
+                                error='Compaction outcome is unknown after restart; manual reconciliation required',
+                                finished_at=time.time())
+                persist_result(previous)
             return previous
         if queue.active():
             raise CleanupBlocked('active_queue_lease')
         if plan.get('scope') != 'sources' or not isinstance(plan.get('candidates'), list):
             raise CleanupBlocked('invalid_source_plan')
-        atomic_json(result_path, result)
+        try:
+            total_bytes = shutil.disk_usage(storage).total
+            preflight_operation_evidence(
+                result, plan['candidates'], plan_id=plan_id, scope='sources',
+                outcome_template=lambda candidate: operation_outcome_template(
+                    candidate, plan_id=plan_id, scope='sources', storage_root=storage,
+                ),
+                final_fields={
+                    'status': 'interrupted_unknown', 'applied': False,
+                    'error': 'Compaction outcome is unknown after restart; manual reconciliation required',
+                    'finished_at': float('1.7976931348623157e308'),
+                    'disk_free_after_bytes': total_bytes,
+                    'disk_free_change_bytes': -total_bytes,
+                    'removed_logical_bytes': 0,
+                },
+            )
+        except RetentionPersistenceError as error:
+            result.update(status='blocked', applied=False,
+                          error='operation_evidence_capacity_exceeded',
+                          capacity_error=error.code, finished_at=time.time())
+            persist_result()
+            return result
+        persist_result()
         for candidate in plan['candidates']:
             item = {'job_id': candidate.get('job_id'), 'status': 'retained'}
             result['items'].append(item)
@@ -172,17 +216,20 @@ def apply_source_compaction(layout, plan, queue, *, owner, call, policy=None):
                     if queue.active():
                         raise CleanupBlocked('queue_state_changed')
                     item.update(status='compacting', path=str(source))
-                    atomic_json(result_path, result)
+                    persist_result()
                     compacted = compact_source_capsule(storage, source, job['source_digest'])
                     item.update(status='compacted' if compacted['state'] == 'completed' else 'partial',
                                 compaction=compacted)
             except Exception as error:
-                item.update(status='partial_error' if item['status'] == 'compacting' else 'retained',
-                            reason=f'{type(error).__name__}: {error}')
-            atomic_json(result_path, result)
+                item.update(status='partial_error' if item['status'] == 'compacting' else 'retained')
+                item.update(failure_fields(
+                    error, summary_key='reason', label='failure',
+                    optional_bytes_used=item.get('_optional_error_json_bytes', 0),
+                ))
+            persist_result()
         succeeded = all(item['status'] == 'compacted' for item in result['items'])
         result.update(status='succeeded' if succeeded else 'partial', applied=succeeded,
                       finished_at=time.time(), disk_free_after_bytes=shutil.disk_usage(storage).free)
         result['disk_free_change_bytes'] = result['disk_free_after_bytes'] - result['disk_free_before_bytes']
-        atomic_json(result_path, result)
+        persist_result()
     return result

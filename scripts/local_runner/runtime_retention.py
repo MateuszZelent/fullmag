@@ -13,6 +13,10 @@ from local_runner.retention_executor import (
     CleanupBlocked, _directory_identity, _execution_identity_matches,
     _guard_evidence, _guard_owners, _json,
 )
+from local_runner.retention_persistence import (
+    RetentionPersistenceError, failure_fields, operation_outcome_template,
+    preflight_operation_evidence, read_document, write_document,
+)
 from local_runner.runtime_references import plan_runtime_references
 from local_runner.runtime_use import retention_mutation_guard
 from local_runner.storage_maintenance import complete_jobs, container_inventory, guard_no_mount_users
@@ -87,7 +91,11 @@ def plan_runtime_cleanup(layout, queue, *, owner, call, policy, job_ids=None):
                        build_receipt_sha256=_receipt_hash(storage, by_id[jid]))
             candidates.append(row)
         except Exception as error:
-            retained.append({**row, 'why_retained': f'{type(error).__name__}: {error}'})
+            retained_row = {**row}
+            retained_row.update(failure_fields(
+                error, summary_key='why_retained', label='retention_failure',
+            ))
+            retained.append(retained_row)
     return {'scope': 'runtime', 'status': 'preview', 'candidates': candidates,
             'candidates_count': len(candidates), 'retained': retained, 'retained_count': len(retained),
             'estimated_reclaimed_bytes': sum(item['size_bytes'] for item in candidates),
@@ -106,12 +114,21 @@ def apply_runtime_cleanup(layout, plan, queue, *, owner, call, policy):
     result = {'plan_id': plan_id, 'scope': 'runtime', 'status': 'running', 'applied': False,
               'started_at': time.time(), 'items': [], 'removed_logical_bytes': 0,
               'reclaimed_bytes': None, 'disk_free_before_bytes': shutil.disk_usage(storage).free}
+
+    def persist_result(value=None):
+        write_document(
+            storage, result_path, result if value is None else value,
+            kind='operation', scope='runtime',
+        )
+
     with ExitStack() as locks:
         locks.enter_context(retention_mutation_guard(layout))
         for name in ('local-runner-coordinator', 'fullmag-heavy', 'retention'):
             locks.enter_context(file_lock(validate_path(storage / 'locks' / (name + '.lock'), storage), name))
         if result_path.exists():
-            previous = _json(result_path)
+            previous = read_document(
+                storage, result_path, plan_id=plan_id, kind='operation', scope='runtime',
+            )
             if previous.get('status') == 'running':
                 reconciled_at = time.time()
                 previous.update(status='interrupted_unknown', applied=False,
@@ -159,8 +176,13 @@ def apply_runtime_cleanup(layout, plan, queue, *, owner, call, policy):
                         elif tombstone.get('state') != 'removed':
                             raise CleanupBlocked('runtime_tombstone_state_invalid_during_recovery')
                     except Exception as error:
-                        previous_item['reconciliation_error'] = f'{type(error).__name__}: {error}'
-                atomic_json(result_path, previous)
+                        previous_item.update(failure_fields(
+                            error,
+                            summary_key='reconciliation_error',
+                            label='reconciliation',
+                            optional_bytes_used=previous_item.get('_optional_error_json_bytes', 0),
+                        ))
+                persist_result(previous)
             return previous
         if queue.active():
             raise CleanupBlocked('active_queue_lease')
@@ -168,7 +190,36 @@ def apply_runtime_cleanup(layout, plan, queue, *, owner, call, policy):
             raise CleanupBlocked('invalid_runtime_plan')
         if plan.get('raw_runtime_plan', {}).get('unknown_scope') is not False:
             raise CleanupBlocked('runtime_reference_scope_unknown')
-        atomic_json(result_path, result)
+        try:
+            candidates = plan['candidates']
+            sizes = [candidate.get('size_bytes') for candidate in candidates
+                     if isinstance(candidate, dict)]
+            if (len(sizes) != len(candidates) or any(
+                    not isinstance(size, int) or isinstance(size, bool) or size < 0
+                    for size in sizes)):
+                raise RetentionPersistenceError('operation_candidate_size_invalid')
+            total_bytes = shutil.disk_usage(storage).total
+            preflight_operation_evidence(
+                result, candidates, plan_id=plan_id, scope='runtime',
+                outcome_template=lambda candidate: operation_outcome_template(
+                    candidate, plan_id=plan_id, scope='runtime', storage_root=storage,
+                ),
+                final_fields={
+                    'status': 'interrupted_unknown', 'applied': False,
+                    'error': 'Deletion outcome is unknown after restart; manual reconciliation required',
+                    'finished_at': float('1.7976931348623157e308'),
+                    'disk_free_after_bytes': total_bytes,
+                    'disk_free_change_bytes': -total_bytes,
+                    'removed_logical_bytes': sum(sizes),
+                },
+            )
+        except RetentionPersistenceError as error:
+            result.update(status='blocked', applied=False,
+                          error='operation_evidence_capacity_exceeded',
+                          capacity_error=error.code, finished_at=time.time())
+            persist_result()
+            return result
+        persist_result()
         for candidate in plan['candidates']:
             item = {'job_id': candidate.get('job_id'), 'status': 'retained', 'removed_logical_bytes': 0}
             result['items'].append(item)
@@ -242,7 +293,7 @@ def apply_runtime_cleanup(layout, plan, queue, *, owner, call, policy):
                                 package_tree_identity=current['package_tree'],
                                 run_root_identity=run_root_identity, deletion_state='rename_pending')
                     atomic_json(tombstone_path, tombstone)
-                    atomic_json(result_path, result)
+                    persist_result()
 
                     # The unique quarantine is created in this run so the
                     # rename binds the checked package on the same filesystem.
@@ -263,7 +314,7 @@ def apply_runtime_cleanup(layout, plan, queue, *, owner, call, policy):
                     item.update(deletion_state='quarantine_created',
                                 quarantine_identity=quarantine_identity)
                     atomic_json(tombstone_path, tombstone)
-                    atomic_json(result_path, result)
+                    persist_result()
 
                     target = _package(storage, job)
                     if not _execution_identity_matches(
@@ -277,12 +328,12 @@ def apply_runtime_cleanup(layout, plan, queue, *, owner, call, policy):
                         item.update(deletion_state='rename_outcome_unknown')
                         tombstone.update(deletion_state='rename_outcome_unknown')
                         atomic_json(tombstone_path, tombstone)
-                        atomic_json(result_path, result)
+                        persist_result()
                         raise
                     item.update(deletion_state='moved_unverified')
                     tombstone.update(deletion_state='moved_unverified', moved_at=time.time())
                     atomic_json(tombstone_path, tombstone)
-                    atomic_json(result_path, result)
+                    persist_result()
 
                     checked_run_root = retention._checked_child(
                         storage, ('runs', wt, job['job_id']), kind='directory')
@@ -298,13 +349,13 @@ def apply_runtime_cleanup(layout, plan, queue, *, owner, call, policy):
                         item.update(deletion_state='source_path_reappeared')
                         tombstone.update(deletion_state='source_path_reappeared')
                         atomic_json(tombstone_path, tombstone)
-                        atomic_json(result_path, result)
+                        persist_result()
                         raise CleanupBlocked('runtime_package_path_reappeared_after_quarantine')
 
                     item.update(deletion_state='removal_started')
                     tombstone.update(deletion_state='removal_started')
                     atomic_json(tombstone_path, tombstone)
-                    atomic_json(result_path, result)
+                    persist_result()
                     checked_run_root = retention._checked_child(
                         storage, ('runs', wt, job['job_id']), kind='directory')
                     checked_quarantine = retention._checked_child(
@@ -324,7 +375,7 @@ def apply_runtime_cleanup(layout, plan, queue, *, owner, call, policy):
                         item.update(deletion_state='identity_mismatch', observed_package_tree=moved_tree)
                         tombstone.update(deletion_state='identity_mismatch', observed_package_tree=moved_tree)
                         atomic_json(tombstone_path, tombstone)
-                        atomic_json(result_path, result)
+                        persist_result()
                         raise CleanupBlocked('runtime_package_identity_mismatch_after_quarantine')
 
                     shutil.rmtree(moved_target)
@@ -335,7 +386,7 @@ def apply_runtime_cleanup(layout, plan, queue, *, owner, call, policy):
                     item.update(deletion_state='tree_removed')
                     tombstone.update(deletion_state='tree_removed', tree_removed_at=time.time())
                     atomic_json(tombstone_path, tombstone)
-                    atomic_json(result_path, result)
+                    persist_result()
                     checked_run_root = retention._checked_child(
                         storage, ('runs', wt, job['job_id']), kind='directory')
                     checked_quarantine = retention._checked_child(
@@ -358,16 +409,19 @@ def apply_runtime_cleanup(layout, plan, queue, *, owner, call, policy):
                                 removed_logical_bytes=current['size_bytes'])
                     result['removed_logical_bytes'] += current['size_bytes']
             except Exception as error:
-                item.update(status='partial_error' if item['status'] == 'deleting' else 'retained',
-                            reason=f'{type(error).__name__}: {error}')
+                item.update(status='partial_error' if item['status'] == 'deleting' else 'retained')
+                item.update(failure_fields(
+                    error, summary_key='reason', label='failure',
+                    optional_bytes_used=item.get('_optional_error_json_bytes', 0),
+                ))
                 if tombstone is not None:
                     tombstone.update(state='partial_error', error=item['reason'],
                                      deletion_state=item.get('deletion_state'), finished_at=time.time())
                     atomic_json(Path(tombstone['receipt']), tombstone)
-            atomic_json(result_path, result)
+            persist_result()
         succeeded = all(item['status'] == 'deleted' for item in result['items'])
         result.update(status='succeeded' if succeeded else 'partial', applied=succeeded,
                       finished_at=time.time(), disk_free_after_bytes=shutil.disk_usage(storage).free)
         result['disk_free_change_bytes'] = result['disk_free_after_bytes'] - result['disk_free_before_bytes']
-        atomic_json(result_path, result)
+        persist_result()
     return result

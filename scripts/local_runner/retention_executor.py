@@ -19,6 +19,10 @@ from fullmag_storage import atomic_json, file_lock, validate_path
 from local_runner import retention
 from local_runner.build_executor import attest_build_container, validate_build_receipt
 from local_runner.runtime_use import retention_mutation_guard
+from local_runner.retention_persistence import (
+    RetentionPersistenceError, failure_fields, operation_outcome_template,
+    preflight_operation_evidence, read_document, write_document,
+)
 
 
 class CleanupBlocked(RuntimeError):
@@ -221,17 +225,26 @@ def apply_execution_plan(layout, plan, queue, *, owner, call, policy, now=None):
     operations = validate_path(storage / 'index' / 'retention-operations', storage)
     operations.mkdir(parents=True, exist_ok=True)
     result_path = validate_path(operations / (plan_id + '.json'), storage)
-    result = {'plan_id': plan_id, 'status': 'running', 'applied': False,
+    result = {'plan_id': plan_id, 'scope': 'execution', 'status': 'running', 'applied': False,
               'started_at': now, 'items': [], 'removed_logical_bytes': 0,
               'reclaimed_bytes': None, 'reclaim_measurement': 'disk_free_delta_not_attributed',
               'disk_free_before_bytes': shutil.disk_usage(storage).free}
+
+    def persist_result(value=None):
+        write_document(
+            storage,
+            result_path,
+            result if value is None else value,
+            kind='operation',
+            scope='execution',
+        )
     with ExitStack() as locks:
         locks.enter_context(retention_mutation_guard(layout))
         for name in ('local-runner-coordinator', 'fullmag-heavy', 'retention'):
             lock = validate_path(storage / 'locks' / (name + '.lock'), storage)
             locks.enter_context(file_lock(lock, name))
         if result_path.exists():
-            previous = _json(result_path)
+            previous = read_document(storage, result_path, plan_id=plan_id, kind='operation', scope='execution')
             if previous.get('status') == 'running':
                 previous.update(
                     status='interrupted_unknown', applied=False,
@@ -244,17 +257,88 @@ def apply_execution_plan(layout, plan, queue, *, owner, call, policy, now=None):
                             status='interrupted_unknown',
                             deletion_state='unknown_after_restart',
                         )
-                atomic_json(result_path, previous)
+                persist_result(previous)
             return previous
         if queue.active():
             raise CleanupBlocked('active_queue_lease')
-        candidates = plan.get('raw_engine_plan', {}).get('candidates')
-        if plan.get('raw_engine_plan', {}).get('error'):
+        raw_plan = plan.get('raw_engine_plan')
+        if not isinstance(raw_plan, dict):
+            raise CleanupBlocked('missing_execution_inventory')
+        candidates = raw_plan.get('candidates')
+        if raw_plan.get('error'):
             raise CleanupBlocked('failed_execution_inventory')
         if not isinstance(candidates, list):
             raise CleanupBlocked('missing_bound_execution_candidates')
-        requested = {item.get('job_id') for item in plan.get('candidates', [])}
-        atomic_json(result_path, result)
+        candidate_summaries = plan.get('candidates')
+        if not isinstance(candidate_summaries, list):
+            raise CleanupBlocked('missing_execution_candidate_summaries')
+        requested = set()
+        for summary in candidate_summaries:
+            if not isinstance(summary, dict) or not isinstance(summary.get('job_id'), str):
+                raise CleanupBlocked('invalid_execution_candidate_summary')
+            requested.add(summary['job_id'])
+        selected_candidates = []
+        seen = set()
+        for candidate in candidates:
+            if not isinstance(candidate, dict):
+                raise CleanupBlocked('invalid_execution_candidate')
+            jid = candidate.get('job_id')
+            if jid not in requested or jid in seen:
+                continue
+            if not isinstance(jid, str):
+                raise CleanupBlocked('invalid_execution_candidate_identity')
+            seen.add(jid)
+            selected_candidates.append(candidate)
+
+        try:
+            max_removed = sum(
+                candidate['bytes']
+                for candidate in selected_candidates
+                if isinstance(candidate.get('bytes'), int)
+                and not isinstance(candidate.get('bytes'), bool)
+                and candidate['bytes'] >= 0
+            )
+            if len(selected_candidates) != sum(
+                1 for candidate in selected_candidates
+                if isinstance(candidate.get('bytes'), int)
+                and not isinstance(candidate.get('bytes'), bool)
+                and candidate['bytes'] >= 0
+            ):
+                raise RetentionPersistenceError('operation_candidate_size_invalid')
+            total_bytes = shutil.disk_usage(storage).total
+            preflight_operation_evidence(
+                result,
+                selected_candidates,
+                plan_id=plan_id,
+                scope='execution',
+                outcome_template=lambda candidate: operation_outcome_template(
+                    candidate,
+                    plan_id=plan_id,
+                    scope='execution',
+                    storage_root=storage,
+                ),
+                final_fields={
+                    'status': 'interrupted_unknown',
+                    'applied': False,
+                    'error': 'Reconcile the remaining tree with a fresh plan',
+                    'finished_at': float('1.7976931348623157e308'),
+                    'disk_free_after_bytes': total_bytes,
+                    'disk_free_change_bytes': -total_bytes,
+                    'removed_logical_bytes': max_removed,
+                },
+            )
+        except RetentionPersistenceError as error:
+            result.update(
+                status='blocked',
+                applied=False,
+                error='operation_evidence_capacity_exceeded',
+                capacity_error=error.code,
+                finished_at=time.time(),
+            )
+            persist_result()
+            return result
+        persist_result()
+
         seen = set()
         for candidate in candidates:
             jid = candidate.get('job_id')
@@ -263,7 +347,7 @@ def apply_execution_plan(layout, plan, queue, *, owner, call, policy, now=None):
             seen.add(jid)
             item = {'job_id': jid, 'status': 'validating', 'removed_logical_bytes': 0}
             result['items'].append(item)
-            atomic_json(result_path, result)
+            persist_result()
             try:
                 job = queue.get(jid)
                 if (job.get('owner') != owner or job.get('operation') != 'build'
@@ -300,7 +384,7 @@ def apply_execution_plan(layout, plan, queue, *, owner, call, policy, now=None):
                     journal = _json(run_root / 'coordinator.json')
                     _guard_archive_evidence(storage, job, run_root, journal)
                     item['container_cleanup'] = guard_containers(layout, job, journal, target, call)
-                    atomic_json(result_path, result)
+                    persist_result()
                     # Recheck after potentially slow hashing and Docker calls.
                     if queue.get(jid)['state'] != job['state'] or queue.active():
                         raise CleanupBlocked('queue_state_changed')
@@ -334,7 +418,7 @@ def apply_execution_plan(layout, plan, queue, *, owner, call, policy, now=None):
                         run_root_identity=run_root_identity,
                         deletion_state='rename_pending',
                     )
-                    atomic_json(result_path, result)
+                    persist_result()
 
                     # The unique private directory makes the rename destination
                     # exclusive and keeps it on the same filesystem/run root.
@@ -354,7 +438,7 @@ def apply_execution_plan(layout, plan, queue, *, owner, call, policy, now=None):
                         deletion_state='quarantine_created',
                         quarantine_identity=quarantine_identity,
                     )
-                    atomic_json(result_path, result)
+                    persist_result()
 
                     # Rebind the source immediately before the atomic move.
                     target = retention._checked_child(
@@ -370,10 +454,10 @@ def apply_execution_plan(layout, plan, queue, *, owner, call, policy, now=None):
                         os.rename(target, moved_path)
                     except Exception:
                         item.update(deletion_state='rename_outcome_unknown')
-                        atomic_json(result_path, result)
+                        persist_result()
                         raise
                     item.update(deletion_state='moved_unverified')
-                    atomic_json(result_path, result)
+                    persist_result()
 
                     checked_run_root = retention._checked_child(
                         storage, run_parts, kind='directory',
@@ -391,13 +475,13 @@ def apply_execution_plan(layout, plan, queue, *, owner, call, policy, now=None):
                         raise CleanupBlocked('retention_quarantine_changed_after_move')
                     if os.path.lexists(target):
                         item.update(deletion_state='execution_path_reappeared')
-                        atomic_json(result_path, result)
+                        persist_result()
                         raise CleanupBlocked('execution_path_reappeared_after_quarantine')
 
                     # Persist intent before the final identity check and
                     # deletion; a restart records this exact moved path unknown.
                     item.update(deletion_state='removal_started')
-                    atomic_json(result_path, result)
+                    persist_result()
                     checked_run_root = retention._checked_child(
                         storage, run_parts, kind='directory',
                     )
@@ -426,7 +510,7 @@ def apply_execution_plan(layout, plan, queue, *, owner, call, policy, now=None):
                             deletion_state='identity_mismatch',
                             observed_tree_identity=final_identity,
                         )
-                        atomic_json(result_path, result)
+                        persist_result()
                         raise CleanupBlocked('execution_identity_mismatch_after_quarantine')
 
                     shutil.rmtree(moved_target)
@@ -435,7 +519,7 @@ def apply_execution_plan(layout, plan, queue, *, owner, call, policy, now=None):
                     if os.path.lexists(target):
                         raise CleanupBlocked('execution_path_reappeared_after_delete')
                     item.update(deletion_state='tree_removed')
-                    atomic_json(result_path, result)
+                    persist_result()
                     checked_run_root = retention._checked_child(
                         storage, run_parts, kind='directory',
                     )
@@ -461,12 +545,19 @@ def apply_execution_plan(layout, plan, queue, *, owner, call, policy, now=None):
             except Exception as error:
                 # Preserve exact failure and successful preceding items. No
                 # positive reclaim is inferred from a partially removed tree.
-                item.update(status='partial_error' if item['status'] == 'deleting' else 'retained',
-                            reason=f'{type(error).__name__}: {error}')
-            atomic_json(result_path, result)
+                item.update(
+                    status='partial_error' if item['status'] == 'deleting' else 'retained'
+                )
+                item.update(failure_fields(
+                    error,
+                    summary_key='reason',
+                    label='failure',
+                    optional_bytes_used=item.get('_optional_error_json_bytes', 0),
+                ))
+            persist_result()
         failures = any(item['status'] != 'deleted' for item in result['items'])
         result.update(status='partial' if failures else 'succeeded', applied=not failures,
                       finished_at=time.time(), disk_free_after_bytes=shutil.disk_usage(storage).free)
         result['disk_free_change_bytes'] = result['disk_free_after_bytes'] - result['disk_free_before_bytes']
-        atomic_json(result_path, result)
+        persist_result()
     return result
