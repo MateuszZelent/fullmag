@@ -2253,20 +2253,38 @@ void initialize_native_count_fixture(FloquetContourSharedDomainFixture &fixture)
           "native static fixture has the magnetic MFEM volume attribute");
     magnetic_attributes = 0;
     magnetic_attributes[0] = 1;
-    mfem::ConstantCoefficient unit_density(1.0);
-    mfem::LinearForm lumped_mass_form(state_fes.get());
+    mfem::BilinearForm lumped_mass_form(state_fes.get());
     lumped_mass_form.AddDomainIntegrator(
-        new mfem::DomainLFIntegrator(unit_density), magnetic_attributes);
+        new mfem::MassIntegrator(), magnetic_attributes);
     lumped_mass_form.Assemble();
-    check(lumped_mass_form.Size() == static_cast<int>(node_count),
-          "native static state produces a geometric P1 lumped mass on the same mesh");
+    lumped_mass_form.Finalize();
+    mfem::Vector mass_ones(static_cast<int>(node_count));
+    mfem::Vector lumped_mass_weights(static_cast<int>(node_count));
+    mass_ones = 1.0;
+    lumped_mass_form.Mult(mass_ones, lumped_mass_weights);
+    lumped_mass_weights.HostRead();
+    check(lumped_mass_weights.Size() == static_cast<int>(node_count),
+          "native static state produces a full-node geometric P1 lumped mass on the same mesh");
+    context.integration_weights.mfem_lumped_mass.assign(
+        node_count, 0.0);
     std::vector<double> magnetic_lumped_mass(magnetic_node_count, 0.0);
-    for (std::size_t node = 0u; node < magnetic_node_count; ++node) {
-        magnetic_lumped_mass[node] = lumped_mass_form[static_cast<int>(node)];
-        check(std::isfinite(magnetic_lumped_mass[node]) &&
-                  magnetic_lumped_mass[node] > 0.0,
-              "native magnetic P1 lumped-mass weight is finite and positive");
+    for (std::size_t node = 0u; node < node_count; ++node) {
+        const double weight = lumped_mass_weights[static_cast<int>(node)];
+        check(std::isfinite(weight) && weight >= 0.0,
+              "native geometric P1 lumped-mass row sum is finite and non-negative");
+        context.integration_weights.mfem_lumped_mass[node] = weight;
+        if (node < magnetic_node_count) {
+            magnetic_lumped_mass[node] = weight;
+            check(weight > 0.0,
+                  "native magnetic P1 lumped-mass weight is positive");
+        } else {
+            check(weight == 0.0,
+                  "air-only node has no magnetic mass row sum");
+        }
     }
+    check(context.integration_weights.mfem_lumped_mass.size() == node_count,
+          "static Poisson energy owner receives full-node MFEM magnetic lumped mass");
+    context.mesh.node_volumes = context.integration_weights.mfem_lumped_mass;
 
     std::vector<double> unit_magnetization(3u * node_count, 0.0);
     for (std::size_t node = 0u; node < magnetic_node_count; ++node) {
