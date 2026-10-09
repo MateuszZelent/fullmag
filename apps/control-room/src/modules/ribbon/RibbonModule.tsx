@@ -381,7 +381,10 @@ export default function RibbonModule({ kernel }: ModuleProps) {
   // Contextual tab of the analysis module that owns the selected Results node
   // (ADR 0054). It is shown, and active, whenever such a node is selected;
   // choosing another tab dismisses it until a different module's node is selected.
-  const contextModuleId = analysisModuleIdForNodeKind(selection.kind ?? "");
+  // Read independently of `selection`, which is only populated on the View and
+  // Geometry tabs; the contextual tab must follow every Results selection.
+  const selectedKind = useSelectionSelector((currentSelection) => currentSelection.kind ?? null);
+  const contextModuleId = analysisModuleIdForNodeKind(selectedKind ?? "");
   const contextModuleTitle = contextModuleId
     ? ANALYSIS_FEATURE_MANIFESTS.find((manifest) => manifest.id === contextModuleId)?.title ?? null
     : null;
