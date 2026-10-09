@@ -562,6 +562,73 @@ class ScientificGateTests(unittest.TestCase):
         self.assertFalse(valid)
         self.assertTrue(any("backend_plan.solver_policy.max_linear_iterations" in reason for reason in reasons), reasons)
 
+    def test_override_kpath_is_compared_to_repository_vectors_not_trusted(self):
+        canonical = _canonical_path()
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "override.csv"
+            for kind in ("all_gamma", "changed_vector", "duplicate_index", "renumbered"):
+                rows = copy.deepcopy(canonical)
+                if kind == "all_gamma":
+                    for row in rows:
+                        row.update(kx_rad_per_m="0", ky_rad_per_m="0", kz_rad_per_m="0")
+                elif kind == "changed_vector":
+                    rows[1]["ky_rad_per_m"] = "1"
+                elif kind == "duplicate_index":
+                    rows.append(copy.deepcopy(rows[0]))
+                else:
+                    rows[0]["jpath"] = "100"
+                with self.subTest(kind=kind):
+                    with path.open("w", encoding="utf-8", newline="") as stream:
+                        writer = csv.DictWriter(stream, fieldnames=list(canonical[0]))
+                        writer.writeheader()
+                        writer.writerows(rows)
+                    expected, check, reasons = gate._canonical_path_rows(path)
+                    self.assertEqual(check["status"], "fail")
+                    self.assertTrue(reasons)
+                    self.assertEqual(expected, gate._path_rows(KPATH)[0])
+                    self.assertNotEqual(expected[1], (0.0, 0.0, 0.0))
+
+    def test_semantically_identical_kpath_copy_and_missing_reference(self):
+        canonical = _canonical_path()
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "copy.csv"
+            with path.open("w", encoding="utf-8-sig", newline="") as stream:
+                writer = csv.DictWriter(stream, fieldnames=list(canonical[0]))
+                writer.writeheader()
+                for row in canonical:
+                    row = dict(row)
+                    for key in ("kx_rad_per_m", "ky_rad_per_m", "kz_rad_per_m"):
+                        row[key] = format(float(row[key]), ".17e")
+                    writer.writerow(row)
+            expected, check, reasons = gate._canonical_path_rows(path)
+            self.assertEqual(check["status"], "pass", reasons)
+            self.assertEqual(len(expected), 61)
+            with mock.patch.object(gate, "CANONICAL_KPATH", Path(directory) / "missing.csv"):
+                expected, check, reasons = gate._canonical_path_rows(path)
+            self.assertEqual(check["status"], "fail")
+            self.assertEqual(expected, {})
+            self.assertTrue(any("cannot read canonical k-path" in reason for reason in reasons))
+
+    def test_validate_case_has_mandatory_canonical_kpath_check(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            case_dir = _make_case(root, "c1")
+            override = root / "all-gamma.csv"
+            rows = _canonical_path()
+            with override.open("w", encoding="utf-8", newline="") as stream:
+                writer = csv.DictWriter(stream, fieldnames=list(rows[0]))
+                writer.writeheader()
+                for row in rows:
+                    row = dict(row)
+                    row.update(kx_rad_per_m="0", ky_rad_per_m="0", kz_rad_per_m="0")
+                    writer.writerow(row)
+            report = gate.validate_case(case_dir, "c1", parameters_path=PARAMETERS, kpath_path=override)
+            self.assertEqual(report["checks"]["canonical_kpath"]["status"], "fail")
+            self.assertEqual(report["status"], "not_qualified")
+            self.assertTrue(any("required scientific check canonical_kpath" in reason for reason in report["reasons"]))
+            valid = gate.validate_case(case_dir, "c1", parameters_path=PARAMETERS, kpath_path=KPATH)
+            self.assertEqual(valid["checks"]["canonical_kpath"]["status"], "pass")
+
     def test_canonical_path_requires_an_explicit_pure_de_auxiliary_control(self):
         parameters = json.loads(PARAMETERS.read_text(encoding="utf-8"))
         control = parameters["analytic_controls"]["kalinikos_slab_n0"]

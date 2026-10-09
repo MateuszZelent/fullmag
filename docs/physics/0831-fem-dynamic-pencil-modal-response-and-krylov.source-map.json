@@ -3147,8 +3147,8 @@
     {
       "id": "source-eigen-spectrum-v04-quantity",
       "path": "crates/fullmag-ir/src/study_v04.rs",
-      "symbol": "validate_v04_spectrum_quantities",
-      "responsibility": "Semantic V0.4 sampling validation bez zmiany raw serde. Source review PASS, GHA NOT VERIFIED."
+      "symbol": "validation_errors",
+      "responsibility": "Semantic V0.4 przez legacy_validation_view i wspólne validate_study_contracts, bez zmiany raw serde. Source review PASS, GHA NOT VERIFIED."
     },
     {
       "id": "source-eigen-spectrum-plan-quantity",
@@ -3161,6 +3161,12 @@
       "path": "crates/fullmag-runner/src/fem/eigen_execution.rs",
       "symbol": "execute_fem_eigen_inner",
       "responsibility": "Guard przed handoff/providerem dla ręcznego Single-k; source review PASS, GHA NOT VERIFIED."
+    },
+    {
+      "id": "source-comsol-canonical-kpath",
+      "path": "scripts/validate_comsol_dispersion_scientific_gate.py",
+      "symbol": "_canonical_path_rows",
+      "responsibility": "Bind override CSV indices/vectors to repository Gamma-X-M-Gamma benchmark before scientific qualification."
     }
   ],
   "public_api": {

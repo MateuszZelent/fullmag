@@ -2335,6 +2335,7 @@ Repository-owned related contracts:
 
 | Source path | Symbol | Responsibility |
 |---|---|---|
+| scripts/validate_comsol_dispersion_scientific_gate.py | _canonical_path_rows | Bind caller kpath to the versioned benchmark definition by index and exact parsed vector before numeric comparisons. |
 | backends/fem/tests/frequency_domain/mode_deduplication_test.cpp | void mode_deduplication_keeps_pairwise_distinct_quality_representatives | Nontransitive overlap with nonuniform positive mass, dense/CSR/legacy parity, all input permutations and original strict output; hosted execution pending. |
 | backends/fem/tests/frequency_domain/modal_eigen_contract_test.cpp | void initialize_native_count_fixture | Native static H/phi owner and actual data/term digests for the physical count fixture; hosted execution pending. |
 | backends/fem/tests/frequency_domain/modal_eigen_contract_test.cpp | void verify_native_count_fixture_composed_operator | Active boundary faces, canonical partitions, static/dynamic P, mass/Zeeman/gyro and demag energy-bound oracle; hosted execution pending. |
@@ -4360,7 +4361,7 @@ w GitHub Actions jest **NOT VERIFIED**.
 | Source ID | Path + symbol | Odpowiedzialność i dowód |
 |---|---|---|
 | source-eigen-spectrum-ir-quantity | `crates/fullmag-ir/src/lib.rs` :: `is_supported_eigen_spectrum_quantity` | Wspólny canonical predicate; semantic V0.3 validation. Source review PASS, GHA NOT VERIFIED. |
-| source-eigen-spectrum-v04-quantity | `crates/fullmag-ir/src/study_v04.rs` :: `validate_v04_spectrum_quantities` | Semantic V0.4 sampling validation bez zmiany raw serde. Source review PASS, GHA NOT VERIFIED. |
+| source-eigen-spectrum-v04-quantity | `crates/fullmag-ir/src/study_v04.rs` :: `validation_errors` | Semantic V0.4 przez legacy_validation_view i wspólne validate_study_contracts, bez zmiany raw serde. Source review PASS, GHA NOT VERIFIED. |
 | source-eigen-spectrum-plan-quantity | `crates/fullmag-plan/src/validate.rs` :: `validate_eigen_outputs` | Planner reject unsupported spectrum quantity, canonical duplicate identity. Source review PASS, GHA NOT VERIFIED. |
 | source-eigen-spectrum-single-quantity | `crates/fullmag-runner/src/fem/eigen_execution.rs` :: `execute_fem_eigen_inner` | Guard przed handoff/providerem dla ręcznego Single-k; source review PASS, GHA NOT VERIFIED. |
 
@@ -4512,3 +4513,9 @@ kształtu payloadu nie dodaje surowego endpointu ani nowego transportu.
 | source-eigen-diagnostics-generic | `crates/fullmag-runner/src/eigen/artifacts/modal_manifest.rs` :: `write_frequency_domain_eigen_manifest_with_outputs` | Jawny output i requested-mode context dla v2; raw solver v1 pozostaje niezależny; Rust/GHA NOT VERIFIED. |
 | source-eigen-diagnostics-resource | `apps/control-room/src/kernel/resources/studyRuntimeResources.ts` :: `useFrequencyDomainEigenDiagnosticsResource` | Istniejący resource-first hook i endpoint; bez nowego endpointu. |
 | source-eigen-diagnostics-frontend-shape | `apps/control-room/src/modules/inspector/panels/frequency-domain/FrequencyDomainResultInspectors.tsx` :: `eigenDiagnosticTransportSummary` | Konsument oczekuje root-level transport fields, niezależnych od sekcji `dispersion`. |
+
+## Kanoniczna ścieżka benchmarku COMSOL — uwaga 4082209300
+
+Dla C1/A1 referencją jest wersjonowana tabela docs/guides/comsol-dispersion-benchmark/kpath.csv:61 indeksów0..60 ścieżki Γ–X–M–Γ, wektory w rad/m. Opcjonalny --kpath pozostaje wejściem do sprawdzenia, nie nową definicją benchmarku. Po parsowaniu każdy indeks i trzy składowe float64 muszą odpowiadać referencji dokładnie; inny zapis tego samego numeru/BOM jest dozwolony. Duplicate index, brak/przesunięcie indeksu, zmieniony wektor lub nieczytelna/uszkodzona referencja blokuje kwalifikację. Labels i dodatkowe kolumny prezentacyjne nie zastępują wektorów. C0 single-Γ nie potrzebuje path check.
+
+Dalsza walidacja spectrum/CSV/analityki używa wyłącznie oczekiwanych wektorów repozytoryjnych, również przy odrzuconym override. Raport ma osobny mandatory canonical_kpath check, odrębny od liczby zwróconych sample. Nie zmienia to równań, publicznego Python/ProblemIR ani backendów; gate ocenia artefakty FEM CPU/GPU, bez kwalifikacji FDM. Regresje mają odrzucić self-consistent all-Gamma override oraz duplicate/renumbered/changed-vector input i zachować semantycznie identyczną kopię. Źródła i hosted wynik tej poprawki: NOT VERIFIED.

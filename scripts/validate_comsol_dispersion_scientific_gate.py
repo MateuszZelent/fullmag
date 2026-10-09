@@ -37,6 +37,7 @@ EVIDENCE_RELATIVE_PATH = Path("validation/scientific_gate.v1.json")
 EXPECTED_CASES = ("c0", "c1", "a1")
 PATH_CASES = frozenset(("c1", "a1"))
 EXPECTED_PATH_SAMPLE_COUNT = 61
+CANONICAL_KPATH = Path(__file__).resolve().parents[1] / "docs/guides/comsol-dispersion-benchmark/kpath.csv"
 EXPECTED_TARGET_BANDS = 8
 EXPECTED_CONTROL_SAMPLES = (0, 10, 20, 30, 40, 50, 60)
 KITTEL_RELATIVE_TOLERANCE = 1.0e-3
@@ -168,11 +169,39 @@ def _path_rows(kpath_path: Path) -> tuple[dict[int, tuple[float, float, float]],
                 if len(vector) != 3 or not all(math.isfinite(item) for item in vector):
                     reasons.append(f"canonical k-path sample {index} is non-finite")
                     continue
+                if index in expected:
+                    reasons.append(f"canonical k-path has duplicate sample index {index}")
+                    continue
                 expected[index] = vector  # type: ignore[assignment]
-    except OSError as error:
+    except (OSError, UnicodeError, csv.Error) as error:
         reasons.append(f"cannot read canonical k-path {kpath_path}: {error}")
     return expected, reasons
 
+
+
+def _canonical_path_rows(
+    kpath_path: Path,
+) -> tuple[dict[int, tuple[float, float, float]], dict[str, Any], list[str]]:
+    """Keep repository vectors authoritative even when the caller CSV fails."""
+    expected, reasons = _path_rows(CANONICAL_KPATH)
+    if set(expected) != set(range(EXPECTED_PATH_SAMPLE_COUNT)):
+        reasons.append("repository canonical k-path must contain exactly indices 0..60")
+    supplied, supplied_reasons = _path_rows(kpath_path)
+    reasons.extend(supplied_reasons)
+    if set(supplied) != set(expected):
+        reasons.append("supplied k-path indices do not match the repository benchmark")
+    for index in sorted(set(supplied) & set(expected)):
+        if supplied[index] != expected[index]:
+            reasons.append(f"supplied k-path sample {index} vector differs from the repository benchmark")
+    check = _new_check(
+        "fail" if reasons else "pass",
+        reference_path="docs/guides/comsol-dispersion-benchmark/kpath.csv",
+        input_path=str(kpath_path),
+        comparison="exact_parsed_index_and_float64_vector",
+        reference_sample_count=len(expected),
+        supplied_sample_count=len(supplied),
+    )
+    return expected, check, reasons
 
 def _load_parameters(parameters_path: Path) -> tuple[dict[str, Any] | None, list[str]]:
     value, error = _load_json(parameters_path)
@@ -2628,11 +2657,10 @@ def validate_case(
     expected_path: dict[int, tuple[float, float, float]] = {}
     if kpath_path is None:
         kpath_path = parameters_path.parent / "kpath.csv"
+    canonical_path_check = _new_check("not_applicable")
     if case in PATH_CASES:
-        expected_path, path_reasons = _path_rows(kpath_path)
+        expected_path, canonical_path_check, path_reasons = _canonical_path_rows(kpath_path)
         reasons.extend(path_reasons)
-        if len(expected_path) != EXPECTED_PATH_SAMPLE_COUNT:
-            reasons.append(f"canonical k-path has {len(expected_path)} samples; {EXPECTED_PATH_SAMPLE_COUNT} are required")
     spectrum: dict[str, Any] = {}
     branches: dict[str, Any] = {}
     manifest: dict[str, Any] = {}
@@ -2780,6 +2808,7 @@ def validate_case(
         if not assignment_pass:
             reasons.append("scientific tracking assignment/cluster-selection replay remains NOT VERIFIED")
     checks = {
+        "canonical_kpath": canonical_path_check,
         "artifact_binding": evidence_check,
         "numeric_source": source_check,
         "modal_field_phase": field_check,
