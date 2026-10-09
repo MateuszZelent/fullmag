@@ -115,6 +115,21 @@ def _coerce_positive_float(value: object) -> float | None:
     return float(candidate)
 
 
+def _missing_owner_error_code(policy: object, default: str) -> str:
+    # Classify a missing owner from this policy's active lower bound only.
+    if isinstance(policy, PerObjectMeshRecipe):
+        policy = policy.to_ir()
+    if not isinstance(policy, Mapping):
+        return default
+
+    minimum_element_size = policy.get("minimum_element_size")
+    if minimum_element_size is None:
+        minimum_element_size = policy.get("hmin")
+    if _coerce_positive_float(minimum_element_size) is not None:
+        return "mesh_lower_bound_owner_binding_missing"
+    return default
+
+
 def _coerce_transition_distance_intent(value: object) -> float | str | None:
     if isinstance(value, str) and value.strip().lower() in {
         "airbox_boundary",
@@ -269,8 +284,9 @@ def _canonicalize_geometry_owner_mapping(
             alias_candidates=alias_candidates,
         )
         if owner is None:
+            error_code = _missing_owner_error_code(value, missing_error_code)
             raise ValueError(
-                f"{missing_error_code}: "
+                f"{error_code}: "
                 f"{owner_label} owner='{raw_owner}' has no matching geometry"
             )
         is_exact = isinstance(raw_owner, str) and raw_owner.strip() == owner
@@ -314,8 +330,9 @@ def _scope_per_geometry_entries(
         )
         if not isinstance(raw_owner, str) or not raw_owner.strip():
             if has_policy:
+                error_code = _missing_owner_error_code(entry, missing_error_code)
                 raise ValueError(
-                    f"{missing_error_code}: per_geometry owner='{raw_owner}' "
+                    f"{error_code}: per_geometry owner='{raw_owner}' "
                     "has no matching mesh geometry"
                 )
             continue
@@ -331,8 +348,9 @@ def _scope_per_geometry_entries(
             continue
         if owner is None:
             if has_policy:
+                error_code = _missing_owner_error_code(entry, missing_error_code)
                 raise ValueError(
-                    f"{missing_error_code}: per_geometry owner='{raw_owner}' "
+                    f"{error_code}: per_geometry owner='{raw_owner}' "
                     "has no matching mesh geometry"
                 )
             continue

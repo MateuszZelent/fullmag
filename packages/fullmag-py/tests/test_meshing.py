@@ -12082,6 +12082,83 @@ class RegionMeshPolicyTests(unittest.TestCase):
                 owner_geometry_names=(owner.geometry_name, nested_alias.geometry_name),
             )
 
+    def test_per_geometry_missing_owner_reason_requires_active_lower_bound(self) -> None:
+        left = fm.Box(100e-9, 100e-9, 20e-9, name="left")
+        right = fm.Box(100e-9, 100e-9, 20e-9, name="right")
+        owner_roster = (left.geometry_name, right.geometry_name)
+
+        general_cases = [
+            [{"geometry": "typo", "hmax": 10e-9}],
+            [
+                {
+                    "geometry": "typo",
+                    "hmax": 10e-9,
+                    "minimum_element_size": 0.0,
+                }
+            ],
+            [
+                {
+                    "geometry": "typo",
+                    "hmax": 10e-9,
+                    "minimum_element_size": 0.0,
+                    "hmin": 4e-9,
+                }
+            ],
+            [
+                {
+                    "geometry": "typo",
+                    "hmax": 10e-9,
+                    "minimum_element_size": None,
+                    "hmin": 0.0,
+                }
+            ],
+            [
+                {"geometry": "left", "minimum_element_size": 4e-9},
+                {"geometry": "typo", "hmax": 10e-9},
+            ],
+        ]
+        for per_geometry in general_cases:
+            with self.subTest(per_geometry=per_geometry):
+                with self.assertRaisesRegex(
+                    ValueError,
+                    "mesh_size_field_owner_binding_missing.*owner='typo'",
+                ):
+                    _mesh_options_from_runtime_metadata(
+                        {"per_geometry": per_geometry},
+                        geometries=[left],
+                        default_hmax=30e-9,
+                        component_aware=True,
+                        owner_geometry_names=owner_roster,
+                    )
+
+        lower_bound_cases = [
+            [{"geometry": "typo", "minimum_element_size": 4e-9}],
+            [
+                {
+                    "geometry": "typo",
+                    "minimum_element_size": None,
+                    "hmin": 4e-9,
+                }
+            ],
+            [
+                {"geometry": "left", "minimum_element_size": 4e-9},
+                {"geometry": "typo", "hmin": 4e-9},
+            ],
+        ]
+        for per_geometry in lower_bound_cases:
+            with self.subTest(per_geometry=per_geometry):
+                with self.assertRaisesRegex(
+                    ValueError,
+                    "mesh_lower_bound_owner_binding_missing.*owner='typo'",
+                ):
+                    _mesh_options_from_runtime_metadata(
+                        {"per_geometry": per_geometry},
+                        geometries=[left],
+                        default_hmax=30e-9,
+                        component_aware=True,
+                        owner_geometry_names=owner_roster,
+                    )
+
     def test_per_object_asset_builder_threads_full_geometry_owner_roster(self) -> None:
         left = fm.Box(100e-9, 100e-9, 20e-9, name="left")
         right = fm.Box(100e-9, 100e-9, 20e-9, name="right")
@@ -12377,6 +12454,20 @@ class RegionMeshPolicyTests(unittest.TestCase):
                         component_aware=True,
                         per_object_recipes=case.get("recipes"),  # type: ignore[arg-type]
                     )
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "mesh_geometry_owner_binding_missing.*owner='missing'",
+        ):
+            _mesh_options_from_runtime_metadata(
+                {"per_geometry": []},
+                geometries=[geometry],
+                default_hmax=30e-9,
+                component_aware=True,
+                per_object_recipes={
+                    "missing": PerObjectMeshRecipe(hmax=5e-9)
+                },
+            )
 
     def test_region_lower_bound_is_emitted_without_an_upper_target(self) -> None:
         geometry = fm.Box(100e-9, 100e-9, 20e-9, name="owner")

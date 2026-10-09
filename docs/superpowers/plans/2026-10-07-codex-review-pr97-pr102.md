@@ -1881,3 +1881,8 @@ Canonical exact-name-first roster jest wspólny dla scalar hmax, lower hmin, gen
 37872633768 Python113633944937: startup9PASS (actualproducerprofile-schema regression), frozenprobe22PASS (initial/lateerror/success), ordered roundtrip74PASS+35subtests. #4204792263 i#4205039846 oznaczone implemented z tym ograniczonym dowodem. Cały jobFAIL później w314APItests: eigen stage outputselectors giną w canonicalrewrite; trwa renderer-only correction immutable stage snapshots, bezprzywracaniaunionlateroutputs.
 
 37872496641 meshFAIL: nowe owner/recipe/sharedcomposition cases przeszły, wcześniejsze lower-owner error codes preemptowane przez nowy upperbindingresolver oraz znana actualdensityFAIL. Nie poluzowano testów; trwa policy-local missing-owner reason correction. Count37870360729 attempt2 FAIL przedEPS: native magnetic A_qq descriptor has incomplete dimensions or terms; fixtureterm_mask=0 wymaga fizycznie spójnego deskryptora, nie bypassu walidacji.
+
+
+### Domknięcie lower-owner error contract po nowym CI
+
+Missing-owner reason klasyfikowany jest lokalnie dla odrzuconej polityki: dodatni canonical minimum/hmin daje mesh_lower_bound_owner_binding_missing; brak/wyłączonylower zachowuje caller general code. PerObjectRecipe używa to_ir; ambiguity nie jest przechwytywane. Nie opieramy kodu błędu na innym obiekcie workflow, nie zmieniamy priority/numerics i nie poluzowujemy regexów wcześniejszych testów. Dodano hmax-only/mixedknownlower/absentlower/canonicalprecedence controls. AST/diff/reviewPASS, hosted suite pending.
