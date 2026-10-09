@@ -77,6 +77,7 @@ export function EigenDispersionInspectorPanel({
           value={`${summary.branchCount} branch(es), ${summary.trackedPointCount} tracked point(s)`}
         />
         <FieldRow label="Analytic reference" value={summary.analyticReference} />
+        <FieldRow label="Comparison status" value={summary.referenceComparison} />
         <FieldRow label="Validation intent" value={summary.validationIntent} />
         <FieldRow label="Floquet gate" value={summary.floquetGate} />
         <FieldRow label="Capability summary" value={summary.capabilitySummary} />

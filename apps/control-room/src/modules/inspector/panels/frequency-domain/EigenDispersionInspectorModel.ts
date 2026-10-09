@@ -1,6 +1,11 @@
 "use client";
 
 import {
+  REFERENCE_COMPARISON_LABELS,
+  referenceComparisonStatus,
+  referenceModelBoundaryAssumption,
+} from "@/shared/domain/analysis/referenceComparisonStatus";
+import {
   ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DISPERSION_PATH,
 } from "@/kernel/api/apiPaths";
 import {
@@ -71,8 +76,17 @@ export function useEigenDispersionInspectorSummary() {
     dispersion.data?.path_metadata,
   );
 
+  const comparison = dispersionReferenceComparison(
+    manifestPayload,
+    dispersionModel.points,
+    pathValues,
+    record(record(branches.data?.payload)?.diagnostics),
+  );
+
   return {
     analyticReference: dispersionAnalyticReferenceSummary(dispersionModel.points),
+    referenceComparison: `${REFERENCE_COMPARISON_LABELS[comparison.status]} — ${comparison.reasons.join(" ")}`,
+    referenceComparisonStatus: comparison.status,
     badge:
       dispersion.status === "ready"
         ? `${dispersionModel.points.length} point(s)`
@@ -99,6 +113,33 @@ export function useEigenDispersionInspectorSummary() {
     trackedPointCount,
     validationIntent: dispersionValidationIntentSummary(manifestPayload),
   };
+}
+
+/** Comparison status from metadata only; curve agreement never yields "matching". */
+function dispersionReferenceComparison(
+  manifestPayload: Record<string, unknown> | null,
+  points: readonly EigenDispersionPoint[],
+  pathValues: readonly number[],
+  branchDiagnostics: Record<string, unknown> | null,
+) {
+  const validation = record(record(manifestPayload?.validation)?.dispersion_validation);
+  const requested = record(manifestPayload?.requested_execution);
+  const trackingSource = stringValue(branchDiagnostics?.tracking_score_source);
+  const maxPath = pathValues.reduce<number | null>(
+    (max, value) => (Number.isFinite(value) ? Math.max(max ?? 0, Math.abs(value)) : max),
+    null,
+  );
+  return referenceComparisonStatus({
+    branchTrackingConfirmed: trackingSource?.startsWith("modal_overlap_") === true &&
+      trackingSource !== "modal_overlap_unavailable",
+    hasReferencePoints: points.some((point) => point.analyticFrequencyHz != null),
+    maxPathWavevectorRadPerM: maxPath,
+    referenceBoundaryAssumption: referenceModelBoundaryAssumption(
+      stringValue(validation?.analytic_model) ?? null,
+    ),
+    runBoundaryAssumption: stringValue(requested?.boundary_assumption) ?? null,
+    validityMaxWavevectorRadPerM: finiteNumber(validation?.max_k_rad_per_m) ?? null,
+  });
 }
 
 function dispersionAnalyticReferenceSummary(
