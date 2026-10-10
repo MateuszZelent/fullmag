@@ -2497,29 +2497,98 @@ mod tests {
     }
 
     #[test]
-    fn staged_preflight_restores_opaque_files_and_removes_only_owned_staging() {
+    fn staged_preflight_rejects_unknown_project_files_and_removes_only_owned_staging() {
         let parent = tempfile::tempdir().unwrap();
         let sentinel = parent.path().join("preserved");
         fs::write(&sentinel, b"foreign").unwrap();
         let script = b"print('verified')".to_vec();
         let workspace = test_workspace(&script);
         let payload = vec![13u8; MAX_CONTROL_DOCUMENT_BYTES as usize + 1];
-        let archive = archive_with_entries(&workspace, [
-            ("project/main.py".to_string(), script),
-            ("project/opaque.json".to_string(), payload.clone()),
-        ]);
+        let archive = archive_with_entries(
+            &workspace,
+            [
+                ("project/main.py".to_string(), script),
+                ("project/opaque.json".to_string(), payload.clone()),
+            ],
+        );
         let staged = preflight_fms_staged(Cursor::new(&archive), &[], parent.path()).unwrap();
         let root = staged.root.clone();
-        assert!(staged.contains_document("project/opaque.json"));
-        assert!(staged.read_document("project/opaque.json").is_err());
-        let legacy = preflight_fms(Cursor::new(&archive), &[]).unwrap();
-        assert_eq!(staged.inspection.restore_class, legacy.inspection.restore_class);
+        let opaque_path = "project/opaque.json";
+        assert!(staged.contains_document(opaque_path));
+        assert!(staged.read_document(opaque_path).is_err());
+        assert_eq!(fs::read(root.join(opaque_path)).unwrap(), payload);
+        assert!(!staged.reachability.complete);
+
         let store = SessionStore::open(parent.path().join("restored")).unwrap();
-        unpack_fms_staged(&staged, &store).unwrap();
-        assert_eq!(store.read_document("project/opaque.json").unwrap().unwrap(), payload);
+        let owner_before = fs::read(store.root().join("WRITER.owner.json")).unwrap();
+        let error = unpack_fms(Cursor::new(&archive), &store).unwrap_err();
+        assert!(
+            format!("{error:#}").contains("project/opaque.json"),
+            "{error:#}"
+        );
+        assert_snapshot_import_left_destination_pristine(&store, &owner_before);
+        assert_eq!(store.read_document(opaque_path).unwrap(), None);
+
+        let error = unpack_fms_for_visualization(Cursor::new(&archive), &store).unwrap_err();
+        assert!(
+            format!("{error:#}").contains("project/opaque.json"),
+            "{error:#}"
+        );
+        assert_snapshot_import_left_destination_pristine(&store, &owner_before);
+
+        let error = unpack_fms_staged(&staged, &store).unwrap_err();
+        assert!(
+            format!("{error:#}").contains("project/opaque.json"),
+            "{error:#}"
+        );
+        assert_snapshot_import_left_destination_pristine(&store, &owner_before);
+        assert_eq!(fs::read(&sentinel).unwrap(), b"foreign");
+
         drop(staged);
         assert!(!root.exists());
-        assert_eq!(fs::read(sentinel).unwrap(), b"foreign");
+        assert!(store.root().exists());
+        assert_eq!(fs::read(&sentinel).unwrap(), b"foreign");
+    }
+
+    #[test]
+    fn staged_preflight_restores_large_referenced_opaque_artifact_and_removes_only_owned_staging() {
+        let parent = tempfile::tempdir().unwrap();
+        let sentinel = parent.path().join("preserved");
+        fs::write(&sentinel, b"foreign").unwrap();
+        let script = b"print('snapshot artifacts')";
+        let relative = "runs/run-live/artifacts/opaque.bin";
+        let payload = vec![29u8; MAX_CONTROL_DOCUMENT_BYTES as usize + 1];
+        let snapshot = live_snapshot_bytes("run-live", &[("opaque.bin", "field_state")], None);
+        let archive = archive_with_live_snapshot(
+            script,
+            &snapshot,
+            [(relative.to_string(), payload.clone())],
+        );
+        let staged = preflight_fms_staged(Cursor::new(&archive), &[], parent.path()).unwrap();
+        let root = staged.root.clone();
+        assert!(
+            staged.reachability.complete,
+            "{:?}",
+            staged.reachability.warnings
+        );
+        assert!(staged.contains_document(relative));
+        assert_eq!(
+            staged.documents.get(relative).unwrap().byte_count,
+            payload.len() as u64
+        );
+
+        let store = SessionStore::open(parent.path().join("restored")).unwrap();
+        unpack_fms_staged(&staged, &store).unwrap();
+        assert_eq!(fs::read(store.root().join(relative)).unwrap(), payload);
+        assert_eq!(
+            store.current_session().unwrap().unwrap().session_id,
+            "s-001"
+        );
+
+        drop(staged);
+        assert!(!root.exists());
+        assert!(store.root().exists());
+        assert_eq!(fs::read(&sentinel).unwrap(), b"foreign");
     }
 
     #[test]
