@@ -269,6 +269,176 @@ std::string shifted_lu_policy_comparison_json(
             "MAT_SHIFT_NONE", false, comparison.mat_shift_none) + "}";
 }
 
+std::string borrowed_pmat_copy_observation_json(
+    const FloquetShiftedKspFailureProbe::CandidateOperatorDiagnostic::
+        BorrowedPmatCopyObservation &observation)
+{
+    if (!observation.requested) {
+        return "null";
+    }
+    std::string json =
+        "{\"schema_version\":\"floquet_borrowed_pmat_copy.v1\","
+        "\"requested\":true,\"measurement_scope\":\"private_diagnostic_only_solver_acceptance_unchanged\","
+        "\"matrix_copy_method\":\"MatDuplicate(MAT_COPY_VALUES)\","
+        "\"full_entry_comparison_method\":\"all MatGetRow entries for sequential AIJ; MatEqual sampling is not full proof\","
+        "\"same_private_rhs_source\":\"live_pc_rhs_snapshot\","
+        "\"actual_factorization_shift_type_available\":false,\"actual_factorization_shift_amount_available\":false,"
+        "\"actual_reorder_threshold_available\":false,\"live_pc_modified\":false,\"live_factor_workspace_modified\":false,";
+    const auto append_bool = [&json](const char *key, bool value) {
+        json += "\"" + std::string(key) + "\":" + (value ? "true" : "false") + ",";
+    };
+    const auto append_text = [&json, &append_bool](const char *key, bool available, const char *value) {
+        append_bool((std::string(key) + "_available").c_str(), available);
+        json += "\"" + std::string(key) + "\":" +
+            (available && value != nullptr
+                ? "\"" + escape_json_string(value) + "\""
+                : std::string("null")) + ",";
+    };
+    const auto append_number = [&json, &append_bool](const char *key, bool available, double value) {
+        append_bool((std::string(key) + "_available").c_str(), available);
+        json += "\"" + std::string(key) + "\":" +
+            (available ? format_double(value) : std::string("null")) + ",";
+    };
+    const auto append_integer = [&json, &append_bool](const char *key, bool available, long long value) {
+        append_bool((std::string(key) + "_available").c_str(), available);
+        json += "\"" + std::string(key) + "\":" +
+            (available ? std::to_string(value) : std::string("null")) + ",";
+    };
+    const auto append_optional_bool = [&json, &append_bool](const char *key, bool available, bool value) {
+        append_bool((std::string(key) + "_available").c_str(), available);
+        json += "\"" + std::string(key) + "\":" +
+            (available ? (value ? "true" : "false") : "null") + ",";
+    };
+    append_text("status", true, observation.status);
+    append_text("reason", true, observation.reason);
+    append_bool("matrix_copy_attempted", observation.matrix_copy_attempted);
+    append_bool("matrix_copy_available", observation.matrix_copy_available);
+    append_integer("matrix_copy_error_code", observation.matrix_copy_error_code_available,
+        observation.matrix_copy_error_code);
+    append_text("source_matrix_type", observation.source_matrix_type_available,
+        observation.source_matrix_type);
+    append_bool("source_matrix_type_overflow", observation.source_matrix_type_overflow);
+    append_text("copied_matrix_type", observation.copied_matrix_type_available,
+        observation.copied_matrix_type);
+    append_bool("copied_matrix_type_overflow", observation.copied_matrix_type_overflow);
+    append_text("comparison_status", true, observation.comparison_status);
+    append_text("comparison_reason", true, observation.comparison_reason);
+    append_bool("row_restore_attempts_available", observation.row_restore_attempts_available);
+    append_optional_bool("reference_row_restore_attempted",
+        observation.row_restore_attempts_available, observation.reference_row_restore_attempted);
+    append_optional_bool("copied_row_restore_attempted",
+        observation.row_restore_attempts_available, observation.copied_row_restore_attempted);
+    append_bool("bounded_pattern_fixture_requested",
+        observation.bounded_pattern_fixture_requested);
+    append_bool("bounded_pattern_fixture_attempted",
+        observation.bounded_pattern_fixture_attempted);
+    append_bool("bounded_pattern_fixture_available",
+        observation.bounded_pattern_fixture_available);
+    append_text("bounded_pattern_fixture_status", true,
+        observation.bounded_pattern_fixture_status);
+    append_text("bounded_pattern_fixture_reason", true,
+        observation.bounded_pattern_fixture_reason);
+    append_integer("bounded_pattern_fixture_copied_nnz",
+        observation.bounded_pattern_fixture_copied_nnz_available,
+        static_cast<long long>(observation.bounded_pattern_fixture_copied_nnz));
+    append_integer("bounded_pattern_fixture_reference_nnz",
+        observation.bounded_pattern_fixture_reference_nnz_available,
+        static_cast<long long>(observation.bounded_pattern_fixture_reference_nnz));
+    append_optional_bool("bounded_pattern_fixture_nnz_match",
+        observation.bounded_pattern_fixture_nnz_match_available,
+        observation.bounded_pattern_fixture_nnz_match);
+    append_optional_bool("bounded_pattern_fixture_structural_pattern_match",
+        observation.bounded_pattern_fixture_structural_pattern_match_available,
+        observation.bounded_pattern_fixture_structural_pattern_match);
+    append_integer("matrix_rows", observation.matrix_dimensions_available,
+        static_cast<long long>(observation.matrix_rows));
+    append_integer("matrix_columns", observation.matrix_dimensions_available,
+        static_cast<long long>(observation.matrix_columns));
+    append_integer("reference_rows", observation.reference_dimensions_available,
+        static_cast<long long>(observation.reference_rows));
+    append_integer("reference_columns", observation.reference_dimensions_available,
+        static_cast<long long>(observation.reference_columns));
+    append_optional_bool("matrix_dimensions_match", observation.matrix_dimensions_match_available,
+        observation.matrix_dimensions_match);
+    append_integer("copied_nnz", observation.copied_nnz_available,
+        static_cast<long long>(observation.copied_nnz));
+    append_integer("reference_nnz", observation.reference_nnz_available,
+        static_cast<long long>(observation.reference_nnz));
+    append_optional_bool("nnz_match", observation.nnz_match_available, observation.nnz_match);
+    append_optional_bool("structural_pattern_match",
+        observation.structural_pattern_match_available, observation.structural_pattern_match);
+    append_bool("full_explicit_entry_comparison_available",
+        observation.full_explicit_entry_comparison_available);
+    append_optional_bool("values_equal", observation.values_equal_available,
+        observation.values_equal);
+    append_number("max_absolute_entry_defect", observation.max_absolute_entry_defect_available,
+        observation.max_absolute_entry_defect);
+    append_number("reference_frobenius_norm", observation.reference_frobenius_norm_available,
+        observation.reference_frobenius_norm);
+    append_number("relative_frobenius_defect", observation.relative_frobenius_defect_available,
+        observation.relative_frobenius_defect);
+    append_text("reference_matrix_type", observation.reference_matrix_type_available,
+        observation.reference_matrix_type);
+    append_bool("reference_matrix_type_overflow", observation.reference_matrix_type_overflow);
+    append_text("actual_live_solver_package", observation.actual_solver_package_available,
+        observation.actual_solver_package);
+    append_bool("actual_live_solver_package_overflow", observation.actual_solver_package_overflow);
+    append_text("fresh_requested_solver_package",
+        observation.fresh_solver_package_configured && !observation.fresh_solver_package_overflow,
+        observation.fresh_solver_package);
+    append_bool("fresh_solver_package_configured", observation.fresh_solver_package_configured);
+    append_bool("fresh_solver_package_overflow", observation.fresh_solver_package_overflow);
+    append_bool("fresh_pc_type_configured", observation.fresh_pc_type_configured);
+    append_text("fresh_pc_type", observation.fresh_pc_type_configured, PCLU);
+    append_bool("fresh_reorder_threshold_configured", observation.fresh_reorder_threshold_configured);
+    append_number("fresh_reorder_threshold", observation.fresh_reorder_threshold_configured,
+        observation.fresh_reorder_threshold);
+    append_bool("fresh_shift_type_configured", observation.fresh_shift_type_configured);
+    append_text("fresh_shift_type", observation.fresh_shift_type_configured,
+        observation.fresh_shift_type_configured ? "MAT_SHIFT_NONZERO" : nullptr);
+    append_number("fresh_shift_amount_configured", observation.fresh_shift_amount_configured_available,
+        observation.fresh_shift_amount_configured);
+    append_text("fresh_solver_status", true, observation.fresh_solver_status);
+    append_text("fresh_solver_reason", true, observation.fresh_solver_reason);
+    append_bool("fresh_ksp_setup_available", observation.fresh_ksp_setup_available);
+    append_integer("fresh_ksp_setup_error_code", observation.fresh_ksp_setup_error_code_available,
+        observation.fresh_ksp_setup_error_code);
+    append_bool("fresh_solve_attempted", observation.fresh_solve_attempted);
+    append_bool("fresh_solve_fault_injected", observation.fresh_solve_fault_injected);
+    append_bool("fresh_solve_available", observation.fresh_solve_available);
+    append_integer("fresh_solve_error_code", observation.fresh_solve_error_code_available,
+        observation.fresh_solve_error_code);
+    append_integer("fresh_converged_reason", observation.fresh_converged_reason_available,
+        observation.fresh_converged_reason);
+    append_number("same_private_rhs_l2_norm", observation.same_private_rhs_available,
+        observation.same_private_rhs_l2_norm);
+    append_number("fresh_pmat_residual_l2_norm", observation.fresh_pmat_residual_l2_norm_available,
+        observation.fresh_pmat_residual_l2_norm);
+    append_number("fresh_pmat_relative_residual", observation.fresh_pmat_relative_residual_available,
+        observation.fresh_pmat_relative_residual);
+    append_number("fresh_shifted_operator_residual_l2_norm",
+        observation.fresh_shifted_operator_residual_l2_norm_available,
+        observation.fresh_shifted_operator_residual_l2_norm);
+    append_number("fresh_shifted_operator_relative_residual",
+        observation.fresh_shifted_operator_relative_residual_available,
+        observation.fresh_shifted_operator_relative_residual);
+    append_number("live_vs_fresh_solution_relative_defect",
+        observation.live_vs_fresh_solution_relative_defect_available,
+        observation.live_vs_fresh_solution_relative_defect);
+    append_bool("cleanup_attempted", observation.cleanup_attempted);
+    append_optional_bool("cleanup_succeeded", observation.cleanup_attempted,
+        observation.cleanup_succeeded);
+    append_integer("cleanup_error_code", observation.cleanup_error_code_available,
+        observation.cleanup_error_code);
+    append_integer("first_error_code", observation.first_error_code_available,
+        observation.first_error_code);
+    if (!json.empty() && json.back() == ',') {
+        json.pop_back();
+    }
+    json += "}";
+    return json;
+}
+
 std::string live_pc_observation_json(
     const FloquetShiftedKspFailureProbe::CandidateOperatorDiagnostic::
         LivePcObservation &observation)
@@ -473,6 +643,8 @@ std::string live_pc_observation_json(
         (observation.first_error_code_available
             ? std::to_string(observation.first_error_code)
             : std::string("null")) +
+        ",\"borrowed_pmat_copy\":" +
+        borrowed_pmat_copy_observation_json(observation.borrowed_pmat_copy) +
         "}";
     return json;
 }

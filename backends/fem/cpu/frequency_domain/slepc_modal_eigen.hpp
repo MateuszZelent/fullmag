@@ -171,6 +171,120 @@ struct FloquetShiftedKspFailureProbe {
             ShiftedLuPolicyOutcome mat_shift_nonzero{};
             ShiftedLuPolicyOutcome mat_shift_none{};
         };
+        struct BorrowedPmatCopyObservation {
+            bool requested = false;
+            bool available = false;
+            const char *status = "unavailable";
+            const char *reason = "borrowed_pmat_copy_not_started";
+            const char *comparison_status = "unavailable";
+            const char *comparison_reason = "comparison_not_started";
+            bool row_restore_attempts_available = false;
+            bool reference_row_restore_attempted = false;
+            bool copied_row_restore_attempted = false;
+            bool bounded_pattern_fixture_requested = false;
+            bool bounded_pattern_fixture_attempted = false;
+            bool bounded_pattern_fixture_available = false;
+            const char *bounded_pattern_fixture_status = "not_requested";
+            const char *bounded_pattern_fixture_reason = "bounded_pattern_fixture_not_requested";
+            bool bounded_pattern_fixture_copied_nnz_available = false;
+            PetscInt bounded_pattern_fixture_copied_nnz = -1;
+            bool bounded_pattern_fixture_reference_nnz_available = false;
+            PetscInt bounded_pattern_fixture_reference_nnz = -1;
+            bool bounded_pattern_fixture_nnz_match_available = false;
+            bool bounded_pattern_fixture_nnz_match = false;
+            bool bounded_pattern_fixture_structural_pattern_match_available = false;
+            bool bounded_pattern_fixture_structural_pattern_match = false;
+            const char *fresh_solver_status = "unavailable";
+            const char *fresh_solver_reason = "fresh_solver_not_started";
+            bool matrix_copy_attempted = false;
+            bool matrix_copy_available = false;
+            bool matrix_copy_error_code_available = false;
+            int matrix_copy_error_code = 0;
+            bool source_matrix_type_available = false;
+            bool source_matrix_type_overflow = false;
+            char source_matrix_type[128] = {};
+            bool copied_matrix_type_available = false;
+            bool copied_matrix_type_overflow = false;
+            char copied_matrix_type[128] = {};
+            bool reference_matrix_type_available = false;
+            bool reference_matrix_type_overflow = false;
+            char reference_matrix_type[128] = {};
+            bool matrix_dimensions_available = false;
+            PetscInt matrix_rows = -1;
+            PetscInt matrix_columns = -1;
+            bool reference_dimensions_available = false;
+            PetscInt reference_rows = -1;
+            PetscInt reference_columns = -1;
+            bool matrix_dimensions_match_available = false;
+            bool matrix_dimensions_match = false;
+            bool copied_nnz_available = false;
+            PetscInt copied_nnz = -1;
+            bool reference_nnz_available = false;
+            PetscInt reference_nnz = -1;
+            bool nnz_match_available = false;
+            bool nnz_match = false;
+            bool structural_pattern_match_available = false;
+            bool structural_pattern_match = false;
+            bool full_explicit_entry_comparison_available = false;
+            bool values_equal_available = false;
+            bool values_equal = false;
+            bool max_absolute_entry_defect_available = false;
+            double max_absolute_entry_defect =
+                std::numeric_limits<double>::quiet_NaN();
+            bool reference_frobenius_norm_available = false;
+            double reference_frobenius_norm =
+                std::numeric_limits<double>::quiet_NaN();
+            bool relative_frobenius_defect_available = false;
+            double relative_frobenius_defect =
+                std::numeric_limits<double>::quiet_NaN();
+            bool actual_solver_package_available = false;
+            bool actual_solver_package_overflow = false;
+            char actual_solver_package[128] = {};
+            bool fresh_solver_package_configured = false;
+            bool fresh_solver_package_overflow = false;
+            char fresh_solver_package[128] = {};
+            bool fresh_pc_type_configured = false;
+            bool fresh_reorder_threshold_configured = false;
+            double fresh_reorder_threshold = 1.0e-12;
+            bool fresh_shift_type_configured = false;
+            bool fresh_shift_amount_configured_available = false;
+            double fresh_shift_amount_configured =
+                std::numeric_limits<double>::quiet_NaN();
+            bool fresh_ksp_setup_available = false;
+            bool fresh_ksp_setup_error_code_available = false;
+            int fresh_ksp_setup_error_code = 0;
+            bool fresh_solve_attempted = false;
+            bool fresh_solve_fault_injected = false;
+            bool fresh_solve_available = false;
+            bool fresh_solve_error_code_available = false;
+            int fresh_solve_error_code = 0;
+            bool fresh_converged_reason_available = false;
+            int fresh_converged_reason = 0;
+            bool same_private_rhs_available = false;
+            double same_private_rhs_l2_norm =
+                std::numeric_limits<double>::quiet_NaN();
+            bool fresh_pmat_residual_l2_norm_available = false;
+            double fresh_pmat_residual_l2_norm =
+                std::numeric_limits<double>::quiet_NaN();
+            bool fresh_pmat_relative_residual_available = false;
+            double fresh_pmat_relative_residual =
+                std::numeric_limits<double>::quiet_NaN();
+            bool fresh_shifted_operator_residual_l2_norm_available = false;
+            double fresh_shifted_operator_residual_l2_norm =
+                std::numeric_limits<double>::quiet_NaN();
+            bool fresh_shifted_operator_relative_residual_available = false;
+            double fresh_shifted_operator_relative_residual =
+                std::numeric_limits<double>::quiet_NaN();
+            bool live_vs_fresh_solution_relative_defect_available = false;
+            double live_vs_fresh_solution_relative_defect =
+                std::numeric_limits<double>::quiet_NaN();
+            bool cleanup_attempted = false;
+            bool cleanup_succeeded = false;
+            bool cleanup_error_code_available = false;
+            int cleanup_error_code = 0;
+            bool first_error_code_available = false;
+            int first_error_code = 0;
+        };
         struct LivePcObservation {
             bool requested = false;
             bool available = false;
@@ -246,6 +360,7 @@ struct FloquetShiftedKspFailureProbe {
                 std::numeric_limits<double>::quiet_NaN();
             bool first_error_code_available = false;
             int first_error_code = 0;
+            BorrowedPmatCopyObservation borrowed_pmat_copy{};
         };
         bool requested = false;
         bool workspace_available = false;

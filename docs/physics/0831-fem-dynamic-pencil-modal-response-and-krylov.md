@@ -4989,7 +4989,7 @@ opisuje kontrakt wdrażany: implementacja w toku, GHA/runtime **NOT VERIFIED**.
 
 ## Plan pomiaru kopii rzeczywistego Pmat — bez zmiany solvera
 
-Stan: projekt ograniczonej diagnostyki opt-in, kod i wykonanie **NOT VERIFIED**.
+Stan: niezależny review źródeł ograniczonej diagnostyki opt-in **PASS**; wykonanie i kwalifikacja naukowa **NOT VERIFIED**.
 Dla fixture w logu38044235857 mod0,517405523835Hz przechodził oryginalny
 residual około2,92e-11. Późniejszy hardKSP nie jest wyjaśniony oknem. LivePC
 powtarzalnie daje residual względny około7,54e-8, a świeże izolowane LU około
@@ -5009,11 +5009,30 @@ MatEqual dla matrix-free daje próbkowanie i nie wystarcza jako ten dowód.
 Zachowujemy faktycznie odczytany solver package i jawnie zapisane ustawienia
 konstrukcji. Ustawień requested/configured nie opisujemy jako zmierzonych
 actual; brak publicznego odczytu ustawienia jest reported jako unavailable,
-nie zastępowany założeniem. Kalibracja wektora rozwiązania i obie normy residual
+nie zastępowany założeniem. Pełne porównanie jawnych wpisów jest ograniczone
+do sekwencyjnego AIJ i wymiarów nie większych niż 512; inne typy lub większy
+wymiar mają jawny status unavailable, bez próbkowanego substytutu dowodu.
+Kalibracja wektora rozwiązania i obie normy residual
 muszą korzystać z tych samych scale/RHS i oryginalnego operatora co live PC.
 Nie zmieniamy live PC, jego factor workspace, tolerancji ani okna wyszukiwania.
 Błędy i checked cleanup pozostają częścią prywatnej diagnostyki; nie wolno
 wykonywać zapytań do grafu po hard EPS error.
+
+Regresja błędu zwalniania widoku wiersza jest rejestrowana jako osobny CTest
+`modal_eigen_borrowed_pmat_row_restore_fault_quarantine`, wykonywany w nowym
+procesie przez istniejący profil CI `floquet-modal-slepc`. Po pierwszym błędzie
+restore dalsze wywołania PETSc na niepewnym grafie są zabronione, a graf pozostaje
+w kwarantannie. Liczniki NNZ muszą być zachowane przed restore; błąd pierwotny
+odczytu oraz błąd cleanup pozostają oddzielnymi polami. Rejestracja testu nie
+jest dowodem wykonania. Drugi osobny test
+`modal_eigen_borrowed_pmat_row_primary_cleanup_fault_quarantine` sprawdza
+odrębne kody błędu pierwotnego i cleanup. Weryfikacja obu ścieżek w GitHub Actions
+pozostaje pending. Dodatkowa negatywna fixture
+`modal_eigen_borrowed_pmat_pattern_mismatch_fixture` wywołuje ten sam comparator
+na dwóch owned macierzach SeqAIJ 2x2 o odpowiednio 3 i 4 wpisach. Jej odrębne
+pola `bounded_pattern_fixture_*` nie są pomiarem rzeczywistego Pmat. Test ma
+wykrywać różną liczbę wpisów i różny wzorzec, bez zmiany operatora produkcyjnego;
+niezależny review źródeł tej fixture PASS, wykonanie NOT VERIFIED.
 
 Dokumentacja PETSc: [MatDuplicate](https://petsc.org/main/manualpages/Mat/MatDuplicate/),
 [MatEqual](https://petsc.org/release/manualpages/Mat/MatEqual/),

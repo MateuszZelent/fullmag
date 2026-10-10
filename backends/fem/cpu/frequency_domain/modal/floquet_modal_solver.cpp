@@ -1696,6 +1696,11 @@ struct FloquetCandidateOperatorDiagnosticWorkspace {
     Vec live_pc_operator_solution = nullptr;
     Vec live_pc_operator_action = nullptr;
     Vec live_pc_residual = nullptr;
+    Mat borrowed_pmat_pattern_fixture_copied = nullptr;
+    Mat borrowed_pmat_pattern_fixture_reference = nullptr;
+    Mat live_pc_owned_pmat_copy = nullptr;
+    KSP live_pc_owned_pmat_ksp = nullptr;
+    Vec live_pc_owned_pmat_solution = nullptr;
 };
 
 PetscErrorCode floquet_candidate_relative_vector_defect(
@@ -1742,6 +1747,938 @@ bool copy_bounded_petsc_type_name(
     return true;
 }
 
+using FloquetBorrowedPmatCopyObservation =
+    FloquetCandidateOperatorDiagnostic::BorrowedPmatCopyObservation;
+constexpr PetscInt kFloquetBorrowedPmatFullCompareMaxDimension = 512;
+
+void record_borrowed_pmat_error(
+    FloquetBorrowedPmatCopyObservation *observation,
+    PetscErrorCode error,
+    const char *reason) noexcept
+{
+    if (observation == nullptr || error == PETSC_SUCCESS) {
+        return;
+    }
+    if (!observation->first_error_code_available) {
+        observation->first_error_code_available = true;
+        observation->first_error_code = static_cast<int>(error);
+    }
+    observation->status = "partial";
+    observation->reason = reason;
+}
+
+void record_borrowed_pmat_row_restore_failure(
+    FloquetBorrowedPmatCopyObservation *observation,
+    PetscErrorCode error,
+    const char *reason) noexcept
+{
+    if (observation == nullptr || error == PETSC_SUCCESS) {
+        return;
+    }
+    observation->cleanup_attempted = true;
+    observation->cleanup_succeeded = false;
+    observation->cleanup_error_code_available = true;
+    observation->cleanup_error_code = static_cast<int>(error);
+    observation->comparison_status = "error";
+    observation->comparison_reason = reason;
+    record_borrowed_pmat_error(observation, error, reason);
+}
+
+PetscErrorCode compare_borrowed_pmat_full_explicit_entries(
+    Mat copied_matrix,
+    Mat reference_matrix,
+    FloquetBorrowedPmatCopyObservation *observation) noexcept
+{
+    if (copied_matrix == nullptr || reference_matrix == nullptr ||
+        observation == nullptr) {
+        if (observation != nullptr) {
+            observation->comparison_status = "unavailable";
+            observation->comparison_reason = "matrix_or_observation_unavailable";
+        }
+        return PETSC_ERR_ARG_WRONGSTATE;
+    }
+    MatType copied_type = nullptr;
+    PetscErrorCode error = MatGetType(copied_matrix, &copied_type);
+    if (error != PETSC_SUCCESS || copied_type == nullptr) {
+        observation->comparison_status = "error";
+        observation->comparison_reason = "copied_matrix_type_unavailable";
+        return error != PETSC_SUCCESS ? error : PETSC_ERR_ARG_WRONGSTATE;
+    }
+    observation->copied_matrix_type_available = copy_bounded_petsc_type_name(
+        copied_type, observation->copied_matrix_type,
+        sizeof(observation->copied_matrix_type),
+        &observation->copied_matrix_type_overflow);
+    MatType reference_type = nullptr;
+    error = MatGetType(reference_matrix, &reference_type);
+    if (error != PETSC_SUCCESS || reference_type == nullptr) {
+        observation->comparison_status = "error";
+        observation->comparison_reason = "reference_matrix_type_unavailable";
+        return error != PETSC_SUCCESS ? error : PETSC_ERR_ARG_WRONGSTATE;
+    }
+    observation->reference_matrix_type_available = copy_bounded_petsc_type_name(
+        reference_type, observation->reference_matrix_type,
+        sizeof(observation->reference_matrix_type),
+        &observation->reference_matrix_type_overflow);
+    if (std::strcmp(copied_type, MATSEQAIJ) != 0 ||
+        std::strcmp(reference_type, MATSEQAIJ) != 0) {
+        observation->comparison_status = "unavailable";
+        observation->comparison_reason =
+            "full_entry_comparison_supports_sequential_aij_only";
+        return PETSC_ERR_SUP;
+    }
+
+    PetscInt rows = 0, columns = 0, reference_rows = 0, reference_columns = 0;
+    error = MatGetSize(copied_matrix, &rows, &columns);
+    if (error == PETSC_SUCCESS) {
+        error = MatGetSize(reference_matrix, &reference_rows, &reference_columns);
+    }
+    if (error != PETSC_SUCCESS) {
+        observation->comparison_status = "error";
+        observation->comparison_reason = "matrix_dimensions_unavailable";
+        return error;
+    }
+    observation->matrix_dimensions_available = true;
+    observation->matrix_rows = rows;
+    observation->matrix_columns = columns;
+    observation->reference_dimensions_available = true;
+    observation->reference_rows = reference_rows;
+    observation->reference_columns = reference_columns;
+    observation->matrix_dimensions_match_available = true;
+    observation->matrix_dimensions_match =
+        rows == reference_rows && columns == reference_columns;
+    if (!observation->matrix_dimensions_match) {
+        observation->comparison_status = "unavailable";
+        observation->comparison_reason = "matrix_dimensions_mismatch";
+        return PETSC_ERR_ARG_SIZ;
+    }
+    if (rows < 0 || columns < 0 ||
+        rows > kFloquetBorrowedPmatFullCompareMaxDimension ||
+        columns > kFloquetBorrowedPmatFullCompareMaxDimension) {
+        observation->comparison_status = "unavailable";
+        observation->comparison_reason = "matrix_dimension_exceeds_512";
+        return PETSC_ERR_SUP;
+    }
+
+    PetscInt copied_nnz = 0, reference_nnz = 0;
+    bool structure_match = true, values_equal = true;
+    double max_defect = 0.0, reference_norm_squared = 0.0;
+    double difference_norm_squared = 0.0;
+    for (PetscInt row = 0; row < rows; ++row) {
+        PetscInt copied_count = 0, reference_count = 0;
+        const PetscInt *copied_columns = nullptr, *reference_columns = nullptr;
+        const PetscScalar *copied_values = nullptr, *reference_values = nullptr;
+        error = MatGetRow(copied_matrix, row, &copied_count,
+                          &copied_columns, &copied_values);
+        if (error != PETSC_SUCCESS) {
+            observation->comparison_status = "error";
+            observation->comparison_reason = "copied_matrix_row_unavailable";
+            return error;
+        }
+        const char *row_fault =
+            std::getenv("FULLMAG_FLOQUET_LIVE_PC_DIAGNOSTIC_FAULT");
+        const bool inject_reference_row_get_failure =
+            row == 0 && row_fault != nullptr &&
+            std::strcmp(row_fault, "reference_row_get_copy_restore") == 0;
+        error = inject_reference_row_get_failure
+            ? PETSC_ERR_ARG_WRONGSTATE
+            : MatGetRow(reference_matrix, row, &reference_count,
+                        &reference_columns, &reference_values);
+        if (error != PETSC_SUCCESS) {
+            observation->comparison_status = "error";
+            observation->comparison_reason = "reference_matrix_row_unavailable";
+            record_borrowed_pmat_error(
+                observation, error, "reference_matrix_row_unavailable");
+            observation->row_restore_attempts_available = true;
+            observation->copied_row_restore_attempted = true;
+            const bool inject_copied_row_restore_failure =
+                row_fault != nullptr &&
+                std::strcmp(row_fault, "reference_row_get_copy_restore") == 0;
+            const PetscErrorCode restore = inject_copied_row_restore_failure
+                ? PETSC_ERR_LIB
+                : MatRestoreRow(
+                      copied_matrix, row, &copied_count,
+                      &copied_columns, &copied_values);
+            if (restore != PETSC_SUCCESS) {
+                record_borrowed_pmat_row_restore_failure(
+                    observation,
+                    restore,
+                    "copied_matrix_row_restore_failed_after_reference_row_unavailable");
+            }
+            return error;
+        }
+        bool valid = copied_count >= 0 && reference_count >= 0 &&
+            (copied_count == 0 || (copied_columns != nullptr && copied_values != nullptr)) &&
+            (reference_count == 0 ||
+             (reference_columns != nullptr && reference_values != nullptr));
+        bool finite = true;
+        PetscScalar copied_row[kFloquetBorrowedPmatFullCompareMaxDimension]{};
+        PetscScalar reference_row[kFloquetBorrowedPmatFullCompareMaxDimension]{};
+        unsigned char copied_pattern[kFloquetBorrowedPmatFullCompareMaxDimension]{};
+        unsigned char reference_pattern[kFloquetBorrowedPmatFullCompareMaxDimension]{};
+        for (PetscInt entry = 0; valid && entry < copied_count; ++entry) {
+            const PetscInt column = copied_columns[entry];
+            if (column < 0 || column >= columns || copied_pattern[column] != 0u) {
+                valid = false;
+                break;
+            }
+            if (!std::isfinite(static_cast<double>(PetscAbsScalar(copied_values[entry])))) {
+                finite = false;
+                valid = false;
+                break;
+            }
+            copied_pattern[column] = 1u;
+            copied_row[column] = copied_values[entry];
+        }
+        for (PetscInt entry = 0; valid && entry < reference_count; ++entry) {
+            const PetscInt column = reference_columns[entry];
+            if (column < 0 || column >= columns || reference_pattern[column] != 0u) {
+                valid = false;
+                break;
+            }
+            if (!std::isfinite(static_cast<double>(PetscAbsScalar(reference_values[entry])))) {
+                finite = false;
+                valid = false;
+                break;
+            }
+            reference_pattern[column] = 1u;
+            reference_row[column] = reference_values[entry];
+        }
+        const PetscInt copied_row_nnz = copied_count;
+        const PetscInt reference_row_nnz = reference_count;
+        observation->row_restore_attempts_available = true;
+        const bool inject_reference_restore_failure =
+            row == 0 && row_fault != nullptr &&
+            std::strcmp(row_fault, "reference_row_restore") == 0;
+        observation->reference_row_restore_attempted = true;
+        const PetscErrorCode reference_restore = inject_reference_restore_failure
+            ? PETSC_ERR_LIB
+            : MatRestoreRow(
+                  reference_matrix, row, &reference_count,
+                  &reference_columns, &reference_values);
+        if (reference_restore != PETSC_SUCCESS) {
+            record_borrowed_pmat_row_restore_failure(
+                observation, reference_restore, "reference_matrix_row_restore_failed");
+            return reference_restore;
+        }
+        observation->copied_row_restore_attempted = true;
+        const PetscErrorCode copied_restore = MatRestoreRow(
+            copied_matrix, row, &copied_count, &copied_columns, &copied_values);
+        if (copied_restore != PETSC_SUCCESS) {
+            record_borrowed_pmat_row_restore_failure(
+                observation, copied_restore, "copied_matrix_row_restore_failed");
+            return copied_restore;
+        }
+        if (!valid) {
+            observation->comparison_status = "error";
+            observation->comparison_reason = finite
+                ? "explicit_matrix_row_structure_invalid" : "explicit_matrix_row_value_non_finite";
+            return finite ? PETSC_ERR_ARG_WRONGSTATE : PETSC_ERR_FP;
+        }
+        copied_nnz += copied_row_nnz;
+        reference_nnz += reference_row_nnz;
+        for (PetscInt column = 0; column < columns; ++column) {
+            structure_match = structure_match &&
+                copied_pattern[column] == reference_pattern[column];
+            const PetscScalar delta = copied_row[column] - reference_row[column];
+            const double difference = static_cast<double>(PetscAbsScalar(delta));
+            const double reference = static_cast<double>(PetscAbsScalar(reference_row[column]));
+            if (!std::isfinite(difference) || !std::isfinite(reference)) {
+                observation->comparison_status = "error";
+                observation->comparison_reason = "matrix_entry_defect_non_finite";
+                return PETSC_ERR_FP;
+            }
+            max_defect = std::max(max_defect, difference);
+            difference_norm_squared += difference * difference;
+            reference_norm_squared += reference * reference;
+            values_equal = values_equal && difference == 0.0;
+        }
+    }
+    observation->copied_nnz_available = true;
+    observation->copied_nnz = copied_nnz;
+    observation->reference_nnz_available = true;
+    observation->reference_nnz = reference_nnz;
+    observation->nnz_match_available = true;
+    observation->nnz_match = copied_nnz == reference_nnz;
+    observation->structural_pattern_match_available = true;
+    observation->structural_pattern_match = structure_match;
+    observation->values_equal_available = true;
+    observation->values_equal = values_equal;
+    observation->max_absolute_entry_defect_available = true;
+    observation->max_absolute_entry_defect = max_defect;
+    const double reference_norm = std::sqrt(reference_norm_squared);
+    const double difference_norm = std::sqrt(difference_norm_squared);
+    if (!std::isfinite(reference_norm) || !std::isfinite(difference_norm)) {
+        observation->comparison_status = "error";
+        observation->comparison_reason = "matrix_frobenius_norm_non_finite";
+        return PETSC_ERR_FP;
+    }
+    observation->reference_frobenius_norm_available = true;
+    observation->reference_frobenius_norm = reference_norm;
+    if (reference_norm > 0.0) {
+        observation->relative_frobenius_defect_available = true;
+        observation->relative_frobenius_defect = difference_norm / reference_norm;
+    }
+    observation->full_explicit_entry_comparison_available = true;
+    observation->comparison_status = "measured";
+    observation->comparison_reason = reference_norm > 0.0
+        ? "all_explicit_seq_aij_entries_compared"
+        : "all_entries_compared_reference_frobenius_norm_zero_relative_unavailable";
+    return PETSC_SUCCESS;
+}
+
+void measure_bounded_pattern_mismatch_fixture(
+    FloquetCandidateOperatorDiagnosticWorkspace *workspace) noexcept
+{
+    if (workspace == nullptr) {
+        return;
+    }
+    auto &observation = workspace->summary.live_pc_observation.borrowed_pmat_copy;
+    observation.bounded_pattern_fixture_requested = true;
+    observation.bounded_pattern_fixture_attempted = true;
+    observation.bounded_pattern_fixture_status = "partial";
+    observation.bounded_pattern_fixture_reason = "bounded_pattern_fixture_setup_started";
+
+    PetscErrorCode error = PETSC_SUCCESS;
+    do {
+        error = MatCreateSeqAIJ(
+            PETSC_COMM_SELF, 2, 2, 2, nullptr,
+            &workspace->borrowed_pmat_pattern_fixture_copied);
+        if (error != PETSC_SUCCESS) {
+            observation.bounded_pattern_fixture_reason =
+                "bounded_pattern_fixture_copied_matrix_create_failed";
+            break;
+        }
+        error = MatCreateSeqAIJ(
+            PETSC_COMM_SELF, 2, 2, 2, nullptr,
+            &workspace->borrowed_pmat_pattern_fixture_reference);
+        if (error != PETSC_SUCCESS) {
+            observation.bounded_pattern_fixture_reason =
+                "bounded_pattern_fixture_reference_matrix_create_failed";
+            break;
+        }
+
+        Mat copied = workspace->borrowed_pmat_pattern_fixture_copied;
+        Mat reference = workspace->borrowed_pmat_pattern_fixture_reference;
+        error = MatSetValue(copied, 0, 0, static_cast<PetscScalar>(1.0), INSERT_VALUES);
+        if (error == PETSC_SUCCESS) {
+            error = MatSetValue(copied, 0, 1, static_cast<PetscScalar>(2.0), INSERT_VALUES);
+        }
+        if (error == PETSC_SUCCESS) {
+            error = MatSetValue(copied, 1, 1, static_cast<PetscScalar>(3.0), INSERT_VALUES);
+        }
+        if (error == PETSC_SUCCESS) {
+            error = MatSetValue(reference, 0, 0, static_cast<PetscScalar>(1.0), INSERT_VALUES);
+        }
+        if (error == PETSC_SUCCESS) {
+            error = MatSetValue(reference, 0, 1, static_cast<PetscScalar>(2.0), INSERT_VALUES);
+        }
+        if (error == PETSC_SUCCESS) {
+            error = MatSetValue(reference, 1, 0, static_cast<PetscScalar>(4.0), INSERT_VALUES);
+        }
+        if (error == PETSC_SUCCESS) {
+            error = MatSetValue(reference, 1, 1, static_cast<PetscScalar>(3.0), INSERT_VALUES);
+        }
+        if (error == PETSC_SUCCESS) {
+            error = MatAssemblyBegin(copied, MAT_FINAL_ASSEMBLY);
+        }
+        if (error == PETSC_SUCCESS) {
+            error = MatAssemblyEnd(copied, MAT_FINAL_ASSEMBLY);
+        }
+        if (error == PETSC_SUCCESS) {
+            error = MatAssemblyBegin(reference, MAT_FINAL_ASSEMBLY);
+        }
+        if (error == PETSC_SUCCESS) {
+            error = MatAssemblyEnd(reference, MAT_FINAL_ASSEMBLY);
+        }
+        if (error != PETSC_SUCCESS) {
+            observation.bounded_pattern_fixture_reason =
+                "bounded_pattern_fixture_matrix_assembly_failed";
+            break;
+        }
+
+        FloquetBorrowedPmatCopyObservation comparison{};
+        error = compare_borrowed_pmat_full_explicit_entries(
+            copied, reference, &comparison);
+        observation.bounded_pattern_fixture_copied_nnz_available =
+            comparison.copied_nnz_available;
+        observation.bounded_pattern_fixture_copied_nnz =
+            comparison.copied_nnz;
+        observation.bounded_pattern_fixture_reference_nnz_available =
+            comparison.reference_nnz_available;
+        observation.bounded_pattern_fixture_reference_nnz =
+            comparison.reference_nnz;
+        observation.bounded_pattern_fixture_nnz_match_available =
+            comparison.nnz_match_available;
+        observation.bounded_pattern_fixture_nnz_match =
+            comparison.nnz_match;
+        observation.bounded_pattern_fixture_structural_pattern_match_available =
+            comparison.structural_pattern_match_available;
+        observation.bounded_pattern_fixture_structural_pattern_match =
+            comparison.structural_pattern_match;
+        if (error != PETSC_SUCCESS) {
+            observation.bounded_pattern_fixture_reason =
+                "bounded_pattern_fixture_comparison_failed";
+            if (std::strstr(comparison.comparison_reason, "restore_failed") != nullptr) {
+                const PetscErrorCode cleanup_error =
+                    comparison.cleanup_error_code_available
+                    ? static_cast<PetscErrorCode>(comparison.cleanup_error_code)
+                    : error;
+                observation.cleanup_attempted = true;
+                observation.cleanup_succeeded = false;
+                observation.cleanup_error_code_available = true;
+                observation.cleanup_error_code = static_cast<int>(cleanup_error);
+                record_borrowed_pmat_error(
+                    &observation, cleanup_error,
+                    "bounded_pattern_fixture_row_restore_failed_graph_quarantined");
+                observation.status = "error";
+                observation.reason =
+                    "bounded_pattern_fixture_row_restore_failed_graph_quarantined";
+                workspace->cleanup_failed = true;
+                workspace->cleanup_error = cleanup_error;
+            }
+            break;
+        }
+
+        observation.bounded_pattern_fixture_available =
+            comparison.copied_nnz_available &&
+            comparison.reference_nnz_available &&
+            comparison.nnz_match_available &&
+            comparison.structural_pattern_match_available;
+        observation.bounded_pattern_fixture_status =
+            observation.bounded_pattern_fixture_available ? "measured" : "partial";
+        observation.bounded_pattern_fixture_reason =
+            "owned_seq_aij_2x2_3_entry_vs_4_entry_fixture_compared";
+    } while (false);
+
+    if (error != PETSC_SUCCESS && !workspace->cleanup_failed) {
+        record_borrowed_pmat_error(
+            &observation, error, observation.bounded_pattern_fixture_reason);
+    }
+}
+
+PetscErrorCode destroy_candidate_live_pmat_copy_resources(
+    FloquetCandidateOperatorDiagnosticWorkspace *workspace) noexcept
+{
+    if (workspace == nullptr) {
+        return PETSC_SUCCESS;
+    }
+    auto &observation = workspace->summary.live_pc_observation.borrowed_pmat_copy;
+    if (workspace->cleanup_failed) {
+        return workspace->cleanup_error != PETSC_SUCCESS
+            ? workspace->cleanup_error
+            : PETSC_ERR_LIB;
+    }
+    observation.cleanup_attempted = true;
+    const auto fail_cleanup = [&workspace, &observation](PetscErrorCode error) {
+        const PetscErrorCode cleanup_error =
+            error != PETSC_SUCCESS ? error : PETSC_ERR_LIB;
+        observation.cleanup_succeeded = false;
+        observation.cleanup_error_code_available = true;
+        observation.cleanup_error_code = static_cast<int>(cleanup_error);
+        observation.status = "error";
+        observation.reason = "borrowed_pmat_owned_resource_cleanup_failed";
+        workspace->cleanup_failed = true;
+        workspace->cleanup_error = cleanup_error;
+        return cleanup_error;
+    };
+    if (workspace->live_pc_owned_pmat_ksp != nullptr) {
+        KSP owned = workspace->live_pc_owned_pmat_ksp;
+        const PetscErrorCode error = KSPDestroy(&owned);
+        if (error != PETSC_SUCCESS || owned != nullptr) {
+            return fail_cleanup(error);
+        }
+        workspace->live_pc_owned_pmat_ksp = nullptr;
+    }
+    if (workspace->live_pc_owned_pmat_solution != nullptr) {
+        Vec owned = workspace->live_pc_owned_pmat_solution;
+        const PetscErrorCode error = VecDestroy(&owned);
+        if (error != PETSC_SUCCESS || owned != nullptr) {
+            return fail_cleanup(error);
+        }
+        workspace->live_pc_owned_pmat_solution = nullptr;
+    }
+    if (workspace->borrowed_pmat_pattern_fixture_copied != nullptr) {
+        Mat owned = workspace->borrowed_pmat_pattern_fixture_copied;
+        const PetscErrorCode error = MatDestroy(&owned);
+        if (error != PETSC_SUCCESS || owned != nullptr) {
+            return fail_cleanup(error);
+        }
+        workspace->borrowed_pmat_pattern_fixture_copied = nullptr;
+    }
+    if (workspace->borrowed_pmat_pattern_fixture_reference != nullptr) {
+        Mat owned = workspace->borrowed_pmat_pattern_fixture_reference;
+        const PetscErrorCode error = MatDestroy(&owned);
+        if (error != PETSC_SUCCESS || owned != nullptr) {
+            return fail_cleanup(error);
+        }
+        workspace->borrowed_pmat_pattern_fixture_reference = nullptr;
+    }
+    if (workspace->live_pc_owned_pmat_copy != nullptr) {
+        Mat owned = workspace->live_pc_owned_pmat_copy;
+        const PetscErrorCode error = MatDestroy(&owned);
+        if (error != PETSC_SUCCESS || owned != nullptr) {
+            return fail_cleanup(error);
+        }
+        workspace->live_pc_owned_pmat_copy = nullptr;
+    }
+    observation.cleanup_succeeded = true;
+    return PETSC_SUCCESS;
+}
+
+PetscErrorCode prepare_candidate_owned_pmat_copy_and_lu(
+    FloquetCandidateOperatorDiagnosticWorkspace *workspace,
+    PC live_pc,
+    Mat borrowed_pmat) noexcept
+{
+    auto &observation = workspace->summary.live_pc_observation.borrowed_pmat_copy;
+    do {
+        if (borrowed_pmat == nullptr) {
+            observation.reason = "borrowed_live_pmat_unavailable";
+            break;
+        }
+        MatType source_type = nullptr;
+        PetscErrorCode error = MatGetType(borrowed_pmat, &source_type);
+        if (error != PETSC_SUCCESS || source_type == nullptr) {
+            record_borrowed_pmat_error(
+                &observation,
+                error != PETSC_SUCCESS ? error : PETSC_ERR_ARG_WRONGSTATE,
+                "borrowed_live_pmat_type_unavailable");
+            break;
+        }
+        observation.source_matrix_type_available = copy_bounded_petsc_type_name(
+            source_type,
+            observation.source_matrix_type,
+            sizeof(observation.source_matrix_type),
+            &observation.source_matrix_type_overflow);
+        const char *fault = std::getenv("FULLMAG_FLOQUET_LIVE_PC_DIAGNOSTIC_FAULT");
+        observation.matrix_copy_attempted = true;
+        if (fault != nullptr && std::strcmp(fault, "pmat_copy") == 0) {
+            observation.matrix_copy_error_code_available = true;
+            observation.matrix_copy_error_code = static_cast<int>(PETSC_ERR_LIB);
+            record_borrowed_pmat_error(
+                &observation, PETSC_ERR_LIB, "injected_borrowed_pmat_copy_failure");
+            break;
+        }
+        error = MatDuplicate(
+            borrowed_pmat, MAT_COPY_VALUES, &workspace->live_pc_owned_pmat_copy);
+        if (error != PETSC_SUCCESS) {
+            observation.matrix_copy_error_code_available = true;
+            observation.matrix_copy_error_code = static_cast<int>(error);
+            record_borrowed_pmat_error(
+                &observation, error, "borrowed_live_pmat_copy_failed");
+            break;
+        }
+        observation.matrix_copy_available = true;
+        MatType copied_type = nullptr;
+        error = MatGetType(workspace->live_pc_owned_pmat_copy, &copied_type);
+        if (error != PETSC_SUCCESS || copied_type == nullptr) {
+            record_borrowed_pmat_error(
+                &observation,
+                error != PETSC_SUCCESS ? error : PETSC_ERR_ARG_WRONGSTATE,
+                "owned_pmat_copy_type_unavailable");
+            break;
+        }
+        observation.copied_matrix_type_available = copy_bounded_petsc_type_name(
+            copied_type,
+            observation.copied_matrix_type,
+            sizeof(observation.copied_matrix_type),
+            &observation.copied_matrix_type_overflow);
+        if (workspace->exact_shifted_matrix_available &&
+            workspace->exact_shifted_matrix != nullptr) {
+            error = compare_borrowed_pmat_full_explicit_entries(
+                workspace->live_pc_owned_pmat_copy,
+                workspace->exact_shifted_matrix,
+                &observation);
+            if (error != PETSC_SUCCESS) {
+                if (std::strstr(observation.comparison_reason, "restore_failed") != nullptr) {
+                    observation.cleanup_attempted = true;
+                    observation.cleanup_succeeded = false;
+                    if (!observation.cleanup_error_code_available) {
+                        observation.cleanup_error_code_available = true;
+                        observation.cleanup_error_code = static_cast<int>(error);
+                    }
+                    const PetscErrorCode cleanup_error =
+                        static_cast<PetscErrorCode>(observation.cleanup_error_code);
+                    observation.reason = "matrix_row_restore_failed_diagnostic_graph_quarantined";
+                    workspace->cleanup_failed = true;
+                    workspace->cleanup_error = cleanup_error;
+                    break;
+                }
+                record_borrowed_pmat_error(
+                    &observation, error, "full_explicit_pmat_comparison_unavailable");
+                if (std::strcmp(observation.comparison_status, "error") == 0) {
+                    break;
+                }
+            }
+        } else {
+            observation.comparison_status = "unavailable";
+            observation.comparison_reason = "exact_reference_snapshot_unavailable";
+        }
+        if (fault != nullptr && std::strcmp(fault, "pattern_mismatch_fixture") == 0) {
+            measure_bounded_pattern_mismatch_fixture(workspace);
+            if (workspace->cleanup_failed) {
+                break;
+            }
+        }
+        if (std::strcmp(copied_type, MATSEQAIJ) != 0) {
+            observation.fresh_solver_reason =
+                "fresh_lu_requires_explicit_sequential_aij_pmat";
+            break;
+        }
+        PetscInt rows = 0, columns = 0, rhs_size = 0;
+        error = MatGetSize(workspace->live_pc_owned_pmat_copy, &rows, &columns);
+        if (error == PETSC_SUCCESS) {
+            error = VecGetSize(workspace->live_pc_rhs, &rhs_size);
+        }
+        if (error != PETSC_SUCCESS) {
+            observation.fresh_solver_reason = "fresh_pmat_dimension_query_failed";
+            record_borrowed_pmat_error(
+                &observation, error, "fresh_pmat_dimension_query_failed");
+            break;
+        }
+        if (rows <= 0 || rows != columns || rows != rhs_size) {
+            observation.fresh_solver_reason = "fresh_pmat_rhs_dimension_mismatch";
+            record_borrowed_pmat_error(
+                &observation, PETSC_ERR_ARG_SIZ, "fresh_pmat_rhs_dimension_mismatch");
+            break;
+        }
+        if (live_pc == nullptr ||
+            !workspace->summary.live_pc_observation.pc_type_available ||
+            std::strcmp(workspace->summary.live_pc_observation.pc_type, PCLU) != 0) {
+            observation.fresh_solver_reason = "borrowed_live_pc_is_not_lu";
+            break;
+        }
+        MatSolverType actual_package = nullptr;
+        error = PCFactorGetMatSolverType(live_pc, &actual_package);
+        if (error != PETSC_SUCCESS || actual_package == nullptr) {
+            observation.fresh_solver_reason = "actual_live_lu_package_unavailable";
+            record_borrowed_pmat_error(
+                &observation,
+                error != PETSC_SUCCESS ? error : PETSC_ERR_ARG_WRONGSTATE,
+                "actual_live_lu_package_unavailable");
+            break;
+        }
+        observation.actual_solver_package_available = copy_bounded_petsc_type_name(
+            actual_package,
+            observation.actual_solver_package,
+            sizeof(observation.actual_solver_package),
+            &observation.actual_solver_package_overflow);
+        if (fault != nullptr && std::strcmp(fault, "fresh_setup") == 0) {
+            observation.fresh_ksp_setup_error_code_available = true;
+            observation.fresh_ksp_setup_error_code = static_cast<int>(PETSC_ERR_LIB);
+            observation.fresh_solver_status = "partial";
+            observation.fresh_solver_reason = "injected_fresh_lu_setup_failure";
+            record_borrowed_pmat_error(
+                &observation, PETSC_ERR_LIB, "injected_fresh_lu_setup_failure");
+            break;
+        }
+        error = VecDuplicate(
+            workspace->live_pc_rhs,
+            &workspace->live_pc_owned_pmat_solution);
+        if (error == PETSC_SUCCESS) {
+            error = KSPCreate(PETSC_COMM_SELF, &workspace->live_pc_owned_pmat_ksp);
+        }
+        if (error == PETSC_SUCCESS) {
+            error = KSPSetOperators(
+                workspace->live_pc_owned_pmat_ksp,
+                workspace->live_pc_owned_pmat_copy,
+                workspace->live_pc_owned_pmat_copy);
+        }
+        if (error == PETSC_SUCCESS) {
+            error = KSPSetType(workspace->live_pc_owned_pmat_ksp, KSPPREONLY);
+        }
+        PC fresh_pc = nullptr;
+        if (error == PETSC_SUCCESS) {
+            error = KSPGetPC(workspace->live_pc_owned_pmat_ksp, &fresh_pc);
+        }
+        if (error == PETSC_SUCCESS && fresh_pc == nullptr) {
+            error = PETSC_ERR_ARG_WRONGSTATE;
+        }
+        if (error == PETSC_SUCCESS) {
+            error = PCSetType(fresh_pc, PCLU);
+            observation.fresh_pc_type_configured = error == PETSC_SUCCESS;
+        }
+        if (error == PETSC_SUCCESS) {
+            error = PCFactorSetMatSolverType(fresh_pc, actual_package);
+            observation.fresh_solver_package_configured = error == PETSC_SUCCESS;
+            if (error == PETSC_SUCCESS) {
+                copy_bounded_petsc_type_name(
+                    actual_package,
+                    observation.fresh_solver_package,
+                    sizeof(observation.fresh_solver_package),
+                    &observation.fresh_solver_package_overflow);
+            }
+        }
+        if (error == PETSC_SUCCESS) {
+            error = PCFactorReorderForNonzeroDiagonal(fresh_pc, 1.0e-12);
+            observation.fresh_reorder_threshold_configured = error == PETSC_SUCCESS;
+        }
+        if (error == PETSC_SUCCESS) {
+            error = PCFactorSetShiftType(fresh_pc, MAT_SHIFT_NONZERO);
+            observation.fresh_shift_type_configured = error == PETSC_SUCCESS;
+        }
+        const double shift_amount = workspace->summary.shifted_lu_policy_comparison
+            .requested_factorization_shift_amount;
+        if (error == PETSC_SUCCESS &&
+            (!std::isfinite(shift_amount) || shift_amount <= 0.0)) {
+            error = PETSC_ERR_ARG_WRONGSTATE;
+        }
+        if (error == PETSC_SUCCESS) {
+            error = PCFactorSetShiftAmount(fresh_pc, static_cast<PetscReal>(shift_amount));
+            if (error == PETSC_SUCCESS) {
+                observation.fresh_shift_amount_configured_available = true;
+                observation.fresh_shift_amount_configured = shift_amount;
+            }
+        }
+        if (error == PETSC_SUCCESS) {
+            error = KSPSetErrorIfNotConverged(
+                workspace->live_pc_owned_pmat_ksp, PETSC_FALSE);
+        }
+        if (error == PETSC_SUCCESS) {
+            error = KSPSetInitialGuessNonzero(
+                workspace->live_pc_owned_pmat_ksp, PETSC_FALSE);
+        }
+        if (error == PETSC_SUCCESS) {
+            error = KSPSetUp(workspace->live_pc_owned_pmat_ksp);
+        }
+        if (error != PETSC_SUCCESS) {
+            observation.fresh_ksp_setup_error_code_available = true;
+            observation.fresh_ksp_setup_error_code = static_cast<int>(error);
+            observation.fresh_solver_status = "partial";
+            observation.fresh_solver_reason = "fresh_owned_lu_setup_failed";
+            record_borrowed_pmat_error(
+                &observation, error, "fresh_owned_lu_setup_failed");
+            break;
+        }
+        observation.fresh_ksp_setup_available = true;
+        observation.fresh_solver_status = "ready";
+        observation.fresh_solver_reason = "fresh_owned_lu_ready";
+    } while (false);
+    return PETSC_SUCCESS;
+}
+
+void measure_candidate_owned_pmat_fresh_solution(
+    FloquetCandidateOperatorDiagnosticWorkspace *workspace,
+    double rhs_norm) noexcept
+{
+    auto &observation = workspace->summary.live_pc_observation.borrowed_pmat_copy;
+    if (!observation.fresh_ksp_setup_available ||
+        workspace->live_pc_owned_pmat_ksp == nullptr ||
+        workspace->live_pc_owned_pmat_solution == nullptr ||
+        workspace->live_pc_rhs == nullptr || workspace->live_pc_solution == nullptr) {
+        return;
+    }
+    observation.same_private_rhs_available =
+        std::isfinite(rhs_norm) && rhs_norm >= 0.0;
+    if (!observation.same_private_rhs_available) {
+        observation.fresh_solver_status = "partial";
+        observation.fresh_solver_reason = "same_private_rhs_norm_unavailable";
+        record_borrowed_pmat_error(
+            &observation, PETSC_ERR_FP, "same_private_rhs_norm_unavailable");
+        return;
+    }
+    observation.same_private_rhs_l2_norm = rhs_norm;
+    observation.fresh_solve_attempted = true;
+    const char *fault = std::getenv("FULLMAG_FLOQUET_LIVE_PC_DIAGNOSTIC_FAULT");
+    if (fault != nullptr && std::strcmp(fault, "fresh_solve") == 0) {
+        observation.fresh_solve_fault_injected = true;
+        observation.fresh_solve_error_code_available = true;
+        observation.fresh_solve_error_code = static_cast<int>(PETSC_ERR_LIB);
+        observation.fresh_solver_status = "partial";
+        observation.fresh_solver_reason = "injected_fresh_lu_solve_failure";
+        record_borrowed_pmat_error(
+            &observation, PETSC_ERR_LIB, "injected_fresh_lu_solve_failure");
+        return;
+    }
+    PetscErrorCode error = VecSet(
+        workspace->live_pc_owned_pmat_solution,
+        static_cast<PetscScalar>(0.0));
+    if (error == PETSC_SUCCESS) {
+        error = KSPSolve(
+            workspace->live_pc_owned_pmat_ksp,
+            workspace->live_pc_rhs,
+            workspace->live_pc_owned_pmat_solution);
+    }
+    if (error != PETSC_SUCCESS) {
+        observation.fresh_solve_error_code_available = true;
+        observation.fresh_solve_error_code = static_cast<int>(error);
+        observation.fresh_solver_status = "partial";
+        observation.fresh_solver_reason = "fresh_owned_lu_solve_failed";
+        record_borrowed_pmat_error(
+            &observation, error, "fresh_owned_lu_solve_failed");
+        return;
+    }
+    KSPConvergedReason reason = KSP_CONVERGED_ITERATING;
+    error = KSPGetConvergedReason(workspace->live_pc_owned_pmat_ksp, &reason);
+    if (error != PETSC_SUCCESS) {
+        observation.fresh_solve_error_code_available = true;
+        observation.fresh_solve_error_code = static_cast<int>(error);
+        observation.fresh_solver_status = "partial";
+        observation.fresh_solver_reason = "fresh_owned_lu_reason_unavailable";
+        record_borrowed_pmat_error(
+            &observation, error, "fresh_owned_lu_reason_unavailable");
+        return;
+    }
+    observation.fresh_converged_reason_available = true;
+    observation.fresh_converged_reason = static_cast<int>(reason);
+    if (reason <= 0) {
+        observation.fresh_solver_status = "partial";
+        observation.fresh_solver_reason = "fresh_owned_lu_did_not_converge";
+        record_borrowed_pmat_error(
+            &observation, PETSC_ERR_NOT_CONVERGED, "fresh_owned_lu_did_not_converge");
+        return;
+    }
+    observation.fresh_solve_available = true;
+
+    error = MatMult(
+        workspace->live_pc_owned_pmat_copy,
+        workspace->live_pc_owned_pmat_solution,
+        workspace->live_pc_pmat_action);
+    if (error == PETSC_SUCCESS) {
+        error = VecAXPY(
+            workspace->live_pc_pmat_action,
+            static_cast<PetscScalar>(-1.0),
+            workspace->live_pc_rhs);
+    }
+    PetscReal pmat_residual = std::numeric_limits<PetscReal>::quiet_NaN();
+    if (error == PETSC_SUCCESS) {
+        error = VecNorm(workspace->live_pc_pmat_action, NORM_2, &pmat_residual);
+    }
+    if (error != PETSC_SUCCESS || !std::isfinite(static_cast<double>(pmat_residual)) ||
+        pmat_residual < 0.0) {
+        record_borrowed_pmat_error(
+            &observation,
+            error != PETSC_SUCCESS ? error : PETSC_ERR_FP,
+            "fresh_owned_pmat_residual_unavailable");
+        return;
+    }
+    observation.fresh_pmat_residual_l2_norm_available = true;
+    observation.fresh_pmat_residual_l2_norm = static_cast<double>(pmat_residual);
+    PetscReal pmat_relative = std::numeric_limits<PetscReal>::quiet_NaN();
+    error = detail::calculate_floquet_relative_residual(
+        pmat_residual, static_cast<PetscReal>(rhs_norm), &pmat_relative);
+    if (error != PETSC_SUCCESS) {
+        record_borrowed_pmat_error(
+            &observation, error, "fresh_owned_pmat_relative_residual_unavailable");
+        return;
+    }
+    observation.fresh_pmat_relative_residual_available = true;
+    observation.fresh_pmat_relative_residual = static_cast<double>(pmat_relative);
+
+    const double scale = workspace->summary.preconditioner_normalization_scale;
+    if (!std::isfinite(scale) || scale <= 0.0) {
+        record_borrowed_pmat_error(
+            &observation, PETSC_ERR_FP, "fresh_solution_scale_unavailable");
+        return;
+    }
+    error = VecCopy(
+        workspace->live_pc_owned_pmat_solution,
+        workspace->live_pc_operator_solution);
+    if (error == PETSC_SUCCESS) {
+        error = VecScale(
+            workspace->live_pc_operator_solution,
+            static_cast<PetscScalar>(scale));
+    }
+    if (error == PETSC_SUCCESS) {
+        error = apply_isolated_candidate_shifted_action(
+            workspace,
+            workspace->live_pc_operator_solution,
+            workspace->live_pc_operator_action);
+    }
+    if (error == PETSC_SUCCESS) {
+        error = VecAXPY(
+            workspace->live_pc_operator_action,
+            static_cast<PetscScalar>(-1.0),
+            workspace->live_pc_rhs);
+    }
+    PetscReal shifted_residual = std::numeric_limits<PetscReal>::quiet_NaN();
+    if (error == PETSC_SUCCESS) {
+        error = VecNorm(workspace->live_pc_operator_action, NORM_2, &shifted_residual);
+    }
+    if (error != PETSC_SUCCESS || !std::isfinite(static_cast<double>(shifted_residual)) ||
+        shifted_residual < 0.0) {
+        record_borrowed_pmat_error(
+            &observation,
+            error != PETSC_SUCCESS ? error : PETSC_ERR_FP,
+            "fresh_isolated_shifted_residual_unavailable");
+        return;
+    }
+    observation.fresh_shifted_operator_residual_l2_norm_available = true;
+    observation.fresh_shifted_operator_residual_l2_norm =
+        static_cast<double>(shifted_residual);
+    PetscReal shifted_relative = std::numeric_limits<PetscReal>::quiet_NaN();
+    error = detail::calculate_floquet_relative_residual(
+        shifted_residual, static_cast<PetscReal>(rhs_norm), &shifted_relative);
+    if (error != PETSC_SUCCESS) {
+        record_borrowed_pmat_error(
+            &observation, error, "fresh_isolated_shifted_relative_residual_unavailable");
+        return;
+    }
+    observation.fresh_shifted_operator_relative_residual_available = true;
+    observation.fresh_shifted_operator_relative_residual =
+        static_cast<double>(shifted_relative);
+    error = floquet_candidate_relative_vector_defect(
+        workspace->live_pc_solution,
+        workspace->live_pc_owned_pmat_solution,
+        workspace->difference,
+        &observation.live_vs_fresh_solution_relative_defect);
+    if (error != PETSC_SUCCESS) {
+        record_borrowed_pmat_error(
+            &observation, error, "live_vs_fresh_solution_defect_unavailable");
+        return;
+    }
+    observation.live_vs_fresh_solution_relative_defect_available = true;
+    observation.fresh_solver_status = "measured";
+    observation.fresh_solver_reason = "fresh_owned_lu_residuals_measured";
+}
+
+PetscErrorCode capture_candidate_borrowed_pmat_copy(
+    FloquetCandidateOperatorDiagnosticWorkspace *workspace,
+    PC live_pc,
+    Mat borrowed_pmat,
+    double rhs_norm) noexcept
+{
+    if (workspace == nullptr) {
+        return PETSC_SUCCESS;
+    }
+    auto &observation = workspace->summary.live_pc_observation.borrowed_pmat_copy;
+    observation = {};
+    observation.requested = true;
+    observation.status = "unavailable";
+    observation.reason = "borrowed_pmat_copy_not_started";
+    observation.comparison_status = "unavailable";
+    observation.comparison_reason = "comparison_not_started";
+    observation.fresh_solver_status = "unavailable";
+    observation.fresh_solver_reason = "fresh_solver_not_started";
+    observation.fresh_reorder_threshold = 1.0e-12;
+    prepare_candidate_owned_pmat_copy_and_lu(workspace, live_pc, borrowed_pmat);
+    measure_candidate_owned_pmat_fresh_solution(workspace, rhs_norm);
+    const PetscErrorCode cleanup_error =
+        destroy_candidate_live_pmat_copy_resources(workspace);
+    if (cleanup_error != PETSC_SUCCESS) {
+        return cleanup_error;
+    }
+    observation.available =
+        observation.full_explicit_entry_comparison_available &&
+        observation.fresh_ksp_setup_available &&
+        observation.fresh_solve_available &&
+        observation.same_private_rhs_available &&
+        observation.fresh_pmat_residual_l2_norm_available &&
+        observation.fresh_pmat_relative_residual_available &&
+        observation.fresh_shifted_operator_residual_l2_norm_available &&
+        observation.fresh_shifted_operator_relative_residual_available &&
+        observation.live_vs_fresh_solution_relative_defect_available &&
+        observation.cleanup_succeeded;
+    if (observation.available) {
+        observation.status = "measured";
+        observation.reason = "owned_pmat_copy_compared_and_fresh_lu_measured";
+    } else if (observation.status == "unavailable" && observation.matrix_copy_attempted) {
+        observation.status = "partial";
+        observation.reason = "owned_pmat_copy_measurement_incomplete";
+    }
+    return PETSC_SUCCESS;
+}
+
 PetscErrorCode capture_candidate_live_pc_observation(
     FloquetCandidateOperatorDiagnosticWorkspace *workspace,
     KSP live_ksp,
@@ -1758,6 +2695,8 @@ PetscErrorCode capture_candidate_live_pc_observation(
     observation.available = false;
     observation.status = "unavailable";
     observation.reason = "live_pc_observation_not_started";
+    observation.borrowed_pmat_copy.requested = true;
+    observation.borrowed_pmat_copy.reason = "awaiting_live_pc_apply_and_owned_copy";
     const double preconditioner_scale =
         workspace->summary.preconditioner_normalization_scale;
     if (std::isfinite(preconditioner_scale) && preconditioner_scale > 0.0) {
@@ -1987,6 +2926,12 @@ PetscErrorCode capture_candidate_live_pc_observation(
                     observation.status = "error";
                     observation.reason = "candidate_changed_during_live_pc_apply";
                     return PETSC_ERR_ARG_WRONGSTATE;
+                }
+
+                error = capture_candidate_borrowed_pmat_copy(
+                    workspace, live_pc, pc_pmat, static_cast<double>(rhs_norm));
+                if (error != PETSC_SUCCESS) {
+                    return error;
                 }
 
                 ++observation.pmat_action_attempt_count;
@@ -2408,7 +3353,11 @@ PetscErrorCode destroy_candidate_operator_diagnostic_workspace(
         *slot = nullptr;
         return PETSC_SUCCESS;
     };
-    PetscErrorCode error = destroy_ksp(&workspace->mat_shift_nonzero_ksp);
+    PetscErrorCode error = destroy_candidate_live_pmat_copy_resources(workspace);
+    if (error != PETSC_SUCCESS) {
+        return error;
+    }
+    error = destroy_ksp(&workspace->mat_shift_nonzero_ksp);
     if (error != PETSC_SUCCESS) {
         return error;
     }

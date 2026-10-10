@@ -1176,6 +1176,25 @@ if(FULLMAG_USE_MFEM_STACK AND FULLMAG_FEM_WITH_SLEPC)
         COMMAND fem_modal_eigen_contract --floquet-live-pc-apply-fault-quarantine-probe)
     set_tests_properties(modal_eigen_live_pc_apply_fault_quarantine
         PROPERTIES TIMEOUT 120)
+    # A failed row restore quarantines PETSc; exercise it in its own process.
+    add_custom_target(modal_eigen_borrowed_pmat_row_restore_fault_quarantine
+        DEPENDS fem_modal_eigen_contract)
+    add_test(NAME modal_eigen_borrowed_pmat_row_restore_fault_quarantine
+        COMMAND fem_modal_eigen_contract --floquet-borrowed-pmat-row-restore-fault-quarantine-probe)
+    set_tests_properties(modal_eigen_borrowed_pmat_row_restore_fault_quarantine
+        PROPERTIES TIMEOUT 120)
+    add_custom_target(modal_eigen_borrowed_pmat_row_primary_cleanup_fault_quarantine
+        DEPENDS fem_modal_eigen_contract)
+    add_test(NAME modal_eigen_borrowed_pmat_row_primary_cleanup_fault_quarantine
+        COMMAND fem_modal_eigen_contract --floquet-borrowed-pmat-row-primary-cleanup-fault-quarantine-probe)
+    set_tests_properties(modal_eigen_borrowed_pmat_row_primary_cleanup_fault_quarantine
+        PROPERTIES TIMEOUT 120)
+    add_custom_target(modal_eigen_borrowed_pmat_pattern_mismatch_fixture
+        DEPENDS fem_modal_eigen_contract)
+    add_test(NAME modal_eigen_borrowed_pmat_pattern_mismatch_fixture
+        COMMAND fem_modal_eigen_contract --floquet-borrowed-pmat-pattern-mismatch-fixture-probe)
+    set_tests_properties(modal_eigen_borrowed_pmat_pattern_mismatch_fixture
+        PROPERTIES TIMEOUT 120)
     # Run the public Gamma boundary independently without replacing the full suite.
     add_custom_target(fem_modal_eigen_gamma_admission_contract
         DEPENDS fem_modal_eigen_contract)

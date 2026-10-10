@@ -6843,7 +6843,10 @@ void modal_nonzero_k_floquet_bloch_payload_with_dynamic_demag_k_is_admitted()
 
 void modal_nonzero_k_floquet_shared_domain_nearest_reports_shifted_ksp_diagnostics(
     bool count_certificate_only = false,
-    bool fault_quarantine_only = false)
+    bool fault_quarantine_only = false,
+    bool borrowed_pmat_row_restore_fault_only = false,
+    bool borrowed_pmat_primary_cleanup_fault_only = false,
+    bool pattern_mismatch_fixture_only = false)
 {
 #if FULLMAG_HAS_MFEM_STACK && FULLMAG_FEM_WITH_SLEPC
     FloquetContourSharedDomainFixture fixture{};
@@ -6877,7 +6880,8 @@ void modal_nonzero_k_floquet_shared_domain_nearest_reports_shifted_ksp_diagnosti
         fixture.payload.magnetic_a_qq_csr = magnetic_stiffness.view();
     }
 
-    if (fault_quarantine_only) {
+    if (fault_quarantine_only || borrowed_pmat_row_restore_fault_only ||
+        borrowed_pmat_primary_cleanup_fault_only) {
         fixture.descriptor.term_presence_mask =
             FULLMAG_FEM_MODAL_LINEARIZATION_TERM_FIELD;
         fixture.descriptor.field_term_digest =
@@ -6901,6 +6905,179 @@ void modal_nonzero_k_floquet_shared_domain_nearest_reports_shifted_ksp_diagnosti
         "{\"operator_family\":\"mfem_linearized_llg\","
         "\"payload_kind\":\"certified_shared_domain\"}";
 
+    if (pattern_mismatch_fixture_only) {
+        const ScopedFloquetDiagnosticEnvironment diagnostic_environment{};
+        SavedEnvironmentValue fault_environment{
+            "FULLMAG_FLOQUET_LIVE_PC_DIAGNOSTIC_FAULT"};
+        const bool fault_ready = diagnostic_environment.ready &&
+            set_floquet_diagnostic_environment(
+                fault_environment.name, "pattern_mismatch_fixture") == 0;
+        check(fault_ready,
+              "enable the private bounded pattern-mismatch fixture during opt-in diagnostics");
+        FullmagFemModalEigenRequest fixture_request = request;
+        fixture_request.max_linear_iterations = 1;
+        FullmagFemFrequencyDomainResult fixture_result =
+            fullmag_fem_modal_eigen_solve(&fixture_request);
+        fault_environment.restore();
+
+        const char *borrowed_observation = fixture_result.diagnostics_json != nullptr
+            ? std::strstr(fixture_result.diagnostics_json, "\"borrowed_pmat_copy\":{")
+            : nullptr;
+        check(borrowed_observation != nullptr,
+              "bounded pattern fixture evidence is scoped to the borrowed-Pmat object");
+        const double actual_rows = extract_json_number(
+            borrowed_observation, "\"matrix_rows\":", "actual_borrowed_pmat_dimensions");
+        const double actual_copied_nnz = extract_json_number(
+            borrowed_observation, "\"copied_nnz\":", "actual_borrowed_pmat_copied_nnz");
+        const double actual_reference_nnz = extract_json_number(
+            borrowed_observation, "\"reference_nnz\":", "actual_borrowed_pmat_reference_nnz");
+        const double fixture_copied_nnz = extract_json_number(
+            borrowed_observation,
+            "\"bounded_pattern_fixture_copied_nnz\":",
+            "bounded_pattern_fixture_copied_nnz");
+        const double fixture_reference_nnz = extract_json_number(
+            borrowed_observation,
+            "\"bounded_pattern_fixture_reference_nnz\":",
+            "bounded_pattern_fixture_reference_nnz");
+        const bool actual_pmat_counts_are_nonzero =
+            std::isfinite(actual_rows) && actual_rows > 0.0 &&
+            std::isfinite(actual_copied_nnz) && actual_copied_nnz > 0.0 &&
+            std::isfinite(actual_reference_nnz) && actual_reference_nnz > 0.0 &&
+            actual_copied_nnz >= actual_rows &&
+            actual_reference_nnz >= actual_rows &&
+            actual_copied_nnz == actual_reference_nnz;
+        const bool known_pattern_fixture_is_distinguished =
+            fixture_copied_nnz == 3.0 &&
+            fixture_reference_nnz == 4.0 &&
+            contains(
+                borrowed_observation,
+                "\"bounded_pattern_fixture_requested\":true,\"bounded_pattern_fixture_attempted\":true,\"bounded_pattern_fixture_available\":true") &&
+            contains(
+                borrowed_observation,
+                "\"bounded_pattern_fixture_status_available\":true,\"bounded_pattern_fixture_status\":\"measured\"") &&
+            contains(
+                borrowed_observation,
+                "\"bounded_pattern_fixture_nnz_match_available\":true,\"bounded_pattern_fixture_nnz_match\":false") &&
+            contains(
+                borrowed_observation,
+                "\"bounded_pattern_fixture_structural_pattern_match_available\":true,\"bounded_pattern_fixture_structural_pattern_match\":false");
+        check(fixture_result.status == FULLMAG_FEM_FD_SOLVE_ERROR &&
+                  contains(fixture_result.diagnostics_json,
+                           "\"full_explicit_entry_comparison_available\":true") &&
+                  actual_pmat_counts_are_nonzero &&
+                  known_pattern_fixture_is_distinguished &&
+                  contains(
+                      borrowed_observation,
+                      "\"cleanup_attempted\":true,\"cleanup_succeeded_available\":true,\"cleanup_succeeded\":true") &&
+                  contains(fixture_result.result_json, "\"status\":\"solve_error\""),
+              "owned 2x2 SeqAIJ fixture detects the known 3/4-entry and structural-pattern mismatch without replacing actual-Pmat evidence");
+        fullmag_fem_frequency_domain_result_destroy(&fixture_result);
+        std::printf(
+            "PASS: modal_eigen_borrowed_pmat_pattern_mismatch_fixture_probe\n");
+        return;
+    }
+    if (borrowed_pmat_row_restore_fault_only || borrowed_pmat_primary_cleanup_fault_only) {
+        const ScopedFloquetDiagnosticEnvironment diagnostic_environment{};
+        SavedEnvironmentValue fault_environment{
+            "FULLMAG_FLOQUET_LIVE_PC_DIAGNOSTIC_FAULT"};
+        const char *row_fault_name = borrowed_pmat_primary_cleanup_fault_only
+            ? "reference_row_get_copy_restore" : "reference_row_restore";
+        const bool fault_ready = diagnostic_environment.ready &&
+            set_floquet_diagnostic_environment(
+                fault_environment.name, row_fault_name) == 0;
+        check(fault_ready,
+              "enable the private borrowed-Pmat row-restore fault in its fresh process");
+        FullmagFemModalEigenRequest fault_request = request;
+        fault_request.max_linear_iterations = 1;
+        FullmagFemFrequencyDomainResult fault_result =
+            fullmag_fem_modal_eigen_solve(&fault_request);
+        fault_environment.restore();
+
+        const char *borrowed_observation = fault_result.diagnostics_json != nullptr
+            ? std::strstr(fault_result.diagnostics_json, "\"borrowed_pmat_copy\":{")
+            : nullptr;
+        const bool row_attempt_order_observed =
+            borrowed_pmat_primary_cleanup_fault_only
+                ? contains(
+                      fault_result.diagnostics_json,
+                      "\"reference_row_restore_attempted_available\":true,\"reference_row_restore_attempted\":false") &&
+                      contains(
+                          fault_result.diagnostics_json,
+                          "\"copied_row_restore_attempted_available\":true,\"copied_row_restore_attempted\":true")
+                : contains(
+                      fault_result.diagnostics_json,
+                      "\"reference_row_restore_attempted_available\":true,\"reference_row_restore_attempted\":true") &&
+                      contains(
+                          fault_result.diagnostics_json,
+                          "\"copied_row_restore_attempted_available\":true,\"copied_row_restore_attempted\":false");
+        const bool row_restore_failure_observed =
+            fault_result.status == FULLMAG_FEM_FD_SOLVE_ERROR &&
+            contains(fault_result.diagnostics_json,
+                     "\"shifted_ksp_failure_probe\":{\"schema_version\":\"shifted_ksp_failure_probe.v1\"") &&
+            borrowed_observation != nullptr &&
+            contains(fault_result.diagnostics_json,
+                     "\"borrowed_pmat_copy\":{\"schema_version\":\"floquet_borrowed_pmat_copy.v1\",\"requested\":true") &&
+            (borrowed_pmat_primary_cleanup_fault_only
+                 ? contains(
+                       fault_result.diagnostics_json,
+                       "\"comparison_reason\":\"copied_matrix_row_restore_failed_after_reference_row_unavailable\"")
+                 : contains(
+                       fault_result.diagnostics_json,
+                       "\"comparison_reason\":\"reference_matrix_row_restore_failed\"")) &&
+            contains(fault_result.diagnostics_json,
+                     "\"row_restore_attempts_available\":true") &&
+            row_attempt_order_observed &&
+            contains(fault_result.diagnostics_json,
+                     "\"cleanup_attempted\":true,\"cleanup_succeeded_available\":true,\"cleanup_succeeded\":false") &&
+            contains(fault_result.diagnostics_json,
+                     "\"cleanup_error_code_available\":true") &&
+            contains(fault_result.diagnostics_json,
+                     "\"reason\":\"matrix_row_restore_failed_diagnostic_graph_quarantined\"") &&
+            contains(fault_result.diagnostics_json,
+                     "\"production_phi_rhs_unchanged_after_observation_available\":true,\"production_phi_rhs_unchanged_after_observation\":true") &&
+            contains(fault_result.diagnostics_json,
+                     "\"production_phi_solution_unchanged_after_observation_available\":true,\"production_phi_solution_unchanged_after_observation\":true") &&
+            contains(fault_result.result_json, "\"status\":\"solve_error\"");
+        bool primary_cleanup_codes_distinct = !borrowed_pmat_primary_cleanup_fault_only;
+        if (borrowed_pmat_primary_cleanup_fault_only && borrowed_observation != nullptr) {
+            const double primary_error_code = extract_json_number(
+                borrowed_observation,
+                "\"first_error_code\":",
+                "borrowed_pmat_row_primary_error");
+            const double cleanup_error_code = extract_json_number(
+                borrowed_observation,
+                "\"cleanup_error_code\":",
+                "borrowed_pmat_row_cleanup_error");
+            primary_cleanup_codes_distinct =
+                std::isfinite(primary_error_code) &&
+                std::isfinite(cleanup_error_code) &&
+                primary_error_code != cleanup_error_code;
+        }
+        bool process_unsafe_before_destroy = false;
+        {
+            std::lock_guard<std::mutex> lock(
+                fullmag::fem::runtime::petsc_slepc_process_mutex());
+            process_unsafe_before_destroy =
+                fullmag::fem::runtime::petsc_slepc_process_is_unsafe_locked();
+        }
+        fullmag_fem_frequency_domain_result_destroy(&fault_result);
+        bool process_unsafe_after_destroy = false;
+        {
+            std::lock_guard<std::mutex> lock(
+                fullmag::fem::runtime::petsc_slepc_process_mutex());
+            process_unsafe_after_destroy =
+                fullmag::fem::runtime::petsc_slepc_process_is_unsafe_locked();
+        }
+        check(row_restore_failure_observed && primary_cleanup_codes_distinct,
+              "borrowed-Pmat row failure preserves restore order, distinct primary/cleanup errors, and solve/quarantine evidence");
+        check(process_unsafe_before_destroy && process_unsafe_after_destroy,
+              "row-restore failure quarantines the PETSc/SLEPc graph across result destruction");
+        std::printf("PASS: %s\n",
+            borrowed_pmat_primary_cleanup_fault_only
+                ? "modal_eigen_borrowed_pmat_row_primary_cleanup_fault_quarantine_probe"
+                : "modal_eigen_borrowed_pmat_row_restore_fault_quarantine_probe");
+        return;
+    }
     if (fault_quarantine_only) {
         const ScopedFloquetDiagnosticEnvironment diagnostic_environment{};
         SavedEnvironmentValue fault_environment{
@@ -7505,6 +7682,28 @@ void modal_nonzero_k_floquet_shared_domain_nearest_reports_shifted_ksp_diagnosti
 
     FullmagFemModalEigenRequest hard_ksp_nearest_request = request;
     hard_ksp_nearest_request.max_linear_iterations = 1;
+    FullmagFemFrequencyDomainResult hard_ksp_opt_out_result{};
+    {
+        const ScopedFloquetDiagnosticEnvironment diagnostic_environment{};
+        const bool opt_out_ready = diagnostic_environment.ready &&
+            set_floquet_diagnostic_environment(
+                diagnostic_environment.dense_oracle.name, "") == 0 &&
+            set_floquet_diagnostic_environment(
+                diagnostic_environment.schur_action.name, "") == 0;
+        check(opt_out_ready,
+              "disable existing private Floquet diagnostics for the opt-out serializer regression");
+        if (opt_out_ready) {
+            hard_ksp_opt_out_result =
+                fullmag_fem_modal_eigen_solve(&hard_ksp_nearest_request);
+        }
+    }
+    check(hard_ksp_opt_out_result.status == FULLMAG_FEM_FD_SOLVE_ERROR &&
+              contains(hard_ksp_opt_out_result.diagnostics_json,
+                       "\"shifted_ksp_failure_probe\":{\"schema_version\":\"shifted_ksp_failure_probe.v1\"") &&
+              !contains(hard_ksp_opt_out_result.diagnostics_json,
+                        "\"borrowed_pmat_copy\""),
+          "private borrowed-Pmat evidence adds no JSON object when diagnostics are opted out");
+    fullmag_fem_frequency_domain_result_destroy(&hard_ksp_opt_out_result);
     FullmagFemFrequencyDomainResult hard_ksp_nearest_result{};
     {
         const ScopedFloquetDiagnosticEnvironment diagnostic_environment{};
@@ -7549,6 +7748,75 @@ void modal_nonzero_k_floquet_shared_domain_nearest_reports_shifted_ksp_diagnosti
                  "\"mat_shift_none\":{\"factorization_shift_policy\":\"MAT_SHIFT_NONE\"");
     check(shifted_lu_diagnostic_serialized,
           "nearest hard KSP failure serializes separate exact-shift LU policy measurements");
+    const bool borrowed_pmat_copy_full_observation =
+        contains(hard_ksp_nearest_result.diagnostics_json,
+                 "\"borrowed_pmat_copy\":{\"schema_version\":\"floquet_borrowed_pmat_copy.v1\",\"requested\":true") &&
+        contains(hard_ksp_nearest_result.diagnostics_json,
+                 "\"matrix_copy_method\":\"MatDuplicate(MAT_COPY_VALUES)\"") &&
+        contains(hard_ksp_nearest_result.diagnostics_json,
+                 "\"full_explicit_entry_comparison_available\":true") &&
+        contains(hard_ksp_nearest_result.diagnostics_json,
+                 "\"matrix_dimensions_match_available\":true,\"matrix_dimensions_match\":true") &&
+        contains(hard_ksp_nearest_result.diagnostics_json,
+                 "\"nnz_match_available\":true,\"nnz_match\":true") &&
+        contains(hard_ksp_nearest_result.diagnostics_json,
+                 "\"structural_pattern_match_available\":true,\"structural_pattern_match\":true") &&
+        contains(hard_ksp_nearest_result.diagnostics_json,
+                 "\"values_equal_available\":true,\"values_equal\":true") &&
+        contains(hard_ksp_nearest_result.diagnostics_json,
+                 "\"relative_frobenius_defect_available\":true") &&
+        contains(hard_ksp_nearest_result.diagnostics_json,
+                 "\"actual_live_solver_package_available\":true") &&
+        contains(hard_ksp_nearest_result.diagnostics_json,
+                 "\"fresh_requested_solver_package_available\":true") &&
+        contains(hard_ksp_nearest_result.diagnostics_json,
+                 "\"fresh_shift_type_configured\":true") &&
+        contains(hard_ksp_nearest_result.diagnostics_json,
+                 "\"fresh_shift_amount_configured_available\":true") &&
+        contains(hard_ksp_nearest_result.diagnostics_json,
+                 "\"actual_factorization_shift_type_available\":false") &&
+        contains(hard_ksp_nearest_result.diagnostics_json,
+                 "\"fresh_ksp_setup_available\":true") &&
+        contains(hard_ksp_nearest_result.diagnostics_json,
+                 "\"fresh_solve_available\":true") &&
+        contains(hard_ksp_nearest_result.diagnostics_json,
+                 "\"same_private_rhs_source\":\"live_pc_rhs_snapshot\"") &&
+        contains(hard_ksp_nearest_result.diagnostics_json,
+                 "\"same_private_rhs_l2_norm_available\":true") &&
+        contains(hard_ksp_nearest_result.diagnostics_json,
+                 "\"fresh_pmat_residual_l2_norm_available\":true") &&
+        contains(hard_ksp_nearest_result.diagnostics_json,
+                 "\"fresh_shifted_operator_residual_l2_norm_available\":true") &&
+        contains(hard_ksp_nearest_result.diagnostics_json,
+                 "\"live_vs_fresh_solution_relative_defect_available\":true") &&
+        contains(hard_ksp_nearest_result.diagnostics_json,
+                 "\"cleanup_attempted\":true,\"cleanup_succeeded_available\":true,\"cleanup_succeeded\":true");
+    check(borrowed_pmat_copy_full_observation,
+          "opt-in hard-KSP diagnostics capture a complete explicit Pmat copy comparison and fresh-LU evidence on the same RHS");
+    const char *borrowed_pmat_full_json = std::strstr(
+        hard_ksp_nearest_result.diagnostics_json,
+        "\"borrowed_pmat_copy\":{");
+    check(borrowed_pmat_full_json != nullptr,
+          "private borrowed-Pmat count assertion is scoped to its serialized object");
+    const double borrowed_pmat_rows = extract_json_number(
+        borrowed_pmat_full_json,
+        "\"matrix_rows\":",
+        "borrowed_pmat_copy_full_explicit_entry_dimensions");
+    const double borrowed_pmat_copy_nnz = extract_json_number(
+        borrowed_pmat_full_json,
+        "\"copied_nnz\":",
+        "borrowed_pmat_copy_full_explicit_entry_count");
+    const double borrowed_pmat_reference_nnz = extract_json_number(
+        borrowed_pmat_full_json,
+        "\"reference_nnz\":",
+        "borrowed_pmat_reference_full_explicit_entry_count");
+    check(std::isfinite(borrowed_pmat_rows) && borrowed_pmat_rows > 0.0 &&
+              std::isfinite(borrowed_pmat_copy_nnz) && borrowed_pmat_copy_nnz > 0.0 &&
+              std::isfinite(borrowed_pmat_reference_nnz) && borrowed_pmat_reference_nnz > 0.0 &&
+              borrowed_pmat_copy_nnz >= borrowed_pmat_rows &&
+              borrowed_pmat_reference_nnz >= borrowed_pmat_rows &&
+              borrowed_pmat_copy_nnz == borrowed_pmat_reference_nnz,
+          "full explicit Pmat comparison reports matching known nonzero stored-entry counts at least covering the structural diagonal");
     const bool both_shifted_lu_setups_and_solves_available =
         contains(hard_ksp_nearest_result.diagnostics_json,
                  "\"mat_shift_nonzero\":{\"factorization_shift_policy\":\"MAT_SHIFT_NONZERO\",\"factorization_shift_amount_is_honored_by_policy\":true,\"actual_factorization_perturbation_measured\":false,\"factorization_setup_available\":true,\"factorization_setup_error_code\":0,\"solve_available\":true") &&
@@ -7583,6 +7851,15 @@ void modal_nonzero_k_floquet_shared_domain_nearest_reports_shifted_ksp_diagnosti
         hard_ksp_nearest_result.diagnostics_json,
         "\"rhs_l2_norm\":",
         "live_pc_rhs_norm");
+    const double borrowed_pmat_copy_rhs_norm = extract_json_number(
+        hard_ksp_nearest_result.diagnostics_json,
+        "\"same_private_rhs_l2_norm\":",
+        "borrowed_pmat_copy_same_private_rhs");
+    check(std::isfinite(borrowed_pmat_copy_rhs_norm) &&
+              std::abs(borrowed_pmat_copy_rhs_norm - live_rhs_norm) <=
+                  16.0 * std::numeric_limits<double>::epsilon() *
+                      std::max(1.0, std::abs(live_rhs_norm)),
+          "fresh Pmat LU uses the same private RHS snapshot and norm as the live PC observation");
     const double live_pmat_residual = extract_json_number(
         hard_ksp_nearest_result.diagnostics_json,
         "\"pmat_residual_l2_norm\":",
@@ -7660,6 +7937,39 @@ void modal_nonzero_k_floquet_shared_domain_nearest_reports_shifted_ksp_diagnosti
                            "\"threshold_l2_norm\":null"),
               "unavailable callback measurement values serialize as null rather than zero");
     }
+    FullmagFemFrequencyDomainResult fresh_solve_fault_result{};
+    {
+        const ScopedFloquetDiagnosticEnvironment diagnostic_environment{};
+        const bool fault_ready = diagnostic_environment.ready &&
+            set_floquet_diagnostic_environment(
+                "FULLMAG_FLOQUET_LIVE_PC_DIAGNOSTIC_FAULT", "fresh_solve") == 0;
+        check(fault_ready,
+              "enable the private fresh-LU fault after its owned matrix/KSP setup");
+        if (fault_ready) {
+            fresh_solve_fault_result =
+                fullmag_fem_modal_eigen_solve(&hard_ksp_nearest_request);
+        }
+    }
+    check(fresh_solve_fault_result.status == FULLMAG_FEM_FD_SOLVE_ERROR &&
+              contains(fresh_solve_fault_result.diagnostics_json,
+                       "\"fresh_solve_fault_injected\":true") &&
+              contains(fresh_solve_fault_result.diagnostics_json,
+                       "\"fresh_solve_error_code_available\":true") &&
+              contains(fresh_solve_fault_result.diagnostics_json,
+                       "\"fresh_solve_available\":false") &&
+              contains(fresh_solve_fault_result.diagnostics_json,
+                       "\"fresh_pmat_residual_l2_norm_available\":false,\"fresh_pmat_residual_l2_norm\":null") &&
+              contains(fresh_solve_fault_result.diagnostics_json,
+                       "\"cleanup_attempted\":true,\"cleanup_succeeded_available\":true,\"cleanup_succeeded\":true") &&
+              contains(fresh_solve_fault_result.diagnostics_json,
+                       "\"candidate_unchanged_after_repeat_apply\":true") &&
+              contains(fresh_solve_fault_result.diagnostics_json,
+                       "\"production_phi_rhs_unchanged_after_observation_available\":true,\"production_phi_rhs_unchanged_after_observation\":true") &&
+              contains(fresh_solve_fault_result.diagnostics_json,
+                       "\"production_phi_solution_unchanged_after_observation_available\":true,\"production_phi_solution_unchanged_after_observation\":true"),
+          "fresh-LU measurement failure stays unavailable, cleans its owned graph, and preserves live/production workspaces");
+    fullmag_fem_frequency_domain_result_destroy(&fresh_solve_fault_result);
+
     fullmag_fem_frequency_domain_result_destroy(&hard_ksp_nearest_result);
 
     FullmagFemModalEigenRequest hard_ksp_window_request = window_request;
@@ -7685,7 +7995,7 @@ void modal_nonzero_k_floquet_shared_domain_nearest_reports_shifted_ksp_diagnosti
 
 
 #else
-    if (count_certificate_only || fault_quarantine_only) {
+    if (count_certificate_only || fault_quarantine_only || borrowed_pmat_row_restore_fault_only || borrowed_pmat_primary_cleanup_fault_only || pattern_mismatch_fixture_only) {
         std::fprintf(stderr,
                      "FAIL: isolated Floquet contract mode requires MFEM and SLEPc");
         std::exit(2);
@@ -8088,6 +8398,51 @@ int main(int argc, char **argv)
         if (argc == 2 && std::strcmp(argv[1], "--floquet-count-certificate") == 0) {
             modal_nonzero_k_floquet_shared_domain_nearest_reports_shifted_ksp_diagnostics(true);
             return 0;
+        }
+        if (argc == 2 &&
+            std::strcmp(
+                argv[1],
+                "--floquet-borrowed-pmat-pattern-mismatch-fixture-probe") == 0) {
+#if FULLMAG_HAS_MFEM_STACK && FULLMAG_FEM_WITH_SLEPC
+            modal_nonzero_k_floquet_shared_domain_nearest_reports_shifted_ksp_diagnostics(
+                false, false, false, false, true);
+            return 0;
+#else
+            std::fprintf(
+                stderr,
+                "FAIL: --floquet-borrowed-pmat-pattern-mismatch-fixture-probe requires MFEM and SLEPc\n");
+            return 3;
+#endif
+        }
+        if (argc == 2 &&
+            std::strcmp(
+                argv[1],
+                "--floquet-borrowed-pmat-row-primary-cleanup-fault-quarantine-probe") == 0) {
+#if FULLMAG_HAS_MFEM_STACK && FULLMAG_FEM_WITH_SLEPC
+            modal_nonzero_k_floquet_shared_domain_nearest_reports_shifted_ksp_diagnostics(
+                false, false, false, true);
+            return 0;
+#else
+            std::fprintf(
+                stderr,
+                "FAIL: --floquet-borrowed-pmat-row-primary-cleanup-fault-quarantine-probe requires MFEM and SLEPc\n");
+            return 3;
+#endif
+        }
+        if (argc == 2 &&
+            std::strcmp(
+                argv[1],
+                "--floquet-borrowed-pmat-row-restore-fault-quarantine-probe") == 0) {
+#if FULLMAG_HAS_MFEM_STACK && FULLMAG_FEM_WITH_SLEPC
+            modal_nonzero_k_floquet_shared_domain_nearest_reports_shifted_ksp_diagnostics(
+                false, false, true);
+            return 0;
+#else
+            std::fprintf(
+                stderr,
+                "FAIL: --floquet-borrowed-pmat-row-restore-fault-quarantine-probe requires MFEM and SLEPc\n");
+            return 3;
+#endif
         }
         if (argc == 2 &&
             std::strcmp(

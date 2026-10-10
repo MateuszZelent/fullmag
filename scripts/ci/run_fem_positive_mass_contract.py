@@ -158,6 +158,36 @@ CONTRACT_PROFILES: dict[str, dict[str, Any]] = {
                 ],
             },
             {
+                "name": "modal_eigen_borrowed_pmat_row_restore_fault_quarantine",
+                "source_suffix": "backends/fem/tests/frequency_domain/modal_eigen_contract_test.cpp",
+                "marker": "PASS: modal_eigen_borrowed_pmat_row_restore_fault_quarantine_probe",
+                "compile_definitions": [
+                    "-DFULLMAG_HAS_MFEM_STACK=1",
+                    "-DFULLMAG_FEM_WITH_SLEPC=1",
+                    "-DFULLMAG_HAS_CUDA_RUNTIME=0",
+                ],
+            },
+            {
+                "name": "modal_eigen_borrowed_pmat_row_primary_cleanup_fault_quarantine",
+                "source_suffix": "backends/fem/tests/frequency_domain/modal_eigen_contract_test.cpp",
+                "marker": "PASS: modal_eigen_borrowed_pmat_row_primary_cleanup_fault_quarantine_probe",
+                "compile_definitions": [
+                    "-DFULLMAG_HAS_MFEM_STACK=1",
+                    "-DFULLMAG_FEM_WITH_SLEPC=1",
+                    "-DFULLMAG_HAS_CUDA_RUNTIME=0",
+                ],
+            },
+            {
+                "name": "modal_eigen_borrowed_pmat_pattern_mismatch_fixture",
+                "source_suffix": "backends/fem/tests/frequency_domain/modal_eigen_contract_test.cpp",
+                "marker": "PASS: modal_eigen_borrowed_pmat_pattern_mismatch_fixture_probe",
+                "compile_definitions": [
+                    "-DFULLMAG_HAS_MFEM_STACK=1",
+                    "-DFULLMAG_FEM_WITH_SLEPC=1",
+                    "-DFULLMAG_HAS_CUDA_RUNTIME=0",
+                ],
+            },
+            {
                 "name": "fem_floquet_forced_inner_failure_contract",
                 "source_suffix": "backends/fem/tests/frequency_domain/floquet_modal_solver_test.cpp",
                 "marker": "PASS: fem_floquet_forced_inner_failure_contract",

@@ -3868,13 +3868,13 @@
       "id": "source-live-pmat-owned-copy-plan",
       "path": "backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp",
       "symbol": "capture_candidate_live_pc_observation",
-      "responsibility": "Plan pelnego porownania actualPmat i ownedfreshLU; implementation/runtime NOT VERIFIED."
+      "responsibility": "Prywatna kopia rzeczywistego Pmat, pelne porownanie SeqAIJ do 512, ownedfreshLU, jawne available/configured/actual; niezalezny source review PASS, GHA/runtime NOT VERIFIED."
     },
     {
       "id": "source-live-pmat-json-plan",
       "path": "backends/fem/cpu/frequency_domain/production_cpu_modal_eigen.cpp",
       "symbol": "std::string live_pc_observation_json",
-      "responsibility": "Plan pelnego porownania actualPmat i ownedfreshLU; implementation/runtime NOT VERIFIED."
+      "responsibility": "Prywatna kopia rzeczywistego Pmat, pelne porownanie SeqAIJ do 512, ownedfreshLU, jawne available/configured/actual; niezalezny source review PASS, GHA/runtime NOT VERIFIED."
     }
   ],
   "public_api": {
