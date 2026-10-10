@@ -293,6 +293,19 @@
       "independent_count": "not_performed",
       "receipt_sha256": "80a637c86b0c5e4f11241500439c08df18997a8b760df4881d01d3ce75782389",
       "qualification_claimed": false
+    },
+    {
+      "run_id": 38083872121,
+      "sha": "95860f55c6a87012c480d76261c9db70188e1124",
+      "conclusion": "failure",
+      "scope": "rust_API_source_contracts",
+      "API_tests_passed": 1016,
+      "API_tests_failed": 1,
+      "API_tests_ignored": 3,
+      "failed_test": "router_v2::tests::v2_older_runtime_m_frame_preserves_newer_selected_source_and_bundle",
+      "failure": "fixture interprets FMVP extension/header bytes as f64 field samples",
+      "log_sha256": "31b7f02aa1c6464968a1a31cceab6aeb0d4903e9b7c338fcc97250c23d1625de",
+      "qualification_claimed": false
     }
   ]
 }

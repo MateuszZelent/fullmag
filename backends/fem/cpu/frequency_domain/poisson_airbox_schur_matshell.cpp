@@ -6988,7 +6988,7 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
 
     out_result->accepted_modes.clear();
     out_result->accepted_modes.reserve(candidates.size());
-    for (const Candidate &candidate : candidates) {
+    for (Candidate &candidate : candidates) {
         PoissonAirboxModalEigenResult::AcceptedMode mode{};
         mode.eigenpair_index = static_cast<std::uint32_t>(candidate.eigenpair_index);
         mode.eigenvalue_real = candidate.lambda_real;
@@ -7006,7 +7006,13 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
         mode.poisson_residual_l2 = candidate.metrics.poisson_residual_l2;
         mode.gauge_residual_abs = candidate.metrics.gauge_residual_abs;
         mode.gauge_mean_abs = candidate.metrics.gauge_mean_abs;
-        mode.full_vector = candidate.full_vector;
+        if (problem.retain_window_discovery_pool) {
+            // The child already owns this reconstruction; transfer it rather
+            // than keeping a second full discovery pool alive.
+            mode.full_vector = std::move(candidate.full_vector);
+        } else {
+            mode.full_vector = candidate.full_vector;
+        }
         out_result->accepted_modes.push_back(std::move(mode));
     }
     const Candidate &selected = candidates.front();

@@ -5357,3 +5357,19 @@ częstotliwości/rank/subspace i residual gates pozostaje ścisłe.
 Sześciomodowa regresja sprawdza zachowanie pierwszych czterech fizycznych
 częstotliwości; retry jest wymagane tylko przez osobne edge-coverage cases,
 ponieważ EPS może poprawnie overdeliver cały gęsty pool bez retry.
+
+
+### P2 — pomiar ustawień PCLU przed błędem EPS
+
+Plan korekty obserwacji: opt-in monitor KSP odczytuje wyłącznie KSPGetPC,
+PCGetType oraz PCFactorGetShiftType/Amount podczas żywego callbacku,
+niezależnie od dodatniego recursive reason. Rekord jest mały, scalar-only,
+zerowany przed odczytem; zapisuje callback/iteration/attempt i osobne
+kody getterów. Nie wykonuje PCApply, setup, MatMult ani KSPBuildSolution
+i nie zmienia kryterium true residual, stop reason lub operatora.
+Po hard EPSSolve error wolno publikować tylko zapamiętane scalars.
+
+Scope: queried_live_PCLU_configuration_during_ksp_monitor_not_actual_factor_perturbation.
+Ustawienia PC nie dowodzą rzeczywistej perturbacji faktora ani przyczyny
+błędu GMRES. Bogatsza obserwacja candidate zachowuje swój obecny gate
+i JSON; obie obserwacje używają jednego helpera getterów.

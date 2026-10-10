@@ -608,3 +608,23 @@ PASS po tej korekcie; hosted wykonanie wymagane.
 
 P4 private discovery jest na remote 7be53ea1524d018fcc56295f4a01fe5542040f1d;
 ponowienie #38085530937 w toku. P10 Rust #38083872121 również w toku.
+
+
+## P4 ownership i terminalny wynik P10
+
+Discovery child przenosi reconstruction z Candidate do istniejącego
+accepted_modes zamiast kopiować drugi pełny pool. Nearest zachowuje
+dotychczasową ścieżkę. Po transferze używane są tylko zapisane metrics,
+indeks i lambda/frequency; root i niezależny lifetime review PASS.
+Nie jest to pomiar całkowitego RAM solvera; hosted regresje wymagane.
+
+#38083872121 na95860f55c6a87012c480d76261c9db70188e1124:
+API 1016 PASS /1 FAIL /3 ignored. Jedyna odmowa to nowa fixture
+dekodująca nagłówek FMVP jako próbki f64; korekta dekodera w toku.
+Nie uznajemy całego workflow za PASS. Przy niezmienionej produkcji
+ponowienie obejmie skupione session/source/bundle cases w GHA;
+poprzednie zielone źródłowe przypadki zachowują swój zakres dowodu.
+
+P0 admission na remote 3be9ed87496e24e2fc0582e1b10443715bc46bd5;
+hosted #38085900429 pending. P2 getter-only monitor contract zapisany
+w nocie przed implementacją; implementacja w toku, runtime NOT VERIFIED.
