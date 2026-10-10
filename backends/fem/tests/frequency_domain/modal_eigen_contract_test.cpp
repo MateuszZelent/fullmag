@@ -6340,6 +6340,13 @@ void modal_nonzero_k_floquet_shared_domain_nearest_reports_shifted_ksp_diagnosti
         fixture.payload.magnetic_a_qq_csr = magnetic_stiffness.view();
     }
 
+    if (fault_quarantine_only) {
+        fixture.descriptor.term_presence_mask =
+            FULLMAG_FEM_MODAL_LINEARIZATION_TERM_FIELD;
+        fixture.descriptor.field_term_digest =
+            fixture.descriptor.linearization_state_digest;
+    }
+
     FullmagFemModalEigenRequest request =
         make_floquet_contour_request(fixture, nullptr, nullptr);
     request.target_kind = "nearest_frequency";
