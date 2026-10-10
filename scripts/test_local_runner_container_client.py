@@ -276,8 +276,9 @@ class ContainerClientTests(unittest.TestCase):
         self.assertEqual(IMAGE, create[-1])
         self.assertIn(["--hostname", container_client.CONTAINER_NAME], [create[index:index + 2] for index in range(len(create) - 1)])
         self.assertFalse(any(value in {"-v", "--volume", "--env"} for value in create))
-        self.assertNotIn("checkout", " ".join(create).casefold())
-        self.assertNotIn("home", " ".join(create).casefold())
+        # Exact mount equality above excludes checkout/home exposure without
+        # rejecting a legal storage path located below /home on hosted Linux.
+        self.assertEqual(3, len(mounts))
 
     def test_start_attests_foreign_named_container_before_any_start_or_remove(self):
         self.configure()
