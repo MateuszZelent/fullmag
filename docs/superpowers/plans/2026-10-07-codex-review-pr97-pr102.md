@@ -2703,3 +2703,7 @@ GHA38002760059 exactff6e24cd1 / Rust114064496049 SUCCESS: named published_hyster
 ### Nowa awaria Gmsh — odrębna od wcześniejszego density failure
 
 Python114070724651 w GHA38004708009 terminal FAIL: proces zakończony sygnałem segmentation fault, exit139, podczas test_multi_object_sizing_cylinder_and_waveguide; ostatni log1527–1529. W tym przebiegu nie dotarł do pełnego wyniku meshing suite. Krok preserve diagnostics nie znalazł plików; nie ma artefaktu z tracebackiem Gmsh. Nie przypisujemy tego crasha wcześniejszemu region-floor failure i nie traktujemy ponowienia jako diagnozy. Wymagane prześledzenie konfiguracji Gmsh/field ownership oraz mocniejszy hosted failure capture, z zachowaniem geometrii i kryteriów testu. Wcześniejszy problem regionalnego zagęszczenia nadal otwarty.
+
+### Zachowanie logu również przy natywnej awarii siatkowania
+
+Existing Python meshing krok tworzy teraz katalog diagnostyczny i zapisuje stdout/stderr przez tee do unittest.log w istniejącym artefakcie. Jawne pipefail zachowuje niezerowy wynik procesu testów; geometria, kryteria, test discovery oraz faulthandler niezmienione. Existing always upload może dzięki temu zachować listę wykonanych testów także wtedy, gdy natywny crash nie zdąży wyprodukować diagnostyki Python. To poprawka obserwowalności, nie naprawa Gmsh. Root review całego3line delta, YAML parser i diff-check PASS; rzeczywiste zachowanie upload/exit wymaga następnego hosted bootstrap po uzasadnionych zmianach źródeł.

@@ -620,7 +620,10 @@ jobs:
       - name: Run Python meshing tests
         env:
           FULLMAG_MESH_FAILURE_ARTIFACT_DIR: ${{ runner.temp }}/fullmag-mesh-failure-artifacts
-        run: python -X faulthandler -m unittest discover -s packages/fullmag-py/tests -p 'test_meshing.py' -v
+        run: |
+          mkdir -p "$FULLMAG_MESH_FAILURE_ARTIFACT_DIR"
+          set -o pipefail
+          python -X faulthandler -m unittest discover -s packages/fullmag-py/tests -p 'test_meshing.py' -v 2>&1 | tee "$FULLMAG_MESH_FAILURE_ARTIFACT_DIR/unittest.log"
 
       - name: Preserve Python meshing failure diagnostics
         if: always()
