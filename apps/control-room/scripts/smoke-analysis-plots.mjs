@@ -37,9 +37,17 @@ const DEVELOPMENT_BACKEND_FIXTURE_PATH = "/v2/platform/development-backend";
 const FIXTURE_SESSION_ID = "analysis-plots-fixture";
 const FIXTURE_SESSION_EPOCH = "00000000-0000-4000-8000-000000000017";
 const FIXTURE_REQUEST_SCOPE_EPOCH = "00000000-0000-4000-8000-000000000018";
+const REFERENCE_FIXTURE_RUN_ID = "analysis-frequency-fixture-run";
+const REFERENCE_FIXTURE_STAGE_ID = "analysis-frequency-fixture-stage";
+const CURRENT_RUN_FIXTURE_PATH = "/v2/sessions/current/simulation/runs/current";
+const POSTPROCESSING_DEFINITIONS_FIXTURE_PATH = "/v2/sessions/current/analysis/postprocessing/definitions";
+const ANALYTIC_REFERENCE_MODELS_FIXTURE_PATH = "/v2/sessions/current/analysis/references/analytic-models";
+const DATA_ARTIFACTS_FIXTURE_PATH = "/v2/sessions/current/data/artifacts";
+const DATA_OBSERVATION_FRAMES_FIXTURE_PATH = "/v2/sessions/current/data/observation-frames";
 const ROWS_BIN_PATTERN =
   /^\/v2\/sessions\/current\/data\/tables\/[^/]+\/rows\.bin(?:\?|$)/;
 const FREQUENCY_DOMAIN_PATHS = {
+  branches: "/v2/sessions/current/analysis/frequency-domain/eigen/branches.v2",
   dispersion: "/v2/sessions/current/analysis/frequency-domain/eigen/dispersion",
   manifest: "/v2/sessions/current/analysis/frequency-domain/manifest.v1",
   modePrefix: "/v2/sessions/current/analysis/frequency-domain/eigen/modes/",
@@ -874,8 +882,350 @@ async function verifyFrequencyDomainChartFixtures(browser, workspaceUrl, baseUrl
       await page.close();
     }
   }
+  const referenceImportProof = await verifyReferenceImportResultInspector(browser, workspaceUrl, baseUrl);
+  proofs.push(referenceImportProof);
+  persistFixtureProof(false);
   persistFixtureProof(true);
   return proofs;
+}
+
+function createReferenceImportFixture() {
+  const dispersionText = [
+    "sample_index,sample_id,raw_mode_index,mode_id,branch_id,path_s_rad_per_m,frequency_hz,mode_field_available,mode_field_id",
+    "0,k-path-sample-00000,1,tracked-mode-00000,tracked,0,1000000000,false,",
+    "1,k-path-sample-00001,1,tracked-mode-00001,tracked,1000000,1100000000,false,",
+  ].join("\n");
+  return {
+    calculationMode: "dispersion_modal",
+    dispersionText,
+    id: "results-dispersion-reference-import",
+    kSampling: {
+      kind: "path",
+      points: [
+        { k_vector: [0, 0, 0], label: "Γ" },
+        { k_vector: [1000000, 0, 0], label: "X" },
+      ],
+      samples_per_segment: [1],
+    },
+    referenceImport: true,
+    spectrumPayload: {
+      samples: [
+        {
+          modes: [
+            {
+              frequency_hz: 1000000000,
+              mode_field_available: false,
+              mode_id: "tracked-mode-00000",
+              raw_mode_index: 1,
+            },
+          ],
+          sample_id: "k-path-sample-00000",
+          sample_index: 0,
+        },
+        {
+          modes: [
+            {
+              frequency_hz: 1100000000,
+              mode_field_available: false,
+              mode_id: "tracked-mode-00001",
+              raw_mode_index: 1,
+            },
+          ],
+          sample_id: "k-path-sample-00001",
+          sample_index: 1,
+        },
+      ],
+      schema_version: "eigen_spectrum.v2",
+    },
+    surfaceId: "dispersion",
+  };
+}
+
+async function verifyReferenceImportResultInspector(browser, workspaceUrl, baseUrl) {
+  const page = await browser.newPage({ viewport: { height: 1000, width: 1440 } });
+  const fixture = createReferenceImportFixture();
+  const fixtureState = await installAnalysisDatasetFixtureRoutes(page, fixture);
+  const errors = [];
+  const resourceRequests = [];
+  const runId = REFERENCE_FIXTURE_RUN_ID;
+  const stageId = REFERENCE_FIXTURE_STAGE_ID;
+  const rootId = "results:run:" + runId;
+  const groupId = rootId + ":k-resolved";
+  const stageNodeId = groupId + ":stage:" + stageId + ":modal_eigen";
+  const dispersionNodeId = stageNodeId + ":dispersion";
+  const dispersionSelector = ".fm-explorer [role=\"treeitem\"][data-node-id=\"" + dispersionNodeId + "\"]";
+  const oversizeFileName = "oversized-reference.csv";
+
+  await seedAnalysisSurfacePreference(page, "dispersion");
+  await page.addInitScript(({ apiBase: configuredApiBase }) => {
+    window.__FULLMAG_CONFIG__ = {
+      ...(window.__FULLMAG_CONFIG__ ?? {}),
+      disableRealtime: true,
+      controlRoomApiBase: configuredApiBase,
+    };
+  }, { apiBase: baseUrl });
+  page.on("console", (message) => {
+    if (message.type() !== "error") return;
+    const text = message.text();
+    if (!text.startsWith("Failed to load resource:")) errors.push(text);
+  });
+  page.on("pageerror", (error) => errors.push(error.message));
+  page.on("request", (request) => {
+    const requestPath = currentSessionPath(request.url());
+    if (
+      request.method() !== "OPTIONS" &&
+      requestPath &&
+      (
+        requestPath === CURRENT_RUN_FIXTURE_PATH ||
+        requestPath.startsWith("/v2/sessions/current/analysis/")
+      )
+    ) {
+      resourceRequests.push({
+        method: request.method(),
+        path: requestPath,
+        sessionScope: request.headers()["x-fullmag-session-scope"] ?? null,
+      });
+    }
+  });
+
+  try {
+    await page.goto(workspaceUrl, { timeout: timeoutMs, waitUntil: "domcontentloaded" });
+    await page.locator("main.fm-workspace-shell").waitFor({ state: "visible", timeout: timeoutMs });
+    await openAnalysisPlots(page);
+
+    const resultsTab = page.locator(".fm-explorer .fm-tabs-trigger")
+      .filter({ hasText: /^Results$/ })
+      .first();
+    await resultsTab.waitFor({ state: "visible", timeout: timeoutMs });
+    if (await resultsTab.getAttribute("aria-selected") !== "true") {
+      await resultsTab.click({ timeout: timeoutMs });
+    }
+
+    async function expandResultsNode(nodeId) {
+      const selector = ".fm-explorer [role=\"treeitem\"][data-node-id=\"" + nodeId + "\"]";
+      const row = page.locator(selector);
+      await row.waitFor({ state: "visible", timeout: timeoutMs });
+      if (await row.getAttribute("aria-expanded") === "false") {
+        const branch = row.locator(".fm-explorer-tree-row__branch");
+        if (await branch.count()) await branch.click({ timeout: timeoutMs });
+        else await row.dblclick({ timeout: timeoutMs });
+      }
+      await page.waitForFunction(
+        (nodeSelector) => document.querySelector(nodeSelector)?.getAttribute("aria-expanded") === "true",
+        selector,
+        { timeout: timeoutMs },
+      );
+    }
+
+    await expandResultsNode(rootId);
+    await expandResultsNode(groupId);
+    await expandResultsNode(stageNodeId);
+    const dispersionNode = page.locator(dispersionSelector);
+    await dispersionNode.click({ timeout: timeoutMs });
+    await page.waitForFunction(
+      (selector) => document.querySelector(selector)?.getAttribute("aria-selected") === "true",
+      dispersionSelector,
+      { timeout: timeoutMs },
+    );
+
+    const inspector = page.locator(".fm-inspector");
+    await inspector.waitFor({ state: "visible", timeout: timeoutMs });
+    const ownerText = (await inspector.innerText()).replace(/\s+/g, " ");
+    for (const expected of [runId, stageId, "Artifact revision", "17"]) {
+      if (!ownerText.includes(expected)) {
+        throw new Error("Selected dispersion Inspector is missing owner identity " + expected + ": " + ownerText);
+      }
+    }
+
+    const referenceGroup = inspector.locator("button").filter({ hasText: /^Import reference/ }).first();
+    await referenceGroup.waitFor({ state: "visible", timeout: timeoutMs });
+    await referenceGroup.click({ timeout: timeoutMs });
+    const fileInput = page.getByLabel("Reference file");
+    await fileInput.waitFor({ state: "visible", timeout: timeoutMs });
+    const validCsv = [
+      "path,frequency",
+      "1.234567890123e-6,2.345678901234",
+      "2.345678901234e-6,3.456789012345",
+      "",
+    ].join("\n");
+    await fileInput.setInputFiles({
+      name: "precision-reference.csv",
+      mimeType: "text/csv",
+      buffer: Buffer.from(validCsv, "utf8"),
+    });
+
+    const pointSummary = page.getByText(/^2 points\./);
+    await pointSummary.waitFor({ state: "visible", timeout: timeoutMs });
+    const pathColumn = page.getByRole("combobox", { name: "Path coordinate column" });
+    const frequencyColumn = page.getByRole("combobox", { name: "Frequency column" });
+    await pathColumn.waitFor({ state: "visible", timeout: timeoutMs });
+    await frequencyColumn.waitFor({ state: "visible", timeout: timeoutMs });
+    const selectedPathColumn = (await pathColumn.innerText()).trim();
+    const selectedFrequencyColumn = (await frequencyColumn.innerText()).trim();
+    if (!selectedPathColumn.includes("path") || !selectedFrequencyColumn.includes("frequency")) {
+      throw new Error("Reference column defaults do not select the uploaded path/frequency columns.");
+    }
+    const labelInput = page.getByLabel("Reference label");
+    await labelInput.fill("Precision browser reference");
+    const importButton = page.getByRole("button", { name: "Import as reference", exact: true });
+    if (await importButton.isDisabled()) {
+      throw new Error("Valid two-row reference data did not enable the real Import as reference command.");
+    }
+    await importButton.click({ timeout: timeoutMs });
+    await page.getByText(/Imported reference/, { exact: false })
+      .waitFor({ state: "visible", timeout: timeoutMs });
+
+    if (fixtureState.referenceCreateRequests.length !== 1) {
+      throw new Error("Expected one valid reference-create request, saw " + fixtureState.referenceCreateRequests.length + ".");
+    }
+    const validCreate = fixtureState.referenceCreateRequests[0];
+    const definition = validCreate?.body?.definition;
+    const expectedPoints = [
+      [1.234567890123e-6 * 1e6, 2.345678901234 * 1e9],
+      [2.345678901234e-6 * 1e6, 3.456789012345 * 1e9],
+    ];
+    const expectedSessionScope = "session=" + encodeURIComponent(FIXTURE_SESSION_ID) +
+      "&epoch=" + encodeURIComponent(FIXTURE_SESSION_EPOCH) +
+      "&request_scope_epoch=" + encodeURIComponent(FIXTURE_REQUEST_SCOPE_EPOCH);
+    if (
+      validCreate?.sessionScope !== expectedSessionScope ||
+      validCreate?.body?.expected_scene_revision !== 0 ||
+      definition?.data_ref?.run_id !== runId ||
+      definition?.data_ref?.dataset_id !== stageId ||
+      definition?.data_ref?.dataset_revision !== "17" ||
+      JSON.stringify(definition?.settings?.points) !== JSON.stringify(expectedPoints) ||
+      definition?.settings?.source_units?.path !== "rad/um" ||
+      definition?.settings?.source_units?.frequency !== "GHz"
+    ) {
+      throw new Error("Valid reference import did not preserve its typed Results owner, units, and full-precision SI points.");
+    }
+
+    const scopedOwnerPaths = [
+      CURRENT_RUN_FIXTURE_PATH,
+      POSTPROCESSING_DEFINITIONS_FIXTURE_PATH,
+      FREQUENCY_DOMAIN_PATHS.manifest,
+      FREQUENCY_DOMAIN_PATHS.spectrum,
+      FREQUENCY_DOMAIN_PATHS.dispersion,
+      "/v2/sessions/current/analysis/results/runs/" + runId + "/datasets",
+    ];
+    const scopedOwnerResources = scopedOwnerPaths.map((resourcePath) => {
+      const request = resourceRequests.find((candidate) =>
+        candidate.method === "GET" && candidate.path === resourcePath,
+      );
+      if (!request || request.sessionScope !== expectedSessionScope) {
+        throw new Error("Results owner resource was not read through the scoped v2 facade: " + resourcePath);
+      }
+      return resourcePath;
+    });
+
+    await page.evaluate((invalidFileName) => {
+      const ownDescriptor = Object.getOwnPropertyDescriptor(File.prototype, "text");
+      const originalText = File.prototype.text;
+      if (typeof originalText !== "function") {
+        throw new Error("Browser File.text is unavailable for the oversize-read assertion.");
+      }
+      const audit = { ownDescriptor, oversizedCalls: 0 };
+      Object.defineProperty(window, "__FULLMAG_REFERENCE_IMPORT_TEXT_AUDIT__", {
+        configurable: true,
+        value: audit,
+      });
+      Object.defineProperty(File.prototype, "text", {
+        configurable: true,
+        enumerable: ownDescriptor?.enumerable ?? false,
+        writable: true,
+        value: function (...args) {
+          if (this instanceof File && this.name === invalidFileName) audit.oversizedCalls += 1;
+          return originalText.apply(this, args);
+        },
+      });
+    }, oversizeFileName);
+
+    let overlimitEvidence;
+    try {
+      await page.getByLabel("Reference file").setInputFiles({
+        name: oversizeFileName,
+        mimeType: "text/csv",
+        buffer: Buffer.alloc(4 * 1024 * 1024 + 1, 0x20),
+      });
+      const oversizeMessage = page.getByText("Reference files must be 4 MiB or smaller.", { exact: true });
+      await oversizeMessage.waitFor({ state: "visible", timeout: timeoutMs });
+      if (await pointSummary.count() !== 0) {
+        throw new Error("Oversized selection left the previous reference point summary visible.");
+      }
+      if (
+        await page.getByRole("combobox", { name: "Path coordinate column" }).count() !== 0 ||
+        await page.getByRole("combobox", { name: "Frequency column" }).count() !== 0
+      ) {
+        throw new Error("Oversized selection left the previous reference column table visible.");
+      }
+      if (await page.getByLabel("Reference label").count() !== 0) {
+        throw new Error("Oversized selection retained a previous file's reference label control.");
+      }
+      if (!(await oversizeMessage.isVisible()) || await importButton.count() !== 0) {
+        throw new Error("Oversized file did not leave a visible error with the import action removed.");
+      }
+      const textAudit = await page.evaluate(() => {
+        const audit = window.__FULLMAG_REFERENCE_IMPORT_TEXT_AUDIT__;
+        return { oversizedCalls: audit?.oversizedCalls ?? -1 };
+      });
+      if (textAudit.oversizedCalls !== 0) {
+        throw new Error("Oversized reference bytes were read through File.text.");
+      }
+      if (fixtureState.referenceCreateRequests.length !== 1) {
+        throw new Error("Oversized selection attempted another reference-definition create.");
+      }
+      await page.waitForFunction(
+        (selector) => document.querySelector(selector)?.getAttribute("aria-selected") === "true",
+        dispersionSelector,
+        { timeout: timeoutMs },
+      );
+      const currentInspectorText = (await inspector.innerText()).replace(/\s+/g, " ");
+      if (!currentInspectorText.includes(runId) || !currentInspectorText.includes(stageId)) {
+        throw new Error("The selected Results owner changed after oversized reference rejection.");
+      }
+      overlimitEvidence = {
+        errorVisible: true,
+        fileTextCalls: textAudit.oversizedCalls,
+        invalidCreateRequests: fixtureState.referenceCreateRequests.length - 1,
+        pointSummaryCleared: true,
+        previousColumnsCleared: true,
+        previousLabelCleared: true,
+        selectedNodeId: await dispersionNode.getAttribute("data-node-id"),
+      };
+      const screenshot = path.join(acceptanceDirectory, "analysis-reference-import-overlimit.png");
+      mkdirSync(acceptanceDirectory, { recursive: true });
+      await page.screenshot({ path: screenshot, fullPage: true });
+      overlimitEvidence.screenshot = screenshot;
+    } finally {
+      await page.evaluate(() => {
+        const audit = window.__FULLMAG_REFERENCE_IMPORT_TEXT_AUDIT__;
+        if (audit?.ownDescriptor) {
+          Object.defineProperty(File.prototype, "text", audit.ownDescriptor);
+        } else {
+          Reflect.deleteProperty(File.prototype, "text");
+        }
+        Reflect.deleteProperty(window, "__FULLMAG_REFERENCE_IMPORT_TEXT_AUDIT__");
+      });
+    }
+
+    await assertNoVisibleResourceErrors(page, errors);
+    return {
+      artifactRevision: 17,
+      fixture: fixture.id,
+      owner: { runId, stageId },
+      proof: {
+        acceptedDefinitionId: definition.definition_id,
+        expectedSiPoints: expectedPoints,
+        requestedSessionScope: expectedSessionScope,
+        scopedOwnerResources,
+        validCreateRequestCount: fixtureState.referenceCreateRequests.length,
+        validSourceUnits: definition.settings.source_units,
+      },
+      rejectedOversize: overlimitEvidence,
+    };
+  } finally {
+    await page.close();
+  }
 }
 
 async function selectFrequencyDomainSubview(page, { subviewId, subviewLabel, surfaceId, surfaceLabel }) {
@@ -1846,6 +2196,8 @@ function targetOrTrackedModeId(isTarget, targetModeId, sampleIndex) {
 }
 
 async function installAnalysisDatasetFixtureRoutes(page, frequencyDomainFixture = null) {
+  const referenceImportEnabled = frequencyDomainFixture?.referenceImport === true;
+  const referenceImportState = { referenceCreateRequests: [], definitions: [] };
   const datasetRef = "analysis-fixture";
   const revision = 17;
   const columns = [
@@ -1934,8 +2286,115 @@ async function installAnalysisDatasetFixtureRoutes(page, frequencyDomainFixture 
       "access-control-allow-origin": "*",
       "x-api-contract-version": "1.0.0",
     };
+    if (referenceImportEnabled && request.method() === "OPTIONS") {
+      await route.fulfill({
+        body: "",
+        headers: {
+          ...cors,
+          "access-control-allow-headers": request.headers()["access-control-request-headers"] ?? "content-type",
+          "access-control-allow-methods": "GET, POST, OPTIONS",
+        },
+        status: 204,
+      });
+      return;
+    }
+    if (
+      referenceImportEnabled &&
+      request.method() === "POST" &&
+      url.pathname === POSTPROCESSING_DEFINITIONS_FIXTURE_PATH
+    ) {
+      const body = request.postDataJSON();
+      if (!body || typeof body !== "object" || !body.definition || typeof body.definition !== "object") {
+        await route.fulfill({
+          body: JSON.stringify({ error: "Fixture received an invalid definition-create request." }),
+          contentType: "application/json",
+          headers: cors,
+          status: 400,
+        });
+        return;
+      }
+      referenceImportState.referenceCreateRequests.push({
+        body,
+        sessionScope: request.headers()["x-fullmag-session-scope"] ?? null,
+      });
+      const sceneRevision = referenceImportState.definitions.length + 1;
+      const definition = { ...body.definition, revision: sceneRevision };
+      referenceImportState.definitions.push(definition);
+      await route.fulfill({
+        body: JSON.stringify({ definition, scene_revision: sceneRevision }),
+        contentType: "application/json",
+        headers: cors,
+        status: 200,
+      });
+      return;
+    }
     if (request.method() !== "GET") {
       await route.fulfill({ body: "", headers: cors, status: 204 });
+      return;
+    }
+    if (referenceImportEnabled && url.pathname === CURRENT_RUN_FIXTURE_PATH) {
+      await route.fulfill({
+        body: JSON.stringify(referenceCurrentRunFixture()),
+        contentType: "application/json",
+        headers: cors,
+        status: 200,
+      });
+      return;
+    }
+    if (referenceImportEnabled && url.pathname === POSTPROCESSING_DEFINITIONS_FIXTURE_PATH) {
+      await route.fulfill({
+        body: JSON.stringify({
+          count: referenceImportState.definitions.length,
+          definitions: referenceImportState.definitions,
+          scene_revision: referenceImportState.definitions.length,
+        }),
+        contentType: "application/json",
+        headers: cors,
+        status: 200,
+      });
+      return;
+    }
+    if (referenceImportEnabled && url.pathname === ANALYTIC_REFERENCE_MODELS_FIXTURE_PATH) {
+      await route.fulfill({
+        body: JSON.stringify({ models: [], schema_version: "analytic-reference-models.v1" }),
+        contentType: "application/json",
+        headers: cors,
+        status: 200,
+      });
+      return;
+    }
+    if (
+      referenceImportEnabled &&
+      url.pathname === "/v2/sessions/current/analysis/results/runs/" + REFERENCE_FIXTURE_RUN_ID + "/datasets"
+    ) {
+      await route.fulfill({
+        body: JSON.stringify({
+          items: [],
+          next_cursor: null,
+          revision: "17",
+          run_id: REFERENCE_FIXTURE_RUN_ID,
+          schema_version: "fullmag.analysis.result_dataset_index.v1",
+          status: "unsupported",
+          total_count: 0,
+          unsupported_reason: "no validated result dataset artifacts are published",
+        }),
+        contentType: "application/json",
+        headers: cors,
+        status: 200,
+      });
+      return;
+    }
+    if (referenceImportEnabled && url.pathname === DATA_ARTIFACTS_FIXTURE_PATH) {
+      await route.fulfill({ body: "[]", contentType: "application/json", headers: cors, status: 200 });
+      return;
+    }
+    if (referenceImportEnabled && url.pathname === DATA_OBSERVATION_FRAMES_FIXTURE_PATH) {
+      await route.fulfill({
+        body: JSON.stringify({ frames: [], next_cursor: null, run_id: REFERENCE_FIXTURE_RUN_ID }),
+        contentType: "application/json",
+        headers: cors,
+        status: 200,
+      });
       return;
     }
     if (url.pathname === "/v2/sessions/current/status") {
@@ -1943,6 +2402,7 @@ async function installAnalysisDatasetFixtureRoutes(page, frequencyDomainFixture 
         body: JSON.stringify(analysisStatusFixture({
           frequencyDomainPublished: Boolean(frequencyDomainFixture),
           eigenModesPublished: frequencyDomainFixture?.calculationMode !== "frequency_response",
+          currentRunPublished: referenceImportEnabled,
         })),
         contentType: "application/json",
         headers: cors,
@@ -2042,6 +2502,7 @@ async function installAnalysisDatasetFixtureRoutes(page, frequencyDomainFixture 
     }
     await fulfillMissingFixtureResource(route, cors);
   });
+  return referenceImportState;
 }
 
 async function fulfillFrequencyDomainFixtureResource(route, pathname, fixture, headers) {
@@ -2075,6 +2536,34 @@ async function fulfillFrequencyDomainFixtureResource(route, pathname, fixture, h
         payload: fixture.responsePayload,
         resourceKey: FREQUENCY_DOMAIN_PATHS.response,
         schemaVersion: "frequency_domain_response_sweep_resource.v1",
+      })),
+      contentType: "application/json",
+      headers,
+      status: 200,
+    });
+    return true;
+  }
+  if (pathname === FREQUENCY_DOMAIN_PATHS.response && fixture.referenceImport) {
+    await route.fulfill({
+      body: JSON.stringify(frequencyDomainUnavailableJsonArtifactFixture({
+        artifactPath: "response/magnetic_response_sweep.v2.json",
+        missingReason: "Response data is not published by the dispersion reference fixture.",
+        resourceKey: FREQUENCY_DOMAIN_PATHS.response,
+        schemaVersion: "frequency_domain_response_sweep_resource.v1",
+      })),
+      contentType: "application/json",
+      headers,
+      status: 200,
+    });
+    return true;
+  }
+  if (pathname === FREQUENCY_DOMAIN_PATHS.branches && fixture.referenceImport) {
+    await route.fulfill({
+      body: JSON.stringify(frequencyDomainUnavailableJsonArtifactFixture({
+        artifactPath: "eigen/branches.v2.json",
+        missingReason: "Mode branches are not published by the reference-import fixture.",
+        resourceKey: FREQUENCY_DOMAIN_PATHS.branches,
+        schemaVersion: "frequency_domain_eigen_branches.v1",
       })),
       contentType: "application/json",
       headers,
@@ -2128,7 +2617,10 @@ function frequencyDomainManifestFixture(fixture) {
   const artifacts = isResponse
     ? { response_sweep_v2_path: "response/magnetic_response_sweep.v2.json" }
     : isDispersion
-      ? { dispersion_csv_path: "eigen/dispersion.csv" }
+      ? {
+        ...(fixture.referenceImport ? { spectrum_v2_path: "eigen/spectrum.v2.json" } : {}),
+        dispersion_csv_path: "eigen/dispersion.csv",
+      }
       : { spectrum_v2_path: "eigen/spectrum.v2.json" };
   const payload = {
     artifacts,
@@ -2146,6 +2638,7 @@ function frequencyDomainManifestFixture(fixture) {
     requested_execution: {
       boundary_context: "finite_open",
       calculation_mode: fixture.calculationMode,
+      ...(fixture.referenceImport && fixture.kSampling ? { k_sampling: fixture.kSampling } : {}),
     },
     run_id: "analysis-frequency-fixture-run",
     schema_version: "frequency_domain_manifest.v1",
@@ -2285,6 +2778,25 @@ function frequencyDomainJsonArtifactFixture({ artifactPath, payload, resourceKey
   };
 }
 
+function frequencyDomainUnavailableJsonArtifactFixture({ artifactPath, missingReason, resourceKey, schemaVersion }) {
+  const revision = sha256Digest(Buffer.from("unavailable:" + resourceKey + ":" + missingReason, "utf8"));
+  return {
+    artifact_path: artifactPath,
+    artifact_set_id: "analysis-frequency-fixture-artifact-set",
+    content_digest: revision,
+    mesh_generation_id: "analysis-fixture-mesh",
+    missing_reason: missingReason,
+    payload: null,
+    resource_key: resourceKey,
+    revision,
+    run_id: REFERENCE_FIXTURE_RUN_ID,
+    schema_version: schemaVersion,
+    session_id: FIXTURE_SESSION_ID,
+    stage_id: REFERENCE_FIXTURE_STAGE_ID,
+    status: "unavailable",
+  };
+}
+
 function frequencyDomainTextArtifactFixture(text) {
   const contentDigest = sha256Digest(Buffer.from(text, "utf8"));
   return {
@@ -2310,9 +2822,50 @@ function sha256Digest(value) {
   return `sha256:${createHash("sha256").update(value).digest("hex")}`;
 }
 
+function referenceCurrentRunSummaryFixture() {
+  return {
+    requested_device: "cpu",
+    resolved_device: "cpu",
+    run_id: REFERENCE_FIXTURE_RUN_ID,
+    selection_reason: "Hosted browser Results fixture.",
+    solver_steps: 2,
+    solver_time: 0,
+    stage_count: 1,
+    stage_index: 0,
+    stage_label: "Dispersion",
+    started_at: "2026-10-09T00:00:00.000Z",
+  };
+}
+
+function referenceCurrentRunFixture() {
+  return {
+    active_stage_index: 0,
+    active_stage_kind: "eigenmodes",
+    artifact_dir: "/fixture/results/analysis-frequency-fixture-run",
+    requested_backend: "fem",
+    requested_device: "cpu",
+    requested_mode: "eigenmodes",
+    requested_precision: "fp64",
+    resolved_backend: "fem",
+    resolved_device: "cpu",
+    resolved_engine_id: "browser-fixture",
+    resolved_mode: "eigenmodes",
+    resolved_precision: "fp64",
+    revision: 17,
+    run_id: REFERENCE_FIXTURE_RUN_ID,
+    session_id: FIXTURE_SESSION_ID,
+    solver_time_seconds: 0,
+    started_at: "2026-10-09T00:00:00.000Z",
+    status: "completed",
+    total_stages: 1,
+    total_steps: 2,
+  };
+}
+
 function analysisStatusFixture({
   eigenModesPublished = false,
   frequencyDomainPublished = false,
+  currentRunPublished = false,
 } = {}) {
   return {
     api_contract_version: "1.0.0",
@@ -2369,7 +2922,7 @@ function analysisStatusFixture({
       visualization_state_revision: 0,
       workspace_revision: 0,
     },
-    run: null,
+    run: currentRunPublished ? referenceCurrentRunSummaryFixture() : null,
     runtime_bundle_version: "analysis-plots-fixture",
     session: {
       created_at: "2026-10-08T00:00:00.000Z",
