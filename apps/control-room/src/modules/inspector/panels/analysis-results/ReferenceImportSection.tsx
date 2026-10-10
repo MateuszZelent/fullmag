@@ -1,12 +1,13 @@
 "use client";
 
 import { Upload } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 
 import { IMPORT_DISPERSION_REFERENCE_COMMAND } from "@/kernel/analysis-modules/postprocessingCommandContributions";
 import { createCommandContext } from "@/kernel/commands/commandContext";
 import { useKernel } from "@/kernel/KernelContext";
 import {
+  MAX_REFERENCE_FILE_BYTES,
   parseReferenceTable,
   referencePointsFromTable,
   type ReferenceAxisUnit,
@@ -21,6 +22,38 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { FeedbackBanner } from "../../primitives/FeedbackBanner";
 import { InspectorGroup } from "../../primitives/InspectorGroup";
 import { InspectorPropertyRow } from "../../primitives/InspectorPropertyRow";
+
+type ReferenceFileReadResult =
+  | { kind: "ready"; table: ReferenceTable }
+  | { kind: "error"; reason: string }
+  | { kind: "stale" };
+
+/** Applies parser limits to browser file content before updating Inspector state. */
+async function readReferenceFileWithinLimits(
+  file: Pick<File, "name" | "size" | "text">,
+  isCurrent: () => boolean,
+): Promise<ReferenceFileReadResult> {
+  if (!isCurrent()) return { kind: "stale" };
+  if (!Number.isSafeInteger(file.size) || file.size < 0) {
+    return { kind: "error", reason: "The selected file has an invalid size." };
+  }
+  if (file.size > MAX_REFERENCE_FILE_BYTES) {
+    return { kind: "error", reason: "Reference files must be 4 MiB or smaller." };
+  }
+  try {
+    const text = await file.text();
+    if (!isCurrent()) return { kind: "stale" };
+    return { kind: "ready", table: parseReferenceTable(text) };
+  } catch (error) {
+    if (!isCurrent()) return { kind: "stale" };
+    return {
+      kind: "error",
+      reason: error instanceof Error && error.message.length > 0
+        ? error.message
+        : "The selected reference file could not be read.",
+    };
+  }
+}
 
 /**
  * Imports a COMSOL or CSV dispersion as a reference overlay saved with the
@@ -37,6 +70,7 @@ export function ReferenceImportSection() {
   const [frequencyUnit, setFrequencyUnit] = useState<ReferenceFrequencyUnit>("GHz");
   const [label, setLabel] = useState("");
   const [message, setMessage] = useState<{ kind: "error" | "success"; text: string } | null>(null);
+  const readGeneration = useRef(0);
 
   const points = useMemo(
     () =>
@@ -52,34 +86,54 @@ export function ReferenceImportSection() {
   );
 
   async function readFile(file: File | undefined) {
+    const generation = ++readGeneration.current;
     setMessage(null);
+    setFileName(file?.name ?? null);
+    setTable(null);
+    setPathColumn("0");
+    setFrequencyColumn("1");
+    setLabel("");
     if (!file) return;
-    const parsed = parseReferenceTable(await file.text());
-    setFileName(file.name);
-    setTable(parsed);
+
+    const result = await readReferenceFileWithinLimits(file, () => generation === readGeneration.current);
+    if (generation !== readGeneration.current || result.kind === "stale") return;
+    if (result.kind === "error") {
+      setMessage({ kind: "error", text: result.reason });
+      return;
+    }
+    setTable(result.table);
     setLabel((current) => current || file.name.replace(/\.[^.]+$/, ""));
-    if (parsed.columns.length < 2) {
+    if (result.table.columns.length < 2) {
       setMessage({ kind: "error", text: "The file needs at least two numeric columns." });
     }
   }
 
   async function importReference() {
     if (!fileName || !points?.ok) return;
-    const result = await kernel.commands.execute(
-      IMPORT_DISPERSION_REFERENCE_COMMAND,
-      createCommandContext("inspector", kernel, { sourceDetail: "dispersion reference import" }),
-      {
-        fileName,
-        label: label.trim(),
-        points: points.points,
-        sourceUnits: { frequency: frequencyUnit, path: pathUnit },
-      },
-    );
-    setMessage(
-      result?.status === "completed"
-        ? { kind: "success", text: result.message ?? "Reference imported." }
-        : { kind: "error", text: result?.message ?? "Reference import failed." },
-    );
+    try {
+      const result = await kernel.commands.execute(
+        IMPORT_DISPERSION_REFERENCE_COMMAND,
+        createCommandContext("inspector", kernel, { sourceDetail: "dispersion reference import" }),
+        {
+          fileName,
+          label: label.trim(),
+          points: points.points,
+          sourceUnits: { frequency: frequencyUnit, path: pathUnit },
+        },
+      );
+      setMessage(
+        result?.status === "completed"
+          ? { kind: "success", text: result.message ?? "Reference imported." }
+          : { kind: "error", text: result?.message ?? "Reference import failed." },
+      );
+    } catch (error) {
+      setMessage({
+        kind: "error",
+        text: error instanceof Error && error.message.length > 0
+          ? `Reference import failed: ${error.message}`
+          : "Reference import failed.",
+      });
+    }
   }
 
   const columnOptions = table?.columns.map((column, index) => ({ label: column, value: String(index) })) ?? [];

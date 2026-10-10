@@ -1,5 +1,10 @@
 import { ANALYSIS_POSTPROCESSING_DEFINITIONS_PATH } from "@/kernel/api/apiPaths";
 import type { CommandContext, CommandContribution, CommandResult } from "@/kernel/commands/commandTypes";
+import {
+  isReferenceAxisUnit,
+  isReferenceFrequencyUnit,
+  referencePointPairsValidationError,
+} from "@/shared/domain/analysis/referenceImport";
 
 import {
   importedReferenceDefinition,
@@ -18,17 +23,31 @@ export interface ImportDispersionReferenceInput {
   sourceUnits: { frequency: string; path: string };
 }
 
-function asImportInput(input: unknown): ImportDispersionReferenceInput | null {
-  if (!input || typeof input !== "object") return null;
+type ImportInputValidation =
+  | { input: ImportDispersionReferenceInput; reason: null }
+  | { input: null; reason: string };
+
+function validateImportInput(input: unknown): ImportInputValidation {
+  if (!input || typeof input !== "object") {
+    return { input: null, reason: "Choose a file, its columns and units, and a label." };
+  }
   const candidate = input as Partial<ImportDispersionReferenceInput>;
-  return typeof candidate.fileName === "string" &&
-    typeof candidate.label === "string" &&
-    candidate.label.trim().length > 0 &&
-    Array.isArray(candidate.points) &&
-    candidate.points.length >= 2 &&
-    candidate.sourceUnits
-    ? (candidate as ImportDispersionReferenceInput)
-    : null;
+  if (
+    typeof candidate.fileName !== "string" || candidate.fileName.trim().length === 0 ||
+    typeof candidate.label !== "string" || candidate.label.trim().length === 0
+  ) {
+    return { input: null, reason: "Choose a file name and a non-empty reference label." };
+  }
+  const sourceUnits = candidate.sourceUnits;
+  if (
+    !sourceUnits || typeof sourceUnits !== "object" ||
+    !isReferenceFrequencyUnit(sourceUnits.frequency) || !isReferenceAxisUnit(sourceUnits.path)
+  ) {
+    return { input: null, reason: "Choose supported units for the path coordinate and frequency." };
+  }
+  const pointError = referencePointPairsValidationError(candidate.points);
+  if (pointError) return { input: null, reason: pointError };
+  return { input: candidate as ImportDispersionReferenceInput, reason: null };
 }
 
 /** The selected dispersion result whose run and stage the reference is compared with. */
@@ -43,25 +62,45 @@ function importDataset(context: CommandContext) {
 function importDisabledReason(context: CommandContext): string | null {
   if (!context.api) return "Control Room API is not available.";
   if (!importDataset(context)) return "Select a dispersion relation in the Results tree.";
-  if (!asImportInput(context.input)) return "Choose a file, its columns and units, and a label.";
-  return null;
+  return validateImportInput(context.input).reason;
 }
 
 async function importDispersionReference(context: CommandContext): Promise<CommandResult> {
-  const reason = importDisabledReason(context);
-  const dataset = importDataset(context);
-  const input = asImportInput(context.input);
-  if (reason || !dataset || !input || !context.api) {
-    return { message: reason ?? "Reference cannot be imported.", status: "failed" };
+  if (!context.api) {
+    return { message: "Control Room API is not available.", status: "failed" };
   }
-  const definitions = context.api.analysis.postprocessing.definitions;
-  const current = await definitions.list();
-  const created = await definitions.create({
-    definition: importedReferenceDefinition({ ...input, dataset }),
-    expected_scene_revision: current.scene_revision,
-  });
-  context.resources?.invalidate(ANALYSIS_POSTPROCESSING_DEFINITIONS_PATH, created.scene_revision);
-  return { message: `Imported reference ${created.definition.label}.`, status: "completed" };
+  const dataset = importDataset(context);
+  const validation = validateImportInput(context.input);
+  if (!dataset) {
+    return { message: "Select a dispersion relation in the Results tree.", status: "failed" };
+  }
+  if (!validation.input) {
+    return { message: validation.reason, status: "failed" };
+  }
+  try {
+    const definitions = context.api.analysis.postprocessing.definitions;
+    const current = await definitions.list();
+    const created = await definitions.create({
+      definition: importedReferenceDefinition({ ...validation.input, dataset }),
+      expected_scene_revision: current.scene_revision,
+    });
+    try {
+      context.resources?.invalidate(ANALYSIS_POSTPROCESSING_DEFINITIONS_PATH, created.scene_revision);
+    } catch {
+      return {
+        message: `Imported reference ${created.definition.label}. Refresh the results view to see it.`,
+        status: "completed",
+      };
+    }
+    return { message: `Imported reference ${created.definition.label}.`, status: "completed" };
+  } catch (error) {
+    return {
+      message: error instanceof Error && error.message.length > 0
+        ? `Reference import failed: ${error.message}`
+        : "Reference import failed.",
+      status: "failed",
+    };
+  }
 }
 
 interface UnpinInput {

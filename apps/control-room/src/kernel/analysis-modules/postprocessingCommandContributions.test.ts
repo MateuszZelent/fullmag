@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { MAX_REFERENCE_POINTS } from "@/shared/domain/analysis/referenceImport";
+
 import {
+  IMPORT_DISPERSION_REFERENCE_COMMAND,
   PIN_MODE_VISUALIZATION_COMMAND,
   POSTPROCESSING_DEFINITION_COMMANDS,
 } from "./postprocessingCommandContributions";
@@ -75,6 +78,39 @@ function commandContext(
 function pinCommand() {
   return POSTPROCESSING_DEFINITION_COMMANDS.find(
     (command) => command.id === PIN_MODE_VISUALIZATION_COMMAND,
+  );
+}
+
+function referenceCommandContext(input: unknown, list = vi.fn().mockResolvedValue({ definitions: [], scene_revision: 11 })) {
+  const create = vi.fn();
+  const invalidate = vi.fn();
+  return {
+    context: {
+      api: { analysis: { postprocessing: { definitions: { list, create } } } },
+      input,
+      selection: {
+        get: () => ({
+          kind: "results.dispersion",
+          label: "Dispersion",
+          ref: {
+            analysisRunId: "run-1",
+            analysisStageId: "stage-1",
+            artifactRevision: 7,
+            type: "frequency-domain" as const,
+          },
+        }),
+      },
+      resources: { invalidate },
+    } as never,
+    create,
+    invalidate,
+    list,
+  };
+}
+
+function referenceCommand() {
+  return POSTPROCESSING_DEFINITION_COMMANDS.find(
+    (command) => command.id === IMPORT_DISPERSION_REFERENCE_COMMAND,
   );
 }
 
@@ -160,5 +196,96 @@ describe("pin mode visualization command owner deduplication", () => {
     expect(result.status).toBe("completed");
     expect(fixture.create).toHaveBeenCalledTimes(1);
     expect(fixture.invalidate).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("import dispersion reference command bounds", () => {
+  it("preserves valid SI pairs through the existing definitions API command", async () => {
+    const command = referenceCommand();
+    expect(command).toBeDefined();
+    if (!command) return;
+    const fixture = referenceCommandContext({
+      fileName: "reference.csv",
+      label: "Reference",
+      points: [[3, 9], [-1, 2]],
+      sourceUnits: { frequency: "GHz", path: "rad/um" },
+    });
+    fixture.create.mockResolvedValue({
+      definition: { label: "Reference" },
+      scene_revision: 12,
+    });
+
+    const result = await command.run(fixture.context);
+
+    expect(result).toEqual({ message: "Imported reference Reference.", status: "completed" });
+    expect(fixture.create).toHaveBeenCalledWith(expect.objectContaining({
+      definition: expect.objectContaining({
+        data_ref: { dataset_revision: "7", dataset_id: "stage-1", run_id: "run-1" },
+        settings: expect.objectContaining({ points: [[3, 9], [-1, 2]] }),
+      }),
+      expected_scene_revision: 11,
+    }));
+    expect(fixture.invalidate).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ["oversized points", Array.from({ length: MAX_REFERENCE_POINTS + 1 }, (_, index) => [index, index])],
+    ["non-finite point", [[0, 1], [1, Number.NaN]]],
+    ["malformed tuple", [[0, 1], [1, 2, 3]]],
+  ])("rejects %s before listing or creating stored definitions", async (_label, points) => {
+    const command = referenceCommand();
+    expect(command).toBeDefined();
+    if (!command) return;
+    const fixture = referenceCommandContext({
+      fileName: "reference.csv",
+      label: "Reference",
+      points,
+      sourceUnits: { frequency: "GHz", path: "rad/um" },
+    });
+
+    const result = await command.run(fixture.context);
+
+    expect(result.status).toBe("failed");
+    expect(fixture.list).not.toHaveBeenCalled();
+    expect(fixture.create).not.toHaveBeenCalled();
+    expect(fixture.invalidate).not.toHaveBeenCalled();
+  });
+
+  it("rejects unsupported units without reading or mutating stored definitions", async () => {
+    const command = referenceCommand();
+    expect(command).toBeDefined();
+    if (!command) return;
+    const fixture = referenceCommandContext({
+      fileName: "reference.csv",
+      label: "Reference",
+      points: [[0, 1], [1, 2]],
+      sourceUnits: { frequency: "kHz", path: "rad/m" },
+    });
+
+    const result = await command.run(fixture.context);
+
+    expect(result.status).toBe("failed");
+    expect(result.message).toMatch(/supported units/);
+    expect(fixture.list).not.toHaveBeenCalled();
+    expect(fixture.create).not.toHaveBeenCalled();
+  });
+
+  it("returns facade failures as a command result", async () => {
+    const command = referenceCommand();
+    expect(command).toBeDefined();
+    if (!command) return;
+    const list = vi.fn().mockRejectedValue(new Error("definitions unavailable"));
+    const fixture = referenceCommandContext({
+      fileName: "reference.csv",
+      label: "Reference",
+      points: [[0, 1], [1, 2]],
+      sourceUnits: { frequency: "GHz", path: "rad/um" },
+    }, list);
+
+    const result = await command.run(fixture.context);
+
+    expect(result).toMatchObject({ message: "Reference import failed: definitions unavailable", status: "failed" });
+    expect(fixture.create).not.toHaveBeenCalled();
+    expect(fixture.invalidate).not.toHaveBeenCalled();
   });
 });

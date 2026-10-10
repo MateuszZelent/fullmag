@@ -1,5 +1,11 @@
 import type { PostprocessingDefinition } from "@/kernel/api/apiTypes";
 import type { Selection } from "@/kernel/selection/selectionTypes";
+import {
+  isReferenceAxisUnit,
+  isReferenceFrequencyUnit,
+  isReferencePointPairs,
+  referencePointPairsValidationError,
+} from "@/shared/domain/analysis/referenceImport";
 
 import { ANALYSIS_FEATURE_MANIFESTS } from "./analysisModuleManifests";
 import type { AnalysisModuleId, AnalysisNodeKind } from "./analysisModuleContract";
@@ -188,6 +194,36 @@ export const IMPORTED_REFERENCE_SCHEMA = "analysis.dispersion.reference.v1";
  * its comparison status stays "unknown" until metadata is provided.
  */
 export function importedReferenceDefinition(input: ImportedReferenceInput): PostprocessingDefinition {
+  if (!input || typeof input !== "object") {
+    throw new TypeError("Reference import details are required.");
+  }
+  const pointError = referencePointPairsValidationError(input.points);
+  if (pointError) throw new RangeError(pointError);
+  if (typeof input.fileName !== "string" || input.fileName.trim().length === 0) {
+    throw new TypeError("Choose a reference file name.");
+  }
+  if (typeof input.label !== "string" || input.label.trim().length === 0) {
+    throw new TypeError("Choose a label for the reference.");
+  }
+  if (
+    !input.sourceUnits || typeof input.sourceUnits !== "object" ||
+    !isReferenceFrequencyUnit(input.sourceUnits.frequency) ||
+    !isReferenceAxisUnit(input.sourceUnits.path)
+  ) {
+    throw new TypeError("Choose supported units for the reference.");
+  }
+  const dataset = input.dataset;
+  if (
+    !dataset || typeof dataset !== "object" ||
+    typeof dataset.runId !== "string" || dataset.runId.trim().length === 0 ||
+    typeof dataset.stageId !== "string" || dataset.stageId.trim().length === 0 ||
+    !(
+      (typeof dataset.artifactRevision === "number" && Number.isFinite(dataset.artifactRevision)) ||
+      (typeof dataset.artifactRevision === "string" && dataset.artifactRevision.trim().length > 0)
+    )
+  ) {
+    throw new TypeError("The selected dispersion result has an invalid published identity.");
+  }
   const manifest = ANALYSIS_FEATURE_MANIFESTS.find((candidate) => candidate.id === "analysis.dispersion");
   const stamp = `${input.fileName}:${input.points.length}:${input.points[0]?.join(",") ?? ""}`;
   return {
@@ -199,16 +235,20 @@ export function importedReferenceDefinition(input: ImportedReferenceInput): Post
     node_kind: "analysis.dispersion.reference",
     label: input.label,
     data_ref: {
-      run_id: input.dataset.runId,
-      dataset_id: input.dataset.stageId,
-      dataset_revision: String(input.dataset.artifactRevision),
+      run_id: dataset.runId,
+      dataset_id: dataset.stageId,
+      dataset_revision: String(dataset.artifactRevision),
     },
     settings: {
       file_name: input.fileName,
       path_quantity: "path_coordinate_rad_per_m",
+      // The complete array was validated and bounded before this copy.
       points: input.points.map(([path, frequency]) => [path, frequency]),
       source: "imported_table",
-      source_units: input.sourceUnits,
+      source_units: {
+        frequency: input.sourceUnits.frequency,
+        path: input.sourceUnits.path,
+      },
       y_quantity: "frequency_hz",
     },
   };
@@ -216,18 +256,25 @@ export function importedReferenceDefinition(input: ImportedReferenceInput): Post
 
 /** SI points of a stored imported reference, or null when the settings are not a reference. */
 export function importedReferencePoints(definition: PostprocessingDefinition): [number, number][] | null {
-  if (definition.definition_schema !== IMPORTED_REFERENCE_SCHEMA) return null;
-  const points = (definition.settings as Record<string, unknown> | undefined)?.points;
-  if (!Array.isArray(points)) return null;
-  const parsed = points.flatMap((point): [number, number][] =>
-    Array.isArray(point) &&
-    point.length === 2 &&
-    typeof point[0] === "number" &&
-    typeof point[1] === "number" &&
-    Number.isFinite(point[0]) &&
-    Number.isFinite(point[1])
-      ? [[point[0], point[1]]]
-      : [],
-  );
-  return parsed.length >= 2 ? parsed : null;
+  if (
+    !definition || definition.definition_schema !== IMPORTED_REFERENCE_SCHEMA ||
+    typeof definition.label !== "string" || definition.label.trim().length === 0
+  ) return null;
+  const settings = definition.settings as Record<string, unknown> | undefined;
+  if (
+    !settings || settings.source !== "imported_table" ||
+    settings.path_quantity !== "path_coordinate_rad_per_m" ||
+    settings.y_quantity !== "frequency_hz" ||
+    typeof settings.file_name !== "string" || settings.file_name.trim().length === 0
+  ) return null;
+  const sourceUnits = settings.source_units;
+  if (
+    !sourceUnits || typeof sourceUnits !== "object" ||
+    !isReferenceFrequencyUnit((sourceUnits as Record<string, unknown>).frequency) ||
+    !isReferenceAxisUnit((sourceUnits as Record<string, unknown>).path)
+  ) return null;
+  const points = settings.points;
+  if (!isReferencePointPairs(points)) return null;
+  // Reject malformed or oversized stored data as a whole before allocating a render copy.
+  return points.map(([path, frequency]): [number, number] => [path, frequency]);
 }

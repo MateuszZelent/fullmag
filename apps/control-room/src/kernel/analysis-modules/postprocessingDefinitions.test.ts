@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
+import { MAX_REFERENCE_POINTS } from "@/shared/domain/analysis/referenceImport";
+
 import {
+  IMPORTED_REFERENCE_SCHEMA,
+  importedReferenceDefinition,
+  importedReferencePoints,
   modeVisualizationOwnerMatch,
   modeVisualizationDefinitionFromSelection,
   pinnedModeVisualizationId,
@@ -190,5 +195,64 @@ describe("pinned mode visualization definitions", () => {
       ).ok,
     ).toBe(false);
     expect(modeVisualizationDefinitionFromSelection(modeSelection("object.visualization") as never).ok).toBe(false);
+  });
+});
+
+describe("imported dispersion reference definitions", () => {
+  const baseInput = {
+    dataset: { artifactRevision: 7, runId: "run-1", stageId: "eigen-dispersion" },
+    fileName: "reference.csv",
+    label: "Reference",
+    points: [[3, 9], [-1, 2]] as const,
+    sourceUnits: { frequency: "GHz", path: "rad/um" } as const,
+  };
+
+  it("preserves every accepted SI pair through definition construction and readback", () => {
+    const definition = importedReferenceDefinition(baseInput);
+
+    expect(definition.definition_schema).toBe(IMPORTED_REFERENCE_SCHEMA);
+    expect(importedReferencePoints(definition)).toEqual([[3, 9], [-1, 2]]);
+  });
+
+  it("accepts the exact point limit and rejects an oversized constructor input before copying", () => {
+    const points = Array.from({ length: MAX_REFERENCE_POINTS }, (_, index) => [index, index] as const);
+    const definition = importedReferenceDefinition({ ...baseInput, points });
+
+    expect(importedReferencePoints(definition)).toHaveLength(MAX_REFERENCE_POINTS);
+    expect(() => importedReferenceDefinition({
+      ...baseInput,
+      points: [...points, [MAX_REFERENCE_POINTS, MAX_REFERENCE_POINTS] as const],
+    })).toThrow(/at most/);
+  });
+
+  it("rejects malformed stored point sets as a whole instead of dropping individual rows", () => {
+    const definition = importedReferenceDefinition(baseInput);
+    const malformed = {
+      ...definition,
+      settings: { ...definition.settings, points: [[0, 1], [2, "3"], [4, 5]] },
+    };
+    const oversized = {
+      ...definition,
+      settings: {
+        ...definition.settings,
+        points: Array.from({ length: MAX_REFERENCE_POINTS + 1 }, (_, index) => [index, index]),
+      },
+    };
+    const unsupportedUnits = {
+      ...definition,
+      settings: { ...definition.settings, source_units: { frequency: "Hz", path: "m" } },
+    };
+
+    expect(importedReferencePoints(malformed)).toBeNull();
+    expect(importedReferencePoints(oversized)).toBeNull();
+    expect(importedReferencePoints(unsupportedUnits)).toBeNull();
+  });
+
+  it.each([
+    ["non-finite SI value", { points: [[0, 1], [2, Number.NaN]] }],
+    ["unsupported unit", { sourceUnits: { frequency: "kHz", path: "rad/m" } }],
+    ["non-finite published revision", { dataset: { artifactRevision: Number.NaN, runId: "run-1", stageId: "stage-1" } }],
+  ])("rejects %s in a direct constructor call", (_description, overrides) => {
+    expect(() => importedReferenceDefinition({ ...baseInput, ...overrides } as never)).toThrow();
   });
 });
