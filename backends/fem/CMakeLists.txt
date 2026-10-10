@@ -1005,6 +1005,10 @@ add_custom_target(fem_modal_eigen_live_shift_configuration_contract
     DEPENDS fem_modal_eigen_contract)
 add_test(NAME fem_modal_eigen_live_shift_configuration_contract
     COMMAND $<TARGET_FILE:fem_modal_eigen_contract> --floquet-live-shift-configuration)
+add_custom_target(fem_modal_eigen_damping_admission_contract
+    DEPENDS fem_modal_eigen_contract)
+add_test(NAME fem_modal_eigen_damping_admission_contract
+    COMMAND $<TARGET_FILE:fem_modal_eigen_contract> --modal-damping-admission)
 add_custom_target(fem_modal_eigen_phase_convention_contract
     DEPENDS fem_modal_eigen_contract)
 add_test(NAME fem_modal_eigen_phase_convention_contract

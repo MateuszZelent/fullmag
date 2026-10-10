@@ -270,6 +270,14 @@ CONTRACT_PROFILES["modal-phase-slepc"]["tests"].append({
                             "-DFULLMAG_HAS_CUDA_RUNTIME=0"],
 })
 
+CONTRACT_PROFILES["modal-phase-slepc"]["tests"].append({
+    "name": "fem_modal_eigen_damping_admission_contract",
+    "source_suffix": "backends/fem/tests/frequency_domain/modal_eigen_contract_test.cpp",
+    "marker": "PASS: modal_damping_policy_admission_contract",
+    "compile_definitions": ["-DFULLMAG_HAS_MFEM_STACK=1", "-DFULLMAG_FEM_WITH_SLEPC=1",
+                            "-DFULLMAG_HAS_CUDA_RUNTIME=0"],
+})
+
 CONTRACT_PROFILES["floquet-count-slepc"] = {
     **CONTRACT_PROFILES["generic-modal-slepc"],
     "slug": "fem-floquet-count-slepc-contract",

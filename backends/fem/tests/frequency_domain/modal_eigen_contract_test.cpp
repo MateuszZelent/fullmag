@@ -484,6 +484,94 @@ FullmagFemModalEigenRequest base_request()
     return request;
 }
 
+void modal_damping_policy_tokens_and_nonshared_matrices()
+{
+    const auto same_text = [](const char *left, const char *right) {
+        if (left == nullptr || right == nullptr) {
+            return left == right;
+        }
+        return std::strcmp(left, right) == 0;
+    };
+
+    FullmagFemModalEigenRequest legacy_request = base_request();
+    legacy_request.operator_request.alpha = 0.025;
+    FullmagFemFrequencyDomainResult legacy_result =
+        fullmag_fem_modal_eigen_solve(&legacy_request);
+    FullmagFemModalEigenRequest ignore_request = legacy_request;
+    ignore_request.operator_request.damping_policy = "ignore";
+    FullmagFemFrequencyDomainResult ignore_result =
+        fullmag_fem_modal_eigen_solve(&ignore_request);
+    check(legacy_result.status == ignore_result.status &&
+              legacy_result.mode_count == ignore_result.mode_count &&
+              same_text(legacy_result.diagnostics_json, ignore_result.diagnostics_json) &&
+              same_text(legacy_result.result_json, ignore_result.result_json),
+          "null damping_policy preserves the explicit Ignore baseline");
+    fullmag_fem_frequency_domain_result_destroy(&legacy_result);
+    fullmag_fem_frequency_domain_result_destroy(&ignore_result);
+
+    const char *invalid_policies[] = {"", "include_typo"};
+    for (const char *policy : invalid_policies) {
+        FullmagFemModalEigenRequest invalid_request = base_request();
+        invalid_request.operator_request.damping_policy = policy;
+        FullmagFemFrequencyDomainResult invalid_result =
+            fullmag_fem_modal_eigen_solve(&invalid_request);
+        check(invalid_result.status == FULLMAG_FEM_FD_VALIDATION_ERROR &&
+                  contains(invalid_result.diagnostics_json,
+                           "\"reason\":\"invalid_modal_damping_policy\""),
+              "empty and unknown damping_policy tokens fail with the stable validation reason");
+        check(invalid_result.mode_count == 0u,
+              "invalid damping_policy tokens accept no modal outputs");
+        fullmag_fem_frequency_domain_result_destroy(&invalid_result);
+    }
+
+    constexpr double tiny_stiffness[] = {1.0, 0.0, 0.0, 1.0};
+    constexpr double tiny_gyrotropic[] = {0.0, -1.0, 1.0, 0.0};
+    FullmagFemModalEigenRequest tiny_request = base_request();
+    tiny_request.operator_request.alpha = 0.025;
+    tiny_request.operator_request.damping_policy = "include";
+    tiny_request.tiny_validation_enabled = 1;
+    tiny_request.tiny_validation_tangent_dof_count = 2;
+    tiny_request.tiny_validation_stiffness_matrix_row_major = tiny_stiffness;
+    tiny_request.tiny_validation_mass_matrix_row_major = tiny_gyrotropic;
+    FullmagFemFrequencyDomainResult tiny_result =
+        fullmag_fem_modal_eigen_solve(&tiny_request);
+    check(tiny_result.status == FULLMAG_FEM_FD_OK && tiny_result.mode_count == 1u,
+          "Include does not reject a caller-provided tiny matrix outside shared-domain assembly");
+    check(!contains(tiny_result.diagnostics_json,
+                    "shared_domain_exact_damping_unavailable"),
+          "tiny validation remains outside the shared-domain damping admission gate");
+    fullmag_fem_frequency_domain_result_destroy(&tiny_result);
+
+    constexpr double dense_stiffness[] = {1.0, 0.0, 0.0, 1.0};
+    constexpr double dense_gyrotropic[] = {0.0, -1.0, 1.0, 0.0};
+    constexpr double dense_mass[] = {1.0, 0.0, 0.0, 1.0};
+    FullmagFemModalEigenRequest dense_request = base_request();
+    dense_request.target_kind = "frequency_window";
+    dense_request.frequency_min_hz = 0.01;
+    dense_request.frequency_max_hz = 1.0;
+    dense_request.mfem_operator_enabled = 1;
+    dense_request.mfem_tangent_dof_count = 2u;
+    dense_request.mfem_stiffness_matrix_row_major = dense_stiffness;
+    dense_request.mfem_gyrotropic_matrix_row_major = dense_gyrotropic;
+    dense_request.mfem_mass_matrix_row_major = dense_mass;
+    dense_request.operator_request.operator_diagnostics_json =
+        "{\"operator_family\":\"rust_full_2x2_dense_operator\","
+        "\"payload_kind\":\"rust_full_2x2_dense_operator\"}";
+    dense_request.operator_request.alpha = 0.025;
+    FullmagFemFrequencyDomainResult dense_legacy_result =
+        fullmag_fem_modal_eigen_solve(&dense_request);
+    dense_request.operator_request.damping_policy = "include";
+    FullmagFemFrequencyDomainResult dense_include_result =
+        fullmag_fem_modal_eigen_solve(&dense_request);
+    check(dense_include_result.status == dense_legacy_result.status &&
+              dense_include_result.mode_count == dense_legacy_result.mode_count &&
+              !contains(dense_include_result.diagnostics_json,
+                        "shared_domain_exact_damping_unavailable"),
+          "Include does not globally reject caller-owned dense modal matrices");
+    fullmag_fem_frequency_domain_result_destroy(&dense_legacy_result);
+    fullmag_fem_frequency_domain_result_destroy(&dense_include_result);
+}
+
 void modal_dependency_info_is_reported()
 {
     fullmag_fem_frequency_domain_dependency_info dependency_info{};
@@ -3227,6 +3315,169 @@ void initialize_floquet_original_descriptor_fixture(
             static_cast<std::uint32_t>(magnetic_stiffness.values.size()));
     }
     fixture.payload.magnetic_a_qq_csr = magnetic_stiffness.view();
+}
+
+void check_shared_domain_damping_unavailable(
+    const FullmagFemFrequencyDomainResult &result,
+    std::uint32_t expected_execution_target,
+    const char *route)
+{
+    char message[256]{};
+    std::snprintf(message, sizeof(message), "%s Include returns unavailable", route);
+    check(result.status == FULLMAG_FEM_FD_UNAVAILABLE, message);
+    std::snprintf(
+        message, sizeof(message),
+        "%s reports the exact damping-unavailable reason", route);
+    check(contains(result.diagnostics_json,
+                   "\"reason\":\"shared_domain_exact_damping_unavailable\""),
+          message);
+    std::snprintf(
+        message, sizeof(message), "%s diagnostics remain incomplete", route);
+    check(contains(result.diagnostics_json, "\"complete\":false"), message);
+    std::snprintf(message, sizeof(message), "%s accepts no modes", route);
+    check(result.mode_count == 0u, message);
+    std::snprintf(
+        message, sizeof(message),
+        "%s preserves the requested execution target", route);
+    check(result.resolved_execution_target == expected_execution_target, message);
+    std::snprintf(message, sizeof(message), "%s reports no execution fallback", route);
+    check(result.resolved_fallback_state == 0u &&
+              contains(result.resolved_fallback_reason, "none"),
+          message);
+}
+
+void modal_shared_domain_damping_policy_fails_before_all_aliases()
+{
+    FloquetContourSharedDomainFixture fixture{};
+    CsrOwned magnetic_stiffness{};
+    initialize_floquet_original_descriptor_fixture(fixture, magnetic_stiffness);
+
+    constexpr std::array<double, 16> dense_stiffness{{
+        1.0, 0.0, 0.0, 0.0,
+        0.0, 1.0, 0.0, 0.0,
+        0.0, 0.0, 1.0, 0.0,
+        0.0, 0.0, 0.0, 1.0,
+    }};
+    constexpr std::array<double, 16> dense_gyrotropic{{
+        0.0, -1.0, 0.0, 0.0,
+        1.0, 0.0, 0.0, 0.0,
+        0.0, 0.0, 0.0, -1.0,
+        0.0, 0.0, 1.0, 0.0,
+    }};
+
+    const std::size_t provider_node_count = fixture.nodes.size() / 3u;
+    std::vector<double> unsupported_uniaxial_axes(3u * provider_node_count, 0.0);
+    std::vector<double> unsupported_uniaxial_fields(provider_node_count, 1.0);
+    for (std::size_t node = 0u; node < provider_node_count; ++node) {
+        unsupported_uniaxial_axes[3u * node + 2u] = 1.0;
+    }
+    fixture.descriptor.term_presence_mask |=
+        FULLMAG_FEM_MODAL_LINEARIZATION_TERM_ANISOTROPY;
+    fixture.descriptor.anisotropy_term_digest =
+        fixture.descriptor.linearization_state_digest;
+    fixture.descriptor.uniaxial_axis_xyz = unsupported_uniaxial_axes.data();
+    fixture.descriptor.uniaxial_axis_xyz_count = unsupported_uniaxial_axes.size();
+    fixture.descriptor.uniaxial_anisotropy_field_a_per_m =
+        unsupported_uniaxial_fields.data();
+    fixture.descriptor.uniaxial_anisotropy_field_count =
+        unsupported_uniaxial_fields.size();
+    FullmagFemModalEigenRequest shared_legacy_request =
+        make_floquet_contour_request(fixture, nullptr, nullptr);
+    shared_legacy_request.target_kind = "nearest_frequency";
+    shared_legacy_request.target_frequency_hz = 0.16;
+    shared_legacy_request.frequency_min_hz = 0.0;
+    shared_legacy_request.frequency_max_hz = 0.0;
+    shared_legacy_request.eigensolver_family = 1;
+    FullmagFemFrequencyDomainResult shared_legacy_result =
+        fullmag_fem_modal_eigen_solve(&shared_legacy_request);
+    FullmagFemModalEigenRequest shared_ignore_request = shared_legacy_request;
+    shared_ignore_request.operator_request.damping_policy = "ignore";
+    FullmagFemFrequencyDomainResult shared_ignore_result =
+        fullmag_fem_modal_eigen_solve(&shared_ignore_request);
+    check(shared_legacy_result.status == FULLMAG_FEM_FD_UNAVAILABLE &&
+              shared_ignore_result.status == shared_legacy_result.status &&
+              shared_ignore_result.mode_count == shared_legacy_result.mode_count &&
+              shared_legacy_result.diagnostics_json != nullptr &&
+              shared_ignore_result.diagnostics_json != nullptr &&
+              std::strcmp(shared_legacy_result.diagnostics_json,
+                          shared_ignore_result.diagnostics_json) == 0 &&
+              shared_legacy_result.result_json != nullptr &&
+              shared_ignore_result.result_json != nullptr &&
+              std::strcmp(shared_legacy_result.result_json,
+                          shared_ignore_result.result_json) == 0,
+          "null and explicit Ignore preserve the same shared-domain provider outcome");
+    check(contains(shared_legacy_result.diagnostics_json,
+                   "\"reason\":\"floquet_shared_domain_sparse_assembly_failed\""),
+          "shared-domain Ignore comparison reaches the expected unsupported-term provider result");
+    fullmag_fem_frequency_domain_result_destroy(&shared_legacy_result);
+    fullmag_fem_frequency_domain_result_destroy(&shared_ignore_result);
+    fixture.descriptor.term_presence_mask =
+        FULLMAG_FEM_MODAL_LINEARIZATION_TERM_FIELD;
+    fixture.descriptor.anisotropy_term_digest = nullptr;
+    fixture.descriptor.uniaxial_axis_xyz = nullptr;
+    fixture.descriptor.uniaxial_axis_xyz_count = 0u;
+    fixture.descriptor.uniaxial_anisotropy_field_a_per_m = nullptr;
+    fixture.descriptor.uniaxial_anisotropy_field_count = 0u;
+
+    const double alphas[] = {0.0, 0.025};
+    for (double alpha : alphas) {
+        FullmagFemModalEigenRequest k0_request =
+            make_floquet_contour_request(fixture, nullptr, nullptr);
+        k0_request.floquet_k_vector_rad_per_m[0] = 0.0;
+        k0_request.floquet_k_vector_rad_per_m[1] = 0.0;
+        k0_request.floquet_k_vector_rad_per_m[2] = 0.0;
+        k0_request.operator_request.alpha = alpha;
+        k0_request.operator_request.damping_policy = "include";
+        FullmagFemFrequencyDomainResult k0_result =
+            fullmag_fem_modal_eigen_solve(&k0_request);
+        check_shared_domain_damping_unavailable(
+            k0_result, FULLMAG_FEM_MODAL_EXECUTION_PRODUCTION_CPU,
+            alpha == 0.0 ? "K0 zero-alpha" : "K0 positive-alpha");
+        fullmag_fem_frequency_domain_result_destroy(&k0_result);
+
+        FullmagFemModalEigenRequest sparse_request =
+            make_floquet_contour_request(fixture, nullptr, nullptr);
+        sparse_request.operator_request.alpha = alpha;
+        sparse_request.operator_request.damping_policy = "include";
+        FullmagFemFrequencyDomainResult sparse_result =
+            fullmag_fem_modal_eigen_solve(&sparse_request);
+        check_shared_domain_damping_unavailable(
+            sparse_result, FULLMAG_FEM_MODAL_EXECUTION_PRODUCTION_CPU,
+            alpha == 0.0 ? "Floquet sparse zero-alpha" : "Floquet sparse positive-alpha");
+        fullmag_fem_frequency_domain_result_destroy(&sparse_result);
+
+        FullmagFemModalEigenRequest dense_request = make_floquet_contour_request(
+            fixture, dense_stiffness.data(), dense_gyrotropic.data(), 4u);
+        dense_request.operator_request.alpha = alpha;
+        dense_request.operator_request.damping_policy = "include";
+        FullmagFemFrequencyDomainResult dense_result =
+            fullmag_fem_modal_eigen_solve(&dense_request);
+        check_shared_domain_damping_unavailable(
+            dense_result, FULLMAG_FEM_MODAL_EXECUTION_PRODUCTION_CPU,
+            alpha == 0.0 ? "Floquet dense zero-alpha" : "Floquet dense positive-alpha");
+        fullmag_fem_frequency_domain_result_destroy(&dense_result);
+    }
+
+    FullmagFemModalEigenRequest gpu_request =
+        make_floquet_contour_request(fixture, nullptr, nullptr);
+    gpu_request.floquet_k_vector_rad_per_m[0] = 0.0;
+    gpu_request.floquet_k_vector_rad_per_m[1] = 0.0;
+    gpu_request.floquet_k_vector_rad_per_m[2] = 0.0;
+    gpu_request.execution_target = FULLMAG_FEM_MODAL_EXECUTION_PRODUCTION_GPU;
+    gpu_request.operator_request.alpha = 0.025;
+    gpu_request.operator_request.damping_policy = "include";
+    FullmagFemFrequencyDomainResultV20 gpu_envelope{};
+    gpu_envelope.abi_version = FULLMAG_FEM_FREQUENCY_DOMAIN_RESULT_V20_ABI_VERSION;
+    gpu_envelope.struct_size = sizeof(gpu_envelope);
+    check(fullmag_fem_modal_eigen_solve_v20(&gpu_request, &gpu_envelope) ==
+              FULLMAG_FEM_OK,
+          "v20 accepts a GPU shared-domain Include request for an unavailable result");
+    check_shared_domain_damping_unavailable(
+        gpu_envelope.scientific_result_v18,
+        FULLMAG_FEM_MODAL_EXECUTION_PRODUCTION_GPU,
+        "GPU K0");
+    fullmag_fem_frequency_domain_result_v20_destroy(&gpu_envelope);
+    std::printf("PASS: modal_shared_domain_damping_policy_admission_contract\n");
 }
 
 void modal_floquet_shared_domain_contour_original_k_certification(
@@ -8879,6 +9130,19 @@ void modal_poisson_airbox_tail_gpu_shift_invert_action_writes_artifact()
 
 int main(int argc, char **argv)
 {
+    if (argc == 2 && std::strcmp(argv[1], "--modal-damping-admission") == 0) {
+#if FULLMAG_HAS_MFEM_STACK && FULLMAG_FEM_WITH_SLEPC
+        modal_damping_policy_tokens_and_nonshared_matrices();
+        modal_shared_domain_damping_policy_fails_before_all_aliases();
+        std::printf("PASS: modal_damping_policy_admission_contract\n");
+        return 0;
+#else
+        std::fprintf(
+            stderr,
+            "FAIL: --modal-damping-admission requires MFEM and SLEPc\n");
+        return 3;
+#endif
+    }
     borrowed_pmat_copy_serializer_optional_shift_fields();
     if (argc > 1) {
         if (argc == 2 && std::strcmp(argv[1], "--floquet-gamma-admission") == 0) {
@@ -9025,6 +9289,9 @@ int main(int argc, char **argv)
         return 2;
     }
     modal_shared_domain_provider_terminal_status_fails_closed();
+#if FULLMAG_HAS_MFEM_STACK && FULLMAG_FEM_WITH_SLEPC
+    modal_shared_domain_damping_policy_fails_before_all_aliases();
+#endif
     modal_shared_domain_provider_failure_status_is_consistent();
     nonfinite_json_sanitizer_has_bounded_fail_closed_semantics();
     FullmagFemFrequencyDomainResult zeroed{};
@@ -9033,6 +9300,7 @@ int main(int argc, char **argv)
           "destroy on zeroed result must be idempotent");
 
     modal_dependency_info_is_reported();
+    modal_damping_policy_tokens_and_nonshared_matrices();
     modal_invalid_abi_returns_validation_error();
     modal_v13_extension_rejects_unknown_enum_and_releases_zero_result();
     modal_v16_extension_rejects_unknown_spectral_transform_and_short_prefix();

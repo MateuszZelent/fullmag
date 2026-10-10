@@ -591,3 +591,20 @@ Regresja dense interior sprawdza cztery właściwe częstotliwości
 EPS już zwrócił wystarczający pool. Osobne retry/edge-failure przypadki
 zachowano. Root i niezależny source review PASS, diff/map validator PASS.
 Hosted wykonanie pozostaje wymagane; spectrum count nadal not_performed.
+
+
+## P0 — direct C ABI damping admission
+
+Po ABI/enums walidujemy null/ignore/include; unknown/empty są validation_error.
+Shared-domain Include jawnie zwraca unavailable przed każdym aliasem assembly,
+zachowując requested execution i brak fallbacku/modów. Caller-provided
+matrices pozostają poza tą blokadą. Nie jest to aktywacja exact damping.
+
+Dodano dedicated CLI/CTest do istniejącego managed modal-phase-slepc: tokeny,
+null/ignore parity, CPU K0/sparse/dense i GPU-v20 (odmowa bez GPU execution),
+alpha0/dodatnie oraz nonshared matrices. OFF build ma zwrócić unavailable3,
+nie full PASS za pominięte shared cases. Root/static i niezależny review
+PASS po tej korekcie; hosted wykonanie wymagane.
+
+P4 private discovery jest na remote 7be53ea1524d018fcc56295f4a01fe5542040f1d;
+ponowienie #38085530937 w toku. P10 Rust #38083872121 również w toku.

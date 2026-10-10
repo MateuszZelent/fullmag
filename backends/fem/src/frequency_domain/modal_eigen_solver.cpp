@@ -2129,6 +2129,33 @@ FrequencyDomainContractResult solve_modal_eigen_contract(
             "unknown_modal_enum",
             request.operator_request.operator_diagnostics_json);
     }
+    const char *damping_policy = request.operator_request.damping_policy;
+    const bool include_gilbert_damping = damping_policy != nullptr &&
+        std::strcmp(damping_policy, "include") == 0;
+    if (damping_policy != nullptr &&
+        std::strcmp(damping_policy, "ignore") != 0 &&
+        !include_gilbert_damping) {
+        return validation_error_result(
+            "modal_eigen",
+            "native FEM modal_eigen request uses an invalid damping_policy",
+            "invalid_modal_damping_policy",
+            request.operator_request.operator_diagnostics_json);
+    }
+    if (request.poisson_airbox_shared_domain_enabled != 0 &&
+        include_gilbert_damping) {
+        FrequencyDomainContractResult result = shared_domain_provider_failure_result(
+            FrequencyDomainStatus::unavailable,
+            "modal_eigen",
+            "native FEM modal_eigen exact damping is unavailable for shared-domain operators",
+            "shared_domain_exact_damping_unavailable",
+            request.operator_request.operator_diagnostics_json);
+        set_modal_execution(
+            result,
+            request.execution_target,
+            request.spectral_transform_kind,
+            "shared_domain_exact_damping_unavailable");
+        return result;
+    }
     const bool wants_cartesian_delta_m =
         request.result_field_representation != ModalResultFieldRepresentation::tangent_q;
     if (wants_cartesian_delta_m &&
