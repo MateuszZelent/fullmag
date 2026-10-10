@@ -3250,3 +3250,20 @@ zakończyło się na kompilacji: prywatny nagłówek DTO użył `PetscInt` bez
 deklaracji tego typu. Nie uruchomiono dwunastu CTestów i nie uzyskano nowego
 pomiaru Pmat. To osobna poprawka samowystarczalności nagłówka; wcześniejsze
 SOURCE PASS nie było dowodem kompilacji.
+
+
+### 2026-10-10 — samowystarczalny DTO diagnostyki Pmat
+
+Osiem nowych pól licznika/wymiarów w `slepc_modal_eigen.hpp` używa teraz
+`std::int64_t` z istniejącego `<cstdint>`, zgodnie z pozostałymi polami DTO.
+Lokalne indeksy PETSc w implementacji pozostają `PetscInt`. Niezależne
+SOURCE review nie wykazało zawężenia przy przypisaniu ani serializacji
+na używanych platformach. To naprawa błędu kompilacji GHA 38056427993,
+nie zmiana operatora ani polityki solvera. Hosted build i dwanaście CTestów
+pozostają NOT VERIFIED do wykonania poprawionego commita.
+
+Poprawka finalizacji sweepu została wysłana jako pełny SHA
+`5532bed64e2a0ec043788da29086108ce8f13594`. Dedykowana kontrola
+`bias-field-artifacts`: GHA 38059971447. Wynik oczekiwany; wcześniejszych
+nieudanych wykonań nie zastępujemy deklaracją sukcesu. PR97 jest OPEN;
+PR102 CLOSED bez merge, co potwierdzono przez API GitHub.
