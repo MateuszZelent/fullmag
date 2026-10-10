@@ -6810,6 +6810,16 @@ mod tests {
             frequency_min_hz: 1.0,
             frequency_max_hz: 1.0e13,
         };
+        let mut sample_plan = plan.clone();
+        sample_plan.k_sampling = Some(fullmag_ir::KSamplingIR::Single {
+            k_vector: [0.0, 0.0, 0.0],
+        });
+        let native_summary = crate::fem::test_support::
+            canonical_production_shift_invert_summary_for_path_test(&sample_plan);
+        let sample_solver_diagnostics = native_summary
+            .get("solver_diagnostics")
+            .cloned()
+            .expect("canonical native spectrum summary must include solver diagnostics");
         let path_result = crate::eigen::PathSolveResult {
             gamma0_rad_s_per_a_m: 2.211e5, // Explicit fixture parameter.
             samples: vec![crate::eigen::SingleKSolveResult {
@@ -6854,14 +6864,7 @@ mod tests {
                 relaxation_steps: 0,
                 solver_model: EigenSolverModel::ProductionCpuShiftInvert,
                 solver_notes: vec!["production sample".to_string()],
-                solver_diagnostics: Some(serde_json::json!({
-                    "solver_adapter": "k0_poisson_airbox_cpu_schur_slepc",
-                    "slepc": {
-                        "converged_eigenpair_count": 7,
-                        "accepted_mode_count": 2,
-                        "outer_iterations": 19,
-                    },
-                })),
+                solver_diagnostics: Some(sample_solver_diagnostics.clone()),
             }],
             branches: Vec::new(),
             solver_model: EigenSolverModel::ProductionCpuShiftInvert,
@@ -7126,14 +7129,13 @@ mod tests {
             &plan,
         );
 
-        assert_eq!(
-            manifest["resolved_execution"]["reference_or_production"],
-            "reference"
-        );
-        assert_eq!(
-            manifest["resolved_execution"]["native_backend"],
-            "runner_validation"
-        );
+        assert_eq!(manifest["sample_execution_provenance"]["status"], "missing");
+        assert_eq!(manifest["sample_execution_provenance"]["sample_count"], 0);
+        assert!(manifest["resolved_execution"]["reference_or_production"].is_null());
+        assert!(manifest["resolved_execution"]["native_backend"].is_null());
+        assert!(manifest["resolved_execution"]["device"].is_null());
+        assert!(manifest["resolved_execution"]["engine"].is_null());
+        assert!(manifest["physics"]["phase_convention"].is_null());
         assert_eq!(
             manifest["capabilities"]["production_native_solver_available"],
             false
@@ -7223,10 +7225,13 @@ mod tests {
             &plan,
         );
 
-        assert_eq!(
-            manifest["resolved_execution"]["reference_or_production"],
-            "reference"
-        );
+        assert_eq!(manifest["sample_execution_provenance"]["status"], "missing");
+        assert_eq!(manifest["sample_execution_provenance"]["sample_count"], 0);
+        assert!(manifest["resolved_execution"]["reference_or_production"].is_null());
+        assert!(manifest["resolved_execution"]["native_backend"].is_null());
+        assert!(manifest["resolved_execution"]["device"].is_null());
+        assert!(manifest["resolved_execution"]["engine"].is_null());
+        assert!(manifest["physics"]["phase_convention"].is_null());
         assert_eq!(
             manifest["diagnostics"]["production_cpu_rejection_reason"],
             "production_cpu_modal_dynamic_demag_k_operator_missing"
@@ -8361,6 +8366,25 @@ mod tests {
             .auxiliary_artifacts
             .iter()
             .any(|artifact| artifact.relative_path == "eigen/spectrum.v2.json"));
+        let summary_bytes = &run.auxiliary_artifacts.iter()
+            .find(|artifact| artifact.relative_path == "validation/kittel_k0_pbc/summary.v1.json")
+            .expect("synthetic K0 sweep must publish the selected three-point branch")
+            .bytes;
+        let summary: serde_json::Value = serde_json::from_slice(summary_bytes)
+            .expect("synthetic summary must be valid JSON");
+        assert_eq!(summary["sweep_point_count"], 3);
+        assert_eq!(summary["status"], "partial");
+        assert_eq!(summary["qualification"], "NOT VERIFIED");
+        assert_eq!(summary["solver"]["execution_lane"], "reference");
+        assert_eq!(summary["demag"]["production_periodic_airbox_claim"], false);
+        let uniformity = summary["mode_selection"]["minimum_uniformity_score"]
+            .as_f64().expect("synthetic XYZ must have a valid uniformity score");
+        assert!((uniformity - 1.0).abs() < 1.0e-12);
+        let points = run.auxiliary_artifacts.iter()
+            .find(|artifact| artifact.relative_path == "validation/kittel_k0_pbc/points.v1.csv")
+            .expect("all three synthetic field points must be published");
+        assert_eq!(std::str::from_utf8(&points.bytes).unwrap().lines().count(), 4);
+
     }
 
     #[test]
@@ -8633,10 +8657,16 @@ mod tests {
             &[],
             &plan,
         );
+        assert_eq!(manifest["sample_execution_provenance"]["status"], "missing");
+        assert_eq!(manifest["sample_execution_provenance"]["sample_count"], 0);
         assert_eq!(
-            manifest["resolved_execution"]["reference_or_production"],
-            "production"
+            manifest["sample_execution_provenance"]["diagnostics_available_count"],
+            0
         );
+        assert!(manifest["resolved_execution"]["reference_or_production"].is_null());
+        assert!(manifest["resolved_execution"]["device"].is_null());
+        assert!(manifest["resolved_execution"]["engine"].is_null());
+        assert!(manifest["physics"]["phase_convention"].is_null());
         assert_eq!(
             manifest["diagnostics"]["periodic_mesh_certificate"],
             diagnostics["periodic_mesh_certificate"]

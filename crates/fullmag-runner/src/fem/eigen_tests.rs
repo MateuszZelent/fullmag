@@ -5101,6 +5101,11 @@ fn add_x_floquet_pair_to_plan(plan: &mut FemEigenPlanIR) {
 fn add_x_floquet_shared_domain_airbox_to_plan(plan: &mut FemEigenPlanIR) {
     add_minimal_shared_domain_periodic_airbox(plan);
     configure_x_floquet_request(plan);
+    let SpinWaveBoundaryConditionIR::Config(config) = &mut plan.spin_wave_bc else {
+        unreachable!("the x-Floquet fixture installs an explicit boundary configuration");
+    };
+    config.boundary_pair_id = None;
+    config.pair_ids = vec!["x_faces".to_string(), "y_faces".to_string()];
 }
 
 fn configure_x_floquet_request(plan: &mut FemEigenPlanIR) {
@@ -6796,6 +6801,90 @@ fn eigen_path_single_k_floquet_shared_domain_production_summary_artifacts(
     .expect("native modal summary publication should preserve Floquet diagnostics")
 }
 
+#[cfg(test)]
+pub(super) fn canonical_production_shift_invert_summary_for_path_test(
+    plan: &FemEigenPlanIR,
+) -> serde_json::Value {
+    let native_diagnostics = serde_json::json!({
+        "schema_version": "frequency_domain_modal_diagnostics.v1",
+        "study_product": "modal_eigen",
+        "status": "ok",
+        "complete": true,
+        "solver_adapter": "slepc_modal_eigen",
+        "solver_model": "slepc_multi_shift_invert_production_cpu_dense",
+        "solver_family": "shift_invert",
+        "resolved_solver_family": "shift_invert",
+        "spectral_transform": "shift_invert",
+        "execution_lane": "production_cpu",
+        "production_solver_available": true,
+        "validation_only": false,
+        "phasor_convention": "exp_i_omega_t",
+        "eigenvalue_mapping": "lambda_eq_i_omega",
+        "resolved_execution": {
+            "device": "cpu",
+            "precision": "double",
+            "engine": "petsc_slepc",
+            "native_backend": "native_cpu",
+            "reference_or_production": "production",
+            "solver_library": "slepc",
+            "solver_algorithm": "shift_invert",
+            "status": "ok",
+            "fallback_used": false
+        },
+        "slepc": {
+            "converged_eigenpair_count": 7,
+            "accepted_mode_count": 2,
+            "outer_iterations": 19
+        }
+    });
+    let native_result = serde_json::json!({
+        "schema_version": "frequency_domain_modal_result.v1",
+        "study_product": "modal_eigen",
+        "solver_adapter": "slepc_modal_eigen",
+        "solver_model": "slepc_multi_shift_invert_production_cpu_dense"
+    });
+    let normalized_diagnostics = native_solver_diagnostics_json(
+        plan,
+        &native_diagnostics.to_string(),
+        Some(&native_result.to_string()),
+        None,
+    )
+    .expect("native shift-invert diagnostics should normalize");
+
+    let empty_reduction = ReductionMap {
+        active_nodes: Vec::new(),
+        node_map: Vec::new(),
+        node_phases: Vec::new(),
+        complex_reduction: false,
+    };
+    let artifacts = super::eigen_native_artifacts::native_modal_artifacts(
+        plan,
+        &[OutputIR::EigenSpectrum {
+            quantity: "eigenfrequency".to_string(),
+        }],
+        &plan.equilibrium_magnetization,
+        &empty_reduction,
+        &[],
+        &[],
+        None,
+        normalized_diagnostics,
+        0,
+        None,
+        None,
+        None,
+        None,
+        0,
+        None,
+    )
+    .expect("native modal publisher should write the shift-invert summary");
+    let summary_artifact = artifacts
+        .iter()
+        .find(|artifact| artifact.relative_path == "eigen/spectrum.json")
+        .expect("native publisher should write the canonical spectrum summary");
+    serde_json::from_slice(&summary_artifact.bytes)
+        .expect("canonical native spectrum summary should parse")
+}
+
 fn eigen_path_single_k_summary_artifact_for_diagnostics(
     diagnostics: &serde_json::Value,
 ) -> AuxiliaryArtifact {
@@ -7191,6 +7280,8 @@ fn native_poisson_airbox_modes_use_q_payload_and_certified_residuals() {
             "omega_rad_s": omega,
             "frequency_hz": 4.0e9,
             "relative_residual": 2.0e-12,
+            "magnetic_block_backward_error": 3.0e-12,
+            "poisson_block_backward_error": 0.0,
             "full_residual_reconstruction_relative_error": 3.0e-12,
         }]
     })
@@ -10301,9 +10392,13 @@ fn bias_field_path_requires_producer_identity_before_relaxation() {
         &mut callback,
     )
     .expect_err("a physical bias-field path without producer identity must fail closed");
-    assert!(error
-        .message
-        .contains("fem_bias_field_relaxation_missing_producer_stage_identity"));
+    assert!(
+        error
+            .message
+            .contains("fem_bias_field_relaxation_missing_producer_stage_identity"),
+        "unexpected pre-identity failure: {}",
+        error.message
+    );
 }
 
 #[test]

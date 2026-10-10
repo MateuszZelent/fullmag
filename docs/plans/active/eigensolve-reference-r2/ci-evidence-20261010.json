@@ -1,0 +1,47 @@
+{
+  "schema_version": "eigensolve_r2_ci_evidence.v1",
+  "scope": "source_and_bounded_native_contracts_only",
+  "scientific_qualification": "NOT VERIFIED",
+  "runs": [
+    {
+      "run_id": 38068292627,
+      "sha": "39a20c4596231563e0568a2eec9cb4c4529aed56",
+      "conclusion": "success",
+      "scope": "synthetic_A1_geometry_and_artifact_consumers"
+    },
+    {
+      "run_id": 38068966497,
+      "sha": "924c26129a0b5e5b3aadf32bfb3df852479ef4e4",
+      "conclusion": "failure",
+      "passed": 1561,
+      "failed": 30,
+      "ignored": 1,
+      "new_typed_consumer_cases_passed": 7,
+      "new_reference_method_cases_passed": 7
+    },
+    {
+      "run_id": 38068716019,
+      "sha": "19bcb4fd8dba368ab14e405f319a243c4e5577b8",
+      "conclusion": "success",
+      "scope": "modal-phase-slepc",
+      "passed_ctests": [
+        "fem_modal_eigen_phase_convention_contract",
+        "fem_modal_eigen_typed_cpu_transport_contract"
+      ],
+      "artifact_name": "fem-cpu-source-contract-modal-phase-slepc-38068716019-1",
+      "receipt_sha256": "1a362fc3ba0d856abadaff87420974f8a6fdb8eb0f0f9ccf082fc08c94f6cc3a",
+      "petsc_scalar_type": "real",
+      "petsc_version": "3.24.6",
+      "slepc_version": "3.24.3",
+      "mfem_ref": "v4.10"
+    },
+    {
+      "run_id": 38069118693,
+      "sha": "924c26129a0b5e5b3aadf32bfb3df852479ef4e4",
+      "conclusion": "failure",
+      "scope": "full_Rust_API",
+      "compile_error": "E0425 latest_fields in FrozenSpins fixture",
+      "tests_ran": false
+    }
+  ]
+}

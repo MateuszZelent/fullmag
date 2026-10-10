@@ -107,3 +107,55 @@ nie wykonały się w tym nieudanym jobie. Fresh CI wymagane.
 Native phase/typed job #38068716019 i pełny Rust/API #38068718203 zostały
 zlecone na `19bcb4fd...`; terminalny wynik jeszcze nieznany. Nadal brak
 kwalifikacji runtime/nauki nowego exact damping/GPU i całego P0–P10.
+
+
+## Checkpoint: CI i przyczyny błędów po 924c261
+
+Hosted #38068966497 (924c26129a0b5e5b3aadf32bfb3df852479ef4e4):
+kompilacja runnera PASS; 1561 PASS, 30 FAIL, 1 ignored. Wszystkie siedem
+nowych przypadków typed CPU oraz siedem R2 damping/method evidence PASS.
+Pełna suite pozostaje FAIL. Hosted #38069118693: API nie skompilowało się
+przez niezadeklarowane latest_fields w fixture FrozenSpins. Naprawa używa
+istniejącego admit_test_latest_fields_from_physical_step bez zmiany oczekiwań.
+
+Hosted #38068716019 na 19bcb4fd8dba368ab14e405f319a243c4e5577b8:
+modal-phase-slepc SUCCESS. To bramka natywnego kontraktu fazy/typed CPU,
+nie zbieżność dyspersji ani kwalifikacja całego P2/P9. Receipt należy zachować.
+
+Wykryte rzeczywiste przyczyny i przygotowane poprawki:
+- Bias-field path: przygotowanie point_plan usuwa listę sweepu, więc ponowne
+  rozpoznanie intencji z tej listy omijało per-field Relax→Eigen owner.
+  Serial adapter używa zewnętrznej intencji i istniejącego właściciela
+  relaksacji/provenance/potential publication. Test nadal wymaga producer ID.
+- Synthetic K0 Kittel: jednoskładowy reduced_vector nie miał legalnego layoutu
+  XYZ i blokował wybór gałęzi. Zastępuje go spójny unit Euclidean XYZ
+  placeholder; nie jest to wektor FEM ani fizyczna eliptyczność. Regresja
+  wymaga wszystkich trzech punktów, reference lane i NOT VERIFIED.
+- R4 fixture: pełna tożsamość rodziny jest zachowana przed usunięciem tylko
+  badanych evidence. Positive Floquet fixture deklaruje rzeczywistą parę X/Y.
+  Poisson fixture podaje jawnie oba block residuals zamiast niejawnego EPS.
+  Produkcyjne guardy i tolerancje pozostają bez zmian.
+
+Reconciliation R2: 51 fragmentów z 31 plików; 46 hashy zgodnych ze snapshotem,
+5 zmienionych. JSON zapisuje źródła, aktualne hashe i drift; nie dowodzi runtime.
+
+P4: direct sparse assembler ma N² staging, ale jedyny caller to contract test.
+Nie wolno przedstawiać jego optymalizacji jako obniżenia RAM rzeczywistych runów.
+Najpierw trzeba połączyć rzeczywistego producenta z direct local CSR i budget.
+E18 porównuje wybrane klastry dwóch schedule, bez niezależnego count; zachowanie
+historyczne nie jest dowodem kompletności całego okna. Korekta nowej emisji i
+independent count pozostają otwarte. P0–P10 nie są zakończone.
+
+
+Cztery dispatch provenance fixtures poprawiono źródłowo: puste sample lists
+wymagają missing observed provenance, a positive native sample bierze
+solver_diagnostics z kanonicznego publishera przez helper cfg(test). Nie
+odtwarzamy execution/phasor z enum. Zachowano negative capability/operator
+assertions. Source syntax i niezależny review wymagane; wykonanie oczekuje GHA.
+
+P3 scan: istniejący nodewise action B_alpha nie dowodzi poprawnych wag weak
+production pencil. Shared-domain mass assembly nie używa jeszcze alpha_per_node.
+Generic i Floquet mają odrębne complex Ω filters; samo ich usunięcie może
+przyjąć mirror sector. Następny bounded etap wymaga physical projection,
+original residual i complex eigenvalue clustering, potem weak-alpha energy
+balance. Obecne Include reference nie jest exact solve i nie otwiera native gate.

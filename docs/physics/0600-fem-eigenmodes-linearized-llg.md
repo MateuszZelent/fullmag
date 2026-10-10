@@ -1162,7 +1162,7 @@ Nie rekonstruujemy brakującej metody historycznego wyniku z samego `include`.
 
 | Realizacja | Zakres tej korekty | Kwalifikacja |
 |---|---|---|
-| FEM CPU reference | Stabilna ewaluacja korekty, odrzucenie nielegalnego alfa i provenance | CI/nauka NOT VERIFIED |
+| FEM CPU reference | Stabilna ewaluacja korekty, odrzucenie nielegalnego alfa i provenance | Siedem nowych regresji hosted PASS; nauka NOT VERIFIED |
 | FEM CPU native | Istniejący undamped Floquet/demag; bez zmiany operatora | Osobne wymagane bramki P2/P3 |
 | FEM GPU | Bez rozszerzenia modalnej capability | Osobna kwalifikacja P5 |
 | FDM CPU/GPU | Nie jest właścicielem tego modalnego writera | Poza korektą |
@@ -1199,3 +1199,68 @@ sprawdzone źródła i regresje do wykonania w GHA. Kontrola mapy naukowej przes
 Są to dowody źródeł, nie wykonanie solvera ani kwalifikacja P2/P3/P4.
 Osiągnięty count cap w `method_evidence` opisuje ograniczenie wyszukiwania;
 nie jest dowodem, że dodatkowe mody faktycznie istnieją lub zostały ucięte.
+
+
+(r2-synthetic-kittel-profile-contract)=
+## R2: wymiar profilu syntetycznej kontroli Kittel
+
+`ReferenceK0KittelSyntheticDemagFactor` jest analityczną kontrolą publikacji
+częstotliwości. Nie jest numerycznym rozwiązaniem FEM/Poisson i nie dowodzi
+poprawności dynamicznego demagu. Jego jednopunktowy profil jest syntetycznym
+placeholderem do śledzenia jednej gałęzi, nie obliczonym profilem eliptycznego
+modu filmu. Nie używamy go jako oracle polaryzacji ani geometrycznej masy.
+
+Producent musi jednak spełniać własny kontrakt danych: kompleksowy XYZ ma
+trzy komponenty na punkt, a lifted real/imag są tymi samymi komponentami.
+Norma euklidesowa syntetycznego profilu jest jednostkowa; nie dopisujemy
+consistent P1 metric ani geometrycznych node weights. Obecność wektora
+jednoskalarnego nie może zasłaniać poprawnego lifted XYZ przed selektorem
+uniformity. Naprawa dotyczy danych producenta, nie tolerancji selektora.
+
+Wymagana regresja hosted przechodzi przez publiczny executor trzech pól K0,
+sprawdza kompletną syntetyczną gałąź oraz summary reference/partial z
+`production_periodic_airbox_claim=false`. Nie oznacza kwalifikacji FEM.
+
+| Source ID | Path | Symbol | Odpowiedzialność |
+|---|---|---|---|
+| source-synthetic-kittel-profile-r2 | `crates/fullmag-runner/src/fem/eigen_path_guards.rs` | `solve_k0_kittel_synthetic_demag_factor_single_k` | Spójny wymiar i normalizacja jednopunktowego placeholdera reference |
+| source-synthetic-kittel-selector-r2 | `crates/fullmag-runner/src/eigen/artifacts/kittel.rs` | `k0_kittel_mode_uniformity_score` | Weryfikacja wymiaru pola bez cichego fallbacku od błędnego wektora |
+
+
+(r2-bias-field-sample-routing)=
+## R2: jawny kontekst próbki bias-field po przygotowaniu planu
+
+Każda fizyczna próbka sweepa pola wymaga równowagi zaakceptowanej dla jej
+bieżącego pola i material/mesh/physics identity. Przygotowanie pojedynczego
+planu celowo usuwa z niego listę sweepa, aby nie powodować rekursji.
+To nie może usuwać intencji wykonania per-sample Relax→Eigen.
+
+Orkiestrator serialnego path rozpoznaje próbkę z zewnętrznego planu i jawnie
+wywołuje istniejącego właściciela per-sample relaxation. Zachowuje seed,
+wybrane pole, sample index, planned execution, producer identity i zakres
+phi/H publication. Brak producer identity nadal odrzuca wykonanie przed
+relaksacją; nie zastępujemy go przyjęciem początkowej magnetyzacji jako
+zaakceptowanej równowagi. Ordinary k-path zachowuje istniejący handoff reuse.
+Ta korekta nie nadaje równoległości fizycznemu continuation sweepowi i nie
+zmienia IR, C ABI ani modelu demagu.
+
+| Source ID | Path | Symbol | Odpowiedzialność |
+|---|---|---|---|
+| source-bias-sample-prepare-r2 | `crates/fullmag-runner/src/fem/eigen_sweep.rs` | `prepare_bias_field_sample_plan` | Aktualne pole/seed i usunięcie listy sweepa bez ponownego dispatch |
+| source-bias-sample-owner-r2 | `crates/fullmag-runner/src/fem/eigen_execution.rs` | `execute_bias_field_sample_with_potential_publication` | Wymagana identity producenta i bieżący Relax→Eigen oraz wybrane phi/H |
+| source-bias-path-orchestrator-r2 | `crates/fullmag-runner/src/fem/eigen_path.rs` | `execute_fem_eigen_path_with_producer_identity_and_parallel_policy` | Jawna trasa próbki z zewnętrznej intencji sweepa |
+
+Regresja hosted: publiczny path bez identity musi odrzucić wykonanie z
+`fem_bias_field_relaxation_missing_producer_stage_identity`; brak bypassu
+nie jest jeszcze wykonaniem fizycznego sweepa ani kwalifikacją FEM.
+
+
+Dowód R2 z GitHub Actions: #38068966497 na `924c26129a0b5e5b3aadf32bfb3df852479ef4e4`
+wykonał siedem nowych przypadków reference damping/method evidence i siedem
+przypadków Rust typed admission — wszystkie PASS. Pełna suite nadal FAIL
+(1561 PASS, 30 FAIL, 1 ignored). Natywna bramka #38068716019 na
+`19bcb4fd8dba368ab14e405f319a243c4e5577b8` wykonała dwa CTest:
+phase convention i typed CPU transport, oba PASS. Jest to wykonanie małych
+kontraktów SLEPc/PETSc real-double, nie kwalifikacja DE/BV, zbieżności siatki,
+airboxu ani dokładnego damped pencil. Receipt i zakresy są związane z SHA
+w `docs/plans/active/eigensolve-reference-r2/ci-evidence-20261010.json`.

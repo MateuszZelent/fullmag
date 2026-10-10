@@ -281,6 +281,9 @@ pub(super) fn solve_k0_kittel_synthetic_demag_factor_single_k(
         * (h0_a_per_m * (h0_a_per_m + effective_magnetisation)).sqrt()
         / std::f64::consts::TAU;
     let omega = std::f64::consts::TAU * frequency_hz;
+    // Unit Euclidean XYZ placeholder for the synthetic one-point reference.
+    // This is not an MFEM eigenvector or a geometric mass normalization.
+    let component = std::f64::consts::FRAC_1_SQRT_2;
     Ok(crate::eigen::SingleKSolveResult {
         sample: sample.clone(),
         modes: vec![crate::eigen::SingleKModeResult {
@@ -301,9 +304,13 @@ pub(super) fn solve_k0_kittel_synthetic_demag_factor_single_k(
             tangent_leakage_max_abs: Some(0.0),
             tangent_leakage_weighted_relative_l2: Some(0.0),
             dominant_polarization: "synthetic_demag_factor".to_string(),
-            reduced_vector: Some(vec![num_complex::Complex64::new(1.0, 0.0)]),
-            lifted_real: Some(vec![[0.0, 1.0, 0.0]]),
-            lifted_imag: Some(vec![[0.0, 0.0, 1.0]]),
+            reduced_vector: Some(vec![
+                num_complex::Complex64::new(0.0, 0.0),
+                num_complex::Complex64::new(component, 0.0),
+                num_complex::Complex64::new(0.0, component),
+            ]),
+            lifted_real: Some(vec![[0.0, component, 0.0]]),
+            lifted_imag: Some(vec![[0.0, 0.0, component]]),
             amplitude: Some(vec![1.0]),
             phase: Some(vec![0.0]),
             node_mass_weights: None,
@@ -316,6 +323,8 @@ pub(super) fn solve_k0_kittel_synthetic_demag_factor_single_k(
         solver_notes: vec![
             "k0_3a_synthetic_demag_factor".to_string(),
             "production_periodic_airbox_claim=false".to_string(),
+            "synthetic_uniform_profile_not_fem_eigenvector".to_string(),
+            "synthetic_euclidean_normalization_no_geometric_mass".to_string(),
         ],
         solver_diagnostics: None,
     })

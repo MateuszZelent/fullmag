@@ -491,7 +491,7 @@ pub(crate) fn execute_bias_field_sample_with_relaxation(
     )
 }
 
-fn execute_bias_field_sample_with_potential_publication(
+pub(super) fn execute_bias_field_sample_with_potential_publication(
     sample_plan: &FemEigenPlanIR,
     outputs: &[OutputIR],
     lane: FemEigenExecutionLane,

@@ -605,6 +605,12 @@ pub(crate) mod test_support {
         super::eigen_path_single_k_solver_model(plan, artifacts)
     }
 
+    pub(crate) fn canonical_production_shift_invert_summary_for_path_test(
+        plan: &FemEigenPlanIR,
+    ) -> Value {
+        super::super::eigen_tests::canonical_production_shift_invert_summary_for_path_test(plan)
+    }
+
     pub(crate) fn eigen_path_solver_diagnostics(
         engine: FemEngine,
         plan: &FemEigenPlanIR,
@@ -2931,17 +2937,33 @@ pub(crate) fn execute_fem_eigen_path_with_producer_identity_and_parallel_policy(
                 sample_index: sample.sample_index,
                 sample_label: sample.label.clone(),
             };
-            let executed = super::eigen_execution::execute_fem_eigen_path_single_k(
-                self.execution,
-                &point_plan,
-                outputs,
-                &potential_publication,
-                Some(&mut forward),
-                sample.sample_index,
-                Some(sample.sample_index),
-                source_stage_handoff,
-                self.producer_identity.as_ref(),
-            )?;
+            // Preparation clears the delegated plan's sweep list to prevent
+            // recursion. Preserve the outer intent explicitly: a bias sample
+            // must still obtain its own current-field Relax -> Eigen handoff.
+            let executed = if bias_field_sweep_requested(plan) {
+                super::eigen_execution::execute_bias_field_sample_with_potential_publication(
+                    &point_plan,
+                    outputs,
+                    self.execution.lane(),
+                    Some(&mut forward),
+                    sample.sample_index,
+                    self.execution.resolution().map(|_| self.execution),
+                    self.producer_identity.as_ref(),
+                    Some(&potential_publication),
+                )?
+            } else {
+                super::eigen_execution::execute_fem_eigen_path_single_k(
+                    self.execution,
+                    &point_plan,
+                    outputs,
+                    &potential_publication,
+                    Some(&mut forward),
+                    sample.sample_index,
+                    Some(sample.sample_index),
+                    source_stage_handoff,
+                    self.producer_identity.as_ref(),
+                )?
+            };
             // Preserve raw bytes first; only a completed native run may be
             // parsed or become the next sample's accepted equilibrium.
             match checkpoint_and_admit_single_k(

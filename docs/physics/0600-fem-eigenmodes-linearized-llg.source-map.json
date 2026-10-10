@@ -144,6 +144,36 @@
   ],
   "sources": [
     {
+      "id": "source-bias-sample-prepare-r2",
+      "path": "crates/fullmag-runner/src/fem/eigen_sweep.rs",
+      "symbol": "prepare_bias_field_sample_plan",
+      "responsibility": "Prepare the current field and seed while clearing the outer sweep to prevent recursion."
+    },
+    {
+      "id": "source-bias-sample-owner-r2",
+      "path": "crates/fullmag-runner/src/fem/eigen_execution.rs",
+      "symbol": "execute_bias_field_sample_with_potential_publication",
+      "responsibility": "Require producer identity and perform current-field accepted relaxation before modal solve."
+    },
+    {
+      "id": "source-bias-path-orchestrator-r2",
+      "path": "crates/fullmag-runner/src/fem/eigen_path.rs",
+      "symbol": "execute_fem_eigen_path_with_producer_identity_and_parallel_policy",
+      "responsibility": "Preserve outer bias-field intent after the delegated single-sample plan clears its sweep list."
+    },
+    {
+      "id": "source-synthetic-kittel-profile-r2",
+      "path": "crates/fullmag-runner/src/fem/eigen_path_guards.rs",
+      "symbol": "solve_k0_kittel_synthetic_demag_factor_single_k",
+      "responsibility": "Publish a consistent normalized XYZ synthetic profile without claiming a numerical FEM solution."
+    },
+    {
+      "id": "source-synthetic-kittel-selector-r2",
+      "path": "crates/fullmag-runner/src/eigen/artifacts/kittel.rs",
+      "symbol": "k0_kittel_mode_uniformity_score",
+      "responsibility": "Reject malformed declared field dimensions and retain independent uniformity selection."
+    },
+    {
       "id": "source-reference-linewidth-factor-r2",
       "path": "crates/fullmag-runner/src/fem/eigen_output.rs",
       "symbol": "damping_imaginary_factor",

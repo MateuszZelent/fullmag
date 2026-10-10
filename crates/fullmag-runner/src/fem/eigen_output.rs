@@ -4782,59 +4782,33 @@ mod linearization_identity_sidecar_tests {
     #[test]
     fn r4_coverage_preserves_identity_evidence_when_recomputed_family_is_missing() {
         let sample_index = 3_usize;
-        let mut identity = identity_fixture(sample_index);
-        let equilibrium_bytes = serde_json::to_vec(&serde_json::json!({
-            "content_sha256": identity.equilibrium_artifact_sha256.clone(),
-        }))
-        .expect("equilibrium fixture must serialize");
-        let state_bytes = serde_json::to_vec(&serde_json::json!({
-            "content_sha256": identity.linearization_state_sha256.clone(),
-        }))
-        .expect("state fixture must serialize");
-        let accepted_bytes = serde_json::to_vec(&serde_json::json!({
-            "schema_version": "CertifiedFemEquilibriumFields.v2",
-            "content_sha256": identity.accepted_fields_content_sha256.clone(),
-        }))
-        .expect("accepted fixture must serialize");
-        identity.accepted_fields_bytes_sha256 =
-            format!("sha256:{:x}", Sha256::digest(&accepted_bytes));
-        identity.content_sha256.clear();
-        let identity_preimage =
-            serde_json::to_vec(&identity).expect("identity preimage must serialize");
-        identity.content_sha256 = super::super::eigen_equilibrium_contract::
-            linearization_identity_v2_content_sha256_from_preimage_bytes(&identity_preimage);
-        let identity_bytes = serde_json::to_vec(&identity).expect("identity must serialize");
-        let preimage_sidecar = super::super::eigen_equilibrium_contract::
-            linearization_identity_v2_preimage_sidecar_bytes(&identity)
-            .expect("identity preimage sidecar must serialize");
-        let artifacts = vec![
-            AuxiliaryArtifact {
-                relative_path: format!(
-                    "eigen/metadata/sample_{sample_index:04}/accepted_fem_equilibrium_fields.v2.json"
-                ),
-                bytes: accepted_bytes,
-            },
-            AuxiliaryArtifact {
-                relative_path: format!(
-                    "eigen/metadata/sample_{sample_index:04}/linearization_identity.v2.json"
-                ),
-                bytes: identity_bytes,
-            },
-            AuxiliaryArtifact {
-                relative_path: format!(
-                    "eigen/metadata/sample_{sample_index:04}/linearization_identity_preimage.v1.json"
-                ),
-                bytes: preimage_sidecar,
-            },
-            AuxiliaryArtifact {
-                relative_path: "eigen/metadata/equilibrium_artifact.v8.json".to_string(),
-                bytes: equilibrium_bytes,
-            },
-            AuxiliaryArtifact {
-                relative_path: "eigen/metadata/linearization_state.v7.json".to_string(),
-                bytes: state_bytes,
-            },
+        let plan = super::super::eigen_tests::minimal_native_modal_plan();
+        let consumer_plan_bytes =
+            super::super::eigen_equilibrium_contract::consumer_plan_snapshot_bytes(&plan)
+                .expect("consumer plan fixture must serialize");
+        let mut artifacts = complete_r4_fixture(sample_index, &consumer_plan_bytes);
+        let sample_prefix = format!("eigen/metadata/sample_{sample_index:04}");
+        let identity_path = format!("{sample_prefix}/linearization_identity.v2.json");
+        let identity = {
+            let identity_artifact = artifacts
+                .iter()
+                .find(|artifact| artifact.relative_path == identity_path)
+                .expect("complete R4 fixture must include its sample identity");
+            serde_json::from_slice::<
+                super::super::eigen_equilibrium_contract::LinearizationIdentityV2,
+            >(&identity_artifact.bytes)
+            .expect("complete R4 identity must deserialize")
+        };
+        let omitted_paths = [
+            format!("{sample_prefix}/certified_fem_equilibrium_fields.v2.json"),
+            format!("{sample_prefix}/recomputed_fem_linearization_certificate.v2.json"),
         ];
+        artifacts.retain(|artifact| {
+            !omitted_paths
+                .iter()
+                .any(|path| path == &artifact.relative_path)
+        });
+
         let coverage = inspect_r4_sidecars(&artifacts, &[sample_index]);
         assert_eq!(coverage.status, "missing_recomputed");
         assert_eq!(
