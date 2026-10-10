@@ -4766,8 +4766,13 @@ void modal_gamma_cabi_route_preserves_authored_k()
           "MFEM-assembled modal payload diagnostics report production multi-shift SLEPc family");
     check(contains(diagnostics_json.c_str(), "\"solver_model\":\"slepc_multi_shift_invert_production_cpu_dense\""),
           "a vector on the componentwise Gamma boundary routes through the production K0 modal solver");
-    check(contains(diagnostics_json.c_str(), "\"deduplication_mass_matrix\":\"provided\""),
-          "MFEM-assembled modal payload diagnostics report provided tangent mass");
+    check(contains(
+              diagnostics_json.c_str(),
+              "\"deduplication_inner_product\":\"mfem_tangent_mass\"") &&
+              contains(
+                  diagnostics_json.c_str(),
+                  "\"deduplication_mass_matrix\":\"provided_dense_row_major\""),
+          "MFEM-assembled modal payload diagnostics report the caller's validated dense tangent mass");
     const double frequency_hz =
         extract_json_number(
             result.result_json,
