@@ -6,7 +6,7 @@ Pełny rejestr obejmuje 279 komentarzy liniowych Codex oraz 3 uwagi w treści re
 
 PR #102 zamknięto 2026-10-07, zachowując remote branch `codex/launcher-instance-isolation-20261002` przy `954ba797307c4cc773772d380123893210cfa447`. PR #97 pozostaje otwarty do ukończenia rozpatrzenia i uzasadnionych poprawek. Merge ani usuwanie branchy nie są częścią polecenia zamknięcia PR-ów. Wcześniejszy WIP meshing zachowany osobno.
 
-Stan rejestru: `already_fixed`: 31, `duplicate`: 91, `implemented`: 132, `implemented_pending_ci`: 6, `not_actionable`: 2, `unsupported_recommendation`: 3, `valid_unfixed`: 17. Łącznie 282 wpisów; wszystkie wpisy oceniono; zasadnych nienaprawionych i brakujących bramek nie uznaje się za zakończone.
+Stan rejestru: `already_fixed`: 31, `duplicate`: 91, `implemented`: 133, `implemented_pending_ci`: 5, `not_actionable`: 2, `unsupported_recommendation`: 3, `valid_unfixed`: 17. Łącznie 282 wpisów; wszystkie wpisy oceniono; zasadnych nienaprawionych i brakujących bramek nie uznaje się za zakończone.
 
 Legenda: `pending` — nierozpatrzona; `valid_unfixed` — zasadna, nie naprawiona; `already_fixed` — poprawka potwierdzona aktualnym kodem; `duplicate` — powtórzenie; `unsupported_recommendation` — konkretna rekomendacja nie odpowiada kontraktowi; `implemented` — poprawka z potwierdzoną regresją CI; `implemented_pending_ci` — poprawka przygotowana, regresja oczekuje CI; `implemented_pending_browser` — pokrywające CI przeszło, nadal wymaga celowanego dowodu z przeglądarki; `not_actionable` — uwaga zastąpiona późniejszą jawną decyzją użytkownika.
 
@@ -282,7 +282,7 @@ Legenda: `pending` — nierozpatrzona; `valid_unfixed` — zasadna, nie naprawio
 | [4226154711](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4226154711) / #97 | `scripts/local_runner/source_compaction.py` | implemented | Source-compaction wiąże source/stage/private-quarantine z właścicielem katalogu; POSIX mutacje używają deskryptora, Windows realnego deny-delete sharing lock oraz oddzielnych Python snapshot i pełnych native identity checks. Recovery zachowuje obce drzewo i reseal CAS. |
 | [4226154713](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4226154713) / #97 | `backends/fem/cpu/frequency_domain/mode_deduplication.cpp` | implemented | Strict mass-action i legacy dense dedup wybierają reprezentantów kolejno według residualu i frequency tie; accepted representatives nie są podmieniane. Końcowe survivory są parowo odrębne względem niezmienionego predicate, bez transitive closure. Strictoutput nadal ma oryginalne amplitudy/IDs/residuals i końcowy frequency order. |
 | [4226154718](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4226154718) / #97 | `apps/control-room/src/modules/inspector/panels/frequency-domain/EigenBranchInspectorPanel.tsx` | implemented | Plot3D zachowuje poprawny owned handoff przy ready/stale hooks; session/artifact/run/stage/revision i availability guards pozostają wymagane. |
-| [4226154721](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4226154721) / #97 | `crates/fullmag-plan/src/validate.rs` | implemented_pending_ci | Gamma biasfield sweep uruchamia wspolny physicalbranch tracker przed public SaveMode selekcja; zachowuje authored fieldaxis iacceptedterminalprefix. Zarr candidatepayload/attrs usuwaneprzed selectedtrackedappend;diagnosticsonlybezmodepayload. Realnativefixture deklarujepair/facets/nodepairs; internalSinglevectorpreserved bezzmianpublicexactzeroIR. Independentfull8fileSOURCEreview+3Requiredre-review PASS;staticrustfmt/JSON/scientificdocs/diffPASS. ActualGHApending;niejestfizycznybenchmark. |
+| [4226154721](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4226154721) / #97 | `crates/fullmag-plan/src/validate.rs` | implemented | Naprawiono selekcje galezi Gamma bias-field przez rzeczywiste publisher artifacts, bez zamiany k-path na field sweep. Finalizator diagnostics-only zachowuje trzy hashe z dokladnej probki bez publikacji niewybranych modow/pol. Dedykowane GHA przeszlo cztery negatywne kontrole identity, rzeczywisty native-publisher regression i trzy kontrole planera. |
 | [4234647631](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4234647631) / #97 | `crates/fullmag-api/src/router_v2/handlers/analysis/results.rs` | implemented | Dataset lifecycle i refs pochodza z producing-stage rekordu; Running/Failed/Cancelled/Stopped/Paused/Unknown pozostaja partial, Completed wymaga poprawnych punktow, lifecycle zmienia revision. Explicit kind wygrywa; missing kind fallback tylko tego samego active index; points/progress/invalidation maja wspolny predykat. GHA38012917074 Rust114096741106 SUCCESS exact6b8: nazwane nowe regresje lifecycle/status/index/kind/invalidation PASS, router_v2 1006PASS/0FAIL/3ignored. |
 | [4234647636](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4234647636) / #97 | `apps/control-room/src/kernel/analysis-modules/postprocessingDefinitions.ts` | implemented | Full pinned owner/lookup/group/panel source review closed legacy Required. GHA38003097013 exact12a22fb975a98db153e76248dd2211883180e691SUCCESS; ControlRoom114065585435named definitions5/command6/Explorer36/selection76/panel2 tests PASS, type/lint/build. Browser114065585268SUCCESS. StaticReactDoctor0.9.12 changed scope baseff6 to12a new0diagnostics, no score/supplychain/deadcode scan. No localtests/builds or full scientific qualification claimed. |
 | [4234647644](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4234647644) / #97 | `apps/control-room/src/modules/explorer/builders/resultsExplorerNodes.ts` | implemented | Full pinned owner/lookup/group/panel source review closed legacy Required. GHA38003097013 exact12a22fb975a98db153e76248dd2211883180e691SUCCESS; ControlRoom114065585435named definitions5/command6/Explorer36/selection76/panel2 tests PASS, type/lint/build. Browser114065585268SUCCESS. StaticReactDoctor0.9.12 changed scope baseff6 to12a new0diagnostics, no score/supplychain/deadcode scan. No localtests/builds or full scientific qualification claimed. |
@@ -3267,3 +3267,20 @@ Poprawka finalizacji sweepu została wysłana jako pełny SHA
 `bias-field-artifacts`: GHA 38059971447. Wynik oczekiwany; wcześniejszych
 nieudanych wykonań nie zastępujemy deklaracją sukcesu. PR97 jest OPEN;
 PR102 CLOSED bez merge, co potwierdzono przez API GitHub.
+
+
+### 2026-10-10 — potwierdzenie sweepu w rzeczywistym CI
+
+GHA 38059971447 na SHA `5532bed64e2a0ec043788da29086108ce8f13594`
+zakończyło się SUCCESS: cztery kontrole sample identity, regresja
+`bias_field_branch_selection_tracks_native_publisher_artifacts_before_publication`
+i trzy kontrole planera przeszły. Uwaga 4226154721 otrzymała implemented
+na podstawie tego dowodu; nie kwalifikuje to fizyki. Rejestr ma teraz
+133 implemented, 31 already_fixed, 17 valid_unfixed i 5 implemented_pending_ci.
+
+Refresh32 pobrał 282 inline komentarze PR97: zero nowych uwag Codex.
+Poświadczenia metadanych pozostają nieopublikowane: review wykryło
+ukrywanie błędu odczytu, check-then-rename, brak zabezpieczenia podmiany
+pliku Windows i możliwość blokady FIFO. Pierwszy i ostatni problem mają
+poprawki źródłowe; writer gate/no-clobber i Windows pozostają w pracy.
+Nie promujemy uwagi 4207003038 na podstawie niezweryfikowanego WIP.

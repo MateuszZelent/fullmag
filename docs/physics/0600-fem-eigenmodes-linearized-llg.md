@@ -410,9 +410,12 @@ candidates, or create public spectrum, magnetization, or potential payloads
 that the output selection did not request.
 
 The focused `native_field_sweep_identity_tests` and native-publisher bias-field
-regression cover this publication contract. Source review has passed; hosted
-execution of this correction is pending. It is not a numerical or scientific
-qualification of a field-sweep eigenmode.
+regression cover this publication contract. Source review has passed and
+[GHA38059971447](https://github.com/MateuszZelent/fullmag/actions/runs/38059971447)
+on commit `5532bed64e2a0ec043788da29086108ce8f13594` passed all four
+identity regressions, the native-publisher tracked-selection regression,
+and three planner regressions. This is publication-contract evidence,
+not a numerical or scientific qualification of a field-sweep eigenmode.
 
 The single-field publisher retains candidate vectors internally so the shared
 mass-metric tracker can compare all accepted modes.  These tracking candidates
