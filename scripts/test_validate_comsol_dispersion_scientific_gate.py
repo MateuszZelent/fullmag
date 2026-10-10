@@ -1022,7 +1022,20 @@ def _make_case(root: Path, case: str = "c1", *, primary_material=None, producer_
             _attach_ks_equilibrium(case_dir / f"validation/ks/{direction}")
         ks_bv = _bundle_descriptor(case_dir, "validation/ks/bv")
         ks_de = _bundle_descriptor(case_dir, "validation/ks/de")
-    for name, mesh_id, airbox, scale, modes in (("mesh_coarse", "mesh-L1", 2.0e-6, 1.0, 24), ("mesh_medium", "mesh-L2", 2.0e-6, 1.00005, 24), ("mesh_fine", "mesh-L3", 2.0e-6, 1.0001, 24), ("airbox_coarse", "mesh-L1", 2.0e-6, 1.0, 24), ("airbox_medium", "mesh-L1", 4.0e-6, 1.00005, 24), ("airbox_fine", "mesh-L1", 8.0e-6, 1.0001, 24), ("modes_24", "mesh-L1", 2.0e-6, 1.0, 24), ("modes_48", "mesh-L1", 2.0e-6, 1.00005, 48)):
+    held_fixed_modes = requested_modes
+    comparison_runs = (
+        ("mesh_coarse", "mesh-L1", 2.0e-6, 1.0, held_fixed_modes),
+        ("mesh_medium", "mesh-L2", 2.0e-6, 1.00005, held_fixed_modes),
+        ("mesh_fine", "mesh-L3", 2.0e-6, 1.0001, held_fixed_modes),
+        ("airbox_coarse", "mesh-L1", 2.0e-6, 1.0, held_fixed_modes),
+        ("airbox_medium", "mesh-L1", 4.0e-6, 1.00005, held_fixed_modes),
+        ("airbox_fine", "mesh-L1", 8.0e-6, 1.0001, held_fixed_modes),
+        # The independent requested-mode convergence study retains its
+        # canonical 24-to-48 comparison even for the one-mode C0 primary case.
+        ("modes_24", "mesh-L1", 2.0e-6, 1.0, 24),
+        ("modes_48", "mesh-L1", 2.0e-6, 1.00005, 48),
+    )
+    for name, mesh_id, airbox, scale, modes in comparison_runs:
         scaled_samples, scaled_branches = _scaled_payload(samples, branches, scale)
         convergence_runs[name] = _write_bundle(case_dir, f"validation/convergence/{name}", scaled_samples, scaled_branches, mesh_id=mesh_id, airbox_m=airbox, requested_modes=modes)
     evidence = _evidence(case_dir, case, base_bindings, ks_bv=ks_bv, ks_de=ks_de, convergence_runs=convergence_runs)
