@@ -33,8 +33,10 @@ jobs:
           sudo apt-get update
           sudo apt-get install --yes --no-install-recommends libglu1-mesa
       - name: Install meshing dependencies
+        id: install-meshing
         run: python -m pip install -e 'packages/fullmag-py[meshing,figures]' pytest
       - name: Validate exact-layer airbox grading and coordinate closure
         run: python -B -m pytest -q scripts/test_box_layered_airbox_mesh.py
       - name: Validate actual density, exact layers and reporting
+        if: ${{ !cancelled() && steps.install-meshing.outcome == 'success' }}
         run: python -B -m unittest discover -s packages/fullmag-py/tests -p test_meshing.py -v
