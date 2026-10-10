@@ -2847,7 +2847,15 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
             and airbox is not None
             and _has_component_scoped_size_fields(mesh_options)
         )
-        if scoped_thin_film_box:
+        scoped_ring_layers = (
+            ring_shared_geo_direct
+            and _has_component_scoped_size_fields(mesh_options)
+            and _supports_scoped_layer_partitioned_box(
+                geometries[0],
+                airbox=airbox,
+            )
+        )
+        if scoped_thin_film_box or scoped_ring_layers:
             if not _supports_scoped_layer_partitioned_box(
                 geometries[0],
                 airbox=airbox,
@@ -2857,7 +2865,8 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                     f"{THIN_FILM_SCOPED_LAYER_PARTITION_UNSUPPORTED_REASON}"
                 )
             scoped_layer_partitioned_geo = True
-            box_layered_geo_direct = True
+            if scoped_thin_film_box:
+                box_layered_geo_direct = True
             single_geometry_occ_direct = True
         effective_airbox_target, effective_per_object_targets = _resolve_effective_shared_domain_targets(
             geometries,
@@ -2968,6 +2977,45 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                 else float(hints.hmax)
             )
             if (
+                len(geometries) == 1
+                and (box_layered_geo_direct or ring_shared_geo_direct)
+            ):
+                # Exact-layer Box/ring generation also uses hmax as its body
+                # upper field. Resolve it from the same owner target recorded
+                # in the build report; FEM.hmax is only the fallback. A whole-
+                # owner ComponentVolumeConstant can additionally raise that
+                # target when the manual field program is the owner policy.
+                geometry = geometries[0]
+                resolved_target = effective_per_object_targets.get(
+                    geometry.geometry_name, {}
+                )
+                resolved_body_hmax = _coerce_positive_float(
+                    resolved_target.get("hmax")
+                    if isinstance(resolved_target, Mapping)
+                    else None
+                )
+                owner_hmax_candidates = [
+                    resolved_body_hmax
+                    if resolved_body_hmax is not None
+                    else float(hints.hmax)
+                ]
+                owner_aliases = set(_geometry_name_aliases(geometry.geometry_name))
+                for field in mesh_options.size_fields:
+                    if not isinstance(field, Mapping):
+                        continue
+                    if field.get("kind") != "ComponentVolumeConstant":
+                        continue
+                    params = field.get("params")
+                    if not isinstance(params, Mapping):
+                        continue
+                    owner = params.get("GeometryName")
+                    if not isinstance(owner, str) or owner.strip() not in owner_aliases:
+                        continue
+                    owner_field_hmax = _coerce_positive_float(params.get("VIn"))
+                    if owner_field_hmax is not None:
+                        owner_hmax_candidates.append(owner_field_hmax)
+                effective_hmax = max(owner_hmax_candidates)
+            if (
                 not (mixed_shared_geo_direct or ring_shared_geo_direct or box_layered_geo_direct)
                 and airbox is not None
                 and airbox.maximum_element_size is not None
@@ -2999,7 +3047,11 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                             "Generating shared-GEO prism/pyramid/tetrahedron mesh"
                             if mixed_shared_geo_direct
                             else (
-                                "Generating shared-GEO ring tetrahedral mesh"
+                                (
+                                    "Generating shared-GEO layer-partitioned ring tetrahedral mesh"
+                                    if scoped_ring_layers
+                                    else "Generating shared-GEO ring tetrahedral mesh"
+                                )
                                 if ring_shared_geo_direct
                                 else (
                                     "Generating shared-GEO layer-partitioned tetrahedral Box mesh"
@@ -3018,7 +3070,11 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                     "Single-geometry shared-GEO mixed mesh path selected"
                     if mixed_shared_geo_direct
                     else (
-                        "Single-geometry shared-GEO ring mesh path selected"
+                        (
+                            "Single-geometry shared-GEO layer-partitioned ring mesh path selected"
+                            if scoped_ring_layers
+                            else "Single-geometry shared-GEO ring mesh path selected"
+                        )
                         if ring_shared_geo_direct
                         else (
                             "Single-geometry shared-GEO layer-partitioned Box mesh path selected"

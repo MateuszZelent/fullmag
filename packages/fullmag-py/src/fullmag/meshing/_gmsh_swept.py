@@ -242,13 +242,159 @@ def _supports_scoped_layer_partitioned_box(
     *,
     airbox: AirboxOptions | None,
 ) -> bool:
-    """Whether the Box domain supports exact GEO z-layer volume partitions."""
-    return (
-        isinstance(geometry, Box)
-        and airbox is not None
-        and airbox.grading_mode == "geometric"
-        and _coincident_ring_airbox_bounds(geometry, airbox) is not None
-    )
+    """Whether a Box or canonical ring supports exact GEO z-layer partitions."""
+    if airbox is None or airbox.grading_mode != "geometric":
+        return False
+    if isinstance(geometry, Box):
+        base = geometry
+    else:
+        components = _box_cylinder_ring_components(geometry)
+        if components is None:
+            return False
+        base, _tool = components
+    return _coincident_ring_airbox_bounds(base, airbox) is not None
+
+
+def _add_source_face_lower_bound_fields(
+    gmsh: Any,
+    *,
+    lower_bound_fields: list[dict[str, Any]],
+    source_surface: int,
+    hscale: float,
+) -> list[int]:
+    """Compile component lower bounds on a source face owned by the component."""
+    field_ids: list[int] = []
+    for config in lower_bound_fields:
+        if not isinstance(config, dict):
+            raise ValueError("mesh_lower_bound_field_invalid: config must be an object")
+        params = config.get("params", {})
+        if not isinstance(params, dict):
+            raise ValueError("mesh_lower_bound_field_invalid: params must be an object")
+        geometry_name = params.get("GeometryName")
+        if not isinstance(geometry_name, str) or not geometry_name.strip():
+            reason = "mesh_lower_bound_owner_binding_missing: GeometryName is required"
+            config["_gmsh_status"] = "rejected"
+            config["_gmsh_reason"] = reason
+            raise ValueError(reason)
+
+        size = float(params["MinimumElementSize"]) * hscale
+        if not math.isfinite(size) or size <= 0.0:
+            raise ValueError(
+                "mesh_lower_bound_field_invalid: MinimumElementSize must be finite and positive"
+            )
+        kind = config.get("kind")
+        if kind == "ComponentVolumeLowerBound":
+            field_id = gmsh.model.mesh.field.add("Constant")
+            gmsh.model.mesh.field.setNumbers(
+                field_id, "SurfacesList", [source_surface]
+            )
+            gmsh.model.mesh.field.setNumber(field_id, "VIn", size)
+            gmsh.model.mesh.field.setNumber(field_id, "VOut", 0.0)
+            gmsh.model.mesh.field.setNumber(field_id, "IncludeBoundary", 1)
+            field_ids.append(int(field_id))
+            continue
+
+        if kind != "ComponentRegionLowerBound":
+            reason = f"mesh_lower_bound_field_unsupported: kind='{kind}'"
+            config["_gmsh_status"] = "rejected"
+            config["_gmsh_reason"] = reason
+            raise ValueError(reason)
+
+        shape_kind = params.get("ShapeKind")
+        center = [float(value) * hscale for value in params.get("Center", [])]
+        if len(center) != 3:
+            raise ValueError("mesh_lower_bound_shape_unsupported: region center must be 3D")
+
+        if shape_kind == "box":
+            box_size = [float(value) * hscale for value in params.get("Size", [])]
+            if len(box_size) != 3:
+                raise ValueError("mesh_lower_bound_shape_unsupported: box size must be 3D")
+            shape_field = gmsh.model.mesh.field.add("Box")
+            gmsh.model.mesh.field.setNumber(shape_field, "VIn", size)
+            gmsh.model.mesh.field.setNumber(shape_field, "VOut", 0.0)
+            for axis, name in enumerate(("X", "Y", "Z")):
+                half_size = 0.5 * box_size[axis]
+                gmsh.model.mesh.field.setNumber(
+                    shape_field, f"{name}Min", center[axis] - half_size
+                )
+                gmsh.model.mesh.field.setNumber(
+                    shape_field, f"{name}Max", center[axis] + half_size
+                )
+        elif shape_kind == "cylinder":
+            axis = [
+                float(value) for value in params.get("Axis", [0.0, 0.0, 1.0])
+            ]
+            if len(axis) != 3:
+                raise ValueError(
+                    "mesh_lower_bound_shape_unsupported: cylinder axis must be 3D"
+                )
+            axis_norm = math.sqrt(sum(value * value for value in axis))
+            if not math.isfinite(axis_norm) or axis_norm <= 0.0:
+                raise ValueError("mesh_lower_bound_shape_unsupported: cylinder axis is zero")
+            axis_unit = [value / axis_norm for value in axis]
+            height = float(params["Height"]) * hscale
+            half_axis = [0.5 * height * value for value in axis_unit]
+            cylinder_fields: list[int] = []
+            for origin, direction in (
+                ([center[index] - half_axis[index] for index in range(3)], axis_unit),
+                (
+                    [center[index] + half_axis[index] for index in range(3)],
+                    [-value for value in axis_unit],
+                ),
+            ):
+                cylinder = gmsh.model.mesh.field.add("Cylinder")
+                gmsh.model.mesh.field.setNumber(cylinder, "VIn", size)
+                gmsh.model.mesh.field.setNumber(cylinder, "VOut", 0.0)
+                gmsh.model.mesh.field.setNumber(
+                    cylinder, "Radius", float(params["Radius"]) * hscale
+                )
+                gmsh.model.mesh.field.setNumber(cylinder, "XCenter", origin[0])
+                gmsh.model.mesh.field.setNumber(cylinder, "YCenter", origin[1])
+                gmsh.model.mesh.field.setNumber(cylinder, "ZCenter", origin[2])
+                for axis_name, value in zip(("XAxis", "YAxis", "ZAxis"), direction):
+                    gmsh.model.mesh.field.setNumber(
+                        cylinder, axis_name, value * height
+                    )
+                cylinder_fields.append(int(cylinder))
+            shape_field = gmsh.model.mesh.field.add("Min")
+            gmsh.model.mesh.field.setNumbers(
+                shape_field, "FieldsList", cylinder_fields
+            )
+        elif shape_kind == "sphere":
+            shape_field = gmsh.model.mesh.field.add("Ball")
+            gmsh.model.mesh.field.setNumber(shape_field, "VIn", size)
+            gmsh.model.mesh.field.setNumber(shape_field, "VOut", 0.0)
+            gmsh.model.mesh.field.setNumber(
+                shape_field, "Radius", float(params["Radius"]) * hscale
+            )
+            gmsh.model.mesh.field.setNumber(shape_field, "XCenter", center[0])
+            gmsh.model.mesh.field.setNumber(shape_field, "YCenter", center[1])
+            gmsh.model.mesh.field.setNumber(shape_field, "ZCenter", center[2])
+        else:
+            region_id = params.get("RegionId", "<unknown>")
+            reason = (
+                "mesh_lower_bound_shape_unsupported: "
+                f"region='{region_id}' shape_kind='{shape_kind}'"
+            )
+            config["_gmsh_status"] = "rejected"
+            config["_gmsh_reason"] = reason
+            raise ValueError(reason)
+
+        owner_mask = gmsh.model.mesh.field.add("Constant")
+        gmsh.model.mesh.field.setNumbers(
+            owner_mask, "SurfacesList", [source_surface]
+        )
+        gmsh.model.mesh.field.setNumber(owner_mask, "VIn", 1.0)
+        gmsh.model.mesh.field.setNumber(owner_mask, "VOut", 0.0)
+        gmsh.model.mesh.field.setNumber(owner_mask, "IncludeBoundary", 1)
+        scoped_field = gmsh.model.mesh.field.add("MathEval")
+        gmsh.model.mesh.field.setString(
+            scoped_field,
+            "F",
+            f"Min(F{shape_field}, {size:.17g}*F{owner_mask})",
+        )
+        field_ids.append(int(scoped_field))
+    return field_ids
 
 
 def _apply_mixed_source_face_mesh_options(
@@ -301,6 +447,32 @@ def _apply_mixed_source_face_mesh_options(
             continue
         generic_fields.append(config)
 
+    for config in opts.lower_bound_fields:
+        params = config.get("params") if isinstance(config, dict) else None
+        if not isinstance(params, dict):
+            raise ValueError("mesh_lower_bound_field_invalid: params must be an object")
+        geometry_name = params.get("GeometryName")
+        if isinstance(geometry_name, str) and geometry_name.strip():
+            geometry_names.add(geometry_name)
+    source_lower_bound_ids = _add_source_face_lower_bound_fields(
+        gmsh,
+        lower_bound_fields=opts.lower_bound_fields,
+        source_surface=source_surface,
+        hscale=hscale,
+    )
+    if source_lower_bound_ids and not source_field_ids and not generic_fields:
+        # _apply_mesh_options receives Gmsh-scaled hmax here. Supply its base
+        # upper target directly instead of asking its SI lower-only fallback
+        # to scale that already-scaled value a second time.
+        source_default = gmsh.model.mesh.field.add("Constant")
+        gmsh.model.mesh.field.setNumbers(
+            source_default, "SurfacesList", [source_surface]
+        )
+        gmsh.model.mesh.field.setNumber(source_default, "VIn", hmax_scaled)
+        gmsh.model.mesh.field.setNumber(source_default, "VOut", hmax_scaled)
+        gmsh.model.mesh.field.setNumber(source_default, "IncludeBoundary", 1)
+        source_field_ids.append(int(source_default))
+
     _apply_mesh_options(
         gmsh,
         hmax_scaled,
@@ -308,6 +480,7 @@ def _apply_mixed_source_face_mesh_options(
         _dc_replace(opts, size_fields=generic_fields, lower_bound_fields=[]),
         hscale=hscale,
         preexisting_field_ids=source_field_ids,
+        preexisting_lower_bound_field_ids=source_lower_bound_ids,
         component_surface_tags={name: [source_surface] for name in geometry_names},
     )
     field_ids = [int(field_id) for field_id in gmsh.model.mesh.field.list()]
@@ -2242,11 +2415,11 @@ def _generate_coincident_ring_airbox_mesh(
         gmsh.model.geo.synchronize()
 
         scoped_layer_partitioning = (
-            isinstance(geometry, Box)
+            (isinstance(geometry, Box) or tool is not None)
             and _has_component_scoped_size_fields(options)
         )
         if scoped_layer_partitioning and not _supports_scoped_layer_partitioned_box(
-            geometry,
+            base,
             airbox=airbox,
         ):
             raise ValueError(
@@ -2256,7 +2429,7 @@ def _generate_coincident_ring_airbox_mesh(
 
         source_fields: list[int] = []
         if not scoped_layer_partitioning:
-            if options.size_fields:
+            if options.size_fields or options.lower_bound_fields:
                 source_fields.append(
                     _apply_mixed_source_face_mesh_options(
                         gmsh,
@@ -2293,10 +2466,11 @@ def _generate_coincident_ring_airbox_mesh(
             source_entities = [(2, current_annulus)] + (
                 [(2, current_hole)] if current_hole is not None else []
             )
-            # Keep every requested z interval to one extrusion layer. Meshed
-            # extrusion still copies one source triangulation through the airbox;
-            # delaying source meshing does not realize interior-only 3D sizing.
-            # Exact layer planes and actual regional density are separate gates.
+            # Keep every requested z interval to one extrusion layer. In the
+            # unscoped route, the already-meshed source triangulation is copied
+            # through air; scoped owner fields instead leave the source unmeshed
+            # so final volume fields can preserve magnetic/air ownership.
+            # Exact layer planes and actual regional density remain separate gates.
             extruded = gmsh.model.geo.extrude(
                 source_entities,
                 0.0,
@@ -2438,7 +2612,24 @@ def _generate_coincident_ring_airbox_mesh(
                 else []
             ),
         )
-        preexisting_fields = list(source_fields)
+        # _apply_mesh_options raises the global characteristic-length ceiling
+        # to accommodate the far-air target. Keep the body hmax independent of
+        # that global value with an owner-volume upper field; its VOut is the
+        # neutral global ceiling, so the constraint does not coarsen air.
+        body_upper_field = gmsh.model.mesh.field.add("Constant")
+        gmsh.model.mesh.field.setNumbers(
+            body_upper_field, "VolumesList", body_volumes
+        )
+        gmsh.model.mesh.field.setNumber(
+            body_upper_field, "VIn", body_hmax_scaled
+        )
+        gmsh.model.mesh.field.setNumber(body_upper_field, "IncludeBoundary", 1)
+        gmsh.model.mesh.field.setNumber(
+            body_upper_field,
+            "VOut",
+            max(body_hmax_scaled, h_outer_scaled),
+        )
+        preexisting_fields = [*source_fields, int(body_upper_field)]
         if airbox_field is not None:
             preexisting_fields.append(int(airbox_field))
         _apply_mesh_options(
@@ -2783,7 +2974,7 @@ def generate_swept_box_cylinder_ring_mesh(
         gmsh.model.geo.synchronize()
 
         source_field_ids: list[int] = []
-        if opts.size_fields:
+        if opts.size_fields or opts.lower_bound_fields:
             source_field_ids.append(
                 _apply_mixed_source_face_mesh_options(
                     gmsh,
@@ -3548,7 +3739,7 @@ def generate_swept_box_mesh(
             gmsh.option.setNumber("Mesh.CharacteristicLengthMin", opts.hmin * SCALE)
         gmsh.option.setNumber("Mesh.Algorithm", opts.algorithm_2d)
         source_refinement_field: int | None = None
-        if airbox is not None and opts.size_fields:
+        if airbox is not None and (opts.size_fields or opts.lower_bound_fields):
             source_refinement_field = _apply_mixed_source_face_mesh_options(
                 gmsh,
                 source_surface=source_surf,

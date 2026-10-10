@@ -3685,6 +3685,109 @@ do powierzchni źródłowej i jej brzegu. To pole pozostaje w końcowej
 kombinacji rozmiarów: powietrze nie nadpisuje bocznego hmax filmu.
 Hmax to cel charakterystycznego rozmiaru Gmsh, a nie ścisły limit
 długości każdej krawędzi tetraedru.
+Końcowy cap charakteryzuje również dalekie powietrze i może być większy
+niż cel filmu. Dlatego dokładna warstwowa realizacja dodaje osobne górne
+pole ograniczone do objętości magnetycznych. Jego `VIn` respektuje
+rozwiązany per-owner `hmax` z `effective_per_object_targets` oraz jawne
+owner-wide `ComponentVolumeConstant` pola. Te pola pozostają w istniejącym
+upper `Min` stacku; body cap jest co najmniej tak duży jak ich `VIn`, więc
+nie clampuje manualnego owner targetu. Pola regionalne nie podnoszą tego
+globalnego body capu i pozostają w swoich dotychczasowych zakresach.
+`VOut` jest neutralnym globalnym capem
+`max(h_{\mathrm{body}}, h_{\mathrm{air}})`. Pole airboxu pozostaje
+ograniczone do objętości powietrza, więc większy cel dalekiego powietrza
+nie zmienia bocznej siatki filmu. Oba pola są składane operatorem minimum;
+granica body–air otrzymuje ciaśniejszy z sąsiadujących celów. To zachowuje
+rozdzielczość geometryczną filmu bez przenoszenia jego lower boundów do
+zewnętrznego powietrza.
+Dokładne zakresy pól upper w route warstwowym są następujące:
+
+```{math}
+:label: eq-swept-body-air-volume-upper-cap
+
+h_{\mathrm{body}} = \max\!\left(h_{\mathrm{owner}},
+  \max\!\left(\{0\}\cup\{VIn_f:f\in\mathcal{F}_{\mathrm{owner}}\}\right)\right),
+\qquad
+h_{\mathrm{global}} = \max(h_{\mathrm{body}}, h_{\mathrm{air}}),
+\qquad
+h_{\mathrm{body}}^{u}(\mathbf{x}) =
+\begin{cases}
+  h_{\mathrm{body}}, & \mathbf{x}\in\Omega_{\mathrm{body}},\\
+  h_{\mathrm{global}}, & \mathbf{x}\notin\Omega_{\mathrm{body}},
+\end{cases}
+\qquad
+h_{\mathrm{air}}^{u}(\mathbf{x}) =
+\begin{cases}
+  h_{\mathrm{airbox}}(\mathbf{x}), & \mathbf{x}\in\Omega_{\mathrm{air}},\\
+  h_{\mathrm{global}}, & \mathbf{x}\notin\Omega_{\mathrm{air}},
+\end{cases}
+\qquad
+h_{u}(\mathbf{x}) = \min(h_{\mathrm{body}}^{u}(\mathbf{x}),
+                           h_{\mathrm{air}}^{u}(\mathbf{x})).
+```
+
+Wartości pól i ich dziedziny są przeskalowane do jednostek Gmsh po
+zdefiniowaniu ich w SI; neutralny `VOut` nie przekracza globalnego capu.
+Na powierzchni wspólnej pola nadal ogranicza ciaśniejszy target. Dodatkowe
+upper fields są dalej składane przez `min`, a owner-scoped lower fields przez
+opisaną poniżej kompozycję; równanie nie przenosi targetu ani flooru filmu do
+objętości powietrza.
+W swept Box, ring i mieszanym shared-domain wariancie source-face,
+którego powierzchnia jest częścią siatkowanego komponentu, komponentowy
+lower bound współtworzy pole tej powierzchni przed `mesh.generate(2)`:
+późniejsze pole 3D nie może usunąć już wygenerowanych drobnych krawędzi
+z ekstruzji. Dla każdej pozycji powierzchni źródłowej skala docelowa
+jest kompozycją istniejących pól górnych i dolnych:
+
+```{math}
+:label: eq-swept-source-face-lower-bound-composition
+
+h_{\mathrm{source}}(\mathbf{x}) =
+\max\!\left(
+  \min\!\left(h_{\mathrm{base}}(\mathbf{x}),
+             h_{\mathrm{interface}}(\mathbf{x}),
+             h_{\mathrm{component}}(\mathbf{x})\right),
+  \max\!\left(h_{\mathrm{volume\ floor}}(\mathbf{x}),
+               h_{\mathrm{region\ floor}}(\mathbf{x})\right)
+\right).
+```
+
+Rozmiary w równaniu są w metrach SI. Bazowy upper target jest zawsze
+obecny; pominięte dodatkowe upper fields są neutralne dla `min`, a brak
+floor-ów oznacza zero dla dolnego pola. Komponentowy floor jest
+ograniczony do powierzchni źródłowej jego właściciela i nadal jest
+nakładany na odpowiadającą mu objętość po ekstruzji. Powierzchnia
+zewnętrznego airboxu nie staje się właścicielem komponentowego floor-u;
+na takim route floor pozostaje ograniczony do objętości komponentu.
+Nie ustawia rozmiaru w airboxie ani nie zmienia górnych celów; lokalne
+pole interfejsu i komponentu pozostają w tej samej kompozycji przed
+generacją siatki 2D. Równanie
+opisuje cel charakterystycznego rozmiaru Gmsh, nie dolny limit każdej
+zrealizowanej krawędzi; ograniczenia geometrii mogą tworzyć krótsze
+krawędzie. To zachowanie dotyczy generatora siatki, nie zmienia równania
+FEM ani kwalifikacji fizycznej.
+
+| Symbol | Znaczenie | Jednostka SI |
+|---|---|---|
+| $h_{\mathrm{source}}(\mathbf{x})$ | Docelowy charakterystyczny rozmiar na swept source-face po kompozycji pól | $\mathrm{m}$ |
+| $h_{\mathrm{base}}(\mathbf{x})$ | Bazowy upper target źródłowej powierzchni | $\mathrm{m}$ |
+| $h_{\mathrm{interface}}(\mathbf{x})$ | Upper target pola interfejsu na źródłowej powierzchni | $\mathrm{m}$ |
+| $h_{\mathrm{component}}(\mathbf{x})$ | Upper target komponentu lub lokalnego regionu na źródłowej powierzchni | $\mathrm{m}$ |
+| $h_{\mathrm{volume\ floor}}(\mathbf{x})$ | Wartość floor komponentowej objętości przeniesiona na jej źródłową powierzchnię | $\mathrm{m}$ |
+| $h_{\mathrm{region\ floor}}(\mathbf{x})$ | Wartość floor regionu ograniczona jego kształtem i źródłową powierzchnią właściciela | $\mathrm{m}$ |
+| $h_{\mathrm{global}}$ | Wspólny globalny cap Gmsh: większy z body `hmax` i zewnętrznego airbox maximum | $\mathrm{m}$ |
+| $h_{\mathrm{body}}$ | Body-volume upper cap uwzględniający resolved target i owner-wide upper field program | $\mathrm{m}$ |
+| $h_{\mathrm{owner}}$ | Rozwiązany per-owner `hmax` przed zastosowaniem jawnych pól owner-wide | $\mathrm{m}$ |
+| $\mathcal{F}_{\mathrm{owner}}$ | Zbiór owner-wide `ComponentVolumeConstant` upper fields dla filmu; bez pól regionalnych | $1$ |
+| $VIn_f$ | Jawny target `VIn` owner-wide pola $f$ | $\mathrm{m}$ |
+| $h_{\mathrm{air}}$ | Maksymalny target zewnętrznego airboxu po rozwiązaniu warstw | $\mathrm{m}$ |
+| $h_{\mathrm{airbox}}(\mathbf{x})$ | Ograniczony do airboxu profil upper targetów przestrzennych | $\mathrm{m}$ |
+| $h_{\mathrm{body}}^{u}(\mathbf{x})$ | Pole body-volume upper z neutralnym wyjściem poza filmem | $\mathrm{m}$ |
+| $h_{\mathrm{air}}^{u}(\mathbf{x})$ | Pole airbox upper z neutralnym wyjściem poza powietrzem | $\mathrm{m}$ |
+| $h_u(\mathbf{x})$ | Minimum body- i airbox-volume upper fields przed dodatkowymi polami | $\mathrm{m}$ |
+| $\Omega_{\mathrm{body}}$ | Magnetyczna objętość warstwowego filmu | $\mathrm{m}^3$ |
+| $\Omega_{\mathrm{air}}$ | Objętość powietrza w dokładnym airboxie | $\mathrm{m}^3$ |
+
 Sprawdzamy monotoniczne zagęszczenie x/y przy zmniejszaniu hmax,
 stałą siatkę x/y przy zmianie liczby warstw, zgodność translacji SI
 i fazy exp(-i k·r), dodatnie objętości oraz objętość filmu i airboxu.
@@ -3698,7 +3801,20 @@ Regresja generacji nie dowodzi zgodności częstotliwości eigensolve.
 | ID | Plik | Symbol |
 |---|---|---|
 | source-box-layer-source-face | `packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py` | `_generate_coincident_ring_airbox_mesh` |
+| source-box-body-volume-upper-cap | `packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py` | `_generate_coincident_ring_airbox_mesh` |
+| source-box-resolved-owner-hmax-selection | `packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py` | `_realize_fem_domain_mesh_asset_from_components_impl` |
+| source-box-owner-volume-field-upper | `packages/fullmag-py/src/fullmag/meshing/_gmsh_fields.py` | `_add_component_volume_constant_field` |
+| source-box-owner-hmax-resolver | `packages/fullmag-py/src/fullmag/meshing/_mesh_targets.py` | `resolve_shared_domain_targets` |
+| source-swept-source-face-lower-bound | `packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py` | `_apply_mixed_source_face_mesh_options` |
+| source-swept-exact-ring-owner-floor | `packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py` | `_generate_coincident_ring_airbox_mesh` |
+| source-swept-exact-ring-route-selection | `packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py` | `_realize_fem_domain_mesh_asset_from_components_impl` |
+| source-swept-exact-ring-layer-report | `packages/fullmag-py/src/fullmag/meshing/mesh_build_report.py` | `_build_mesh_operation_statuses` |
+| source-swept-source-face-lower-bound-regression | `packages/fullmag-py/tests/test_meshing.py` | `test_swept_source_face_lower_bounds_compose_before_generation` |
+| source-swept-exact-ring-floor-report-regression | `packages/fullmag-py/tests/test_meshing.py` | `test_scoped_exact_ring_lower_bound_uses_layer_route_and_report` |
 | source-box-lateral-regression | `scripts/test_box_layered_airbox_mesh.py` | `test_box_lateral_resolution_survives_final_air_fields` |
+| source-box-air-profile-default-cap-body-xy | `scripts/test_box_layered_airbox_mesh.py` | `test_public_box_default_airbox_cap_realizes_geometric_vertical_growth` |
+| source-box-air-profile-explicit-minimum-body-xy | `scripts/test_box_layered_airbox_mesh.py` | `test_public_box_explicit_airbox_minimum_above_body_hmax_is_preserved` |
+| source-box-owner-hmax-air-profile-regression | `packages/fullmag-py/tests/test_meshing.py` | `test_exact_layer_body_target_precedence_survives_air_and_local_fields` |
 
 
 ## Warstwy powietrza w periodycznej komórce antidot A1

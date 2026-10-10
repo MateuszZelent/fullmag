@@ -744,6 +744,50 @@
         "source-box-layer-roundoff-regression",
         "source-box-layer-offset-regression"
       ]
+    },
+    {
+      "id": "eq-swept-body-air-volume-upper-cap",
+      "symbols": [
+        "swept_body_air_h_global",
+        "swept_body_air_h_owner",
+        "swept_body_air_h_body",
+        "swept_body_air_h_air",
+        "swept_body_air_owner_fields",
+        "swept_body_air_vin_field",
+        "swept_body_air_h_body_upper",
+        "swept_body_air_h_air_upper",
+        "swept_body_air_h_airbox",
+        "swept_body_air_h_upper",
+        "swept_body_air_omega_body",
+        "swept_body_air_omega_air"
+      ],
+      "sources": [
+        "source-box-body-volume-upper-cap",
+        "source-box-resolved-owner-hmax-selection",
+        "source-box-owner-volume-field-upper",
+        "source-box-owner-hmax-resolver",
+        "source-box-air-profile-default-cap-body-xy",
+        "source-box-air-profile-explicit-minimum-body-xy",
+        "source-box-owner-hmax-air-profile-regression"
+      ]
+    },
+    {
+      "id": "eq-swept-source-face-lower-bound-composition",
+      "symbols": [
+        "swept_source_h_target",
+        "swept_source_h_base",
+        "swept_source_h_interface",
+        "swept_source_h_component",
+        "swept_source_h_volume_floor",
+        "swept_source_h_region_floor"
+      ],
+      "sources": [
+        "source-swept-source-face-field-composition",
+        "source-swept-source-face-lower-bound-regression",
+        "source-swept-exact-ring-floor-report-regression",
+        "source-swept-exact-ring-route-selection",
+        "source-swept-exact-ring-route-report"
+      ]
     }
   ],
   "symbols": [
@@ -1682,6 +1726,114 @@
       "latex": "$\\operatorname{ulp}_{64}(R_z)$",
       "meaning": "Lokalny odstęp binary64 na skali względnego planu",
       "si_unit": "$\\mathrm{m}$"
+    },
+    {
+      "id": "swept_source_h_target",
+      "latex": "$h_{\\mathrm{source}}(\\mathbf{x})$",
+      "meaning": "Docelowy charakterystyczny rozmiar na swept source-face po kompozycji pól",
+      "si_unit": "$\\mathrm{m}$"
+    },
+    {
+      "id": "swept_source_h_base",
+      "latex": "$h_{\\mathrm{base}}(\\mathbf{x})$",
+      "meaning": "Bazowy upper target źródłowej powierzchni",
+      "si_unit": "$\\mathrm{m}$"
+    },
+    {
+      "id": "swept_source_h_interface",
+      "latex": "$h_{\\mathrm{interface}}(\\mathbf{x})$",
+      "meaning": "Upper target pola interfejsu na źródłowej powierzchni",
+      "si_unit": "$\\mathrm{m}$"
+    },
+    {
+      "id": "swept_source_h_component",
+      "latex": "$h_{\\mathrm{component}}(\\mathbf{x})$",
+      "meaning": "Upper target komponentu lub lokalnego regionu na źródłowej powierzchni",
+      "si_unit": "$\\mathrm{m}$"
+    },
+    {
+      "id": "swept_source_h_volume_floor",
+      "latex": "$h_{\\mathrm{volume\\ floor}}(\\mathbf{x})$",
+      "meaning": "Wartość floor komponentowej objętości przeniesiona na jej źródłową powierzchnię",
+      "si_unit": "$\\mathrm{m}$"
+    },
+    {
+      "id": "swept_source_h_region_floor",
+      "latex": "$h_{\\mathrm{region\\ floor}}(\\mathbf{x})$",
+      "meaning": "Wartość floor regionu ograniczona jego kształtem i źródłową powierzchnią właściciela",
+      "si_unit": "$\\mathrm{m}$"
+    },
+    {
+      "id": "swept_body_air_h_global",
+      "latex": "$h_{\\mathrm{global}}$",
+      "meaning": "Wspólny globalny cap Gmsh: większy z body `hmax` i zewnętrznego airbox maximum",
+      "si_unit": "$\\mathrm{m}$"
+    },
+    {
+      "id": "swept_body_air_h_owner",
+      "latex": "$h_{\\mathrm{owner}}$",
+      "meaning": "Rozwiązany per-owner `hmax` przed zastosowaniem jawnych pól owner-wide",
+      "si_unit": "$\\mathrm{m}$"
+    },
+    {
+      "id": "swept_body_air_h_body",
+      "latex": "$h_{\\mathrm{body}}$",
+      "meaning": "Body-volume upper cap uwzględniający resolved target i owner-wide upper field program",
+      "si_unit": "$\\mathrm{m}$"
+    },
+    {
+      "id": "swept_body_air_h_air",
+      "latex": "$h_{\\mathrm{air}}$",
+      "meaning": "Maksymalny target zewnętrznego airboxu po rozwiązaniu warstw",
+      "si_unit": "$\\mathrm{m}$"
+    },
+    {
+      "id": "swept_body_air_owner_fields",
+      "latex": "$\\mathcal{F}_{\\mathrm{owner}}$",
+      "meaning": "Zbiór owner-wide `ComponentVolumeConstant` upper fields dla filmu; bez pól regionalnych",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "swept_body_air_vin_field",
+      "latex": "$VIn_f$",
+      "meaning": "Jawny target `VIn` owner-wide pola $f$",
+      "si_unit": "$\\mathrm{m}$"
+    },
+    {
+      "id": "swept_body_air_h_body_upper",
+      "latex": "$h_{\\mathrm{body}}^{u}(\\mathbf{x})$",
+      "meaning": "Pole body-volume upper z neutralnym wyjściem poza filmem",
+      "si_unit": "$\\mathrm{m}$"
+    },
+    {
+      "id": "swept_body_air_h_air_upper",
+      "latex": "$h_{\\mathrm{air}}^{u}(\\mathbf{x})$",
+      "meaning": "Pole airbox upper z neutralnym wyjściem poza powietrzem",
+      "si_unit": "$\\mathrm{m}$"
+    },
+    {
+      "id": "swept_body_air_h_airbox",
+      "latex": "$h_{\\mathrm{airbox}}(\\mathbf{x})$",
+      "meaning": "Ograniczony do airboxu profil upper targetów przestrzennych",
+      "si_unit": "$\\mathrm{m}$"
+    },
+    {
+      "id": "swept_body_air_h_upper",
+      "latex": "$h_u(\\mathbf{x})$",
+      "meaning": "Minimum body- i airbox-volume upper fields przed dodatkowymi polami",
+      "si_unit": "$\\mathrm{m}$"
+    },
+    {
+      "id": "swept_body_air_omega_body",
+      "latex": "$\\Omega_{\\mathrm{body}}$",
+      "meaning": "Magnetyczna objętość warstwowego filmu",
+      "si_unit": "$\\mathrm{m}^3$"
+    },
+    {
+      "id": "swept_body_air_omega_air",
+      "latex": "$\\Omega_{\\mathrm{air}}$",
+      "meaning": "Objętość powietrza w dokładnym airboxie",
+      "si_unit": "$\\mathrm{m}^3$"
     }
   ],
   "sources": [
@@ -2467,6 +2619,84 @@
       "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py",
       "symbol": "_generate_coincident_ring_airbox_mesh",
       "responsibility": "Persistent source face sizing and synchronized Tet4 body-air extrusion"
+    },
+    {
+      "id": "source-box-body-volume-upper-cap",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py",
+      "symbol": "_generate_coincident_ring_airbox_mesh",
+      "responsibility": "Keep the body upper target restricted to magnetic volumes when the global cap grows to fit the airbox"
+    },
+    {
+      "id": "source-box-resolved-owner-hmax-selection",
+      "path": "packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py",
+      "symbol": "_realize_fem_domain_mesh_asset_from_components_impl",
+      "responsibility": "Use the resolved per-owner hmax for exact-layer Box/ring body sizing, preserving the FEM hint only as a missing-target fallback"
+    },
+    {
+      "id": "source-box-owner-volume-field-upper",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_fields.py",
+      "symbol": "_add_component_volume_constant_field",
+      "responsibility": "Realize ComponentVolumeConstant as an IncludeBoundary owner-volume field"
+    },
+    {
+      "id": "source-box-owner-hmax-resolver",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_mesh_targets.py",
+      "symbol": "resolve_shared_domain_targets",
+      "responsibility": "Resolve per-owner hmax precedence before mesh realization"
+    },
+    {
+      "id": "source-box-air-profile-default-cap-body-xy",
+      "path": "scripts/test_box_layered_airbox_mesh.py",
+      "symbol": "test_public_box_default_airbox_cap_realizes_geometric_vertical_growth",
+      "responsibility": "Actual-Gmsh public-path check for exact body XY across the resolved default air cap"
+    },
+    {
+      "id": "source-box-air-profile-explicit-minimum-body-xy",
+      "path": "scripts/test_box_layered_airbox_mesh.py",
+      "symbol": "test_public_box_explicit_airbox_minimum_above_body_hmax_is_preserved",
+      "responsibility": "Actual-Gmsh public-path check for exact body XY when the explicit air minimum exceeds body hmax"
+    },
+    {
+      "id": "source-box-owner-hmax-air-profile-regression",
+      "path": "packages/fullmag-py/tests/test_meshing.py",
+      "symbol": "test_exact_layer_body_target_precedence_survives_air_and_local_fields",
+      "responsibility": "Actual-Gmsh Box and ring checks for resolved and manual whole-owner hmax precedence across air profiles, with localized fields unable to raise the body-wide cap"
+    },
+    {
+      "id": "source-swept-source-face-field-composition",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py",
+      "symbol": "_apply_mixed_source_face_mesh_options",
+      "responsibility": "Compose geometry-owned lower-bound fields on the exact source surface with upper targets before 2D generation"
+    },
+    {
+      "id": "source-swept-exact-ring-owner-floor",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py",
+      "symbol": "_generate_coincident_ring_airbox_mesh",
+      "responsibility": "Keep scoped canonical-ring floors on owner volumes by delaying meshing until exact layer volumes exist"
+    },
+    {
+      "id": "source-swept-exact-ring-route-selection",
+      "path": "packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py",
+      "symbol": "_realize_fem_domain_mesh_asset_from_components_impl",
+      "responsibility": "Select the existing exact-layer canonical-ring route for scoped floors and preserve its ring build identity"
+    },
+    {
+      "id": "source-swept-source-face-lower-bound-regression",
+      "path": "packages/fullmag-py/tests/test_meshing.py",
+      "symbol": "test_swept_source_face_lower_bounds_compose_before_generation",
+      "responsibility": "Actual-Gmsh swept Box/ring/mixed-route coverage for component floors present before source-face triangulation"
+    },
+    {
+      "id": "source-swept-exact-ring-floor-report-regression",
+      "path": "packages/fullmag-py/tests/test_meshing.py",
+      "symbol": "test_scoped_exact_ring_lower_bound_uses_layer_route_and_report",
+      "responsibility": "Actual-Gmsh canonical ring coverage applying owner floors to magnetic volumes without assigning them to the external airbox source face"
+    },
+    {
+      "id": "source-swept-exact-ring-route-report",
+      "path": "packages/fullmag-py/src/fullmag/meshing/mesh_build_report.py",
+      "symbol": "_build_mesh_operation_statuses",
+      "responsibility": "Report the verified unmeshed exact-layer canonical-ring route and its owner-bound layer-plane proof"
     },
     {
       "id": "source-box-lateral-regression",

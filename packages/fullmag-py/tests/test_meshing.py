@@ -72,6 +72,7 @@ from fullmag.meshing._gmsh_swept import (
     generate_swept_tetrahedral_box_airbox_mesh,
 )
 from fullmag.model.problem import BackendTarget, build_geometry_assets_for_request
+from fullmag.model.geometry import Geometry
 from fullmag.meshing._gmsh_types import (
     FEM_TOPOLOGY_VOLUME_EPS,
     MixedPeriodicTopologyError,
@@ -13549,6 +13550,499 @@ class RegionMeshPolicyTests(unittest.TestCase):
                 self.assertEqual(
                     mesh_data["selected_roi_edge_midpoint_indices"].shape, (0, 2)
                 )
+
+    def test_swept_source_face_lower_bounds_compose_before_generation(self) -> None:
+        try:
+            import gmsh  # noqa: F401
+        except ImportError:
+            self.skipTest("gmsh not available")
+
+        def source_plane_edges(mesh: MeshData, z: float, selector) -> list[float]:
+            nodes = np.asarray(mesh.nodes, dtype=np.float64)
+            offsets = np.asarray(mesh.cell_offsets, dtype=np.int64)
+            cell_nodes = np.asarray(mesh.cell_nodes, dtype=np.int32)
+            seen: set[tuple[int, int]] = set()
+            lengths: list[float] = []
+            for cell_index in range(mesh.n_elements):
+                cell = cell_nodes[offsets[cell_index] : offsets[cell_index + 1]]
+                plane_nodes = [
+                    int(node)
+                    for node in cell
+                    if abs(float(nodes[int(node), 2]) - z) <= 1e-15
+                ]
+                for first_index in range(len(plane_nodes)):
+                    for second_index in range(first_index + 1, len(plane_nodes)):
+                        first, second = plane_nodes[first_index], plane_nodes[second_index]
+                        edge = (min(first, second), max(first, second))
+                        if edge in seen:
+                            continue
+                        midpoint = 0.5 * (nodes[first] + nodes[second])
+                        if selector(midpoint):
+                            seen.add(edge)
+                            lengths.append(
+                                float(np.linalg.norm(nodes[first] - nodes[second]))
+                            )
+            return lengths
+
+        ring = fm.Difference(
+            base=fm.Box(40e-9, 40e-9, 10e-9, name="floor_ring_box"),
+            tool=fm.Cylinder(radius=8e-9, height=10e-9, name="floor_ring_hole"),
+            name="floor_ring",
+        )
+        ring_floor = {
+            "kind": "ComponentVolumeLowerBound",
+            "params": {
+                "GeometryName": ring.geometry_name,
+                "MinimumElementSize": 8e-9,
+                "Source": "per_geometry_mesh_policy",
+            },
+        }
+        with patch.object(
+            gmsh_swept,
+            "_apply_mixed_source_face_mesh_options",
+            wraps=gmsh_swept._apply_mixed_source_face_mesh_options,
+        ) as ring_source_face:
+            ring_mesh = gmsh_swept.generate_swept_box_cylinder_ring_mesh(
+                ring,
+                10e-9,
+                3,
+                order=1,
+                distribution="fixed",
+                recombine=False,
+                airbox=None,
+                options=MeshOptions(
+                    size_fields=[
+                        {
+                            "kind": "Box",
+                            "params": {
+                                "VIn": 2e-9,
+                                "VOut": 10e-9,
+                                "XMin": -22e-9,
+                                "XMax": 22e-9,
+                                "YMin": -22e-9,
+                                "YMax": 22e-9,
+                                "ZMin": -6e-9,
+                                "ZMax": 6e-9,
+                            },
+                        }
+                    ],
+                    lower_bound_fields=[ring_floor],
+                    compute_quality=False,
+                    per_element_quality=False,
+                ),
+            )
+        ring_source_face.assert_called_once()
+        ring_edges = source_plane_edges(
+            ring_mesh, -5e-9, lambda _point: True
+        )
+        self.assertTrue(ring_edges)
+        ring_median = float(np.median(ring_edges))
+        # The owner floor is the only owner-tagged field; the generic 2 nm
+        # refinement composes as max(8 nm floor, min(10 nm base, 2 nm target)).
+        # This checks a characteristic size, not a strict edge floor.
+        self.assertGreater(ring_median, 4e-9)
+        self.assertLess(ring_median, 16e-9)
+
+        owner_name = "mixed_source_face_owner"
+        component_bulk = {
+            "kind": "ComponentVolumeConstant",
+            "params": {"GeometryName": owner_name, "VIn": 20e-9, "VOut": 20e-9},
+        }
+        interface_refinement = {
+            "kind": "Box",
+            "params": {
+                "VIn": 2e-9,
+                "VOut": 20e-9,
+                "XMin": -18e-9,
+                "XMax": 18e-9,
+                "YMin": -13e-9,
+                "YMax": 13e-9,
+                "ZMin": -10e-9,
+                "ZMax": 6e-9,
+            },
+        }
+        local_floor = {
+            "kind": "ComponentRegionLowerBound",
+            "params": {
+                "GeometryName": owner_name,
+                "RegionId": f"{owner_name}:source-floor",
+                "ShapeKind": "box",
+                "Center": [0.0, 0.0, -2e-9],
+                "Size": [36e-9, 26e-9, 16e-9],
+                "MinimumElementSize": 8e-9,
+                "Source": "region_mesh_policy",
+            },
+        }
+
+        def mixed_box_mesh(*, include_floor: bool) -> MeshData:
+            options = MeshOptions(
+                mesh_strategy="swept_prism",
+                size_fields=[dict(component_bulk), dict(interface_refinement)],
+                lower_bound_fields=[dict(local_floor)] if include_floor else [],
+                compute_quality=False,
+                per_element_quality=False,
+            )
+            with patch.object(
+                gmsh_swept,
+                "_apply_mixed_source_face_mesh_options",
+                wraps=gmsh_swept._apply_mixed_source_face_mesh_options,
+            ) as source_face:
+                mesh = gmsh_swept.generate_swept_box_mesh(
+                    (80e-9, 60e-9, 16e-9),
+                    20e-9,
+                    2,
+                    thin_axis=2,
+                    order=1,
+                    distribution="fixed",
+                    element_ratio=1.0,
+                    symmetric=False,
+                    recombine=False,
+                    airbox=AirboxOptions(
+                        size=(100e-9, 80e-9, 100e-9),
+                        center=(0.0, 0.0, 0.0),
+                        maximum_element_size=30e-9,
+                    ),
+                    options=options,
+                    geometry_name=owner_name,
+                )
+            source_face.assert_called_once()
+            self.assertEqual(
+                source_face.call_args.kwargs["opts"].lower_bound_fields,
+                options.lower_bound_fields,
+            )
+            return mesh
+
+        baseline = mixed_box_mesh(include_floor=False)
+        floored = mixed_box_mesh(include_floor=True)
+
+        def in_region(point: np.ndarray) -> bool:
+            return abs(float(point[0])) <= 16e-9 and abs(float(point[1])) <= 11e-9
+
+        def outside_region(point: np.ndarray) -> bool:
+            return abs(float(point[0])) >= 25e-9 or abs(float(point[1])) >= 20e-9
+
+        baseline_core = source_plane_edges(baseline, -8e-9, in_region)
+        floored_core = source_plane_edges(floored, -8e-9, in_region)
+        floored_bulk = source_plane_edges(floored, -8e-9, outside_region)
+        self.assertTrue(baseline_core)
+        self.assertTrue(floored_core)
+        self.assertTrue(floored_bulk)
+        baseline_median = float(np.median(baseline_core))
+        core_median = float(np.median(floored_core))
+        bulk_median = float(np.median(floored_bulk))
+        # Inside the interface field, max(8 nm floor, min(20 nm base, 2 nm
+        # refinement)) sets an 8 nm target. The rest of the owner stays coarser.
+        self.assertGreater(core_median, baseline_median * 1.5)
+        self.assertGreater(core_median, 4e-9)
+        self.assertLess(core_median, 16e-9)
+        self.assertGreater(bulk_median, core_median)
+
+    def test_scoped_exact_ring_lower_bound_uses_layer_route_and_report(self) -> None:
+        try:
+            import gmsh  # noqa: F401
+        except ImportError:
+            self.skipTest("gmsh not available")
+
+        geometry = fm.Difference(
+            base=fm.Box(40e-9, 40e-9, 10e-9, name="scoped_ring_box"),
+            tool=fm.Cylinder(radius=8e-9, height=10e-9, name="scoped_ring_hole"),
+            name="scoped_ring",
+        )
+        mesh_workflow = {
+            "mesh_options": {
+                "mesh_strategy": "thin_film_tetrahedral",
+                "through_thickness_elements": 3,
+                "periodic_pair_ids": ["x_faces", "y_faces"],
+                "size_fields": [
+                    {
+                        "kind": "ComponentVolumeConstant",
+                        "params": {
+                            "GeometryName": geometry.geometry_name,
+                            "VIn": 10e-9,
+                            "VOut": 20e-9,
+                        },
+                    },
+                    {
+                        "kind": "Box",
+                        "params": {
+                            "VIn": 2e-9,
+                            "VOut": 20e-9,
+                            "XMin": -18e-9,
+                            "XMax": 18e-9,
+                            "YMin": -18e-9,
+                            "YMax": 18e-9,
+                            "ZMin": -18e-9,
+                            "ZMax": 18e-9,
+                        },
+                    },
+                ],
+            },
+            "per_geometry": [
+                {
+                    "geometry": geometry.geometry_name,
+                    "minimum_element_size": 8e-9,
+                }
+            ],
+        }
+        study_universe = {
+            "mode": "manual",
+            "size": [40e-9, 40e-9, 410e-9],
+            "center": [0.0, 0.0, 0.0],
+            "airbox_hmax": 20e-9,
+            "airbox_hmin": 2e-9,
+        }
+        with patch.object(
+            gmsh_swept,
+            "_apply_mixed_source_face_mesh_options",
+            wraps=gmsh_swept._apply_mixed_source_face_mesh_options,
+        ) as source_face:
+            mesh, region_markers, report = realize_fem_domain_mesh_asset_from_components_with_report(
+                geometries=[geometry],
+                hints=fm.FEM(order=1, hmax=10e-9),
+                study_universe=study_universe,
+                mesh_workflow=mesh_workflow,
+            )
+        # The exact-cell route's starting face belongs to the airbox, so the
+        # owner floor is applied after per-layer volumes exist, never projected
+        # onto air merely to change a shared source triangulation.
+        source_face.assert_not_called()
+        self.assertEqual(report.build_mode, "single_geometry_geo_ring")
+        thin_film = next(
+            status
+            for status in report.operation_statuses
+            if status.kind == "thin_film" and status.scope == geometry.geometry_name
+        )
+        self.assertEqual(thin_film.status, "applied")
+        self.assertEqual(thin_film.actual_method, "geo_layer_partitioned_tetrahedral")
+        self.assertTrue(thin_film.details["layer_planes_realized"])
+        self.assertEqual(thin_film.details["layer_plane_verification"], "verified")
+        self.assertEqual(thin_film.details["resolved_layer_partitions"], 3)
+        floor_records = [
+            entry
+            for entry in report.to_dict()["size_fields_realized"]
+            if entry["role"] == "lower_bound"
+            and entry["source"] == "per_geometry_mesh_policy"
+            and entry["target"] == geometry.geometry_name
+        ]
+        self.assertEqual(len(floor_records), 1, report.to_dict())
+        self.assertEqual(floor_records[0]["status"], "applied")
+
+        nodes = np.asarray(mesh.nodes, dtype=np.float64)
+        cells = np.asarray(mesh.elements, dtype=np.int32)
+        markers = np.asarray(mesh.element_markers, dtype=np.int32)
+        self.assertEqual(set(mesh.cell_types.tolist()), {"tet4"})
+        xyz = nodes[cells]
+        volumes = np.linalg.det(xyz[:, 1:] - xyz[:, :1]) / 6.0
+        self.assertTrue(np.all(np.isfinite(volumes)))
+        self.assertTrue(np.all(volumes > 0.0))
+        body_marker = next(
+            int(entry["marker"])
+            for entry in region_markers
+            if entry.get("geometry_name") == geometry.geometry_name
+        )
+        body_mask = markers == body_marker
+        body_nodes = np.unique(cells[body_mask].reshape(-1))
+        for plane in np.linspace(-5e-9, 5e-9, 4):
+            self.assertTrue(np.any(np.abs(nodes[body_nodes, 2] - plane) <= 1e-15))
+        self.assertAlmostEqual(
+            float(volumes.sum()),
+            40e-9 * 40e-9 * 410e-9,
+            delta=1e-12 * 40e-9 * 40e-9 * 410e-9,
+        )
+        self.assertAlmostEqual(
+            float(volumes[body_mask].sum()),
+            (40e-9 * 40e-9 - np.pi * (8e-9) ** 2) * 10e-9,
+            delta=1e-12 * 40e-9 * 40e-9 * 10e-9,
+        )
+
+        def median_tet_edge_length(mask: np.ndarray) -> float:
+            lengths: list[float] = []
+            for tet in cells[mask]:
+                for first_index in range(4):
+                    for second_index in range(first_index + 1, 4):
+                        lengths.append(
+                            float(
+                                np.linalg.norm(
+                                    nodes[int(tet[first_index])]
+                                    - nodes[int(tet[second_index])]
+                                )
+                            )
+                        )
+            return float(np.median(lengths))
+
+        roi_cells = (
+            (np.abs(np.mean(xyz[:, :, 0], axis=1)) <= 16e-9)
+            & (np.abs(np.mean(xyz[:, :, 1], axis=1)) <= 16e-9)
+            & (np.abs(np.mean(xyz[:, :, 2], axis=1)) <= 18e-9)
+        )
+        body_median = median_tet_edge_length(body_mask & roi_cells)
+        air_median = median_tet_edge_length((~body_mask) & roi_cells)
+        # The body floor is 8 nm over a 2 nm interface target; the air retains
+        # its independent 2 nm target in the same spatial region.
+        self.assertGreater(body_median, 4e-9)
+        self.assertLess(body_median, 16e-9)
+        self.assertLess(air_median, body_median)
+        self.assertTrue(
+            {"x_faces", "y_faces"}.issubset(
+                {str(pair["pair_id"]) for pair in mesh.periodic_node_pairs}
+            )
+        )
+
+    def test_exact_layer_body_target_precedence_survives_air_and_local_fields(self) -> None:
+        try:
+            import gmsh  # noqa: F401
+        except ImportError:
+            self.skipTest("gmsh not available")
+
+        def body_xy(mesh: MeshData, markers: list[dict[str, object]], geometry: Geometry):
+            marker = next(
+                int(entry["marker"])
+                for entry in markers
+                if entry.get("geometry_name") == geometry.geometry_name
+            )
+            cells = np.asarray(mesh.elements, dtype=np.int32)
+            body_nodes = np.unique(
+                cells[np.asarray(mesh.element_markers, dtype=np.int32) == marker]
+            )
+            return set(
+                map(
+                    tuple,
+                    np.round(np.asarray(mesh.nodes, dtype=np.float64)[body_nodes, :2], 17),
+                )
+            )
+
+        def realize(
+            geometry: Geometry,
+            *,
+            hint_hmax: float,
+            airbox_hmax: float,
+            owner_hmax: float | None = None,
+            owner_constant_hmax: float | None = None,
+            localized_hmax: float | None = None,
+        ) -> tuple[set[tuple[float, float]], SharedDomainBuildReport]:
+            size_fields: list[dict[str, object]] = []
+            if owner_constant_hmax is not None:
+                size_fields.append(
+                    {
+                        "kind": "ComponentVolumeConstant",
+                        "params": {
+                            "GeometryName": geometry.geometry_name,
+                            "VIn": owner_constant_hmax,
+                            "VOut": 1.0e22,
+                        },
+                    }
+                )
+            if localized_hmax is not None:
+                size_fields.append(
+                    {
+                        "kind": "ComponentRestrictedBox",
+                        "params": {
+                            "GeometryName": geometry.geometry_name,
+                            "VIn": localized_hmax,
+                            "VOut": 1.0e22,
+                            "XMin": -10e-9,
+                            "XMax": 10e-9,
+                            "YMin": -10e-9,
+                            "YMax": 10e-9,
+                            "ZMin": -4e-9,
+                            "ZMax": 4e-9,
+                        },
+                    }
+                )
+            mesh_workflow: dict[str, object] = {
+                "mesh_options": {
+                    "mesh_strategy": "thin_film_tetrahedral",
+                    "through_thickness_elements": 3,
+                    "periodic_pair_ids": ["x_faces", "y_faces"],
+                    "compute_quality": False,
+                    "per_element_quality": False,
+                    "size_fields": size_fields,
+                }
+            }
+            if owner_hmax is not None:
+                mesh_workflow["per_geometry"] = [
+                    {"geometry": geometry.geometry_name, "hmax": owner_hmax}
+                ]
+            mesh, markers, report = realize_fem_domain_mesh_asset_from_components_with_report(
+                geometries=[geometry],
+                hints=fm.FEM(order=1, hmax=hint_hmax),
+                study_universe={
+                    "mode": "manual",
+                    "size": [40e-9, 40e-9, 410e-9],
+                    "center": [0.0, 0.0, 0.0],
+                    "airbox_hmax": airbox_hmax,
+                },
+                mesh_workflow=mesh_workflow,
+            )
+            return body_xy(mesh, markers, geometry), report
+
+        geometries = (
+            fm.Box(40e-9, 40e-9, 10e-9, name="owner_target_box"),
+            fm.Difference(
+                base=fm.Box(40e-9, 40e-9, 10e-9, name="owner_target_ring_box"),
+                tool=fm.Cylinder(
+                    radius=8e-9,
+                    height=10e-9,
+                    name="owner_target_ring_hole",
+                ),
+                name="owner_target_ring",
+            ),
+        )
+        for geometry in geometries:
+            with self.subTest(geometry=geometry.geometry_name):
+                baseline_xy, baseline_report = realize(
+                    geometry,
+                    hint_hmax=20e-9,
+                    owner_hmax=20e-9,
+                    airbox_hmax=30e-9,
+                )
+                resolved_xy, resolved_report = realize(
+                    geometry,
+                    hint_hmax=10e-9,
+                    owner_hmax=20e-9,
+                    airbox_hmax=30e-9,
+                )
+                far_air_xy, far_air_report = realize(
+                    geometry,
+                    hint_hmax=10e-9,
+                    owner_hmax=20e-9,
+                    airbox_hmax=50e-9,
+                )
+                manual_owner_xy, manual_owner_report = realize(
+                    geometry,
+                    hint_hmax=10e-9,
+                    owner_constant_hmax=20e-9,
+                    airbox_hmax=50e-9,
+                )
+
+                for report in (baseline_report, resolved_report, far_air_report):
+                    self.assertAlmostEqual(
+                        report.effective_per_object_targets[geometry.geometry_name].hmax,
+                        20e-9,
+                    )
+                self.assertAlmostEqual(
+                    manual_owner_report.effective_per_object_targets[
+                        geometry.geometry_name
+                    ].hmax,
+                    10e-9,
+                )
+                self.assertEqual(resolved_xy, baseline_xy)
+                self.assertEqual(far_air_xy, resolved_xy)
+                self.assertEqual(manual_owner_xy, far_air_xy)
+
+                if isinstance(geometry, fm.Box):
+                    localized_xy, localized_report = realize(
+                        geometry,
+                        hint_hmax=10e-9,
+                        owner_hmax=20e-9,
+                        airbox_hmax=50e-9,
+                        localized_hmax=50e-9,
+                    )
+                    self.assertIn(
+                        "ComponentRestrictedBox",
+                        localized_report.used_size_field_kinds,
+                    )
+                    self.assertEqual(localized_xy, far_air_xy)
 
     def test_scoped_layer_plane_report_waits_for_postmesh_proof(self) -> None:
         geometry = fm.Box(120e-9, 80e-9, 20e-9, name="thin_box")

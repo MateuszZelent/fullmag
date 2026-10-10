@@ -627,8 +627,15 @@ def _build_mesh_operation_statuses(
         for geometry in geometries:
             sweepability = classify_sweepability(geometry)
             scope = getattr(geometry, "geometry_name", type(geometry).__name__)
+            exact_ring_layers = (
+                build_mode == "single_geometry_geo_ring"
+                and _supports_scoped_layer_partitioned_box(
+                    geometry,
+                    airbox=airbox,
+                )
+            )
             scoped_layer_partitioning = (
-                exact_box_layers
+                (exact_box_layers or exact_ring_layers)
                 and _has_component_scoped_size_fields(opts)
                 and _supports_scoped_layer_partitioned_box(
                     geometry,
@@ -672,7 +679,13 @@ def _build_mesh_operation_statuses(
                     status=(
                         ("applied" if layer_planes_realized else "requested")
                         if scoped_layer_partitioning
-                        else ("applied" if exact_box_layers or sweepability.sweepable else "skipped")
+                        else (
+                            "applied"
+                            if exact_box_layers
+                            or exact_ring_layers
+                            or sweepability.sweepable
+                            else "skipped"
+                        )
                     ),
                     requested_method=requested_thin_film,
                     actual_method=(
@@ -680,13 +693,17 @@ def _build_mesh_operation_statuses(
                         ("geo_layered_tetrahedral" if exact_box_layers else
                          ("feature_aware_tetrahedral" if sweepability.sweepable else "free_tetrahedral"))
                     ),
-                    reason=None if exact_box_layers or sweepability.sweepable else sweepability.reason,
+                    reason=(
+                        None
+                        if exact_box_layers or exact_ring_layers or sweepability.sweepable
+                        else sweepability.reason
+                    ),
                     details={
                         "build_mode": build_mode,
                         "through_thickness_elements": opts.through_thickness_elements,
                         "requested_sweep_direction": requested_sweep_direction,
                         "resolved_sweep_direction": (
-                            "z" if exact_box_layers else
+                            "z" if exact_box_layers or exact_ring_layers else
                             ("xyz"[sweepability.thin_axis] if sweepability.thin_axis is not None else None)
                         ),
                         "airbox_present": airbox is not None,
