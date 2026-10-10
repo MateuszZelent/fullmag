@@ -6,6 +6,7 @@ import { KernelContext } from "@/kernel/KernelContext";
 import type { KernelApi } from "@/kernel/types";
 import {
   findElement,
+  findElements,
   installSimulationPreparationTestDom,
   TestEvent,
   type TestElement,
@@ -80,6 +81,26 @@ describe("ReferenceImportSection file selection", () => {
       expect(oversizedText).not.toHaveBeenCalled();
       expect(container.textContent).toContain("2 points.");
       expect(container.textContent).not.toContain("4 MiB or smaller");
+      const nativeSelectConstructor = dom.document.defaultView?.HTMLSelectElement as
+        | { prototype: object }
+        | undefined;
+      if (!nativeSelectConstructor) {
+        throw new Error("The test DOM must expose its native select constructor.");
+      }
+      const nativeValueSetter = Object.getOwnPropertyDescriptor(
+        nativeSelectConstructor.prototype,
+        "value",
+      )?.set;
+      expect(nativeValueSetter).toBeTypeOf("function");
+      const columnSelects = findElements(
+        container,
+        (element) => element.tagName.toLowerCase() === "select",
+      );
+      expect(columnSelects).toHaveLength(2);
+      expect(columnSelects.every(
+        (element) => Object.getPrototypeOf(element) === nativeSelectConstructor.prototype,
+      )).toBe(true);
+      expect(columnSelects.map((element) => element.value)).toEqual(["0", "1"]);
 
       await act(async () => { chooseFile(input, slowFile); });
       expect(container.textContent).not.toContain("2 points.");

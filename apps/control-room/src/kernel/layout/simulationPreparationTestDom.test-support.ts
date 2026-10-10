@@ -389,6 +389,21 @@ function serializeTestNode(node: TestNode): string {
   return `<${node.tagName.toLowerCase()}${attributes}>${node.childNodes.map(serializeTestNode).join("")}</${node.tagName.toLowerCase()}>`;
 }
 
+/**
+ * Radix Select patches the native select value setter when its hidden form
+ * control changes. Keep that setter on the select prototype only, as in a
+ * browser, while reusing TestElement's existing control-value storage.
+ */
+class TestHTMLSelectElement extends TestElement {
+  override get value(): string {
+    return super.value;
+  }
+
+  override set value(value: string) {
+    super.value = value;
+  }
+}
+
 export class TestDocument extends TestNode {
   activeElement: TestElement | null = null;
   readonly body: TestElement;
@@ -412,6 +427,9 @@ export class TestDocument extends TestNode {
   }
 
   createElement(tagName: string): TestElement {
+    if (tagName.toLowerCase() === "select") {
+      return new TestHTMLSelectElement(this, tagName);
+    }
     return new TestElement(this, tagName);
   }
 
@@ -485,6 +503,7 @@ export function installSimulationPreparationTestDom({
     Element: TestElement,
     Event: TestEvent,
     HTMLElement: TestElement,
+    HTMLSelectElement: TestHTMLSelectElement,
     HTMLIFrameElement: TestHtmlIFrameElement,
     location: { search: "" },
     MutationObserver: TestMutationObserver,
@@ -505,6 +524,7 @@ export function installSimulationPreparationTestDom({
     Element: TestElement,
     Event: TestEvent,
     HTMLElement: TestElement,
+    HTMLSelectElement: TestHTMLSelectElement,
     MutationObserver: TestMutationObserver,
     Node: TestNode,
     ResizeObserver: TestResizeObserver,
