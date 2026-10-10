@@ -58,6 +58,23 @@ znika z provenance. Jawne `gpu` nie może rozwiązać się do `CpuReference`.
 Jawne `cpu` nie jest cicho przepisywane na przyszły native CPU, dopóki taki
 engine nie ma własnego capability, ABI i dowodów.
 
+### 2a. Zgodnosc istniejacych identyfikatorow FDM
+
+Planner uzywa `fdm_cpu_reference` i `fdm_cuda`; istniejacy producenci
+moga zapisywac odpowiednio `cpu_reference` i `cuda_fdm`. Przy kontroli
+requested/resolved/executed runner interpretuje tylko te dwie jawne pary
+jako ten sam engine, przez istniejacy mapping `fdm_engine_id`. Porownanie
+samego backend/device nie wystarcza. Nieznane ID nadal powoduje blad;
+pozostale realizacje i warianty multilayer nie otrzymuja nowych aliasow.
+
+Zapis provenance zachowuje surowe ID producenta i fallbacku. Nie migrujemy
+historycznych artefaktow ani schematu. Alias nie pozwala zadeklarowac
+fallbacku pomiedzy dwiema nazwami tego samego engine, ukryc CPU/CUDA mismatch
+ani dopuscic fallbacku w Strict. Regresje kontroluja koncowy writer metadanych.
+Jest to zgodnosc nazw istniejacych realizacji, nie nowa capability ani
+kwalifikacja runtime/fizyki. Pozne odrzucanie nielegalnego fallbacku pozostaje
+osobnym problemem: powinno nastapic przed solve, a nie dopiero przy publikacji.
+
 ### 3. Status capability nie jest kwalifikacją fizyki
 
 `fdm_cpu_reference` i `fdm_gpu_production` pozostają odrębnymi lane'ami

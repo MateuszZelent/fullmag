@@ -516,10 +516,24 @@ fn effective_execution_request(
     }
 }
 
+fn canonical_engine_identity(engine: &str) -> &str {
+    match engine {
+        "cpu_reference" | "fdm_cpu_reference" => {
+            crate::solver_runtime::engine::fdm_engine_id(
+                crate::solver_runtime::engine::FdmEngine::CpuReference,
+            )
+        }
+        "cuda_fdm" | "fdm_cuda" => crate::solver_runtime::engine::fdm_engine_id(
+            crate::solver_runtime::engine::FdmEngine::CudaFdm,
+        ),
+        other => other,
+    }
+}
+
 fn actual_engine_backend_and_device(engine: &str) -> std::io::Result<(&'static str, &'static str)> {
-    let resolved = match engine {
-        "cpu_reference" | "cpu_reference_multilayer" => ("fdm", "cpu"),
-        "cuda_fdm"
+    let resolved = match canonical_engine_identity(engine) {
+        "fdm_cpu_reference" | "cpu_reference_multilayer" => ("fdm", "cpu"),
+        "fdm_cuda"
         | "cuda_fdm_charge_only"
         | "cuda_assisted_multilayer"
         | "cuda_native_multilayer_convolution"
@@ -703,13 +717,17 @@ fn final_execution_resolution_provenance(
         ));
     }
     if let Some(entry) = fallback {
-        if entry.original_engine == entry.fallback_engine {
+        if canonical_engine_identity(&entry.original_engine)
+            == canonical_engine_identity(&entry.fallback_engine)
+        {
             return Err(Error::new(
                 ErrorKind::InvalidData,
                 "resolved fallback original_engine and fallback_engine must differ",
             ));
         }
-        if entry.fallback_engine != provenance.execution_engine {
+        if canonical_engine_identity(&entry.fallback_engine)
+            != canonical_engine_identity(&provenance.execution_engine)
+        {
             return Err(Error::new(
                 ErrorKind::InvalidData,
                 format!(
@@ -7352,6 +7370,20 @@ mod tests {
         problem
     }
 
+    fn fdm_execution_problem(device: &str, mode: ExecutionMode) -> fullmag_ir::ProblemIR {
+        let mut problem = fullmag_ir::ProblemIR::bootstrap_example();
+        problem.backend_policy.requested_backend = fullmag_ir::BackendTarget::Fdm;
+        problem.validation_profile.execution_mode = mode;
+        problem.problem_meta.runtime_metadata.insert(
+            "runtime_selection".to_string(),
+            serde_json::json!({
+                "device": device,
+                "precision": "double",
+            }),
+        );
+        problem
+    }
+
     #[test]
     fn final_metadata_contains_no_fallback_cpu_execution_resolution() {
         let problem = fem_execution_problem("cpu", ExecutionMode::Extended);
@@ -7511,6 +7543,150 @@ mod tests {
         assert_eq!(resolution["resolution_mode"], "fallback");
         assert_eq!(resolution["fallback_occurred"], true);
         assert_eq!(resolution["fallback_reason"], "native_fem_gpu_unavailable");
+    }
+
+    #[test]
+    fn final_metadata_accepts_canonical_fdm_cpu_fallback_with_legacy_cpu_execution_id() {
+        let problem = fdm_execution_problem("auto", ExecutionMode::Extended);
+        let mut plan = test_execution_plan(None);
+        plan.common.execution_mode = ExecutionMode::Extended;
+        let metadata = write_final_execution_test_metadata_without_fem_policy(
+            "fdm-cpu-alias-fallback",
+            &problem,
+            &plan,
+            ExecutionProvenance {
+                execution_engine: "cpu_reference".to_string(),
+                precision: "double".to_string(),
+                resolved_fallback: Some(ResolvedFallback {
+                    occurred: true,
+                    original_engine: "cuda_fdm".to_string(),
+                    fallback_engine: "fdm_cpu_reference".to_string(),
+                    reason: "cuda_fdm_unavailable".to_string(),
+                    message: "CUDA unavailable; selected CPU reference".to_string(),
+                }),
+                ..ExecutionProvenance::default()
+            },
+        )
+        .expect("canonical CPU fallback and legacy CPU execution IDs should agree");
+
+        let provenance = &metadata["execution_provenance"];
+        assert_eq!(provenance["execution_engine"], "cpu_reference");
+        assert_eq!(
+            provenance["resolved_fallback"]["original_engine"],
+            "cuda_fdm"
+        );
+        assert_eq!(
+            provenance["resolved_fallback"]["fallback_engine"],
+            "fdm_cpu_reference"
+        );
+        let resolution = &provenance["execution_resolution"];
+        assert_eq!(resolution["resolved_execution"]["backend"], "fdm");
+        assert_eq!(resolution["resolved_execution"]["device"], "cpu");
+        assert_eq!(resolution["fallback_occurred"], true);
+    }
+
+    #[test]
+    fn final_metadata_rejects_cpu_fallback_when_actual_engine_is_cuda_alias() {
+        let problem = fdm_execution_problem("auto", ExecutionMode::Extended);
+        let mut plan = test_execution_plan(None);
+        plan.common.execution_mode = ExecutionMode::Extended;
+        let error = write_final_execution_test_metadata_without_fem_policy(
+            "fdm-cpu-fallback-actual-cuda",
+            &problem,
+            &plan,
+            ExecutionProvenance {
+                execution_engine: "fdm_cuda".to_string(),
+                precision: "double".to_string(),
+                resolved_fallback: Some(ResolvedFallback {
+                    occurred: true,
+                    original_engine: "cuda_fdm".to_string(),
+                    fallback_engine: "cpu_reference".to_string(),
+                    reason: "test_cpu_fallback".to_string(),
+                    message: "CPU fallback was declared".to_string(),
+                }),
+                ..ExecutionProvenance::default()
+            },
+        )
+        .expect_err("CPU fallback metadata must reject an actual CUDA engine");
+        assert!(error
+            .to_string()
+            .contains("resolved fallback engine mismatch"));
+    }
+
+    #[test]
+    fn final_metadata_rejects_fallback_aliases_with_same_canonical_identity() {
+        let problem = fdm_execution_problem("auto", ExecutionMode::Extended);
+        let mut plan = test_execution_plan(None);
+        plan.common.execution_mode = ExecutionMode::Extended;
+        let error = write_final_execution_test_metadata_without_fem_policy(
+            "fdm-same-canonical-fallback",
+            &problem,
+            &plan,
+            ExecutionProvenance {
+                execution_engine: "cpu_reference".to_string(),
+                precision: "double".to_string(),
+                resolved_fallback: Some(ResolvedFallback {
+                    occurred: true,
+                    original_engine: "cpu_reference".to_string(),
+                    fallback_engine: "fdm_cpu_reference".to_string(),
+                    reason: "invalid_same_engine_fallback".to_string(),
+                    message: "the aliases name one engine".to_string(),
+                }),
+                ..ExecutionProvenance::default()
+            },
+        )
+        .expect_err("different FDM engine aliases must not hide a same-engine fallback");
+        assert!(error
+            .to_string()
+            .contains("resolved fallback original_engine and fallback_engine must differ"));
+    }
+
+    #[test]
+    fn final_metadata_rejects_unknown_execution_engine_id() {
+        let problem = fdm_execution_problem("auto", ExecutionMode::Extended);
+        let mut plan = test_execution_plan(None);
+        plan.common.execution_mode = ExecutionMode::Extended;
+        let error = write_final_execution_test_metadata_without_fem_policy(
+            "fdm-unknown-engine",
+            &problem,
+            &plan,
+            ExecutionProvenance {
+                execution_engine: "fdm_future_guess".to_string(),
+                precision: "double".to_string(),
+                ..ExecutionProvenance::default()
+            },
+        )
+        .expect_err("unknown engine identifiers must fail closed");
+        assert!(error
+            .to_string()
+            .contains("unknown execution_engine 'fdm_future_guess'"));
+    }
+
+    #[test]
+    fn final_metadata_keeps_strict_fallback_rejection_for_fdm_aliases() {
+        let problem = fdm_execution_problem("auto", ExecutionMode::Strict);
+        let plan = test_execution_plan(None);
+        let error = write_final_execution_test_metadata_without_fem_policy(
+            "fdm-strict-fallback-rejected",
+            &problem,
+            &plan,
+            ExecutionProvenance {
+                execution_engine: "cpu_reference".to_string(),
+                precision: "double".to_string(),
+                resolved_fallback: Some(ResolvedFallback {
+                    occurred: true,
+                    original_engine: "cuda_fdm".to_string(),
+                    fallback_engine: "fdm_cpu_reference".to_string(),
+                    reason: "cuda_fdm_unavailable".to_string(),
+                    message: "CUDA unavailable; selected CPU reference".to_string(),
+                }),
+                ..ExecutionProvenance::default()
+            },
+        )
+        .expect_err("Strict execution must continue to reject every fallback");
+        assert!(error
+            .to_string()
+            .contains("strict execution metadata cannot contain a resolved fallback"));
     }
 
     #[test]
