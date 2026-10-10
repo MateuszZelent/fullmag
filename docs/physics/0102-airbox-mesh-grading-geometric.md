@@ -1,7 +1,7 @@
 # Airbox mesh grading
 
 - Status: geometric and legacy linear field generation implemented; full 0105 production evidence pending
-- Last updated: 2026-08-27
+- Last updated: 2026-10-10
 - Governing ADR: `docs/adr/0027-canonical-fem-mesh-policy-and-quality-evidence.md`
 
 (airbox-grading-problem-statement)=
@@ -87,6 +87,18 @@ legacy explicit option, not the default scientific recommendation.
 | $h(d)$ | airbox target size at distance $d$ | $\mathrm m$ |
 | $h_\min$ | eligible near-feature air target | $\mathrm m$ |
 | $h_\max$ | far-air maximum target | $\mathrm m$ |
+| $R$ | exact radius of the circular hole in a ring geometry | $\mathrm m$ |
+| $i$ | index of a consecutive polygon edge, wrapping after the final vertex | $1$ |
+| $\pi$ | ratio of a circle's circumference to its diameter | $1$ |
+| $\sin$ | sine function applied to an angle in radians | $1$ |
+| $\sum_i$ | sum over all consecutive polygon edges | $1$ |
+| $\Delta\theta_i$ | positive angular gap between consecutive polygon vertices on the hole wall | $\mathrm{rad}$ |
+| $\Delta\theta_\max$ | largest angular gap on the polygonal hole wall | $\mathrm{rad}$ |
+| $A_\mathrm{poly}$ | cross-sectional area of the polygonal hole used by the straight-sided mesh | $\mathrm{m^2}$ |
+| $\Delta A$ | circular-hole area minus polygonal-hole area | $\mathrm{m^2}$ |
+| $t$ | axial thickness of the ring body | $\mathrm m$ |
+| $V_\mathrm{tet}$ | volume represented by the straight-sided tetrahedra in the ring body | $\mathrm{m^3}$ |
+| $V_\mathrm{CAD}$ | exact box-minus-cylinder volume of the ring body | $\mathrm{m^3}$ |
 
 (airbox-grading-assumptions-and-validity)=
 ## 4. Assumptions and validity
@@ -181,6 +193,57 @@ Surface, edge, corner, transition-air and far-air zones enter the canonical
 upper/lower composition independently. Growth is verified on face-adjacent
 final cells, not inferred from the MathEval expression.
 
+### Straight-sided boundary of an exact-layer ring
+
+A linear tetrahedral mesh represents a cylindrical hole with a polygonal wall.
+For the uniform ring prism used by the exact-layer regression, the chordal
+volume bound below applies only if the test first verifies that every hole-wall
+vertex lies on radius $R$ within a coordinate-roundoff tolerance scaled by the
+largest model coordinate. All exact layer planes must have the same ordered
+angular vertex set, with no hole-wall vertices between those planes; the end
+caps and outer box must also be flat and unchanged. Those checks make the
+represented hole an inscribed polygonal prism rather than an assumption inferred from one
+cross-section. For polygon gaps $0<\Delta\theta_i\le\pi$ with
+$\sum_i\Delta\theta_i=2\pi$:
+
+```{math}
+:label: eq-ring-polygon-hole-area
+
+A_\mathrm{poly}=\frac{R^2}{2}\sum_i\sin(\Delta\theta_i),
+\qquad
+\Delta A=\pi R^2-A_\mathrm{poly}
+=\frac{R^2}{2}\sum_i\left(\Delta\theta_i-\sin(\Delta\theta_i)\right),
+\qquad
+0\le\Delta A\le\frac{\pi R^2}{6}(\Delta\theta_\max)^2.
+```
+
+For each edge, $0\le\Delta\theta_i-\sin(\Delta\theta_i)\le(\Delta\theta_i)^3/6$.
+Summing these bounds and using
+$\sum_i\Delta\theta_i^3\le(\Delta\theta_\max)^2\sum_i\Delta\theta_i$
+gives the stated area bound.
+Because the outer box is exact, the mesh body's volume excess is exactly the
+missing cylindrical-hole volume for this verified prism case:
+
+```{math}
+:label: eq-ring-polygon-hole-volume-bound
+
+V_\mathrm{tet}-V_\mathrm{CAD}=t\,\Delta A,
+\qquad
+0\le V_\mathrm{tet}-V_\mathrm{CAD}
+\le\frac{\pi tR^2}{6}(\Delta\theta_\max)^2.
+```
+
+This bounds only the geometric volume difference from straight-sided boundary
+facets; it is not a solver-error or physics-accuracy bound. If the common
+cross-section and cap conditions are not proven, this prism equation must not
+be used to explain a volume difference; a conservative facet-based bound or an
+explicit failed applicability check is required instead. The regression derives
+the complete body boundary from faces with one incident body tetrahedron,
+requires a closed two-facet incidence at every shell edge, and classifies each
+face exactly once as a flat cap, an outer side, or the cylindrical hole wall.
+For both caps and all four outer sides, planar triangle incidence, boundary
+edges, and covered area are checked before the chordal volume bound is used.
+
 (airbox-grading-implementation-mapping)=
 ## 9. Implementation mapping
 
@@ -204,6 +267,29 @@ production criteria, not claims about the current partial report.
 - Current reports do not yet publish the complete canonical band/growth gate.
 - Linear grading remains compatibility behavior and is not removed here.
 - FMMQ v1 cannot carry mixed topology quality evidence.
+- The scoped exact-layer path currently invokes GEO extrusion with
+  `numElements=[1]`, `heights=[1.0]` and `recombine=True` in
+  `packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py::_generate_coincident_ring_airbox_mesh`.
+  This also creates and copies a source-face mesh, so source-face XY density is
+  not yet proven independent of the airbox sizing. A planned correction is to
+  create the exact CAD layer partitions without mesh-extrusion arguments, then
+  generate the conforming 3D mesh after owner-volume and air-volume fields are
+  installed. This is a proposed route only: it is not implemented or
+  runtime-qualified. GHA regressions must still prove body XY invariance,
+  scoped density, exact planes, airbox grading, positive cells and periodic
+  pairing before the status changes.
+- The resolved exact-layer generator cap and the reported `effective_airbox_target`
+  are currently distinct. `_resolve_box_airbox_layer_sizes` derives a finite
+  outer target from the interface target and growth ratio when no maximum was
+  authored: for $h_\min=10\times10^{-9}\,\mathrm m$ and $g=1.3$, the generated
+  cap is $10\times10^{-9}\,\mathrm m\,g^4\approx2.8561\times10^{-8}\,\mathrm m$.
+  With $h_\min=15\times10^{-9}\,\mathrm m$, it is approximately
+  $4.2842\times10^{-8}\,\mathrm m$. Current GHA diagnostics still
+  show `effective_airbox_target.hmax=10 nm` for these implicit-cap cases. The
+  report therefore does not yet identify the generator's derived outer cap.
+  The intended report correction is additive: expose the derived cap separately
+  while preserving authored `None` in requested intent. Until then, do not use
+  this report field as evidence of the implicit generator cap.
 
 (airbox-grading-scientific-bibliography)=
 ## 12. Scientific bibliography
@@ -221,3 +307,9 @@ production criteria, not claims about the current partial report.
 | Airbox field | `packages/fullmag-py/src/fullmag/meshing/_airbox_grading.py` | `_add_airbox_grading_field` | creates GEO/OCC airbox grading field | FEM meshing | Gmsh tests |
 | Boundary span | `packages/fullmag-py/src/fullmag/meshing/_size_field_plan.py` | `_resolve_airbox_boundary_transition_span` | resolves numeric side/corner transition spans | FEM meshing | planner tests |
 | Physical model | `docs/physics/0102-airbox-mesh-grading-geometric.md` | `DOC-ANCHOR:airbox-grading-governing-equations` | source-free exterior equations motivating grading | FEM contract | publication review |
+| Chordal ring volume bound | `docs/physics/0102-airbox-mesh-grading-geometric.md` | `DOC-ANCHOR:eq-ring-polygon-hole-volume-bound` | conditional geometric bound for a verified common polygonal hole prism | FEM mesh geometry | planned GHA regression |
+| Exact-layer ring construction | `packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py` | `_generate_coincident_ring_airbox_mesh` | creates per-plane ring volumes; scoped XY-independence remains unqualified | FEM meshing | actual GHA required |
+| Ring volume applicability regression | `packages/fullmag-py/tests/test_meshing.py` | `test_scoped_exact_ring_lower_bound_uses_layer_route_and_report` | must verify all plane vertex sets, radius, caps, and the conditional bound | FEM meshing | planned GHA regression |
+| Pure chordal-bound regression | `packages/fullmag-py/tests/test_meshing.py` | `test_ring_chordal_bound_guard_and_refinement` | checks the analytic inequality, invalid geometry rejection, and bound tightening under refinement | FEM mesh geometry | source test added; GHA pending |
+| Exact-layer airbox target resolution | `packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py` | `_resolve_box_airbox_layer_sizes` | derives interface and finite outer cap for the exact-layer Box/ring generator | FEM meshing | implemented |
+| Effective-target report | `packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py` | `_resolve_effective_shared_domain_targets` | reports resolved airbox intent, not yet the exact-layer generator's implicit cap | FEM meshing | report limitation |

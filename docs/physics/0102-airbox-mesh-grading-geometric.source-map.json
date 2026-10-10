@@ -73,6 +73,45 @@
       "sources": [
         "geometric-profile"
       ]
+    },
+    {
+      "id": "eq-ring-polygon-hole-area",
+      "symbols": [
+        "ring_radius",
+        "ring_edge_index",
+        "ring_circle_constant",
+        "ring_sine",
+        "ring_summation",
+        "ring_angular_gap",
+        "ring_max_angular_gap",
+        "ring_polygon_area",
+        "ring_area_deficit"
+      ],
+      "sources": [
+        "ring-volume-source",
+        "ring-volume-regression",
+        "ring-prism-bound-regression"
+      ]
+    },
+    {
+      "id": "eq-ring-polygon-hole-volume-bound",
+      "symbols": [
+        "ring_thickness",
+        "ring_area_deficit",
+        "ring_edge_index",
+        "ring_circle_constant",
+        "ring_sine",
+        "ring_summation",
+        "ring_tetra_volume",
+        "ring_cad_volume",
+        "ring_radius",
+        "ring_max_angular_gap"
+      ],
+      "sources": [
+        "ring-volume-source",
+        "ring-volume-regression",
+        "ring-prism-bound-regression"
+      ]
     }
   ],
   "symbols": [
@@ -147,6 +186,78 @@
       "latex": "h_\\max",
       "meaning": "far-air maximum target",
       "si_unit": "\\mathrm m"
+    },
+    {
+      "id": "ring_radius",
+      "latex": "R",
+      "meaning": "exact radius of the circular hole in a ring geometry",
+      "si_unit": "\\mathrm m"
+    },
+    {
+      "id": "ring_edge_index",
+      "latex": "i",
+      "meaning": "index of a consecutive polygon edge, wrapping after the final vertex",
+      "si_unit": "1"
+    },
+    {
+      "id": "ring_circle_constant",
+      "latex": "\\pi",
+      "meaning": "ratio of a circle's circumference to its diameter",
+      "si_unit": "1"
+    },
+    {
+      "id": "ring_sine",
+      "latex": "\\sin",
+      "meaning": "sine function applied to an angle in radians",
+      "si_unit": "1"
+    },
+    {
+      "id": "ring_summation",
+      "latex": "\\sum_i",
+      "meaning": "sum over all consecutive polygon edges",
+      "si_unit": "1"
+    },
+    {
+      "id": "ring_angular_gap",
+      "latex": "\\Delta\\theta_i",
+      "meaning": "positive angular gap between consecutive polygon vertices on the hole wall",
+      "si_unit": "\\mathrm{rad}"
+    },
+    {
+      "id": "ring_max_angular_gap",
+      "latex": "\\Delta\\theta_\\max",
+      "meaning": "largest angular gap on the polygonal hole wall",
+      "si_unit": "\\mathrm{rad}"
+    },
+    {
+      "id": "ring_polygon_area",
+      "latex": "A_\\mathrm{poly}",
+      "meaning": "cross-sectional area of the polygonal hole used by the straight-sided mesh",
+      "si_unit": "\\mathrm{m^2}"
+    },
+    {
+      "id": "ring_area_deficit",
+      "latex": "\\Delta A",
+      "meaning": "circular-hole area minus polygonal-hole area",
+      "si_unit": "\\mathrm{m^2}"
+    },
+    {
+      "id": "ring_thickness",
+      "latex": "t",
+      "meaning": "axial thickness of the ring body",
+      "si_unit": "\\mathrm m"
+    },
+    {
+      "id": "ring_tetra_volume",
+      "latex": "V_\\mathrm{tet}",
+      "meaning": "volume represented by the straight-sided tetrahedra in the ring body",
+      "si_unit": "\\mathrm{m^3}"
+    },
+    {
+      "id": "ring_cad_volume",
+      "latex": "V_\\mathrm{CAD}",
+      "meaning": "exact box-minus-cylinder volume of the ring body",
+      "si_unit": "\\mathrm{m^3}"
     }
   ],
   "sources": [
@@ -184,6 +295,48 @@
       "symbol": "DOC-ANCHOR:airbox-grading-governing-equations",
       "responsibility": "Defines the source-free exterior equations used to motivate grading.",
       "evidence_status": "planned_contract"
+    },
+    {
+      "id": "ring-volume-source",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py",
+      "symbol": "_generate_coincident_ring_airbox_mesh",
+      "responsibility": "Creates exact-layer Box/ring volumes and extracts the straight-sided tetrahedral mesh.",
+      "evidence_status": "implemented"
+    },
+    {
+      "id": "ring-volume-regression",
+      "path": "packages/fullmag-py/tests/test_meshing.py",
+      "symbol": "test_scoped_exact_ring_lower_bound_uses_layer_route_and_report",
+      "responsibility": "Derives all body boundary faces from tetrahedron incidence, classifies each exactly once, and verifies closed-shell and cap/outer planar coverage before applying the conditional chordal volume bound.",
+      "evidence_status": "planned_contract"
+    },
+    {
+      "id": "ring-prism-bound-regression",
+      "path": "packages/fullmag-py/tests/test_meshing.py",
+      "symbol": "test_ring_chordal_bound_guard_and_refinement",
+      "responsibility": "Checks the annular-cap area oracle, complementary quad halves, and chordal inequality; rejects duplicate or missing wall facets, nonclosed shells, unknown or overlapping classifications, incomplete planar patches, and invalid geometry.",
+      "evidence_status": "implemented"
+    },
+    {
+      "id": "scoped-layer-geometry-only-plan",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py",
+      "symbol": "_generate_coincident_ring_airbox_mesh",
+      "responsibility": "Planned geometry-only exact-layer extrusion before owner-volume/air-volume mesh fields; not implemented or runtime-qualified.",
+      "evidence_status": "planned_contract"
+    },
+    {
+      "id": "box-layer-size-resolution",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py",
+      "symbol": "_resolve_box_airbox_layer_sizes",
+      "responsibility": "Resolves numeric interface and outer targets used by the exact-layer Box/ring generator.",
+      "evidence_status": "implemented"
+    },
+    {
+      "id": "effective-airbox-target-report",
+      "path": "packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py",
+      "symbol": "_resolve_effective_shared_domain_targets",
+      "responsibility": "Produces the effective target report, which does not currently expose the exact-layer implicit outer cap.",
+      "evidence_status": "implemented"
     }
   ],
   "public_api": {

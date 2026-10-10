@@ -324,6 +324,383 @@ def _tet_edge_midpoint_coverage_summary(
     }
 
 
+def _verified_ring_prism_chordal_volume_bound(
+    nodes: np.ndarray,
+    wall_faces: np.ndarray,
+    *,
+    radius_m: float,
+    z_planes_m: list[float],
+    coordinate_tolerance_m: float,
+) -> tuple[float, float, float]:
+    """Return polygon defect, its proven upper bound, and the maximum angle gap."""
+    points = np.asarray(nodes, dtype=np.float64)
+    faces = np.asarray(wall_faces, dtype=np.int64)
+    planes = np.asarray(z_planes_m, dtype=np.float64)
+    tolerance = float(coordinate_tolerance_m)
+    radius = float(radius_m)
+    if (
+        points.ndim != 2
+        or points.shape[1] != 3
+        or faces.ndim != 2
+        or faces.shape[1] != 3
+        or not len(faces)
+        or planes.ndim != 1
+        or len(planes) < 2
+        or not np.all(np.isfinite(points))
+        or not np.all(np.isfinite(planes))
+        or not np.isfinite(radius)
+        or radius <= 0.0
+        or not np.isfinite(tolerance)
+        or tolerance <= 0.0
+        or np.any(faces < 0)
+        or np.any(faces >= len(points))
+        or np.any(np.diff(planes) <= 0.0)
+    ):
+        raise AssertionError("ring prism chord bound requires finite complete geometry")
+
+    wall_nodes = np.unique(faces.reshape(-1))
+    wall_points = points[wall_nodes]
+    radial = np.hypot(wall_points[:, 0], wall_points[:, 1])
+    if np.any(np.abs(radial - radius) > tolerance):
+        raise AssertionError("ring wall vertices do not lie on the authored radius")
+    node_planes = np.argmin(
+        np.abs(wall_points[:, 2, None] - planes[None, :]), axis=1
+    )
+    if np.any(np.abs(wall_points[:, 2] - planes[node_planes]) > tolerance):
+        raise AssertionError("ring wall has vertices between exact layer planes")
+
+    plane_xy: list[np.ndarray] = []
+    for plane_index in range(len(planes)):
+        selected = np.flatnonzero(node_planes == plane_index)
+        xy = wall_points[selected, :2]
+        if len(xy) < 3:
+            raise AssertionError("ring wall has an incomplete plane vertex set")
+        angles = np.mod(np.arctan2(xy[:, 1], xy[:, 0]), 2.0 * np.pi)
+        ordered_xy = xy[np.argsort(angles, kind="stable")]
+        if np.any(np.linalg.norm(np.diff(ordered_xy, axis=0), axis=1) <= tolerance):
+            raise AssertionError("ring plane contains duplicate polygon vertices")
+        plane_xy.append(ordered_xy)
+
+    reference_xy = plane_xy[0]
+    reference_angles = np.mod(
+        np.arctan2(reference_xy[:, 1], reference_xy[:, 0]), 2.0 * np.pi
+    )
+    vertex_count = len(reference_xy)
+    for xy in plane_xy[1:]:
+        if len(xy) != vertex_count:
+            raise AssertionError("ring layer planes have different polygon vertex counts")
+        matched = []
+        for point in xy:
+            distances = np.linalg.norm(reference_xy - point, axis=1)
+            match = int(np.argmin(distances))
+            if float(distances[match]) > tolerance:
+                raise AssertionError("ring layer planes do not share the same XY polygon")
+            matched.append(match)
+        if len(set(matched)) != vertex_count:
+            raise AssertionError("ring layer plane mapping is not one-to-one")
+
+    order = np.argsort(reference_angles, kind="stable")
+    ordered_angles = reference_angles[order]
+    gaps = np.diff(
+        np.concatenate((ordered_angles, [ordered_angles[0] + 2.0 * np.pi]))
+    )
+    if np.any(gaps <= 0.0) or float(np.max(gaps)) > np.pi + tolerance / radius:
+        raise AssertionError("ring polygon must be convex with angular gaps no larger than pi")
+
+    def reference_vertex(xy: np.ndarray) -> int:
+        distances = np.linalg.norm(reference_xy - xy, axis=1)
+        index = int(np.argmin(distances))
+        if float(distances[index]) > tolerance:
+            raise AssertionError("ring side facet has a vertex outside the common polygon")
+        return index
+
+    faces_by_side: dict[tuple[int, int], list[tuple[tuple[int, int], ...]]] = {}
+    for face in faces:
+        if len(set(int(node) for node in face)) != 3:
+            raise AssertionError("ring side facet must have three distinct nodes")
+        face_points = points[face]
+        plane_ids = np.argmin(
+            np.abs(face_points[:, 2, None] - planes[None, :]), axis=1
+        )
+        if np.any(np.abs(face_points[:, 2] - planes[plane_ids]) > tolerance):
+            raise AssertionError("ring side facet contains an off-plane wall vertex")
+        slab_ids = np.unique(plane_ids)
+        if len(slab_ids) != 2 or int(slab_ids[1]) != int(slab_ids[0]) + 1:
+            raise AssertionError("ring side facet does not span one adjacent layer slab")
+        face_corners = tuple(
+            (int(plane_id), reference_vertex(point))
+            for plane_id, point in zip(plane_ids, face_points[:, :2], strict=True)
+        )
+        if len(set(face_corners)) != 3:
+            raise AssertionError("ring side facet repeats a prism corner")
+        vertices = sorted({vertex for _, vertex in face_corners})
+        if len(vertices) != 2:
+            raise AssertionError("ring side facet is not on one vertical polygon side")
+        first, second = vertices
+        if (first + 1) % vertex_count == second:
+            edge = first
+        elif (second + 1) % vertex_count == first:
+            edge = second
+        else:
+            raise AssertionError("ring side facet skips a polygon edge")
+        key = (int(slab_ids[0]), edge)
+        faces_by_side.setdefault(key, []).append(tuple(sorted(face_corners)))
+
+    expected_faces = {
+        (slab, edge)
+        for slab in range(len(planes) - 1)
+        for edge in range(vertex_count)
+    }
+    if set(faces_by_side) != expected_faces:
+        raise AssertionError("ring wall is missing a polygon side in one layer slab")
+    for (slab, edge), triangles in faces_by_side.items():
+        if len(triangles) != 2:
+            raise AssertionError("each prism side must have exactly two triangles")
+        if len(set(triangles)) != 2:
+            raise AssertionError("ring prism side contains a duplicate triangle")
+        next_vertex = (edge + 1) % vertex_count
+        expected_corners = {
+            (slab, edge),
+            (slab, next_vertex),
+            (slab + 1, edge),
+            (slab + 1, next_vertex),
+        }
+        first_triangle, second_triangle = (set(triangle) for triangle in triangles)
+        shared_diagonal = first_triangle & second_triangle
+        valid_diagonals = {
+            frozenset(((slab, edge), (slab + 1, next_vertex))),
+            frozenset(((slab, next_vertex), (slab + 1, edge))),
+        }
+        if (
+            first_triangle | second_triangle != expected_corners
+            or len(shared_diagonal) != 2
+            or frozenset(shared_diagonal) not in valid_diagonals
+        ):
+            raise AssertionError(
+                "ring prism side triangles must be complementary halves of one quad"
+            )
+
+    area_deficit = 0.5 * radius**2 * float(np.sum(gaps - np.sin(gaps)))
+    thickness = float(planes[-1] - planes[0])
+    defect = thickness * area_deficit
+    bound = np.pi * thickness * radius**2 * float(np.max(gaps)) ** 2 / 6.0
+    return defect, bound, float(np.max(gaps))
+
+def _rectangle_patch_boundary_edges(
+    nodes: np.ndarray,
+    faces: np.ndarray,
+    *,
+    axes: tuple[int, int],
+    bounds: tuple[float, float, float, float],
+    coordinate_tolerance_m: float,
+) -> set[tuple[int, int]]:
+    """Return the expected segmented perimeter edges of a planar rectangle patch."""
+    points = np.asarray(nodes, dtype=np.float64)
+    triangles = np.asarray(faces, dtype=np.int64)
+    tolerance = float(coordinate_tolerance_m)
+    node_ids = np.unique(triangles.reshape(-1))
+    expected: set[tuple[int, int]] = set()
+    for side_index, tangent_index in ((0, 1), (1, 0)):
+        side_axis = axes[side_index]
+        tangent_axis = axes[tangent_index]
+        side_min, side_max = bounds[2 * side_index : 2 * side_index + 2]
+        tangent_min, tangent_max = bounds[2 * tangent_index : 2 * tangent_index + 2]
+        for side_value in (side_min, side_max):
+            side_nodes = node_ids[
+                np.abs(points[node_ids, side_axis] - side_value) <= tolerance
+            ]
+            if len(side_nodes) < 2:
+                raise AssertionError("planar patch is missing a rectangle boundary side")
+            order = np.argsort(points[side_nodes, tangent_axis], kind="stable")
+            ordered_nodes = side_nodes[order]
+            tangent_values = points[ordered_nodes, tangent_axis]
+            if (
+                abs(float(tangent_values[0]) - tangent_min) > tolerance
+                or abs(float(tangent_values[-1]) - tangent_max) > tolerance
+                or np.any(np.diff(tangent_values) <= tolerance)
+            ):
+                raise AssertionError("planar patch rectangle perimeter is incomplete")
+            for first, second in zip(ordered_nodes[:-1], ordered_nodes[1:], strict=True):
+                expected.add(tuple(sorted((int(first), int(second)))))
+    return expected
+
+
+def _verified_planar_patch_area(
+    nodes: np.ndarray,
+    faces: np.ndarray,
+    *,
+    fixed_axis: int,
+    fixed_value: float,
+    axes: tuple[int, int],
+    bounds: tuple[float, float, float, float],
+    expected_boundary_edges: set[tuple[int, int]],
+    expected_area_m2: float,
+    area_tolerance_m2: float,
+    coordinate_tolerance_m: float,
+) -> float:
+    """Check planar triangle incidence and return its summed geometric area."""
+    points = np.asarray(nodes, dtype=np.float64)
+    triangles = np.asarray(faces, dtype=np.int64)
+    tolerance = float(coordinate_tolerance_m)
+    if triangles.ndim != 2 or triangles.shape[1] != 3 or not len(triangles):
+        raise AssertionError("planar patch requires nonempty triangle facets")
+    if np.any(triangles < 0) or np.any(triangles >= len(points)):
+        raise AssertionError("planar patch contains an invalid node index")
+    if np.any(np.abs(points[triangles, fixed_axis] - fixed_value) > tolerance):
+        raise AssertionError("planar patch contains a nonplanar triangle")
+
+    u_min, u_max, v_min, v_max = bounds
+    projected = points[triangles][:, :, axes]
+    if (
+        np.any(projected[:, :, 0] < u_min - tolerance)
+        or np.any(projected[:, :, 0] > u_max + tolerance)
+        or np.any(projected[:, :, 1] < v_min - tolerance)
+        or np.any(projected[:, :, 1] > v_max + tolerance)
+    ):
+        raise AssertionError("planar patch triangle lies outside its CAD rectangle")
+
+    edge_incidence: dict[tuple[int, int], int] = {}
+    face_signatures: set[tuple[int, int, int]] = set()
+    areas: list[float] = []
+    for face, triangle in zip(triangles, projected, strict=True):
+        node_ids = tuple(sorted(int(node) for node in face))
+        if len(set(node_ids)) != 3 or node_ids in face_signatures:
+            raise AssertionError("planar patch contains a duplicate or degenerate triangle")
+        face_signatures.add(node_ids)
+        first = triangle[1] - triangle[0]
+        second = triangle[2] - triangle[0]
+        area = 0.5 * abs(float(first[0] * second[1] - first[1] * second[0]))
+        if not np.isfinite(area) or area <= 0.0:
+            raise AssertionError("planar patch contains a zero-area triangle")
+        areas.append(area)
+        for first_node, second_node in (
+            (face[0], face[1]),
+            (face[1], face[2]),
+            (face[2], face[0]),
+        ):
+            edge = tuple(sorted((int(first_node), int(second_node))))
+            edge_incidence[edge] = edge_incidence.get(edge, 0) + 1
+            if edge_incidence[edge] > 2:
+                raise AssertionError("planar patch edge has nonmanifold incidence")
+
+    actual_boundary_edges = {
+        edge for edge, incidence in edge_incidence.items() if incidence == 1
+    }
+    if actual_boundary_edges != expected_boundary_edges or any(
+        incidence not in {1, 2} for incidence in edge_incidence.values()
+    ):
+        raise AssertionError("planar patch has incomplete boundary or edge incidence")
+    area_sum = float(np.sum(areas))
+    if abs(area_sum - float(expected_area_m2)) > float(area_tolerance_m2):
+        raise AssertionError("planar patch area does not cover its CAD region")
+    return area_sum
+
+def _classify_ring_body_boundary_face(
+    face_points: np.ndarray,
+    *,
+    radius_m: float,
+    z_bounds_m: tuple[float, float],
+    xy_bounds_m: tuple[float, float],
+    coordinate_tolerance_m: float,
+) -> str:
+    """Require each body-boundary triangle to have one geometric owner."""
+    points = np.asarray(face_points, dtype=np.float64)
+    tolerance = float(coordinate_tolerance_m)
+    radius = float(radius_m)
+    z_min, z_max = z_bounds_m
+    xy_min, xy_max = xy_bounds_m
+    if (
+        points.shape != (3, 3)
+        or not np.all(np.isfinite(points))
+        or not np.isfinite(tolerance)
+        or tolerance <= 0.0
+        or not np.isfinite(radius)
+        or radius <= 0.0
+    ):
+        raise AssertionError("body boundary classification requires finite triangle geometry")
+
+    matches: list[str] = []
+    if np.all(np.abs(points[:, 2] - z_min) <= tolerance):
+        matches.append("cap_lower")
+    if np.all(np.abs(points[:, 2] - z_max) <= tolerance):
+        matches.append("cap_upper")
+    for axis, label in ((0, "x"), (1, "y")):
+        if np.all(np.abs(points[:, axis] - xy_min) <= tolerance):
+            matches.append(f"outer_{label}_min")
+        if np.all(np.abs(points[:, axis] - xy_max) <= tolerance):
+            matches.append(f"outer_{label}_max")
+
+    radial = np.hypot(points[:, 0], points[:, 1])
+    if (
+        np.all(np.abs(radial - radius) <= tolerance)
+        and float(np.ptp(points[:, 2])) > tolerance
+        and float(np.min(points[:, 2])) >= z_min - tolerance
+        and float(np.max(points[:, 2])) <= z_max + tolerance
+    ):
+        matches.append("hole_wall")
+
+    if len(matches) != 1:
+        raise AssertionError(
+            "body boundary facet must match exactly one cap, outer side, or hole wall"
+        )
+    return matches[0]
+
+
+def _verify_closed_triangle_surface(faces: np.ndarray) -> None:
+    """Require a nonduplicated triangular shell with two faces at every edge."""
+    triangles = np.asarray(faces, dtype=np.int64)
+    if triangles.ndim != 2 or triangles.shape[1] != 3 or not len(triangles):
+        raise AssertionError("closed surface requires nonempty triangle facets")
+    edge_incidence: dict[tuple[int, int], int] = {}
+    face_signatures: set[tuple[int, int, int]] = set()
+    for face in triangles:
+        signature = tuple(sorted(int(node) for node in face))
+        if len(set(signature)) != 3 or signature in face_signatures:
+            raise AssertionError("closed surface contains a duplicate or degenerate triangle")
+        face_signatures.add(signature)
+        for first, second in (
+            (face[0], face[1]),
+            (face[1], face[2]),
+            (face[2], face[0]),
+        ):
+            edge = tuple(sorted((int(first), int(second))))
+            edge_incidence[edge] = edge_incidence.get(edge, 0) + 1
+    if any(incidence != 2 for incidence in edge_incidence.values()):
+        raise AssertionError("closed body boundary edge must have exactly two incident facets")
+
+
+def _polygonal_ring_annular_cap_area(
+    *,
+    radius_m: float,
+    angular_gaps_rad: np.ndarray,
+    outer_width_m: float,
+    outer_height_m: float,
+) -> float:
+    """Return rectangle area minus the inscribed polygon's hole area."""
+    radius = float(radius_m)
+    gaps = np.asarray(angular_gaps_rad, dtype=np.float64)
+    width = float(outer_width_m)
+    height = float(outer_height_m)
+    if (
+        not np.isfinite(radius)
+        or radius <= 0.0
+        or gaps.ndim != 1
+        or not len(gaps)
+        or not np.all(np.isfinite(gaps))
+        or np.any(gaps <= 0.0)
+        or not np.isfinite(width)
+        or width <= 0.0
+        or not np.isfinite(height)
+        or height <= 0.0
+    ):
+        raise AssertionError("annular cap area requires finite positive ring geometry")
+    polygon_hole_area = 0.5 * radius**2 * float(np.sum(np.sin(gaps)))
+    annular_area = width * height - polygon_hole_area
+    if not np.isfinite(annular_area) or annular_area <= 0.0:
+        raise AssertionError("annular cap area must remain positive and finite")
+    return annular_area
+
+
 def _write_density_failure_capture(
     artifact_dir: Path,
     *,
@@ -13738,6 +14115,197 @@ class RegionMeshPolicyTests(unittest.TestCase):
         self.assertLess(core_median, 16e-9)
         self.assertGreater(bulk_median, core_median)
 
+    def test_ring_chordal_bound_guard_and_refinement(self) -> None:
+        quarter_circle_gaps = np.full(4, 0.5 * np.pi, dtype=np.float64)
+        square_ring_cap_area = _polygonal_ring_annular_cap_area(
+            radius_m=1.0,
+            angular_gaps_rad=quarter_circle_gaps,
+            outer_width_m=4.0,
+            outer_height_m=4.0,
+        )
+        self.assertAlmostEqual(square_ring_cap_area, 14.0, delta=64.0 * np.finfo(float).eps)
+        self.assertGreater(square_ring_cap_area, 0.0)
+
+        radius = 8e-9
+        thickness = 10e-9
+        tolerance = 64.0 * np.finfo(float).eps * 20e-9
+        planes = [-0.5 * thickness, 0.5 * thickness]
+
+        def ring_wall(segment_count: int) -> tuple[np.ndarray, np.ndarray]:
+            angles = 2.0 * np.pi * np.arange(segment_count) / segment_count
+            ring_xy = np.column_stack((radius * np.cos(angles), radius * np.sin(angles)))
+            nodes = np.vstack(
+                (
+                    np.column_stack((ring_xy, np.full(segment_count, planes[0]))),
+                    np.column_stack((ring_xy, np.full(segment_count, planes[1]))),
+                )
+            )
+            faces: list[list[int]] = []
+            for index in range(segment_count):
+                following = (index + 1) % segment_count
+                lower_a, lower_b = index, following
+                upper_a, upper_b = segment_count + index, segment_count + following
+                faces.extend(
+                    ([lower_a, lower_b, upper_b], [lower_a, upper_b, upper_a])
+                )
+            return nodes, np.asarray(faces, dtype=np.int32)
+
+        coarse_nodes, coarse_faces = ring_wall(8)
+        coarse_defect, coarse_bound, _ = _verified_ring_prism_chordal_volume_bound(
+            coarse_nodes,
+            coarse_faces,
+            radius_m=radius,
+            z_planes_m=planes,
+            coordinate_tolerance_m=tolerance,
+        )
+        fine_nodes, fine_faces = ring_wall(16)
+        fine_defect, fine_bound, _ = _verified_ring_prism_chordal_volume_bound(
+            fine_nodes,
+            fine_faces,
+            radius_m=radius,
+            z_planes_m=planes,
+            coordinate_tolerance_m=tolerance,
+        )
+        self.assertGreater(coarse_defect, 0.0)
+        self.assertLessEqual(coarse_defect, coarse_bound)
+        self.assertLess(fine_defect, coarse_defect)
+        self.assertLess(fine_bound, coarse_bound)
+        self.assertLessEqual(fine_defect, fine_bound)
+
+        wrong_radius = np.array(coarse_nodes, copy=True)
+        wrong_radius[0, 0] *= 1.1
+        with self.assertRaisesRegex(AssertionError, "authored radius"):
+            _verified_ring_prism_chordal_volume_bound(
+                wrong_radius,
+                coarse_faces,
+                radius_m=radius,
+                z_planes_m=planes,
+                coordinate_tolerance_m=tolerance,
+            )
+        with self.assertRaisesRegex(AssertionError, "exactly one cap"):
+            _classify_ring_body_boundary_face(
+                np.asarray(
+                    [
+                        [-20e-9, -1e-9, -5e-9],
+                        [-20e-9, 0.0, -5e-9],
+                        [-20e-9, 1e-9, -5e-9],
+                    ]
+                ),
+                radius_m=8e-9,
+                z_bounds_m=(-5e-9, 5e-9),
+                xy_bounds_m=(-20e-9, 20e-9),
+                coordinate_tolerance_m=tolerance,
+            )
+        with self.assertRaisesRegex(AssertionError, "exactly one cap"):
+            _classify_ring_body_boundary_face(
+                np.asarray(
+                    [
+                        [0.0, 0.0, 0.0],
+                        [2e-9, 0.0, 1e-9],
+                        [0.0, 2e-9, 2e-9],
+                    ]
+                ),
+                radius_m=8e-9,
+                z_bounds_m=(-5e-9, 5e-9),
+                xy_bounds_m=(-20e-9, 20e-9),
+                coordinate_tolerance_m=tolerance,
+            )
+        tetrahedron_surface = np.asarray(
+            [[0, 1, 2], [0, 1, 3], [0, 2, 3], [1, 2, 3]],
+            dtype=np.int32,
+        )
+        _verify_closed_triangle_surface(tetrahedron_surface)
+        with self.assertRaisesRegex(AssertionError, "two incident facets"):
+            _verify_closed_triangle_surface(tetrahedron_surface[:-1])
+
+        square_nodes = np.asarray(
+            [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0, 1.0, 0.0], [0.0, 1.0, 0.0]]
+        )
+        square_faces = np.asarray([[0, 1, 2], [0, 2, 3]], dtype=np.int32)
+        square_boundary = {(0, 1), (1, 2), (2, 3), (0, 3)}
+        _verified_planar_patch_area(
+            square_nodes,
+            square_faces,
+            fixed_axis=2,
+            fixed_value=0.0,
+            axes=(0, 1),
+            bounds=(0.0, 1.0, 0.0, 1.0),
+            expected_boundary_edges=square_boundary,
+            expected_area_m2=1.0,
+            area_tolerance_m2=1e-12,
+            coordinate_tolerance_m=1e-12,
+        )
+        with self.assertRaisesRegex(AssertionError, "incomplete boundary"):
+            _verified_planar_patch_area(
+                square_nodes,
+                square_faces[:1],
+                fixed_axis=2,
+                fixed_value=0.0,
+                axes=(0, 1),
+                bounds=(0.0, 1.0, 0.0, 1.0),
+                expected_boundary_edges=square_boundary,
+                expected_area_m2=1.0,
+                area_tolerance_m2=1e-12,
+                coordinate_tolerance_m=1e-12,
+            )
+
+        with self.assertRaisesRegex(AssertionError, "incomplete plane vertex set"):
+            _verified_ring_prism_chordal_volume_bound(
+                coarse_nodes,
+                coarse_faces,
+                radius_m=radius,
+                z_planes_m=[planes[0], 0.0, planes[1]],
+                coordinate_tolerance_m=tolerance,
+            )
+        missing_half_wall = coarse_faces[:-1]
+        with self.assertRaisesRegex(AssertionError, "exactly two triangles"):
+            _verified_ring_prism_chordal_volume_bound(
+                coarse_nodes,
+                missing_half_wall,
+                radius_m=radius,
+                z_planes_m=planes,
+                coordinate_tolerance_m=tolerance,
+            )
+        duplicate_half_wall = np.array(coarse_faces, copy=True)
+        duplicate_half_wall[1] = duplicate_half_wall[0]
+        with self.assertRaisesRegex(AssertionError, "duplicate triangle"):
+            _verified_ring_prism_chordal_volume_bound(
+                coarse_nodes,
+                duplicate_half_wall,
+                radius_m=radius,
+                z_planes_m=planes,
+                coordinate_tolerance_m=tolerance,
+            )
+        noncomplementary_split = np.array(coarse_faces, copy=True)
+        noncomplementary_split[1] = [0, 1, len(coarse_nodes) // 2]
+        with self.assertRaisesRegex(AssertionError, "complementary halves"):
+            _verified_ring_prism_chordal_volume_bound(
+                coarse_nodes,
+                noncomplementary_split,
+                radius_m=radius,
+                z_planes_m=planes,
+                coordinate_tolerance_m=tolerance,
+            )
+        incomplete_wall = coarse_faces[2:]
+        with self.assertRaisesRegex(AssertionError, "missing a polygon side"):
+            _verified_ring_prism_chordal_volume_bound(
+                coarse_nodes,
+                incomplete_wall,
+                radius_m=radius,
+                z_planes_m=planes,
+                coordinate_tolerance_m=tolerance,
+            )
+        off_plane_wall = np.array(coarse_nodes, copy=True)
+        off_plane_wall[0, 2] = 0.25 * thickness
+        with self.assertRaisesRegex(AssertionError, "between exact layer planes"):
+            _verified_ring_prism_chordal_volume_bound(
+                off_plane_wall,
+                coarse_faces,
+                radius_m=radius,
+                z_planes_m=planes,
+                coordinate_tolerance_m=tolerance,
+            )
+
     def test_scoped_exact_ring_lower_bound_uses_layer_route_and_report(self) -> None:
         try:
             import gmsh  # noqa: F401
@@ -13850,10 +14418,222 @@ class RegionMeshPolicyTests(unittest.TestCase):
             40e-9 * 40e-9 * 410e-9,
             delta=1e-12 * 40e-9 * 40e-9 * 410e-9,
         )
+        coordinate_scale = max(float(np.max(np.abs(nodes))), 8e-9)
+        coordinate_tolerance = 64.0 * np.finfo(float).eps * coordinate_scale
+        body_planes = np.linspace(-5e-9, 5e-9, 4, dtype=np.float64)
+        body_coordinates = nodes[body_nodes]
+        np.testing.assert_allclose(
+            [
+                np.min(body_coordinates[:, 0]),
+                np.min(body_coordinates[:, 1]),
+                np.min(body_coordinates[:, 2]),
+                np.max(body_coordinates[:, 0]),
+                np.max(body_coordinates[:, 1]),
+                np.max(body_coordinates[:, 2]),
+            ],
+            [-20e-9, -20e-9, -5e-9, 20e-9, 20e-9, 5e-9],
+            rtol=0.0,
+            atol=coordinate_tolerance,
+        )
+        all_boundary_faces = np.asarray(mesh.boundary_faces, dtype=np.int32)
+        self.assertEqual(mesh.facet_roles.shape, (len(all_boundary_faces),))
+        global_boundary_ordinals: dict[tuple[int, int, int], int] = {}
+        for ordinal, face in enumerate(all_boundary_faces):
+            key = tuple(sorted(int(node) for node in face))
+            self.assertNotIn(key, global_boundary_ordinals, "duplicate global boundary facet")
+            global_boundary_ordinals[key] = ordinal
+
+        local_tet_faces = ((0, 1, 2), (0, 1, 3), (0, 2, 3), (1, 2, 3))
+        body_face_incidence: dict[tuple[int, int, int], int] = {}
+        for tetrahedron in cells[body_mask]:
+            for local_face in local_tet_faces:
+                key = tuple(sorted(int(tetrahedron[index]) for index in local_face))
+                body_face_incidence[key] = body_face_incidence.get(key, 0) + 1
+        self.assertTrue(
+            all(incidence in {1, 2} for incidence in body_face_incidence.values()),
+            "body tetrahedra contain a nonmanifold face",
+        )
+        body_boundary_keys = sorted(
+            key for key, incidence in body_face_incidence.items() if incidence == 1
+        )
+        self.assertTrue(body_boundary_keys, report.to_dict())
+        self.assertTrue(
+            set(body_boundary_keys).issubset(global_boundary_ordinals),
+            "a body boundary facet is missing from the emitted boundary mesh",
+        )
+        global_interface_keys = {
+            key
+            for key, ordinal in global_boundary_ordinals.items()
+            if str(mesh.facet_roles[ordinal]) == "material_interface"
+        }
+        self.assertTrue(global_interface_keys, report.to_dict())
+        self.assertTrue(
+            global_interface_keys.issubset(set(body_boundary_keys)),
+            "an emitted material-interface facet is not part of the body boundary",
+        )
+        body_boundary_faces = np.asarray(body_boundary_keys, dtype=np.int32)
+        _verify_closed_triangle_surface(body_boundary_faces)
+
+        category_faces: dict[str, list[tuple[int, int, int]]] = {
+            "cap_lower": [],
+            "cap_upper": [],
+            "outer_x_min": [],
+            "outer_x_max": [],
+            "outer_y_min": [],
+            "outer_y_max": [],
+            "hole_wall": [],
+        }
+        for face in body_boundary_faces:
+            category = _classify_ring_body_boundary_face(
+                nodes[face],
+                radius_m=8e-9,
+                z_bounds_m=(-5e-9, 5e-9),
+                xy_bounds_m=(-20e-9, 20e-9),
+                coordinate_tolerance_m=coordinate_tolerance,
+            )
+            category_faces[category].append(tuple(int(node) for node in face))
+        for category in category_faces:
+            self.assertTrue(
+                category_faces[category],
+                f"missing body boundary category {category}",
+            )
+        wall_faces = np.asarray(category_faces["hole_wall"], dtype=np.int32)
+        self.assertGreater(len(wall_faces), 0, report.to_dict())
+
+        for category, cap_z in (("cap_lower", -5e-9), ("cap_upper", 5e-9)):
+            cap_faces = np.asarray(category_faces[category], dtype=np.int32)
+            cap_node_ids = np.unique(cap_faces.reshape(-1))
+            cap_radii = np.hypot(nodes[cap_node_ids, 0], nodes[cap_node_ids, 1])
+            hole_node_ids = cap_node_ids[
+                np.abs(cap_radii - 8e-9) <= coordinate_tolerance
+            ]
+            self.assertGreaterEqual(len(hole_node_ids), 3, category)
+            angles = np.mod(
+                np.arctan2(nodes[hole_node_ids, 1], nodes[hole_node_ids, 0]),
+                2.0 * np.pi,
+            )
+            order = np.argsort(angles, kind="stable")
+            hole_node_ids = hole_node_ids[order]
+            angles = angles[order]
+            gaps = np.diff(np.concatenate((angles, [angles[0] + 2.0 * np.pi])))
+            self.assertTrue(np.all(gaps > 0.0), f"duplicate hole vertex on {category}")
+            self.assertLessEqual(float(np.max(gaps)), np.pi + coordinate_tolerance / 8e-9)
+            all_wall_nodes = np.unique(wall_faces.reshape(-1))
+            wall_plane_nodes = all_wall_nodes[
+                np.abs(nodes[all_wall_nodes, 2] - cap_z) <= coordinate_tolerance
+            ]
+            self.assertEqual(
+                set(map(int, hole_node_ids)),
+                set(map(int, wall_plane_nodes)),
+                f"{category} and cylindrical wall do not share the complete polygon ring",
+            )
+            hole_boundary_edges = {
+                tuple(
+                    sorted(
+                        (
+                            int(hole_node_ids[index]),
+                            int(hole_node_ids[(index + 1) % len(hole_node_ids)]),
+                        )
+                    )
+                )
+                for index in range(len(hole_node_ids))
+            }
+            outer_boundary_edges = _rectangle_patch_boundary_edges(
+                nodes,
+                cap_faces,
+                axes=(0, 1),
+                bounds=(-20e-9, 20e-9, -20e-9, 20e-9),
+                coordinate_tolerance_m=coordinate_tolerance,
+            )
+            expected_area = _polygonal_ring_annular_cap_area(
+                radius_m=8e-9,
+                angular_gaps_rad=gaps,
+                outer_width_m=40e-9,
+                outer_height_m=40e-9,
+            )
+            perimeter = 4.0 * 40e-9 + sum(
+                float(np.linalg.norm(nodes[first] - nodes[second]))
+                for first, second in hole_boundary_edges
+            )
+            area_tolerance = (
+                2.0 * perimeter * coordinate_tolerance
+                + 64.0
+                * np.finfo(float).eps
+                * expected_area
+                * len(cap_faces)
+            )
+            _verified_planar_patch_area(
+                nodes,
+                cap_faces,
+                fixed_axis=2,
+                fixed_value=cap_z,
+                axes=(0, 1),
+                bounds=(-20e-9, 20e-9, -20e-9, 20e-9),
+                expected_boundary_edges=outer_boundary_edges | hole_boundary_edges,
+                expected_area_m2=expected_area,
+                area_tolerance_m2=area_tolerance,
+                coordinate_tolerance_m=coordinate_tolerance,
+            )
+
+        outer_side_specs = (
+            ("outer_x_min", 0, -20e-9, (1, 2)),
+            ("outer_x_max", 0, 20e-9, (1, 2)),
+            ("outer_y_min", 1, -20e-9, (0, 2)),
+            ("outer_y_max", 1, 20e-9, (0, 2)),
+        )
+        for category, fixed_axis, fixed_value, axes in outer_side_specs:
+            side_faces = np.asarray(category_faces[category], dtype=np.int32)
+            side_boundary = _rectangle_patch_boundary_edges(
+                nodes,
+                side_faces,
+                axes=axes,
+                bounds=(-20e-9, 20e-9, -5e-9, 5e-9),
+                coordinate_tolerance_m=coordinate_tolerance,
+            )
+            expected_area = 40e-9 * 10e-9
+            perimeter = 2.0 * (40e-9 + 10e-9)
+            area_tolerance = (
+                2.0 * perimeter * coordinate_tolerance
+                + 64.0
+                * np.finfo(float).eps
+                * expected_area
+                * len(side_faces)
+            )
+            _verified_planar_patch_area(
+                nodes,
+                side_faces,
+                fixed_axis=fixed_axis,
+                fixed_value=fixed_value,
+                axes=axes,
+                bounds=(-20e-9, 20e-9, -5e-9, 5e-9),
+                expected_boundary_edges=side_boundary,
+                expected_area_m2=expected_area,
+                area_tolerance_m2=area_tolerance,
+                coordinate_tolerance_m=coordinate_tolerance,
+            )
+        chordal_defect_volume, chordal_volume_bound, maximum_angle_gap = (
+            _verified_ring_prism_chordal_volume_bound(
+                nodes,
+                wall_faces,
+                radius_m=8e-9,
+                z_planes_m=body_planes.tolist(),
+                coordinate_tolerance_m=coordinate_tolerance,
+            )
+        )
+        self.assertGreater(maximum_angle_gap, 0.0)
+        exact_body_volume = (40e-9 * 40e-9 - np.pi * (8e-9) ** 2) * 10e-9
+        body_volume = float(volumes[body_mask].sum())
+        body_volume_excess = body_volume - exact_body_volume
+        volume_roundoff = 1e-12 * 40e-9 * 40e-9 * 10e-9
+        self.assertGreaterEqual(body_volume_excess, -volume_roundoff)
+        self.assertLessEqual(
+            body_volume_excess,
+            chordal_volume_bound + volume_roundoff,
+        )
         self.assertAlmostEqual(
-            float(volumes[body_mask].sum()),
-            (40e-9 * 40e-9 - np.pi * (8e-9) ** 2) * 10e-9,
-            delta=1e-12 * 40e-9 * 40e-9 * 10e-9,
+            body_volume_excess,
+            chordal_defect_volume,
+            delta=volume_roundoff,
         )
 
         def median_tet_edge_length(mask: np.ndarray) -> float:
