@@ -1,4 +1,5 @@
 """Lightweight real-Gmsh regression for the exact-layer periodic film mesh."""
+import math
 import sys
 from pathlib import Path
 import numpy as np
@@ -28,8 +29,13 @@ def _realize_public_de_smoke_box(
         )
         assert source.count(authored_mesh_call) == 1
         fixture_path = tmp_path / fixture_name
+        fixture_mesh_calls = (
+            'study.objects.mesh.defaults(maximum_element_size=10e-9, '
+            'periodic_pair_ids=["x_faces", "y_faces"])\n    '
+            + universe_mesh_call
+        )
         fixture_path.write_text(
-            source.replace(authored_mesh_call, universe_mesh_call, 1),
+            source.replace(authored_mesh_call, fixture_mesh_calls, 1),
             encoding="utf-8",
         )
         problem = fm.load_problem_from_script(
@@ -81,6 +87,57 @@ def test_graded_planes_keep_film_and_outer_bounds():
     film = [z for z in levels if -5e-9 <= z <= 5e-9]
     assert len(film) == 7
     assert np.max(np.diff(levels)) <= 100e-9 * (1 + 1e-12)
+
+
+def test_box_airbox_layer_plan_closes_roundoff_sized_final_slab():
+    levels = _box_airbox_layer_levels(
+        -5e-9, 5e-9, -205e-9, 205e-9, 3,
+        h_inner=5e-9, h_outer=5e-9, growth=1.3,
+    )
+    split = levels.index(-5e-9)
+    lower_intervals = np.diff([*levels[:split], -5e-9])
+    upper_intervals = np.diff([5e-9, *levels[split + 4:]])
+
+    assert len(lower_intervals) == 40
+    assert len(upper_intervals) == 40
+    assert levels[0] == -205e-9
+    assert levels[-1] == 205e-9
+    assert np.all(lower_intervals > 0.9 * 5e-9)
+    assert np.all(upper_intervals > 0.9 * 5e-9)
+    np.testing.assert_allclose(lower_intervals, 5e-9, rtol=0, atol=1e-20)
+    np.testing.assert_allclose(upper_intervals, 5e-9, rtol=0, atol=1e-20)
+
+
+def test_box_airbox_layer_plan_allows_resolvable_offset_coordinates():
+    body_bottom = 1000.0
+    body_top = 1000.0 + 1e-9
+    zmax = body_top + 1e-7 + 5e-12
+    h_inner = 1e-10
+    levels = _box_airbox_layer_levels(
+        body_bottom, body_top, body_bottom - 1e-7, zmax, 3,
+        h_inner=h_inner, h_outer=h_inner, growth=1.3,
+    )
+    split = levels.index(body_top)
+    upper_intervals = np.diff([body_top, *levels[split + 1:]])
+    coordinate_scale = max(abs(body_top), abs(zmax), abs(zmax - body_top))
+    local_ulp = math.ulp(coordinate_scale)
+    relative_scale = max(abs(zmax - body_top), h_inner)
+    relative_ulp = math.ulp(relative_scale)
+    roundoff_bound = (
+        2 * local_ulp + 4 * (len(upper_intervals) + 2) * relative_ulp
+    )
+    old_origin_scaled_bound = (len(upper_intervals) + 2) * local_ulp
+    authored_remainder = math.fsum(
+        [zmax - body_top, *([-h_inner] * (len(upper_intervals) - 1))]
+    )
+
+    assert 900 < len(upper_intervals) < 1100
+    assert levels[-1] == zmax
+    assert local_ulp < h_inner <= old_origin_scaled_bound
+    assert np.all(upper_intervals > 0)
+    assert roundoff_bound < upper_intervals[-1] < h_inner
+    assert abs(upper_intervals[-1] - authored_remainder) <= roundoff_bound
+    assert np.max(upper_intervals) <= h_inner + roundoff_bound
 
 
 @pytest.mark.parametrize("layers", [3, 6, 9])
@@ -140,10 +197,10 @@ def test_public_de_model_shared_domain_realizes_six_layers(monkeypatch):
             mesh_workflow=meta["mesh_workflow"])
         assert report.build_mode == "single_geometry_geo_layered_box"
         status = next(s for s in report.operation_statuses if s.kind == "thin_film")
-        assert status.actual_method == "geo_layered_tetrahedral"
+        assert status.actual_method == "geo_layer_partitioned_tetrahedral"
         assert status.details["resolved_sweep_direction"] == "z"
         diagnostic = report.to_dict()["thin_film_diagnostics"][0]
-        assert diagnostic["actual_method"] == "geo_layered_tetrahedral"
+        assert diagnostic["actual_method"] == "geo_layer_partitioned_tetrahedral"
         assert not any("maximum element size" in w for w in diagnostic["warnings"])
         assert markers == [{"geometry_name": "film", "marker": 1}]
         body = np.asarray(mesh.elements)[np.asarray(mesh.element_markers) == 1]
@@ -273,12 +330,22 @@ def test_box_airbox_invalid_targets_fail_before_gmsh(monkeypatch):
             ),
             options=MeshOptions(mesh_strategy="thin_film_tetrahedral"),
         )
-    with pytest.raises(ValueError, match="scaled Box airbox element sizes.*finite"):
+    with pytest.raises(ValueError, match="scaled Box body maximum element size.*finite"):
         generate_swept_tetrahedral_box_airbox_mesh(
             Box(size=(40e-9, 40e-9, 10e-9)), 1e303, 6, order=1,
             distribution="fixed", recombine=False,
             airbox=AirboxOptions(
                 size=(40e-9, 40e-9, 410e-9), grading_ratio=1.01,
+            ),
+            options=MeshOptions(mesh_strategy="thin_film_tetrahedral"),
+        )
+    with pytest.raises(ValueError, match="scaled Box airbox element sizes.*finite"):
+        generate_swept_tetrahedral_box_airbox_mesh(
+            Box(size=(40e-9, 40e-9, 10e-9)), 10e-9, 6, order=1,
+            distribution="fixed", recombine=False,
+            airbox=AirboxOptions(
+                size=(40e-9, 40e-9, 410e-9),
+                maximum_element_size=1e303,
             ),
             options=MeshOptions(mesh_strategy="thin_film_tetrahedral"),
         )

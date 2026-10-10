@@ -1949,18 +1949,105 @@ def _box_airbox_layer_levels(
         raise ValueError("air layer sizes must be positive, ordered, and growth >= 1")
 
     def exterior(interface: float, boundary: float, direction: float) -> list[float]:
+        coordinate_span = direction * (boundary - interface)
+        if not math.isfinite(coordinate_span) or coordinate_span <= 0.0:
+            raise ValueError("air layer coordinate span must be finite and positive")
+        coordinate_scale = max(abs(interface), abs(boundary), coordinate_span)
+        coordinate_spacing = math.ulp(coordinate_scale)
+        if coordinate_spacing >= h_inner:
+            raise ValueError("air layer size is below coordinate resolution")
+
         result = []
         position = interface
+        relative_sum = 0.0
+        compensation = 0.0
         step = h_inner
-        while direction * (boundary - position) > 0:
-            remaining = direction * (boundary - position)
-            following = boundary if remaining <= step else position + direction * step
+
+        def roundoff_bound(distance: float, *, prior_steps: int) -> float:
+            relative_scale = max(coordinate_span, abs(distance), abs(step))
+            relative_spacing = math.ulp(relative_scale)
+            bound = (
+                2.0 * coordinate_spacing
+                + 4.0 * (prior_steps + 2) * relative_spacing
+            )
+            if not math.isfinite(bound):
+                raise ValueError("air layer coordinate roundoff bound must be finite")
+            return bound
+
+        def close_boundary(bound: float) -> list[float]:
+            if not result:
+                return [boundary]
+            previous = result[-2] if len(result) > 1 else interface
+            extended_step = abs(boundary - previous)
+            if extended_step - h_outer <= bound:
+                result[-1] = boundary
+                return result
+            raise ValueError(
+                "air layer roundoff closure would exceed maximum element size"
+            )
+
+        while True:
+            distance = math.fsum((relative_sum, -compensation))
+            remaining = coordinate_span - distance
+            bound = roundoff_bound(distance, prior_steps=len(result))
+            if remaining <= bound:
+                if remaining < -bound:
+                    raise ValueError("air layer relative plan overshot the boundary")
+                return close_boundary(bound)
+
+            if remaining <= step:
+                if boundary == position:
+                    raise ValueError("air layer size is below coordinate resolution")
+                if abs(boundary - position) - step > bound:
+                    raise ValueError(
+                        "air layer step exceeds maximum element size at coordinate precision"
+                    )
+                result.append(boundary)
+                return result
+
+            corrected_step = step - compensation
+            next_sum = relative_sum + corrected_step
+            next_compensation = (next_sum - relative_sum) - corrected_step
+            next_distance = math.fsum((next_sum, -next_compensation))
+            next_bound = roundoff_bound(
+                next_distance, prior_steps=len(result) + 1,
+            )
+            if coordinate_span - next_distance <= 0.0:
+                overshoot = next_distance - coordinate_span
+                if overshoot > next_bound:
+                    raise ValueError("air layer relative plan overshot the boundary")
+                if boundary == position:
+                    raise ValueError("air layer size is below coordinate resolution")
+                if abs(boundary - position) - step > next_bound:
+                    raise ValueError(
+                        "air layer step exceeds maximum element size at coordinate precision"
+                    )
+                result.append(boundary)
+                return result
+
+            following = interface + direction * next_distance
             if following == position:
                 raise ValueError("air layer size is below coordinate resolution")
+            if abs(following - position) - step > next_bound:
+                raise ValueError(
+                    "air layer step exceeds maximum element size at coordinate precision"
+                )
+            if direction * (following - boundary) >= 0.0:
+                if coordinate_span - next_distance > next_bound:
+                    raise ValueError(
+                        "air layer size is below coordinate resolution"
+                    )
+                if abs(boundary - position) - step > next_bound:
+                    raise ValueError(
+                        "air layer step exceeds maximum element size at coordinate precision"
+                    )
+                result.append(boundary)
+                return result
             result.append(following)
             position = following
+            relative_sum = next_sum
+            compensation = next_compensation
             step = min(step * growth, h_outer)
-        return result
 
     lower = exterior(body_bottom, zmin, -1.0)
     upper = exterior(body_top, zmax, 1.0)

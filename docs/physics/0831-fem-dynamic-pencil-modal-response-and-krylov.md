@@ -3555,6 +3555,17 @@ airboxu.
 | $h_{\mathrm{in}}$ | Rozwiązany rozmiar pierwszego kroku airboxu | $\mathrm{m}$ |
 | $h_{\mathrm{cap}}$ | Rozwiązany górny limit kroku airboxu | $\mathrm{m}$ |
 | $r$ | AirboxOptions.grading_ratio (domyślnie 1.3) | $1$ |
+| $\epsilon_z$ | Konserwatywna granica błędu domknięcia współrzędnych przy planowaniu płaszczyzn airboxu | $\mathrm{m}$ |
+| $n$ | Liczba dotychczas zaplanowanych odcinków powietrza | $1$ |
+| $z_0$ | Położenie płaszczyzny interfejsu body-air | $\mathrm{m}$ |
+| $z_b$ | Położenie zewnętrznej granicy airboxu | $\mathrm{m}$ |
+| $D_z$ | Długość przedziału od interfejsu do granicy | $\mathrm{m}$ |
+| $S_z$ | Największa skala współrzędnej interfejsu, granicy i przedziału | $\mathrm{m}$ |
+| $\operatorname{ulp}_{64}(S_z)$ | Lokalny odstęp binary64 między reprezentowalnymi współrzędnymi | $\mathrm{m}$ |
+| $d$ | Skompensowany względny dystans od interfejsu | $\mathrm{m}$ |
+| $h_{\mathrm{step}}$ | Bieżący rozmiar następnego kroku powietrza | $\mathrm{m}$ |
+| $R_z$ | Skala względnego dystansu i kroku | $\mathrm{m}$ |
+| $\operatorname{ulp}_{64}(R_z)$ | Lokalny odstęp binary64 na skali względnego planu | $\mathrm{m}$ |
 
 ```{math}
 :label: eq-box-airbox-step-size-resolution
@@ -3580,6 +3591,38 @@ przed wywołaniem Gmsh.
 Wszystkie wielkości wejściowe są w metrach; skalowanie GEO do mikrometrów
 nie zmienia wyniku ani translacji Floqueta w artefaktach SI.
 
+Planner sumuje względne długości z kompensacją Kahana, a każdą płaszczyznę
+absolutną oblicza jako $z_0\pm d$. Nie akumuluje błędu początku układu przez
+wszystkie odcinki. Niech $D_z=|z_b-z_0|$,
+$S_z=\max(|z_0|,|z_b|,D_z)$,
+$R_z=\max(D_z,|d|,h_{\mathrm{step}})$ i $n$ będzie liczbą dotychczas
+zaplanowanych odcinków. Dwa lokalne ULP na skali absolutnej ograniczają
+konwersję płaszczyzny; względna część obejmuje błędy arytmetyki sumowania
+i obliczenia pozostałego odstępu:
+
+```{math}
+:label: eq-box-airbox-coordinate-closure
+
+\epsilon_z =
+2\operatorname{ulp}_{64}(S_z)
++4(n+2)\operatorname{ulp}_{64}(R_z).
+```
+
+$\epsilon_z$, $z_0$, $z_b$, $D_z$, $S_z$, $d$, $h_{\mathrm{step}}$, $R_z$,
+$\operatorname{ulp}_{64}(S_z)$ i $\operatorname{ulp}_{64}(R_z)$ mają
+jednostkę $\mathrm{m}$; $n$ jest bezwymiarowe. Duże przesunięcie początku
+układu pozostaje dozwolone, gdy lokalny ULP współrzędnych jest mniejszy od
+$h_{\mathrm{in}}$; nie zwiększa tolerancji proporcjonalnie do liczby odcinków.
+Jeśli pozostały odstęp jest nie większy niż $\epsilon_z$, planner zastępuje
+ostatnią zaplanowaną płaszczyznę
+dokładną granicą tylko wtedy, gdy wydłużony w ten sposób poprzedni odcinek
+nie przekracza $h_{\mathrm{cap}}+\epsilon_z$. W przeciwnym razie planner
+odrzuca wejście przed Gmsh, zamiast emitować podrozdzielczy końcowy
+odcinek. Każda długość odcinka jest więc ograniczona przez $h_{\mathrm{cap}}$
+z dokładnością tej granicy zaokrągleń. Gdy lokalny ULP osiąga rozmiar
+pierwszego kroku, planner zgłasza brak rozdzielczości współrzędnych zamiast
+łączyć elementy o nierozróżnialnych płaszczyznach.
+
 Ścieżka pierścienia zachowuje dotychczasowy podział geometrii; wspólna
 reguła rozmiarów i stopniowania w osi z dotyczy zarówno Box, jak i
 Box minus Cylinder. FDM CPU/GPU nie korzystają z tej siatki. Generacja FEM jest
@@ -3599,6 +3642,8 @@ Indeks źródeł realizacji warstw:
 | ID | Plik | Symbol |
 |---|---|---|
 | source-box-layer-planes | `packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py` | `_box_airbox_layer_levels` |
+| source-box-layer-roundoff-regression | `scripts/test_box_layered_airbox_mesh.py` | `test_box_airbox_layer_plan_closes_roundoff_sized_final_slab` |
+| source-box-layer-offset-regression | `scripts/test_box_layered_airbox_mesh.py` | `test_box_airbox_layer_plan_allows_resolvable_offset_coordinates` |
 | source-box-airbox-step-sizes | `packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py` | `_resolve_box_airbox_layer_sizes` |
 | source-box-layer-generator | `packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py` | `generate_swept_tetrahedral_box_airbox_mesh` |
 | source-box-layer-routing | `packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py` | `_realize_fem_domain_mesh_asset_from_components_impl` |

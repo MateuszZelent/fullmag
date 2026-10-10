@@ -723,6 +723,27 @@
       "sources": [
         "source-box-airbox-step-sizes"
       ]
+    },
+    {
+      "id": "eq-box-airbox-coordinate-closure",
+      "symbols": [
+        "box_airbox_closure_epsilon",
+        "box_airbox_planned_intervals",
+        "box_airbox_interface_z",
+        "box_airbox_boundary_z",
+        "box_airbox_coordinate_scale",
+        "box_airbox_coordinate_ulp",
+        "box_airbox_span",
+        "box_airbox_relative_distance",
+        "box_airbox_current_step",
+        "box_airbox_relative_scale",
+        "box_airbox_relative_ulp"
+      ],
+      "sources": [
+        "source-box-layer-planes",
+        "source-box-layer-roundoff-regression",
+        "source-box-layer-offset-regression"
+      ]
     }
   ],
   "symbols": [
@@ -1595,6 +1616,72 @@
       "latex": "$r$",
       "meaning": "AirboxOptions.grading_ratio (domyślnie 1.3)",
       "si_unit": "$1$"
+    },
+    {
+      "id": "box_airbox_closure_epsilon",
+      "latex": "$\\epsilon_z$",
+      "meaning": "Konserwatywna granica błędu domknięcia współrzędnych przy planowaniu płaszczyzn airboxu",
+      "si_unit": "$\\mathrm{m}$"
+    },
+    {
+      "id": "box_airbox_planned_intervals",
+      "latex": "$n$",
+      "meaning": "Liczba dotychczas zaplanowanych odcinków powietrza",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "box_airbox_interface_z",
+      "latex": "$z_0$",
+      "meaning": "Położenie płaszczyzny interfejsu body-air",
+      "si_unit": "$\\mathrm{m}$"
+    },
+    {
+      "id": "box_airbox_boundary_z",
+      "latex": "$z_b$",
+      "meaning": "Położenie zewnętrznej granicy airboxu",
+      "si_unit": "$\\mathrm{m}$"
+    },
+    {
+      "id": "box_airbox_coordinate_scale",
+      "latex": "$S_z$",
+      "meaning": "Największa skala współrzędnej interfejsu, granicy i przedziału",
+      "si_unit": "$\\mathrm{m}$"
+    },
+    {
+      "id": "box_airbox_coordinate_ulp",
+      "latex": "$\\operatorname{ulp}_{64}(S_z)$",
+      "meaning": "Lokalny odstęp binary64 między reprezentowalnymi współrzędnymi",
+      "si_unit": "$\\mathrm{m}$"
+    },
+    {
+      "id": "box_airbox_span",
+      "latex": "$D_z$",
+      "meaning": "Długość przedziału od interfejsu do granicy",
+      "si_unit": "$\\mathrm{m}$"
+    },
+    {
+      "id": "box_airbox_relative_distance",
+      "latex": "$d$",
+      "meaning": "Skompensowany względny dystans od interfejsu",
+      "si_unit": "$\\mathrm{m}$"
+    },
+    {
+      "id": "box_airbox_current_step",
+      "latex": "$h_{\\mathrm{step}}$",
+      "meaning": "Bieżący rozmiar następnego kroku powietrza",
+      "si_unit": "$\\mathrm{m}$"
+    },
+    {
+      "id": "box_airbox_relative_scale",
+      "latex": "$R_z$",
+      "meaning": "Skala względnego dystansu i kroku",
+      "si_unit": "$\\mathrm{m}$"
+    },
+    {
+      "id": "box_airbox_relative_ulp",
+      "latex": "$\\operatorname{ulp}_{64}(R_z)$",
+      "meaning": "Lokalny odstęp binary64 na skali względnego planu",
+      "si_unit": "$\\mathrm{m}$"
     }
   ],
   "sources": [
@@ -2307,7 +2394,19 @@
       "id": "source-box-layer-planes",
       "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py",
       "symbol": "_box_airbox_layer_levels",
-      "responsibility": "Plan exact film planes and independently graded airbox planes with exact closure at the outer boundary"
+      "responsibility": "Plan exact film planes and independently graded airbox planes with bounded roundoff closure at the exact outer boundary"
+    },
+    {
+      "id": "source-box-layer-roundoff-regression",
+      "path": "scripts/test_box_layered_airbox_mesh.py",
+      "symbol": "test_box_airbox_layer_plan_closes_roundoff_sized_final_slab",
+      "responsibility": "Pure plan regression proving 40 full-size intervals close a 200 nm gap at a 5 nm cap without a roundoff-sized extra interval"
+    },
+    {
+      "id": "source-box-layer-offset-regression",
+      "path": "scripts/test_box_layered_airbox_mesh.py",
+      "symbol": "test_box_airbox_layer_plan_allows_resolvable_offset_coordinates",
+      "responsibility": "Pure plan regression showing offset coordinates remain admissible when local binary64 spacing is finer than the requested step, with cap deviation bounded by absolute conversion and compensated relative-sum ULP error"
     },
     {
       "id": "source-box-airbox-step-sizes",
