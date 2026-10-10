@@ -83,3 +83,27 @@ zamknięte, zanim zażądamy kwalifikacji P2/P9.
   krok po CI: domknąć compile/regression failures, potem count integration,
   residual norms i rzeczywiste benchmarki P2/P9. Exact damping, GPU,
   FEM/BEM/RF/DMI/STT/EASA oraz pełny UI pozostają w tabeli zakresu.
+
+
+## Dowody hosted i naprawa kompilacji
+
+Publikacja korekt: `f8ccb47a82e1fc026ae22390736e875a798f82c9` (fixture API)
+oraz `19bcb4fd8dba368ab14e405f319a243c4e5577b8` (typed CPU transport,
+reference method evidence, nota/ADR i CI).
+
+Hosted #38068292627 na exact `39a20c4596231563e0568a2eec9cb4c4529aed56`
+**SUCCESS**: primary geometry/provenance 113 PASS +136 subtests, verifier
+5 PASS, root/plot/parity consumers 104 PASS +70 subtests. Terminal producer
+Linux 44 PASS, Windows 43 PASS. Potwierdza naprawę fixture A1; nie jest
+wynikiem obliczenia dyspersji.
+
+Hosted #38068679693 na exact `19bcb4fd8dba368ab14e405f319a243c4e5577b8`
+**FAIL**: E0432, brak re-exportu `NativeModalComplex64` i
+`NativeModalEigenTypedResult` przez crate-private fasadę `native_fem`.
+Źródłowa poprawka dodaje tylko te istniejące typy do listy `pub(crate) use`;
+nie zmienia widoczności publicznej ani zamrożonego ABI. Hosted testy runnera
+nie wykonały się w tym nieudanym jobie. Fresh CI wymagane.
+
+Native phase/typed job #38068716019 i pełny Rust/API #38068718203 zostały
+zlecone na `19bcb4fd...`; terminalny wynik jeszcze nieznany. Nadal brak
+kwalifikacji runtime/nauki nowego exact damping/GPU i całego P0–P10.

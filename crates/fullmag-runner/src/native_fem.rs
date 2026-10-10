@@ -49,10 +49,10 @@ pub(crate) use frequency_domain::{
     NativeDrivenResponseContractRequest, NativeFrequencyDomainCancelCallback,
     NativeFrequencyDomainContractResult, NativeFrequencyDomainExecutionLane,
     NativeFrequencyDomainProgress, NativeFrequencyDomainProgressCallback,
-    NativeFrequencyDomainStatus, NativeModalEigenCsrMatrixView,
+    NativeFrequencyDomainStatus, NativeModalComplex64, NativeModalEigenCsrMatrixView,
     NativeModalEigenFloquetPeriodicPair, NativeModalEigenMfemOperatorProblem,
     NativeModalEigenPoissonAirboxBlockProblem, NativeModalEigenRequest,
-    NativeModalEigenSharedDomainProblem, NativeModalEigenSparseOperatorProblem,
+    NativeModalEigenSharedDomainProblem, NativeModalEigenSparseOperatorProblem, NativeModalEigenTypedResult,
     NativeModalExecutionTarget, NativeModalGpuAttestation,
 };
 #[allow(unused_imports)]
