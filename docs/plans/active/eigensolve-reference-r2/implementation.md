@@ -446,3 +446,35 @@ z NumPy 2.2.6 i SciPy 1.15.3. Wykonanie pending. Prywatna realizacja
 energy mass jest przygotowywana w oddzielnym fragmencie; jej source
 review, hosted assembly i dopiero integracja exact-damping physical
 sector/original residual pozostają wymaganymi etapami P3.
+
+
+## P10 — spójność wybranego fizycznego źródła m
+
+Poprawiono wspólny resolver wartości/meta/catalog/frame/bundle/readiness.
+Nowszy kwalifikowany physical live payload nie jest ukrywany przez starszy
+Latest/Preview. Przed progress lub starszym callbackiem 8→7→6 bufor kroku 8
+jest zachowany w istniejącym cache z pierwotną tożsamością, bez wymyślonego
+scientific revision. Grid overflow, jawna obca FEM generation i sama zmiana
+topologii nie kwalifikują starego m. Actual bindery nie certyfikują ponownie
+zarejestrowanego starego payloadu w nowej domenie. Nie przenosimy starego
+m preview przez zmianę domain/topology.
+
+Starszy Pending/Error nie degraduje wybranego accepted physical m także po
+jego zachowaniu w Latest; brak accepted frame i status tego samego/nowszego
+kroku nadal blokują. Reguła dotyczy tylko m, pozostałe quantity guards
+zachowano. Bundle wymaga rzeczywistego zgodnego physical scalar row i
+carriera; positive fixture wymaga nonnull i sprawdza exact frame/topology/
+fingerprint. Negative cases obejmują absent/mismatched row.
+
+Root i niezależny source review PASS po naprawie dwóch dodatkowych P1
+(utrata m8 przez starszy callback i recertyfikacja w actual binderach) oraz
+statusu po zachowaniu bufora w cache. Cztery pliki parsują się stdout-only
+rustfmt, diff check PASS. Kompilacja i wykonanie API pozostają NOT VERIFIED
+do świeżego hosted rust run; nie jest to zamknięcie całego P10 ani browser proof.
+
+Aktualny dowód P3: hosted [38081980214](https://github.com/MateuszZelent/fullmag/actions/runs/38081980214)
+na `36da16235309b3c57db253bb784cdea9ffeb1df4` — 7/7 niezależnych testów
+algebry PASS. Dowód P4 [38080351130](https://github.com/MateuszZelent/fullmag/actions/runs/38080351130)
+na b176d824 — build, phase i typed transport PASS, selected-window FAIL;
+dokładna fixture/powód nie są widoczne w dotychczasowym logu. Dodawana
+diagnostyka nie zmienia modelu ani progów. Receipty i hashe zapisano w JSON.

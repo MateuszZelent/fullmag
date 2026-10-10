@@ -173,6 +173,37 @@
       "failure": "legacy_fixture_rejected_before_production_SLEPc",
       "receipt_sha256": "50da93d180270a0b88c75442e63f3a4c548238ec6ea90f95478227ceb4eeeb51",
       "qualification_claimed": false
+    },
+    {
+      "run_id": 38081980214,
+      "sha": "36da16235309b3c57db253bb784cdea9ffeb1df4",
+      "conclusion": "success",
+      "scope": "independent_small_pencil_damping_oracle",
+      "tests_passed": 7,
+      "numpy_version": "2.2.6",
+      "scipy_version": "1.15.3",
+      "log_sha256": "7ec096d14150d268379a9fcbb4eef34c5f7f22549fa778c1f85ecf8973ba5761",
+      "native_assembly": "NOT VERIFIED",
+      "native_exact_damping": "NOT VERIFIED",
+      "dispersion_qualification": "NOT VERIFIED",
+      "qualification_claimed": false
+    },
+    {
+      "run_id": 38080351130,
+      "sha": "b176d824ce21eca7f96132ebac6579e61d53a753",
+      "conclusion": "failure",
+      "scope": "modal-phase-slepc",
+      "native_build": "passed",
+      "passed_ctests": [
+        "fem_modal_eigen_phase_convention_contract",
+        "fem_modal_eigen_typed_cpu_transport_contract"
+      ],
+      "failed_ctests": [
+        "fem_poisson_airbox_selected_window_contract"
+      ],
+      "failure": "selected_window_failed_before_terminal_marker; detailed_fixture_identity_not_available",
+      "receipt_sha256": "a84df656125d5004021a8348a81dba6d0572ecb19d4bd68ec91ddc7fc9687a14",
+      "qualification_claimed": false
     }
   ]
 }

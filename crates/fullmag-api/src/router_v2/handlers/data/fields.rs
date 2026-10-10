@@ -66,7 +66,9 @@ use crate::schemas::fields::*;
 use crate::session::{
     current_artifact_dir, latest_field_source_is_qualified, latest_field_source_precedence,
     preview_cache_precedes_latest, preview_field_source_is_qualified,
-    preview_field_source_precedence, resolved_current_field_source, ResolvedCurrentFieldSource,
+    preview_field_source_precedence, relevant_field_materialization_status,
+    resolved_current_field_observation_frame, resolved_current_field_source,
+    ResolvedCurrentFieldSource,
 };
 use crate::types::{AppState, CommandLifecycleState, SessionStateResponse};
 use fullmag_quantities::{normalize_quantity_id, quantity_spec};
@@ -1389,6 +1391,26 @@ fn current_source_step(snapshot: &SessionStateResponse) -> u64 {
         .unwrap_or(0)
 }
 
+fn freshness_from_selected_observation_frame(
+    snapshot: &SessionStateResponse,
+    quantity_id: &str,
+    mut freshness: FieldFreshness,
+) -> FieldFreshness {
+    let n_comp = quantity_spec(quantity_id)
+        .map(|spec| usize::from(spec.n_comp))
+        .unwrap_or(3);
+    let Some(frame) = resolved_current_field_observation_frame(snapshot, quantity_id, n_comp)
+    else {
+        return freshness;
+    };
+    freshness.source_step = frame.source_step;
+    freshness.source_time_seconds = frame
+        .source_time_seconds
+        .filter(|time| time.is_finite() && *time >= 0.0);
+    freshness.stale_by_steps = current_source_step(snapshot).saturating_sub(frame.source_step);
+    freshness
+}
+
 fn latest_json_field_freshness(
     snapshot: &SessionStateResponse,
     value: &serde_json::Value,
@@ -1501,7 +1523,7 @@ fn resolved_current_field_values<'a>(
         .flatten()?;
     let point_count = field.values.len() / n_comp.max(1);
     let grid = resolved_current_field_grid(snapshot, field.source_grid, point_count);
-    let freshness = match field.source_kind {
+    let mut freshness = match field.source_kind {
         SpatialFieldSourceKind::Materialized => latest_json_field_freshness(
             snapshot,
             snapshot.latest_fields.get(quantity_id)?,
@@ -1513,7 +1535,7 @@ fn resolved_current_field_values<'a>(
         SpatialFieldSourceKind::Live => completed_field_freshness(
             current_source_step(snapshot),
             current_source_step(snapshot),
-            field.quantity_revision,
+            0,
             snapshot
                 .live_state
                 .as_ref()
@@ -1523,6 +1545,9 @@ fn resolved_current_field_values<'a>(
         ),
         SpatialFieldSourceKind::Persisted => return None,
     };
+    if quantity_id == "m" {
+        freshness = freshness_from_selected_observation_frame(snapshot, quantity_id, freshness);
+    }
     Some((field, grid, freshness))
 }
 
@@ -1593,14 +1618,7 @@ fn materializer_status<'a>(
     snapshot: &'a SessionStateResponse,
     quantity_id: &str,
 ) -> Option<&'a fullmag_runner::LiveFieldMaterializationStatus> {
-    snapshot
-        .live_state
-        .as_ref()?
-        .latest_step
-        .field_materialization_states
-        .iter()
-        .rev()
-        .find(|status| status.quantity == quantity_id)
+    relevant_field_materialization_status(snapshot, quantity_id)
 }
 
 fn legacy_pending_field_freshness(snapshot: &SessionStateResponse) -> FieldFreshness {
@@ -1934,6 +1952,12 @@ pub async fn get_field_catalog(
             field
         };
         remember_materialized_carrier(&mut materialized_carriers, &resolved);
+        let freshness = latest_json_field_freshness(snapshot, value, qid);
+        let freshness = if qid == "m" {
+            freshness_from_selected_observation_frame(snapshot, qid, freshness)
+        } else {
+            freshness
+        };
         push_field_descriptor(
             &mut quantities,
             qid,
@@ -1941,7 +1965,7 @@ pub async fn get_field_catalog(
             None,
             resolved.quantity_revision,
             &gen_id,
-            latest_json_field_freshness(snapshot, value, qid),
+            freshness,
             !resolved.values.is_empty(),
         );
     }
@@ -1960,6 +1984,12 @@ pub async fn get_field_catalog(
             continue;
         };
         remember_materialized_carrier(&mut materialized_carriers, &resolved);
+        let freshness = preview_field_freshness(snapshot, field);
+        let freshness = if qid == "m" {
+            freshness_from_selected_observation_frame(snapshot, qid, freshness)
+        } else {
+            freshness
+        };
         push_field_descriptor(
             &mut quantities,
             qid,
@@ -1970,7 +2000,7 @@ pub async fn get_field_catalog(
                 .then_some(field.spatial_kind.as_str()),
             resolved.quantity_revision,
             &gen_id,
-            preview_field_freshness(snapshot, field),
+            freshness,
             !resolved.values.is_empty(),
         );
     }
@@ -2056,17 +2086,13 @@ pub async fn get_field_catalog(
             .ok_or_else(|| ApiError::internal("selected live magnetization has no carrier"))?;
         remember_materialized_carrier(&mut materialized_carriers, &live_magnetization);
         quantities.retain(|quantity| quantity.quantity_id != "m");
-        push_field_descriptor(
-            &mut quantities,
+        let freshness = freshness_from_selected_observation_frame(
+            snapshot,
             "m",
-            quantity_unit("m"),
-            None,
-            live_magnetization.quantity_revision,
-            &gen_id,
             completed_field_freshness(
                 current_source_step(snapshot),
                 current_source_step(snapshot),
-                live_magnetization.quantity_revision,
+                0,
                 snapshot
                     .live_state
                     .as_ref()
@@ -2074,17 +2100,33 @@ pub async fn get_field_catalog(
                     .unwrap_or(0),
                 0,
             ),
+        );
+        push_field_descriptor(
+            &mut quantities,
+            "m",
+            quantity_unit("m"),
+            None,
+            live_magnetization.quantity_revision,
+            &gen_id,
+            freshness,
             true,
         );
     }
 
-    for status in snapshot
+    let status_quantities = snapshot
         .live_state
         .as_ref()
         .into_iter()
         .flat_map(|state| state.latest_step.field_materialization_states.iter())
-        .filter(|status| status.state != fullmag_runner::LiveFieldMaterializationState::Complete)
-    {
+        .map(|status| status.quantity.clone())
+        .collect::<BTreeSet<_>>();
+    for quantity_id in status_quantities {
+        let Some(status) = relevant_field_materialization_status(snapshot, &quantity_id) else {
+            continue;
+        };
+        if status.state == fullmag_runner::LiveFieldMaterializationState::Complete {
+            continue;
+        }
         if let Some(descriptor) = quantities
             .iter_mut()
             .find(|descriptor| descriptor.quantity_id == status.quantity)
@@ -3147,6 +3189,11 @@ fn field_observation_frame_ref(
     source_step: u64,
     source_time_seconds: Option<f64>,
 ) -> AcceptedObservationFrameRef {
+    if quantity_id == "m" {
+        if let Some(frame) = resolved_current_field_observation_frame(snapshot, "m", 3) {
+            return frame;
+        }
+    }
     snapshot
         .latest_fields
         .get(quantity_id)

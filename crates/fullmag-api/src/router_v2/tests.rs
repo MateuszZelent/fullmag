@@ -4314,7 +4314,7 @@ async fn domain_meta_uses_fdm_physical_cell_size_for_grid_and_bounds() {
             },
         });
     }
-    let app = build_v2_router().with_state(state);
+    let app = build_v2_router().with_state(state.clone());
     let response = app
         .oneshot(
             Request::builder()
@@ -38444,16 +38444,156 @@ async fn v2_field_vector_prefers_live_magnetization_over_stale_latest_field() {
                 fem_mesh: None,
                 magnetization: Some(vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0]),
                 per_object_scalars: Default::default(),
-                field_materialization_states: Vec::new(),
+                field_materialization_states: vec![
+                    fullmag_runner::LiveFieldMaterializationStatus {
+                        quantity: "m".into(),
+                        source_step: 7,
+                        request_revision: 1,
+                        state: fullmag_runner::LiveFieldMaterializationState::Error,
+                        error: Some("step 7 materialization failed".into()),
+                    },
+                ],
                 preview_field: None,
                 finished: false,
             },
         };
         apply_test_runtime_frame(snapshot, current_live_state)
             .expect("current step 8 magnetization should apply as a physical observation");
+        let session_id = snapshot.session.session_id.clone();
+        crate::session::apply_current_live_scalar_frame(
+            snapshot,
+            crate::types::CurrentLiveScalarFrameRequest {
+                session_id,
+                latest_scalar_row: Some(sample_scalar_row(8, 2.0e-9, 0.0)),
+            },
+        )
+        .expect("step 8 physical scalar row should bind to the selected live field");
         snapshot.state_version = 24;
     }
-    let app = build_v2_router().with_state(state);
+    let app = build_v2_router().with_state(state.clone());
+    let meta_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/m/meta")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(meta_response.status(), StatusCode::OK);
+    let meta = body_json(meta_response).await;
+    assert_eq!(meta["source_step"], 8);
+    assert_eq!(meta["source_time_seconds"], 2.0e-9);
+    assert_eq!(meta["observation_frame"]["source_step"], 8);
+    assert_eq!(meta["observation_frame"]["source_time_seconds"], 2.0e-9);
+    assert_eq!(meta["state"], "complete");
+    assert!(meta["materialization_error"].is_null());
+    if !meta["publication_bundle"].is_null() {
+        assert_eq!(
+            meta["publication_bundle"]["observation_frame"],
+            meta["observation_frame"]
+        );
+    }
+
+    let catalog_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(catalog_response.status(), StatusCode::OK);
+    let catalog = body_json(catalog_response).await;
+    let live_m = catalog["quantities"]
+        .as_array()
+        .and_then(|quantities| {
+            quantities
+                .iter()
+                .find(|quantity| quantity["quantity_id"] == "m")
+        })
+        .expect("selected live magnetization should be listed");
+    assert_eq!(live_m["source_step"], 8);
+    assert_eq!(live_m["source_time_seconds"], 2.0e-9);
+    assert_eq!(live_m["state"], "complete");
+
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot
+            .live_state
+            .as_mut()
+            .expect("live state remains available")
+            .latest_step
+            .field_materialization_states = vec![
+            fullmag_runner::LiveFieldMaterializationStatus {
+                quantity: "m".into(),
+                source_step: 8,
+                request_revision: 2,
+                state: fullmag_runner::LiveFieldMaterializationState::Pending,
+                error: None,
+            },
+        ];
+    }
+    let same_step_pending_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/m/meta")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let same_step_pending = body_json(same_step_pending_response).await;
+    assert_eq!(same_step_pending["state"], "stale_complete");
+    assert_eq!(
+        same_step_pending["materialization_reason_code"],
+        "field_stale_complete"
+    );
+
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot
+            .live_state
+            .as_mut()
+            .expect("live state remains available")
+            .latest_step
+            .field_materialization_states = vec![
+            fullmag_runner::LiveFieldMaterializationStatus {
+                quantity: "m".into(),
+                source_step: 9,
+                request_revision: 3,
+                state: fullmag_runner::LiveFieldMaterializationState::Error,
+                error: Some("step 9 materialization failed".into()),
+            },
+        ];
+    }
+    let newer_step_error_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/m/meta")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let newer_step_error = body_json(newer_step_error_response).await;
+    assert_eq!(newer_step_error["state"], "error");
+    assert_eq!(
+        newer_step_error["materialization_error"],
+        "step 9 materialization failed"
+    );
+
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot
+            .live_state
+            .as_mut()
+            .expect("live state remains available")
+            .latest_step
+            .field_materialization_states = Vec::new();
+    }
     let response = app
         .oneshot(
             Request::builder()
@@ -38472,6 +38612,562 @@ async fn v2_field_vector_prefers_live_magnetization_over_stale_latest_field() {
         .map(|chunk| f64::from_le_bytes(chunk.try_into().unwrap()))
         .collect();
     assert_eq!(values, vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0]);
+}
+
+#[tokio::test]
+async fn v2_older_runtime_m_frame_preserves_newer_selected_source_and_bundle() {
+    let state = test_app_state_with_live_session().await;
+    {
+        let mut guard = state.current_live_state.write().await;
+        let snapshot = guard.as_mut().expect("live session exists");
+        let mesh = sample_fem_mesh_payload();
+        let expected_topology_hash = fullmag_runner::fem_mesh_topology_fingerprint(&mesh);
+        snapshot.fem_mesh = Some(mesh);
+        snapshot.mesh_revision = 7;
+        let selected_m = vec![
+            1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, -1.0, 0.0, 0.0,
+        ];
+        apply_test_runtime_frame(
+            snapshot,
+            physical_test_live_state(8, 8.0e-12, [4, 1, 1], Some(selected_m)),
+        )
+        .expect("step 8 m should publish through the runtime frame path");
+
+        let session_id = snapshot.session.session_id.clone();
+        crate::session::apply_current_live_scalar_frame(
+            snapshot,
+            crate::types::CurrentLiveScalarFrameRequest {
+                session_id,
+                latest_scalar_row: Some(sample_scalar_row(8, 8.0e-12, 0.0)),
+            },
+        )
+        .expect("step 8 scalar row should bind to the selected physical source");
+        assert!(
+            snapshot.field_publication_bundles.contains_key("m"),
+            "a matching physical scalar row and FEM carrier should publish the m bundle"
+        );
+        let initial_bundle = snapshot
+            .field_publication_bundles
+            .get("m")
+            .expect("matching physical scalar row and FEM carrier produce a bundle");
+        assert!(snapshot.scalar_rows.iter().any(|row| {
+            row.is_physical_observation()
+                && row.observation_frame.as_ref() == Some(&initial_bundle.observation_frame)
+        }));
+        assert_eq!(initial_bundle.topology_hash, expected_topology_hash);
+        assert_eq!(initial_bundle.field.quantity_id, "m");
+        assert!(!initial_bundle.field.carrier_id.is_empty());
+        assert!(!initial_bundle.field.carrier_fingerprint.is_empty());
+
+        let intermediate_older_m = vec![
+            0.0, 1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, -1.0, 0.0,
+        ];
+        let mut intermediate_older_state =
+            physical_test_live_state(7, 7.0e-12, [4, 1, 1], Some(intermediate_older_m));
+        intermediate_older_state
+            .latest_step
+            .field_materialization_states = vec![fullmag_runner::LiveFieldMaterializationStatus {
+            quantity: "m".into(),
+            source_step: 7,
+            request_revision: 1,
+            state: fullmag_runner::LiveFieldMaterializationState::Pending,
+            error: None,
+        }];
+        apply_test_runtime_frame(
+            snapshot,
+            intermediate_older_state,
+        )
+        .expect("older step 7 callback should preserve selected step 8 m");
+        assert_eq!(
+            snapshot
+                .live_state
+                .as_ref()
+                .expect("live state remains")
+                .latest_step
+                .step,
+            7
+        );
+        assert!(crate::session::relevant_field_materialization_status(snapshot, "m").is_none());
+        assert_eq!(
+            snapshot
+                .field_publication_bundles
+                .get("m")
+                .expect("selected step 8 bundle remains available")
+                .observation_frame
+                .source_step,
+            8
+        );
+
+        let older_m = vec![
+            0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0, -1.0, 0.0,
+        ];
+        let mut older_state = physical_test_live_state(6, 6.0e-12, [4, 1, 1], Some(older_m));
+        older_state.latest_step.field_materialization_states = vec![
+            fullmag_runner::LiveFieldMaterializationStatus {
+                quantity: "m".into(),
+                source_step: 7,
+                request_revision: 1,
+                state: fullmag_runner::LiveFieldMaterializationState::Pending,
+                error: None,
+            },
+            fullmag_runner::LiveFieldMaterializationStatus {
+                quantity: "m".into(),
+                source_step: 6,
+                request_revision: 2,
+                state: fullmag_runner::LiveFieldMaterializationState::Error,
+                error: Some("step 6 materialization failed".into()),
+            },
+        ];
+        apply_test_runtime_frame(
+            snapshot,
+            older_state,
+        )
+        .expect("older step 6 callback should apply without replacing selected m");
+        assert!(crate::session::relevant_field_materialization_status(snapshot, "m").is_none());
+
+        assert_eq!(
+            snapshot
+                .live_state
+                .as_ref()
+                .expect("live state remains")
+                .latest_step
+                .step,
+            6
+        );
+        let bundle = snapshot
+            .field_publication_bundles
+            .get("m")
+            .expect("preserved step 8 source should retain an exact publication bundle");
+        assert_eq!(bundle.observation_frame.source_step, 8);
+        assert_eq!(
+            bundle.observation_frame.source_time_seconds,
+            Some(8.0e-12)
+        );
+        assert_eq!(bundle.topology_revision, "7");
+    }
+
+    let app = build_v2_router().with_state(state);
+    let meta_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/m/meta")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(meta_response.status(), StatusCode::OK);
+    let meta = body_json(meta_response).await;
+    assert_eq!(meta["source_step"], 8);
+    assert_eq!(meta["source_time_seconds"], 8.0e-12);
+    assert_eq!(meta["state"], "complete");
+    assert!(meta["materialization_error"].is_null());
+    assert_eq!(meta["observation_frame"]["source_step"], 8);
+    assert!(
+        meta["publication_bundle"].is_object(),
+        "the selected step 8 publication bundle must remain available"
+    );
+    assert_eq!(
+        meta["publication_bundle"]["observation_frame"],
+        meta["observation_frame"]
+    );
+
+    let catalog_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(catalog_response.status(), StatusCode::OK);
+    let catalog = body_json(catalog_response).await;
+    let magnetization = catalog["quantities"]
+        .as_array()
+        .and_then(|quantities| {
+            quantities
+                .iter()
+                .find(|quantity| quantity["quantity_id"] == "m")
+        })
+        .expect("selected magnetization should be in the field catalog");
+    assert_eq!(magnetization["source_step"], 8);
+    assert_eq!(magnetization["source_time_seconds"], 8.0e-12);
+    assert_eq!(magnetization["state"], "complete");
+
+    let vector_response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/m/samples/vector?format=bin")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(vector_response.status(), StatusCode::OK);
+    let bytes = body_bytes(vector_response).await;
+    assert_eq!(&bytes[..4], b"FMVP");
+    let values: Vec<f64> = bytes[48..]
+        .chunks_exact(8)
+        .map(|chunk| f64::from_le_bytes(chunk.try_into().unwrap()))
+        .collect();
+    assert_eq!(
+        values,
+        vec![
+            1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, -1.0, 0.0, 0.0,
+        ]
+    );
+}
+
+#[tokio::test]
+async fn v2_m_publication_bundle_requires_matching_physical_scalar_row() {
+    let state = test_app_state_with_live_session().await;
+    {
+        let mut guard = state.current_live_state.write().await;
+        let snapshot = guard.as_mut().expect("live session exists");
+        snapshot.fem_mesh = Some(sample_fem_mesh_payload());
+        snapshot.mesh_revision = 7;
+        let selected_m = vec![
+            1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, -1.0, 0.0, 0.0,
+        ];
+        apply_test_runtime_frame(
+            snapshot,
+            physical_test_live_state(8, 8.0e-12, [4, 1, 1], Some(selected_m)),
+        )
+        .expect("step 8 m should publish through the runtime frame path");
+        assert!(
+            !snapshot.field_publication_bundles.contains_key("m"),
+            "a physical scalar row is required before publishing an m bundle"
+        );
+
+        let session_id = snapshot.session.session_id.clone();
+        crate::session::apply_current_live_scalar_frame(
+            snapshot,
+            crate::types::CurrentLiveScalarFrameRequest {
+                session_id,
+                latest_scalar_row: Some(sample_scalar_row(7, 7.0e-12, 0.0)),
+            },
+        )
+        .expect("step 7 scalar row should apply as a separate physical observation");
+        assert!(
+            !snapshot.field_publication_bundles.contains_key("m"),
+            "a scalar row from a different physical frame cannot certify the m bundle"
+        );
+    }
+
+    let app = build_v2_router().with_state(state);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/m/meta")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let meta = body_json(response).await;
+    assert_eq!(meta["source_step"], 8);
+    assert!(
+        meta["publication_bundle"].is_null(),
+        "metadata must report the bundle as unavailable without an exact scalar frame"
+    );
+}
+
+#[tokio::test]
+async fn v2_progress_keeps_live_magnetization_at_its_original_observation_step() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        apply_test_runtime_frame(
+            snapshot,
+            physical_test_live_state(
+                7,
+                7.0e-12,
+                [2, 1, 1],
+                Some(vec![0.25, 0.5, 0.75, -0.25, -0.5, -0.75]),
+            ),
+        )
+        .expect("step 7 magnetization should apply as a physical observation");
+
+        let mut progress = physical_test_live_state(8, 8.0e-12, [2, 1, 1], None);
+        progress.latest_step.kind = fullmag_quantities::StepDataKind::SolverProgress;
+        progress.latest_step.solver_progress = Some(fullmag_quantities::SolverProgress::FemEigen {
+            metrics: HashMap::from([("progress_fraction".into(), 0.5)]),
+        });
+        apply_test_runtime_frame(snapshot, progress)
+            .expect("solver progress should not become a magnetization observation");
+    }
+    let app = build_v2_router().with_state(state);
+
+    let meta_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/m/meta")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(meta_response.status(), StatusCode::OK);
+    let meta = body_json(meta_response).await;
+    assert_eq!(meta["source_step"], 7);
+    assert_eq!(meta["source_time_seconds"], 7.0e-12);
+    assert_eq!(meta["observation_frame"]["source_step"], 7);
+    assert_eq!(meta["stale_by_steps"], 1);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/m/samples/vector?format=bin")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = body_bytes(response).await;
+    let values: Vec<f64> = bytes[48..]
+        .chunks_exact(8)
+        .map(|chunk| f64::from_le_bytes(chunk.try_into().unwrap()))
+        .collect();
+    assert_eq!(values, vec![0.25, 0.5, 0.75, -0.25, -0.5, -0.75]);
+}
+
+#[tokio::test]
+async fn v2_equal_or_newer_cached_magnetization_keeps_precedence_over_live() {
+    for cached_step in [8_u64, 9_u64] {
+        let state = test_app_state_with_live_session().await;
+        if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+            let cached_value = cached_step as f64;
+            let latest_fields = serde_json::from_value(serde_json::json!({
+                "m": {
+                    "values": [
+                        [cached_value, 0.0, 0.0],
+                        [cached_value, 0.0, 0.0]
+                    ],
+                    "layout": { "grid_cells": [2, 1, 1] }
+                }
+            }))
+            .expect("cached m fixture should deserialize");
+            publish_test_fields_from_physical_step(
+                snapshot,
+                physical_test_live_state(
+                    cached_step,
+                    cached_step as f64 * 1.0e-12,
+                    [2, 1, 1],
+                    None,
+                ),
+                latest_fields,
+            )
+            .expect("cached m should bind to an accepted physical source");
+            apply_test_runtime_frame(
+                snapshot,
+                physical_test_live_state(
+                    8,
+                    8.0e-12,
+                    [2, 1, 1],
+                    Some(vec![0.0, 1.0, 0.0, 0.0, 1.0, 0.0]),
+                ),
+            )
+            .expect("live step 8 magnetization should apply");
+        }
+        let app = build_v2_router().with_state(state);
+        let meta_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/v2/sessions/current/data/fields/m/meta")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(meta_response.status(), StatusCode::OK);
+        let meta = body_json(meta_response).await;
+        assert_eq!(meta["source_step"], cached_step);
+        assert_eq!(meta["observation_frame"]["source_step"], cached_step);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/v2/sessions/current/data/fields/m/samples/vector?format=bin")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = body_bytes(response).await;
+        let values: Vec<f64> = bytes[48..]
+            .chunks_exact(8)
+            .map(|chunk| f64::from_le_bytes(chunk.try_into().unwrap()))
+            .collect();
+        assert_eq!(
+            values,
+            vec![cached_step as f64, 0.0, 0.0, cached_step as f64, 0.0, 0.0]
+        );
+    }
+}
+
+#[tokio::test]
+async fn v2_newer_live_magnetization_supersedes_older_preview_source() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        apply_test_runtime_frame(
+            snapshot,
+            physical_test_live_state(7, 7.0e-12, [2, 1, 1], None),
+        )
+        .expect("preview source step should be an accepted physical observation");
+        publish_test_preview_fields(
+            snapshot,
+            vec![LivePreviewField {
+                config_revision: 1,
+                source_step: 7,
+                source_time_seconds: Some(7.0e-12),
+                source_revision: 7,
+                materialized_at_unix_ms: 1_700_000_000_107,
+                materialization_wall_time_ns: 10,
+                quantity: "m".to_string(),
+                unit: "1".to_string(),
+                spatial_kind: "grid".to_string(),
+                quantity_domain: "magnetic_only".to_string(),
+                preview_grid: [2, 1, 1],
+                original_grid: [2, 1, 1],
+                vector_field_values: vec![-1.0, 0.0, 0.0, -1.0, 0.0, 0.0],
+                x_chosen_size: 2,
+                y_chosen_size: 1,
+                applied_x_chosen_size: 2,
+                applied_y_chosen_size: 1,
+                applied_layer_stride: 1,
+                auto_downscaled: false,
+                auto_downscale_message: None,
+                active_mask: None,
+            }],
+        )
+        .expect("step 7 preview should publish with its accepted source identity");
+        apply_test_runtime_frame(
+            snapshot,
+            physical_test_live_state(
+                8,
+                8.0e-12,
+                [2, 1, 1],
+                Some(vec![0.0, 1.0, 0.0, 0.0, 1.0, 0.0]),
+            ),
+        )
+        .expect("step 8 live m should supersede the older preview");
+    }
+    let app = build_v2_router().with_state(state);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/m/samples/vector?format=bin")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = body_bytes(response).await;
+    let values: Vec<f64> = bytes[48..]
+        .chunks_exact(8)
+        .map(|chunk| f64::from_le_bytes(chunk.try_into().unwrap()))
+        .collect();
+    assert_eq!(values, vec![0.0, 1.0, 0.0, 0.0, 1.0, 0.0]);
+}
+
+#[tokio::test]
+async fn v2_unqualified_physical_m_does_not_replace_previous_live_source() {
+    for incoming_m in [
+        vec![f64::NAN, 0.0, 0.0, 0.0, 1.0, 0.0],
+        vec![0.0, 0.0, 1.0],
+    ] {
+        let state = test_app_state_with_live_session().await;
+        if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+            apply_test_runtime_frame(
+                snapshot,
+                physical_test_live_state(
+                    7,
+                    7.0e-12,
+                    [2, 1, 1],
+                    Some(vec![0.25, 0.5, 0.75, -0.25, -0.5, -0.75]),
+                ),
+            )
+            .expect("step 7 magnetization should apply");
+            apply_test_runtime_frame(
+                snapshot,
+                physical_test_live_state(8, 8.0e-12, [2, 1, 1], Some(incoming_m)),
+            )
+            .expect("a physical frame with an unqualified m payload may still advance");
+        }
+        let app = build_v2_router().with_state(state);
+        let meta_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/v2/sessions/current/data/fields/m/meta")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(meta_response.status(), StatusCode::OK);
+        let meta = body_json(meta_response).await;
+        assert_eq!(meta["source_step"], 7);
+        assert_eq!(meta["source_time_seconds"], 7.0e-12);
+        assert_eq!(meta["stale_by_steps"], 1);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/v2/sessions/current/data/fields/m/samples/vector?format=bin")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = body_bytes(response).await;
+        let values: Vec<f64> = bytes[48..]
+            .chunks_exact(8)
+            .map(|chunk| f64::from_le_bytes(chunk.try_into().unwrap()))
+            .collect();
+        assert_eq!(values, vec![0.25, 0.5, 0.75, -0.25, -0.5, -0.75]);
+    }
+}
+
+#[tokio::test]
+async fn v2_m_cached_source_is_invalidated_by_same_cardinality_topology_change() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        let latest_fields = serde_json::from_value(serde_json::json!({
+            "m": {
+                "values": [[0.0, 1.0, 0.0], [0.0, 1.0, 0.0]],
+                "layout": { "grid_cells": [2, 1, 1] }
+            }
+        }))
+        .expect("source fixture should deserialize");
+        publish_test_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(7, 7.0e-12, [2, 1, 1], None),
+            latest_fields,
+        )
+        .expect("step 7 source should publish before the topology changes");
+        let cached_m = snapshot.latest_fields.get("m").expect("cached m");
+        assert!(crate::session::latest_field_source_is_qualified(
+            snapshot, "m", cached_m
+        ));
+
+        snapshot.mesh_revision = snapshot.mesh_revision.saturating_add(1);
+        let cached_m = snapshot.latest_fields.get("m").expect("cached m remains");
+        assert!(!crate::session::latest_field_source_is_qualified(
+            snapshot, "m", cached_m
+        ));
+        assert!(crate::session::resolved_current_field_source(snapshot, "m", 3).is_none());
+    }
 }
 
 #[tokio::test]

@@ -4,6 +4,7 @@ use axum::{extract::State, Json};
 use std::sync::Arc;
 
 use crate::schemas::quantities::QuantityCatalogResponse;
+use crate::session::relevant_field_materialization_status;
 use crate::types::{AppState, SessionStateResponse};
 use fullmag_quantities::{quantity_spec, QuantitySpec};
 use fullmag_runner::{
@@ -65,13 +66,7 @@ fn annotate_runtime_quantity_state(
         let supported =
             preliminary.provider == fullmag_runner::QuantityProviderCapability::Available;
 
-        let status = snapshot.live_state.as_ref().and_then(|state| {
-            state
-                .latest_step
-                .field_materialization_states
-                .iter()
-                .find(|status| status.quantity == entry.id)
-        });
+        let status = relevant_field_materialization_status(snapshot, &entry.id);
         let resolved_field = resolve_current_spatial_field(
             snapshot,
             &entry.id,

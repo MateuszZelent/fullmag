@@ -5,7 +5,8 @@ use crate::error::ApiError;
 use crate::quantities::{build_quantities, extract_fem_mesh_from_metadata};
 use crate::router_v2::handlers::data::field_resolution::{
     field_values_hash, field_values_match_current_domain, flatten_json_field_values,
-    json_field_grid, json_field_matches_current_domain, json_field_payload_signature,
+    is_fdm_snapshot, json_field_grid, json_field_matches_current_domain,
+    json_field_payload_signature,
     live_magnetization_values_ref,
 };
 use crate::router_v2::handlers::data::fields::{
@@ -400,14 +401,7 @@ pub(crate) fn command_readiness_matches_requirements(
         for quantity_id in &requirement.quantity_ids {
             let quantity = fullmag_quantities::quantity_spec(quantity_id)
                 .ok_or_else(|| format!("unknown materialization quantity '{quantity_id}'"))?;
-            if let Some(status) = snapshot.live_state.as_ref().and_then(|state| {
-                state
-                    .latest_step
-                    .field_materialization_states
-                    .iter()
-                    .rev()
-                    .find(|status| status.quantity == *quantity_id)
-            }) {
+            if let Some(status) = relevant_field_materialization_status(snapshot, quantity_id) {
                 if status.state != fullmag_runner::LiveFieldMaterializationState::Complete {
                     return Ok(false);
                 }
@@ -963,6 +957,7 @@ enum EffectiveFieldSourceKind {
 struct EffectiveFieldSource {
     kind: EffectiveFieldSourceKind,
     source_step: Option<u64>,
+    source_time_seconds_bits: Option<u64>,
     source_revision: Option<u64>,
     materialized_at_unix_ms: Option<u64>,
     baseline_revision: Option<u64>,
@@ -1015,20 +1010,88 @@ pub(crate) fn resolved_current_field_source<'a>(
         (None, None) => None,
     };
 
-    let cached_source_is_authoritative = match cached_source {
-        Some(ResolvedCurrentFieldSource::Preview(_)) => true,
-        Some(ResolvedCurrentFieldSource::Latest(value)) => {
-            latest_field_has_explicit_provenance(value)
-        }
-        Some(ResolvedCurrentFieldSource::LegacyLiveMagnetization { .. }) | None => false,
-    };
-    if quantity != "m" || cached_source_is_authoritative {
+    if quantity != "m" {
         return cached_source;
     }
+    let Some((values, grid, live_step)) = qualified_live_magnetization(snapshot) else {
+        return cached_source;
+    };
+    let cached_source_step = cached_source.and_then(|source| match source {
+        ResolvedCurrentFieldSource::Latest(value) => {
+            latest_field_source_step(snapshot, quantity, value)
+        }
+        ResolvedCurrentFieldSource::Preview(field) => Some(field.source_step),
+        ResolvedCurrentFieldSource::LegacyLiveMagnetization { .. } => None,
+    });
+    let cached_source_preserves_precedence = match cached_source {
+        Some(ResolvedCurrentFieldSource::Preview(_)) => {
+            cached_source_step.is_none_or(|cached_step| cached_step >= live_step)
+        }
+        Some(ResolvedCurrentFieldSource::Latest(value)) => cached_source_step
+            .map(|cached_step| cached_step >= live_step)
+            .unwrap_or_else(|| latest_field_has_explicit_provenance(value)),
+        Some(ResolvedCurrentFieldSource::LegacyLiveMagnetization { .. }) | None => false,
+    };
+    if cached_source_preserves_precedence {
+        return cached_source;
+    }
+    Some(ResolvedCurrentFieldSource::LegacyLiveMagnetization { values, grid })
+}
 
-    live_magnetization_values_ref(snapshot)
-        .map(|(values, grid)| ResolvedCurrentFieldSource::LegacyLiveMagnetization { values, grid })
-        .or(cached_source)
+fn latest_field_source_step(
+    snapshot: &SessionStateResponse,
+    quantity: &str,
+    value: &Value,
+) -> Option<u64> {
+    value
+        .get("source_step")
+        .and_then(Value::as_u64)
+        .or_else(|| {
+            value
+                .get("observation_frame")
+                .and_then(|frame| frame.get("source_step"))
+                .and_then(Value::as_u64)
+        })
+        .or_else(|| {
+            snapshot
+                .preview_cache
+                .accepted_latest_source_frame(quantity)
+                .map(|frame| frame.source_step)
+        })
+}
+
+fn qualified_live_magnetization(
+    snapshot: &SessionStateResponse,
+) -> Option<(&[f64], [u32; 3], u64)> {
+    let state = snapshot.live_state.as_ref()?;
+    let step = &state.latest_step;
+    if !step.is_physical_observation() || !step.time.is_finite() || step.time < 0.0 {
+        return None;
+    }
+    if !is_fdm_snapshot(snapshot)
+        && snapshot
+            .fem_mesh
+            .as_ref()
+            .and_then(|mesh| mesh.generation_id.as_deref())
+            .is_some_and(|mesh_generation_id| {
+                step.fem_mesh_generation_id
+                    .as_deref()
+                    .is_some_and(|source_generation_id| {
+                        source_generation_id != mesh_generation_id
+                    })
+            })
+    {
+        return None;
+    }
+    let (values, grid) = live_magnetization_values_ref(snapshot)?;
+    let point_count = values.len() / 3;
+    let grid_point_count = grid.into_iter().try_fold(1usize, |count, axis| {
+        usize::try_from(axis).ok()?.checked_mul(count)
+    })?;
+    if grid_point_count != point_count {
+        return None;
+    }
+    Some((values, grid, step.step))
 }
 
 fn effective_field_source(
@@ -1045,6 +1108,11 @@ fn effective_field_source(
             Some(EffectiveFieldSource {
                 kind: EffectiveFieldSourceKind::Latest,
                 source_step: value.get("source_step").and_then(Value::as_u64),
+                source_time_seconds_bits: value
+                    .get("source_time_seconds")
+                    .and_then(Value::as_f64)
+                    .filter(|time| time.is_finite() && *time >= 0.0)
+                    .map(f64::to_bits),
                 source_revision: value.get("source_revision").and_then(Value::as_u64),
                 materialized_at_unix_ms: value
                     .get("materialized_at_unix_ms")
@@ -1059,6 +1127,10 @@ fn effective_field_source(
         ResolvedCurrentFieldSource::Preview(field) => Some(EffectiveFieldSource {
             kind: EffectiveFieldSourceKind::Preview,
             source_step: Some(field.source_step),
+            source_time_seconds_bits: field
+                .source_time_seconds
+                .filter(|time| time.is_finite() && *time >= 0.0)
+                .map(f64::to_bits),
             source_revision: Some(field.source_revision),
             materialized_at_unix_ms: Some(field.materialized_at_unix_ms),
             baseline_revision: None,
@@ -1068,11 +1140,17 @@ fn effective_field_source(
             payload_hash: field_values_hash(&field.vector_field_values),
         }),
         ResolvedCurrentFieldSource::LegacyLiveMagnetization { values, grid } => {
+            let latest_step = &snapshot.live_state.as_ref()?.latest_step;
             Some(EffectiveFieldSource {
                 kind: EffectiveFieldSourceKind::LegacyLiveMagnetization,
-                source_step: None,
+                source_step: Some(latest_step.step),
+                source_time_seconds_bits: (latest_step.time.is_finite() && latest_step.time >= 0.0)
+                    .then(|| latest_step.time.to_bits()),
                 source_revision: None,
-                materialized_at_unix_ms: None,
+                materialized_at_unix_ms: snapshot
+                    .live_state
+                    .as_ref()
+                    .map(|state| state.updated_at_unix_ms.min(u64::MAX as u128) as u64),
                 baseline_revision: None,
                 config_revision: None,
                 value_count: values.len(),
@@ -1105,7 +1183,13 @@ fn apply_effective_field_source_delta(
     let mut catalog_changed = false;
     for (quantity, previous_source) in previous_sources {
         let next_source = effective_field_source(current, quantity.as_str());
-        if previous_source == next_source {
+        if previous_source == next_source
+            || same_live_magnetization_projection(
+                quantity.as_str(),
+                previous_source,
+                next_source,
+            )
+        {
             continue;
         }
         if previous_source.is_some() != next_source.is_some() {
@@ -1125,6 +1209,28 @@ fn apply_effective_field_source_delta(
     }
     if catalog_changed {
         bump_field_catalog_revision(current);
+    }
+}
+
+fn same_live_magnetization_projection(
+    quantity: &str,
+    previous: Option<EffectiveFieldSource>,
+    next: Option<EffectiveFieldSource>,
+) -> bool {
+    if quantity != "m" {
+        return false;
+    }
+    match (previous, next) {
+        (
+            Some(previous),
+            Some(mut next),
+        ) if previous.kind == EffectiveFieldSourceKind::LegacyLiveMagnetization
+            && next.kind == EffectiveFieldSourceKind::Latest =>
+        {
+            next.kind = previous.kind;
+            previous == next
+        }
+        _ => false,
     }
 }
 
@@ -2261,6 +2367,128 @@ pub(crate) fn apply_current_live_runtime_frame(
     Ok(())
 }
 
+fn runtime_frame_has_qualified_live_magnetization(
+    current: &SessionStateResponse,
+    live_state: Option<&LiveState>,
+    fem_mesh: Option<&fullmag_runner::FemMeshPayload>,
+) -> bool {
+    let Some(mut live_state) = live_state.cloned() else {
+        return false;
+    };
+    let mut candidate = current.clone();
+    if let Some(mesh) = live_state.latest_step.fem_mesh.take() {
+        apply_fem_mesh_update(&mut candidate, mesh);
+    }
+    if let Some(mesh) = fem_mesh {
+        apply_fem_mesh_update(&mut candidate, mesh.clone());
+    }
+    candidate.live_state = Some(live_state);
+    qualified_live_magnetization(&candidate).is_some()
+}
+
+fn runtime_frame_preserves_current_m_domain(
+    current: &SessionStateResponse,
+    live_state: Option<&LiveState>,
+    fem_mesh: Option<&fullmag_runner::FemMeshPayload>,
+) -> bool {
+    let mut candidate = current.clone();
+    if let Some(mesh) = live_state.and_then(|state| state.latest_step.fem_mesh.as_ref()) {
+        apply_fem_mesh_update(&mut candidate, mesh.clone());
+    }
+    if let Some(mesh) = fem_mesh {
+        apply_fem_mesh_update(&mut candidate, mesh.clone());
+    }
+    candidate.mesh_revision == current.mesh_revision
+        && domain_generation_id(&candidate) == domain_generation_id(current)
+}
+
+fn runtime_frame_has_older_selected_live_magnetization(
+    current: &SessionStateResponse,
+    frame: &CurrentLiveRuntimeFrameRequest,
+    has_qualified_incoming_m: bool,
+) -> bool {
+    if !has_qualified_incoming_m || frame.session_id != current.session.session_id {
+        return false;
+    }
+    if current.run.as_ref().is_some_and(|run| {
+        run.session_id != current.session.session_id || run.run_id != current.session.run_id
+    }) {
+        return false;
+    }
+    let Some(incoming_live_state) = frame.live_state.as_ref() else {
+        return false;
+    };
+    if !incoming_live_state.latest_step.is_physical_observation() {
+        return false;
+    }
+    if !matches!(
+        resolved_current_field_source(current, "m", 3),
+        Some(ResolvedCurrentFieldSource::LegacyLiveMagnetization { .. })
+    ) {
+        return false;
+    }
+    let Some((_, _, selected_step)) = qualified_live_magnetization(current) else {
+        return false;
+    };
+    if incoming_live_state.latest_step.step >= selected_step {
+        return false;
+    }
+    let Some(selected_frame) = resolved_current_field_observation_frame(current, "m", 3) else {
+        return false;
+    };
+    accepted_m_frame_matches_current_domain(current, &selected_frame)
+        && runtime_frame_preserves_current_m_domain(
+            current,
+            Some(incoming_live_state),
+            frame.fem_mesh.as_ref(),
+        )
+}
+
+fn preserve_selected_live_magnetization_before_runtime_update(
+    current: &mut SessionStateResponse,
+) -> Result<bool, ApiError> {
+    if !matches!(
+        resolved_current_field_source(current, "m", 3),
+        Some(ResolvedCurrentFieldSource::LegacyLiveMagnetization { .. })
+    ) {
+        return Ok(false);
+    }
+    let Some((values, grid, source_step)) = qualified_live_magnetization(current) else {
+        return Ok(false);
+    };
+    let Some(source_frame) = resolved_current_field_observation_frame(current, "m", 3) else {
+        return Ok(false);
+    };
+    let state = current
+        .live_state
+        .as_ref()
+        .expect("qualified live magnetization requires live state");
+    let source_time_seconds = state.latest_step.time;
+    if source_frame.source_step != source_step
+        || source_frame.source_time_seconds != Some(source_time_seconds)
+    {
+        return Ok(false);
+    }
+    let values_by_point = values
+        .chunks_exact(3)
+        .map(|point| [point[0], point[1], point[2]])
+        .collect::<Vec<_>>();
+    let mut latest_fields = LatestFields::default();
+    latest_fields.insert(
+        "m".to_string(),
+        json!({
+            "values": values_by_point,
+            "source_step": source_step,
+            "source_time_seconds": source_time_seconds,
+            "materialized_at_unix_ms": state.updated_at_unix_ms.min(u64::MAX as u128) as u64,
+            "layout": { "grid_cells": grid }
+        }),
+    );
+    bind_latest_field_observation_frames(current, &mut latest_fields)?;
+    merge_latest_fields(&mut current.latest_fields, latest_fields);
+    Ok(true)
+}
+
 fn apply_current_live_runtime_frame_in_place(
     current: &mut SessionStateResponse,
     frame: CurrentLiveRuntimeFrameRequest,
@@ -2290,6 +2518,32 @@ fn apply_current_live_runtime_frame_in_place(
     }
     let previous_field_sources =
         capture_effective_field_sources(current, &affected_field_quantities);
+    let previous_domain_generation_id = domain_generation_id(current);
+    let previous_mesh_revision = current.mesh_revision;
+    let frame_fem_mesh_changes_identity = frame
+        .fem_mesh
+        .as_ref()
+        .filter(|mesh| is_solver_domain_fem_mesh(mesh))
+        .is_some_and(|mesh| {
+            current.fem_mesh.as_ref().is_none_or(|current_mesh| {
+                fem_mesh_identity(current_mesh) != fem_mesh_identity(mesh)
+                    || current_mesh.generation_id.as_deref() != mesh.generation_id.as_deref()
+            })
+        });
+    let incoming_live_state_present = frame.live_state.is_some();
+    let has_qualified_incoming_m = runtime_frame_has_qualified_live_magnetization(
+        current,
+        frame.live_state.as_ref(),
+        frame.fem_mesh.as_ref(),
+    );
+    let older_live_m_replay =
+        runtime_frame_has_older_selected_live_magnetization(current, &frame, has_qualified_incoming_m);
+    if frame.session_id == current.session.session_id
+        && (!has_qualified_incoming_m || older_live_m_replay)
+        && (frame.live_state.is_some() || frame.fem_mesh.is_some())
+    {
+        preserve_selected_live_magnetization_before_runtime_update(current)?;
+    }
     if let Some(previous_preview) = current.live_state.as_ref().and_then(|live_state| {
         live_state
             .latest_step
@@ -2308,38 +2562,41 @@ fn apply_current_live_runtime_frame_in_place(
         if current.run.is_none() && current.session.status == "bootstrapping" {
             current.session.status = live_state.status.clone();
         }
+        if !has_qualified_incoming_m {
+            live_state.latest_step.magnetization = None;
+        }
         if let Some(fem_mesh) = live_state.latest_step.fem_mesh.take() {
             apply_fem_mesh_update(current, fem_mesh);
         }
-        // Preserve heavy payload fields from the previous state when the
-        // incoming frame does not carry them.  The CLI only sends
-        // magnetization every `field_every_n` steps (typically 50) but
-        // publishes scalar progress every ~5 s.  Without this carry-forward
-        // the API-side cached state loses magnetization on intermediate
-        // frames, causing the control-room 3D viewport to show stale /
-        // static textures and vectors.
+        // Carry the prior mesh-generation hint only while mesh identity remains
+        // stable. The accepted preview source is still preserved independently.
+        // Magnetization is preserved in latest_fields with its original frame.
         if let Some(prev) = current.live_state.as_ref() {
-            if live_state.latest_step.is_physical_observation()
-                && live_state.latest_step.magnetization.is_none()
+            if live_state.latest_step.fem_mesh_generation_id.is_none()
+                && previous_mesh_revision == current.mesh_revision
+                && previous_domain_generation_id == domain_generation_id(current)
+                && !frame_fem_mesh_changes_identity
             {
-                live_state.latest_step.magnetization = prev
-                    .latest_step
-                    .is_physical_observation()
-                    .then(|| prev.latest_step.magnetization.clone())
-                    .flatten();
-            }
-            if live_state.latest_step.fem_mesh_generation_id.is_none() {
                 live_state.latest_step.fem_mesh_generation_id =
                     prev.latest_step.fem_mesh_generation_id.clone();
             }
+            let m_domain_changed = previous_mesh_revision != current.mesh_revision
+                || previous_domain_generation_id != domain_generation_id(current)
+                || frame_fem_mesh_changes_identity;
             if live_state.latest_step.is_physical_observation()
                 && live_state.latest_step.preview_field.is_none()
             {
-                live_state.latest_step.preview_field = prev
+                let previous_preview = prev
                     .latest_step
                     .is_physical_observation()
                     .then(|| prev.latest_step.preview_field.clone())
                     .flatten();
+                if previous_preview
+                    .as_ref()
+                    .is_none_or(|preview| preview.quantity != "m" || !m_domain_changed)
+                {
+                    live_state.latest_step.preview_field = previous_preview;
+                }
             }
         }
         // Promote the active preview field into preview_cache so that API
@@ -2358,6 +2615,14 @@ fn apply_current_live_runtime_frame_in_place(
     }
     if let Some(fem_mesh) = frame.fem_mesh {
         apply_fem_mesh_update(current, fem_mesh);
+    }
+    if !incoming_live_state_present
+        && (previous_mesh_revision != current.mesh_revision
+            || previous_domain_generation_id != domain_generation_id(current))
+    {
+        if let Some(live_state) = current.live_state.as_mut() {
+            live_state.latest_step.magnetization = None;
+        }
     }
     if let Some(engine_log) = frame.engine_log {
         current.engine_log = engine_log;
@@ -2379,14 +2644,18 @@ fn apply_current_live_runtime_frame_in_place(
     }
     apply_effective_field_source_delta(current, previous_field_sources);
 
-    let result = finalize_current_live_apply(current, CurrentLiveApplyFlags::default());
-    if result.is_ok() {
-        annotate_solver_profile_publisher_apply(
-            &mut current.solver_profile,
-            apply_start.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64,
-        );
+    finalize_current_live_apply(current, CurrentLiveApplyFlags::default())?;
+    annotate_solver_profile_publisher_apply(
+        &mut current.solver_profile,
+        apply_start.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64,
+    );
+    if affected_field_quantities.contains("m") {
+        let mut affected_magnetization = BTreeSet::new();
+        affected_magnetization.insert("m".to_string());
+        refresh_accepted_field_publication_bundles(current, &affected_magnetization)
+    } else {
+        Ok(())
     }
-    result
 }
 
 pub(crate) fn apply_current_live_scalar_frame(
@@ -2412,7 +2681,10 @@ pub(crate) fn apply_current_live_scalar_frame(
             has_scalar_row: true,
             ..CurrentLiveApplyFlags::default()
         },
-    )
+    )?;
+    let mut affected_quantities = BTreeSet::new();
+    affected_quantities.insert("m".to_string());
+    refresh_accepted_field_publication_bundles(current, &affected_quantities)
 }
 
 pub(crate) fn apply_current_live_field_frame(
@@ -2746,7 +3018,7 @@ pub(crate) fn latest_field_source_is_qualified(
     quantity_id: &str,
     raw: &Value,
 ) -> bool {
-    if authored_material_field_matches(current, quantity_id, raw) {
+    if quantity_id != "m" && authored_material_field_matches(current, quantity_id, raw) {
         return true;
     }
     let frame = raw
@@ -2757,28 +3029,168 @@ pub(crate) fn latest_field_source_is_qualified(
             )
             .ok()
         });
+    let replay_frame = if quantity_id == "m" {
+        registered_latest_field_replay_frame(current, quantity_id, raw)
+    } else {
+        accepted_latest_field_replay_frame(current, quantity_id, raw)
+    };
     let source_step = raw
         .get("source_step")
         .and_then(Value::as_u64)
-        .or_else(|| frame.as_ref().map(|frame| frame.source_step));
+        .or_else(|| frame.as_ref().map(|frame| frame.source_step))
+        .or_else(|| {
+            if quantity_id == "m" {
+                replay_frame.as_ref().map(|frame| frame.source_step)
+            } else {
+                None
+            }
+        });
     let source_time_seconds = raw
         .get("source_time_seconds")
         .and_then(Value::as_f64)
-        .or_else(|| frame.as_ref().and_then(|frame| frame.source_time_seconds));
+        .or_else(|| frame.as_ref().and_then(|frame| frame.source_time_seconds))
+        .or_else(|| {
+            if quantity_id == "m" {
+                replay_frame
+                    .as_ref()
+                    .and_then(|frame| frame.source_time_seconds)
+            } else {
+                None
+            }
+        });
     let Some(source_step) = source_step else {
         return false;
     };
-    let accepted = accepted_observation_frame_for_source(
-        current,
-        source_step,
-        source_time_seconds,
-        None,
-    )
-    .or_else(|| accepted_latest_field_replay_frame(current, quantity_id, raw));
-    accepted.is_some_and(|accepted| frame.as_ref().is_none_or(|frame| frame == &accepted))
+    let accepted = if quantity_id == "m" {
+        replay_frame.or_else(|| {
+            accepted_observation_frame_for_source(
+                current,
+                source_step,
+                source_time_seconds,
+                None,
+            )
+        })
+    } else {
+        accepted_observation_frame_for_source(
+            current,
+            source_step,
+            source_time_seconds,
+            None,
+        )
+        .or(replay_frame)
+    };
+    accepted.is_some_and(|accepted| {
+        frame.as_ref().is_none_or(|frame| frame == &accepted)
+            && (quantity_id != "m" || accepted_m_frame_matches_current_domain(current, &accepted))
+    })
+}
+
+fn accepted_m_frame_matches_current_domain(
+    current: &SessionStateResponse,
+    frame: &crate::schemas::common::AcceptedObservationFrameRef,
+) -> bool {
+    accepted_frame_belongs_to_current_session(current, frame)
+        && frame
+            == &accepted_observation_frame_ref(
+                current,
+                frame.source_step,
+                frame.source_time_seconds,
+            )
+}
+
+pub(crate) fn resolved_current_field_observation_frame(
+    snapshot: &SessionStateResponse,
+    quantity: &str,
+    n_comp: usize,
+) -> Option<crate::schemas::common::AcceptedObservationFrameRef> {
+    let source = resolved_current_field_source(snapshot, quantity, n_comp)?;
+    let frame = match source {
+        ResolvedCurrentFieldSource::Latest(value) => {
+            value
+                .get("observation_frame")
+                .and_then(|value| {
+                    serde_json::from_value::<
+                        crate::schemas::common::AcceptedObservationFrameRef,
+                    >(value.clone())
+                    .ok()
+                })
+                .or_else(|| {
+                    snapshot
+                        .preview_cache
+                        .accepted_latest_source_frame(quantity)
+                        .cloned()
+                })
+                .or_else(|| {
+                    let source_step = latest_field_source_step(snapshot, quantity, value)?;
+                    let source_time = value
+                        .get("source_time_seconds")
+                        .and_then(Value::as_f64)
+                        .filter(|time| time.is_finite() && *time >= 0.0);
+                    accepted_observation_frame_for_source(
+                        snapshot,
+                        source_step,
+                        source_time,
+                        None,
+                    )
+                })
+        }
+        ResolvedCurrentFieldSource::Preview(field) => {
+            accepted_preview_observation_frame(snapshot, field, None)
+        }
+        ResolvedCurrentFieldSource::LegacyLiveMagnetization { .. } => {
+            let state = snapshot.live_state.as_ref()?;
+            let step = &state.latest_step;
+            if !step.time.is_finite() || step.time < 0.0 {
+                return None;
+            }
+            accepted_observation_frame_for_source(
+                snapshot,
+                step.step,
+                Some(step.time),
+                None,
+            )
+        }
+    }?;
+    if quantity == "m" && !accepted_m_frame_matches_current_domain(snapshot, &frame) {
+        return None;
+    }
+    Some(frame)
+}
+
+pub(crate) fn relevant_field_materialization_status<'a>(
+    snapshot: &'a SessionStateResponse,
+    quantity: &str,
+) -> Option<&'a fullmag_runner::LiveFieldMaterializationStatus> {
+    let selected_m_source_step = if quantity == "m" {
+        resolved_current_field_observation_frame(snapshot, "m", 3)
+            .map(|frame| frame.source_step)
+    } else {
+        None
+    };
+    snapshot
+        .live_state
+        .as_ref()?
+        .latest_step
+        .field_materialization_states
+        .iter()
+        .rev()
+        .find(|status| {
+            status.quantity == quantity
+                && !selected_m_source_step
+                    .is_some_and(|step| status.source_step < step)
+        })
 }
 
 fn accepted_latest_field_replay_frame(
+    current: &SessionStateResponse,
+    quantity_id: &str,
+    incoming: &Value,
+) -> Option<crate::schemas::common::AcceptedObservationFrameRef> {
+    let accepted = registered_latest_field_replay_frame(current, quantity_id, incoming)?;
+    accepted_frame_belongs_to_current_session(current, &accepted).then_some(accepted)
+}
+
+fn registered_latest_field_replay_frame(
     current: &SessionStateResponse,
     quantity_id: &str,
     incoming: &Value,
@@ -2795,7 +3207,7 @@ fn accepted_latest_field_replay_frame(
     let accepted = current
         .preview_cache
         .accepted_latest_source_frame(quantity_id)?;
-    if accepted != &stored_frame || !accepted_frame_belongs_to_current_session(current, accepted) {
+    if accepted != &stored_frame {
         return None;
     }
     let mut stored_payload = stored.clone();
@@ -2821,15 +3233,28 @@ pub(crate) fn preview_field_source_is_qualified(
     field: &LivePreviewField,
 ) -> bool {
     let actual = &field.vector_field_values;
-    if authored_material_field_values(current, &field.quantity).is_some_and(|expected| {
-        !actual.is_empty()
-            && actual.iter().all(|value| value.is_finite())
-            && ((actual.len() == expected.len() && actual == &expected)
-                || (expected.len() == 1 && actual.iter().all(|value| *value == expected[0])))
-    }) {
+    if field.quantity != "m"
+        && authored_material_field_values(current, &field.quantity).is_some_and(|expected| {
+            !actual.is_empty()
+                && actual.iter().all(|value| value.is_finite())
+                && ((actual.len() == expected.len() && actual == &expected)
+                    || (expected.len() == 1 && actual.iter().all(|value| *value == expected[0])))
+        })
+    {
         return true;
     }
-    accepted_preview_observation_frame(current, field, None).is_some()
+    let frame = if field.quantity == "m" {
+        current
+            .preview_cache
+            .accepted_source_frame(field)
+            .cloned()
+            .or_else(|| accepted_preview_observation_frame(current, field, None))
+    } else {
+        accepted_preview_observation_frame(current, field, None)
+    };
+    frame.is_some_and(|frame| {
+        field.quantity != "m" || accepted_m_frame_matches_current_domain(current, &frame)
+    })
 }
 
 fn accepted_preview_observation_frame(
@@ -2837,6 +3262,11 @@ fn accepted_preview_observation_frame(
     field: &LivePreviewField,
     candidate_row: Option<&ScalarRow>,
 ) -> Option<crate::schemas::common::AcceptedObservationFrameRef> {
+    if field.quantity == "m" {
+        if let Some(frame) = current.preview_cache.accepted_source_frame(field) {
+            return Some(frame.clone());
+        }
+    }
     accepted_observation_frame_for_source(
         current,
         field.source_step,
@@ -2878,7 +3308,11 @@ fn bind_latest_field_observation_frames_with_candidate(
     let current_step = current.live_state.as_ref().map(|state| &state.latest_step);
     let current_physical_step = current_step.filter(|step| step.is_physical_observation());
     for (quantity_id, value) in latest_fields.entries_mut() {
-        let replay_frame = accepted_latest_field_replay_frame(current, quantity_id, value);
+        let replay_frame = if quantity_id == "m" {
+            registered_latest_field_replay_frame(current, quantity_id, value)
+        } else {
+            accepted_latest_field_replay_frame(current, quantity_id, value)
+        };
         if authored_material_field_matches(current, quantity_id, value) {
             continue;
         }
@@ -2905,6 +3339,13 @@ fn bind_latest_field_observation_frames_with_candidate(
             .and_then(Value::as_u64)
             .or_else(|| supplied_frame.as_ref().map(|frame| frame.source_step))
             .or_else(|| {
+                if quantity_id == "m" {
+                    replay_frame.as_ref().map(|frame| frame.source_step)
+                } else {
+                    None
+                }
+            })
+            .or_else(|| {
                 current_physical_step.map(|step| step.step)
             })
             .or_else(|| {
@@ -2917,6 +3358,15 @@ fn bind_latest_field_observation_frames_with_candidate(
             .and_then(Value::as_f64)
             .or_else(|| supplied_frame.as_ref().and_then(|frame| frame.source_time_seconds))
             .or_else(|| {
+                if quantity_id == "m" {
+                    replay_frame
+                        .as_ref()
+                        .and_then(|frame| frame.source_time_seconds)
+                } else {
+                    None
+                }
+            })
+            .or_else(|| {
                 current_physical_step
                     .filter(|step| Some(step.step) == source_step)
                     .map(|step| step.time)
@@ -2927,16 +3377,29 @@ fn bind_latest_field_observation_frames_with_candidate(
                     .filter(|row| Some(row.step) == source_step)
                     .map(|row| row.time)
             });
-        let accepted_frame = source_step
-            .and_then(|step| {
-                accepted_observation_frame_for_source(
-                    current,
-                    step,
-                    source_time_seconds,
-                    candidate_row,
-                )
+        let accepted_frame = if quantity_id == "m" {
+            replay_frame.clone().or_else(|| {
+                source_step.and_then(|step| {
+                    accepted_observation_frame_for_source(
+                        current,
+                        step,
+                        source_time_seconds,
+                        candidate_row,
+                    )
+                })
             })
-            .or(replay_frame);
+        } else {
+            source_step
+                .and_then(|step| {
+                    accepted_observation_frame_for_source(
+                        current,
+                        step,
+                        source_time_seconds,
+                        candidate_row,
+                    )
+                })
+                .or(replay_frame)
+        };
         let Some(accepted_frame) = accepted_frame else {
             return Err(ApiError::bad_request(format!(
                 "latest field '{quantity_id}' has no accepted physical observation source"
@@ -2948,6 +3411,11 @@ fn bind_latest_field_observation_frames_with_candidate(
         {
             return Err(ApiError::bad_request(format!(
                 "latest field '{quantity_id}' observation frame does not match an accepted physical source"
+            )));
+        }
+        if quantity_id == "m" && !accepted_m_frame_matches_current_domain(current, &accepted_frame) {
+            return Err(ApiError::bad_request(format!(
+                "latest field '{quantity_id}' observation frame does not match the current magnetization domain"
             )));
         }
         if supplied_frame.is_none() {
@@ -2981,9 +3449,18 @@ fn validate_preview_field_sources(
                             && actual.iter().all(|value| *value == expected[0])))
             });
         let accepted_physical = accepted_preview_observation_frame(current, field, candidate_row);
+        let accepted_physical_matches_domain = accepted_physical.as_ref().is_none_or(|frame| {
+            field.quantity != "m" || accepted_m_frame_matches_current_domain(current, frame)
+        });
         if !authored_material && accepted_physical.is_none() {
             return Err(ApiError::bad_request(format!(
                 "preview field '{}' has no accepted physical observation source",
+                field.quantity
+            )));
+        }
+        if field.quantity == "m" && !accepted_physical_matches_domain {
+            return Err(ApiError::bad_request(format!(
+                "preview field '{}' does not match the accepted physical source",
                 field.quantity
             )));
         }
@@ -3002,18 +3479,34 @@ fn refresh_accepted_field_publication_bundles(
 ) -> Result<(), ApiError> {
     for quantity_id in affected_quantities {
         current.field_publication_bundles.remove(quantity_id);
-        let Some(field_value) = current.latest_fields.get(quantity_id) else {
+        let Some(spec) = fullmag_quantities::quantity_spec(quantity_id) else {
             continue;
         };
-        let Some(observation_frame_value) = field_value.get("observation_frame") else {
-            continue;
-        };
-        let observation_frame: crate::schemas::common::AcceptedObservationFrameRef =
-            serde_json::from_value(observation_frame_value.clone()).map_err(|error| {
+        let observation_frame = if quantity_id == "m" {
+            let Some(frame) = resolved_current_field_observation_frame(
+                current,
+                quantity_id,
+                usize::from(spec.n_comp),
+            ) else {
+                continue;
+            };
+            frame
+        } else {
+            let Some(field_value) = current.latest_fields.get(quantity_id) else {
+                continue;
+            };
+            let Some(observation_frame_value) = field_value.get("observation_frame") else {
+                continue;
+            };
+            serde_json::from_value::<crate::schemas::common::AcceptedObservationFrameRef>(
+                observation_frame_value.clone(),
+            )
+            .map_err(|error| {
                 ApiError::conflict(format!(
                     "accepted field '{quantity_id}' has an invalid observation frame: {error}"
                 ))
-            })?;
+            })?
+        };
         let scalar_matches_frame = current
             .scalar_rows
             .iter()
@@ -3025,9 +3518,6 @@ fn refresh_accepted_field_publication_bundles(
         if !scalar_matches_frame {
             continue;
         }
-        let Some(spec) = fullmag_quantities::quantity_spec(quantity_id) else {
-            continue;
-        };
         let Some(field) =
             resolve_current_spatial_field(current, quantity_id, usize::from(spec.n_comp))?
         else {
@@ -5565,6 +6055,565 @@ mod tests {
             solver_profile: None,
             fem_mesh: None,
         })
+    }
+
+    fn current_with_accepted_fem_m_preview() -> (SessionStateResponse, LivePreviewField) {
+        let mut current = test_current_snapshot();
+        current.fem_mesh = Some(domain_fem_mesh("mesh-generation-1"));
+        let mut preview = preview_field("m");
+        preview.source_step = 7;
+        preview.source_time_seconds = Some(7.0e-12);
+        preview.original_grid = [4, 1, 1];
+        preview.preview_grid = [4, 1, 1];
+        preview.vector_field_values = vec![0.5; 12];
+        preview.x_chosen_size = 4;
+        preview.y_chosen_size = 1;
+        preview.applied_x_chosen_size = 4;
+        preview.applied_y_chosen_size = 1;
+        let mut live_state = live_state_with_magnetization(7, vec![0.25; 12]);
+        live_state.latest_step.grid = [4, 1, 1];
+        live_state.latest_step.fem_mesh_generation_id =
+            Some("mesh-generation-1".to_string());
+        live_state.latest_step.preview_field = Some(preview.clone());
+        let session_id = current.session.session_id.clone();
+
+        apply_current_live_runtime_frame(
+            &mut current,
+            CurrentLiveRuntimeFrameRequest {
+                session_id,
+                live_state: Some(live_state),
+                frozen_spins_runtime_status: None,
+                engine_log: None,
+                solver_profile: None,
+                fem_mesh: None,
+            },
+        )
+        .expect("initial physical m preview should publish through the runtime path");
+        assert!(
+            preview_field_source_is_qualified(
+                &current,
+                current.preview_cache.get("m").expect("accepted m preview")
+            )
+        );
+        (current, preview)
+    }
+
+    #[test]
+    fn qualified_live_magnetization_rejects_grid_cardinality_overflow() {
+        let mut current = test_current_snapshot();
+        let mut live_state = live_state_with_magnetization(8, vec![1.0, 0.0, 0.0]);
+        live_state.latest_step.grid = [u32::MAX; 3];
+        current.live_state = Some(live_state);
+
+        assert!(qualified_live_magnetization(&current).is_none());
+        assert!(resolved_current_field_source(&current, "m", 3).is_none());
+    }
+
+    #[test]
+    fn new_mesh_frame_does_not_inherit_the_previous_fem_generation_hint() {
+        let mut current = test_current_snapshot();
+        current.fem_mesh = Some(domain_fem_mesh("mesh-generation-1"));
+        let mut previous_live_state =
+            live_state_with_magnetization(7, vec![0.25; 12]);
+        previous_live_state.latest_step.grid = [4, 1, 1];
+        previous_live_state.latest_step.fem_mesh_generation_id =
+            Some("mesh-generation-1".to_string());
+        current.live_state = Some(previous_live_state);
+
+        let mut incoming_live_state =
+            live_state_with_magnetization(8, vec![0.5; 12]);
+        incoming_live_state.latest_step.grid = [4, 1, 1];
+        let incoming_mesh = domain_fem_mesh("mesh-generation-2");
+        apply_current_live_runtime_frame(
+            &mut current,
+            CurrentLiveRuntimeFrameRequest {
+                session_id: "test-session".to_string(),
+                live_state: Some(incoming_live_state),
+                frozen_spins_runtime_status: None,
+                engine_log: None,
+                solver_profile: None,
+                fem_mesh: Some(incoming_mesh),
+            },
+        )
+        .expect("new mesh and live frame should apply atomically");
+
+        let selected_live_state = current.live_state.as_ref().expect("live state");
+        assert_eq!(
+            selected_live_state.latest_step.fem_mesh_generation_id,
+            None,
+            "a missing producer hint must not be relabeled with the previous generation"
+        );
+        assert!(matches!(
+            resolved_current_field_source(&current, "m", 3),
+            Some(ResolvedCurrentFieldSource::LegacyLiveMagnetization { .. })
+        ));
+    }
+
+    #[test]
+    fn runtime_mesh_change_does_not_carry_an_accepted_m_preview() {
+        let (mut current, _) = current_with_accepted_fem_m_preview();
+        let mut incoming = live_state_with_magnetization(7, vec![0.75; 12]);
+        incoming.latest_step.grid = [4, 1, 1];
+        incoming.latest_step.fem_mesh_generation_id =
+            Some("mesh-generation-2".to_string());
+        incoming.latest_step.fem_mesh = Some(domain_fem_mesh("mesh-generation-2"));
+
+        apply_current_live_runtime_frame(
+            &mut current,
+            CurrentLiveRuntimeFrameRequest {
+                session_id: "test-session".to_string(),
+                live_state: Some(incoming),
+                frozen_spins_runtime_status: None,
+                engine_log: None,
+                solver_profile: None,
+                fem_mesh: None,
+            },
+        )
+        .expect("same-cardinality mesh generation should apply");
+
+        assert!(current
+            .live_state
+            .as_ref()
+            .expect("live state")
+            .latest_step
+            .preview_field
+            .is_none());
+        let cached_preview = current
+            .preview_cache
+            .get("m")
+            .expect("old preview data remains auditable in cache");
+        assert_eq!(cached_preview.source_step, 7);
+        assert!(!preview_field_source_is_qualified(&current, cached_preview));
+    }
+
+    #[test]
+    fn runtime_mesh_change_rejects_replayed_m_preview_binding() {
+        let (mut current, old_preview) = current_with_accepted_fem_m_preview();
+        let mut incoming = live_state_with_magnetization(7, vec![0.75; 12]);
+        incoming.latest_step.grid = [4, 1, 1];
+        incoming.latest_step.fem_mesh_generation_id =
+            Some("mesh-generation-2".to_string());
+        incoming.latest_step.fem_mesh = Some(domain_fem_mesh("mesh-generation-2"));
+        incoming.latest_step.preview_field = Some(old_preview);
+
+        let result = apply_current_live_runtime_frame(
+            &mut current,
+            CurrentLiveRuntimeFrameRequest {
+                session_id: "test-session".to_string(),
+                live_state: Some(incoming),
+                frozen_spins_runtime_status: None,
+                engine_log: None,
+                solver_profile: None,
+                fem_mesh: None,
+            },
+        );
+
+        assert!(result.is_err(), "old-domain preview cannot be rebound");
+        assert_eq!(
+            current.fem_mesh.as_ref().and_then(|mesh| mesh.generation_id.as_deref()),
+            Some("mesh-generation-1")
+        );
+        assert!(
+            preview_field_source_is_qualified(
+                &current,
+                current.preview_cache.get("m").expect("original accepted preview")
+            )
+        );
+    }
+
+    #[test]
+    fn explicit_stale_fem_generation_does_not_qualify_live_m() {
+        let mut current = test_current_snapshot();
+        current.fem_mesh = Some(domain_fem_mesh("mesh-generation-current"));
+        let mut live_state = live_state_with_magnetization(
+            8,
+            vec![
+                1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, -1.0, 0.0, 0.0,
+            ],
+        );
+        live_state.latest_step.grid = [4, 1, 1];
+        current.live_state = Some(live_state.clone());
+
+        assert!(
+            qualified_live_magnetization(&current).is_some(),
+            "legacy frames without a generation hint remain compatible"
+        );
+
+        live_state.latest_step.fem_mesh_generation_id =
+            Some("mesh-generation-old".to_string());
+        current.live_state = Some(live_state);
+        assert!(qualified_live_magnetization(&current).is_none());
+        assert!(resolved_current_field_source(&current, "m", 3).is_none());
+    }
+
+    #[test]
+    fn older_m_materialization_status_does_not_hide_other_quantities() {
+        let mut current = test_current_snapshot();
+        let mut live_state = live_state_with_magnetization(8, vec![1.0, 0.0, 0.0]);
+        live_state.latest_step.grid = [1, 1, 1];
+        live_state.latest_step.field_materialization_states =
+            vec![fullmag_runner::LiveFieldMaterializationStatus {
+                quantity: "H_eff".to_string(),
+                source_step: 7,
+                request_revision: 1,
+                state: fullmag_runner::LiveFieldMaterializationState::Error,
+                error: Some("step 7 field failed".to_string()),
+            }];
+        current.live_state = Some(live_state);
+
+        assert!(matches!(
+            resolved_current_field_source(&current, "m", 3),
+            Some(ResolvedCurrentFieldSource::LegacyLiveMagnetization { .. })
+        ));
+        let status = relevant_field_materialization_status(&current, "H_eff")
+            .expect("older H_eff status remains relevant to H_eff");
+        assert_eq!(status.source_step, 7);
+        assert_eq!(
+            status.state,
+            fullmag_runner::LiveFieldMaterializationState::Error
+        );
+    }
+
+    #[test]
+    fn older_m_status_is_ignored_for_selected_cached_source_but_same_and_newer_block() {
+        let mut current = test_current_snapshot();
+        let mut live_state = live_state_with_magnetization(8, vec![1.0, 0.0, 0.0]);
+        live_state.latest_step.grid = [1, 1, 1];
+        current.live_state = Some(live_state);
+        assert!(preserve_selected_live_magnetization_before_runtime_update(&mut current)
+            .expect("the accepted Live m source should be preserved"));
+        assert!(matches!(
+            resolved_current_field_source(&current, "m", 3),
+            Some(ResolvedCurrentFieldSource::Latest(_))
+        ));
+
+        current
+            .live_state
+            .as_mut()
+            .expect("live state")
+            .latest_step
+            .field_materialization_states = vec![
+            fullmag_runner::LiveFieldMaterializationStatus {
+                quantity: "m".to_string(),
+                source_step: 7,
+                request_revision: 1,
+                state: fullmag_runner::LiveFieldMaterializationState::Error,
+                error: Some("older step 7 field failed".to_string()),
+            },
+        ];
+        assert!(
+            relevant_field_materialization_status(&current, "m").is_none(),
+            "older status must not degrade the preserved step 8 source"
+        );
+
+        current
+            .live_state
+            .as_mut()
+            .expect("live state")
+            .latest_step
+            .field_materialization_states = vec![
+            fullmag_runner::LiveFieldMaterializationStatus {
+                quantity: "m".to_string(),
+                source_step: 8,
+                request_revision: 2,
+                state: fullmag_runner::LiveFieldMaterializationState::Pending,
+                error: None,
+            },
+        ];
+        let same_step = relevant_field_materialization_status(&current, "m")
+            .expect("same-step pending status remains relevant");
+        assert_eq!(same_step.source_step, 8);
+        assert_eq!(
+            same_step.state,
+            fullmag_runner::LiveFieldMaterializationState::Pending
+        );
+
+        current
+            .live_state
+            .as_mut()
+            .expect("live state")
+            .latest_step
+            .field_materialization_states = vec![
+            fullmag_runner::LiveFieldMaterializationStatus {
+                quantity: "m".to_string(),
+                source_step: 9,
+                request_revision: 3,
+                state: fullmag_runner::LiveFieldMaterializationState::Error,
+                error: Some("newer step 9 field failed".to_string()),
+            },
+        ];
+        let newer_step = relevant_field_materialization_status(&current, "m")
+            .expect("newer error status remains relevant");
+        assert_eq!(newer_step.source_step, 9);
+        assert_eq!(
+            newer_step.state,
+            fullmag_runner::LiveFieldMaterializationState::Error
+        );
+    }
+
+    #[test]
+    fn registered_latest_m_frame_cannot_be_rederived_after_topology_change() {
+        let mut current = test_current_snapshot();
+        current.live_state = Some(live_state_with_magnetization(
+            7,
+            vec![1.0, 0.0, 0.0],
+        ));
+        current
+            .live_state
+            .as_mut()
+            .expect("physical live state")
+            .latest_step
+            .grid = [1, 1, 1];
+        let latest_fields = serde_json::from_value(json!({
+            "m": {
+                "source_step": 7,
+                "source_time_seconds": 7.0e-12,
+                "source_revision": 4,
+                "materialized_at_unix_ms": 1_700_000_000_107_u64,
+                "values": [[1.0, 0.0, 0.0]],
+                "layout": { "grid_cells": [1, 1, 1] }
+            }
+        }))
+        .expect("latest magnetization fixture should deserialize");
+        apply_current_live_field_frame(
+            &mut current,
+            CurrentLiveFieldFrameRequest {
+                session_id: "test-session".to_string(),
+                latest_fields: Some(latest_fields),
+                replace_latest_fields: false,
+                field_generation: None,
+                preview_fields: None,
+                clear_preview_cache: false,
+            },
+        )
+        .expect("step 7 field should bind to its accepted physical frame");
+
+        let mut replay = current
+            .latest_fields
+            .get("m")
+            .expect("accepted latest m")
+            .clone();
+        replay
+            .as_object_mut()
+            .expect("latest m is an object")
+            .remove("observation_frame");
+        current.mesh_revision = current.mesh_revision.saturating_add(1);
+
+        assert!(
+            !latest_field_source_is_qualified(&current, "m", &replay),
+            "an exact replay must retain its old accepted topology frame"
+        );
+    }
+
+    #[test]
+    fn latest_m_writer_rejects_registered_replay_after_topology_change() {
+        let mut current = test_current_snapshot();
+        current.fem_mesh = Some(domain_fem_mesh("mesh-generation-1"));
+        let mut live_state = live_state_with_magnetization(7, vec![0.25; 12]);
+        live_state.latest_step.grid = [4, 1, 1];
+        live_state.latest_step.fem_mesh_generation_id =
+            Some("mesh-generation-1".to_string());
+        current.live_state = Some(live_state);
+
+        let latest_fields = serde_json::from_value(json!({
+            "m": {
+                "source_step": 7,
+                "source_time_seconds": 7.0e-12,
+                "source_revision": 4,
+                "materialized_at_unix_ms": 1_700_000_000_107_u64,
+                "values": [[0.25, 0.0, 0.0], [0.25, 0.0, 0.0],
+                           [0.25, 0.0, 0.0], [0.25, 0.0, 0.0]],
+                "layout": { "grid_cells": [4, 1, 1] }
+            }
+        }))
+        .expect("accepted Latest m fixture should deserialize");
+        apply_current_live_field_frame(
+            &mut current,
+            CurrentLiveFieldFrameRequest {
+                session_id: "test-session".to_string(),
+                latest_fields: Some(latest_fields),
+                replace_latest_fields: false,
+                field_generation: None,
+                preview_fields: None,
+                clear_preview_cache: false,
+            },
+        )
+        .expect("initial Latest m should bind to generation 1");
+
+        let stored = current.latest_fields.get("m").expect("stored Latest m");
+        let stored_frame = stored.get("observation_frame").cloned().expect("accepted frame");
+        let mut replay = stored.clone();
+        replay
+            .as_object_mut()
+            .expect("Latest m is an object")
+            .remove("observation_frame");
+        current.fem_mesh = Some(domain_fem_mesh("mesh-generation-2"));
+        let replay_fields = serde_json::from_value(json!({ "m": replay }))
+            .expect("exact Latest m replay should deserialize");
+
+        let result = apply_current_live_field_frame(
+            &mut current,
+            CurrentLiveFieldFrameRequest {
+                session_id: "test-session".to_string(),
+                latest_fields: Some(replay_fields),
+                replace_latest_fields: false,
+                field_generation: None,
+                preview_fields: None,
+                clear_preview_cache: false,
+            },
+        );
+
+        assert!(result.is_err(), "old frame must not be rebound to generation 2");
+        assert_eq!(
+            current.latest_fields.get("m").unwrap()["observation_frame"],
+            stored_frame
+        );
+    }
+
+    #[test]
+    fn registered_latest_m_frame_cannot_be_rebound_across_session_epoch() {
+        let mut current = test_current_snapshot();
+        current.live_state = Some(live_state_with_magnetization(
+            7,
+            vec![1.0, 0.0, 0.0],
+        ));
+        current
+            .live_state
+            .as_mut()
+            .expect("physical live state")
+            .latest_step
+            .grid = [1, 1, 1];
+        let latest_fields = serde_json::from_value(json!({
+            "m": {
+                "source_step": 7,
+                "source_time_seconds": 7.0e-12,
+                "source_revision": 4,
+                "materialized_at_unix_ms": 1_700_000_000_107_u64,
+                "values": [[1.0, 0.0, 0.0]],
+                "layout": { "grid_cells": [1, 1, 1] }
+            }
+        }))
+        .expect("latest magnetization fixture should deserialize");
+        apply_current_live_field_frame(
+            &mut current,
+            CurrentLiveFieldFrameRequest {
+                session_id: "test-session".to_string(),
+                latest_fields: Some(latest_fields),
+                replace_latest_fields: false,
+                field_generation: None,
+                preview_fields: None,
+                clear_preview_cache: false,
+            },
+        )
+        .expect("step 7 field should bind to its accepted physical frame");
+
+        let mut replay = current
+            .latest_fields
+            .get("m")
+            .expect("accepted latest m")
+            .clone();
+        replay
+            .as_object_mut()
+            .expect("latest m is an object")
+            .remove("observation_frame");
+        current.session.session_id = "next-session".to_string();
+
+        assert!(
+            !latest_field_source_is_qualified(&current, "m", &replay),
+            "an exact replay must not cross its accepted session epoch"
+        );
+    }
+
+    #[test]
+    fn registered_preview_m_frame_cannot_be_rederived_after_topology_change() {
+        let mut current = test_current_snapshot();
+        current.live_state = Some(live_state_with_magnetization(
+            7,
+            vec![1.0, 0.0, 0.0],
+        ));
+        current
+            .live_state
+            .as_mut()
+            .expect("physical live state")
+            .latest_step
+            .grid = [1, 1, 1];
+        let mut preview = preview_field("m");
+        preview.source_step = 7;
+        preview.source_time_seconds = Some(7.0e-12);
+        let accepted_frame = accepted_observation_frame_ref(&current, 7, Some(7.0e-12));
+        current
+            .preview_cache
+            .remember_accepted_source(&preview, accepted_frame);
+        current.preview_cache.insert(preview.clone());
+        current.mesh_revision = current.mesh_revision.saturating_add(1);
+
+        assert!(
+            !preview_field_source_is_qualified(&current, &preview),
+            "a cached m preview must retain its accepted topology frame"
+        );
+    }
+
+    #[test]
+    fn mesh_only_change_invalidates_live_m_when_either_identity_changes() {
+        for change_generation_id in [false, true] {
+            let mut current = test_current_snapshot();
+            let original_mesh = domain_fem_mesh("mesh-generation-1");
+            current.fem_mesh = Some(original_mesh.clone());
+            current.live_state = Some(live_state_with_magnetization(
+                7,
+                vec![
+                    1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, -1.0, 0.0, 0.0,
+                ],
+            ));
+            current
+                .live_state
+                .as_mut()
+                .expect("physical live state")
+                .latest_step
+                .grid = [4, 1, 1];
+
+            assert!(
+                qualified_live_magnetization(&current).is_some(),
+                "fixture must start with a qualified live m"
+            );
+            let previous_generation_id = domain_generation_id(&current);
+            let previous_mesh_revision = current.mesh_revision;
+            let mut replacement_mesh = original_mesh;
+            if change_generation_id {
+                replacement_mesh.generation_id = Some("mesh-generation-2".to_string());
+            } else {
+                replacement_mesh.cells.nodes = vec![1, 2, 0, 3];
+            }
+
+            apply_current_live_runtime_frame(
+                &mut current,
+                CurrentLiveRuntimeFrameRequest {
+                    session_id: "test-session".to_string(),
+                    live_state: None,
+                    frozen_spins_runtime_status: None,
+                    engine_log: None,
+                    solver_profile: None,
+                    fem_mesh: Some(replacement_mesh),
+                },
+            )
+            .expect("mesh-only runtime frame should apply");
+
+            if change_generation_id {
+                assert_ne!(domain_generation_id(&current), previous_generation_id);
+                assert_eq!(current.mesh_revision, previous_mesh_revision);
+            } else {
+                assert_eq!(domain_generation_id(&current), previous_generation_id);
+                assert_ne!(current.mesh_revision, previous_mesh_revision);
+            }
+            assert!(
+                current
+                    .live_state
+                    .as_ref()
+                    .and_then(|state| state.latest_step.magnetization.as_ref())
+                    .is_none(),
+                "a mesh-only identity change must invalidate bare live m"
+            );
+        }
     }
 
     #[test]
