@@ -6,11 +6,13 @@ on:
     paths:
       - 'packages/fullmag-py/src/fullmag/meshing/**'
       - 'packages/fullmag-py/tests/test_meshing.py'
+      - 'scripts/test_box_layered_airbox_mesh.py'
       - '.github/workflows/scoped-mesh-fields.yml'
   pull_request:
     paths:
       - 'packages/fullmag-py/src/fullmag/meshing/**'
       - 'packages/fullmag-py/tests/test_meshing.py'
+      - 'scripts/test_box_layered_airbox_mesh.py'
       - '.github/workflows/scoped-mesh-fields.yml'
   workflow_dispatch:
 
