@@ -1317,7 +1317,7 @@ pub(crate) mod test_support {
                 Some(expected_cartesian_mode_bytes(plan.mesh.nodes.len(), component, scale).as_slice())
             );
             let zarr_attrs_path = format!(
-                "eigen/mode_fields.zarr/sample_{sample_index:04}/mode_{raw_mode_index:04}/.zattrs"
+                "eigen/mode_fields.zarr/sample_{sample_index:04}/mode_{raw_mode_index:04}/vector_xyz_complex/.zattrs"
             );
             let zarr_attrs: Value = serde_json::from_slice(
                 artifact_bytes(&merged, &zarr_attrs_path)
