@@ -499,9 +499,11 @@ The bias-field adapter is owned by
 `crates/fullmag-runner/src/fem/eigen_path.rs::track_bias_field_sweep_samples`,
 and the accepted-prefix publication boundary by
 `crates/fullmag-runner/src/fem/eigen_sweep.rs::execute_bias_field_sweep_with_publication`.
-Their source-level regression must exercise the native single-sample publisher,
-the shared artifact parser, tracking, branch selection, and final sweep writer;
-hosted verification remains pending until the required CI lane runs.
+The source-level regression passes deterministic typed modal data through
+the canonical native artifact finalizer, shared artifact parser, tracker,
+branch selector, and sweep writer. It checks the artifact pipeline only; it is
+not an eigensolver or physical-validation proof. Hosted verification remains
+pending until the required CI lane runs.
 
 ## Artifact contract
 

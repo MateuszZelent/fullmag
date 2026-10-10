@@ -732,17 +732,14 @@ pub(crate) mod test_support {
         super::solve_k0_kittel_synthetic_demag_factor_single_k(plan, sample)
     }
 
-    fn bias_field_publication_test_sample(
+    /// Exercise the production native artifact publisher with deterministic
+    /// modal data. This is an artifact-pipeline fixture, not a solver or
+    /// physical-validation proof.
+    fn bias_field_native_artifact_pipeline_fixture(
         point_plan: &FemEigenPlanIR,
         sample_index: usize,
         tracking_outputs: &[OutputIR],
     ) -> Result<crate::types::ExecutedRun, RunError> {
-        let source_mesh = point_plan
-            .mesh
-            .mixed_topology_fingerprint_v3()
-            .map_err(|message| RunError { message })?;
-        let operator_identity = format!("sha256:{}", "1".repeat(64));
-        let phase_identity = format!("sha256:{}", "2".repeat(64));
         let topology = MeshTopology::from_ir(&point_plan.mesh).map_err(|error| RunError {
             message: error.to_string(),
         })?;
@@ -753,114 +750,117 @@ pub(crate) mod test_support {
         let scalar_class_count = usize::try_from(scalar_class_count).map_err(|_| RunError {
             message: "test scalar class count exceeds host dimensions".to_string(),
         })?;
-        let node_count = point_plan.mesh.nodes.len();
-        let authored_k_vector = match point_plan.k_sampling.as_ref() {
-            Some(fullmag_ir::KSamplingIR::Single { k_vector }) => *k_vector,
-            _ => {
-                return Err(RunError {
-                    message: "native publisher regression requires a single-k plan".to_string(),
-                });
-            }
-        };
-        let mut modes = Vec::new();
-        let mut artifacts = Vec::new();
-
-        for raw_mode_index in 0..2_u32 {
-            let follows_low_frequency_branch =
-                (sample_index == 0 && raw_mode_index == 0)
-                    || (sample_index == 1 && raw_mode_index == 1);
-            let scale = if sample_index == 0 { 1.0 } else { 1.25 };
-            let mut real = vec![[0.0; 3]; node_count];
-            let imag = vec![[0.0; 3]; node_count];
-            for vector in &mut real {
-                vector[if follows_low_frequency_branch { 1 } else { 2 }] = scale;
-            }
-            let frequency_real_hz = match (sample_index, raw_mode_index) {
-                (0, 0) => 1.0e9,
-                (0, 1) => 2.0e9,
-                (1, 0) => 3.0e9,
-                (1, 1) => 1.1e9,
-                _ => unreachable!("fixture contains exactly two samples and two modes"),
-            };
-            let phi_real = (0..scalar_class_count)
-                .map(|class| {
-                    1.0 + sample_index as f64 * 2.0
-                        + raw_mode_index as f64
-                        + class as f64 * 0.125
-                })
-                .collect::<Vec<_>>();
-            let phi_imag = vec![0.0; scalar_class_count];
-            let mode = serde_json::json!({
-                "index": raw_mode_index,
-                "frequency_hz": frequency_real_hz,
-                "frequency_real_hz": frequency_real_hz,
-                "frequency_imag_hz": 0.0,
-                "angular_frequency_rad_per_s": frequency_real_hz * std::f64::consts::TAU,
-                "eigenvalue_real": 0.0,
-                "eigenvalue_imag": frequency_real_hz,
-                "norm": 1.0,
-                "mass_norm": 1.0,
-                "max_amplitude": scale,
-                "residual_relative_l2": 0.0,
-                "residual_norm": 0.0,
-                "residual_linf": 0.0,
-                "tangent_leakage_mean_abs": 0.0,
-                "tangent_leakage_max_abs": 0.0,
-                "tangent_leakage_weighted_relative_l2": 0.0,
-                "dominant_polarization": if follows_low_frequency_branch { "y" } else { "z" },
-                "k_vector": authored_k_vector,
-                "external_field_a_per_m": point_plan.external_field,
-                "phasor_convention": "exp(+i*omega*t)",
-                "assembly_kind": "mfem_weak_form_shared_domain",
-                "source_mesh_topology_sha256": source_mesh,
-                "operator_input_signature_sha256": operator_identity,
-                "phase_constraint_sha256": phase_identity,
-                "phi_real": phi_real,
-                "phi_imag": phi_imag,
-                "real": real,
-                "imag": imag,
-                "amplitude": vec![scale; node_count],
-                "phase": vec![0.0; node_count],
-            });
-            modes.push(mode.clone());
-            artifacts.push(crate::types::AuxiliaryArtifact {
-                relative_path: format!("eigen/modes/mode_{raw_mode_index:04}.json"),
-                bytes: serde_json::to_vec(&mode).map_err(|error| RunError {
-                    message: format!("cannot serialize native test mode payload: {error}"),
-                })?,
-            });
-        }
-
-        let solver_diagnostics = serde_json::json!({
-            "solver_adapter": "bias_field_native_publisher_regression",
-            "execution_lane": "cpu",
-            "solve_succeeded": true,
-            "fields_available": true,
-            "spectrum_completeness": "complete",
-            "window_complete": true,
-        });
-        let summary = serde_json::json!({
-            "solver_kind": "bias_field_native_publisher_regression",
-            "relaxation_steps": 0,
-            "modes": modes,
-            "solver_diagnostics": solver_diagnostics,
-        });
-        let requested_modes =
-            crate::fem::eigen_output::requested_mode_indices_for_result(tracking_outputs, 2)?;
-        crate::fem::eigen_output::write_eigen_v2_bundle_with_outputs(
-            point_plan,
-            &summary,
-            &requested_modes,
-            &mut artifacts,
-            sample_index,
-            tracking_outputs,
+        let reduction = build_reduction_map(
+            &topology,
+            &point_plan.spin_wave_bc,
+            point_plan.k_sampling.as_ref(),
         )?;
-        artifacts.push(crate::types::AuxiliaryArtifact {
-            relative_path: "eigen/spectrum.json".to_string(),
-            bytes: serde_json::to_vec(&summary).map_err(|error| RunError {
-                message: format!("cannot serialize native test spectrum: {error}"),
-            })?,
-        });
+        let active_count = reduction.active_nodes.len();
+        let bases = crate::fem::eigen_projection::tangent_bases(
+            &point_plan.equilibrium_magnetization,
+        );
+        let modes = (0..2_usize)
+            .map(|raw_mode_index| {
+                let follows_low_frequency_branch =
+                    (sample_index == 0 && raw_mode_index == 0)
+                        || (sample_index == 1 && raw_mode_index == 1);
+                let scale = if sample_index == 0 { 1.0 } else { 1.25 };
+                let component_offset = if follows_low_frequency_branch {
+                    0
+                } else {
+                    active_count
+                };
+                let mut vector = vec![num_complex::Complex64::new(0.0, 0.0); 2 * active_count];
+                for active_index in 0..active_count {
+                    vector[component_offset + active_index] = num_complex::Complex64::new(scale, 0.0);
+                }
+                let phi_vector = (0..scalar_class_count)
+                    .map(|class| {
+                        num_complex::Complex64::new(
+                            1.0 + sample_index as f64 * 2.0
+                                + raw_mode_index as f64
+                                + class as f64 * 0.125,
+                            0.0,
+                        )
+                    })
+                    .collect();
+                let frequency_hz = match (sample_index, raw_mode_index) {
+                    (0, 0) => 1.0e9,
+                    (0, 1) => 2.0e9,
+                    (1, 0) => 3.0e9,
+                    (1, 1) => 1.1e9,
+                    _ => unreachable!("fixture contains exactly two samples and two modes"),
+                };
+                let omega_rad_s = frequency_hz * std::f64::consts::TAU;
+                crate::fem::eigen_native_result::NativeModalEigenpair {
+                    cluster_id: raw_mode_index as u64,
+                    frequency_hz,
+                    omega_rad_s,
+                    eigenvalue_real: 0.0,
+                    eigenvalue_imag: omega_rad_s,
+                    residual_absolute_l2: Some(0.0),
+                    residual_relative_l2: 0.0,
+                    residual_linf: Some(0.0),
+                    mass_norm: 1.0,
+                    block_residual_q: 0.0,
+                    block_residual_phi: 0.0,
+                    block_residual_gauge: None,
+                    backend_reported_residual: Some(0.0),
+                    vector,
+                    q_vector: Vec::new(),
+                    phi_vector,
+                    floquet_descriptor_certified: false,
+                    floquet_full_descriptor_certified: false,
+                    floquet_seam_frame_certified: false,
+                    floquet_gauge_policy_satisfied: false,
+                    floquet_geometric_bc_certified: false,
+                    floquet_poisson_boundary_kind: None,
+                    floquet_poisson_gauge_policy: None,
+                    floquet_potential_representation: None,
+                    floquet_magnetic_relative_residual: None,
+                    floquet_potential_relative_residual: None,
+                    floquet_full_magnetic_relative_residual: None,
+                    floquet_full_potential_relative_residual: None,
+                    floquet_scalar_phase_seam_relative_residual: None,
+                    floquet_tangent_frame_seam_relative_residual: None,
+                    floquet_cartesian_magnetic_seam_relative_residual: None,
+                    floquet_equilibrium_pair_relative_residual: None,
+                    floquet_potential_real_split: Vec::new(),
+                }
+            })
+            .collect::<Vec<_>>();
+        let node_mass_weights = vec![1.0; active_count];
+        let auxiliary_artifacts =
+            crate::fem::eigen_native_artifacts::native_modal_artifacts(
+                point_plan,
+                tracking_outputs,
+                &point_plan.equilibrium_magnetization,
+                &reduction,
+                &bases,
+                &modes,
+                Some(&node_mass_weights),
+                serde_json::json!({
+                    "assembly_kind": "mfem_weak_form_shared_domain",
+                    "solver_backend": "bias_field_native_artifact_pipeline_fixture",
+                    "solver_model": "bias_field_native_artifact_pipeline_fixture",
+                    "solver_kind": "bias_field_native_artifact_pipeline_fixture",
+                    "solver_adapter": "bias_field_native_artifact_pipeline_fixture",
+                    "execution_lane": "cpu",
+                    "solve_succeeded": true,
+                    "fields_available": true,
+                    "spectrum_completeness": "complete",
+                    "window_complete": true,
+                    "operator_input_signature_sha256": format!("sha256:{}", "1".repeat(64)),
+                    "phase_constraint_sha256": format!("sha256:{}", "2".repeat(64)),
+                }),
+                0,
+                None,
+                None,
+                None,
+                None,
+                sample_index,
+                None,
+            )?;
 
         Ok(crate::types::ExecutedRun {
             result: crate::types::RunResult {
@@ -876,9 +876,9 @@ pub(crate) mod test_support {
             initial_magnetization: point_plan.equilibrium_magnetization.clone(),
             field_snapshots: Vec::new(),
             field_snapshot_count: 0,
-            auxiliary_artifacts: artifacts,
+            auxiliary_artifacts,
             provenance: crate::ExecutionProvenance {
-                execution_engine: "bias_field_native_publisher_regression".to_string(),
+                execution_engine: "bias_field_native_artifact_pipeline_fixture".to_string(),
                 precision: "double".to_string(),
                 ..Default::default()
             },
@@ -1042,7 +1042,7 @@ pub(crate) mod test_support {
             FemEngine::CpuNative,
             true,
             |point_plan, sample_index| {
-                bias_field_publication_test_sample(point_plan, sample_index, &tracking_outputs)
+                bias_field_native_artifact_pipeline_fixture(point_plan, sample_index, &tracking_outputs)
             },
         )
         .expect("native publisher samples should track and publish branch zero");
@@ -1172,7 +1172,7 @@ pub(crate) mod test_support {
             FemEngine::CpuNative,
             false,
             |point_plan, sample_index| {
-                bias_field_publication_test_sample(point_plan, sample_index, &raw_outputs)
+                bias_field_native_artifact_pipeline_fixture(point_plan, sample_index, &raw_outputs)
             },
         )
         .expect("raw mode-index selection should keep the sample-local publication path");
@@ -1215,7 +1215,7 @@ pub(crate) mod test_support {
             |point_plan, sample_index| {
                 let internal_outputs =
                     eigen_path_tracking_outputs(&tracking_diagnostic_outputs, plan.count);
-                bias_field_publication_test_sample(
+                bias_field_native_artifact_pipeline_fixture(
                     point_plan,
                     sample_index,
                     &internal_outputs,
@@ -1262,7 +1262,7 @@ pub(crate) mod test_support {
             true,
             |point_plan, sample_index| {
                 let tracking_outputs = eigen_path_tracking_outputs(&outputs, plan.count);
-                let mut run = bias_field_publication_test_sample(
+                let mut run = bias_field_native_artifact_pipeline_fixture(
                     point_plan,
                     sample_index,
                     &tracking_outputs,
@@ -1316,7 +1316,7 @@ pub(crate) mod test_support {
             |point_plan, sample_index| {
                 let unknown_tracking_outputs =
                     eigen_path_tracking_outputs(&unknown_branch_outputs, plan.count);
-                bias_field_publication_test_sample(
+                bias_field_native_artifact_pipeline_fixture(
                     point_plan,
                     sample_index,
                     &unknown_tracking_outputs,

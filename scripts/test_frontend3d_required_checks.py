@@ -197,6 +197,7 @@ CONTRACT_SCOPES = frozenset(
     {
         "bootstrap",
         "rust",
+        "bias-field-artifacts",
         "browser",
         "positive-mass",
         "native-modal",

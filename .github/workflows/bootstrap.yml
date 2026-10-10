@@ -7,13 +7,14 @@ on:
   workflow_dispatch:
     inputs:
       contract_scope:
-        description: Select bootstrap, browser, native modal, positive-mass, or focused CPU SLEPc modal contracts.
+        description: Select bootstrap, browser, Rust, bias-field artifacts, retention, or native modal contracts.
         type: choice
         required: true
         default: bootstrap
         options:
           - bootstrap
           - rust
+          - bias-field-artifacts
           - browser
           - positive-mass
           - native-modal
@@ -25,7 +26,7 @@ on:
 
 jobs:
   native-modal-cabi-contract:
-    if: ${{ github.event_name != 'workflow_dispatch' || (inputs.contract_scope != 'positive-mass' && inputs.contract_scope != 'browser' && inputs.contract_scope != 'floquet-modal-slepc' && inputs.contract_scope != 'generic-modal-slepc' && inputs.contract_scope != 'floquet-count-slepc' && inputs.contract_scope != 'modal-phase-slepc' && inputs.contract_scope != 'retention' && inputs.contract_scope != 'rust') }}
+    if: ${{ github.event_name != 'workflow_dispatch' || (inputs.contract_scope != 'positive-mass' && inputs.contract_scope != 'browser' && inputs.contract_scope != 'floquet-modal-slepc' && inputs.contract_scope != 'generic-modal-slepc' && inputs.contract_scope != 'floquet-count-slepc' && inputs.contract_scope != 'modal-phase-slepc' && inputs.contract_scope != 'retention' && inputs.contract_scope != 'rust' && inputs.contract_scope != 'bias-field-artifacts') }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -58,7 +59,7 @@ jobs:
           if-no-files-found: error
 
   rust-contracts:
-    if: ${{ github.event_name != 'workflow_dispatch' || (inputs.contract_scope != 'positive-mass' && inputs.contract_scope != 'browser' && inputs.contract_scope != 'native-modal' && inputs.contract_scope != 'floquet-modal-slepc' && inputs.contract_scope != 'generic-modal-slepc' && inputs.contract_scope != 'floquet-count-slepc' && inputs.contract_scope != 'modal-phase-slepc' && inputs.contract_scope != 'retention') }}
+    if: ${{ github.event_name != 'workflow_dispatch' || (inputs.contract_scope != 'positive-mass' && inputs.contract_scope != 'browser' && inputs.contract_scope != 'native-modal' && inputs.contract_scope != 'floquet-modal-slepc' && inputs.contract_scope != 'generic-modal-slepc' && inputs.contract_scope != 'floquet-count-slepc' && inputs.contract_scope != 'modal-phase-slepc' && inputs.contract_scope != 'retention' && inputs.contract_scope != 'bias-field-artifacts') }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -235,6 +236,32 @@ jobs:
           RUST_MIN_STACK: 8388608
         run: ./scripts/ci/run_frontend3d_required_gate.sh rust-quantity-api-cli-contracts
 
+  bias-field-artifact-contracts:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.contract_scope == 'bias-field-artifacts' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+      - name: Setup Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+      - name: Install Python runtime dependencies
+        run: python -m pip install -e packages/fullmag-py 'pytest>=9,<10' 'pyyaml>=6,<7'
+      - name: Validate workflow scope and required-gate contracts
+        run: python -B -m pytest -q scripts/test_frontend3d_required_checks.py scripts/test_bootstrap_workflow_contract.py
+      - name: Run bias-field tracked mode publication contracts
+        run: cargo test -p fullmag-runner bias_field_branch_selection_tracks_native_publisher_artifacts_before_publication --lib
+      - name: Run eigen branch selector planning contracts
+        run: |
+          cargo test -p fullmag-plan fem_eigen_branch --lib
+          cargo test -p fullmag-plan fem_eigen_raw_mode_indices_remain_valid_without_path_sampling --lib
+
   checkpoint-windows-contracts:
     if: ${{ github.event_name != 'workflow_dispatch' || inputs.contract_scope == 'bootstrap' }}
     runs-on: windows-latest
@@ -264,7 +291,7 @@ jobs:
         run: cargo test -p fullmag-runner checkpoint_inspector_accepts_actual_persisted_manifest --lib -- --ignored
 
   generated-api-determinism:
-    if: ${{ github.event_name != 'workflow_dispatch' || (inputs.contract_scope != 'positive-mass' && inputs.contract_scope != 'browser' && inputs.contract_scope != 'native-modal' && inputs.contract_scope != 'floquet-modal-slepc' && inputs.contract_scope != 'generic-modal-slepc' && inputs.contract_scope != 'floquet-count-slepc' && inputs.contract_scope != 'modal-phase-slepc' && inputs.contract_scope != 'retention' && inputs.contract_scope != 'rust') }}
+    if: ${{ github.event_name != 'workflow_dispatch' || (inputs.contract_scope != 'positive-mass' && inputs.contract_scope != 'browser' && inputs.contract_scope != 'native-modal' && inputs.contract_scope != 'floquet-modal-slepc' && inputs.contract_scope != 'generic-modal-slepc' && inputs.contract_scope != 'floquet-count-slepc' && inputs.contract_scope != 'modal-phase-slepc' && inputs.contract_scope != 'retention' && inputs.contract_scope != 'rust' && inputs.contract_scope != 'bias-field-artifacts') }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -302,7 +329,7 @@ jobs:
           if-no-files-found: error
 
   api-hygiene-rg13:
-    if: ${{ github.event_name != 'workflow_dispatch' || (inputs.contract_scope != 'positive-mass' && inputs.contract_scope != 'browser' && inputs.contract_scope != 'native-modal' && inputs.contract_scope != 'floquet-modal-slepc' && inputs.contract_scope != 'generic-modal-slepc' && inputs.contract_scope != 'floquet-count-slepc' && inputs.contract_scope != 'modal-phase-slepc' && inputs.contract_scope != 'retention' && inputs.contract_scope != 'rust') }}
+    if: ${{ github.event_name != 'workflow_dispatch' || (inputs.contract_scope != 'positive-mass' && inputs.contract_scope != 'browser' && inputs.contract_scope != 'native-modal' && inputs.contract_scope != 'floquet-modal-slepc' && inputs.contract_scope != 'generic-modal-slepc' && inputs.contract_scope != 'floquet-count-slepc' && inputs.contract_scope != 'modal-phase-slepc' && inputs.contract_scope != 'retention' && inputs.contract_scope != 'rust' && inputs.contract_scope != 'bias-field-artifacts') }}
     runs-on: ubuntu-22.04
     steps:
       - name: Checkout
@@ -329,7 +356,7 @@ jobs:
           PATH=/usr/bin:/bin "$node_bin" apps/control-room/scripts/check-api-hygiene.mjs
 
   control-room-contracts:
-    if: ${{ github.event_name != 'workflow_dispatch' || (inputs.contract_scope != 'positive-mass' && inputs.contract_scope != 'native-modal' && inputs.contract_scope != 'floquet-modal-slepc' && inputs.contract_scope != 'generic-modal-slepc' && inputs.contract_scope != 'floquet-count-slepc' && inputs.contract_scope != 'modal-phase-slepc' && inputs.contract_scope != 'retention' && inputs.contract_scope != 'rust') }}
+    if: ${{ github.event_name != 'workflow_dispatch' || (inputs.contract_scope != 'positive-mass' && inputs.contract_scope != 'native-modal' && inputs.contract_scope != 'floquet-modal-slepc' && inputs.contract_scope != 'generic-modal-slepc' && inputs.contract_scope != 'floquet-count-slepc' && inputs.contract_scope != 'modal-phase-slepc' && inputs.contract_scope != 'retention' && inputs.contract_scope != 'rust' && inputs.contract_scope != 'bias-field-artifacts') }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -378,7 +405,7 @@ jobs:
         run: pnpm --dir apps/control-room build
 
   browser-fixture-smoke:
-    if: ${{ github.event_name != 'workflow_dispatch' || (inputs.contract_scope != 'positive-mass' && inputs.contract_scope != 'native-modal' && inputs.contract_scope != 'floquet-modal-slepc' && inputs.contract_scope != 'generic-modal-slepc' && inputs.contract_scope != 'floquet-count-slepc' && inputs.contract_scope != 'modal-phase-slepc' && inputs.contract_scope != 'retention' && inputs.contract_scope != 'rust') }}
+    if: ${{ github.event_name != 'workflow_dispatch' || (inputs.contract_scope != 'positive-mass' && inputs.contract_scope != 'native-modal' && inputs.contract_scope != 'floquet-modal-slepc' && inputs.contract_scope != 'generic-modal-slepc' && inputs.contract_scope != 'floquet-count-slepc' && inputs.contract_scope != 'modal-phase-slepc' && inputs.contract_scope != 'retention' && inputs.contract_scope != 'rust' && inputs.contract_scope != 'bias-field-artifacts') }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -496,7 +523,7 @@ jobs:
           if-no-files-found: error
 
   fdm-relaxation-qualification:
-    if: ${{ github.event_name != 'workflow_dispatch' || (inputs.contract_scope != 'positive-mass' && inputs.contract_scope != 'browser' && inputs.contract_scope != 'native-modal' && inputs.contract_scope != 'floquet-modal-slepc' && inputs.contract_scope != 'generic-modal-slepc' && inputs.contract_scope != 'floquet-count-slepc' && inputs.contract_scope != 'modal-phase-slepc' && inputs.contract_scope != 'retention' && inputs.contract_scope != 'rust') }}
+    if: ${{ github.event_name != 'workflow_dispatch' || (inputs.contract_scope != 'positive-mass' && inputs.contract_scope != 'browser' && inputs.contract_scope != 'native-modal' && inputs.contract_scope != 'floquet-modal-slepc' && inputs.contract_scope != 'generic-modal-slepc' && inputs.contract_scope != 'floquet-count-slepc' && inputs.contract_scope != 'modal-phase-slepc' && inputs.contract_scope != 'retention' && inputs.contract_scope != 'rust' && inputs.contract_scope != 'bias-field-artifacts') }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -518,7 +545,7 @@ jobs:
         run: timeout --foreground 180s cargo test -p fullmag-runner --test physics_validation fdm_relaxation::uniform_field_alignment -- --ignored --nocapture
 
   python-contracts:
-    if: ${{ github.event_name != 'workflow_dispatch' || (inputs.contract_scope != 'positive-mass' && inputs.contract_scope != 'browser' && inputs.contract_scope != 'native-modal' && inputs.contract_scope != 'floquet-modal-slepc' && inputs.contract_scope != 'generic-modal-slepc' && inputs.contract_scope != 'floquet-count-slepc' && inputs.contract_scope != 'modal-phase-slepc' && inputs.contract_scope != 'retention' && inputs.contract_scope != 'rust') }}
+    if: ${{ github.event_name != 'workflow_dispatch' || (inputs.contract_scope != 'positive-mass' && inputs.contract_scope != 'browser' && inputs.contract_scope != 'native-modal' && inputs.contract_scope != 'floquet-modal-slepc' && inputs.contract_scope != 'generic-modal-slepc' && inputs.contract_scope != 'floquet-count-slepc' && inputs.contract_scope != 'modal-phase-slepc' && inputs.contract_scope != 'retention' && inputs.contract_scope != 'rust' && inputs.contract_scope != 'bias-field-artifacts') }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -672,7 +699,7 @@ jobs:
 
 
   windows-volatile-storage-contracts:
-    if: ${{ github.event_name != 'workflow_dispatch' || (inputs.contract_scope != 'positive-mass' && inputs.contract_scope != 'browser' && inputs.contract_scope != 'native-modal' && inputs.contract_scope != 'floquet-modal-slepc' && inputs.contract_scope != 'generic-modal-slepc' && inputs.contract_scope != 'floquet-count-slepc' && inputs.contract_scope != 'modal-phase-slepc' && inputs.contract_scope != 'retention' && inputs.contract_scope != 'rust') }}
+    if: ${{ github.event_name != 'workflow_dispatch' || (inputs.contract_scope != 'positive-mass' && inputs.contract_scope != 'browser' && inputs.contract_scope != 'native-modal' && inputs.contract_scope != 'floquet-modal-slepc' && inputs.contract_scope != 'generic-modal-slepc' && inputs.contract_scope != 'floquet-count-slepc' && inputs.contract_scope != 'modal-phase-slepc' && inputs.contract_scope != 'retention' && inputs.contract_scope != 'rust' && inputs.contract_scope != 'bias-field-artifacts') }}
     runs-on: windows-latest
     steps:
       - name: Checkout

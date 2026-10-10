@@ -3185,3 +3185,10 @@ nie usuwamy historycznych bajtów, nie klasyfikujemy legacy heurystycznie.
 Pełny cross-layer source review i GHA nadal wymagane, uwaga valid_unfixed.
 
 Dalsza diagnoza bias fixture potwierdziła, że produkcyjny native_modal_artifacts zawsze emituje wymagany eigen_summary i dopiero potem wywołuje writerV2. Fixture uruchamiał tylko writerV2 i ręcznie spectrum, więc pomijał rzeczywistego właściciela wymaganych danych. Korekta testu używa pełnego native_modal_artifacts z NativeModalEigenpair; parser i publiczne flagi pozostają. To regresja pipeline publikacji, nie wykonanie solvera ani kwalifikacja fizyczna.
+
+
+### Korekta fixture i dedykowane CI dla bias-field — 2026-10-10
+
+Przyczyna FAIL GHA38050227675: fixture omijała kanoniczny finalizer i nie produkowała wymaganego `eigen/metadata/eigen_summary.json`. Poprawka przekazuje deterministyczne `NativeModalEigenpair` przez `native_modal_artifacts`; zachowuje parser, tracker i reguły selekcji. Review SOURCE PASS obejmuje wszystkich pięciu konsumentów fixture, wymagany `assembly_kind`, pola zespolone oraz brak payloadów nie wybranych modów. To fixture potoku artefaktów, nie dowód działania solvera ani fizyki.
+
+Workflow `bias-field-artifacts` uruchamia nazwany test publikacji i planera, poprzedzone kontrolą zakresów workflow. Rejestr `CONTRACT_SCOPES` uzupełniony; pozostałe ścieżki push/PR zachowane. Review źródeł CI PASS; wykonanie pozostaje NOT VERIFIED do terminalnego wyniku GitHub Actions. Nie wykonywano testów ani kompilacji lokalnie. Uwaga 4226154721 pozostaje `implemented_pending_ci`.
