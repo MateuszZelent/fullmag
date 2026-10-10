@@ -811,7 +811,8 @@
       ],
       "sources": [
         "source-r2-gilbert-energy-contract",
-        "source-floquet-neumann-invertibility"
+        "source-floquet-neumann-invertibility",
+        "source-r2-private-gilbert-mass"
       ]
     },
     {
@@ -836,7 +837,8 @@
       ],
       "sources": [
         "source-r2-gilbert-energy-contract",
-        "source-floquet-neumann-invertibility"
+        "source-floquet-neumann-invertibility",
+        "source-r2-gilbert-energy-balance-oracle"
       ]
     }
   ],
@@ -4032,7 +4034,7 @@
       "id": "source-r2-gilbert-energy-contract",
       "path": "docs/physics/0831-fem-dynamic-pencil-modal-response-and-krylov.md",
       "symbol": "DOC-ANCHOR:r2-exact-gilbert-energy-mass",
-      "responsibility": "Proposed energy mass and energy-balance sign; not implemented or runtime qualified",
+      "responsibility": "Required energy-mass contract; native exact-damping capability not runtime qualified",
       "evidence_status": "planned_contract"
     },
     {
@@ -4046,6 +4048,30 @@
       "path": "scripts/test_eigensolve_complex_damping_oracle.py",
       "symbol": "physical_doubled_spectrum",
       "responsibility": "Projected original residual and physical subspace rank in the independent doubled-real oracle"
+    },
+    {
+      "id": "source-r2-private-gilbert-request",
+      "path": "backends/fem/cpu/frequency_domain/operators/poisson_airbox_shared_domain.hpp",
+      "symbol": "assemble_poisson_airbox_shared_domain",
+      "responsibility": "Default-false private request boundary; no public ABI or native Include capability"
+    },
+    {
+      "id": "source-r2-private-gilbert-mass",
+      "path": "backends/fem/cpu/frequency_domain/operators/poisson_airbox_shared_domain.cpp",
+      "symbol": "FrequencyDomainStatus assemble_poisson_airbox_shared_domain",
+      "responsibility": "Negative symmetric energy mass before Hermitian reduction; source-visible and runtime unverified"
+    },
+    {
+      "id": "source-r2-private-gilbert-regressions",
+      "path": "backends/fem/tests/frequency_domain/poisson_airbox_shared_domain_test.cpp",
+      "symbol": "void floquet_positive_tangent_mass_matches_independent_phase_reduction",
+      "responsibility": "Private Gilbert mass, phase/frame covariance, provenance and invalid-input regressions; hosted execution pending"
+    },
+    {
+      "id": "source-r2-gilbert-energy-balance-oracle",
+      "path": "scripts/test_eigensolve_complex_damping_oracle.py",
+      "symbol": "test_energy_balance_and_opposite_sign_produces_growth",
+      "responsibility": "Independent small-pencil loss/growth sign test; not native FEM qualification"
     }
   ],
   "public_api": {

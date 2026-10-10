@@ -833,6 +833,15 @@ double node_ms(
         : request.uniform_saturation_magnetization_a_per_m;
 }
 
+double node_alpha(
+    const PoissonAirboxSharedDomainAssemblyRequest &request,
+    std::uint64_t node) noexcept
+{
+    return request.alpha_per_node != nullptr
+        ? request.alpha_per_node[node]
+        : request.uniform_alpha;
+}
+
 bool validate_materials(
     const PoissonAirboxSharedDomainAssemblyRequest &request,
     std::uint64_t node_count,
@@ -851,6 +860,34 @@ bool validate_materials(
     for (std::uint64_t node = 0; node < node_count; ++node) {
         if (!finite_positive(node_ms(request, node))) {
             error = "shared-domain saturation magnetization contains a non-positive value";
+            return false;
+        }
+    }
+    return true;
+}
+
+bool validate_gilbert_damping(
+    const PoissonAirboxSharedDomainAssemblyRequest &request,
+    std::uint64_t node_count,
+    std::string &error)
+{
+    if (request.alpha_per_node == nullptr && request.alpha_per_node_count != 0u) {
+        error = "shared-domain Gilbert alpha count is nonzero without nodal values";
+        return false;
+    }
+    if (request.alpha_per_node != nullptr &&
+        request.alpha_per_node_count != node_count) {
+        error = "shared-domain Gilbert alpha count does not match the scalar mesh";
+        return false;
+    }
+    if (!std::isfinite(request.uniform_alpha) || request.uniform_alpha < 0.0) {
+        error = "shared-domain uniform Gilbert alpha must be finite and non-negative";
+        return false;
+    }
+    for (std::uint64_t node = 0u; node < node_count; ++node) {
+        const double alpha = node_alpha(request, node);
+        if (!std::isfinite(alpha) || alpha < 0.0) {
+            error = "shared-domain nodal Gilbert alpha must be finite and non-negative";
             return false;
         }
     }
@@ -2406,6 +2443,7 @@ FrequencyDomainStatus assemble_poisson_airbox_shared_domain(
             }
         }
         if (!validate_materials(request, node_count, error) ||
+            !validate_gilbert_damping(request, node_count, error) ||
             !finite_positive(request.gamma0_m_per_a_s) ||
             !finite_positive(request.mu0_T_m_A)) {
             if (error.empty()) {
@@ -2687,6 +2725,7 @@ FrequencyDomainStatus assemble_poisson_airbox_shared_domain(
                 }
                 double m0[3] = {0.0, 0.0, 0.0};
                 double ms = 0.0;
+                double alpha = 0.0;
                 for (int local = 0; local < dofs.Size(); ++local) {
                     const std::uint64_t node = static_cast<std::uint64_t>(
                         dofs[local] >= 0 ? dofs[local] : -1 - dofs[local]);
@@ -2694,6 +2733,32 @@ FrequencyDomainStatus assemble_poisson_airbox_shared_domain(
                         m0[axis] += shape[local] * request.tangent_frames[node].m[axis];
                     }
                     ms += shape[local] * node_ms(request, node);
+                    if (request.include_gilbert_damping) {
+                        alpha += shape[local] * node_alpha(request, node);
+                    }
+                }
+                double gilbert_scale = 0.0;
+                if (request.include_gilbert_damping) {
+                    if (!std::isfinite(alpha) || alpha < 0.0) {
+                        throw std::overflow_error(
+                            "shared-domain Gilbert alpha interpolation became non-finite");
+                    }
+                    const long double scale =
+                        static_cast<long double>(request.mu0_T_m_A) *
+                        static_cast<long double>(ms) *
+                        static_cast<long double>(alpha) /
+                        static_cast<long double>(request.gamma0_m_per_a_s);
+                    if (!std::isfinite(scale) ||
+                        scale > static_cast<long double>(
+                                    std::numeric_limits<double>::max())) {
+                        throw std::overflow_error(
+                            "shared-domain Gilbert damping mass coefficient overflowed");
+                    }
+                    gilbert_scale = static_cast<double>(scale);
+                    if (!std::isfinite(gilbert_scale)) {
+                        throw std::overflow_error(
+                            "shared-domain Gilbert damping mass coefficient is non-finite");
+                    }
                 }
                 const double m0_norm = std::sqrt(
                     m0[0] * m0[0] + m0[1] * m0[1] + m0[2] * m0[2]);
@@ -2847,6 +2912,24 @@ FrequencyDomainStatus assemble_poisson_airbox_shared_domain(
                                         shape[local_trial] *
                                         (request.mu0_T_m_A * ms / request.gamma0_m_per_a_s) *
                                         gyrotropic * weight);
+                                if (request.include_gilbert_damping) {
+                                    const double frame_dot =
+                                        row_frame[0] * column_frame[0] +
+                                        row_frame[1] * column_frame[1] +
+                                        row_frame[2] * column_frame[2];
+                                    const double damping_entry =
+                                        -test_sign * trial_sign *
+                                        shape[local_test] * shape[local_trial] *
+                                        gilbert_scale * frame_dot * weight;
+                                    if (!std::isfinite(damping_entry)) {
+                                        throw std::overflow_error(
+                                            "shared-domain Gilbert damping mass entry is non-finite");
+                                    }
+                                    b_qq_full.add(
+                                        2u * test_node + row_component,
+                                        2u * trial_node + column_component,
+                                        damping_entry);
+                                }
                             }
                         }
                         if (positive_tangent_mass_full != nullptr) {
@@ -3083,6 +3166,18 @@ FrequencyDomainStatus assemble_poisson_airbox_shared_domain(
             for (int axis = 0; axis < 3; ++axis) {
                 digest.add_double("m[" + std::to_string(node) + "][" + std::to_string(axis) + "]",
                                   request.tangent_frames[node].m[axis]);
+            }
+        }
+        if (request.include_gilbert_damping) {
+            digest.add_u64("gilbert_damping_active", 1u);
+            if (request.alpha_per_node != nullptr) {
+                for (std::uint64_t node = 0u; node < node_count; ++node) {
+                    digest.add_double(
+                        "alpha_per_node[" + std::to_string(node) + "]",
+                        request.alpha_per_node[node]);
+                }
+            } else {
+                digest.add_double("uniform_alpha", request.uniform_alpha);
             }
         }
         add_digest_matrix(digest, "A_qq", out_result->a_qq);
@@ -3493,6 +3588,9 @@ FrequencyDomainStatus assemble_poisson_airbox_shared_domain_payload(
         request.saturation_magnetization_count = saturation_magnetization.size();
         request.uniform_saturation_magnetization_a_per_m =
             payload.uniform_saturation_magnetisation_a_per_m;
+        request.alpha_per_node = payload.linearization_descriptor->alpha_per_node;
+        request.alpha_per_node_count =
+            payload.linearization_descriptor->alpha_per_node_count;
         request.gamma0_m_per_a_s = payload.gamma0_m_per_a_s;
         request.mu0_T_m_A = fullmag::fem::kMu0;
         const bool has_floquet_wavevector = floquet_k_rad_per_m != nullptr;

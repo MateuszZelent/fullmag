@@ -123,6 +123,12 @@ struct PoissonAirboxSharedDomainAssemblyRequest {
     const double *saturation_magnetization_a_per_m = nullptr;
     std::uint64_t saturation_magnetization_count = 0;
     double uniform_saturation_magnetization_a_per_m = 0.0;
+    // Private opt-in for the energy-Hessian Gilbert mass.  Descriptor alpha
+    // is carried through this request without activating damping by default.
+    bool include_gilbert_damping = false;
+    const double *alpha_per_node = nullptr;
+    std::uint64_t alpha_per_node_count = 0;
+    double uniform_alpha = 0.0;
     double gamma0_m_per_a_s = 0.0;
     double mu0_T_m_A = 0.0;
 

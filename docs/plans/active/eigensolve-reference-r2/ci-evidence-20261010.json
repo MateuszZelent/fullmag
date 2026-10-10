@@ -204,6 +204,25 @@
       "failure": "selected_window_failed_before_terminal_marker; detailed_fixture_identity_not_available",
       "receipt_sha256": "a84df656125d5004021a8348a81dba6d0572ecb19d4bd68ec91ddc7fc9687a14",
       "qualification_claimed": false
+    },
+    {
+      "run_id": 38080625714,
+      "sha": "b8675a329e34db1ea491a5b96aa9410cdca66e63",
+      "conclusion": "failure",
+      "scope": "floquet-count-slepc",
+      "native_build": "passed",
+      "passed_ctests": [
+        "fem_modal_eigen_floquet_count_contract"
+      ],
+      "failed_ctests": [
+        "fem_modal_eigen_live_shift_configuration_contract"
+      ],
+      "actual_native_nearest_SLEPc_reached": true,
+      "true_probe_attempt_count": 0,
+      "actual_live_factor_query": "NOT VERIFIED",
+      "failure": "one_iteration_fixture_budget_failed_before_positive_recursive_callback_and_candidate_observer",
+      "receipt_sha256": "3c5a05b00527a8499cd3dffe89f0e4fae27fd8197503b2d4e192f555b368021d",
+      "qualification_claimed": false
     }
   ]
 }

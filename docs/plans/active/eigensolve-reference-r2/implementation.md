@@ -478,3 +478,36 @@ algebry PASS. Dowód P4 [38080351130](https://github.com/MateuszZelent/fullmag/a
 na b176d824 — build, phase i typed transport PASS, selected-window FAIL;
 dokładna fixture/powód nie są widoczne w dotychczasowym logu. Dodawana
 diagnostyka nie zmienia modelu ani progów. Receipty i hashe zapisano w JSON.
+
+
+## P3 — prywatny assembly gotowy do hosted weryfikacji
+
+Dodano default-false include_gilbert_damping, alpha pointer/count/fallback
+i przekazanie alpha z descriptoru. Produkcja nadal nie aktywuje opt-in
+i nie dopuszcza native Include. Aktywny B składa -R_alpha przed C^H B C;
+Ms/alpha interpolowane są osobno. Dodano walidację, overflow guard i
+active-only dependency digest. Ignore B i dotychczasowy digest zachowane
+dla legalnych alpha. Nie zmieniono publicznego ABI ani tolerancji.
+
+Root i niezależny source/math review PASS. Regresje tet/prism mierzą
+alpha0 wraz ze strukturą CSR, independent quadrature, wrong-product
+discrimination, Rayleigh sign, phase/frame covariance, fallback, zmianę
+aktywnego alpha/digest i invalid/overflow. Map validator oraz diff check
+PASS. Compile/execution pending hosted positive-mass; nie jest to publiczna
+ani zakwalifikowana exact-damping capability.
+
+Oracle rozszerzono o ósmy przypadek: dodatnie alpha przy saddle Hessian
+zachowuje genuine growing physical mode. Nie wolno odrzucać go tylko
+przez znak Im Omega. Historyczne 7/7 z #38081980214 pozostaje dowodem
+niezmienionych siedmiu przypadków; wykonanie ósmego pending.
+
+P2 [38080625714](https://github.com/MateuszZelent/fullmag/actions/runs/38080625714)
+na b8675a329 — build i count contract PASS; native nearest dociera do
+SLEPc, lecz max_linear_iterations=1 kończy się przed dodatnim recursive
+callbackiem (true_probe_attempt_count=0), więc live getters nie wykonują
+się. Source correction zwiększa wyłącznie budżet fixture do 64; asercje
+prawdziwego pomiaru pozostają. Nie zmieniamy polityki LU bez jego dowodu.
+
+P10 jest na remote `21403fc7331d6dd01e22fb4057ab09e059490592`;
+hosted Rust [38082733810](https://github.com/MateuszZelent/fullmag/actions/runs/38082733810)
+uruchomiony, terminalny wynik jeszcze nieznany.

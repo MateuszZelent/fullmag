@@ -1163,6 +1163,526 @@ void floquet_positive_tangent_mass_matches_independent_phase_reduction()
     check(quadratic.real() > 0.0 &&
               std::abs(quadratic.imag()) <= 1.0e-12 * std::max(1.0, quadratic.real()),
           "phase-reduced tangent mass has a positive real quadratic form");
+
+    // P3 private Gilbert-mass contract.  Keep descriptor-like alpha data on
+    // the request while disabled and verify it leaves both B and its digest
+    // unchanged.  The enabled path is checked against an independent
+    // quadrature traversal on both tet4 and prism6.
+    std::vector<double> nonuniform_ms(static_cast<std::size_t>(node_count));
+    std::vector<double> nonuniform_alpha(static_cast<std::size_t>(node_count));
+    for (std::uint64_t node = 0u; node < node_count; ++node) {
+        nonuniform_ms[static_cast<std::size_t>(node)] =
+            1.3 + 0.17 * static_cast<double>(node);
+        nonuniform_alpha[static_cast<std::size_t>(node)] =
+            0.013 + 0.004 * static_cast<double>(node % 4u);
+    }
+    fd::PoissonAirboxSharedDomainAssemblyRequest material_request = request;
+    material_request.saturation_magnetization_a_per_m = nonuniform_ms.data();
+    material_request.saturation_magnetization_count = nonuniform_ms.size();
+    material_request.uniform_saturation_magnetization_a_per_m = 8.0;
+    material_request.alpha_per_node = nonuniform_alpha.data();
+    material_request.alpha_per_node_count = nonuniform_alpha.size();
+    material_request.uniform_alpha = 0.031;
+    material_request.include_gilbert_damping = false;
+
+    fd::PoissonAirboxSharedDomainAssemblyResult disabled_with_alpha{};
+    check(fd::assemble_poisson_airbox_shared_domain(
+              material_request, &disabled_with_alpha) == fd::FrequencyDomainStatus::ok,
+          disabled_with_alpha.error_message);
+    fd::PoissonAirboxSharedDomainAssemblyRequest material_without_alpha =
+        material_request;
+    material_without_alpha.alpha_per_node = nullptr;
+    material_without_alpha.alpha_per_node_count = 0u;
+    material_without_alpha.uniform_alpha = 0.0;
+    fd::PoissonAirboxSharedDomainAssemblyResult disabled_without_alpha{};
+    check(fd::assemble_poisson_airbox_shared_domain(
+              material_without_alpha, &disabled_without_alpha) ==
+              fd::FrequencyDomainStatus::ok,
+          disabled_without_alpha.error_message);
+    check(disabled_with_alpha.floquet_full_b_qq.values ==
+              disabled_without_alpha.floquet_full_b_qq.values &&
+              std::strcmp(
+                  disabled_with_alpha.operator_digest,
+                  disabled_without_alpha.operator_digest) == 0,
+          "forwarded descriptor alpha must leave Ignore B and the undamped digest unchanged");
+
+    std::vector<double> zero_alpha(static_cast<std::size_t>(node_count), 0.0);
+    fd::PoissonAirboxSharedDomainAssemblyRequest zero_damping_request =
+        material_request;
+    zero_damping_request.include_gilbert_damping = true;
+    zero_damping_request.alpha_per_node = zero_alpha.data();
+    zero_damping_request.alpha_per_node_count = zero_alpha.size();
+    fd::PoissonAirboxSharedDomainAssemblyResult zero_damping_result{};
+    check(fd::assemble_poisson_airbox_shared_domain(
+              zero_damping_request, &zero_damping_result) == fd::FrequencyDomainStatus::ok,
+          zero_damping_result.error_message);
+    check(zero_damping_result.floquet_full_b_qq.row_offsets ==
+              disabled_with_alpha.floquet_full_b_qq.row_offsets &&
+              zero_damping_result.floquet_full_b_qq.column_indices ==
+                  disabled_with_alpha.floquet_full_b_qq.column_indices &&
+              zero_damping_result.floquet_full_b_qq.values ==
+                  disabled_with_alpha.floquet_full_b_qq.values &&
+              std::strcmp(
+                  zero_damping_result.operator_digest,
+                  disabled_with_alpha.operator_digest) != 0,
+          "alpha=0 preserves B while the explicit opt-in remains provenance-visible");
+
+    fd::PoissonAirboxSharedDomainAssemblyRequest damped_request = material_request;
+    damped_request.include_gilbert_damping = true;
+    fd::PoissonAirboxSharedDomainAssemblyResult damped_result{};
+    check(fd::assemble_poisson_airbox_shared_domain(
+              damped_request, &damped_result) == fd::FrequencyDomainStatus::ok,
+          damped_result.error_message);
+    fd::PoissonAirboxSharedDomainAssemblyRequest unused_fallback_variant =
+        damped_request;
+    unused_fallback_variant.uniform_alpha = 0.071;
+    fd::PoissonAirboxSharedDomainAssemblyResult unused_fallback_result{};
+    check(fd::assemble_poisson_airbox_shared_domain(
+              unused_fallback_variant, &unused_fallback_result) ==
+              fd::FrequencyDomainStatus::ok,
+          unused_fallback_result.error_message);
+    check(std::strcmp(
+              damped_result.operator_digest,
+              unused_fallback_result.operator_digest) == 0,
+          "nodal alpha provenance must not redundantly hash its unused uniform fallback");
+
+    std::vector<double> changed_active_alpha = nonuniform_alpha;
+    changed_active_alpha[0] += 0.002;
+    fd::PoissonAirboxSharedDomainAssemblyRequest changed_alpha_request = damped_request;
+    changed_alpha_request.alpha_per_node = changed_active_alpha.data();
+    fd::PoissonAirboxSharedDomainAssemblyResult changed_alpha_result{};
+    check(fd::assemble_poisson_airbox_shared_domain(
+              changed_alpha_request, &changed_alpha_result) == fd::FrequencyDomainStatus::ok,
+          changed_alpha_result.error_message);
+    check(std::strcmp(damped_result.operator_digest,
+                      changed_alpha_result.operator_digest) != 0 &&
+              damped_result.floquet_full_b_qq.values !=
+                  changed_alpha_result.floquet_full_b_qq.values,
+          "changing only an active nodal alpha updates both B and its immutable operator digest");
+
+    std::vector<double> expected_damping(
+        static_cast<std::size_t>(full_q_count * full_q_count), 0.0);
+    std::vector<double> nodal_product_damping(
+        static_cast<std::size_t>(full_q_count * full_q_count), 0.0);
+    for (int element = 0; element < mesh.GetNE(); ++element) {
+        mfem::Array<int> dofs;
+        scalar_space.GetElementDofs(element, dofs);
+        const mfem::Geometry::Type geometry = mesh.GetElementGeometry(element);
+        check(geometry == mfem::Geometry::TETRAHEDRON ||
+                  geometry == mfem::Geometry::PRISM,
+              "Gilbert oracle fixture uses only tet4 and prism6");
+        const int quadrature_order =
+            geometry == mfem::Geometry::TETRAHEDRON ? 5 : 4;
+        const mfem::IntegrationRule &rule =
+            mfem::IntRules.Get(geometry, quadrature_order);
+        const mfem::FiniteElement *finite_element = scalar_space.GetFE(element);
+        mfem::ElementTransformation *transformation =
+            mesh.GetElementTransformation(element);
+        for (int point_index = 0; point_index < rule.GetNPoints(); ++point_index) {
+            const mfem::IntegrationPoint &point = rule.IntPoint(point_index);
+            transformation->SetIntPoint(&point);
+            mfem::Vector shape(dofs.Size());
+            finite_element->CalcShape(point, shape);
+            const double weight = transformation->Weight() * point.weight;
+            double ms_q = 0.0;
+            double alpha_q = 0.0;
+            double interpolated_nodal_product = 0.0;
+            for (int local = 0; local < dofs.Size(); ++local) {
+                const std::uint64_t node = static_cast<std::uint64_t>(
+                    dofs[local] >= 0 ? dofs[local] : -1 - dofs[local]);
+                const double node_ms_value =
+                    nonuniform_ms[static_cast<std::size_t>(node)];
+                const double node_alpha_value =
+                    nonuniform_alpha[static_cast<std::size_t>(node)];
+                ms_q += shape[local] * node_ms_value;
+                alpha_q += shape[local] * node_alpha_value;
+                interpolated_nodal_product +=
+                    shape[local] * node_ms_value * node_alpha_value;
+            }
+            const double coefficient =
+                request.mu0_T_m_A * ms_q * alpha_q /
+                request.gamma0_m_per_a_s;
+            const double wrong_product_coefficient =
+                request.mu0_T_m_A * interpolated_nodal_product /
+                request.gamma0_m_per_a_s;
+            for (int local_row = 0; local_row < dofs.Size(); ++local_row) {
+                const int raw_row = dofs[local_row];
+                const std::uint64_t row_node = static_cast<std::uint64_t>(
+                    raw_row >= 0 ? raw_row : -1 - raw_row);
+                const double row_sign = raw_row >= 0 ? 1.0 : -1.0;
+                for (int local_column = 0; local_column < dofs.Size(); ++local_column) {
+                    const int raw_column = dofs[local_column];
+                    const std::uint64_t column_node = static_cast<std::uint64_t>(
+                        raw_column >= 0 ? raw_column : -1 - raw_column);
+                    const double column_sign = raw_column >= 0 ? 1.0 : -1.0;
+                    const double scalar_weight =
+                        row_sign * column_sign *
+                        shape[local_row] * shape[local_column] * weight;
+                    for (std::uint32_t row_component = 0u;
+                         row_component < 2u; ++row_component) {
+                        for (std::uint32_t column_component = 0u;
+                             column_component < 2u; ++column_component) {
+                            const double frame_dot = dot3(
+                                tangent_component(frames[row_node], row_component),
+                                tangent_component(frames[column_node], column_component));
+                            const std::size_t offset = static_cast<std::size_t>(
+                                (2u * row_node + row_component) * full_q_count +
+                                2u * column_node + column_component);
+                            expected_damping[offset] +=
+                                scalar_weight * coefficient * frame_dot;
+                            nodal_product_damping[offset] +=
+                                scalar_weight * wrong_product_coefficient * frame_dot;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    std::vector<double> expected_damped_b(
+        static_cast<std::size_t>(full_q_count * full_q_count), 0.0);
+    double quadrature_scale = 0.0;
+    double damping_scale = 0.0;
+    double independent_product_difference = 0.0;
+    double full_operator_error = 0.0;
+    double symmetric_error = 0.0;
+    for (std::uint64_t row = 0u; row < full_q_count; ++row) {
+        for (std::uint64_t column = 0u; column < full_q_count; ++column) {
+            const std::size_t offset = static_cast<std::size_t>(
+                row * full_q_count + column);
+            const double undamped = matrix_value(
+                disabled_with_alpha.floquet_full_b_qq, row, column);
+            expected_damped_b[offset] = undamped - expected_damping[offset];
+            const double actual = matrix_value(
+                damped_result.floquet_full_b_qq, row, column);
+            full_operator_error = std::max(
+                full_operator_error, std::abs(actual - expected_damped_b[offset]));
+            symmetric_error = std::max(
+                symmetric_error,
+                std::abs(
+                    actual +
+                    matrix_value(damped_result.floquet_full_b_qq, column, row) +
+                    expected_damping[offset] +
+                    expected_damping[static_cast<std::size_t>(
+                        column * full_q_count + row)]));
+            quadrature_scale = std::max(
+                quadrature_scale,
+                std::max(std::abs(actual), std::abs(expected_damped_b[offset])));
+            damping_scale = std::max(
+                damping_scale, std::abs(expected_damping[offset]));
+            independent_product_difference = std::max(
+                independent_product_difference,
+                std::abs(
+                    expected_damping[offset] -
+                    nodal_product_damping[offset]));
+        }
+    }
+    check(full_operator_error <=
+              1.0e-11 * std::max(1.0e-30, quadrature_scale),
+          "damped full B matches independent tet4/prism6 quadrature with separately interpolated Ms and alpha");
+    check(symmetric_error <=
+              1.0e-11 * std::max(1.0e-30, damping_scale),
+          "the symmetric part of B is the negative Gilbert Rayleigh mass");
+    check(independent_product_difference >
+              1.0e-6 * std::max(1.0e-30, damping_scale),
+          "independent oracle distinguishes Ms_q*alpha_q from interpolated nodal Ms*alpha");
+
+    long double rayleigh_damping = 0.0L;
+    long double pencil_quadratic = 0.0L;
+    std::vector<double> rayleigh_vector(static_cast<std::size_t>(full_q_count));
+    for (std::uint64_t row = 0u; row < full_q_count; ++row) {
+        rayleigh_vector[static_cast<std::size_t>(row)] =
+            0.2 + 0.037 * static_cast<double>(row);
+    }
+    for (std::uint64_t row = 0u; row < full_q_count; ++row) {
+        for (std::uint64_t column = 0u; column < full_q_count; ++column) {
+            const double product =
+                rayleigh_vector[static_cast<std::size_t>(row)] *
+                rayleigh_vector[static_cast<std::size_t>(column)];
+            const std::size_t offset = static_cast<std::size_t>(
+                row * full_q_count + column);
+            rayleigh_damping +=
+                static_cast<long double>(product) * expected_damping[offset];
+            pencil_quadratic +=
+                static_cast<long double>(product) *
+                matrix_value(damped_result.floquet_full_b_qq, row, column);
+        }
+    }
+    check(rayleigh_damping > 0.0L && pencil_quadratic < 0.0L &&
+              std::abs(static_cast<double>(pencil_quadratic + rayleigh_damping)) <=
+                  1.0e-11 * static_cast<double>(rayleigh_damping),
+          "positive Gilbert Rayleigh form gives non-positive symmetric B and decaying energy");
+
+    const std::vector<std::complex<double>> independent_constraint =
+        build_independent_constraint(true, true);
+
+    std::vector<std::complex<double>> expected_phase_damping(
+        static_cast<std::size_t>(reduced_q_count * reduced_q_count),
+        std::complex<double>{});
+    double phase_projection_error = 0.0;
+    double phase_scale = 0.0;
+    double phase_hermitian_error = 0.0;
+    for (std::uint64_t row = 0u; row < reduced_q_count; ++row) {
+        for (std::uint64_t column = 0u; column < reduced_q_count; ++column) {
+            std::complex<double> projected_b{};
+            std::complex<double> projected_damping{};
+            for (std::uint64_t full_row = 0u; full_row < full_q_count; ++full_row) {
+                const std::complex<double> left = std::conj(
+                    independent_constraint[static_cast<std::size_t>(
+                        full_row * reduced_q_count + row)]);
+                if (left == std::complex<double>{}) continue;
+                for (std::uint64_t full_column = 0u;
+                     full_column < full_q_count; ++full_column) {
+                    const std::complex<double> right =
+                        independent_constraint[static_cast<std::size_t>(
+                            full_column * reduced_q_count + column)];
+                    if (right == std::complex<double>{}) continue;
+                    const std::size_t full_offset = static_cast<std::size_t>(
+                        full_row * full_q_count + full_column);
+                    projected_b += left * expected_damped_b[full_offset] * right;
+                    projected_damping += left *
+                        expected_damping[full_offset] * right;
+                }
+            }
+            const std::size_t offset = static_cast<std::size_t>(
+                row * reduced_q_count + column);
+
+            expected_phase_damping[offset] = projected_damping;
+            const std::complex<double> actual_b = complex_matrix_value(
+                damped_result.floquet_b_qq, row, column);
+            phase_projection_error = std::max(
+                phase_projection_error, std::abs(actual_b - projected_b));
+            const std::complex<double> actual_damping = -0.5 *
+                (actual_b + std::conj(complex_matrix_value(
+                    damped_result.floquet_b_qq, column, row)));
+            phase_hermitian_error = std::max(
+                phase_hermitian_error,
+                std::abs(actual_damping - projected_damping));
+            phase_scale = std::max(
+                phase_scale,
+                std::max(std::abs(actual_b), std::abs(projected_b)));
+        }
+    }
+    check(phase_projection_error <=
+              1.0e-11 * std::max(1.0e-30, phase_scale),
+          "complex Floquet B is the Hermitian-congruence projection C^H B C");
+    check(phase_hermitian_error <=
+              1.0e-11 * std::max(1.0e-30, damping_scale),
+          "the projected dissipative mass remains Hermitian under complex phase constraints");
+
+    std::complex<double> phase_damping_quadratic{};
+    for (std::uint64_t row = 0u; row < reduced_q_count; ++row) {
+        const std::complex<double> left(
+            0.1 * static_cast<double>(row + 1u),
+            -0.03 * static_cast<double>(row + 2u));
+        for (std::uint64_t column = 0u; column < reduced_q_count; ++column) {
+            const std::complex<double> right(
+                0.1 * static_cast<double>(column + 1u),
+                -0.03 * static_cast<double>(column + 2u));
+            phase_damping_quadratic += std::conj(left) *
+                expected_phase_damping[static_cast<std::size_t>(
+                    row * reduced_q_count + column)] * right;
+        }
+    }
+    check(phase_damping_quadratic.real() > 0.0 &&
+              std::abs(phase_damping_quadratic.imag()) <=
+                  1.0e-11 * phase_damping_quadratic.real(),
+          "phase-reduced Gilbert mass has a positive real Hermitian quadratic form");
+
+    // A nodal Gilbert field and the scalar fallback produce the same operator
+    // when they represent the same coefficient.
+    std::vector<double> constant_alpha(static_cast<std::size_t>(node_count), 0.037);
+    fd::PoissonAirboxSharedDomainAssemblyRequest uniform_alpha_request =
+        material_request;
+    uniform_alpha_request.include_gilbert_damping = true;
+    uniform_alpha_request.alpha_per_node = nullptr;
+    uniform_alpha_request.alpha_per_node_count = 0u;
+    uniform_alpha_request.uniform_alpha = 0.037;
+    fd::PoissonAirboxSharedDomainAssemblyResult uniform_alpha_result{};
+    check(fd::assemble_poisson_airbox_shared_domain(
+              uniform_alpha_request, &uniform_alpha_result) == fd::FrequencyDomainStatus::ok,
+          uniform_alpha_result.error_message);
+    fd::PoissonAirboxSharedDomainAssemblyRequest constant_nodal_alpha_request =
+        material_request;
+    constant_nodal_alpha_request.include_gilbert_damping = true;
+    constant_nodal_alpha_request.alpha_per_node = constant_alpha.data();
+    constant_nodal_alpha_request.alpha_per_node_count = constant_alpha.size();
+    fd::PoissonAirboxSharedDomainAssemblyResult constant_nodal_alpha_result{};
+    check(fd::assemble_poisson_airbox_shared_domain(
+              constant_nodal_alpha_request, &constant_nodal_alpha_result) ==
+              fd::FrequencyDomainStatus::ok,
+          constant_nodal_alpha_result.error_message);
+    double fallback_difference = 0.0;
+    double fallback_scale = 0.0;
+    for (std::uint64_t row = 0u; row < full_q_count; ++row) {
+        for (std::uint64_t column = 0u; column < full_q_count; ++column) {
+            const double fallback_value = matrix_value(
+                uniform_alpha_result.floquet_full_b_qq, row, column);
+            const double nodal_value = matrix_value(
+                constant_nodal_alpha_result.floquet_full_b_qq, row, column);
+            fallback_difference = std::max(
+                fallback_difference, std::abs(fallback_value - nodal_value));
+            fallback_scale = std::max(
+                fallback_scale, std::max(std::abs(fallback_value), std::abs(nodal_value)));
+        }
+    }
+    check(fallback_difference <=
+              1.0e-12 * std::max(1.0e-30, fallback_scale),
+          "uniform alpha fallback matches the equivalent constant nodal field");
+
+    // Local tangent-frame changes must act by the corresponding orthogonal
+    // congruence on the full real B block.
+    std::vector<std::uint32_t> identity_classes(static_cast<std::size_t>(node_count));
+    for (std::uint32_t node = 0u; node < node_count; ++node) {
+        identity_classes[static_cast<std::size_t>(node)] = node;
+    }
+    fd::PoissonAirboxSharedDomainAssemblyRequest covariance_request = damped_request;
+    covariance_request.magnetic_phase_constraint = nullptr;
+    covariance_request.scalar_reduced_node = identity_classes.data();
+    covariance_request.scalar_reduced_node_count = node_count;
+    covariance_request.magnetic_reduced_node = identity_classes.data();
+    covariance_request.magnetic_reduced_node_count = node_count;
+    fd::PoissonAirboxSharedDomainAssemblyResult covariance_base{};
+    check(fd::assemble_poisson_airbox_shared_domain(
+              covariance_request, &covariance_base) == fd::FrequencyDomainStatus::ok,
+          covariance_base.error_message);
+    std::vector<fd::TangentFrameNode> rotated_frames = frames;
+    std::vector<double> frame_angles(static_cast<std::size_t>(node_count));
+    for (std::uint64_t node = 0u; node < node_count; ++node) {
+        const double angle = 0.11 + 0.029 * static_cast<double>(node);
+        frame_angles[static_cast<std::size_t>(node)] = angle;
+        const double cosine = std::cos(angle);
+        const double sine = std::sin(angle);
+        double old_e1[3]{};
+        double old_e2[3]{};
+        for (int axis = 0; axis < 3; ++axis) {
+            old_e1[axis] = rotated_frames[static_cast<std::size_t>(node)].e1[axis];
+            old_e2[axis] = rotated_frames[static_cast<std::size_t>(node)].e2[axis];
+        }
+        for (int axis = 0; axis < 3; ++axis) {
+            rotated_frames[static_cast<std::size_t>(node)].e1[axis] =
+                cosine * old_e1[axis] + sine * old_e2[axis];
+            rotated_frames[static_cast<std::size_t>(node)].e2[axis] =
+                -sine * old_e1[axis] + cosine * old_e2[axis];
+        }
+    }
+    fd::PoissonAirboxSharedDomainAssemblyRequest rotated_covariance_request =
+        covariance_request;
+    rotated_covariance_request.tangent_frames = rotated_frames.data();
+    fd::PoissonAirboxSharedDomainAssemblyResult covariance_rotated{};
+    check(fd::assemble_poisson_airbox_shared_domain(
+              rotated_covariance_request, &covariance_rotated) ==
+              fd::FrequencyDomainStatus::ok,
+          covariance_rotated.error_message);
+    const auto frame_change = [&](std::uint64_t node,
+                                  std::uint32_t old_component,
+                                  std::uint32_t new_component) {
+        const double angle = frame_angles[static_cast<std::size_t>(node)];
+        const double cosine = std::cos(angle);
+        const double sine = std::sin(angle);
+        if (old_component == 0u && new_component == 0u) return cosine;
+        if (old_component == 0u && new_component == 1u) return -sine;
+        if (old_component == 1u && new_component == 0u) return sine;
+        return cosine;
+    };
+    double frame_covariance_error = 0.0;
+    double frame_covariance_scale = 0.0;
+    for (std::uint64_t row_node = 0u; row_node < node_count; ++row_node) {
+        for (std::uint64_t column_node = 0u; column_node < node_count; ++column_node) {
+            for (std::uint32_t row_component = 0u; row_component < 2u; ++row_component) {
+                for (std::uint32_t column_component = 0u;
+                     column_component < 2u; ++column_component) {
+                    double expected = 0.0;
+                    for (std::uint32_t old_row = 0u; old_row < 2u; ++old_row) {
+                        for (std::uint32_t old_column = 0u; old_column < 2u; ++old_column) {
+                            expected +=
+                                frame_change(row_node, old_row, row_component) *
+                                matrix_value(
+                                    covariance_base.b_qq,
+                                    2u * row_node + old_row,
+                                    2u * column_node + old_column) *
+                                frame_change(column_node, old_column, column_component);
+                        }
+                    }
+                    const double actual = matrix_value(
+                        covariance_rotated.b_qq,
+                        2u * row_node + row_component,
+                        2u * column_node + column_component);
+                    frame_covariance_error = std::max(
+                        frame_covariance_error, std::abs(actual - expected));
+                    frame_covariance_scale = std::max(
+                        frame_covariance_scale,
+                        std::max(std::abs(actual), std::abs(expected)));
+                }
+            }
+        }
+    }
+    check(frame_covariance_error <=
+              1.0e-11 * std::max(1.0e-30, frame_covariance_scale),
+          "Gilbert mass and gyrotropic B are covariant under independent local frame rotations");
+
+    const auto expect_alpha_validation_error = [&](
+        const fd::PoissonAirboxSharedDomainAssemblyRequest &candidate,
+        const char *message) {
+        fd::PoissonAirboxSharedDomainAssemblyResult candidate_result{};
+        check(fd::assemble_poisson_airbox_shared_domain(
+                  candidate, &candidate_result) == fd::FrequencyDomainStatus::validation_error,
+              message);
+        check(std::strstr(candidate_result.error_message, "alpha") != nullptr,
+              "invalid Gilbert input returns a clear alpha validation error");
+    };
+    fd::PoissonAirboxSharedDomainAssemblyRequest wrong_alpha_count =
+        damped_request;
+    wrong_alpha_count.alpha_per_node_count = node_count - 1u;
+    expect_alpha_validation_error(
+        wrong_alpha_count, "nodal alpha count mismatch must fail validation");
+    fd::PoissonAirboxSharedDomainAssemblyRequest missing_alpha_values =
+        damped_request;
+    missing_alpha_values.alpha_per_node = nullptr;
+    missing_alpha_values.alpha_per_node_count = 1u;
+    expect_alpha_validation_error(
+        missing_alpha_values, "alpha count without a pointer must fail validation");
+    std::vector<double> negative_alpha = nonuniform_alpha;
+    negative_alpha[0] = -0.01;
+    fd::PoissonAirboxSharedDomainAssemblyRequest negative_alpha_request =
+        damped_request;
+    negative_alpha_request.alpha_per_node = negative_alpha.data();
+    expect_alpha_validation_error(
+        negative_alpha_request, "negative nodal alpha must fail validation");
+    std::vector<double> nonfinite_alpha = nonuniform_alpha;
+    nonfinite_alpha[0] = std::numeric_limits<double>::infinity();
+    fd::PoissonAirboxSharedDomainAssemblyRequest nonfinite_alpha_request =
+        damped_request;
+    nonfinite_alpha_request.alpha_per_node = nonfinite_alpha.data();
+    expect_alpha_validation_error(
+        nonfinite_alpha_request, "non-finite nodal alpha must fail validation");
+    fd::PoissonAirboxSharedDomainAssemblyRequest negative_uniform_alpha_request =
+        material_request;
+    negative_uniform_alpha_request.uniform_alpha = -0.01;
+    expect_alpha_validation_error(
+        negative_uniform_alpha_request, "negative uniform alpha must fail validation");
+    fd::PoissonAirboxSharedDomainAssemblyRequest nonfinite_uniform_alpha_request =
+        material_request;
+    nonfinite_uniform_alpha_request.uniform_alpha =
+        std::numeric_limits<double>::quiet_NaN();
+    expect_alpha_validation_error(
+        nonfinite_uniform_alpha_request, "non-finite uniform alpha must fail validation");
+
+    std::vector<double> overflowing_ms(static_cast<std::size_t>(node_count), 1.0e308);
+    std::vector<double> overflowing_alpha(static_cast<std::size_t>(node_count), 1.0e308);
+    fd::PoissonAirboxSharedDomainAssemblyRequest overflow_request = damped_request;
+    overflow_request.saturation_magnetization_a_per_m = overflowing_ms.data();
+    overflow_request.saturation_magnetization_count = overflowing_ms.size();
+    overflow_request.gamma0_m_per_a_s = 1.0;
+    overflow_request.alpha_per_node = overflowing_alpha.data();
+    fd::PoissonAirboxSharedDomainAssemblyResult overflow_result{};
+    check(fd::assemble_poisson_airbox_shared_domain(
+              overflow_request, &overflow_result) == fd::FrequencyDomainStatus::operator_error,
+          "finite coefficients whose Gilbert mass overflows must fail as an operator error");
+    check(std::strstr(overflow_result.error_message, "Gilbert damping mass coefficient") != nullptr,
+          "Gilbert overflow reports a specific operator error");
+
+    std::printf("PASS: shared_domain_gilbert_mass_contract\n");
 }
 #endif
 
@@ -3286,6 +3806,45 @@ int main()
           "magnetic+airbox importer compacts scalar Poisson to declared classes");
     check(film_air_result.a_qq.row_count == 2u && film_air_result.a_qq.values.size() > 0u,
           "magnetic+airbox importer compacts native magnetic exchange to declared classes");
+
+    // The payload adapter forwards descriptor alpha into its private request,
+    // but the default false opt-in keeps the production Ignore operator intact.
+    FullmagFemModalLinearizationDescriptor film_air_without_alpha_descriptor =
+        film_air_descriptor;
+    film_air_without_alpha_descriptor.alpha_per_node = nullptr;
+    film_air_without_alpha_descriptor.alpha_per_node_count = 0u;
+    FullmagFemModalSharedDomainPayload film_air_without_alpha_payload =
+        film_air_payload;
+    film_air_without_alpha_payload.linearization_descriptor =
+        &film_air_without_alpha_descriptor;
+    fd::PoissonAirboxSharedDomainAssemblyResult film_air_without_alpha_result{};
+    check(fd::assemble_poisson_airbox_shared_domain_payload(
+              film_air_without_alpha_payload, &film_air_without_alpha_result) ==
+              fd::FrequencyDomainStatus::ok,
+          film_air_without_alpha_result.error_message);
+    check(film_air_result.b_qq.values == film_air_without_alpha_result.b_qq.values &&
+              std::strcmp(
+                  film_air_result.operator_digest,
+                  film_air_without_alpha_result.operator_digest) == 0,
+          "payload descriptor alpha is forwarded without changing disabled B or its digest");
+
+    std::vector<double> film_air_negative_alpha = film_air_descriptor_alpha;
+    film_air_negative_alpha[0] = -0.01;
+    FullmagFemModalLinearizationDescriptor film_air_negative_alpha_descriptor =
+        film_air_descriptor;
+    film_air_negative_alpha_descriptor.alpha_per_node =
+        film_air_negative_alpha.data();
+    FullmagFemModalSharedDomainPayload film_air_negative_alpha_payload =
+        film_air_payload;
+    film_air_negative_alpha_payload.linearization_descriptor =
+        &film_air_negative_alpha_descriptor;
+    fd::PoissonAirboxSharedDomainAssemblyResult film_air_negative_alpha_result{};
+    check(fd::assemble_poisson_airbox_shared_domain_payload(
+              film_air_negative_alpha_payload,
+              &film_air_negative_alpha_result) ==
+              fd::FrequencyDomainStatus::validation_error &&
+              std::strstr(film_air_negative_alpha_result.error_message, "alpha") != nullptr,
+          "payload builder must forward and reject negative descriptor alpha");
     auto expect_acceptance_rejection = [&](FullmagFemModalSharedDomainPayload candidate,
                                            const char *reason,
                                            const char *message) {

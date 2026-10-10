@@ -5203,7 +5203,9 @@ fixtures. SOURCE nie jest dowodem odczytu ani kwalifikacji fizyki.
 (r2-exact-gilbert-energy-mass)=
 ## R2 P3 — wymagany Gilbert mass dla energy-Hessian owner
 
-Status: planned_contract; native exact damping nie jest jeszcze dopuszczone.
+Status: planned_contract dla native exact damping; prywatny energy mass
+jest source-visible, wykonanie assembly pozostaje NOT VERIFIED.
+Native exact damping nie jest jeszcze dopuszczone.
 Dla energy-Hessian rows w J, przy istniejącym B0 = -G, wymagany znak
 wkładu dyssypacyjnego jest ujemny:
 
@@ -5253,7 +5255,7 @@ Powyższy kontrakt nie jest deklaracją wykonanych testów ani kwalifikacji.
 
 | Source ID | Path | Symbol | Responsibility |
 |---|---|---|---|
-| source-r2-gilbert-energy-contract | docs/physics/0831-fem-dynamic-pencil-modal-response-and-krylov.md | DOC-ANCHOR:r2-exact-gilbert-energy-mass | Proposed energy mass and energy-balance sign; not implemented or runtime qualified |
+| source-r2-gilbert-energy-contract | docs/physics/0831-fem-dynamic-pencil-modal-response-and-krylov.md | DOC-ANCHOR:r2-exact-gilbert-energy-mass | Required energy-mass contract; native exact-damping capability not runtime qualified |
 
 
 ### P3 — niezależny oracle oryginalnego complex pencil
@@ -5281,3 +5283,46 @@ oraz [generalized eig](https://docs.scipy.org/doc/scipy-1.15.3/reference/generat
 |---|---|---|---|
 | source-r2-complex-qz-oracle | scripts/test_eigensolve_complex_damping_oracle.py | original_complex_qz_values | Independent complex QZ finite eigenvalues and reconstruction checks; native qualification not established |
 | source-r2-physical-sector-oracle | scripts/test_eigensolve_complex_damping_oracle.py | physical_doubled_spectrum | Projected original residual and physical subspace rank in the independent doubled-real oracle |
+
+
+### P3 — prywatny energy mass source checkpoint
+
+Prywatny request assembly ma jawny opt-in `include_gilbert_damping=false`,
+nodal alpha oraz uniform fallback. Produkcyjny payload owner przekazuje
+alpha z descriptoru, lecz nie aktywuje opt-in. Native Include pozostaje
+odrzucone przez istniejącą admission; Ignore zachowuje dotychczasowe B
+i digest dla legalnych współczynników. Walidacja alpha obowiązuje także
+przy wyłączonym wkładzie. Aktywny digest obejmuje flagę i rzeczywiście
+używane alpha, bez hashowania nieużywanego fallbacku przy nodal field.
+
+Source review assembly i testów: PASS. Względne regresje sprawdzają
+strukturę CSR dla alpha0, niezależną quadrature tet4/prism6 i rozróżnienie
+interpolacji współczynników, znak Rayleigh, rotacje lokalnych ram,
+Hermitian phase reduction, zmianę active alpha/digest oraz invalid/overflow.
+Nie uruchamiano ich lokalnie. Wykonanie wymaga hosted positive-mass
+contract; sam source PASS ani algebraiczny oracle nie kwalifikują FEM.
+
+Hosted [38081980214](https://github.com/MateuszZelent/fullmag/actions/runs/38081980214)
+na `36da16235309b3c57db253bb784cdea9ffeb1df4`: siedem niezależnych
+małych testów QZ/physical-sector/energy sign PASS. Nie jest to test
+produkcji ani dowód połączenia assembly z exact-damped SLEPc.
+
+| Source ID | Path | Symbol | Responsibility |
+|---|---|---|---|
+| source-r2-private-gilbert-request | backends/fem/cpu/frequency_domain/operators/poisson_airbox_shared_domain.hpp | assemble_poisson_airbox_shared_domain | Default-false private request boundary; no public ABI or native Include capability |
+| source-r2-private-gilbert-mass | backends/fem/cpu/frequency_domain/operators/poisson_airbox_shared_domain.cpp | FrequencyDomainStatus assemble_poisson_airbox_shared_domain | Negative symmetric energy mass before Hermitian reduction; source-visible and runtime unverified |
+| source-r2-private-gilbert-regressions | backends/fem/tests/frequency_domain/poisson_airbox_shared_domain_test.cpp | void floquet_positive_tangent_mass_matches_independent_phase_reduction | Private Gilbert mass, phase/frame covariance, provenance and invalid-input regressions; hosted execution pending |
+| source-r2-gilbert-energy-balance-oracle | scripts/test_eigensolve_complex_damping_oracle.py | test_energy_balance_and_opposite_sign_produces_growth | Independent small-pencil loss/growth sign test; not native FEM qualification |
+
+
+### P3 — genuine growth a sektor sprzężony
+
+Dodatnie alpha nie gwarantuje stabilności stanu równowagi. Symetryczny
+hesjan o ujemnej krzywiźnie może mieć physical mode z dodatnią realną
+częścią lambda, mimo dodatniej masy dyssypacyjnej i ujemnej pochodnej
+energii. Oracle obejmuje także saddle macrospin z dodatnim alpha: obie
+fizyczne gałęzie, zanikającą i rosnącą, muszą pozostać po projekcji.
+Odrzucenie mirror sector opiera się na oryginalnym residualu i physical
+rank; filtrowanie wszystkich ujemnych Im Omega usuwałoby prawdziwą
+niestabilność. Ta algebraiczna fixture nie legalizuje negative alpha
+w materiale ani nie kwalifikuje niestabilnego solvera produkcyjnego.

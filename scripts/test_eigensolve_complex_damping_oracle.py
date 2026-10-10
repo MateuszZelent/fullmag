@@ -126,6 +126,16 @@ class ComplexDampingOracleTests(unittest.TestCase):
         self.assertEqual(int(np.count_nonzero(physical.real > 0)), 2)
         self.assert_original_and_doubled(k, b)
 
+    def test_positive_damping_retains_genuine_unstable_physical_mode(self) -> None:
+        alpha = 0.2
+        k, b = macrospin_pencil(1.0, -1.0, alpha)
+        actual = self.assert_original_and_doubled(k, b)
+        expected = np.array([1.0, -1.0], dtype=complex) / np.sqrt(1 + alpha**2)
+        self.assert_spectrum_matches(actual, expected)
+        physical, _ = physical_doubled_spectrum(k, b)
+        self.assertEqual(int(np.count_nonzero(physical.imag < 0)), 1)
+        self.assertEqual(int(np.count_nonzero(physical.imag > 0)), 1)
+
     def test_frame_rotation_preserves_complex_damped_spectrum(self) -> None:
         k, b = macrospin_pencil(1.0, 7.0, 0.4)
         angle = 0.63
