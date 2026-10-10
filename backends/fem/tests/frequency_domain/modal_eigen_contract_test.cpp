@@ -7621,6 +7621,18 @@ void modal_poisson_airbox_tail_gpu_shift_invert_action_writes_artifact()
 int main(int argc, char **argv)
 {
     if (argc > 1) {
+        if (argc == 2 && std::strcmp(argv[1], "--floquet-gamma-admission") == 0) {
+#if FULLMAG_HAS_MFEM_STACK && FULLMAG_FEM_WITH_SLEPC
+            modal_gamma_cabi_route_preserves_authored_k();
+            production_cpu_modal_eigen_direct_entry_validates_floquet_k();
+            std::printf("PASS: native_floquet_gamma_admission_cabi_contract\n");
+            return 0;
+#else
+            std::fprintf(stderr,
+                         "FAIL: --floquet-gamma-admission requires MFEM and SLEPc\n");
+            return 3;
+#endif
+        }
         if (argc == 2 &&
             std::strcmp(argv[1], "--modal-slepc-phase-convention") == 0) {
 #if FULLMAG_HAS_MFEM_STACK && FULLMAG_FEM_WITH_SLEPC

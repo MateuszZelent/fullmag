@@ -1176,6 +1176,13 @@ if(FULLMAG_USE_MFEM_STACK AND FULLMAG_FEM_WITH_SLEPC)
         COMMAND fem_modal_eigen_contract --floquet-live-pc-apply-fault-quarantine-probe)
     set_tests_properties(modal_eigen_live_pc_apply_fault_quarantine
         PROPERTIES TIMEOUT 120)
+    # Run the public Gamma boundary independently without replacing the full suite.
+    add_custom_target(fem_modal_eigen_gamma_admission_contract
+        DEPENDS fem_modal_eigen_contract)
+    add_test(NAME fem_modal_eigen_gamma_admission_contract
+        COMMAND fem_modal_eigen_contract --floquet-gamma-admission)
+    set_tests_properties(fem_modal_eigen_gamma_admission_contract
+        PROPERTIES TIMEOUT 120)
 
 endif()
 add_fem_source_facade_contract(
