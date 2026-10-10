@@ -3875,6 +3875,36 @@
       "path": "backends/fem/cpu/frequency_domain/production_cpu_modal_eigen.cpp",
       "symbol": "std::string live_pc_observation_json",
       "responsibility": "Prywatna kopia rzeczywistego Pmat, pelne porownanie SeqAIJ do 512, ownedfreshLU, jawne available/configured/actual; niezalezny source review PASS, GHA/runtime NOT VERIFIED."
+    },
+    {
+      "id": "source-r2-selected-window-cpu",
+      "path": "backends/fem/cpu/frequency_domain/poisson_airbox_schur_matshell.cpp",
+      "symbol": "solve_poisson_airbox_modal_eigen_cpu_schur",
+      "responsibility": "Separate selected two-pass search stability from independent whole-window eigenvalue count in newly emitted v2 certificates."
+    },
+    {
+      "id": "source-r2-selected-window-gpu",
+      "path": "backends/fem/gpu/frequency_domain/modal_petsc_slepc.cpp",
+      "symbol": "solve_gpu_frequency_window",
+      "responsibility": "Separate selected two-pass search stability from independent whole-window eigenvalue count in newly emitted v2 certificates."
+    },
+    {
+      "id": "source-r2-modal-damping-observables",
+      "path": "apps/control-room/src/shared/domain/analysis/modalDampingObservables.ts",
+      "symbol": "modalDampingObservables",
+      "responsibility": "Signed modal decay with explicit phasor and physical linewidth/lifetime availability."
+    },
+    {
+      "id": "source-r2-modal-damping-inspector",
+      "path": "apps/control-room/src/modules/inspector/panels/frequency-domain/EigenModeInspectorPanel.tsx",
+      "symbol": "useEigenModeSummary",
+      "responsibility": "Project signed complex frequency through the existing inspector resource hooks without transport or qualification invention."
+    },
+    {
+      "id": "source-r2-modal-frequency-decoder",
+      "path": "apps/control-room/src/shared/domain/analysis/frequencyDomainChartModels.ts",
+      "symbol": "readEigenSpectrumPayload",
+      "responsibility": "Reject malformed modal frequency scalars instead of turning missing or boolean payloads into a zero-decay oscillator in the inspector fallback."
     }
   ],
   "public_api": {

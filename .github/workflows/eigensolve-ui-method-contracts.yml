@@ -1,0 +1,69 @@
+name: eigensolve-ui-method-contracts
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ['codex/**']
+    paths:
+      - 'apps/control-room/src/shared/domain/analysis/modalDampingObservables*'
+      - 'apps/control-room/src/shared/domain/analysis/frequencyDomainChartModels*'
+      - 'apps/control-room/src/modules/inspector/panels/frequency-domain/EigenModeInspectorPanel*'
+      - '.github/workflows/eigensolve-ui-method-contracts.yml'
+  pull_request:
+    paths:
+      - 'apps/control-room/src/shared/domain/analysis/modalDampingObservables*'
+      - 'apps/control-room/src/shared/domain/analysis/frequencyDomainChartModels*'
+      - 'apps/control-room/src/modules/inspector/panels/frequency-domain/EigenModeInspectorPanel*'
+      - '.github/workflows/eigensolve-ui-method-contracts.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  modal-observables:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      FULLMAG_PROJECT_STORAGE_ROOT: ${{ github.workspace }}/../storage
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 2
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10.8.1
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24.18.0
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+      - name: Prepare managed frontend paths
+        run: python -B scripts/fullmag_storage.py prepare-links --profile linux-host --frontend
+      - name: Install pinned workspace dependencies
+        run: python -B scripts/fullmag_storage.py run --profile linux-host -- pnpm install --frozen-lockfile
+      - name: Run signed modal observables and inspector contracts
+        run: >-
+          python -B scripts/fullmag_storage.py run --profile linux-host --
+          pnpm --dir apps/control-room exec vitest run
+          src/shared/domain/analysis/modalDampingObservables.test.ts
+          src/shared/domain/analysis/phasorConventionAdapter.test.ts
+          src/shared/domain/analysis/frequencyDomainChartModels.test.ts
+          src/modules/inspector/panels/frequency-domain/EigenModeInspectorPanel.test.tsx
+      - name: Check module architecture
+        if: always()
+        run: python -B scripts/fullmag_storage.py run --profile linux-host -- pnpm --dir apps/control-room check:architecture-hygiene
+      - name: Check complete frontend types
+        if: always()
+        run: python -B scripts/fullmag_storage.py run --profile linux-host -- pnpm --dir apps/control-room typecheck
+      - name: Scan changed React surface with pinned doctor
+        if: always()
+        run: python -B scripts/fullmag_storage.py run --profile linux-host -- pnpm exec react-doctor --verbose --scope changed
+      - name: Preserve final managed terminal status
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: eigensolve-ui-managed-status-${{ github.run_id }}
+          path: |
+            ${{ github.workspace }}/../storage/builds/**/build-status.json
+          if-no-files-found: error

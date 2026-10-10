@@ -182,3 +182,40 @@ fizyki FDM. Wykonanie nowych zmian oczekuje następnego CI.
 Pełny Rust/API #38072219897 trwa na exact 2101053; jego wynik nie jest
 przypisywany późniejszym zmianom. P4 native v2 search-stability/count-unavailable
 przygotowywane osobno; independent count i P0–P10 nadal nie są zamknięte.
+
+
+## Checkpoint 976fd188 — wszystkie 12 regresji eigensolve PASS
+
+Commit `976fd1888f986bf852e2915be6dfb2c022b0c965` jest na remote.
+Hosted #38072580027: 1576 PASS, 15 FAIL, 1 ignored. Ostatni modalny dispatch
+case i trzy artifacts fixtures teraz PASS. Wszystkie 12 naprawionych
+przypadków eigensolve przeszło; pozostałe 15 nie pozwala uznać pełnej suite
+za zieloną. Przygotowano source-reviewed recertification finalnych FDM grid
+fixtures, named checkpoint bit i jawne Extended w pozytywnych fallback
+fixtures. Test current artifact zachowuje Strict i jawnie wybiera CPU.
+Strict production guard nie został osłabiony. Późne odrzucenie Strict+FDM
+fallback przed publikacją, zamiast przed solve, jest dodatkowym otwartym
+problemem runtime; nie reinterpretujemy auto jako wyjątku od polityki.
+
+Przygotowana korekta P4: nowe CPU Schur/GPU K0 certificates v2 oddzielają
+search stability od count, whole-window complete zawsze false bez count.
+Status ok wymaga starego stability predicate i kompletnego certificate JSON;
+truncation/failure/cancel zachowane. Independent count nadal nie wdrożony.
+SOURCE review wykrył pozostawiony error_message gate; naprawiono oba
+producery i dodano positive regression pustego błędu przy status ok.
+Focused CPU CTest zachowuje dziewięć przypadków i istniejące phase/typed
+bramki w profilu modal-phase-slepc. GPU wykonanie nadal NOT VERIFIED.
+
+P3/P10 signed UI: Inspector zachowuje growth, pokazuje Gamma/2pi w Hz,
+stability i amplitude lifetime w s. Nieoscylujące/growing mody nie mają
+FWHM/Q. Brak jawnego phasoru nie tworzy domyślnego znaku. Reviewer wykrył
+nielegalny spectrum fallback Number(false/empty/null)->0; ścisły parser
+modalnych frequencies naprawiono i dodano decoder→chart point→derived
+observables regression. Pozostałe rodziny parserów nie zostały zmienione.
+SOURCE review PASS; type/Vitest/React Doctor tylko w GHA, browser pending.
+
+R2 źródłowa nota i mapy zaktualizowane przed zachowaniem. AST, YAML data
+parser, diff i scientific source-map walidacja wymagane przed publikacją.
+Plan P0–P10 pozostaje otwarty, szczególnie exact damped pencil, count,
+large sparse producer, demag convergence, GPU/BEM/RF/DMI/STT/EASA i pełny
+round-trip/qualification. Nowe poprawki nie są dowodem tych rozszerzeń.

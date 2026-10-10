@@ -58,6 +58,26 @@ def _gamma_sample(query=None, *, vector=(0.0, 0.0, 0.0)):
     }
 
 
+def _selected_search_v2_certificate():
+    return {
+        "schema_version": "poisson_airbox_frequency_window_certificate.v2",
+        "status": "not_certified",
+        "spectrum_scope": "selected",
+        "window_complete": False,
+        "count_certificate": {
+            "status": "not_performed",
+            "method": None,
+            "count": None,
+        },
+        "search_stability": {
+            "status": "stable",
+            "requested_cluster_limit_covered": True,
+        },
+        "base_schedule": {"planned_subwindow_count": 16},
+        "refinement_schedule": {"planned_subwindow_count": 34},
+    }
+
+
 def _diagnostics(sampling="k0"):
     query = _query()
     root = {
@@ -181,6 +201,44 @@ class GammaKrylovTrialTests(unittest.TestCase):
             self.assertEqual(report["qualification"], "NOT VERIFIED")
             self.assertEqual(report["by_sample"][0]["subwindow_count"], 50)
             self.assertEqual(report["by_sample"][0]["subwindows"][0]["shifted_ksp_restart"], 8)
+
+    def test_selected_search_v2_is_read_as_execution_diagnostics_only(self):
+        diagnostics = _diagnostics()
+        diagnostics["window_certificate"] = _selected_search_v2_certificate()
+
+        with TemporaryDirectory() as tmp:
+            case = _write_case(tmp, diagnostics)
+            report = self._validate(case)
+            self.assertEqual(report["status"], "pass")
+            self.assertEqual(report["qualification"], "NOT VERIFIED")
+
+    def test_v2_rejects_whole_window_and_independent_count_claims(self):
+        invalid_claims = {
+            "whole_window_complete": lambda certificate: certificate.update(
+                window_complete=True
+            ),
+            "certified_status": lambda certificate: certificate.update(
+                status="certified"
+            ),
+            "independent_count": lambda certificate: certificate.update(
+                count_certificate={
+                    "status": "certified",
+                    "method": "independent_count",
+                    "count": 4,
+                }
+            ),
+            "whole_window_scope": lambda certificate: certificate.update(
+                spectrum_scope="window"
+            ),
+        }
+        for name, mutate in invalid_claims.items():
+            with self.subTest(claim=name), TemporaryDirectory() as tmp:
+                diagnostics = _diagnostics()
+                diagnostics["window_certificate"] = _selected_search_v2_certificate()
+                mutate(diagnostics["window_certificate"])
+                case = _write_case(tmp, diagnostics)
+                with self.assertRaises(ValueError):
+                    self._validate(case)
 
     def test_mixed_sampling_maps_only_indexed_gamma_record(self):
         with TemporaryDirectory() as tmp:

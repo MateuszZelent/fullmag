@@ -21,7 +21,11 @@ import {
   type EigenResidualSummary,
 } from "@/shared/domain/analysis/eigenResidualSummary";
 import { formatFrequencyHz } from "@/shared/domain/analysis/frequencyUnits";
-import { phasorAdapter } from "@/shared/domain/analysis/phasorConventionAdapter";
+import {
+  finiteModalScalar,
+  modalDampingObservables,
+  type ModalDampingObservables,
+} from "@/shared/domain/analysis/modalDampingObservables";
 import { Button } from "@/shared/ui/Button";
 
 import type { InspectorPanelProps } from "../../inspectorTypes";
@@ -99,9 +103,7 @@ export function EigenModeInspectorPanel({
         <FieldRow label="Mode identity" value={summary.modeIdentity} />
         <FieldRow label="Frequency" value={summary.frequencyDisplay} />
         <FieldRow label="Imaginary frequency" value={summary.imaginaryFrequency} />
-        <FieldRow label="Decay rate (Gamma)" value={summary.decayRate} />
-        <FieldRow label="Linewidth (FWHM)" value={summary.linewidthFwhm} />
-        <FieldRow label="Q-factor" value={summary.qualityFactor} />
+        <EigenModeDampingFields damping={summary.damping} />
         <FieldRow label="Angular frequency" value={summary.angularFrequency} />
         <FieldRow label="Mode field" value={summary.fieldStatus} />
         <FieldRow label="Mode field resource" value={summary.fieldResource} />
@@ -162,6 +164,54 @@ export function EigenModeResidualFields({
       <FieldRow
         label="Spectrum residual (type unspecified)"
         value={formatNumberOrUnavailable(residual.reportedSpectrumResidual)}
+      />
+    </>
+  );
+}
+
+export function EigenModeDampingFields({
+  damping,
+}: {
+  damping: ModalDampingObservables;
+}) {
+  return (
+    <>
+      <FieldRow
+        label="Decay rate Γ / 2π (Hz)"
+        value={
+          damping.decayRateHz == null
+            ? "not available"
+            : formatFrequency(damping.decayRateHz)
+        }
+      />
+      <FieldRow
+        label="Stability"
+        value={damping.stability}
+        status={damping.stability}
+      />
+      <FieldRow
+        label="Lifetime"
+        value={
+          damping.lifetimeSeconds == null
+            ? "not available"
+            : formatNumber(damping.lifetimeSeconds) + " s"
+        }
+      />
+      <FieldRow
+        label="Linewidth (FWHM)"
+        value={
+          damping.linewidthFwhmHz == null
+            ? "not available"
+            : formatFrequency(damping.linewidthFwhmHz)
+        }
+      />
+      <FieldRow
+        label="Q-factor"
+        value={
+          damping.qualityFactor == null
+            ? "not available"
+            : formatNumber(damping.qualityFactor)
+        }
       />
     </>
   );
@@ -373,26 +423,17 @@ function useEigenModeSummary(selection: InspectorPanelProps["selection"]) {
   const phaseConvention =
     stringValue(record(fieldMetaRecord?.field_units)?.phase_convention) ??
     stringValue(record(modePayload?.metadata)?.phase_convention) ??
-    "exp(-i omega t)";
+    "not available";
 
   const manifest = useFrequencyDomainManifestResource();
   const manifestPayload = record(frequencyDomainManifestPayload(manifest.data));
   const physics = record(manifestPayload?.physics);
-  const rawPhasorConvention =
-    stringValue(physics?.phase_convention) ?? "exp_i_omega_t";
-  const phasorConv = rawPhasorConvention.includes("exp_minus")
-    ? "exp_minus_i_omega_t"
-    : "exp_i_omega_t";
-  const { decayRateSign } = phasorAdapter(phasorConv);
-
-  const decayRateHz =
-    imaginaryFrequencyHz != null ? decayRateSign * imaginaryFrequencyHz : null;
-  const linewidthFwhmHz =
-    decayRateHz != null ? 2 * Math.abs(decayRateHz) : null;
-  const qualityFactor =
-    frequencyHz != null && linewidthFwhmHz && linewidthFwhmHz > 0
-      ? frequencyHz / linewidthFwhmHz
-      : null;
+  const rawPhasorConvention = stringValue(physics?.phase_convention);
+  const damping = modalDampingObservables(
+    frequencyHz,
+    imaginaryFrequencyHz,
+    rawPhasorConvention,
+  );
   const field3DReady =
     fieldMeta.status === "ready" && canPlotSelectedFieldIn3D(fieldMeta.data);
   const field3DStatus =
@@ -448,14 +489,7 @@ function useEigenModeSummary(selection: InspectorPanelProps["selection"]) {
       : "mode field missing",
     frequencyDisplay: formatFrequency(frequencyHz),
     imaginaryFrequency: formatFrequency(imaginaryFrequencyHz),
-    decayRate:
-      decayRateHz == null ? "not available" : formatFrequency(decayRateHz),
-    linewidthFwhm:
-      linewidthFwhmHz == null
-        ? "not available"
-        : formatFrequency(linewidthFwhmHz),
-    qualityFactor:
-      qualityFactor == null ? "not available" : formatNumber(qualityFactor),
+    damping,
     modeIdentity: identity.label,
     phaseConvention,
     residual,
@@ -475,8 +509,7 @@ function record(value: unknown): Record<string, unknown> | null {
 }
 
 function finiteNumber(value: unknown): number | null {
-  const parsed = typeof value === "number" ? value : Number(value);
-  return Number.isFinite(parsed) ? parsed : null;
+  return finiteModalScalar(value);
 }
 
 function stringValue(value: unknown): string | null {

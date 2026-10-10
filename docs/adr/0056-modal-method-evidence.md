@@ -32,3 +32,18 @@ pełną projekcję UI. Brak pola w UI nie może być dowodem exact ani complete.
 Testy źródłowe i serializacji w GHA, fałszywe exact/count claims odrzucane przez
 negatywne fixtures. Fizyczna kwalifikacja P2/P3/P4 pozostaje odrębna.
 Rollback usuwa nową emisję, nie przepisuje historycznych artefaktów.
+
+
+## Rozszerzenie R2 — natywne two-pass certificates
+
+Nowe CPU Schur/GPU K0 wyniki używają `poisson_airbox_frequency_window_certificate.v2`.
+Brak independent count daje `window_complete=false`, `status=not_certified`,
+`spectrum_scope=selected`, `count_certificate={status:not_performed,method:null,count:null}`.
+Dotychczasowe warunki refinement są osobnym `search_stability` i udane wybrane
+mody mogą być opublikowane z execution status ok. Nie zmieniamy operatora,
+per-mode residual gate ani frozen C ABI. v1 pozostaje historycznym recordem.
+Krylov query consumer obsługuje oba schematy jako diagnostykę wykonania,
+bez wyciągania nowej kwalifikacji z historycznego statusu. Count integracja,
+pełna UI projekcja i kwalifikacja CPU/GPU pozostają pending. Rollback nie
+zmienia historycznych bajtów i nie może ponownie twierdzić independent count
+na podstawie two-pass. Native hosted regresje i GPU execution są osobne.

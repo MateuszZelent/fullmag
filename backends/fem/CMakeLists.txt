@@ -1195,6 +1195,14 @@ if(FULLMAG_USE_MFEM_STACK AND FULLMAG_FEM_WITH_SLEPC)
         COMMAND fem_modal_eigen_contract --floquet-borrowed-pmat-pattern-mismatch-fixture-probe)
     set_tests_properties(modal_eigen_borrowed_pmat_pattern_mismatch_fixture
         PROPERTIES TIMEOUT 120)
+    # Count-unavailable selected-spectrum semantics, without GPU execution.
+    add_custom_target(fem_poisson_airbox_selected_window_contract
+        DEPENDS fem_poisson_airbox_modal_eigen_slepc_contract)
+    add_test(NAME fem_poisson_airbox_selected_window_contract
+        COMMAND $<TARGET_FILE:fem_poisson_airbox_modal_eigen_slepc_contract>)
+    set_tests_properties(fem_poisson_airbox_selected_window_contract
+        PROPERTIES TIMEOUT 180
+        ENVIRONMENT "FULLMAG_N2_CW1_FOCUSED=1;FULLMAG_SKIP_GPU_TESTS=1")
     # Isolate vector transport from unrelated full-suite Floquet failures.
     add_custom_target(fem_modal_eigen_typed_cpu_transport_contract
         DEPENDS fem_modal_eigen_contract)

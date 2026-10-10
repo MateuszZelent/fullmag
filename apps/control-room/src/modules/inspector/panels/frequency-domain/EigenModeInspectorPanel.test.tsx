@@ -2,13 +2,15 @@ import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import { buildEigenResidualSummary } from "@/shared/domain/analysis/eigenResidualSummary";
+import { modalDampingObservables } from "@/shared/domain/analysis/modalDampingObservables";
 
 import {
   buildEigenModeIdentityViewModel,
+  EigenModeDampingFields,
   EigenModeResidualFields,
 } from "./EigenModeInspectorPanel";
 
-describe("EigenModeInspectorPanel model and residual fields", () => {
+describe("EigenModeInspectorPanel model, damping, and residual fields", () => {
   it("keeps mode index, branch and field provenance together", () => {
     expect(
       buildEigenModeIdentityViewModel({
@@ -26,6 +28,49 @@ describe("EigenModeInspectorPanel model and residual fields", () => {
       resourceRef: "field://mode-0005",
       sampleIndex: 4,
     });
+  });
+
+  it("renders signed growth without a linewidth claim", () => {
+    const damping = modalDampingObservables(
+      1.2e9,
+      -2e6,
+      "exp_i_omega_t",
+    );
+    const html = renderToStaticMarkup(
+      <EigenModeDampingFields damping={damping} />,
+    );
+
+    expect(html).toContain("Decay rate Γ / 2π (Hz)");
+    expect(html).toContain("-2 MHz");
+    expect(html).toContain("growing");
+    expect(html).toContain("Lifetime");
+    expect(html).toContain("Linewidth (FWHM)");
+    expect(html).toContain("not available");
+  });
+
+  it("shows non-oscillating decay and lifetime without a resonance width", () => {
+    const damping = modalDampingObservables(0, 2e6, "exp_i_omega_t");
+    const html = renderToStaticMarkup(
+      <EigenModeDampingFields damping={damping} />,
+    );
+
+    expect(html).toContain("2 MHz");
+    expect(html).toContain("decaying");
+    expect(html).toContain("7.958e-8 s");
+    expect(html).toContain("Linewidth (FWHM)");
+    expect(html).toContain("not available");
+  });
+
+  it("renders an undamped oscillator with zero FWHM and unavailable Q", () => {
+    const damping = modalDampingObservables(1.2e9, 0, "exp_minus_i_omega_t");
+    const html = renderToStaticMarkup(
+      <EigenModeDampingFields damping={damping} />,
+    );
+
+    expect(html).toContain("undamped");
+    expect(html).toContain("0 Hz");
+    expect(html).toContain("Q-factor");
+    expect(html).toContain("not available");
   });
 
   it("fails closed when a mode selection is incomplete", () => {

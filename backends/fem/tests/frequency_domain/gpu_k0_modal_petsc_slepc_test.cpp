@@ -67,6 +67,39 @@ bool contains(const char *text, const char *needle)
     return text != nullptr && needle != nullptr && std::strstr(text, needle) != nullptr;
 }
 
+void check_count_unavailable_window_certificate(const char *certificate)
+{
+    check(contains(certificate,
+                   "\"schema_version\":\"poisson_airbox_frequency_window_certificate.v2\""),
+          "GPU frequency-window producer must publish certificate v2");
+    check(contains(certificate, "\"spectrum_scope\":\"selected\""),
+          "GPU window certificate must describe only the selected spectrum");
+    check(contains(certificate, "\"window_complete\":false"),
+          "GPU window certificate must not claim whole-window completeness");
+    check(contains(certificate,
+                   "\"count_certificate\":{\"status\":\"not_performed\",\"method\":null,\"count\":null}"),
+          "GPU window certificate must disclose that independent count was not performed");
+}
+
+void check_stable_selected_search_certificate(
+    const fd::PoissonAirboxModalEigenResult &result)
+{
+    check(result.error_message[0] == '\0',
+          "successful selected-spectrum search must not carry an error message");
+    check_count_unavailable_window_certificate(result.window_certificate_json);
+    check(!result.window_complete,
+          "stable GPU selected-spectrum search must keep whole-window completeness false");
+    check(contains(result.window_certificate_json, "\"status\":\"not_certified\""),
+          "stable GPU selected-spectrum search must not certify the whole window");
+    check(contains(result.window_certificate_json,
+                   "\"search_stability\":{\"status\":\"stable\",\"requested_cluster_limit_covered\":true}"),
+          "stable GPU selected-spectrum search must identify only its search-stability evidence");
+    check(std::strcmp(
+              result.stop_reason,
+              "selected_spectrum_stable_count_unavailable") == 0,
+          "stable GPU selected-spectrum search must disclose unavailable independent count");
+}
+
 double json_number_after(const char *json, const char *field)
 {
     const char *position = json != nullptr ? std::strstr(json, field) : nullptr;
@@ -328,7 +361,7 @@ void check_two_pass_schedule(const fd::PoissonAirboxModalEigenResult &result)
           "GPU refinement must execute a numerically larger nev");
 }
 
-void FrequencyWindowPublishesCompleteGpuCertificate()
+void FrequencyWindowPublishesSelectedSearchWithoutCount()
 {
     const WindowSpectrumFixture fixture = make_window_spectrum_fixture(
         {0.25e9, 1.0e9, 2.0e9, 3.0e9});
@@ -348,11 +381,10 @@ void FrequencyWindowPublishesCompleteGpuCertificate()
     check(
         status == fd::FrequencyDomainStatus::ok,
         result.error_message);
-    check(result.window_complete,
-          "separated GPU modes must publish a certified complete window");
+    check_stable_selected_search_certificate(result);
     check_two_pass_schedule(result);
     check(contains(result.window_certificate_json,
-                   "\"schema_version\":\"poisson_airbox_frequency_window_certificate.v1\""),
+                   "\"schema_version\":\"poisson_airbox_frequency_window_certificate.v2\""),
           "GPU window must publish the canonical certificate schema");
     check(contains(result.window_certificate_json,
                    "\"method\":\"shift_nev_refinement_subspace_v1\""),
@@ -370,7 +402,7 @@ void FrequencyWindowPublishesCompleteGpuCertificate()
           "GPU window certificate must publish a stable perturbation result");
     check(!contains(result.window_certificate_json, "\"truncated\":true") &&
               !contains(result.executed_subwindows_json, "diagnostics_truncated"),
-          "certified GPU window must contain complete certificate and schedule JSON");
+          "stable GPU selected search must contain complete certificate and schedule JSON");
     check(contains(result.diagnostics_json, "\"fallback_used\":false"),
           "GPU frequency window must never use a CPU fallback");
     check(control.saw_first_base_position &&
@@ -391,8 +423,9 @@ void FrequencyWindowCertifiesDegenerateGpuSubspace()
     const fd::FrequencyDomainStatus status =
         fd::solve_poisson_airbox_modal_eigen_gpu_petsc_slepc(problem, &result);
     check(status == fd::FrequencyDomainStatus::ok, result.error_message);
-    check(result.window_complete && result.accepted_mode_count == 2u,
-          "GPU must preserve and certify the full rank-two degenerate cluster");
+    check(!result.window_complete && result.accepted_mode_count == 2u,
+          "GPU must preserve the full rank-two selected cluster without whole-window count");
+    check_stable_selected_search_certificate(result);
     check_two_pass_schedule(result);
     check(contains(result.window_certificate_json, "\"requested_nev\":8") &&
               contains(result.window_certificate_json, "\"refined_nev\":14"),
@@ -462,6 +495,7 @@ void FrequencyWindowFailsClosedForGpuSubwindowFailure()
     }
     check(result.window_failed_subwindow && !result.window_complete,
           "failed GPU subwindow must set the structural fail-closed flags");
+    check_count_unavailable_window_certificate(result.window_certificate_json);
     check(result.window_failed_subwindow_count == 1u,
           "deterministic GPU failure fixture must account for exactly one failed subwindow");
     check(std::strcmp(result.stop_reason, "frequency_window_subwindow_failed") == 0,
@@ -490,6 +524,7 @@ void FrequencyWindowCancelsBetweenGpuPasses()
     check(result.window_cancelled && !result.window_failed_subwindow &&
               !result.window_complete,
           "GPU between-pass cancellation must preserve exact structural flags");
+    check_count_unavailable_window_certificate(result.window_certificate_json);
     check(std::strcmp(result.stop_reason, "cancel_requested") == 0,
           "GPU between-pass cancellation must preserve exact stop reason");
     check(result.window_completed_subwindow_count == 16u &&
@@ -523,9 +558,12 @@ void FrequencyWindowPublishesHighOccupancyGpuScheduleWithoutTruncation()
     check(
         status == fd::FrequencyDomainStatus::ok,
         "high-occupancy GPU window schedule must solve successfully");
-    check(result.window_complete &&
-              std::strcmp(result.stop_reason, "window_complete") == 0,
-          "high-occupancy GPU schedule must remain completely certified");
+    check(!result.window_complete &&
+              std::strcmp(
+                  result.stop_reason,
+                  "selected_spectrum_stable_count_unavailable") == 0,
+          "high-occupancy GPU schedule must report stable selected search without whole-window count");
+    check_stable_selected_search_certificate(result);
     check(result.accepted_mode_count == 15u &&
               result.window_subwindow_count == 50u &&
               result.window_completed_subwindow_count == 50u &&
@@ -586,7 +624,7 @@ void PersistentGpuTargetUpdateAcceptsDifferentSparsePatterns()
 int run_n3_w1_focused_tests()
 {
     PersistentGpuTargetUpdateAcceptsDifferentSparsePatterns();
-    FrequencyWindowPublishesCompleteGpuCertificate();
+    FrequencyWindowPublishesSelectedSearchWithoutCount();
     FrequencyWindowCertifiesDegenerateGpuSubspace();
     FrequencyWindowRejectsSplitGpuCluster();
     FrequencyWindowFailsClosedForGpuSubwindowFailure();

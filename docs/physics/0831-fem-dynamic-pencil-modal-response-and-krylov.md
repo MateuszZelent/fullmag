@@ -5051,3 +5051,79 @@ Dokumentacja PETSc: [MatDuplicate](https://petsc.org/main/manualpages/Mat/MatDup
 |---|---|---|---|
 | source-live-pmat-owned-copy-plan | backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp | capture_candidate_live_pc_observation | Ograniczony pomiar rzeczywistego Pmat w bezpiecznym callback; rozszerzenie w toku. |
 | source-live-pmat-json-plan | backends/fem/cpu/frequency_domain/production_cpu_modal_eigen.cpp | std::string live_pc_observation_json | Jawne availability, configured/actual i residual z tej samej skali; rozszerzenie w toku. |
+
+
+(r2-selected-search-stability-v2)=
+## R2: two-pass stability nie jest count całego okna
+
+Nowa emisja `poisson_airbox_frequency_window_certificate.v2` rozdziela
+stabilność wybranych klastrów od kompletności całego widma. Dwa schedules,
+większe NEV, dodatnie margins i zgodne subspaces mogą ominąć ten sam
+nieodkryty blok niezmienniczy. Nie są niezależnym eigenvalue count.
+
+CPU Schur i GPU K0 zachowują istniejące równania, wyszukiwanie, per-mode
+residual gates, metrykę i poprawne mody. Udane wybrane widmo może mieć status
+wykonania `ok` przy `window_complete=false`. Nowy certyfikat ma
+`spectrum_scope=selected`, `status=not_certified`,
+`count_certificate.status=not_performed`, `count=null`, `method=null`.
+`search_stability.status=stable` oznacza tylko spełnienie dotychczasowych
+bramek search/refinement, nie niezależny count ani naukową kwalifikację.
+Brak count nie awansuje do `certified` także dla znanej małej fixture.
+Błędy, anulowanie, niezgodność refinement lub obcięte diagnostics nadal
+zachowują dotychczasową ścieżkę odrzucenia; nie obniżamy tolerancji.
+
+Historyczne v1 nie są przepisywane ani promowane do dowodu count. Consumer
+Krylov query może czytać oba schematy, gdy sprawdza wyłącznie parametry
+wykonania; nie wydaje naukowego certyfikatu widma. Bramka COMSOL wymaga
+właściwego niezależnego count, którego ten producent jeszcze nie dostarcza.
+Istniejący contour owner pozostaje osobny i zachowuje swój count contract.
+Wdrożenie independent count i kwalifikacja P4 pozostają otwarte.
+
+| Source ID | Path | Symbol | Odpowiedzialność |
+|---|---|---|---|
+| source-r2-selected-window-cpu | backends/fem/cpu/frequency_domain/poisson_airbox_schur_matshell.cpp | solve_poisson_airbox_modal_eigen_cpu_schur | Nowa emisja two-pass search stability bez count claim |
+| source-r2-selected-window-gpu | backends/fem/gpu/frequency_domain/modal_petsc_slepc.cpp | solve_gpu_frequency_window | Odpowiedni kontrakt GPU bez promocji runtime qualification |
+
+Regresje native hosted wymagają zachowanych częstotliwości/liczby modów,
+obu schedules, ranks, overlap i margins, a równocześnie false complete i
+jawnego braku count. GPU source/regression oczekuje osobnego wykonania GPU.
+
+
+(r2-ui-signed-modal-decay)=
+## R2: Inspector zachowuje growth i brak dostępnej FWHM
+
+Inspector modułu `inspector` w istniejącym `panel-right` konsumuje zasoby
+przez obecne resource hooks. Dla zespolonej częstotliwości f znak zaniku
+wynika z jawnej konwencji phasoru i istniejącego `phasorConventionAdapter`.
+Brak lub nieznany token oznacza niedostępne derived damping observables;
+nie wybieramy domyślnego phasoru dla danych bez provenance.
+
+Decay prezentowany w Hz ma etykietę `Gamma / 2 pi`, a lifetime jest w s.
+Dodatni zanik oznacza decaying, ujemny growing, zero undamped. Nie wolno
+stosować wartości bezwzględnej decay do FWHM ani zmieniać growth na damping.
+FWHM jest dostępna tylko dla oscylującego stabilnego modu (zero dla idealnie
+nietłumionego oscylatora). Nieoscylujące mody zachowują podpisany decay i
+mogą mieć lifetime, lecz nie mają rezonansowej FWHM/Q. Lifetime wymaga
+ściśle dodatniego decay; Q wymaga dodatniej FWHM. Derived nonfinite values
+pozostają unavailable. Ta projekcja nie nadaje reference linewidth statusu
+exact, nie kwalifikuje solvera i nie zmienia C ABI, OpenAPI ani IR.
+
+| Source ID | Path | Symbol | Odpowiedzialność |
+|---|---|---|---|
+| source-r2-modal-damping-observables | apps/control-room/src/shared/domain/analysis/modalDampingObservables.ts | modalDampingObservables | Signed phasor-aware Gamma/FWHM/lifetime/Q availability |
+| source-r2-modal-damping-inspector | apps/control-room/src/modules/inspector/panels/frequency-domain/EigenModeInspectorPanel.tsx | useEigenModeSummary | Istniejąca projekcja zasobów bez własnego transportu |
+
+Testy GHA: oba jawne phasory, growth bez dodatniej FWHM, nieoscylujące
+rozwiązanie, zero damping, missing/unknown phasor i niefinite wejścia/wyniki.
+Browser validation panelu pozostaje osobną bramką; source test nie dowodzi UI.
+
+
+Spectrum fallback Inspectora dopuszcza wyłącznie skończone liczby JSON lub
+niepuste legacy numeric strings w polach modalnych f. `false`, `true`,
+pusty tekst, null, tablica i obiekt nie są zerową częstotliwością ani zerowym
+zanikiem. Regresja przechodzi przez rzeczywisty decoder spectrum do helpera
+signed damping; pozostałe rodziny wykresów nie zmieniają parsera w tej korekcie.
+
+| Source ID | Path | Symbol | Odpowiedzialność |
+|---|---|---|---|
+| source-r2-modal-frequency-decoder | apps/control-room/src/shared/domain/analysis/frequencyDomainChartModels.ts | readEigenSpectrumPayload | Strict modal frequency scalar admission przed fallbackiem Inspectora |

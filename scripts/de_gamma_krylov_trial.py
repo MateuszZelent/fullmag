@@ -20,7 +20,8 @@ _QUERY_FIELDS = (
     "shifted_ksp_restart",
 )
 _NUMBER_TOLERANCE_REL = 1e-12
-_WINDOW_CERTIFICATE_SCHEMA = "poisson_airbox_frequency_window_certificate.v1"
+_WINDOW_CERTIFICATE_SCHEMA_V1 = "poisson_airbox_frequency_window_certificate.v1"
+_WINDOW_CERTIFICATE_SCHEMA_V2 = "poisson_airbox_frequency_window_certificate.v2"
 _WINDOW_PASSES = (("base", "base_schedule"), ("refinement", "refinement_schedule"))
 _EPS_DIMENSIONS_FIELDS = ("nev", "ncv", "mpd")
 _EPS_DIMENSIONS_KEYS = frozenset(("query_succeeded", *_EPS_DIMENSIONS_FIELDS))
@@ -32,6 +33,33 @@ def _required_object(value, name):
     if not isinstance(value, dict):
         raise ValueError(f"{name} must be an object")
     return value
+
+
+def _validate_window_certificate_v2(certificate, name):
+    if certificate.get("status") != "not_certified":
+        raise ValueError(f"{name}.status must remain not_certified without an independent count")
+    if certificate.get("spectrum_scope") != "selected":
+        raise ValueError(f"{name}.spectrum_scope must identify the selected spectrum")
+    if certificate.get("window_complete") is not False:
+        raise ValueError(f"{name}.window_complete must be false without an independent count")
+
+    count_certificate = _required_object(
+        certificate.get("count_certificate"), f"{name}.count_certificate"
+    )
+    if (
+        count_certificate.get("status") != "not_performed"
+        or count_certificate.get("method") is not None
+        or count_certificate.get("count") is not None
+    ):
+        raise ValueError(f"{name}.count_certificate must disclose that no independent count was performed")
+
+    search_stability = _required_object(
+        certificate.get("search_stability"), f"{name}.search_stability"
+    )
+    if search_stability.get("status") not in {"stable", "not_established"}:
+        raise ValueError(f"{name}.search_stability.status is unsupported")
+    if not isinstance(search_stability.get("requested_cluster_limit_covered"), bool):
+        raise ValueError(f"{name}.search_stability.requested_cluster_limit_covered must be boolean")
 
 
 def _validate_eps_dimensions(value, name):
@@ -330,7 +358,12 @@ def validate_gamma_krylov_trial(
         certificate = _required_object(
             sample.get("window_certificate"), f"sample {sample_index}.window_certificate"
         )
-        if certificate.get("schema_version") != _WINDOW_CERTIFICATE_SCHEMA:
+        certificate_schema = certificate.get("schema_version")
+        if certificate_schema == _WINDOW_CERTIFICATE_SCHEMA_V2:
+            _validate_window_certificate_v2(
+                certificate, f"sample {sample_index}.window_certificate"
+            )
+        elif certificate_schema != _WINDOW_CERTIFICATE_SCHEMA_V1:
             raise ValueError(f"sample {sample_index} has an unsupported window certificate")
         if expected_window_krylov_policy is not None:
             if certificate.get("krylov_subspace_policy") != expected_window_krylov_policy:

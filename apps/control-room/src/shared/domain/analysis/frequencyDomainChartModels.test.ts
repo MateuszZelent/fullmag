@@ -1,3 +1,4 @@
+import { modalDampingObservables } from "./modalDampingObservables";
 import { fieldVectorResourceKey as canonicalFieldVectorResourceKey } from "@/kernel/api/fieldQueryIdentity";
 import { describe, expect, it } from "vitest";
 
@@ -2095,5 +2096,44 @@ describe("frequencyDomainChartModels", () => {
     expect(route.primaryChart).toBe("modal-spectrum");
     expect(route.status).toBe("unavailable");
     expect(route.unavailableReason).toBe("spectrum artifact is missing");
+  });
+});
+
+
+describe("modal frequency scalar admission for inspector spectrum fallback", () => {
+  it.each([false, true, "", " ", null, [], {}])(
+    "keeps malformed imaginary frequency %j unavailable across the spectrum fallback",
+    (invalid) => {
+      const model = buildEigenSpectrumChartModel(jsonResource({modes: [{
+        sample_index: 0, raw_mode_index: 0, frequency_hz: 10,
+        frequency_imag_hz: invalid,
+      }]}));
+      const point = model.points[0]!;
+      expect(point.frequencyHz).toBe(10);
+      expect(point.imaginaryFrequencyHz).toBeNull();
+      expect(modalDampingObservables(point.frequencyHz, point.imaginaryFrequencyHz, "exp_i_omega_t"))
+        .toMatchObject({stability: "not available", linewidthFwhmHz: null, lifetimeSeconds: null});
+    },
+  );
+  it.each([false, true, "", " ", null, [], {}])(
+    "drops malformed real frequency %j without creating a zero-frequency point",
+    (invalid) => {
+      const model = buildEigenSpectrumChartModel(jsonResource({modes: [{
+        sample_index: 0, raw_mode_index: 0, frequency_hz: invalid, frequency_imag_hz: 0,
+      }]}));
+      expect(model.points).toHaveLength(0);
+      expect(model.droppedPointCount).toBe(1);
+    },
+  );
+  it("preserves explicit numeric zero and legacy nonempty signed numeric strings", () => {
+    const model = buildEigenSpectrumChartModel(jsonResource({modes: [{
+      sample_index: 0, raw_mode_index: 0, frequency_hz: "10", frequency_imag_hz: "-2",
+    }, {
+      sample_index: 0, raw_mode_index: 1, frequency_hz: 0, frequency_imag_hz: "0",
+    }]}));
+    expect(model.points[0]).toMatchObject({frequencyHz: 10, imaginaryFrequencyHz: -2});
+    expect(modalDampingObservables(10, model.points[0]!.imaginaryFrequencyHz, "exp_i_omega_t"))
+      .toMatchObject({stability: "growing", linewidthFwhmHz: null});
+    expect(model.points[1]).toMatchObject({frequencyHz: 0, imaginaryFrequencyHz: 0});
   });
 });

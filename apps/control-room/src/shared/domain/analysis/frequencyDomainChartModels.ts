@@ -1,3 +1,4 @@
+import { finiteModalScalar } from "./modalDampingObservables";
 import { fieldVectorResourceKey as canonicalFieldVectorResourceKey } from "@/kernel/api/fieldQueryIdentity";
 import type { AnalysisChartResourceRef } from "./chartCursorPoint";
 import {
@@ -931,16 +932,16 @@ export function readEigenSpectrumPayload(
     );
     return [{
       branchId: stringValue(item.branch_id ?? item.branchId),
-      dampingRateHz: finiteNumber(item.damping_rate_hz ?? item.dampingRateHz),
+      dampingRateHz: finiteModalScalar(item.damping_rate_hz ?? item.dampingRateHz),
       displayModeIndex: modeId == null ? rawModeIndex : displayModeIndex,
-      frequencyHz: finiteNumber(
+      frequencyHz: finiteModalScalar(
         item.frequency_hz ??
           item.frequency_real_hz ??
           item.frequencyHz ??
           item.frequencyRealHz ??
           item.f_hz,
       ),
-      imaginaryFrequencyHz: finiteNumber(
+      imaginaryFrequencyHz: finiteModalScalar(
         item.frequency_imag_hz ??
           item.frequencyImagHz ??
           item.imag_frequency_hz ??

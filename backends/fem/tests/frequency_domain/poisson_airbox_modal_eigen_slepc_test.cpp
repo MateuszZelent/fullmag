@@ -104,6 +104,39 @@ bool contains(const char *haystack, const char *needle)
     return haystack != nullptr && std::strstr(haystack, needle) != nullptr;
 }
 
+void check_count_unavailable_window_certificate(const char *certificate)
+{
+    check(contains(certificate,
+                   "\"schema_version\":\"poisson_airbox_frequency_window_certificate.v2\""),
+          "frequency-window producer must publish certificate v2");
+    check(contains(certificate, "\"spectrum_scope\":\"selected\""),
+          "frequency-window certificate must describe only the selected spectrum");
+    check(contains(certificate, "\"window_complete\":false"),
+          "frequency-window certificate must not claim whole-window completeness");
+    check(contains(certificate,
+                   "\"count_certificate\":{\"status\":\"not_performed\",\"method\":null,\"count\":null}"),
+          "frequency-window certificate must disclose that independent count was not performed");
+}
+
+void check_stable_selected_search_certificate(
+    const fd::PoissonAirboxModalEigenResult &result)
+{
+    check(result.error_message[0] == '\0',
+          "successful selected-spectrum search must not carry an error message");
+    check_count_unavailable_window_certificate(result.window_certificate_json);
+    check(!result.window_complete,
+          "stable selected-spectrum search must keep whole-window completeness false");
+    check(contains(result.window_certificate_json, "\"status\":\"not_certified\""),
+          "stable selected-spectrum search must not certify the whole window");
+    check(contains(result.window_certificate_json,
+                   "\"search_stability\":{\"status\":\"stable\",\"requested_cluster_limit_covered\":true}"),
+          "stable selected-spectrum search must identify only its search-stability evidence");
+    check(std::strcmp(
+              result.stop_reason,
+              "selected_spectrum_stable_count_unavailable") == 0,
+          "stable selected-spectrum search must disclose unavailable independent count");
+}
+
 std::size_t count_occurrences(const char *haystack, const char *needle)
 {
     if (haystack == nullptr || needle == nullptr || needle[0] == '\0') {
@@ -1392,7 +1425,7 @@ void PublishesCanonicalResidualFieldsAndSolverReasons()
         "PA-E2 must publish the explicit solver stop reason");
 }
 
-void FrequencyWindowPublishesCompleteCertificateForSyntheticFixture()
+void FrequencyWindowPublishesSelectedSearchStabilityWithoutCount()
 {
     const WindowSpectrumFixture fixture = make_window_spectrum_fixture(
         {0.25e9, 1.0e9, 2.0e9, 3.0e9});
@@ -1415,14 +1448,13 @@ void FrequencyWindowPublishesCompleteCertificateForSyntheticFixture()
     check(
         status == fd::FrequencyDomainStatus::ok,
         result.error_message);
-    check(result.window_complete,
-          "synthetic CPU frequency window must expose a complete-window certificate");
+    check_stable_selected_search_certificate(result);
     check(result.window_subwindow_count == 50u,
-          "complete-window certificate must preserve the exact 16+34 subwindow schedule");
+          "selected-search certificate must preserve the exact 16+34 subwindow schedule");
     check(result.window_completed_subwindow_count == result.window_subwindow_count,
-          "complete-window certificate must account for every subwindow");
+          "selected-search certificate must account for every subwindow");
     check(result.window_failed_subwindow_count == 0u,
-          "complete-window certificate must report no failed subwindows");
+          "selected-search certificate must report no failed subwindows");
     check(contains(
               result.diagnostics_json,
               "\"operator_context_scope\":\"frequency_window\""),
@@ -1430,7 +1462,7 @@ void FrequencyWindowPublishesCompleteCertificateForSyntheticFixture()
     check(json_number_after(
               result.diagnostics_json,
               "\"operator_context_setup_count\":") == 1.0,
-          "a complete CPU window must configure one persistent operator context");
+          "a stable CPU selected-search result must configure one persistent operator context");
     check(result.split_dof_count_available &&
               result.split_dof_count == 2u * result.q_dof_count,
           "CPU Schur diagnostics must expose the actual real-split dimension");
@@ -1467,22 +1499,22 @@ void FrequencyWindowPublishesCompleteCertificateForSyntheticFixture()
     check(json_number_after(
               result.diagnostics_json,
               "\"poisson_factorization_setup_count\":") == 1.0,
-          "a complete CPU window must factorize Poisson exactly once");
+          "a stable CPU selected-search result must factorize Poisson exactly once");
     check(json_number_after(
               result.diagnostics_json,
               "\"shift_solver_setup_count\":") == 50.0,
-          "a complete CPU window must configure one shift solver per planned subwindow");
-    check(contains(result.diagnostics_json, "\"window_completeness\":{\"status\":\"certified\""),
-          "CPU diagnostics must publish a certified window-completeness object");
+          "a stable CPU selected-search result must configure one shift solver per planned subwindow");
+    check(contains(result.diagnostics_json, "\"window_completeness\":{\"status\":\"not_certified\""),
+          "CPU diagnostics must report whole-window completeness as not certified");
     check(contains(result.diagnostics_json, "\"window_certificate\":"),
-          "CPU diagnostics must publish the complete-window certificate payload");
+          "CPU diagnostics must publish the selected-search certificate payload");
     check(contains(result.window_certificate_json,
                    "\"method\":\"shift_nev_refinement_subspace_v1\""),
-          "complete-window certificate must name the two-pass refinement method");
+          "selected-search certificate must name the two-pass refinement method");
     check(contains(result.window_certificate_json, "\"base_schedule\":{"),
-          "complete-window certificate must publish the base schedule state");
+          "selected-search certificate must publish the base schedule state");
     check(contains(result.window_certificate_json, "\"refinement_schedule\":{"),
-          "complete-window certificate must publish the refinement schedule state");
+          "selected-search certificate must publish the refinement schedule state");
     const double requested_nev = json_number_after(
         result.window_certificate_json,
         "\"requested_nev\":");
@@ -1490,31 +1522,31 @@ void FrequencyWindowPublishesCompleteCertificateForSyntheticFixture()
         result.window_certificate_json,
         "\"refined_nev\":");
     check(requested_nev > 0.0,
-          "complete-window certificate must publish a positive base SLEPc nev");
+          "selected-search certificate must publish a positive base SLEPc nev");
     check(refined_nev > requested_nev,
-          "complete-window certificate must publish a numerically larger refinement nev");
+          "selected-search certificate must publish a numerically larger refinement nev");
     check(contains(result.window_certificate_json, "\"cluster_ranks\":[1,1]"),
-          "complete-window certificate must publish stable physical cluster ranks");
+          "selected-search certificate must publish stable physical cluster ranks");
     check(contains(result.window_certificate_json, "\"coverage_margins_hz\":{"),
-          "complete-window certificate must publish positive edge coverage margins");
+          "selected-search certificate must publish positive edge coverage margins");
     check(json_number_after(result.window_certificate_json, "\"lower\":") > 0.0,
-          "complete-window certificate must have a positive lower coverage margin");
+          "selected-search certificate must have a positive lower coverage margin");
     check(json_number_after(result.window_certificate_json, "\"upper\":") > 0.0,
-          "complete-window certificate must have a positive upper coverage margin");
+          "selected-search certificate must have a positive upper coverage margin");
     check(json_number_after(result.window_certificate_json,
                             "\"min_subspace_overlap\":") >= 1.0 - 1.0e-6,
-          "complete-window certificate must certify invariant-subspace stability");
+          "selected-search certificate must certify invariant-subspace stability");
     check(contains(result.window_certificate_json,
                    "\"perturbation_result\":\"stable\""),
-          "complete-window certificate must record the stable refinement result");
+          "selected-search certificate must record the stable refinement result");
     check(contains(result.window_certificate_json,
                    "\"base_schedule_summary_ref\":\"executed_subwindows_json#pass=base\""),
-          "complete-window certificate must reference the full base schedule summary");
+          "selected-search certificate must reference the full base schedule summary");
     check(contains(result.window_certificate_json,
                    "\"refinement_schedule_summary_ref\":\"executed_subwindows_json#pass=refinement\""),
-          "complete-window certificate must reference the full refinement schedule summary");
+          "selected-search certificate must reference the full refinement schedule summary");
     check(!contains(result.executed_subwindows_json, "diagnostics_truncated"),
-          "certified window must never hide a truncated schedule summary");
+          "stable selected-search result must never hide a truncated schedule summary");
 }
 
 void FrequencyWindowDoesNotRetryWhenOnlyTheGlobalRequestIsSaturated()
@@ -1532,8 +1564,9 @@ void FrequencyWindowDoesNotRetryWhenOnlyTheGlobalRequestIsSaturated()
         fd::solve_poisson_airbox_modal_eigen_cpu_schur(problem, &result) ==
             fd::FrequencyDomainStatus::ok,
         result.error_message);
-    check(result.window_complete && result.accepted_mode_count == 8u,
-          "distributed eight-mode window must remain complete");
+    check(!result.window_complete && result.accepted_mode_count == 8u,
+          "distributed eight-mode search must preserve selected modes without a whole-window count");
+    check_stable_selected_search_certificate(result);
     check(count_occurrences(
               result.executed_subwindows_json,
               "\"local_accepted_mode_count\":") == 50u,
@@ -1613,8 +1646,9 @@ void FrequencyWindowRetriesWhenALocalIntervalIsSaturated()
         fd::solve_poisson_airbox_modal_eigen_cpu_schur(problem, &result) ==
             fd::FrequencyDomainStatus::ok,
         result.error_message);
-    check(result.window_complete && result.accepted_mode_count == 4u,
-          "locally dense frequency window must remain complete after adaptive retry");
+    check(!result.window_complete && result.accepted_mode_count == 4u,
+          "locally dense search must preserve selected modes after adaptive retry without a whole-window count");
+    check_stable_selected_search_certificate(result);
     check(contains(result.executed_subwindows_json, "\"retry_count\":1"),
           "a locally saturated base subwindow must retry with a larger request");
     check(contains(result.executed_subwindows_json,
@@ -1661,8 +1695,9 @@ void FrequencyWindowRetriesUntilBothClippedEdgesAreCovered()
         fd::solve_poisson_airbox_modal_eigen_cpu_schur(problem, &result) ==
             fd::FrequencyDomainStatus::ok,
         result.error_message);
-    check(result.window_complete && result.accepted_mode_count == 4u,
-          "edge-covered frequency window must publish all four in-window modes");
+    check(!result.window_complete && result.accepted_mode_count == 4u,
+          "edge-covered search must preserve all four selected in-window modes without a whole-window count");
+    check_stable_selected_search_certificate(result);
 
     const char *lower_edge =
         "\"pass\":\"refinement\",\"subwindow_index\":0,";
@@ -1722,8 +1757,9 @@ void FrequencyWindowUsesCertifiedSignedGuardBelowFundamentalMode()
         8.5e9, 12.0e9, 1);
     fd::PoissonAirboxModalEigenResult result{};
     check(fd::solve_poisson_airbox_modal_eigen_cpu_schur(problem, &result) ==
-              fd::FrequencyDomainStatus::ok && result.window_complete,
-          "signed physical guards certify a gap below the fundamental positive mode");
+              fd::FrequencyDomainStatus::ok && !result.window_complete,
+          "signed physical guards preserve the selected mode without whole-window count");
+    check_stable_selected_search_certificate(result);
     check(result.accepted_modes.size() == 1 &&
               std::abs(result.accepted_modes[0].frequency_hz - 9.3e9) < 1.0e4,
           "negative guards never become published positive modes");
@@ -1751,8 +1787,9 @@ void FrequencyWindowRetainsDemagInBoundedCachedPreconditioner()
             fixture.problem(lower_edge_hz, 12.0e9, 1);
         fd::PoissonAirboxModalEigenResult result{};
         check(fd::solve_poisson_airbox_modal_eigen_cpu_schur(problem, &result) ==
-                  fd::FrequencyDomainStatus::ok && result.window_complete,
-              "coupled small windows must retain the known certified Schur spectrum");
+                  fd::FrequencyDomainStatus::ok && !result.window_complete,
+              "coupled small windows must retain selected Schur modes without whole-window count");
+        check_stable_selected_search_certificate(result);
         check(result.accepted_modes.size() == 1 &&
                   std::abs(result.accepted_modes[0].frequency_hz - 9.3e9) < 1.0e4,
               "cached shifts must not accumulate or replace the physical operator");
@@ -1854,8 +1891,7 @@ void FrequencyWindowCertifiesDegenerateClusterByInvariantSubspace()
         fd::solve_poisson_airbox_modal_eigen_cpu_schur(problem, &result) ==
             fd::FrequencyDomainStatus::ok,
         result.error_message);
-    check(result.window_complete,
-          "degenerate frequency cluster must be certified as a complete invariant subspace");
+    check_stable_selected_search_certificate(result);
     check(result.accepted_mode_count == 2u,
           "degenerate frequency cluster must preserve its physical rank");
     check(contains(result.executed_subwindows_json,
@@ -1944,6 +1980,7 @@ void FrequencyWindowEmptyFailurePreservesFlagsAndCounts()
           "empty failed window must publish window_failed_subwindow=true");
     check(!result.window_cancelled,
           "empty failed window must not be misclassified as cancelled");
+    check_count_unavailable_window_certificate(result.window_certificate_json);
     check(result.window_completed_subwindow_count == 0u,
           "empty failed window must not count failed subwindows as completed");
     check(result.window_failed_subwindow_count == result.window_subwindow_count &&
@@ -2910,7 +2947,7 @@ int main()
         return 0;
     }
     if (std::getenv("FULLMAG_N2_CW1_FOCUSED") != nullptr) {
-        FrequencyWindowPublishesCompleteCertificateForSyntheticFixture();
+        FrequencyWindowPublishesSelectedSearchStabilityWithoutCount();
         FrequencyWindowDoesNotRetryWhenOnlyTheGlobalRequestIsSaturated();
         FrequencyWindowRetriesWhenALocalIntervalIsSaturated();
         FrequencyWindowRetriesUntilBothClippedEdgesAreCovered();
@@ -2919,6 +2956,7 @@ int main()
         FrequencyWindowFailsClosedWhenRequestSplitsDegenerateCluster();
         FrequencyWindowEmptyFailurePreservesFlagsAndCounts();
         FrequencyWindowCancellationPreservesStopReason();
+        std::printf("PASS: selected_window_search_stability_count_unavailable_contract\n");
         return 0;
     }
     FrequencyWindowUsesCertifiedSignedGuardBelowFundamentalMode();
@@ -2947,7 +2985,7 @@ int main()
     RejectsZeroRequestedModeCountAndUnknownTargetKind();
     RejectsFrequencyWindowOnFullCoupledAdapter();
     PublishesCanonicalResidualFieldsAndSolverReasons();
-    FrequencyWindowPublishesCompleteCertificateForSyntheticFixture();
+    FrequencyWindowPublishesSelectedSearchStabilityWithoutCount();
     FrequencyWindowDoesNotRetryWhenOnlyTheGlobalRequestIsSaturated();
     FrequencyWindowRetriesWhenALocalIntervalIsSaturated();
     FrequencyWindowRetriesUntilBothClippedEdgesAreCovered();

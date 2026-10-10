@@ -2961,3 +2961,18 @@ Pełna projekcja klienta/UI jest zadaniem P10, nie dowodem tego fragmentu.
 
 Właściciel: ADR 0056 oraz nota `0600-fem-eigenmodes-linearized-llg.md`,
 sekcja `reference-modal-method-evidence-r2`. Testy wykonujemy wyłącznie w GHA.
+
+
+## R2 — native two-pass window certificate v2
+
+`poisson_airbox_frequency_window_certificate.v2` preserves schedule, selected
+cluster and overlap telemetry, and separates it from whole-window count.
+`window_complete=false`, `status=not_certified`, `spectrum_scope=selected`
+when independent count was not performed. `count_certificate` contains
+`status=not_performed`, `method=null`, `count=null`; `search_stability` reports
+`stable` or `not_established` and `requested_cluster_limit_covered`.
+Stable selected modes may have execution status `ok`; this does not certify
+whole-window completeness or physics. Truncation/error/cancellation remain
+failure/interruption paths. Historical v1 and contour certificates retain
+separate versions; missing/new count must not be reconstructed from a v1 label.
+No OpenAPI shape, DSL/IR or C ABI change in this scoped correction.

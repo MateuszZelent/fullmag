@@ -4957,8 +4957,12 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
             const int empty_certificate_written = std::snprintf(
                 out_result->window_certificate_json,
                 sizeof(out_result->window_certificate_json),
-                "{\"schema_version\":\"poisson_airbox_frequency_window_certificate.v1\","
+                "{\"schema_version\":\"poisson_airbox_frequency_window_certificate.v2\","
                 "\"status\":\"%s\","
+                "\"spectrum_scope\":\"selected\","
+                "\"window_complete\":false,"
+                "\"count_certificate\":{\"status\":\"not_performed\",\"method\":null,\"count\":null},"
+                "\"search_stability\":{\"status\":\"not_established\",\"requested_cluster_limit_covered\":false},"
                 "\"method\":\"shift_nev_refinement_subspace_v1\","
                 "\"krylov_subspace_policy\":\"bounded_quadruple_nev_window_v2\","
                 "\"requested_min_hz\":%.17g,\"requested_max_hz\":%.17g,"
@@ -5006,8 +5010,12 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
                 std::snprintf(
                     out_result->window_certificate_json,
                     sizeof(out_result->window_certificate_json),
-                    "{\"schema_version\":\"poisson_airbox_frequency_window_certificate.v1\","
+                    "{\"schema_version\":\"poisson_airbox_frequency_window_certificate.v2\","
                     "\"status\":\"failed\","
+                    "\"spectrum_scope\":\"selected\","
+                    "\"window_complete\":false,"
+                    "\"count_certificate\":{\"status\":\"not_performed\",\"method\":null,\"count\":null},"
+                    "\"search_stability\":{\"status\":\"not_established\",\"requested_cluster_limit_covered\":false},"
                     "\"method\":\"shift_nev_refinement_subspace_v1\","
                     "\"truncated\":true,"
                     "\"stop_reason\":\"frequency_window_certificate_truncated\"}");
@@ -5302,8 +5310,12 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
             const int empty_selection_certificate_written = std::snprintf(
                 out_result->window_certificate_json,
                 sizeof(out_result->window_certificate_json),
-                "{\"schema_version\":\"poisson_airbox_frequency_window_certificate.v1\","
+                "{\"schema_version\":\"poisson_airbox_frequency_window_certificate.v2\","
                 "\"status\":\"%s\","
+                "\"spectrum_scope\":\"selected\","
+                "\"window_complete\":false,"
+                "\"count_certificate\":{\"status\":\"not_performed\",\"method\":null,\"count\":null},"
+                "\"search_stability\":{\"status\":\"not_established\",\"requested_cluster_limit_covered\":false},"
                 "\"method\":\"shift_nev_refinement_subspace_v1\","
                 "\"krylov_subspace_policy\":\"bounded_quadruple_nev_window_v2\","
                 "\"requested_min_hz\":%.17g,\"requested_max_hz\":%.17g,"
@@ -5358,8 +5370,12 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
                 std::snprintf(
                     out_result->window_certificate_json,
                     sizeof(out_result->window_certificate_json),
-                    "{\"schema_version\":\"poisson_airbox_frequency_window_certificate.v1\","
+                    "{\"schema_version\":\"poisson_airbox_frequency_window_certificate.v2\","
                     "\"status\":\"failed\","
+                    "\"spectrum_scope\":\"selected\","
+                    "\"window_complete\":false,"
+                    "\"count_certificate\":{\"status\":\"not_performed\",\"method\":null,\"count\":null},"
+                    "\"search_stability\":{\"status\":\"not_established\",\"requested_cluster_limit_covered\":false},"
                     "\"method\":\"shift_nev_refinement_subspace_v1\","
                     "\"truncated\":true,"
                     "\"stop_reason\":\"frequency_window_certificate_truncated\"}");
@@ -5597,17 +5613,19 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
         aggregate.eps_solve_seconds = 0.0;
         const bool refinement_local_coverage_complete =
             pass_local_coverage_uncertified_count[1] == 0u;
-        aggregate.window_complete =
+        const bool search_stability_complete =
             !window_failed && !window_interrupted &&
             base_pass_complete && refinement_pass_complete &&
             mode_coverage_complete && !refinement_disagreement &&
             coverage_margins_positive && cluster_json_complete &&
             refinement_local_coverage_complete;
-        const char *window_certificate_status = aggregate.window_complete
-            ? "certified"
-            : (window_failed ? "failed" : "not_certified");
-        const char *window_stop_reason = aggregate.window_complete
-            ? "window_complete"
+        aggregate.window_complete = false;
+        const char *window_certificate_status =
+            window_failed ? "failed" : "not_certified";
+        const char *search_stability_status =
+            search_stability_complete ? "stable" : "not_established";
+        const char *window_stop_reason = search_stability_complete
+            ? "selected_spectrum_stable_count_unavailable"
             : (window_interrupted
                    ? "cancel_requested"
                    : (window_local_coverage_failed
@@ -5636,8 +5654,12 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
         const int certificate_written = std::snprintf(
             aggregate.window_certificate_json,
             sizeof(aggregate.window_certificate_json),
-            "{\"schema_version\":\"poisson_airbox_frequency_window_certificate.v1\","
+            "{\"schema_version\":\"poisson_airbox_frequency_window_certificate.v2\","
             "\"status\":\"%s\","
+            "\"spectrum_scope\":\"selected\","
+            "\"window_complete\":false,"
+            "\"count_certificate\":{\"status\":\"not_performed\",\"method\":null,\"count\":null},"
+            "\"search_stability\":{\"status\":\"%s\",\"requested_cluster_limit_covered\":%s},"
             "\"method\":\"shift_nev_refinement_subspace_v1\","
             "\"krylov_subspace_policy\":\"bounded_quadruple_nev_window_v2\","
             "\"requested_min_hz\":%.17g,\"requested_max_hz\":%.17g,"
@@ -5661,6 +5683,8 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
             "\"refinement_schedule_summary_ref\":\"executed_subwindows_json#pass=refinement\","
             "\"stop_reason\":\"%s\"}",
             window_certificate_status,
+            search_stability_status,
+            mode_coverage_complete ? "true" : "false",
             problem.frequency_min_hz,
             problem.frequency_max_hz,
             problem.requested_mode_count,
@@ -5707,15 +5731,19 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
             std::snprintf(
                 aggregate.window_certificate_json,
                 sizeof(aggregate.window_certificate_json),
-                "{\"schema_version\":\"poisson_airbox_frequency_window_certificate.v1\","
+                "{\"schema_version\":\"poisson_airbox_frequency_window_certificate.v2\","
                 "\"status\":\"failed\","
+                "\"spectrum_scope\":\"selected\","
+                "\"window_complete\":false,"
+                "\"count_certificate\":{\"status\":\"not_performed\",\"method\":null,\"count\":null},"
+                "\"search_stability\":{\"status\":\"not_established\",\"requested_cluster_limit_covered\":false},"
                 "\"method\":\"shift_nev_refinement_subspace_v1\","
                 "\"truncated\":true,"
                 "\"perturbation_result\":\"certificate_truncated\","
                 "\"stop_reason\":\"frequency_window_certificate_truncated\"}");
             window_stop_reason = aggregate.stop_reason;
         }
-        aggregate.status = aggregate.window_complete
+        aggregate.status = search_stability_complete && certificate_complete
             ? FrequencyDomainStatus::ok
             : (window_interrupted
                    ? FrequencyDomainStatus::interrupted
@@ -5723,7 +5751,7 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
         copy_message(
             aggregate.error_message,
             sizeof(aggregate.error_message),
-            aggregate.window_complete
+            aggregate.status == FrequencyDomainStatus::ok
                 ? ""
                 : (window_interrupted
                        ? "production shared-domain K0 Schur window was cancelled"

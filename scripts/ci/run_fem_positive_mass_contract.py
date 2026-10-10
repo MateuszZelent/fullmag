@@ -261,6 +261,15 @@ CONTRACT_PROFILES["modal-phase-slepc"] = {
     }],
 }
 
+# Retain phase and typed transport, and add the bounded native window gate.
+CONTRACT_PROFILES["modal-phase-slepc"]["tests"].append({
+    "name": "fem_poisson_airbox_selected_window_contract",
+    "source_suffix": "backends/fem/tests/frequency_domain/poisson_airbox_modal_eigen_slepc_test.cpp",
+    "marker": "PASS: selected_window_search_stability_count_unavailable_contract",
+    "compile_definitions": ["-DFULLMAG_HAS_MFEM_STACK=1", "-DFULLMAG_FEM_WITH_SLEPC=1",
+                            "-DFULLMAG_HAS_CUDA_RUNTIME=0"],
+})
+
 CONTRACT_PROFILES["floquet-count-slepc"] = {
     **CONTRACT_PROFILES["generic-modal-slepc"],
     "slug": "fem-floquet-count-slepc-contract",
