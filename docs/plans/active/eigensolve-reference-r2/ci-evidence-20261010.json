@@ -306,6 +306,25 @@
       "failure": "fixture interprets FMVP extension/header bytes as f64 field samples",
       "log_sha256": "31b7f02aa1c6464968a1a31cceab6aeb0d4903e9b7c338fcc97250c23d1625de",
       "qualification_claimed": false
+    },
+    {
+      "run_id": 38085530937,
+      "sha": "7be53ea1524d018fcc56295f4a01fe5542040f1d",
+      "conclusion": "failure",
+      "scope": "modal-phase-slepc",
+      "native_build": "passed",
+      "passed_ctests": [
+        "fem_modal_eigen_phase_convention_contract",
+        "fem_modal_eigen_typed_cpu_transport_contract"
+      ],
+      "failed_ctests": [
+        "fem_poisson_airbox_selected_window_contract"
+      ],
+      "dense_interior_solver_status": "ok",
+      "dense_first_four_frequencies_and_six_local_modes": "passed_before_parameter_assertion",
+      "failure": "stale refined requested count lower bound >=5 despite actual unsaturated base count2",
+      "receipt_sha256": "655ec1730f7c2664ea66d9a1a69356b365326fed85370e3e3313c5f32792c34a",
+      "qualification_claimed": false
     }
   ]
 }

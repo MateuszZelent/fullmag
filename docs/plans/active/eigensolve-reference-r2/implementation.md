@@ -649,3 +649,16 @@ nie zostało uruchomione: workflow_dispatch zwrócił404, gdyż pliku nie ma
 na default branch. Dodajemy zwykły on-push dla pliku workflow i
 konkretnych API source paths na codex branches; nie zmieniamy mastera
 ani nie traktujemy błędu dispatch jako wykonanego testu.
+
+
+## P4 — interior loss poprawione, fixture bound do korekty
+
+#38085530937 na7be53ea1524d018fcc56295f4a01fe5542040f1d: build,
+phase i typed transport PASS. Dense window solve przeszedł, pierwsze
+cztery oczekiwane frequencies i sześć local modes także; suite zatrzymała
+się na starej dolnej granicy refined_requested_mode_count>=5.
+Przy braku wymuszonego retry base może zostać2, refinement4.
+Asercja wymaga teraz prawdziwego wzrostu resolved NEV/count względem
+actual base i zachowuje cap8, split-dimension oraz NCV policy; nie
+zmienia solvera, residualów ani certificate. Kolejne cases niewykonane
+w tym runie; cała selected-window gate nadal NOT VERIFIED.

@@ -1789,7 +1789,7 @@ void FrequencyWindowRetainsInteriorModesBeforePublicationCap()
         maximum_nev,
         4u * static_cast<std::uint64_t>(refined_requested_mode_count));
     check(requested_nev >= 8.0 && requested_nev <= 16.0 && refined_nev > requested_nev &&
-              refined_requested_mode_count >= 5.0 &&
+              4.0 * refined_requested_mode_count > requested_nev &&
               refined_requested_mode_count <= 8.0 &&
               refined_nev <= static_cast<double>(refined_nev_limit),
           "refinement must resolve above the actual base NEV and remain within its count and actual split-dimension bounds");
