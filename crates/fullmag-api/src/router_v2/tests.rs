@@ -9349,6 +9349,109 @@ async fn display_put_replaces_full_selection() {
 }
 
 #[tokio::test]
+async fn runtime_display_selection_waits_for_patch_observation_demand_commit() {
+    use std::future::Future;
+
+    let state = test_app_state_with_live_session().await;
+    let initial_revision = state.current_display_selection.read().await.revision;
+    let app = build_v2_router().with_state(state.clone());
+
+    let transition_guard = state.current_live_session_transition.lock().await;
+    let selection_guard = state.current_display_selection.try_write();
+    assert!(
+        selection_guard.is_ok(),
+        "the fence probe must hold only the session transition"
+    );
+    drop(selection_guard);
+
+    let mut runtime_get_fence_probe = Box::pin(crate::read_current_live_display_selection(
+        axum::extract::State(state.clone()),
+    ));
+    let fence_probe_first_poll = std::future::poll_fn(|cx| {
+        std::task::Poll::Ready(runtime_get_fence_probe.as_mut().poll(cx))
+    })
+    .await;
+    assert!(
+        fence_probe_first_poll.is_pending(),
+        "runtime GET must wait for the session transition even when selection is readable"
+    );
+    drop(transition_guard);
+    let initial_snapshot = runtime_get_fence_probe
+        .await
+        .expect("runtime GET should resume after the transition")
+        .0;
+    assert_eq!(initial_snapshot.revision, initial_revision);
+
+    let presentation_guard = state.current_display_presentation.write().await;
+
+    let patch_task = tokio::spawn(async move {
+        app.oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/v2/sessions/current/visualization/display")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "active_quantity_id": "h_eff"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap()
+    });
+
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        loop {
+            let transition_is_held = state.current_live_session_transition.try_lock().is_err();
+            let selection_is_held = state.current_display_selection.try_write().is_err();
+            if transition_is_held && selection_is_held {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect(
+        "PATCH should hold the session transition and selection while waiting for presentation",
+    );
+
+    let mut runtime_get = Box::pin(crate::read_current_live_display_selection(
+        axum::extract::State(state.clone()),
+    ));
+    let patch_get_first_poll =
+        std::future::poll_fn(|cx| std::task::Poll::Ready(runtime_get.as_mut().poll(cx))).await;
+    assert!(
+        patch_get_first_poll.is_pending(),
+        "runtime GET must wait for the display mutation's session transition"
+    );
+
+    drop(presentation_guard);
+
+    let patch_response = patch_task.await.expect("PATCH task should complete");
+    assert_eq!(patch_response.status(), StatusCode::OK);
+    let patch_json = body_json(patch_response).await;
+    assert_eq!(patch_json["active_quantity_id"], "h_eff");
+
+    let observed = runtime_get
+        .await
+        .expect("runtime GET should complete after the mutation")
+        .0;
+    assert_eq!(observed.selection.quantity, "h_eff");
+    assert_eq!(observed.revision, initial_revision.wrapping_add(1));
+    assert_eq!(
+        observed
+            .observation_quantities
+            .iter()
+            .filter(|quantity| quantity.as_str() == "H_eff")
+            .count(),
+        1,
+        "runtime GET must observe canonical H_eff demand under the published display revision"
+    );
+}
+
+#[tokio::test]
 async fn display_patch_updates_view_mode_and_field_component() {
     let state = test_app_state_with_live_session().await;
     let app = build_v2_router().with_state(state.clone());
