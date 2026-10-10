@@ -3227,3 +3227,26 @@ Niezależny review całego frozen native delta i CMake/CI profile SOURCE PASS. Z
 ### Wdrożenie typed progress po closure review — 2026-10-10
 
 Core5files i consumers18files stanowią wspólny fragment; wszystkie konstruktory wspólnych rows/diagnostics oraz ingest/writers przejrzane. Zamknięto trzy productionRequired (cache exact replay, older source time, physical→physical carry-forward) oraz expectedshape fixture. Regresje negative changed values/layout/revision/carrier, legacy/contradictory ingest, previousacceptedfield retention, physicalobject named fem_eigen_progress i serde/transport są przygotowane. Niezależny SOURCE review PASS dla stabilnego zakresu i trzech napraw; root potwierdził ostatnią flat-values korektę. Source rustfmt parse i diff-check PASS, GHA wykonanie pending. Publiczny V2 shape bez zmian; generated OpenAPI zachowane. Uwaga4204792253 zmieniona z valid_unfixed na implemented_pending_ci, nie na implemented. Potwierdzone163/186 pozostaje87,6%; otwarte17 + pendingCI6.
+
+
+### 2026-10-10 — rzeczywisty błąd finalizacji sweepu diagnostycznego
+
+GHA 38056963663 (SHA `71828c1c3fdc43f8d719a971ba05cf4a8b090185`)
+ponownie wykazało `native field sweep sample 0 has no modes` w regresji
+`bias_field_branch_selection_tracks_native_publisher_artifacts_before_publication`.
+Test dotarł do diagnostycznej selekcji po sprawdzeniu publikacji modów.
+Nie wykonano późniejszych kontroli API/CLI; nie kwalifikujemy nimi typed progress.
+
+Poprawka finalizatora rozróżnia brak zaakceptowanego wyniku solvera od pustej
+listy publicznych modów po jawnej selekcji. W drugim przypadku zachowuje trzy
+hashe pochodzenia z jednej diagnostyki o dokładnym indeksie próbki. Brak,
+duplikat, niepoprawny hash i sprzeczność pozostają błędami. Cztery kontrole
+negatywne dodano do obu istniejących ścieżek CI przed regresją publishera.
+Niezależne SOURCE review: PASS; wykonanie poprawki w GHA: NOT VERIFIED.
+Nie zmieniono okien, tolerancji ani dopuszczania modów.
+
+GHA 38056427993 (SHA `590717456264927fc8c631618ce5d7b10a8fd9ab`)
+zakończyło się na kompilacji: prywatny nagłówek DTO użył `PetscInt` bez
+deklaracji tego typu. Nie uruchomiono dwunastu CTestów i nie uzyskano nowego
+pomiaru Pmat. To osobna poprawka samowystarczalności nagłówka; wcześniejsze
+SOURCE PASS nie było dowodem kompilacji.

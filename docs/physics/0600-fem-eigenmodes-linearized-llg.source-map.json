@@ -127,7 +127,7 @@
       "id": "source-runner-bias-field-prefix-publication",
       "path": "crates/fullmag-runner/src/fem/eigen_sweep.rs",
       "symbol": "execute_bias_field_sweep_with_publication",
-      "responsibility": "Apply tracking and output selection to the completed accepted prefix while retaining the sweep's existing terminal-sample and merge behavior."
+      "responsibility": "Apply tracking and output selection to the completed accepted prefix while retaining the sweep's existing terminal-sample and merge behavior. Finalize diagnostics-only samples using exactly one matching sample_solver_diagnostics entry and three canonical hashes; reject missing, duplicate, malformed, or contradictory provenance without publishing unrequested modes or fields. See native_field_sweep_sample_identity and native_field_sweep_identity_tests in the same file; hosted correction pending."
     },
     {
       "id": "source-plan-bias-field-branch-admission",

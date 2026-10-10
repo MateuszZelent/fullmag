@@ -396,6 +396,24 @@ branch tracking from this rule.  An explicit dispersion request or eigen
 diagnostics that request tracking or overlaps uses the same physical-field
 tracking axis.
 
+A diagnostics-only output selection may leave the public sample `modes` array
+empty after valid native candidates have been tracked. The field-sweep
+finalizer then obtains `equilibrium_artifact_sha256`,
+`linearization_state_sha256`, and `operator_input_signature_sha256` from
+exactly one `sample_solver_diagnostics` entry with the matching integer
+`sample_index`. All three digests must be canonical SHA-256 values. Missing,
+duplicate, null, malformed, or contradictory provenance is rejected. When
+a public mode exists, its identities remain authoritative and any present
+matching diagnostic identities must agree. This does not admit an initial
+solver result with no accepted modes, expose internally retained tracking
+candidates, or create public spectrum, magnetization, or potential payloads
+that the output selection did not request.
+
+The focused `native_field_sweep_identity_tests` and native-publisher bias-field
+regression cover this publication contract. Source review has passed; hosted
+execution of this correction is pending. It is not a numerical or scientific
+qualification of a field-sweep eigenmode.
+
 The single-field publisher retains candidate vectors internally so the shared
 mass-metric tracker can compare all accepted modes.  These tracking candidates
 are not all public outputs: the requested mode/branch selector is applied

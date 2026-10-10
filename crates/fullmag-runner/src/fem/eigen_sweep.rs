@@ -694,6 +694,152 @@ fn required_sha256_from_json(
     Ok(digest)
 }
 
+const NATIVE_FIELD_SWEEP_SAMPLE_IDENTITY_KEYS: [&str; 3] = [
+    "equilibrium_artifact_sha256",
+    "linearization_state_sha256",
+    "operator_input_signature_sha256",
+];
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct NativeFieldSweepSampleIdentity {
+    equilibrium_artifact_sha256: String,
+    linearization_state_sha256: String,
+    operator_input_signature_sha256: String,
+}
+
+impl NativeFieldSweepSampleIdentity {
+    fn from_json(value: &serde_json::Value, context: &str) -> Result<Self, RunError> {
+        Ok(Self {
+            equilibrium_artifact_sha256: required_sha256_from_json(
+                value,
+                "equilibrium_artifact_sha256",
+                context,
+            )?,
+            linearization_state_sha256: required_sha256_from_json(
+                value,
+                "linearization_state_sha256",
+                context,
+            )?,
+            operator_input_signature_sha256: required_sha256_from_json(
+                value,
+                "operator_input_signature_sha256",
+                context,
+            )?,
+        })
+    }
+
+    fn get(&self, key: &str) -> &str {
+        match key {
+            "equilibrium_artifact_sha256" => &self.equilibrium_artifact_sha256,
+            "linearization_state_sha256" => &self.linearization_state_sha256,
+            "operator_input_signature_sha256" => &self.operator_input_signature_sha256,
+            _ => unreachable!("field-sweep identity keys are declared above"),
+        }
+    }
+}
+
+fn sample_solver_diagnostics_for_index(
+    diagnostics: &serde_json::Value,
+    sample_index: u64,
+    required: bool,
+) -> Result<Option<&serde_json::Value>, RunError> {
+    let entries_value = diagnostics.get("sample_solver_diagnostics");
+    let Some(entries_value) = entries_value else {
+        return if required {
+            Err(RunError {
+                message: format!(
+                    "native field sweep sample {sample_index} requires sample_solver_diagnostics for empty selected modes"
+                ),
+            })
+        } else {
+            Ok(None)
+        };
+    };
+    let entries = entries_value
+        .as_array()
+        .ok_or_else(|| RunError {
+            message: "native field sweep sample_solver_diagnostics must be an array".to_string(),
+        })?;
+    let mut matching = entries.iter().filter(|entry| {
+        entry.get("sample_index").and_then(serde_json::Value::as_u64) == Some(sample_index)
+    });
+    let Some(sample) = matching.next() else {
+        return if required {
+            Err(RunError {
+                message: format!(
+                    "native field sweep sample {sample_index} has no matching sample_solver_diagnostics entry"
+                ),
+            })
+        } else {
+            Ok(None)
+        };
+    };
+    if matching.next().is_some() {
+        return Err(RunError {
+            message: format!(
+                "native field sweep sample {sample_index} has duplicate sample_solver_diagnostics entries"
+            ),
+        });
+    }
+    let sample_diagnostics = sample
+        .get("diagnostics")
+        .filter(|value| value.is_object())
+        .ok_or_else(|| RunError {
+            message: format!(
+                "native field sweep sample {sample_index} sample_solver_diagnostics entry has no diagnostics object"
+            ),
+        })?;
+    Ok(Some(sample_diagnostics))
+}
+
+fn native_field_sweep_sample_identity(
+    modes: &[serde_json::Value],
+    diagnostics: &serde_json::Value,
+    sample_index: u64,
+) -> Result<NativeFieldSweepSampleIdentity, RunError> {
+    let sample_diagnostics = sample_solver_diagnostics_for_index(
+        diagnostics,
+        sample_index,
+        modes.is_empty(),
+    )?;
+    let context = if modes.is_empty() {
+        "sample_solver_diagnostics.diagnostics"
+    } else {
+        "spectrum mode"
+    };
+    let identity = match modes.first() {
+        Some(mode) => NativeFieldSweepSampleIdentity::from_json(mode, context)?,
+        None => {
+            let sample_diagnostics = sample_diagnostics.ok_or_else(|| RunError {
+                message: format!(
+                    "native field sweep sample {sample_index} has no sample-level provenance"
+                ),
+            })?;
+            NativeFieldSweepSampleIdentity::from_json(sample_diagnostics, context)?
+        }
+    };
+    if let (Some(sample_diagnostics), Some(_mode)) = (sample_diagnostics, modes.first()) {
+        for key in NATIVE_FIELD_SWEEP_SAMPLE_IDENTITY_KEYS {
+            if sample_diagnostics.get(key).is_none() {
+                continue;
+            }
+            let diagnostic_digest = required_sha256_from_json(
+                sample_diagnostics,
+                key,
+                "sample_solver_diagnostics.diagnostics",
+            )?;
+            if diagnostic_digest != identity.get(key) {
+                return Err(RunError {
+                    message: format!(
+                        "native field sweep sample {sample_index} has contradictory {key} between its spectrum mode and solver diagnostics"
+                    ),
+                });
+            }
+        }
+    }
+    Ok(identity)
+}
+
 fn native_field_sweep_execution(diagnostics: &serde_json::Value, key: &str) -> serde_json::Value {
     let mut execution = diagnostics.get(key).cloned().unwrap_or_else(|| {
         serde_json::json!({
@@ -959,9 +1105,7 @@ pub(super) fn build_native_field_sweep_artifact(
             }
             output_modes.push(output_mode);
         }
-        let first_mode = modes.first().ok_or_else(|| RunError {
-            message: format!("native field sweep sample {sample_index} has no modes"),
-        })?;
+        let sample_identity = native_field_sweep_sample_identity(modes, diagnostics, sample_index)?;
         output_samples.push(serde_json::json!({
             "sample_id": sample_id,
             "sample_index": sample_index,
@@ -973,9 +1117,9 @@ pub(super) fn build_native_field_sweep_artifact(
             },
             "bias_field_a_per_m": bias_field_a_per_m,
             "bias_field_mu0_t": bias_field_a_per_m.map(|value| value * MU0),
-            "equilibrium_artifact_sha256": required_sha256_from_json(first_mode, "equilibrium_artifact_sha256", "spectrum mode")?,
-            "linearization_state_sha256": required_sha256_from_json(first_mode, "linearization_state_sha256", "spectrum mode")?,
-            "operator_input_signature_sha256": required_sha256_from_json(first_mode, "operator_input_signature_sha256", "spectrum mode")?,
+            "equilibrium_artifact_sha256": sample_identity.equilibrium_artifact_sha256,
+            "linearization_state_sha256": sample_identity.linearization_state_sha256,
+            "operator_input_signature_sha256": sample_identity.operator_input_signature_sha256,
             "topology": topology,
             "branch_ids": branch_ids,
             "modes": output_modes,
@@ -1746,4 +1890,127 @@ fn update_sweep_manifest(
         }
     }
     Ok(manifest)
+}
+
+#[cfg(test)]
+mod native_field_sweep_identity_tests {
+    use super::*;
+
+    fn identity_values() -> serde_json::Value {
+        serde_json::json!({
+            "equilibrium_artifact_sha256": format!("sha256:{}", "a".repeat(64)),
+            "linearization_state_sha256": format!("sha256:{}", "b".repeat(64)),
+            "operator_input_signature_sha256": format!("sha256:{}", "c".repeat(64)),
+        })
+    }
+
+    fn diagnostics_for(sample_index: u64, identity: serde_json::Value) -> serde_json::Value {
+        serde_json::json!({
+            "sample_solver_diagnostics": [{
+                "sample_index": sample_index,
+                "diagnostics": identity,
+            }],
+        })
+    }
+
+    #[test]
+    fn diagnostics_only_field_sweep_uses_the_exact_sample_identity() {
+        let expected = identity_values();
+        let other = serde_json::json!({
+            "equilibrium_artifact_sha256": format!("sha256:{}", "d".repeat(64)),
+            "linearization_state_sha256": format!("sha256:{}", "e".repeat(64)),
+            "operator_input_signature_sha256": format!("sha256:{}", "f".repeat(64)),
+        });
+        let diagnostics = serde_json::json!({
+            "sample_solver_diagnostics": [
+                {"sample_index": 1, "diagnostics": other},
+                {"sample_index": 4, "diagnostics": expected.clone()},
+            ],
+        });
+
+        let actual = native_field_sweep_sample_identity(&[], &diagnostics, 4)
+            .expect("empty selected modes must use the matching publisher diagnostics");
+        assert_eq!(
+            actual,
+            NativeFieldSweepSampleIdentity::from_json(
+                &expected,
+                "sample_solver_diagnostics.diagnostics"
+            )
+            .unwrap()
+        );
+    }
+
+    #[test]
+    fn diagnostics_only_field_sweep_fails_closed_for_missing_or_duplicate_samples() {
+        let identity = identity_values();
+        let missing = diagnostics_for(3, identity.clone());
+        assert!(native_field_sweep_sample_identity(&[], &missing, 4).is_err());
+
+        let duplicate = serde_json::json!({
+            "sample_solver_diagnostics": [
+                {"sample_index": 4, "diagnostics": identity.clone()},
+                {"sample_index": 4, "diagnostics": identity},
+            ],
+        });
+        let error = native_field_sweep_sample_identity(&[], &duplicate, 4)
+            .expect_err("duplicate sample provenance must not be selected arbitrarily");
+        assert!(error.message.contains("duplicate sample_solver_diagnostics"));
+    }
+
+    #[test]
+    fn diagnostics_only_field_sweep_fails_closed_for_missing_null_and_malformed_hashes() {
+        assert!(native_field_sweep_sample_identity(&[], &serde_json::json!({}), 0).is_err());
+
+        for key in NATIVE_FIELD_SWEEP_SAMPLE_IDENTITY_KEYS {
+            let mut null_hash = identity_values();
+            null_hash[key] = serde_json::Value::Null;
+            assert!(native_field_sweep_sample_identity(
+                &[],
+                &diagnostics_for(0, null_hash),
+                0,
+            )
+            .is_err());
+
+            let mut malformed_hash = identity_values();
+            malformed_hash[key] = serde_json::json!("not-a-sha256-digest");
+            assert!(native_field_sweep_sample_identity(
+                &[],
+                &diagnostics_for(0, malformed_hash),
+                0,
+            )
+            .is_err());
+        }
+    }
+
+    #[test]
+    fn mode_provenance_remains_authoritative_and_conflicts_fail_closed() {
+        let mode = identity_values();
+        let mode_identity = NativeFieldSweepSampleIdentity::from_json(&mode, "spectrum mode")
+            .expect("the existing selected-mode contract still accepts canonical hashes");
+        assert_eq!(
+            native_field_sweep_sample_identity(&[mode.clone()], &serde_json::json!({}), 0)
+                .unwrap(),
+            mode_identity
+        );
+        assert_eq!(
+            native_field_sweep_sample_identity(
+                &[mode.clone()],
+                &diagnostics_for(0, mode.clone()),
+                0,
+            )
+            .unwrap(),
+            mode_identity
+        );
+
+        let mut conflicting_diagnostics = identity_values();
+        conflicting_diagnostics["operator_input_signature_sha256"] =
+            serde_json::json!(format!("sha256:{}", "f".repeat(64)));
+        let error = native_field_sweep_sample_identity(
+            &[mode],
+            &diagnostics_for(0, conflicting_diagnostics),
+            0,
+        )
+        .expect_err("mode and sample-level identities must not disagree");
+        assert!(error.message.contains("contradictory operator_input_signature_sha256"));
+    }
 }

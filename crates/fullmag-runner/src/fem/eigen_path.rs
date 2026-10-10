@@ -1533,10 +1533,63 @@ pub(crate) mod test_support {
                 && record["sample_index"] == 1
                 && record["raw_mode_index"] == 1
         }));
+        let diagnostics_spectrum: Value = serde_json::from_slice(
+            artifact_bytes(&diagnostics_run, "eigen/spectrum.v2.json")
+                .expect("diagnostics-only sweep keeps an empty spectrum axis"),
+        )
+        .expect("diagnostics-only spectrum JSON is valid");
+        let diagnostics_spectrum_samples = diagnostics_spectrum["samples"]
+            .as_array()
+            .expect("diagnostics-only spectrum samples are published");
+        assert_eq!(diagnostics_spectrum_samples.len(), 2);
+        for sample in diagnostics_spectrum_samples {
+            assert!(sample["modes"].as_array().unwrap().is_empty());
+        }
+        let diagnostics_field_sweep: Value = serde_json::from_slice(
+            artifact_bytes(&diagnostics_run, "eigen/field_sweep.v1.json")
+                .expect("diagnostics-only field-sweep axis is published"),
+        )
+        .expect("diagnostics-only field-sweep JSON is valid");
+        let diagnostics_field_sweep_samples = diagnostics_field_sweep["samples"]
+            .as_array()
+            .expect("diagnostics-only field-sweep samples are published");
+        assert_eq!(diagnostics_field_sweep_samples.len(), 2);
+        let solver_diagnostics: Value = serde_json::from_slice(
+            artifact_bytes(&diagnostics_run, "eigen/diagnostics/solver.v1.json")
+                .expect("sample-level solver provenance is preserved"),
+        )
+        .expect("sample-level solver diagnostics JSON is valid");
+        let sample_solver_diagnostics = solver_diagnostics["sample_solver_diagnostics"]
+            .as_array()
+            .expect("per-sample solver diagnostics are available");
+        assert_eq!(sample_solver_diagnostics.len(), 2);
+        for sample_index in 0..2 {
+            assert!(diagnostics_field_sweep_samples[sample_index]["modes"]
+                .as_array()
+                .unwrap()
+                .is_empty());
+            let sample_diagnostics = sample_solver_diagnostics
+                .iter()
+                .find(|entry| entry["sample_index"] == sample_index)
+                .expect("every field sample has matching source diagnostics");
+            for key in [
+                "equilibrium_artifact_sha256",
+                "linearization_state_sha256",
+                "operator_input_signature_sha256",
+            ] {
+                assert_eq!(
+                    diagnostics_field_sweep_samples[sample_index][key],
+                    sample_diagnostics["diagnostics"][key]
+                );
+            }
+        }
         assert!(!diagnostics_run.auxiliary_artifacts.iter().any(|artifact| {
             artifact.relative_path.starts_with("eigen/modes/")
                 || artifact.relative_path.starts_with("eigen/mode_fields/")
                 || artifact.relative_path.starts_with("eigen/mode_fields.zarr/")
+                || artifact.relative_path.ends_with("physical_potential.v1.json")
+                || artifact.relative_path.ends_with("potential_full.bin")
+                || artifact.relative_path.ends_with("demag_element_full.bin")
         }));
 
         let paused_prefix = crate::fem::eigen_sweep::execute_bias_field_sweep_with_publication(
