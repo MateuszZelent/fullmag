@@ -80,7 +80,7 @@ describe("ReferenceImportSection file selection", () => {
       defaultSelected: boolean;
       selected: boolean;
     };
-    type TestSelectElement = TestElement & {
+    type TestSelectElement = Omit<TestElement, "options"> & {
       options: TestOptionElement[];
       selectedIndex: number;
     };
