@@ -3322,6 +3322,8 @@ void modal_floquet_shared_domain_contour_original_k_certification(
     mismatched_request.operator_request.spin_wave_bc_kind = "floquet";
     mismatched_request.operator_request.k_vector_rad_m = fixture.k_vector.data();
     mismatched_request.operator_request.k_vector_len = 3;
+    mismatched_request.operator_request.operator_diagnostics_json =
+        kContourOperatorDiagnostics;
     mismatched_request.floquet_periodic_pairs = fixture.native_pairs.data();
     mismatched_request.floquet_periodic_pair_count = fixture.native_pairs.size();
     mismatched_request.phase_convention =
