@@ -165,7 +165,7 @@ def _write_mode_fields(root, samples):
     nodes = metadata["execution_plan"]["backend_plan"]["mesh"]["nodes"]
     from comsol_mesh_identity import mesh_topology_fingerprint_v3
     mesh_signature = mesh_topology_fingerprint_v3(metadata["execution_plan"]["backend_plan"]["mesh"])
-    control_samples = {0, 10, 20, 40, 50, 60}
+    field_samples = {sample["sample_index"] for sample in samples}
     for sample in samples:
         index = sample["sample_index"]
         k = sample["k_vector"]
@@ -184,7 +184,7 @@ def _write_mode_fields(root, samples):
                     "mesh_generation_id": "mesh-generation-primary",
                 },
             }
-            if index in control_samples:
+            if index in field_samples:
                 values = []
                 for node in nodes:
                     argument = sum(a * b for a, b in zip(k, node))
@@ -1251,6 +1251,80 @@ class ScientificGateTests(unittest.TestCase):
             self.assertEqual(report["checks"]["modal_field_phase"]["status"], "fail")
             self.assertTrue(any("wavevector differs from the numeric spectrum" in reason for reason in report["reasons"]))
             self.assertFalse(any("phase residual" in reason for reason in report["reasons"]))
+
+    def test_modal_field_phase_covers_every_selected_path_mode(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case_dir = _make_case(Path(directory), "c1")
+            report = gate.validate_case(case_dir, "c1", parameters_path=PARAMETERS, kpath_path=KPATH)
+            field_check = report["checks"]["modal_field_phase"]
+            coverage = field_check["selection_coverage"]
+
+            self.assertEqual(field_check["status"], "pass")
+            self.assertTrue(coverage["complete"])
+            self.assertEqual(coverage["expected_sample_count"], 61)
+            self.assertEqual(coverage["observed_sample_count"], 61)
+            self.assertEqual(coverage["expected_modes_per_sample"], 8)
+            self.assertEqual(coverage["expected_mode_count"], 488)
+            self.assertEqual(coverage["selected_mode_count"], 488)
+            self.assertEqual(coverage["unique_selected_mode_count"], 488)
+            self.assertEqual(coverage["certificate_mode_count"], 488)
+            self.assertEqual(coverage["validated_mode_count"], 488)
+            self.assertEqual(coverage["missing_sample_indices"], [])
+            self.assertTrue(all(count == 8 for count in coverage["selected_raw_mode_count_by_sample"].values()))
+
+            requested = field_check["requested_modes"]
+            requested_pairs = {
+                (item["sample_index"], item["raw_mode_index"])
+                for item in requested
+            }
+            self.assertEqual(len(requested), 488)
+            self.assertEqual(len(requested_pairs), 488)
+            for sample_index in range(61):
+                self.assertEqual(
+                    len({raw for sample, raw in requested_pairs if sample == sample_index}),
+                    8,
+                )
+
+    def test_missing_or_corrupt_j30_modal_field_fails_phase_check(self):
+        for damage in ("missing", "corrupt"):
+            with self.subTest(damage=damage), tempfile.TemporaryDirectory() as directory:
+                case_dir = _make_case(Path(directory), "c1")
+                branch_document = json.loads(
+                    (case_dir / "eigen/branches.v2.json").read_text(encoding="utf-8")
+                )
+                first_branch = next(
+                    branch for branch in branch_document["branches"]
+                    if branch["branch_id"] == 0
+                )
+                point = next(
+                    point for point in first_branch["points"]
+                    if point["sample_index"] == 30
+                )
+                raw_mode = point["raw_mode_index"]
+                mode_path = case_dir / f"eigen/modes/sample_0030/mode_{raw_mode:04}.json"
+                mode = json.loads(mode_path.read_text(encoding="utf-8"))
+                vector_path = case_dir / mode["compatibility_binary_payload_path"]
+                if damage == "missing":
+                    vector_path.unlink()
+                else:
+                    data = vector_path.read_bytes()
+                    values = list(struct.unpack(f"<{len(data)//8}d", data))
+                    values[8] += 0.5
+                    data = struct.pack(f"<{len(values)}d", *values)
+                    vector_path.write_bytes(data)
+                    mode["payload_sha256"] = "sha256:" + hashlib.sha256(data).hexdigest()
+                    _write_json(mode_path, mode)
+
+                report = gate.validate_case(
+                    case_dir, "c1", parameters_path=PARAMETERS, kpath_path=KPATH
+                )
+                field_check = report["checks"]["modal_field_phase"]
+                self.assertEqual(field_check["status"], "fail")
+                self.assertFalse(field_check["selection_coverage"]["complete"])
+                self.assertTrue(
+                    any("sample_0030" in reason for reason in field_check.get("reasons", [])),
+                                    field_check.get("reasons"),
+                )
 
     def test_missing_modal_field_prevents_qualification(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -1424,26 +1424,167 @@ def _validate_exported_mode_fields(
     sample_map: Mapping[int, Mapping[str, Any]],
     reasons: list[str],
 ) -> dict[str, Any]:
-    """Inspect branch-selected binary fields, independently of solver claims."""
+    """Inspect every branch-selected magnetic field, independently of solver claims."""
     from comsol_modal_field_certificate import validate_modal_field_certificate
 
-    control_samples = {0} if case == "c0" else {0, 10, 20, 40, 50, 60}
+    required_sample_indices = {0} if case == "c0" else set(range(EXPECTED_PATH_SAMPLE_COUNT))
+    expected_modes_per_sample = 1 if case == "c0" else EXPECTED_TARGET_BANDS
+    expected_count = len(required_sample_indices) * expected_modes_per_sample
+    raw_modes_by_sample = {index: [] for index in sorted(required_sample_indices)}
     selections = []
     for branch in branches:
-        for point in branch.get("points", []):
-            if not isinstance(point, Mapping) or point.get("sample_index") not in control_samples:
+        points = branch.get("points", [])
+        if not isinstance(points, list):
+            continue
+        for point in points:
+            if not isinstance(point, Mapping):
                 continue
-            raw = point.get("raw_mode_index")
             sample = point.get("sample_index")
-            if isinstance(raw, int) and not isinstance(raw, bool) and raw >= 0:
-                selections.append((sample, raw))
-    expected_count = len(control_samples) * (1 if case == "c0" else EXPECTED_TARGET_BANDS)
-    if len(set(selections)) != expected_count:
-        reasons.append(f"modal field phase requires {expected_count} distinct branch-selected fields")
-        return _new_check("fail", expected_mode_count=expected_count)
-    certificate = validate_modal_field_certificate(
-        case_dir, mode_selections=sorted(selections), phase_tolerance=MAX_PHASE_RESIDUAL,
+            raw = point.get("raw_mode_index")
+            if (
+                not isinstance(sample, int)
+                or isinstance(sample, bool)
+                or sample not in required_sample_indices
+                or not isinstance(raw, int)
+                or isinstance(raw, bool)
+                or raw < 0
+            ):
+                continue
+            selections.append((sample, raw))
+            raw_modes_by_sample[sample].append(raw)
+
+    selected_pairs = set(selections)
+    observed_samples = {sample for sample, _raw in selected_pairs}
+    missing_sample_indices = sorted(required_sample_indices - observed_samples)
+    sample_mode_counts = {
+        str(index): len(raw_modes_by_sample[index])
+        for index in sorted(required_sample_indices)
+    }
+    sample_modes_are_complete = all(
+        len(raw_modes_by_sample[index]) == expected_modes_per_sample
+        and len(set(raw_modes_by_sample[index])) == expected_modes_per_sample
+        for index in required_sample_indices
     )
+    selection_complete = (
+        len(branches) == expected_modes_per_sample
+        and not missing_sample_indices
+        and sample_modes_are_complete
+        and len(selections) == expected_count
+        and len(selected_pairs) == expected_count
+    )
+    selection_coverage: dict[str, Any] = {
+        "expected_branch_count": expected_modes_per_sample,
+        "selected_branch_count": len(branches),
+        "required_sample_indices": sorted(required_sample_indices),
+        "expected_sample_count": len(required_sample_indices),
+        "observed_sample_indices": sorted(observed_samples),
+        "observed_sample_count": len(observed_samples),
+        "missing_sample_indices": missing_sample_indices,
+        "expected_modes_per_sample": expected_modes_per_sample,
+        "selected_raw_mode_count_by_sample": sample_mode_counts,
+        "expected_mode_count": expected_count,
+        "selected_mode_count": len(selections),
+        "unique_selected_mode_count": len(selected_pairs),
+        "duplicate_selected_mode_count": len(selections) - len(selected_pairs),
+        "selection_complete": selection_complete,
+        "certificate_mode_count": 0,
+        "validated_mode_count": 0,
+        "certificate_selection_matches": False,
+        "complete": False,
+    }
+    if not selection_complete:
+        detail = []
+        if len(branches) != expected_modes_per_sample:
+            detail.append(
+                f"selected {len(branches)} branches, expected {expected_modes_per_sample}"
+            )
+        if missing_sample_indices:
+            detail.append(f"missing samples {missing_sample_indices}")
+        incomplete_samples = [
+            index
+            for index in sorted(required_sample_indices)
+            if len(raw_modes_by_sample[index]) != expected_modes_per_sample
+            or len(set(raw_modes_by_sample[index])) != expected_modes_per_sample
+        ]
+        if incomplete_samples:
+            detail.append(f"incomplete per-sample branch selections {incomplete_samples}")
+        if len(selected_pairs) != expected_count:
+            detail.append(f"found {len(selected_pairs)} unique pairs, expected {expected_count}")
+        message = (
+            f"modal field phase requires {expected_count} distinct branch-selected fields "
+            f"across {len(required_sample_indices)} samples"
+        )
+        if detail:
+            message += ": " + "; ".join(detail)
+        reasons.append(message)
+        return _new_check(
+            "fail",
+            qualification="NOT VERIFIED",
+            expected_mode_count=expected_count,
+            mode_count=0,
+            validated_mode_count=0,
+            modes=[],
+            file_hashes=[],
+            selection_coverage=selection_coverage,
+            reasons=[message],
+        )
+
+    certificate = validate_modal_field_certificate(
+        case_dir, mode_selections=sorted(selected_pairs), phase_tolerance=MAX_PHASE_RESIDUAL,
+    )
+    certificate["expected_mode_count"] = expected_count
+    certificate_modes = certificate.get("modes")
+    certified_pairs: set[tuple[int, int]] = set()
+    if isinstance(certificate_modes, list):
+        for mode in certificate_modes:
+            if not isinstance(mode, Mapping):
+                continue
+            sample = mode.get("sample_index")
+            raw = mode.get("raw_mode_index")
+            if (
+                isinstance(sample, int)
+                and not isinstance(sample, bool)
+                and isinstance(raw, int)
+                and not isinstance(raw, bool)
+                and raw >= 0
+            ):
+                certified_pairs.add((sample, raw))
+    certificate_mode_count = certificate.get("mode_count")
+    validated_mode_count = certificate.get("validated_mode_count")
+    certificate_selection_matches = (
+        isinstance(certificate_modes, list)
+        and len(certificate_modes) == expected_count
+        and certified_pairs == selected_pairs
+        and isinstance(certificate_mode_count, int)
+        and not isinstance(certificate_mode_count, bool)
+        and certificate_mode_count == expected_count
+    )
+    selection_coverage.update({
+        "certificate_mode_count": (
+            certificate_mode_count
+            if isinstance(certificate_mode_count, int) and not isinstance(certificate_mode_count, bool)
+            else 0
+        ),
+        "validated_mode_count": (
+            validated_mode_count
+            if isinstance(validated_mode_count, int) and not isinstance(validated_mode_count, bool)
+            else 0
+        ),
+        "certificate_unique_pair_count": len(certified_pairs),
+        "certificate_selection_matches": certificate_selection_matches,
+    })
+    certificate["selection_coverage"] = selection_coverage
+    if not certificate_selection_matches:
+        message = (
+            "modal field phase certificate does not contain exactly one result "
+            "for every selected sample/raw-mode pair"
+        )
+        reasons.append(message)
+        certificate_reasons = certificate.get("reasons")
+        if isinstance(certificate_reasons, list):
+            certificate_reasons.append(message)
+        certificate["status"] = "fail"
+        certificate["qualification"] = "NOT VERIFIED"
     if certificate.get("status") != "pass":
         reasons.extend(f"modal field phase: {reason}" for reason in certificate.get("reasons", []))
         reasons.append("modal field phase certificate did not pass")
@@ -1482,6 +1623,16 @@ def _validate_exported_mode_fields(
             reasons.append(f"modal field sample {index} wavevector differs from the numeric spectrum")
             certificate["status"] = "fail"
             certificate["qualification"] = "NOT VERIFIED"
+    selection_coverage["complete"] = (
+        selection_complete
+        and certificate_selection_matches
+        and certificate.get("mode_count") == expected_count
+        and certificate.get("validated_mode_count") == expected_count
+        and certificate.get("status") == "pass"
+    )
+    if not selection_coverage["complete"]:
+        certificate["status"] = "fail"
+        certificate["qualification"] = "NOT VERIFIED"
     return certificate
 
 

@@ -3656,6 +3656,36 @@
       "responsibility": "Bind override CSV indices/vectors to repository Gamma-X-M-Gamma benchmark before scientific qualification."
     },
     {
+      "id": "source-comsol-modal-field-coverage-gate",
+      "path": "scripts/validate_comsol_dispersion_scientific_gate.py",
+      "symbol": "_validate_exported_mode_fields",
+      "responsibility": "Require every one of the 61 canonical C1/A1 samples for each of eight selected raw branches; keep seven convergence points separate and report selection completeness."
+    },
+    {
+      "id": "source-comsol-modal-field-certificate",
+      "path": "scripts/comsol_modal_field_certificate.py",
+      "symbol": "validate_modal_field_certificate",
+      "responsibility": "Read each selected complex magnetic vector payload and validate its hashes, identities, mesh topology and quasiperiodic phase pairs."
+    },
+    {
+      "id": "source-comsol-modal-field-fixture",
+      "path": "scripts/test_validate_comsol_dispersion_scientific_gate.py",
+      "symbol": "_write_mode_fields",
+      "responsibility": "Write synthetic binary magnetic fields for every fixture sample; this is not a FEM mode calculation."
+    },
+    {
+      "id": "source-comsol-modal-field-fullpath-regression",
+      "path": "scripts/test_validate_comsol_dispersion_scientific_gate.py",
+      "symbol": "test_modal_field_phase_covers_every_selected_path_mode",
+      "responsibility": "Exercise public validate_case with 488 unique sample/raw-mode selections while preserving distinct raw identities."
+    },
+    {
+      "id": "source-comsol-modal-field-interior-regression",
+      "path": "scripts/test_validate_comsol_dispersion_scientific_gate.py",
+      "symbol": "test_missing_or_corrupt_j30_modal_field_fails_phase_check",
+      "responsibility": "Exercise public validate_case and require the modal_field_phase check itself to fail when a selected j=30 payload is missing or corrupt."
+    },
+    {
       "id": "source-comsol-primary-equilibrium-gate",
       "path": "scripts/validate_comsol_dispersion_scientific_gate.py",
       "symbol": "_validate_primary_equilibrium",

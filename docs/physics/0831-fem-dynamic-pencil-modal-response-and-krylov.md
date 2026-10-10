@@ -4765,6 +4765,34 @@ Dla C1/A1 referencją jest wersjonowana tabela docs/guides/comsol-dispersion-ben
 
 Dalsza walidacja spectrum/CSV/analityki używa wyłącznie oczekiwanych wektorów repozytoryjnych, również przy odrzuconym override. Raport ma osobny mandatory canonical_kpath check, odrębny od liczby zwróconych sample. Nie zmienia to równań, publicznego Python/ProblemIR ani backendów; gate ocenia artefakty FEM CPU/GPU, bez kwalifikacji FDM. Regresje mają odrzucić self-consistent all-Gamma override oraz duplicate/renumbered/changed-vector input i zachować semantycznie identyczną kopię. Niezależny SOURCE review PASS; hosted GHA37979402458/job113985786736:63 scientific-gate tests PASS, w tym trzy nowe regresje override/copy/mandatory check. Job Python później FAIL w odrębnym meshing ROI density. To dowód bramki wiązania benchmarku, nie dowód zgodności numerycznej FEM z COMSOL.
 
+### Pełne pokrycie fazowe wybranych pól modalnych
+
+Dla C1/A1 kontrola pola obejmuje wszystkie 61 kanonicznych próbek k oraz osiem
+wybranych gałęzi. Każda para `(sample_index, raw_mode_index)` jest odrębnym
+wyborem, zatem oczekiwanych jest $61 \times 8 = 488$ unikalnych certyfikatów pól.
+Surowe identyfikatory modów pozostają rozróżnione także przy zdegenerowanych
+częstotliwościach. Certyfikator czyta każdy rzeczywisty binarny wektor
+magnetyczny i zachowuje kontrolę hashy, siatki, k oraz quasiperiodycznej fazy.
+Siedem punktów używanych przez osobne kontrole zbieżności nie ogranicza tego
+zakresu. Brak lub uszkodzenie wybranego pola w j=30 ma obniżyć
+`modal_field_phase`, nawet gdy pozostałe punkty kontrolne i widmo są kompletne.
+Dla C0 pozostaje jeden wybrany mod w Γ.
+
+To twierdzenie dotyczy fazy opublikowanych zespolonych pól magnetycznych.
+Bramka nie certyfikuje pełnego pola skalarnego $\phi$, jego równania Poissona,
+airboxu ani pełnego residualu descriptora. Pełna kwalifikacja $\phi$ dla
+bieżącej ścieżki k pozostaje NOT VERIFIED.
+
+| Source ID | Plik | Symbol | Zakres dowodu |
+| --- | --- | --- | --- |
+| source-comsol-modal-field-coverage-gate | scripts/validate_comsol_dispersion_scientific_gate.py | _validate_exported_mode_fields | Wymaga wszystkich 61 × 8 unikalnych par próbka/raw mode dla C1/A1; siedem punktów zbieżności nie ogranicza certyfikacji pola. |
+| source-comsol-modal-field-certificate | scripts/comsol_modal_field_certificate.py | validate_modal_field_certificate | Niezależnie czyta wybrane binarne wektory magnetyczne, wiąże ich hashe i sprawdza fazę na parach periodycznych. |
+| source-comsol-modal-field-fixture | scripts/test_validate_comsol_dispersion_scientific_gate.py | _write_mode_fields | Tworzy syntetyczne binarne payloady dla wszystkich próbek fixture; nie jest obliczeniem modu FEM. |
+| source-comsol-modal-field-fullpath-regression | scripts/test_validate_comsol_dispersion_scientific_gate.py | test_modal_field_phase_covers_every_selected_path_mode | Publiczna validate_case sprawdza pełne 488 par, zachowując raw mode IDs jako odrębne wybory. |
+| source-comsol-modal-field-interior-regression | scripts/test_validate_comsol_dispersion_scientific_gate.py | test_missing_or_corrupt_j30_modal_field_fails_phase_check | Brak lub korupcja wybranego pola w j=30 obniża konkretnie modal_field_phase. |
+
+### Niezależna walidacja accepted equilibrium dla primary modes
+
 Każda próbka i każdy primary mode wybrany przez śledzoną gałąź musi dodatkowo
 przejść primary_equilibrium, niezależnie od zastosowania kontroli
 Kalinikos–Slavin. not_applicable dla KS w C0 i A1 oznacza wyłącznie brak
