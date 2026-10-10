@@ -7089,7 +7089,9 @@ void floquet_live_shift_configuration_uses_native_count_fixture()
     request.operator_request.operator_diagnostics_json =
         "{\"operator_family\":\"mfem_linearized_llg\","
         "\"payload_kind\":\"certified_shared_domain\"}";
-    request.max_linear_iterations = 1;
+    // Reach the positive recursive-convergence callback before measuring the
+    // candidate; a one-iteration limit can fail before the observer runs.
+    request.max_linear_iterations = 64;
 
     const ScopedFloquetDiagnosticEnvironment diagnostic_environment{};
     check(diagnostic_environment.ready,

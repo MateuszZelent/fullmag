@@ -398,6 +398,32 @@ WindowSpectrumFixture make_window_spectrum_fixture(
     return fixture;
 }
 
+fd::FrequencyDomainStatus solve_window_fixture_with_bounded_diagnostics(
+    const char *fixture_name,
+    const fd::PoissonAirboxEigenBlockProblem &problem,
+    fd::PoissonAirboxModalEigenResult *result)
+{
+    const auto status = fd::solve_poisson_airbox_modal_eigen_cpu_schur(problem, result);
+    if (status != fd::FrequencyDomainStatus::ok) {
+        const auto print_bounded = [](const char *label, const char *text, std::size_t maximum) {
+            const std::size_t length = std::strlen(text);
+            const std::size_t prefix = std::min(length, maximum);
+            std::fprintf(stderr, "%s=%.*s%s\n", label, static_cast<int>(prefix), text,
+                         prefix < length ? " [truncated]" : "");
+        };
+        std::fprintf(stderr, "WINDOW FIXTURE FAILURE: name=%s status=%d stop_reason=%s error=%s\n",
+                     fixture_name, static_cast<int>(status), result->stop_reason, result->error_message);
+        print_bounded("window_certificate", result->window_certificate_json, 8192u);
+        print_bounded("diagnostics_prefix", result->diagnostics_json, 4096u);
+        print_bounded("subwindows_prefix", result->executed_subwindows_json, 8192u);
+        const std::size_t schedule_length = std::strlen(result->executed_subwindows_json);
+        if (schedule_length > 8192u) {
+            print_bounded("subwindows_tail", result->executed_subwindows_json + schedule_length - 8192u, 8192u);
+        }
+    }
+    return status;
+}
+
 struct TinySparseFixture {
     double a_qq[4] = {};
     double a_qphi[4] = {};
@@ -1644,7 +1670,8 @@ void FrequencyWindowDoesNotRetryWhenOnlyTheGlobalRequestIsSaturated()
 
     fd::PoissonAirboxModalEigenResult result{};
     check(
-        fd::solve_poisson_airbox_modal_eigen_cpu_schur(problem, &result) ==
+        solve_window_fixture_with_bounded_diagnostics(
+            "FrequencyWindowDoesNotRetryWhenOnlyTheGlobalRequestIsSaturated", problem, &result) ==
             fd::FrequencyDomainStatus::ok,
         result.error_message);
     check(!result.window_complete && result.accepted_mode_count == 8u,
@@ -1727,7 +1754,8 @@ void FrequencyWindowRetriesWhenALocalIntervalIsSaturated()
 
     fd::PoissonAirboxModalEigenResult result{};
     check(
-        fd::solve_poisson_airbox_modal_eigen_cpu_schur(problem, &result) ==
+        solve_window_fixture_with_bounded_diagnostics(
+            "FrequencyWindowRetriesWhenALocalIntervalIsSaturated", problem, &result) ==
             fd::FrequencyDomainStatus::ok,
         result.error_message);
     check(!result.window_complete && result.accepted_mode_count == 4u,
@@ -3113,15 +3141,20 @@ int main()
         return 0;
     }
     if (std::getenv("FULLMAG_N2_CW1_FOCUSED") != nullptr) {
-        FrequencyWindowPublishesSelectedSearchStabilityWithoutCount();
-        FrequencyWindowDoesNotRetryWhenOnlyTheGlobalRequestIsSaturated();
-        FrequencyWindowRetriesWhenALocalIntervalIsSaturated();
-        FrequencyWindowRetriesUntilBothClippedEdgesAreCovered();
-        FrequencyWindowFailsClosedWhenMaximumRequestCannotCoverBothEdges();
-        FrequencyWindowCertifiesDegenerateClusterByInvariantSubspace();
-        FrequencyWindowFailsClosedWhenRequestSplitsDegenerateCluster();
-        FrequencyWindowEmptyFailurePreservesFlagsAndCounts();
-        FrequencyWindowCancellationPreservesStopReason();
+        const auto run_case = [](const char *name, void (*execute)()) {
+            std::printf("RUN: %s\n", name);
+            std::fflush(stdout);
+            execute();
+        };
+        run_case("FrequencyWindowPublishesSelectedSearchStabilityWithoutCount", FrequencyWindowPublishesSelectedSearchStabilityWithoutCount);
+        run_case("FrequencyWindowDoesNotRetryWhenOnlyTheGlobalRequestIsSaturated", FrequencyWindowDoesNotRetryWhenOnlyTheGlobalRequestIsSaturated);
+        run_case("FrequencyWindowRetriesWhenALocalIntervalIsSaturated", FrequencyWindowRetriesWhenALocalIntervalIsSaturated);
+        run_case("FrequencyWindowRetriesUntilBothClippedEdgesAreCovered", FrequencyWindowRetriesUntilBothClippedEdgesAreCovered);
+        run_case("FrequencyWindowFailsClosedWhenMaximumRequestCannotCoverBothEdges", FrequencyWindowFailsClosedWhenMaximumRequestCannotCoverBothEdges);
+        run_case("FrequencyWindowCertifiesDegenerateClusterByInvariantSubspace", FrequencyWindowCertifiesDegenerateClusterByInvariantSubspace);
+        run_case("FrequencyWindowFailsClosedWhenRequestSplitsDegenerateCluster", FrequencyWindowFailsClosedWhenRequestSplitsDegenerateCluster);
+        run_case("FrequencyWindowEmptyFailurePreservesFlagsAndCounts", FrequencyWindowEmptyFailurePreservesFlagsAndCounts);
+        run_case("FrequencyWindowCancellationPreservesStopReason", FrequencyWindowCancellationPreservesStopReason);
         std::printf("PASS: selected_window_search_stability_count_unavailable_contract\n");
         return 0;
     }

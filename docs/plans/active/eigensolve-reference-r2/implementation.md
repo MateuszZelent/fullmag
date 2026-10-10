@@ -511,3 +511,23 @@ prawdziwego pomiaru pozostają. Nie zmieniamy polityki LU bez jego dowodu.
 P10 jest na remote `21403fc7331d6dd01e22fb4057ab09e059490592`;
 hosted Rust [38082733810](https://github.com/MateuszZelent/fullmag/actions/runs/38082733810)
 uruchomiony, terminalny wynik jeszcze nieznany.
+
+
+## P2/P4 — fixture observability po terminalnych błędach
+
+P2: max_linear_iterations 1→64 dotyczy wyłącznie prywatnej native-count
+measurement fixture. Callback mierzący candidate jest wywoływany dopiero
+po dodatnim default recursive reason. Poprzedni limit 1 nie osiągnął tego
+punktu; nie zwiększamy tolerancji ani nie fabrykujemy wartości getterów.
+Nowy budżet sam nie gwarantuje pomiaru ani hard failure — test nadal wymaga
+prawdziwych kodów 0, finite configuration, PCApply i EPS callback counters.
+
+P4: dziewięć focused cases wypisuje nazwę przed wykonaniem. Dwa positive
+window solves bez wcześniejszej diagnostyki drukują bounded certificate,
+diagnostics oraz head/tail subwindows tylko po błędzie. Ten sam solve,
+model, kolejność, asercje i returned status pozostają zachowane.
+Root i niezależny source review PASS. Hosted powtórzenie wymagane.
+
+P3 private assembly jest na remote `f2bbdf31043ce80c2c859d5a58aa529867225574`;
+hosted positive-mass [38083353383](https://github.com/MateuszZelent/fullmag/actions/runs/38083353383)
+uruchomiony. Wykonanie wciąż NOT VERIFIED.
