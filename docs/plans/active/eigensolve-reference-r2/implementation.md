@@ -553,3 +553,26 @@ Native fixture observability jest na remote
 count/live LU [38083482772](https://github.com/MateuszZelent/fullmag/actions/runs/38083482772)
 oraz selected-window/phase/typed [38083492602](https://github.com/MateuszZelent/fullmag/actions/runs/38083492602).
 Oba pending; private assembly #38083353383 również pending.
+
+
+## Hosted checkpoint — private assembly PASS, P2/P4 nadal otwarte
+
+#38083353383 na f2bbdf31043ce80c2c859d5a58aa529867225574: prywatne
+MFEM assembly 1/1 PASS (także Gilbert mass). SLEPc i GPU OFF;
+pełny damped solve pozostaje NOT VERIFIED.
+
+#38083482772 na c26c87f934309d625aa64a87124e61e4fe9b7ed6:
+build/count contract PASS, live LU measurement FAIL. Nawet budżet 64
+nie osiągnął dodatniego recursive reason; true_probe_attempt_count=0,
+EPS error82. Potrzebna zmiana sposobu obserwacji lub adekwatnej fixture,
+nie kolejne ślepe zwiększenie budżetu ani zmyślony pomiar.
+
+#38083492602 na tym samym SHA: named retry fixture FAIL z
+frequency_window_refinement_disagreement / cluster_frequency_mismatch.
+Base/refinement wybierają różne mody z gęstego pasma; analiza przyczyny
+trwa. Certyfikat słusznie pozostaje not_certified, window_complete=false.
+
+P0 direct C ABI: potwierdzona utrata intencji Include w shared-domain
+assembly. Korekta fail-closed w przygotowaniu; null zachowa legacy Ignore,
+unknown/empty token będzie validation_error, shared Include unavailable.
+Caller-provided matrices mają odrębnego właściciela i nie są globalnie blokowane.

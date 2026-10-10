@@ -5289,8 +5289,8 @@ oraz [generalized eig](https://docs.scipy.org/doc/scipy-1.15.3/reference/generat
 
 Prywatny request assembly ma jawny opt-in `include_gilbert_damping=false`,
 nodal alpha oraz uniform fallback. Produkcyjny payload owner przekazuje
-alpha z descriptoru, lecz nie aktywuje opt-in. Native Include pozostaje
-odrzucone przez istniejącą admission; Ignore zachowuje dotychczasowe B
+alpha z descriptoru, lecz nie aktywuje opt-in. Rust admission odrzuca Include; bezpośrednia ścieżka C ABI nie miała
+własnej kontroli tej intencji (korekta P0 poniżej). Ignore zachowuje dotychczasowe B
 i digest dla legalnych współczynników. Walidacja alpha obowiązuje także
 przy wyłączonym wkładzie. Aktywny digest obejmuje flagę i rzeczywiście
 używane alpha, bez hashowania nieużywanego fallbacku przy nodal field.
@@ -5326,3 +5326,20 @@ Odrzucenie mirror sector opiera się na oryginalnym residualu i physical
 rank; filtrowanie wszystkich ujemnych Im Omega usuwałoby prawdziwą
 niestabilność. Ta algebraiczna fixture nie legalizuje negative alpha
 w materiale ani nie kwalifikuje niestabilnego solvera produkcyjnego.
+
+
+### P0 — zachowanie intencji damping w bezpośrednim C ABI
+
+Kontrakt korekty: null zachowuje historyczne Ignore, jawne ignore/include
+są rozpoznawane, inne i pusty token dają validation_error z reason
+invalid_modal_damping_policy. Shared-domain assembly z Include zwraca
+unavailable (shared_domain_exact_damping_unavailable) przed assembly,
+bez fallbacku i zaakceptowanych modów. Dotyczy wszystkich aliasów
+shared-domain CPU/GPU/K0/Floquet. Nie blokuje caller-provided matrices,
+których właściciel operatora jest inny. Ta blokada nie zastępuje
+planowanej integracji exact damping w CPU Floquet.
+
+Hosted private assembly #38083353383 na f2bbdf31043ce80c2c859d5a58aa529867225574:
+1/1 fem_poisson_airbox_shared_domain_contract PASS, w tym
+shared_domain_gilbert_mass_contract. MFEM ON, SLEPc OFF, GPU OFF.
+To dowód wykonania prywatnych regresji assembly, nie pełnego damped solve.

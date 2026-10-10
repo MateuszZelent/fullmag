@@ -246,6 +246,53 @@
       "production_runtime": "NOT VERIFIED",
       "new_API_regressions_executed": false,
       "qualification_claimed": false
+    },
+    {
+      "run_id": 38083353383,
+      "sha": "f2bbdf31043ce80c2c859d5a58aa529867225574",
+      "conclusion": "success",
+      "scope": "private_MFEM_Gilbert_assembly",
+      "passed_ctests": [
+        "fem_poisson_airbox_shared_domain_contract"
+      ],
+      "gilbert_mass_contract": "passed",
+      "MFEM": true,
+      "SLEPc": false,
+      "GPU": false,
+      "receipt_sha256": "7a82fd4a5d48a4fa963c46d8c21e3cae83a0cbe7dc5bcf64901c06b2127be279",
+      "native_exact_damping": "NOT VERIFIED",
+      "qualification_claimed": false
+    },
+    {
+      "run_id": 38083482772,
+      "sha": "c26c87f934309d625aa64a87124e61e4fe9b7ed6",
+      "conclusion": "failure",
+      "scope": "floquet-count-slepc",
+      "native_build": "passed",
+      "passed_ctests": [
+        "fem_modal_eigen_floquet_count_contract"
+      ],
+      "failed_ctests": [
+        "fem_modal_eigen_live_shift_configuration_contract"
+      ],
+      "true_probe_attempt_count": 0,
+      "eps_solve_error_code": 82,
+      "actual_live_factor_query": "NOT VERIFIED",
+      "failure": "64_iteration_fixture_still_failed_before_positive_recursive_reason",
+      "receipt_sha256": "72f91e57532eab23aa31c596b3a3f38b18b69605c866d108ec90917c59c8720c",
+      "qualification_claimed": false
+    },
+    {
+      "run_id": 38083492602,
+      "sha": "c26c87f934309d625aa64a87124e61e4fe9b7ed6",
+      "conclusion": "failure",
+      "scope": "modal-phase-slepc",
+      "native_build": "passed",
+      "failure": "FrequencyWindowRetriesWhenALocalIntervalIsSaturated: frequency_window_refinement_disagreement / cluster_frequency_mismatch",
+      "window_complete": false,
+      "independent_count": "not_performed",
+      "receipt_sha256": "80a637c86b0c5e4f11241500439c08df18997a8b760df4881d01d3ce75782389",
+      "qualification_claimed": false
     }
   ]
 }
