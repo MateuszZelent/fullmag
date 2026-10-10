@@ -6237,8 +6237,8 @@ mod tests {
                 .expect("lib.rs should contain production code")
                 .matches("require_resolved_runtime_sampling(problem, plan)?;")
                 .count(),
-            7,
-            "all seven public planned runner entry points must fail closed before dispatch"
+            8,
+            "all eight public planned runner entry points must fail closed before dispatch"
         );
         let interactive_source = fs::read_to_string(concat!(
             env!("CARGO_MANIFEST_DIR"),
@@ -9603,6 +9603,8 @@ mod tests {
             std::env::remove_var("FULLMAG_FDM_EXECUTION");
         }
         let mut problem = fullmag_ir::ProblemIR::bootstrap_example();
+        // Positive fallback coverage requires an authored mode that permits fallback.
+        problem.validation_profile.execution_mode = fullmag_ir::ExecutionMode::Extended;
         problem
             .problem_meta
             .runtime_metadata
@@ -9642,6 +9644,8 @@ mod tests {
             std::env::remove_var("FULLMAG_FDM_EXECUTION");
         }
         let mut problem = fullmag_ir::ProblemIR::bootstrap_example();
+        // Positive fallback coverage requires an authored mode that permits fallback.
+        problem.validation_profile.execution_mode = fullmag_ir::ExecutionMode::Extended;
         problem
             .problem_meta
             .runtime_metadata
@@ -10280,7 +10284,12 @@ mod tests {
 
     #[test]
     fn run_problem_writes_prescribed_current_transport_artifact() {
+        let _guard = ENV_LOCK.lock().expect("lock FDM execution environment");
         let mut problem = fullmag_ir::ProblemIR::bootstrap_example();
+        // This fixture verifies current artifacts, not device availability fallback.
+        problem.problem_meta.runtime_metadata.insert(
+            "runtime_selection".to_string(), json!({"device": "cpu"}),
+        );
         problem
             .current_modules
             .push(CurrentModuleIR::CurrentTransport {
