@@ -975,9 +975,12 @@ mod tests {
                 "preset_id": "preset-1"
             }
         });
-        assert!(inspect_live_snapshot(&serde_json::to_vec(&value).unwrap())
-            .object_refs
-            .is_err());
+        // A valid visualization ref remains exempt when it is the only scene
+        // reference; the preceding malformed-source case must still fail.
+        assert_eq!(
+            inspect_live_snapshot(&serde_json::to_vec(&value).unwrap()).object_refs,
+            Ok(vec![])
+        );
     }
 
     #[test]
