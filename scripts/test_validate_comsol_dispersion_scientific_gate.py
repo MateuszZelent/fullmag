@@ -1321,6 +1321,11 @@ class ScientificGateTests(unittest.TestCase):
                 field_check = report["checks"]["modal_field_phase"]
                 self.assertEqual(field_check["status"], "fail")
                 self.assertFalse(field_check["selection_coverage"]["complete"])
+                if damage == "missing":
+                    replay = report["checks"]["tracking_field_metric_replay"]
+                    self.assertEqual(replay["status"], "missing")
+                    self.assertTrue(any("tracking field payload missing" in reason for reason in replay["reasons"]))
+                    self.assertEqual(report["qualification"], "NOT VERIFIED")
                 self.assertTrue(
                     any("sample_0030" in reason for reason in field_check.get("reasons", [])),
                                     field_check.get("reasons"),
@@ -1453,7 +1458,7 @@ class ScientificGateTests(unittest.TestCase):
             self.assertTrue(any("increments grow" in reason for reason in report["reasons"]))
             self.assertTrue(all(check["status"] == "pass" for check in report["checks"]["mesh_convergence"]["adjacent_comparisons"]))
 
-    def test_campaign_contract_pass_cannot_qualify_missing_tracking_replay(self):
+    def test_campaign_contract_pass_cannot_qualify_inconsistent_tracking_replay(self):
         with tempfile.TemporaryDirectory() as directory:
             results = {}
             for case in ("c0", "c1", "a1"):
@@ -1466,7 +1471,12 @@ class ScientificGateTests(unittest.TestCase):
                     self.assertEqual(results[case]["status"], "qualified" if case == "c0" else "not_qualified")
                     if case in gate.PATH_CASES:
                         self.assertEqual(results[case]["qualification"], "NOT VERIFIED")
-                        self.assertEqual(results[case]["checks"]["tracking_field_metric_replay"]["status"], "missing")
+                        # Full magnetic phase coverage does not prove consistency of
+                        # the synthetic branch assignment or its metric replay.
+                        self.assertEqual(results[case]["checks"]["modal_field_phase"]["status"], "pass")
+                        replay = results[case]["checks"]["tracking_field_metric_replay"]
+                        self.assertEqual(replay["status"], "fail")
+                        self.assertTrue(replay["reasons"])
             self.assertEqual(gate.validate_requested_cases(results, ("c0", "c1", "a1"))["status"], "not_qualified")
 
     def test_primary_equilibrium_is_mandatory_for_c0_c1_a1(self):
