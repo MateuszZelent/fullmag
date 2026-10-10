@@ -36,6 +36,33 @@ just runner-container-start
 just runner-container-status
 ```
 
+Pole `allowed_profiles` w konfiguracji i odpowiedzi `container-configure` jest
+żądaną, zapisaną listą dozwolonych profili; samo `configure` nie kontaktuje się
+z działającą usługą ani jej nie przeładowuje. Odpowiedź zawiera wtedy
+`profile_activation.status = unverified`, listę `desired_allowed_profiles`,
+`observed_allowed_profiles = null` i przyczynę. Dla zgodności `allowed_profiles`
+pozostaje nazwą skonfigurowanej listy; nie oznacza profili aktywnych w procesie.
+
+`container-status` najpierw atestuje dokładną tożsamość kontenera, a dopiero
+potem wykonuje jedno uwierzytelnione, ograniczone czasowo `GET /health` dla
+działającego kontenera. `profile_activation` pokazuje listy żądaną i
+zaobserwowaną oraz status `active`, `mismatch` albo `unverified`. `active`
+oznacza zgodność zbiorów profili z health; nie oznacza gotowości workera ani
+akceptowania zadań. Te informacje nadal są raportowane oddzielnie w `health`.
+Brak, błąd lub niepoprawna lista health daje `unverified`; brakująca usługa albo
+zatrzymany kontener również nie potwierdza aktywacji.
+
+`container-start` oraz start po kontrolowanej wymianie sprawdzają allowlistę
+uwierzytelnionym health przed zgłoszeniem aktywacji. Przy mismatchu lub braku
+potwierdzenia start kończy się czytelnym błędem i nie zatrzymuje ani nie usuwa
+kontenera automatycznie. Nowy start ponawia brakujące potwierdzenie najwyżej
+trzykrotnie, z istniejącym 10-sekundowym timeoutem każdego odczytu health;
+nie czeka bez ograniczenia. Start wcześniej zatrzymanego kontenera może wznowić
+jego istniejącą kolejkę, lecz żądane profile uznaje za aktywne dopiero po
+zgodnym odczycie health. Aby zastosować zmienioną allowlistę w działającym
+koordynatorze, najpierw jawnie go wstrzymaj i opróżnij kolejkę, a następnie użyj
+`runner-container-replace`; `configure` ani `start` nie wykonują takiej wymiany.
+
 Obraz workera powstaje z istniejącego, świadomie wybranego obrazu toolchaina:
 `just runner-build-image <lokalny-tag-toolchaina>`; sprawdź jego immutable ID,
 a następnie `just runner-configure-build fem-cpu-release sha256:<image-id-workera>`.
@@ -198,13 +225,16 @@ historycznych wyników. v2 nie stanowi dowodu naprawy ABI, dopóki nowy obraz,
 managed build, pomiar pamięci i pilot nie przejdą weryfikacji.
 
 
-Aktywacja wyłącznie profilu runtime-v2 odbywa się przez
+Żądany profil runtime-v2 zapisuje się przez
 `container-configure --image-id <immutable-coordinator-id> --enable-slepc-runtime-v2`.
 Zachowuje istniejące profile, token oraz ustawienia operatora; ponowienie nie
-powiela wpisu. Późniejsza aktywacja current-contracts również zachowuje profile
-wcześniej dodane przez operatora. Wymiana koordynatora wymaga pustej kolejki
-aktywnego wykonania i zatrzymanego workera po graceful pause; nie anuluje się
-w tym celu cudzych jobów.
+powiela wpisu. Późniejsza konfiguracja current-contracts również zachowuje
+profile wcześniej dodane przez operatora, ale nie zmienia listy już wczytanej
+przez działający proces. `container-status` rozróżnia wtedy skonfigurowaną listę
+od listy zgłoszonej przez health. Zastosowanie zmiany wymaga jawnej wymiany
+koordynatora po graceful pause i opróżnieniu aktywnej kolejki; nie anuluje się
+w tym celu cudzych jobów. Po wymianie klient sprawdza, czy nowy proces zgłasza
+dokładnie żądaną listę.
 
 Ponieważ CUDA-enabled `libfullmag_fem` może zachować transitive
 `libcuda.so.1` także w CPU lane, trusted post-build probe dodaje wyłącznie

@@ -18,6 +18,7 @@ import os
 from pathlib import Path
 import re
 import secrets
+import time
 import urllib.error
 import urllib.request
 from collections.abc import Callable, Mapping
@@ -73,6 +74,8 @@ _PROFILE_LISTS = (
     CURRENT_CONTRACT_PROFILES,
     SLEPC_MODAL_PROFILES,
 )
+STARTUP_HEALTH_ATTEMPTS = 3
+STARTUP_HEALTH_RETRY_SECONDS = 0.25
 
 
 def _known_profile_list(value: object) -> bool:
@@ -85,6 +88,58 @@ def _known_profile_list(value: object) -> bool:
         if val_list[:len(ALLOWED_PROFILES)] == list(ALLOWED_PROFILES):
             return True
     return False
+
+
+def _observed_profile_list(value: object) -> list[str] | None:
+    """Normalize only a complete, unique, known coordinator profile list."""
+    if not isinstance(value, list) or not value:
+        return None
+    if any(not isinstance(profile, str) or profile not in SLEPC_MODAL_PROFILES for profile in value):
+        return None
+    if len(set(value)) != len(value) or not set(ALLOWED_PROFILES).issubset(value):
+        return None
+    return sorted(value)
+
+
+def _profile_activation(
+    public: Mapping[str, object],
+    health: object,
+    *,
+    unavailable_reason: str | None = None,
+) -> dict[str, Any]:
+    """Compare configured intent with the coordinator's observed health list."""
+    desired = list(public["allowed_profiles"])
+    activation: dict[str, Any] = {
+        "status": "unverified",
+        "desired_allowed_profiles": desired,
+        "observed_allowed_profiles": None,
+        "reason": unavailable_reason or "Coordinator health has not confirmed the configured profile list.",
+    }
+    if unavailable_reason is not None:
+        return activation
+    if not isinstance(health, Mapping):
+        activation["reason"] = "Coordinator health response is unavailable or is not an object."
+        return activation
+    # Worker readiness is reported separately; profile activation is the
+    # allow-list observed by this coordinator process, regardless of `ok`.
+    observed = _observed_profile_list(health.get("allowed_profiles"))
+    if observed is None:
+        activation["reason"] = "Coordinator health omitted a valid, complete allowed_profiles list."
+        return activation
+    activation["observed_allowed_profiles"] = observed
+    if set(observed) != set(desired):
+        activation["status"] = "mismatch"
+        activation["reason"] = (
+            "The running coordinator profile list differs from the configured allow-list; "
+            "pause and drain it, then use explicit container replacement to apply the desired list."
+        )
+        return activation
+    activation["status"] = "active"
+    activation["reason"] = None
+    return activation
+
+
+_HEALTH_NOT_CHECKED = object()
 
 
 _IMAGE_RE = re.compile(r"sha256:[0-9a-f]{64}\Z")
@@ -413,7 +468,13 @@ def configure(
             # best-effort POSIX hardening step and never changes the contract.
             pass
         atomic_json(public_path, public)
-    return dict(public)
+    result = dict(public)
+    result["profile_activation"] = _profile_activation(
+        public,
+        None,
+        unavailable_reason="Configuration saved as desired state only; configure does not contact the running coordinator.",
+    )
+    return result
 
 
 def _selected_docker_call(
@@ -624,6 +685,21 @@ def _metadata_without_container(public: Mapping[str, object]) -> dict[str, Any]:
     }
 
 
+def _with_profile_activation(
+    metadata: Mapping[str, object],
+    public: Mapping[str, object],
+    activation: Mapping[str, object],
+    *,
+    health: object = _HEALTH_NOT_CHECKED,
+) -> dict[str, Any]:
+    result = dict(metadata)
+    result["allowed_profiles"] = list(public["allowed_profiles"])
+    result["profile_activation"] = dict(activation)
+    if health is not _HEALTH_NOT_CHECKED:
+        result["health"] = health
+    return result
+
+
 def status(
     layout: Mapping[str, object],
     owner: str,
@@ -631,21 +707,54 @@ def status(
     docker_call: Callable[[list[str]], object] | None = None,
     call: Callable[[list[str]], object] | None = None,
 ) -> dict[str, Any]:
-    """Return sanitized metadata after exact identity attestation."""
+    """Attest container identity, then observe profiles from authenticated health."""
 
     operator = _owner(owner)
-    storage, secret_path, public, _ = _load_config(layout, operator)
-    docker = _selected_docker_call(docker_call, call)
-    identifier = _find_container(docker)
-    if identifier is None:
-        return _metadata_without_container(public)
-    return _attest(
-        _inspect_container(docker, identifier),
-        storage=storage,
-        secret_path=secret_path,
-        public=public,
-        operator=operator,
-    )
+    _, _, lock_path = _config_paths(layout)
+    try:
+        with file_lock(lock_path, "local runner container status", blocking=True):
+            storage, secret_path, public, _ = _load_config(layout, operator)
+            docker = _selected_docker_call(docker_call, call)
+            identifier = _find_container(docker)
+            if identifier is None:
+                metadata = _metadata_without_container(public)
+                activation = _profile_activation(
+                    public,
+                    None,
+                    unavailable_reason="No coordinator container is present to report its runtime profile list.",
+                )
+                return _with_profile_activation(metadata, public, activation)
+
+            metadata = _attest(
+                _inspect_container(docker, identifier),
+                storage=storage,
+                secret_path=secret_path,
+                public=public,
+                operator=operator,
+            )
+            if not metadata["running"]:
+                activation = _profile_activation(
+                    public,
+                    None,
+                    unavailable_reason="Coordinator container is stopped; its runtime profile list is unverified.",
+                )
+                return _with_profile_activation(metadata, public, activation)
+
+            try:
+                health = request(layout, operator, "GET", "/health")
+                activation = _profile_activation(public, health)
+            except ContainerClientError as error:
+                health = {"ok": False, "error": str(error)}
+                activation = _profile_activation(
+                    public,
+                    None,
+                    unavailable_reason=f"Authenticated coordinator health request failed: {error}",
+                )
+            return _with_profile_activation(metadata, public, activation, health=health)
+    except StorageError as error:
+        raise ContainerClientError("Local runner container lifecycle is busy") from error
+    except OSError as error:
+        raise ContainerClientError("Local runner container lifecycle lock is unavailable") from error
 
 
 def _start_unlocked(
@@ -681,7 +790,8 @@ def _start_unlocked(
                 public=public,
                 operator=operator,
             )
-        return metadata
+        health, activation = _verify_startup_profile_activation(layout, operator, public)
+        return _with_profile_activation(metadata, public, activation, health=health)
 
     if any("," in str(path) for path in (storage, secret_path)):
         raise ContainerClientError("Storage paths containing commas cannot be bound safely")
@@ -722,13 +832,15 @@ def _start_unlocked(
         operator=operator,
     )
     _docker_text(docker, ["start", metadata["container_id"]])
-    return _attest(
+    metadata = _attest(
         _inspect_container(docker, metadata["container_id"]),
         storage=storage,
         secret_path=secret_path,
         public=public,
         operator=operator,
     )
+    health, activation = _verify_startup_profile_activation(layout, operator, public)
+    return _with_profile_activation(metadata, public, activation, health=health)
 
 
 def start(
@@ -831,6 +943,43 @@ def request(
         return json.loads(content.decode("utf-8"))
     except (UnicodeDecodeError, ValueError) as error:
         raise ContainerClientError("Runner API returned invalid JSON") from error
+
+
+def _verify_startup_profile_activation(
+    layout: Mapping[str, object],
+    owner: str,
+    public: Mapping[str, object],
+) -> tuple[object, dict[str, Any]]:
+    """Wait briefly for health, then require an exact observed profile set."""
+    last_reason = "Coordinator health did not confirm the configured profile list."
+    for attempt in range(STARTUP_HEALTH_ATTEMPTS):
+        try:
+            health = request(layout, owner, "GET", "/health")
+            activation = _profile_activation(public, health)
+        except ContainerClientError as error:
+            health = None
+            activation = _profile_activation(
+                public,
+                None,
+                unavailable_reason=f"Authenticated coordinator health request failed: {error}",
+            )
+        if activation["status"] == "active":
+            return health, activation
+        if activation["status"] == "mismatch":
+            raise ContainerClientError(
+                "Coordinator profile activation mismatch: "
+                f"desired={activation['desired_allowed_profiles']!r}, "
+                f"observed={activation['observed_allowed_profiles']!r}. "
+                f"{activation['reason']}"
+            )
+        last_reason = str(activation["reason"])
+        if attempt + 1 < STARTUP_HEALTH_ATTEMPTS:
+            time.sleep(STARTUP_HEALTH_RETRY_SECONDS)
+    raise ContainerClientError(
+        "Coordinator profile activation remains unverified after "
+        f"{STARTUP_HEALTH_ATTEMPTS} bounded authenticated health checks; "
+        f"no automatic stop or replacement was attempted. {last_reason}"
+    )
 
 
 def stop(layout: Mapping[str, object], owner: str) -> Any:

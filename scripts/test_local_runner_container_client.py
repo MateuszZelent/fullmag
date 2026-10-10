@@ -16,6 +16,11 @@ NEW_IMAGE = "sha256:" + "c" * 64
 CONTAINER_ID = "b" * 64
 
 
+def healthy_profiles(profiles=None, **fields):
+    observed = container_client.ALLOWED_PROFILES if profiles is None else profiles
+    return {"ok": True, "allowed_profiles": list(observed), **fields}
+
+
 class FakeDocker:
     def __init__(self, storage, image=IMAGE):
         self.storage = Path(storage)
@@ -139,7 +144,13 @@ class ContainerClientTests(unittest.TestCase):
         self.assertEqual(container_client.BUILD_CONFIG_PATH, public["build_config_path"])
         self.assertNotIn("token", public)
         self.assertNotIn(secret["token"], json.dumps(public))
-        self.assertEqual(public, json.loads(public_path.read_text(encoding="utf-8")))
+        self.assertEqual(
+            {key: value for key, value in public.items() if key != "profile_activation"},
+            json.loads(public_path.read_text(encoding="utf-8")),
+        )
+        self.assertEqual("unverified", public["profile_activation"]["status"])
+        self.assertEqual(public["allowed_profiles"], public["profile_activation"]["desired_allowed_profiles"])
+        self.assertIsNone(public["profile_activation"]["observed_allowed_profiles"])
         self.assertEqual(container_client.SECRET_SCHEMA, secret["schema"])
         self.assertGreaterEqual(len(secret["token"]), 32)
 
@@ -216,7 +227,10 @@ class ContainerClientTests(unittest.TestCase):
         current = json.loads(
             (self.storage / "index" / "local-runner-container.json").read_text(encoding="utf-8")
         )
-        self.assertEqual(original, current)
+        self.assertEqual(
+            {key: value for key, value in original.items() if key != "profile_activation"},
+            current,
+        )
 
     def test_configure_refuses_implicit_image_or_port_replacement(self):
         original = self.configure()
@@ -227,16 +241,21 @@ class ContainerClientTests(unittest.TestCase):
         current = json.loads(
             (self.storage / "index" / "local-runner-container.json").read_text(encoding="utf-8")
         )
-        self.assertEqual(original, current)
+        self.assertEqual(
+            {key: value for key, value in original.items() if key != "profile_activation"},
+            current,
+        )
 
     def test_start_creates_only_the_exact_coordinator_contract(self):
         self.configure()
         docker = FakeDocker(self.storage)
-        result = container_client.start(self.layout, "alice", docker_call=docker)
+        with patch.object(container_client, "request", return_value=healthy_profiles()):
+            result = container_client.start(self.layout, "alice", docker_call=docker)
         create = next(call for call in docker.calls if call[0] == "create")
         self.assertEqual("running", result["state"])
         self.assertTrue(result["running"])
         self.assertEqual(CONTAINER_ID, result["container_id"])
+        self.assertEqual("active", result["profile_activation"]["status"])
         self.assertIn(["--name", container_client.CONTAINER_NAME], [create[index:index + 2] for index in range(len(create) - 1)])
         self.assertIn(["--restart", "unless-stopped"], [create[index:index + 2] for index in range(len(create) - 1)])
         self.assertIn(["--publish", f"127.0.0.1:{container_client.CONTAINER_PORT}:{container_client.CONTAINER_PORT}"], [create[index:index + 2] for index in range(len(create) - 1)])
@@ -274,8 +293,10 @@ class ContainerClientTests(unittest.TestCase):
         docker = FakeDocker(self.storage)
         docker.container_id = CONTAINER_ID
         docker.inspection = docker._inspection(running=False)
-        result = container_client.start(self.layout, "alice", docker_call=docker)
+        with patch.object(container_client, "request", return_value=healthy_profiles()):
+            result = container_client.start(self.layout, "alice", docker_call=docker)
         self.assertEqual(CONTAINER_ID, result["container_id"])
+        self.assertEqual("active", result["profile_activation"]["status"])
         self.assertIn(["start", CONTAINER_ID], docker.calls)
         self.assertFalse(any(call[0] in {"rm", "prune", "kill"} for call in docker.calls))
 
@@ -290,7 +311,8 @@ class ContainerClientTests(unittest.TestCase):
             yield
 
         with patch.object(container_client, "file_lock", side_effect=observed_lock):
-            container_client.start(self.layout, "alice", docker_call=docker)
+            with patch.object(container_client, "request", return_value=healthy_profiles()):
+                container_client.start(self.layout, "alice", docker_call=docker)
         self.assertEqual(
             [(self.storage / "locks" / "local-runner-container.lock", "local runner container start", True)],
             entered,
@@ -333,6 +355,7 @@ class ContainerClientTests(unittest.TestCase):
         health = {'ok': True, 'worker_alive': False, 'worker_error': None, 'legacy_jobs': [],
                   'active_jobs': [], 'accepting_jobs': False, 'stop_requested': True,
                   'retention_busy': True, 'retention_draining': True,
+                  'allowed_profiles': list(container_client.ALLOWED_PROFILES),
                   'coordinator': {'state': 'stopped', 'active_job_ids': [], 'last_error': None}}
         self.configure()
         directory = self.storage / 'index/retention-plans'
@@ -428,7 +451,10 @@ class ContainerClientTests(unittest.TestCase):
         docker.container_id = CONTAINER_ID
         docker.inspection = docker._inspection(running=True)
         docker.available_images.add(NEW_IMAGE)
-        health = {"ok": True, "active_jobs": [], "coordinator": {"state": "paused"}}
+        health = healthy_profiles(
+            active_jobs=[],
+            coordinator={"state": "paused"},
+        )
         with patch.object(container_client, "_open_url", return_value=FakeHTTPResponse(health)) as health_call:
             result = container_client.replace(self.layout, NEW_IMAGE, "alice", call=docker)
         self.assertEqual(NEW_IMAGE, result["image_id"])
@@ -471,6 +497,8 @@ class ContainerClientTests(unittest.TestCase):
         result = container_client.status(self.layout, "alice", docker_call=docker)
         self.assertEqual("absent", result["state"])
         self.assertIsNone(result["container_id"])
+        self.assertEqual("unverified", result["profile_activation"]["status"])
+        self.assertIsNone(result["profile_activation"]["observed_allowed_profiles"])
         self.assertFalse(any(call[0] in {"create", "start", "rm", "prune", "kill"} for call in docker.calls))
 
     def test_status_rejects_an_extra_mount(self):
@@ -479,8 +507,188 @@ class ContainerClientTests(unittest.TestCase):
         docker.container_id = CONTAINER_ID
         docker.inspection = docker._inspection()
         docker.inspection["Mounts"].append(dict(docker.inspection["Mounts"][0], Destination="/checkout"))
-        with self.assertRaises(container_client.ContainerClientError):
-            container_client.status(self.layout, "alice", docker_call=docker)
+        with patch.object(container_client, "request", side_effect=AssertionError("identity must precede health")) as request:
+            with self.assertRaises(container_client.ContainerClientError):
+                container_client.status(self.layout, "alice", docker_call=docker)
+        request.assert_not_called()
+
+    def test_status_attests_identity_then_reports_order_independent_observed_profiles(self):
+        desired = container_client.configure(
+            self.layout, image_id=IMAGE, owner="alice", enable_slepc_modal=True
+        )
+        docker = FakeDocker(self.storage)
+        docker.container_id = CONTAINER_ID
+        docker.inspection = docker._inspection(running=True)
+        health = healthy_profiles(
+            list(reversed(desired["allowed_profiles"])),
+            ok=False,
+            worker_alive=False,
+            worker_error="worker remains unavailable",
+        )
+        with patch.object(container_client, "request", return_value=health) as request:
+            result = container_client.status(self.layout, "alice", docker_call=docker)
+        self.assertEqual(1, request.call_count)
+        self.assertEqual("GET", request.call_args.args[2])
+        self.assertEqual("/health", request.call_args.args[3])
+        self.assertEqual("active", result["profile_activation"]["status"])
+        self.assertEqual(desired["allowed_profiles"], result["allowed_profiles"])
+        self.assertEqual(desired["allowed_profiles"], result["profile_activation"]["desired_allowed_profiles"])
+        self.assertEqual(set(desired["allowed_profiles"]), set(result["profile_activation"]["observed_allowed_profiles"]))
+        self.assertEqual(health, result["health"])
+        self.assertFalse(result["health"]["ok"])
+        self.assertFalse(any(call[0] in {"start", "stop", "rm", "kill"} for call in docker.calls))
+
+    def test_status_keeps_profile_activation_unverified_for_malformed_or_unavailable_health(self):
+        self.configure()
+        invalid_health = (
+            None,
+            [],
+            {"ok": True},
+            {"ok": True, "allowed_profiles": "fem-cpu-release"},
+            healthy_profiles([]),
+            healthy_profiles(list(container_client.ALLOWED_PROFILES) + ["unknown-profile"]),
+            healthy_profiles(list(container_client.ALLOWED_PROFILES) + [container_client.ALLOWED_PROFILES[0]]),
+        )
+        for health in invalid_health:
+            with self.subTest(health=health):
+                docker = FakeDocker(self.storage)
+                docker.container_id = CONTAINER_ID
+                docker.inspection = docker._inspection(running=True)
+                with patch.object(container_client, "request", return_value=health):
+                    result = container_client.status(self.layout, "alice", docker_call=docker)
+                self.assertEqual("unverified", result["profile_activation"]["status"])
+                self.assertIsNone(result["profile_activation"]["observed_allowed_profiles"])
+
+        docker = FakeDocker(self.storage)
+        docker.container_id = CONTAINER_ID
+        docker.inspection = docker._inspection(running=True)
+        with patch.object(
+            container_client,
+            "request",
+            side_effect=container_client.ContainerClientError("health unavailable"),
+        ):
+            result = container_client.status(self.layout, "alice", docker_call=docker)
+        self.assertEqual("unverified", result["profile_activation"]["status"])
+        self.assertIsNone(result["profile_activation"]["observed_allowed_profiles"])
+        self.assertIn("health unavailable", result["profile_activation"]["reason"])
+        self.assertFalse(result["health"]["ok"])
+
+    def test_status_reports_valid_but_different_running_profiles_as_mismatch(self):
+        initial = self.configure()
+        desired = container_client.configure(
+            self.layout, image_id=IMAGE, owner="alice", enable_current_contracts=True
+        )
+        docker = FakeDocker(self.storage)
+        docker.container_id = CONTAINER_ID
+        docker.inspection = docker._inspection(running=True)
+        with patch.object(
+            container_client,
+            "request",
+            return_value=healthy_profiles(initial["allowed_profiles"]),
+        ):
+            result = container_client.status(self.layout, "alice", docker_call=docker)
+        self.assertNotEqual(set(initial["allowed_profiles"]), set(desired["allowed_profiles"]))
+        self.assertEqual("mismatch", result["profile_activation"]["status"])
+        self.assertEqual(
+            set(initial["allowed_profiles"]),
+            set(result["profile_activation"]["observed_allowed_profiles"]),
+        )
+        self.assertIn("explicit container replacement", result["profile_activation"]["reason"])
+        self.assertFalse(any(call[0] in {"start", "stop", "rm", "kill"} for call in docker.calls))
+
+    def test_configure_does_not_activate_profiles_or_implicitly_replace_a_running_coordinator(self):
+        with patch.object(container_client.coordinator, "docker", side_effect=AssertionError("configure must not contact Docker")):
+            initial = self.configure()
+            desired = container_client.configure(
+                self.layout, image_id=IMAGE, owner="alice", enable_current_contracts=True
+            )
+        self.assertEqual("unverified", desired["profile_activation"]["status"])
+        self.assertIsNone(desired["profile_activation"]["observed_allowed_profiles"])
+        self.assertNotEqual(set(initial["allowed_profiles"]), set(desired["allowed_profiles"]))
+
+        docker = FakeDocker(self.storage)
+        docker.container_id = CONTAINER_ID
+        docker.inspection = docker._inspection(running=True)
+        health = healthy_profiles(
+            list(initial["allowed_profiles"]),
+            active_jobs=[{"job_id": "queued-job", "state": "queued"}],
+        )
+        with patch.object(container_client, "request", return_value=health):
+            with self.assertRaisesRegex(
+                container_client.ContainerClientError,
+                "profile activation mismatch.*pause and drain.*explicit container replacement",
+            ):
+                container_client.start(self.layout, "alice", docker_call=docker)
+        self.assertFalse(
+            any(call[0] in {"start", "stop", "rm", "create", "kill", "prune"} for call in docker.calls)
+        )
+
+    def test_start_of_stopped_container_does_not_claim_unobserved_desired_profiles(self):
+        initial = self.configure()
+        desired = container_client.configure(
+            self.layout, image_id=IMAGE, owner="alice", enable_slepc_runtime_v2=True
+        )
+        docker = FakeDocker(self.storage)
+        docker.container_id = CONTAINER_ID
+        docker.inspection = docker._inspection(running=False)
+        with patch.object(container_client, "request", return_value=healthy_profiles(initial["allowed_profiles"])):
+            with self.assertRaisesRegex(container_client.ContainerClientError, "profile activation mismatch"):
+                container_client.start(self.layout, "alice", docker_call=docker)
+        self.assertNotEqual(set(initial["allowed_profiles"]), set(desired["allowed_profiles"]))
+        self.assertIn(["start", CONTAINER_ID], docker.calls)
+        self.assertFalse(any(call[0] in {"stop", "rm", "create", "kill", "prune"} for call in docker.calls))
+
+    def test_start_retries_bounded_health_until_profile_list_is_observed(self):
+        self.configure()
+        docker = FakeDocker(self.storage)
+        with patch.object(container_client, "request", side_effect=[{"ok": True}, healthy_profiles()]) as request:
+            with patch.object(container_client.time, "sleep", return_value=None):
+                result = container_client.start(self.layout, "alice", docker_call=docker)
+        self.assertEqual(2, request.call_count)
+        self.assertEqual("active", result["profile_activation"]["status"])
+        self.assertEqual(list(container_client.ALLOWED_PROFILES), result["profile_activation"]["desired_allowed_profiles"])
+
+    def test_start_fails_unverified_after_bounded_health_retries_without_cleanup(self):
+        self.configure()
+        docker = FakeDocker(self.storage)
+        with patch.object(container_client, "request", return_value={"ok": True}) as request:
+            with patch.object(container_client.time, "sleep", return_value=None):
+                with self.assertRaisesRegex(
+                    container_client.ContainerClientError,
+                    "remains unverified after 3 bounded authenticated health checks",
+                ):
+                    container_client.start(self.layout, "alice", docker_call=docker)
+        self.assertEqual(container_client.STARTUP_HEALTH_ATTEMPTS, request.call_count)
+        self.assertIn(["start", CONTAINER_ID], docker.calls)
+        self.assertFalse(any(call[0] in {"stop", "rm", "kill", "prune"} for call in docker.calls))
+
+    def test_explicit_replace_applies_new_profile_list_only_after_quiescent_replacement(self):
+        initial = self.configure()
+        desired = container_client.configure(
+            self.layout, image_id=IMAGE, owner="alice", enable_current_contracts=True
+        )
+        docker = FakeDocker(self.storage)
+        docker.container_id = CONTAINER_ID
+        docker.inspection = docker._inspection(running=True)
+        docker.available_images.add(NEW_IMAGE)
+        old_health = healthy_profiles(
+            initial["allowed_profiles"],
+            active_jobs=[],
+            coordinator={"state": "paused"},
+        )
+        new_health = healthy_profiles(
+            list(reversed(desired["allowed_profiles"])),
+            active_jobs=[],
+            coordinator={"state": "paused"},
+        )
+        responses = [FakeHTTPResponse(old_health), FakeHTTPResponse(new_health)]
+        with patch.object(container_client, "_open_url", side_effect=responses):
+            result = container_client.replace(self.layout, NEW_IMAGE, "alice", call=docker)
+        self.assertEqual(NEW_IMAGE, result["image_id"])
+        self.assertEqual("active", result["profile_activation"]["status"])
+        self.assertEqual(set(desired["allowed_profiles"]), set(result["profile_activation"]["observed_allowed_profiles"]))
+        self.assertIn(["stop", "--time", "10", CONTAINER_ID], docker.calls)
+        self.assertIn(["rm", CONTAINER_ID], docker.calls)
 
     def test_authenticated_get_and_graceful_stop_use_the_secret_without_printing_it(self):
         public = self.configure()

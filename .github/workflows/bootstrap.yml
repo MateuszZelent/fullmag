@@ -729,6 +729,8 @@ jobs:
           with Path(os.environ["GITHUB_ENV"]).open("a", encoding="utf-8") as environment:
               for name in ("TMPDIR", "TMP", "TEMP"):
                   environment.write(f"{name}={scratch}\n")
+      - name: Run coordinator profile activation and client lifecycle regressions
+        run: python -B scripts/test_local_runner_container_client.py -v
       - name: Run execution and runtime retention regressions
         run: python -B -m unittest discover -s scripts -p 'test_local_runner_retention*.py' -v
       - name: Run archive receipt and verified runtime tombstone regressions
