@@ -6,13 +6,15 @@
 //! * known backend restart payloads whose `integrator_state` is a self-contained
 //!   versioned checkpoint schema, and
 //! * `project/current_live_snapshot.json`, whose CAS references are scanned
-//!   independently from its typed run-scoped `artifacts[].path` entries.
+//!   independently from its typed run-scoped `artifacts[].path` entries and
+//!   declared scene.v1/v2 material and magnetization asset ids.
 //!
 //! The scanner does not guess hash-like strings. Unknown or hidden references
 //! keep the graph incomplete, while the independent artifact projection makes
 //! sure opaque inline fields cannot hide missing run files from reachability.
 use crate::types::BackendStatePayload;
 use serde_json::Value;
+use std::collections::BTreeSet;
 
 /// Integrator checkpoint schemas that are known to be self-contained.
 const COUPLED_M3_SCHEMA: &str = "fullmag.fdm.coupled_m3_checkpoint.v1";
@@ -127,6 +129,9 @@ fn is_object_ref(value: &str) -> bool {
 /// which is returned for retention. The live snapshot variant separately
 /// exempts only its typed `artifacts[].path` strings from the `objects/...`
 /// CAS-path check; that path is validated and followed by the reachability walker.
+/// Declared scene asset foreign keys are validated and removed from a private
+/// clone before this generic scanner runs, so identically named unknown fields
+/// continue to use ordinary CAS rules.
 fn scan_inline(root: &Value, allow_object_refs: bool) -> Result<Vec<String>, String> {
     scan_inline_with_artifact_paths(root, allow_object_refs, false)
 }
@@ -318,7 +323,276 @@ fn inspect_live_snapshot_object_refs(value: &Value) -> Result<Vec<String>, Strin
     {
         return Err(format!("missing top-level key `{key}`"));
     }
-    scan_inline_with_artifact_paths(value, true, true)
+    let mut scan_value = value.clone();
+    exempt_declared_scene_asset_references(&mut scan_value)?;
+    scan_inline_with_artifact_paths(&scan_value, true, true)
+}
+
+fn declared_scene_asset_ids(
+    scene: &serde_json::Map<String, Value>,
+    key: &str,
+) -> Result<BTreeSet<String>, String> {
+    let Some(assets) = scene.get(key) else {
+        return Ok(BTreeSet::new());
+    };
+    let assets = assets
+        .as_array()
+        .ok_or_else(|| format!("scene_document.{key} is not an array"))?;
+    let mut ids = BTreeSet::new();
+    for (index, asset) in assets.iter().enumerate() {
+        let id = asset
+            .as_object()
+            .and_then(|asset| asset.get("id"))
+            .and_then(Value::as_str)
+            .filter(|id| !id.trim().is_empty())
+            .ok_or_else(|| format!("scene_document.{key}[{index}].id is not a non-empty string"))?;
+        if !ids.insert(id.to_string()) {
+            return Err(format!("scene_document.{key} has duplicate id `{id}`"));
+        }
+    }
+    Ok(ids)
+}
+
+fn exempt_declared_scene_asset_references(snapshot: &mut Value) -> Result<(), String> {
+    let Some(scene_value) = snapshot
+        .as_object_mut()
+        .and_then(|snapshot| snapshot.get_mut("scene_document"))
+    else {
+        return Ok(());
+    };
+    if scene_value.is_null() {
+        return Ok(());
+    }
+    let scene = scene_value
+        .as_object_mut()
+        .ok_or_else(|| "scene_document is not an object".to_string())?;
+    let version = scene
+        .get("version")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "scene_document.version is not a string".to_string())?
+        .to_string();
+    if !matches!(version.as_str(), "scene.v1" | "scene.v2") {
+        return Err(format!(
+            "scene_document.version `{version}` is not a supported typed scene version"
+        ));
+    }
+    let material_ids = declared_scene_asset_ids(scene, "materials")?;
+    let magnetization_ids = declared_scene_asset_ids(scene, "magnetization_assets")?;
+    if let Some(objects) = scene.get_mut("objects") {
+        let objects = objects
+            .as_array_mut()
+            .ok_or_else(|| "scene_document.objects is not an array".to_string())?;
+        for (index, object) in objects.iter_mut().enumerate() {
+            let object = object
+                .as_object_mut()
+                .ok_or_else(|| format!("scene_document.objects[{index}] is not an object"))?;
+            let has_declared_material = object
+                .get("material_ref")
+                .and_then(Value::as_str)
+                .is_some_and(|reference| material_ids.contains(reference));
+            if !has_declared_material {
+                return Err(format!(
+                    "scene_document.objects[{index}].material_ref is not a declared material id"
+                ));
+            }
+            object.remove("material_ref");
+
+            if let Some(reference) = object.get("magnetization_ref") {
+                match reference {
+                    Value::Null => {}
+                    Value::String(reference) if magnetization_ids.contains(reference) => {}
+                    Value::String(_) => {
+                        return Err(format!(
+                            "scene_document.objects[{index}].magnetization_ref is not a declared magnetization asset id"
+                        ));
+                    }
+                    _ => {
+                        return Err(format!(
+                            "scene_document.objects[{index}].magnetization_ref is not a string or null"
+                        ));
+                    }
+                }
+                object.remove("magnetization_ref");
+            }
+
+            if let Some(overrides) = object.get_mut("region_overrides") {
+                let overrides = overrides.as_object_mut().ok_or_else(|| {
+                    format!("scene_document.objects[{index}].region_overrides is not an object")
+                })?;
+                if version == "scene.v1" && !overrides.is_empty() {
+                    return Err(format!(
+                        "scene_document.objects[{index}].region_overrides is not supported by scene.v1"
+                    ));
+                }
+                for (region_id, override_value) in overrides {
+                    let override_value = override_value.as_object_mut().ok_or_else(|| {
+                        format!(
+                            "scene_document.objects[{index}].region_overrides.{region_id} is not an object"
+                        )
+                    })?;
+                    if let Some(reference) = override_value.get("magnetization_ref") {
+                        match reference {
+                            Value::Null => {}
+                            Value::String(reference) if magnetization_ids.contains(reference) => {}
+                            Value::String(_) => {
+                                return Err(format!(
+                                    "scene_document.objects[{index}].region_overrides.{region_id}.magnetization_ref is not a declared magnetization asset id"
+                                ));
+                            }
+                            _ => {
+                                return Err(format!(
+                                    "scene_document.objects[{index}].region_overrides.{region_id}.magnetization_ref is not a string or null"
+                                ));
+                            }
+                        }
+                        override_value.remove("magnetization_ref");
+                    }
+                }
+            }
+        }
+    }
+    let mut preserved_scene_extensions = Vec::new();
+    if version == "scene.v2" {
+        exempt_scene_postprocessing_data_refs(scene)?;
+        exempt_active_visualization_preset_ref(scene, &mut preserved_scene_extensions)?;
+    }
+    if !preserved_scene_extensions.is_empty() {
+        let snapshot = snapshot
+            .as_object_mut()
+            .ok_or_else(|| "root is not an object".to_string())?;
+        let mut key = "__typed_scene_reference_extensions".to_string();
+        while snapshot.contains_key(&key) {
+            key.push('_');
+        }
+        snapshot.insert(key, Value::Array(preserved_scene_extensions));
+    }
+    Ok(())
+}
+
+fn validate_scene_postprocessing_data_ref(value: &Value, context: &str) -> Result<(), String> {
+    let reference = value
+        .as_object()
+        .ok_or_else(|| format!("{context}.data_ref is not an object"))?;
+    const REQUIRED: &[&str] = &["run_id", "dataset_id", "dataset_revision"];
+    const OPTIONAL: &[&str] = &["sample_id", "item_id", "branch_id", "field_id"];
+    if let Some(key) = reference
+        .keys()
+        .find(|key| !REQUIRED.contains(&key.as_str()) && !OPTIONAL.contains(&key.as_str()))
+    {
+        return Err(format!("{context}.data_ref has unknown field `{key}`"));
+    }
+    for key in REQUIRED {
+        if !reference
+            .get(*key)
+            .and_then(Value::as_str)
+            .is_some_and(|value| !value.trim().is_empty())
+        {
+            return Err(format!("{context}.data_ref.{key} is not a non-empty string"));
+        }
+    }
+    for key in OPTIONAL {
+        if let Some(value) = reference.get(*key) {
+            if !value.is_null() && !value.is_string() {
+                return Err(format!("{context}.data_ref.{key} is not a string or null"));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn exempt_scene_postprocessing_data_refs(
+    scene: &mut serde_json::Map<String, Value>,
+) -> Result<(), String> {
+    let Some(analysis) = scene.get_mut("analysis") else {
+        return Ok(());
+    };
+    let analysis = analysis
+        .as_object_mut()
+        .ok_or_else(|| "scene_document.analysis is not an object".to_string())?;
+    let Some(definitions) = analysis.get_mut("postprocessing_definitions") else {
+        return Ok(());
+    };
+    let definitions = definitions.as_array_mut().ok_or_else(|| {
+        "scene_document.analysis.postprocessing_definitions is not an array".to_string()
+    })?;
+    for (index, definition) in definitions.iter_mut().enumerate() {
+        let context = format!("scene_document.analysis.postprocessing_definitions[{index}]");
+        let definition = definition
+            .as_object_mut()
+            .ok_or_else(|| format!("{context} is not an object"))?;
+        for key in [
+            "definition_id",
+            "module_id",
+            "module_version",
+            "definition_schema",
+            "node_kind",
+            "label",
+        ] {
+            if !definition
+                .get(key)
+                .and_then(Value::as_str)
+                .is_some_and(|value| !value.trim().is_empty())
+            {
+                return Err(format!("{context}.{key} is not a non-empty string"));
+            }
+        }
+        if let Some(revision) = definition.get("revision") {
+            if revision.as_u64().is_none() {
+                return Err(format!("{context}.revision is not an unsigned integer"));
+            }
+        }
+        if let Some(parent) = definition.get("parent_definition_id") {
+            if !parent.is_null() && !parent.is_string() {
+                return Err(format!("{context}.parent_definition_id is not a string or null"));
+            }
+        }
+        if let Some(settings) = definition.get("settings") {
+            if !settings.is_null() && !settings.is_object() {
+                return Err(format!("{context}.settings is not an object or null"));
+            }
+        }
+        let data_ref = definition
+            .get("data_ref")
+            .ok_or_else(|| format!("{context}.data_ref is missing"))?;
+        validate_scene_postprocessing_data_ref(data_ref, &context)?;
+        definition.remove("data_ref");
+    }
+    Ok(())
+}
+
+fn exempt_active_visualization_preset_ref(
+    scene: &mut serde_json::Map<String, Value>,
+    preserved_extensions: &mut Vec<Value>,
+) -> Result<(), String> {
+    let Some(editor) = scene.get_mut("editor") else {
+        return Ok(());
+    };
+    let editor = editor
+        .as_object_mut()
+        .ok_or_else(|| "scene_document.editor is not an object".to_string())?;
+    let Some(reference) = editor.remove("active_visualization_preset_ref") else {
+        return Ok(());
+    };
+    if reference.is_null() {
+        return Ok(());
+    }
+    let mut reference = reference
+        .as_object()
+        .cloned()
+        .ok_or_else(|| "scene_document.editor.active_visualization_preset_ref is not an object".to_string())?;
+    for key in ["source", "preset_id"] {
+        if !reference.get(key).is_some_and(Value::is_string) {
+            return Err(format!(
+                "scene_document.editor.active_visualization_preset_ref.{key} is not a string"
+            ));
+        }
+    }
+    reference.remove("source");
+    reference.remove("preset_id");
+    if !reference.is_empty() {
+        preserved_extensions.push(Value::Object(reference));
+    }
+    Ok(())
 }
 
 fn inspect_live_snapshot_artifact_refs(
@@ -523,6 +797,224 @@ mod tests {
         let inspection = inspect_live_snapshot(&serde_json::to_vec(&value).unwrap());
         assert!(inspection.object_refs.is_err());
         assert!(inspection.artifact_refs.is_ok());
+    }
+
+    #[test]
+    fn declared_scene_asset_refs_are_exempt_only_at_typed_scene_paths() {
+        let hash = "d".repeat(64);
+        let mut value = snapshot();
+        value["scene_document"] = json!({
+            "version": "scene.v2",
+            "materials": [{"id": hash.clone()}],
+            "magnetization_assets": [{"id": "mag:body"}, {"id": "mag:region"}],
+            "objects": [{
+                "material_ref": hash.clone(),
+                "magnetization_ref": "mag:body",
+                "region_overrides": {
+                    "region-1": {"magnetization_ref": "mag:region"}
+                },
+                "metadata": {"payload_ref": hash}
+            }]
+        });
+
+        let inspection = inspect_live_snapshot(&serde_json::to_vec(&value).unwrap());
+        assert_eq!(inspection.object_refs, Ok(vec![hash.clone()]));
+        assert!(inspection.artifact_refs.is_ok());
+
+        let mut only_typed_hash = value.clone();
+        only_typed_hash["scene_document"]["objects"][0]["metadata"]
+            .as_object_mut()
+            .unwrap()
+            .remove("payload_ref");
+        assert_eq!(
+            inspect_live_snapshot(&serde_json::to_vec(&only_typed_hash).unwrap()).object_refs,
+            Ok(vec![])
+        );
+
+        value["scene_document"]["objects"][0]["metadata"]["material_ref"] =
+            json!("mat:unrelated");
+        let inspection = inspect_live_snapshot(&serde_json::to_vec(&value).unwrap());
+        assert!(inspection.object_refs.is_err());
+        assert!(inspection.artifact_refs.is_ok());
+
+        value["scene_document"]["objects"][0]["metadata"]["material_ref"] =
+            json!(format!("objects/sha256/{hash}"));
+        let inspection = inspect_live_snapshot(&serde_json::to_vec(&value).unwrap());
+        assert!(inspection.object_refs.is_err());
+    }
+
+    #[test]
+    fn invalid_or_undeclared_scene_asset_refs_remain_fail_closed() {
+        let mut base = snapshot();
+        base["scene_document"] = json!({
+            "version": "scene.v2",
+            "materials": [{"id": "mat:body"}],
+            "magnetization_assets": [{"id": "mag:body"}, {"id": "mag:region"}],
+            "objects": [{
+                "material_ref": "mat:body",
+                "magnetization_ref": "mag:body",
+                "region_overrides": {
+                    "region-1": {"magnetization_ref": "mag:region"}
+                }
+            }]
+        });
+        let cases = [
+            ("undeclared material", json!({"material_ref": "mat:missing"})),
+            ("undeclared magnetization", json!({"magnetization_ref": "mag:missing"})),
+            (
+                "wrong magnetization type",
+                json!({"magnetization_ref": ["mag:body"]}),
+            ),
+            (
+                "undeclared region magnetization",
+                json!({"region_overrides": {"region-1": {"magnetization_ref": "mag:missing"}}}),
+            ),
+        ];
+        for (label, replacement) in cases {
+            let mut value = base.clone();
+            for (key, replacement_value) in replacement.as_object().unwrap() {
+                value["scene_document"]["objects"][0][key] = replacement_value.clone();
+            }
+            let inspection = inspect_live_snapshot(&serde_json::to_vec(&value).unwrap());
+            assert!(inspection.object_refs.is_err(), "{label}");
+        }
+
+        let mut wrong_version = base.clone();
+        wrong_version["scene_document"]["version"] = json!("scene.v9");
+        assert!(inspect_live_snapshot(&serde_json::to_vec(&wrong_version).unwrap())
+            .object_refs
+            .is_err());
+
+        let mut duplicate_ids = base;
+        duplicate_ids["scene_document"]["materials"] =
+            json!([{"id": "mat:body"}, {"id": "mat:body"}]);
+        assert!(inspect_live_snapshot(&serde_json::to_vec(&duplicate_ids).unwrap())
+            .object_refs
+            .is_err());
+    }
+
+    #[test]
+    fn scene_v2_published_data_and_visualization_refs_are_typed_but_extensions_are_scanned() {
+        let hash = "e".repeat(64);
+        let mut value = snapshot();
+        value["scene_document"] = json!({
+            "version": "scene.v2",
+            "materials": [{"id": "mat:body"}],
+            "magnetization_assets": [{"id": "mag:body"}],
+            "objects": [{
+                "material_ref": "mat:body",
+                "magnetization_ref": "mag:body"
+            }],
+            "analysis": {
+                "postprocessing_definitions": [{
+                    "definition_id": "viz-1",
+                    "revision": 1,
+                    "module_id": "analysis.dispersion",
+                    "module_version": "0.1.0",
+                    "definition_schema": "analysis.dispersion.mode_visualization.v1",
+                    "node_kind": "analysis.dispersion.mode_visualization",
+                    "label": "Pinned mode",
+                    "data_ref": {
+                        "run_id": "run-1",
+                        "dataset_id": "modal-k-path",
+                        "dataset_revision": "r7",
+                        "sample_id": "sample-0006",
+                        "item_id": "mode-0001"
+                    },
+                    "settings": {"payload_ref": hash.clone()}
+                }]
+            },
+            "editor": {
+                "active_visualization_preset_ref": {
+                    "source": "user",
+                    "preset_id": "preset-1",
+                    "payload_ref": hash.clone()
+                }
+            }
+        });
+
+        let inspection = inspect_live_snapshot(&serde_json::to_vec(&value).unwrap());
+        assert_eq!(inspection.object_refs, Ok(vec![hash.clone()]));
+        assert!(inspection.artifact_refs.is_ok());
+
+        let mut scene_without_objects = value.clone();
+        scene_without_objects["scene_document"]["objects"] = json!([]);
+        assert_eq!(
+            inspect_live_snapshot(&serde_json::to_vec(&scene_without_objects).unwrap()).object_refs,
+            Ok(vec![hash.clone()])
+        );
+
+        value["scene_document"]["analysis"]["postprocessing_definitions"][0]["data_ref"]["run_id"] =
+            json!("");
+        assert!(inspect_live_snapshot(&serde_json::to_vec(&value).unwrap())
+            .object_refs
+            .is_err());
+
+        value["scene_document"]["analysis"]["postprocessing_definitions"][0]["data_ref"]["run_id"] =
+            json!("run-1");
+        value["scene_document"]["analysis"]["postprocessing_definitions"][0]["data_ref"]["payload_ref"] =
+            json!(hash);
+        assert!(inspect_live_snapshot(&serde_json::to_vec(&value).unwrap())
+            .object_refs
+            .is_err());
+
+        value["scene_document"]["analysis"]["postprocessing_definitions"][0]["data_ref"]
+            .as_object_mut()
+            .unwrap()
+            .remove("payload_ref");
+        value["scene_document"]["editor"]["active_visualization_preset_ref"]["source"] =
+            json!(false);
+        assert!(inspect_live_snapshot(&serde_json::to_vec(&value).unwrap())
+            .object_refs
+            .is_err());
+
+        value["scene_document"].as_object_mut().unwrap().remove("analysis");
+        value["scene_document"]["editor"] = json!({
+            "active_visualization_preset_ref": {
+                "source": "user",
+                "preset_id": "preset-1"
+            }
+        });
+        assert!(inspect_live_snapshot(&serde_json::to_vec(&value).unwrap())
+            .object_refs
+            .is_err());
+    }
+
+    #[test]
+    fn scene_v1_asset_refs_are_typed_while_postprocessing_data_refs_stay_fail_closed() {
+        let mut value = snapshot();
+        value["scene_document"] = json!({
+            "version": "scene.v1",
+            "materials": [{"id": "mat:body"}],
+            "magnetization_assets": [{"id": "mag:body"}],
+            "objects": [{
+                "material_ref": "mat:body",
+                "magnetization_ref": "mag:body"
+            }]
+        });
+        assert_eq!(
+            inspect_live_snapshot(&serde_json::to_vec(&value).unwrap()).object_refs,
+            Ok(vec![])
+        );
+
+        value["scene_document"]["analysis"] = json!({
+            "postprocessing_definitions": [{
+                "definition_id": "viz-1",
+                "module_id": "analysis.dispersion",
+                "module_version": "0.1.0",
+                "definition_schema": "analysis.dispersion.mode_visualization.v1",
+                "node_kind": "analysis.dispersion.mode_visualization",
+                "label": "Pinned mode",
+                "data_ref": {
+                    "run_id": "run-1",
+                    "dataset_id": "modal-k-path",
+                    "dataset_revision": "r7"
+                }
+            }]
+        });
+        assert!(inspect_live_snapshot(&serde_json::to_vec(&value).unwrap())
+            .object_refs
+            .is_err());
     }
 
     #[test]

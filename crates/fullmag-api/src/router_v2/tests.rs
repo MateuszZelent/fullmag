@@ -27555,6 +27555,30 @@ async fn session_import_replace_project_reports_semantic_differences_without_com
         .await
         .clone()
         .expect("replace_project must publish the imported snapshot");
+    let restored_scene = restored
+        .scene_document
+        .as_ref()
+        .expect("replace_project must publish the imported typed scene");
+    let restored_object = restored_scene
+        .objects
+        .first()
+        .expect("imported scene must retain its object");
+    assert_eq!(
+        restored_object.geometry.geometry_params,
+        serde_json::json!({"size": [2.0, 1.0, 1.0]})
+    );
+    assert!(restored_scene
+        .materials
+        .iter()
+        .any(|material| material.id == restored_object.material_ref));
+    let restored_magnetization_ref = restored_object
+        .magnetization_ref
+        .as_ref()
+        .expect("imported object must retain its magnetization asset reference");
+    assert!(restored_scene
+        .magnetization_assets
+        .iter()
+        .any(|asset| &asset.id == restored_magnetization_ref));
     let restored_script = PathBuf::from(&restored.session.script_path);
     let restored_artifacts = PathBuf::from(&restored.session.artifact_dir);
     assert!(
@@ -27701,7 +27725,8 @@ fn assert_active_session_store_uninitialized(repo_root: &std::path::Path, contex
 
 #[tokio::test]
 async fn session_import_missing_snapshot_rejects_before_mutating_state_or_store() {
-    use std::io::Cursor;
+    use std::io::{Cursor, Read, Write};
+    use zip::write::SimpleFileOptions;
 
     let (app, state, repo_root) = test_router_with_session_store_state().await;
     let active_before = serde_json::to_value(
@@ -27750,7 +27775,9 @@ async fn session_import_missing_snapshot_rejects_before_mutating_state_or_store(
     )
     .expect("fixture archive should pack");
     use base64::Engine;
-    let fms_base64 = base64::engine::general_purpose::STANDARD.encode(archive.into_inner());
+    let valid_archive_bytes = archive.into_inner();
+    let fms_base64 =
+        base64::engine::general_purpose::STANDARD.encode(valid_archive_bytes.clone());
 
     let response = app
         .clone()
@@ -27785,24 +27812,35 @@ async fn session_import_missing_snapshot_rejects_before_mutating_state_or_store(
         "preflight failure must not initialize the active SessionStore",
     );
 
-    let mut corrupt_documents = documents;
-    corrupt_documents.insert(
-        "current_live_snapshot.json".to_string(),
-        b"{not valid JSON".to_vec(),
-    );
-    let mut corrupt_archive = Cursor::new(Vec::new());
-    fullmag_session::pack_fms(
-        &mut corrupt_archive,
-        &source_store,
-        &session,
-        &workspace,
-        &fullmag_session::FmsExportProfile::for_profile(fullmag_session::SaveProfile::Compact),
-        &corrupt_documents,
-        &fullmag_session::PackOptions::default(),
-    )
-    .expect("corrupt snapshot fixture archive should pack");
-    let corrupt_fms_base64 =
-        base64::engine::general_purpose::STANDARD.encode(corrupt_archive.into_inner());
+    // Keep the producer on a valid archive. Add or replace the malformed
+    // member afterward so the importer, rather than pack_fms validation,
+    // owns this negative case. ZipWriter recalculates the member CRC and sizes.
+    let mut source = zip::ZipArchive::new(Cursor::new(valid_archive_bytes)).unwrap();
+    let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    let options = SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated);
+    let mut replaced_snapshot = false;
+    for index in 0..source.len() {
+        let mut member = source.by_index(index).unwrap();
+        let name = member.name().to_string();
+        let mut data = Vec::new();
+        member.read_to_end(&mut data).unwrap();
+        drop(member);
+        if name == "project/current_live_snapshot.json" {
+            data = b"{not valid JSON".to_vec();
+            replaced_snapshot = true;
+        }
+        writer.start_file(name, options).unwrap();
+        writer.write_all(&data).unwrap();
+    }
+    if !replaced_snapshot {
+        writer
+            .start_file("project/current_live_snapshot.json", options)
+            .unwrap();
+        writer.write_all(b"{not valid JSON").unwrap();
+    }
+    let corrupt_archive = writer.finish().unwrap().into_inner();
+    let corrupt_fms_base64 = base64::engine::general_purpose::STANDARD.encode(corrupt_archive);
     let corrupt_response = app
         .oneshot(
             Request::builder()
