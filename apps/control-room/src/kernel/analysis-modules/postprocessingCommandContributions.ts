@@ -1,4 +1,5 @@
 import { ANALYSIS_POSTPROCESSING_DEFINITIONS_PATH } from "@/kernel/api/apiPaths";
+import { obsoleteSessionResult } from "@/kernel/commands/commandSessionScope";
 import type { CommandContext, CommandContribution, CommandResult } from "@/kernel/commands/commandTypes";
 import {
   isReferenceAxisUnit,
@@ -78,12 +79,19 @@ async function importDispersionReference(context: CommandContext): Promise<Comma
     return { message: validation.reason, status: "failed" };
   }
   try {
+    const obsoleteBeforeRead = obsoleteSessionResult(context);
+    if (obsoleteBeforeRead) return obsoleteBeforeRead;
+    const options = context.sessionScopeKey ? { sessionScopeKey: context.sessionScopeKey } : undefined;
     const definitions = context.api.analysis.postprocessing.definitions;
-    const current = await definitions.list();
+    const current = await definitions.list(options);
+    const obsoleteAfterRead = obsoleteSessionResult(context);
+    if (obsoleteAfterRead) return obsoleteAfterRead;
     const created = await definitions.create({
       definition: importedReferenceDefinition({ ...validation.input, dataset }),
       expected_scene_revision: current.scene_revision,
-    });
+    }, options);
+    const obsoleteAfterWrite = obsoleteSessionResult(context);
+    if (obsoleteAfterWrite) return obsoleteAfterWrite;
     try {
       context.resources?.invalidate(ANALYSIS_POSTPROCESSING_DEFINITIONS_PATH, created.scene_revision);
     } catch {
@@ -94,6 +102,8 @@ async function importDispersionReference(context: CommandContext): Promise<Comma
     }
     return { message: `Imported reference ${created.definition.label}.`, status: "completed" };
   } catch (error) {
+    const obsolete = obsoleteSessionResult(context);
+    if (obsolete) return obsolete;
     return {
       message: error instanceof Error && error.message.length > 0
         ? `Reference import failed: ${error.message}`
@@ -119,8 +129,13 @@ async function pinModeVisualization(context: CommandContext): Promise<CommandRes
   if (reason || !result.ok || !context.api) {
     return { message: reason ?? "Mode visualization cannot be pinned.", status: "failed" };
   }
+  const obsoleteBeforeRead = obsoleteSessionResult(context);
+  if (obsoleteBeforeRead) return obsoleteBeforeRead;
+  const options = context.sessionScopeKey ? { sessionScopeKey: context.sessionScopeKey } : undefined;
   const definitions = context.api.analysis.postprocessing.definitions;
-  const current = await definitions.list();
+  const current = await definitions.list(options);
+  const obsoleteAfterRead = obsoleteSessionResult(context);
+  if (obsoleteAfterRead) return obsoleteAfterRead;
   const ownerMatches = current.definitions.map((definition) =>
     modeVisualizationOwnerMatch(definition, result.definition),
   );
@@ -137,7 +152,9 @@ async function pinModeVisualization(context: CommandContext): Promise<CommandRes
   const created = await definitions.create({
     definition: result.definition,
     expected_scene_revision: current.scene_revision,
-  });
+  }, options);
+  const obsoleteAfterWrite = obsoleteSessionResult(context);
+  if (obsoleteAfterWrite) return obsoleteAfterWrite;
   context.resources?.invalidate(ANALYSIS_POSTPROCESSING_DEFINITIONS_PATH, created.scene_revision);
   return { message: `Pinned ${created.definition.label}.`, status: "completed" };
 }
@@ -153,11 +170,18 @@ async function unpinDefinition(context: CommandContext): Promise<CommandResult> 
   if (!context.api || !input) {
     return { message: "Choose a pinned visualization to remove.", status: "failed" };
   }
+  const obsoleteBeforeRead = obsoleteSessionResult(context);
+  if (obsoleteBeforeRead) return obsoleteBeforeRead;
+  const options = context.sessionScopeKey ? { sessionScopeKey: context.sessionScopeKey } : undefined;
   const definitions = context.api.analysis.postprocessing.definitions;
-  const current = await definitions.list();
+  const current = await definitions.list(options);
+  const obsoleteAfterRead = obsoleteSessionResult(context);
+  if (obsoleteAfterRead) return obsoleteAfterRead;
   const removed = await definitions.remove(input.definitionId, {
     expected_scene_revision: current.scene_revision,
-  });
+  }, options);
+  const obsoleteAfterWrite = obsoleteSessionResult(context);
+  if (obsoleteAfterWrite) return obsoleteAfterWrite;
   context.resources?.invalidate(ANALYSIS_POSTPROCESSING_DEFINITIONS_PATH, removed.scene_revision);
   return { message: "Pinned visualization removed.", status: "completed" };
 }

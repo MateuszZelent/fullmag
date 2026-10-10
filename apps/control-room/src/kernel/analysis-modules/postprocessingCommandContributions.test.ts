@@ -1,11 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { ANALYSIS_POSTPROCESSING_DEFINITIONS_PATH } from "@/kernel/api/apiPaths";
 import { MAX_REFERENCE_POINTS } from "@/shared/domain/analysis/referenceImport";
 
 import {
   IMPORT_DISPERSION_REFERENCE_COMMAND,
   PIN_MODE_VISUALIZATION_COMMAND,
   POSTPROCESSING_DEFINITION_COMMANDS,
+  UNPIN_POSTPROCESSING_DEFINITION_COMMAND,
 } from "./postprocessingCommandContributions";
 
 const fieldId = "analysis:eigen:sample-0001:mode-0000";
@@ -155,7 +157,7 @@ describe("pin mode visualization command owner deduplication", () => {
           item_id: "mode-0000",
         }),
       }),
-    }));
+    }), undefined);
   });
 
   it.each([
@@ -224,7 +226,7 @@ describe("import dispersion reference command bounds", () => {
         settings: expect.objectContaining({ points: [[3, 9], [-1, 2]] }),
       }),
       expected_scene_revision: 11,
-    }));
+    }), undefined);
     expect(fixture.invalidate).toHaveBeenCalledTimes(1);
   });
 
@@ -286,6 +288,95 @@ describe("import dispersion reference command bounds", () => {
 
     expect(result).toMatchObject({ message: "Reference import failed: definitions unavailable", status: "failed" });
     expect(fixture.create).not.toHaveBeenCalled();
+    expect(fixture.invalidate).not.toHaveBeenCalled();
+  });
+});
+
+const scopedCommands = [
+  IMPORT_DISPERSION_REFERENCE_COMMAND,
+  PIN_MODE_VISUALIZATION_COMMAND,
+  UNPIN_POSTPROCESSING_DEFINITION_COMMAND,
+];
+
+function scopedCommandFixture(commandId: string) {
+  let current = true;
+  const list = vi.fn().mockResolvedValue({ definitions: [], scene_revision: 11 });
+  const mutation = vi.fn().mockResolvedValue({ definition: { label: "Reference" }, scene_revision: 12 });
+  const invalidate = vi.fn();
+  const context = {
+    api: { analysis: { postprocessing: { definitions: { list, create: mutation, remove: mutation } } } },
+    input: commandId === UNPIN_POSTPROCESSING_DEFINITION_COMMAND
+      ? { definitionId: "pin-1" }
+      : { fileName: "reference.csv", label: "Reference", points: [[0, 1], [1, 2]],
+          sourceUnits: { frequency: "GHz", path: "rad/um" } },
+    selection: { get: modeSelection },
+    resources: { invalidate },
+    sessionScopeKey: "session=owner&epoch=captured&request_scope_epoch=request",
+    isCurrentSessionScope: () => current,
+  };
+  const command = POSTPROCESSING_DEFINITION_COMMANDS.find((candidate) => candidate.id === commandId)!;
+  return { context, list, mutation, invalidate, command, expire: () => { current = false; } };
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((accept) => { resolve = accept; });
+  return { promise, resolve };
+}
+
+describe.each(scopedCommands)("postprocessing command session scope: %s", (commandId) => {
+  it("forwards the captured scope to both the read and mutation", async () => {
+    const fixture = scopedCommandFixture(commandId);
+    const result = await fixture.command.run(fixture.context as never);
+    const options = { sessionScopeKey: fixture.context.sessionScopeKey };
+    expect(result.status).toBe("completed");
+    expect(fixture.list).toHaveBeenCalledExactlyOnceWith(options);
+    if (commandId === UNPIN_POSTPROCESSING_DEFINITION_COMMAND) {
+      expect(fixture.mutation).toHaveBeenCalledExactlyOnceWith("pin-1", { expected_scene_revision: 11 }, options);
+    } else {
+      expect(fixture.mutation).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ expected_scene_revision: 11 }), options,
+      );
+    }
+    expect(fixture.invalidate).toHaveBeenCalledExactlyOnceWith(ANALYSIS_POSTPROCESSING_DEFINITIONS_PATH, 12);
+  });
+
+  it("does not read or mutate after its captured session has expired", async () => {
+    const fixture = scopedCommandFixture(commandId);
+    fixture.expire();
+    expect((await fixture.command.run(fixture.context as never)).status).toBe("cancelled");
+    expect(fixture.list).not.toHaveBeenCalled();
+    expect(fixture.mutation).not.toHaveBeenCalled();
+    expect(fixture.invalidate).not.toHaveBeenCalled();
+  });
+
+  it("does not submit a mutation when the session changes during the read", async () => {
+    const fixture = scopedCommandFixture(commandId);
+    const read = deferred<{ definitions: []; scene_revision: number }>();
+    fixture.list.mockReturnValueOnce(read.promise);
+    const result = fixture.command.run(fixture.context as never);
+    expect(fixture.list).toHaveBeenCalledTimes(1);
+    fixture.expire();
+    read.resolve({ definitions: [], scene_revision: 11 });
+    expect((await result).status).toBe("cancelled");
+    expect(fixture.mutation).not.toHaveBeenCalled();
+    expect(fixture.invalidate).not.toHaveBeenCalled();
+  });
+
+  it("does not invalidate the new session after an old-session mutation is acknowledged", async () => {
+    const fixture = scopedCommandFixture(commandId);
+    const acknowledged = deferred<{ definition: { label: string }; scene_revision: number }>();
+    const submitted = deferred<void>();
+    fixture.mutation.mockImplementationOnce(() => {
+      submitted.resolve();
+      return acknowledged.promise;
+    });
+    const result = fixture.command.run(fixture.context as never);
+    await submitted.promise;
+    fixture.expire();
+    acknowledged.resolve({ definition: { label: "Reference" }, scene_revision: 12 });
+    expect((await result).status).toBe("cancelled");
+    expect(fixture.mutation).toHaveBeenCalledTimes(1);
     expect(fixture.invalidate).not.toHaveBeenCalled();
   });
 });

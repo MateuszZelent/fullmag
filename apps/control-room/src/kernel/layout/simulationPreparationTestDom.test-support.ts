@@ -410,18 +410,205 @@ function serializeTestNode(node: TestNode): string {
   return `<${node.tagName.toLowerCase()}${attributes}>${node.childNodes.map(serializeTestNode).join("")}</${node.tagName.toLowerCase()}>`;
 }
 
-/**
- * Radix Select patches the native select value setter when its hidden form
- * control changes. Keep that setter on the select prototype only, as in a
- * browser, while reusing TestElement's existing control-value storage.
- */
-class TestHTMLSelectElement extends TestElement {
+class TestHTMLOptionElement extends TestElement {
+  private selectedness = false;
+  private selectednessIsDirty = false;
+
   override get value(): string {
-    return super.value;
+    const attribute = this.getAttribute("value");
+    if (attribute !== null) return attribute;
+    return this.textContent
+      .replace(/[\t\n\f\r ]+/g, " ")
+      .replace(/^[\t\n\f\r ]+|[\t\n\f\r ]+$/g, "");
   }
 
   override set value(value: string) {
-    super.value = value;
+    this.setAttribute("value", String(value));
+  }
+
+  get selected(): boolean {
+    return this.selectedness;
+  }
+
+  set selected(value: boolean) {
+    const select = this.nearestSelect();
+    if (select) select._setOptionSelected(this, Boolean(value));
+    else this.setSelectednessFromSelect(Boolean(value), true);
+  }
+
+  get defaultSelected(): boolean {
+    return this.hasAttribute("selected");
+  }
+
+  set defaultSelected(value: boolean) {
+    if (value) this.setAttribute("selected", "");
+    else this.removeAttribute("selected");
+  }
+
+  override get disabled(): boolean {
+    if (super.disabled) return true;
+    let ancestor = this.parentNode;
+    while (ancestor && !(ancestor instanceof TestHTMLSelectElement)) {
+      if (ancestor instanceof TestElement && ancestor.tagName === "OPTGROUP" && ancestor.disabled) {
+        return true;
+      }
+      ancestor = ancestor.parentNode;
+    }
+    return false;
+  }
+
+  override setAttribute(name: string, value: string): void {
+    const normalizedName = name.toLowerCase();
+    const wasPresent = this.hasAttribute(normalizedName);
+    super.setAttribute(name, value);
+    if (normalizedName === "selected" && !wasPresent && !this.selectednessIsDirty) {
+      this.setSelectednessFromSelect(true, false);
+      this.nearestSelect()?._resetOptionSelection();
+    }
+  }
+
+  override removeAttribute(name: string): void {
+    const normalizedName = name.toLowerCase();
+    const wasPresent = this.hasAttribute(normalizedName);
+    super.removeAttribute(name);
+    if (normalizedName === "selected" && wasPresent && !this.selectednessIsDirty) {
+      this.setSelectednessFromSelect(false, false);
+      this.nearestSelect()?._resetOptionSelection();
+    }
+  }
+
+  setSelectednessFromSelect(value: boolean, markDirty: boolean): void {
+    this.selectedness = value;
+    if (markDirty) this.selectednessIsDirty = true;
+  }
+
+  private nearestSelect(): TestHTMLSelectElement | null {
+    let ancestor = this.parentNode;
+    while (ancestor) {
+      if (ancestor instanceof TestHTMLSelectElement) return ancestor;
+      ancestor = ancestor.parentNode;
+    }
+    return null;
+  }
+}
+
+/**
+ * Model the select/option value and selectedness IDL used by React DOM and
+ * Radix's hidden form control, without changing TestElement input values.
+ */
+class TestHTMLSelectElement extends TestElement {
+  private explicitNoSelection = false;
+
+  override get value(): string {
+    this.ensureDefaultSelection();
+    return this.collectOptions().find((option) => option.selected)?.value ?? "";
+  }
+
+  override set value(value: string) {
+    const requestedValue = String(value);
+    const options = this.collectOptions();
+    let firstMatchingOption: TestHTMLOptionElement | undefined;
+    for (const option of options) {
+      option.setSelectednessFromSelect(false, false);
+      if (firstMatchingOption === undefined && option.value === requestedValue) {
+        firstMatchingOption = option;
+      }
+    }
+    if (firstMatchingOption) {
+      firstMatchingOption.setSelectednessFromSelect(true, true);
+      this.explicitNoSelection = false;
+    } else {
+      this.explicitNoSelection = true;
+    }
+  }
+
+  override get options(): TestHTMLOptionElement[] {
+    this.ensureDefaultSelection();
+    return this.collectOptions();
+  }
+
+  get selectedIndex(): number {
+    this.ensureDefaultSelection();
+    return this.collectOptions().findIndex((option) => option.selected);
+  }
+
+  set selectedIndex(index: number) {
+    const options = this.collectOptions();
+    const normalizedIndex = Number(index);
+    for (const option of options) option.setSelectednessFromSelect(false, false);
+    if (Number.isInteger(normalizedIndex) && options[normalizedIndex]) {
+      options[normalizedIndex]!.setSelectednessFromSelect(true, true);
+      this.explicitNoSelection = false;
+    } else {
+      this.explicitNoSelection = true;
+    }
+  }
+
+  get multiple(): boolean {
+    return this.hasAttribute("multiple");
+  }
+
+  set multiple(value: boolean) {
+    if (value) this.setAttribute("multiple", "");
+    else this.removeAttribute("multiple");
+  }
+
+  _resetOptionSelection(): void {
+    this.explicitNoSelection = false;
+    this.applySelectednessSettingAlgorithm();
+  }
+
+  _setOptionSelected(option: TestHTMLOptionElement, selected: boolean): void {
+    if (selected && !this.multiple) {
+      for (const sibling of this.collectOptions()) {
+        if (sibling !== option) sibling.setSelectednessFromSelect(false, false);
+      }
+    }
+    option.setSelectednessFromSelect(selected, true);
+    this.explicitNoSelection = false;
+    this.applySelectednessSettingAlgorithm();
+  }
+
+  private collectOptions(): TestHTMLOptionElement[] {
+    const options: TestHTMLOptionElement[] = [];
+    for (const child of this.childNodes) {
+      if (child instanceof TestHTMLOptionElement) {
+        options.push(child);
+      } else if (child instanceof TestElement && child.tagName === "OPTGROUP") {
+        for (const groupChild of child.childNodes) {
+          if (groupChild instanceof TestHTMLOptionElement) options.push(groupChild);
+        }
+      }
+    }
+    return options;
+  }
+
+  private ensureDefaultSelection(): void {
+    if (!this.explicitNoSelection) this.applySelectednessSettingAlgorithm();
+  }
+
+  private applySelectednessSettingAlgorithm(): void {
+    if (this.multiple) return;
+    const options = this.collectOptions();
+    let firstEnabledOption: TestHTMLOptionElement | undefined;
+    let lastSelectedOption: TestHTMLOptionElement | undefined;
+    for (const option of options) {
+      if (option.selected) {
+        lastSelectedOption?.setSelectednessFromSelect(false, false);
+        lastSelectedOption = option;
+      }
+      if (firstEnabledOption === undefined && !option.disabled) firstEnabledOption = option;
+    }
+    if (lastSelectedOption === undefined && firstEnabledOption && this.displaySize() === 1) {
+      firstEnabledOption.setSelectednessFromSelect(true, false);
+    }
+  }
+
+  private displaySize(): number {
+    const size = this.getAttribute("size");
+    if (size === null) return this.multiple ? 4 : 1;
+    const parsed = /^[\t\n\f\r ]*([0-9]+)/.exec(size)?.[1];
+    return parsed === undefined ? (this.multiple ? 4 : 1) : Number(parsed);
   }
 }
 
@@ -448,9 +635,11 @@ export class TestDocument extends TestNode {
   }
 
   createElement(tagName: string): TestElement {
-    if (tagName.toLowerCase() === "select") {
+    const normalizedTagName = tagName.toLowerCase();
+    if (normalizedTagName === "select") {
       return new TestHTMLSelectElement(this, tagName);
     }
+    if (normalizedTagName === "option") return new TestHTMLOptionElement(this, tagName);
     return new TestElement(this, tagName);
   }
 

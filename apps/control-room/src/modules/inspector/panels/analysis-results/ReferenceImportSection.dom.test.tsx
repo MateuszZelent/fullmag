@@ -74,6 +74,93 @@ describe("ReferenceImportSection file selection", () => {
     }
   });
 
+  it("reflects option values and selectedness through a native select", () => {
+    const dom = installSimulationPreparationTestDom();
+    type TestOptionElement = TestElement & {
+      defaultSelected: boolean;
+      selected: boolean;
+    };
+    type TestSelectElement = TestElement & {
+      options: TestOptionElement[];
+      selectedIndex: number;
+    };
+
+    const option = (value: string): TestOptionElement => {
+      const element = dom.document.createElement("option") as TestOptionElement;
+      element.value = value;
+      element.textContent = `Label ${value}`;
+      return element;
+    };
+
+    try {
+      const reflectedOption = dom.document.createElement("option") as TestOptionElement;
+      reflectedOption.setAttribute("value", "attribute-value");
+      reflectedOption.textContent = "Text fallback";
+      expect(reflectedOption.value).toBe("attribute-value");
+      reflectedOption.removeAttribute("value");
+      expect(reflectedOption.value).toBe("Text fallback");
+      reflectedOption.value = "property-value";
+      expect(reflectedOption.getAttribute("value")).toBe("property-value");
+
+      reflectedOption.defaultSelected = true;
+      expect(reflectedOption.hasAttribute("selected")).toBe(true);
+      expect(reflectedOption.selected).toBe(true);
+      reflectedOption.selected = false;
+      expect(reflectedOption.selected).toBe(false);
+      expect(reflectedOption.defaultSelected).toBe(true);
+      reflectedOption.defaultSelected = false;
+      expect(reflectedOption.hasAttribute("selected")).toBe(false);
+      expect(reflectedOption.selected).toBe(false);
+
+      const select = dom.document.createElement("select") as TestSelectElement;
+      const disabledDirect = option("disabled-direct");
+      disabledDirect.setAttribute("disabled", "");
+      const disabledGroup = dom.document.createElement("optgroup");
+      disabledGroup.setAttribute("disabled", "");
+      disabledGroup.appendChild(option("disabled-group"));
+      const group = dom.document.createElement("optgroup");
+      const firstEnabled = option("first-enabled");
+      const secondEnabled = option("second-enabled");
+      group.appendChild(firstEnabled);
+      group.appendChild(secondEnabled);
+      select.appendChild(disabledDirect);
+      select.appendChild(disabledGroup);
+      select.appendChild(group);
+
+      expect(select.options.map((item) => item.value)).toEqual([
+        "disabled-direct", "disabled-group", "first-enabled", "second-enabled",
+      ]);
+      expect(select.value).toBe("first-enabled");
+      expect(select.selectedIndex).toBe(2);
+      expect(firstEnabled.selected).toBe(true);
+
+      select.value = "second-enabled";
+      expect(select.value).toBe("second-enabled");
+      expect(select.selectedIndex).toBe(3);
+      expect(firstEnabled.selected).toBe(false);
+      expect(secondEnabled.selected).toBe(true);
+
+      firstEnabled.selected = true;
+      expect(select.value).toBe("first-enabled");
+      expect(select.selectedIndex).toBe(2);
+      expect(firstEnabled.selected).toBe(true);
+      expect(secondEnabled.selected).toBe(false);
+
+      disabledDirect.selected = true;
+      expect(select.value).toBe("disabled-direct");
+      expect(select.selectedIndex).toBe(0);
+      expect(disabledDirect.selected).toBe(true);
+      expect(firstEnabled.selected).toBe(false);
+
+      select.value = "unmatched-value";
+      expect(select.value).toBe("");
+      expect(select.selectedIndex).toBe(-1);
+      expect(select.options.every((item) => !item.selected)).toBe(true);
+    } finally {
+      dom.restore();
+    }
+  });
+
   it("clears old table data and fences pending and immediate results by newest selection", async () => {
     const dom = installSimulationPreparationTestDom();
     const container = dom.document.createElement("div");
