@@ -2871,3 +2871,10 @@ Pełny root review czterech plików PASS. Regresje rzeczywistej pure comparison 
 GHA 38018495839 exactab151: Control114114048348 SUCCESS,770testfilesPASS1skip;7777testsPASS13skip, bez błędów. Nazwane suite: component DOM4PASS(log1042), postprocessing commands24PASS1040, constructor11PASS1126, persisted reader14PASS1196 i reference parser9PASS1333. Typecheck i lint także PASS. Strict hidden selects ['0','1'] przeszły po bootstrap-before-import; nie jest to rozluźnienie asercji ani mock hooka.
 
 Browser114114048205 SUCCESS; wcześniejszy zachowany actual import proof38016899846 potwierdza full precision SI, właściciela wyników, capturedscope oraz odrzucenie oversize bez text/POST. Uwaga4234647695 implemented. Poprawki publikacji6166c47d055e72a85c7ebf0eccd12d9f6ea9cf68 i normy k57e61c4f4d118c1f1678fc2d9f02620e5d7537a9 są na remote; odrębny GHA38019321647 wykonuje ich nowe regresje. Cały cel i naukowa kwalifikacja solvera pozostają niezakończone.
+
+
+### 2026-10-10 — pierwsze CI publikacji: widoczność helperów i raporty V2
+
+GHA38019321647 exact57e61: Rust114116561543 zakończył kompilację błędami E0364/E0603: helpery tracking outputs i candidate indices miały pub(super) w child module, lecz eigen_path re-exportuje je do szerszego FEM. Native-window regression rzeczywiście konsumuje tracking helper przez sibling module. Właściwą granicą jest pub(in crate::fem) dla tych dwóch funkcji; nie public API ani pub(crate). Zastosowano tę korektę; kompilacja wymaga kolejnego GHA.
+
+Python114116561477 zakończył cały job failure na dotychczasowym meshing actual-density teście (332tests,1failure1skip, body108cells/region0edges), bez zmiany meshing źródeł przez ten fragment. Wcześniejszy nowy krok test_validate_parallel_execution_report.py PASS:15tests, w tym strict V1/V2 journal/direct, unknown token rejection i direct completion not_verified (log333–363). Nie promowano całej publikacji tylko na podstawie tego consumer PASS; jej Rust/regression gate pozostaje pending.

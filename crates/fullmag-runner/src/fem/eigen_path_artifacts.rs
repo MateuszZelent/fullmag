@@ -2448,7 +2448,7 @@ pub(super) fn eigen_path_operator_diagnostics_has_gated_terms(
         })
 }
 
-pub(super) fn eigen_path_tracking_outputs(outputs: &[OutputIR], mode_count: u32) -> Vec<OutputIR> {
+pub(in crate::fem) fn eigen_path_tracking_outputs(outputs: &[OutputIR], mode_count: u32) -> Vec<OutputIR> {
     // A single-k solver must not see path-level branch/sample selectors. Its
     // candidate vectors are needed at every sample to track before exporting.
     let mut tracking_outputs = outputs
@@ -3430,7 +3430,7 @@ pub(super) fn eigen_path_candidate_mode_indices(
     )
 }
 
-pub(super) fn eigen_path_candidate_mode_indices_for_sample(
+pub(in crate::fem) fn eigen_path_candidate_mode_indices_for_sample(
     outputs: &[OutputIR],
     sample_index: usize,
     sample_label: Option<&str>,
