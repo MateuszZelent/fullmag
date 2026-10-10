@@ -6780,7 +6780,7 @@ mod tests {
     fn fem_topology_guard_fully_bound_mixed_frequency_plan_reaches_scope_rejection() {
         let (problem, plan) = certified_mixed_topology_guard_fixture();
 
-        let expected = "fem_mixed_p1_runtime_scope_rejected: study=fem_frequency_response; requested_device=cpu; precision=Double; required=explicit_cpu_or_gpu+strict+double+P1+exchange+poisson_robin_or_dirichlet+PG_BB_or_NCG_or_LLG_overdamped; failed_predicates=[fem_relaxation_plan_missing,demag_count_not_one,study_not_relaxation]; fallback=none";
+        let expected = "fem_mixed_p1_runtime_scope_rejected: study=fem_frequency_response; requested_device=cpu; precision=Double; required=explicit_cpu_or_gpu+strict+double+P1+exchange+poisson_robin_or_dirichlet+relaxation_PG_BB_NCG_LLG_overdamped_or_time_evolution_heun_rk4_rk23_rk45+regional_field_drive_supported_by_time_evolution; failed_predicates=[fem_relaxation_plan_missing,demag_count_not_one,study_not_relaxation_or_time_evolution]; fallback=none";
         let actual = topology_guard_error(&problem, &plan);
         assert_eq!(actual, expected);
         for false_plan_predicate in [
@@ -6974,7 +6974,7 @@ mod tests {
     }
 
     #[test]
-    fn fem_topology_guard_accepts_only_bound_cpu_double_relaxation_scope() {
+    fn fem_topology_guard_bound_strict_double_scope_rejects_unbound_or_unsupported_scope() {
         let (problem, plan) = certified_mixed_cpu_relaxation_guard_fixture();
         require_supported_fem_topology(&problem, &plan)
             .expect("bound CPU-double mixed P1 relaxation must cross the runner guard");
@@ -7003,16 +7003,16 @@ mod tests {
             .expect("bound v3 CPU-double mixed P1 relaxation must cross the runner guard");
 
         for case in [
-            "gpu",
+            "device_provenance_mismatch",
             "single",
             "extended",
-            "time_evolution",
+            "unsupported_time_integrator",
             "unsupported_status",
         ] {
             let mut rejected_problem = problem.clone();
             let mut rejected_plan = plan.clone();
             match case {
-                "gpu" => {
+                "device_provenance_mismatch" => {
                     rejected_problem.problem_meta.runtime_metadata.insert(
                         "runtime_selection".to_string(),
                         json!({"device": "gpu", "precision": "double"}),
@@ -7026,8 +7026,14 @@ mod tests {
                     rejected_problem.validation_profile.execution_mode =
                         fullmag_ir::ExecutionMode::Extended;
                 }
-                "time_evolution" => {
-                    rejected_problem.study = fullmag_ir::ProblemIR::bootstrap_example().study;
+                "unsupported_time_integrator" => {
+                    let bootstrap = fullmag_ir::ProblemIR::bootstrap_example();
+                    rejected_problem.study = bootstrap.study;
+                    let BackendPlanIR::Fem(fem) = &mut rejected_plan.backend_plan else {
+                        unreachable!()
+                    };
+                    fem.relaxation = None;
+                    fem.integrator = Some(IntegratorChoice::Abm3);
                 }
                 "unsupported_status" => {
                     let BackendPlanIR::Fem(fem) = &mut rejected_plan.backend_plan else {
@@ -7044,6 +7050,21 @@ mod tests {
             }
             let error = require_supported_fem_topology(&rejected_problem, &rejected_plan)
                 .expect_err("runner must fail closed outside the qualified mixed P1 tuple");
+            if case == "device_provenance_mismatch" {
+                assert_eq!(
+                    error.message,
+                    "fem_mixed_p1_runtime_provenance_stale: authored/managed device metadata does not match plan-bound effective device; fallback=none"
+                );
+            }
+            if case == "unsupported_time_integrator" {
+                assert!(
+                    error
+                        .message
+                        .contains("study_time_evolution_integrator_unsupported"),
+                    "case={case}: {}",
+                    error.message
+                );
+            }
             assert!(
                 error
                     .message
@@ -7587,9 +7608,14 @@ mod tests {
         };
 
         let pgbb = row("Relaxation(projected_gradient_bb)");
-        assert!(pgbb.contains("fem_cpu_native"), "{pgbb}");
-        assert!(pgbb.contains("fem_native_gpu"), "{pgbb}");
-        assert!(pgbb.contains("native FEM CPU/MFEM/CUDA"), "{pgbb}");
+        assert!(pgbb.contains("FEM CPU/GPU development executable"), "{pgbb}");
+        assert!(pgbb.contains("**planned**"), "{pgbb}");
+        assert!(pgbb.contains("**unvalidated**"), "{pgbb}");
+        assert!(
+            pgbb.contains("No exact source-bound managed receipt exists"),
+            "{pgbb}"
+        );
+        assert!(pgbb.contains("not production-qualified"), "{pgbb}");
         assert!(pgbb.contains("mu0 Ms V"), "{pgbb}");
         assert!(pgbb.contains("m/A"), "{pgbb}");
         assert!(pgbb.contains("owns no RK"), "{pgbb}");
@@ -7605,9 +7631,14 @@ mod tests {
         );
 
         let ncg = row("Relaxation(nonlinear_cg)");
-        assert!(ncg.contains("fem_cpu_native"), "{ncg}");
-        assert!(ncg.contains("fem_native_gpu"), "{ncg}");
-        assert!(ncg.contains("native FEM CPU/MFEM/CUDA"), "{ncg}");
+        assert!(ncg.contains("FEM CPU/GPU development executable"), "{ncg}");
+        assert!(ncg.contains("**planned**"), "{ncg}");
+        assert!(ncg.contains("**unvalidated**"), "{ncg}");
+        assert!(
+            ncg.contains("No exact source-bound managed receipt exists"),
+            "{ncg}"
+        );
+        assert!(ncg.contains("not production-qualified"), "{ncg}");
         assert!(ncg.contains("same physical energy metric"), "{ncg}");
         assert!(ncg.contains("m/A"), "{ncg}");
         assert!(ncg.contains("owns no RK"), "{ncg}");
@@ -7623,11 +7654,12 @@ mod tests {
         );
 
         let tpi = row("Relaxation(tangent_plane_implicit)");
-        assert!(tpi.contains("CPU/MFEM development-only"), "{tpi}");
         assert!(
-            tpi.contains("**under-development** (native FEM CPU/MFEM only)"),
+            tpi.contains("CPU/MFEM development-only in extended mode; forced GPU unsupported"),
             "{tpi}"
         );
+        assert!(tpi.contains("**planned**"), "{tpi}");
+        assert!(tpi.contains("**unvalidated**"), "{tpi}");
         assert!(tpi.contains("Strict mode rejects TPI"), "{tpi}");
         assert!(tpi.contains("Forced GPU rejects"), "{tpi}");
         assert!(tpi.contains("no hidden GPU-to-CPU fallback"), "{tpi}");
