@@ -2653,6 +2653,30 @@ def _generate_coincident_ring_airbox_mesh(
             max(body_hmax_scaled, h_outer_scaled),
         )
         preexisting_fields = [*source_fields, int(body_upper_field)]
+        if scoped_layer_partitioning:
+            # The shared extrusion cap lies at the outer z face, in the air, so
+            # neither the owner-volume upper field above nor the air grading
+            # field (which tends to the far-air cap there) constrains it.
+            # Its triangulation is copied through every exact plane, i.e. it
+            # *is* the body XY triangulation; bound it by the body target so
+            # that raising only the airbox cap cannot coarsen the body
+            # (docs/physics/0102 section 11). VOut is neutral for the Min
+            # composition, so no other surface is refined.
+            source_cap_field = gmsh.model.mesh.field.add("Constant")
+            gmsh.model.mesh.field.setNumbers(
+                source_cap_field,
+                "SurfacesList",
+                [int(annulus_surface)]
+                + ([int(hole_surface)] if hole_surface is not None else []),
+            )
+            gmsh.model.mesh.field.setNumber(
+                source_cap_field, "VIn", body_hmax_scaled
+            )
+            gmsh.model.mesh.field.setNumber(
+                source_cap_field, "VOut", max(body_hmax_scaled, h_outer_scaled)
+            )
+            gmsh.model.mesh.field.setNumber(source_cap_field, "IncludeBoundary", 1)
+            preexisting_fields.append(int(source_cap_field))
         if airbox_field is not None:
             preexisting_fields.append(int(airbox_field))
         if scoped_layer_partitioning:
