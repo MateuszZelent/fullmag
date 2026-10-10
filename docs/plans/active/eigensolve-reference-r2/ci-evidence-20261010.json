@@ -42,6 +42,101 @@
       "scope": "full_Rust_API",
       "compile_error": "E0425 latest_fields in FrozenSpins fixture",
       "tests_ran": false
+    },
+    {
+      "run_id": 38072219897,
+      "sha": "2101053ab52bdaa2ac3c8242ee902d076c1f7263",
+      "conclusion": "failure",
+      "scope": "full_Rust_API_main_suite",
+      "passed": 1004,
+      "failed": 6,
+      "ignored": 3,
+      "filtered": 355
+    },
+    {
+      "run_id": 38076097697,
+      "sha": "ea59d2cb201d4e24c7755ec48a6335b7143854a7",
+      "conclusion": "failure",
+      "scope": "default_feature_runner",
+      "passed": 1593,
+      "failed": 3,
+      "ignored": 1,
+      "new_fdm_identity_writer_cases_passed": 5
+    },
+    {
+      "run_id": 38074310973,
+      "sha": "f9c29e2b2bc195d598e600bbcb3bd47316e58251",
+      "conclusion": "success",
+      "scope": "dispersion_artifact_consumers"
+    },
+    {
+      "run_id": 38076097764,
+      "sha": "ea59d2cb201d4e24c7755ec48a6335b7143854a7",
+      "conclusion": "success",
+      "scope": "dispersion_artifact_consumers"
+    },
+    {
+      "run_id": 38076097699,
+      "sha": "ea59d2cb201d4e24c7755ec48a6335b7143854a7",
+      "conclusion": "failure",
+      "scope": "hosted_UI_contracts",
+      "vitest_passed": 100,
+      "vitest_failed": 1,
+      "failure": "undamped_signed_zero",
+      "complete_typecheck": "passed",
+      "architecture": "passed",
+      "pnpm_manifests_regressions": "passed",
+      "physical_workspace_install": "passed",
+      "react_doctor": {
+        "status": "failure",
+        "errors": 9,
+        "issues": 617,
+        "score": 57,
+        "scope": "analyzed_app_not_claimed_as_new_regressions"
+      },
+      "browser": "NOT VERIFIED"
+    },
+    {
+      "run_id": 38074313403,
+      "sha": "f9c29e2b2bc195d598e600bbcb3bd47316e58251",
+      "conclusion": "failure",
+      "scope": "modal-phase-slepc",
+      "phase": "native_link",
+      "tests_ran": false,
+      "failure": "CPU_test_object_references_GPU_provider_symbols",
+      "receipt_sha256": "a6731f43cdca14bfe852f4f924d7100ba2d09ebff0b4f72bcdb0ccbc49578eb6",
+      "qualification_claimed": false
+    },
+    {
+      "run_id": 38076746447,
+      "sha": "fe99244d060489a3f67c4afc7de09445bdba5220",
+      "conclusion": "success",
+      "scope": "complete_default_feature_runner",
+      "passed": 1596,
+      "failed": 0,
+      "ignored": 1,
+      "scientific_qualification": "NOT VERIFIED"
+    },
+    {
+      "run_id": 38076746462,
+      "sha": "fe99244d060489a3f67c4afc7de09445bdba5220",
+      "conclusion": "failure",
+      "scope": "hosted_UI_contracts",
+      "vitest_passed": 105,
+      "vitest_failed": 0,
+      "manifest_regressions_passed": 5,
+      "complete_typecheck": "passed",
+      "architecture": "passed",
+      "physical_workspace_install": "passed",
+      "manifest_proof_sha256": "339aed894bbaa59a95dd839d8ba7560460ee3177fc6b308d626986ee8f64df18",
+      "react_doctor": {
+        "status": "failure",
+        "errors": 9,
+        "issues": 617,
+        "score": 57,
+        "artifact_diagnostics_sha256": "2cb699880a6151ccb7818ac1967279b7c1afb6bf2bfa2520d8ae847a255a4030"
+      },
+      "browser": "NOT VERIFIED"
     }
   ]
 }

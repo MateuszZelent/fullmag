@@ -307,3 +307,50 @@ SOURCE review i kolejne hosted native wykonanie wymagane.
 
 Sprawdzono kodowanie UTF-8 tracker; poprawiono wylacznie dopisane checkpointy
 z niepoprawnym kodowaniem Windows. Historyczny prefix zachowany.
+
+
+## Checkpoint fe99244d - runner suite zielona, UI kontrakty PASS
+
+`d6bbf4ff3aec8263f629b58b07881b4ad040efa7`,
+`87dc6a748cd9a6ccab0a4f6c640a4b78d8579d74` oraz
+`fe99244d060489a3f67c4afc7de09445bdba5220` sa na remote.
+Hosted #38076746447: 1596 PASS, 0 FAIL, 1 ignored. Pelny default-feature
+runner kontrakt jest zielony; nie jest dowodem fizyki, FEM/GPU czy calego API.
+Hosted UI #38076746462: 105 Vitest PASS w czterech plikach, piec manifest
+regressions PASS, architecture i pelny typecheck PASS. Cale workflow nadal
+FAIL przez React Doctor: 9 errors/617 issues/57 score. Dokladny report
+i manifest source identity pobrano; hashe zapisano w ci-evidence JSON.
+[Zakres blokady UI](ui-ci-gates-20261010.md) rozdziela te wyniki od browser.
+
+Native CPU selected-window rerun #38076759242 na exact fe99244d trwa.
+R2 P2 note/map przed kolejnym diagnostic change dopuszcza odczyt konfiguracji
+live PCLU przez publiczne PCFactorGetShiftType/GetShiftAmount z pinned
+PETSc v3.24.6. Jest to read-only configuration query, nie pomiar rzeczywistej
+perturbacji faktora ani zmiana polityki LU. Getter failure nie moze byc
+zastepowany requested value; source/runtime proof i dalszy eksperyment
+unshifted exact-Schur pozostaja odrebne. Mapa naukowa przeszla walidator.
+P0-P10 nadal nie jest zamkniete.
+
+
+## P2/P10 - kolejne source-reviewed korekty
+
+Private live-PCLU query zostal zlozony bez zmiany solver configuration,
+operatora ani residual gate. SOURCE review PASS: exact PCLU guard, niezalezne
+getter codes, raw/mapped enum, finite amount i null/partial dla braku odczytu.
+Serializer zachowuje perturbation_measured=false i nie duplikuje kluczy.
+Review wykryl, ze count-only fixture wraca przed nowymi query assertions.
+Dlatego istnieje osobny CLI/CTest alias live_shift_configuration w istniejacym
+floquet-count-slepc profile; count-only nadal pozostaje osobny.
+GHA rzeczywistego odczytu oczekuje wykonania, bez przypisywania mu PASS
+na podstawie fixture serializer. Mapa naukowa i AST profilu PASS.
+
+Piec API fixture corrections ma SOURCE review PASS: missing m usuwa oba
+zrodla, mat_ms jest opublikowane przez fizyczny publisher, trzy FrozenSpins
+requests maja rzeczywista revision po publikacji; stale/topology guards
+pozostaja. To nie zamyka szostego API failure. Wspolny resolver m wybiera
+stary cache z jawna provenance przed rzeczywiscie nowszym physical live m.
+Sam precedence fix jest niewystarczajacy: carry-forward starego bufora moze
+falszywie nadac mu nowy step, a meta/frame/bundle/readiness maja oddzielne
+selektory. Nastepna poprawka musi zachowac payload source identity i atomowe
+bundle, a status materializer oceniac wzgledem wybranego zrodla.
+Nie zmieniono oczekiwania failing live-vector testu ani guards produkcyjnych.
