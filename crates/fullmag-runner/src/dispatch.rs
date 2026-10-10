@@ -7066,7 +7066,7 @@ mod tests {
         );
         assert_eq!(nested_manifest["validation_state"], "unvalidated");
         assert!(
-            nested_manifest.get("validated_scope").is_none(),
+            nested_manifest.get("validated_scope").is_none_or(serde_json::Value::is_null),
             "unvalidated diagnostics must not publish a validated scope"
         );
         assert_eq!(

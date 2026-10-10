@@ -5402,6 +5402,31 @@ mod tests {
     #[test]
     fn exact_backend_observation_executes_only_one_of_two_same_kind_modules() {
         let mut problem = fullmag_ir::ProblemIR::bootstrap_example();
+        fn torque_module(id: &str, current_density: [f64; 3]) -> fullmag_ir::SpinTorqueModuleIR {
+            fullmag_ir::SpinTorqueModuleIR::ZhangLi {
+                schema_version: Some("zhang_li_torque.v1".to_string()),
+                id: Some(id.to_string()),
+                target: Some(fullmag_ir::RegionRefIR {
+                    object_id: "strip".to_string(),
+                    region_id: None,
+                }),
+                formula_version: "zhang_li.mumax3.v1".to_string(),
+                operator_version: Some("zl_mumax3_central_v1".to_string()),
+                current_density: Some(current_density),
+                current_source: None,
+                degree: 1.0,
+                beta: 0.05,
+                lande_g: Some(2.0),
+            }
+        }
+        problem.spin_torque_modules = vec![
+            torque_module("torque:first", [1.0e12, 0.0, 0.0]),
+            torque_module("torque:second", [0.0, 1.0e12, 0.0]),
+        ];
+        let first_family_payload = serde_json::to_value(&problem.spin_torque_modules[0])
+            .expect("serialize first canonical typed torque record");
+        let second_family_payload = serde_json::to_value(&problem.spin_torque_modules[1])
+            .expect("serialize second canonical typed torque record");
         problem.physics_graph = Some(serde_json::json!({
             "schema_version": "physics_graph.v1",
             "scene_revision": 1,
@@ -5409,31 +5434,41 @@ mod tests {
                 {
                     "id": "torque:first",
                     "kind": "spin_torque",
-                    "applies_to": [{"kind": "global"}],
-                    "solve_domain": [],
+                    "applies_to": [{"kind": "object", "object_id": "strip"}],
+                    "solve_domain": [{"object_id": "strip"}],
                     "depends_on": [],
                     "activation": "active",
                     "authored_state": "authored",
                     "capability": "reference_executable",
-                    "source_path": "/spin_torques/0",
-                    "family_payload": {"kind": "zhang_li"}
+                    "source_path": "/spin_torque_modules/0",
+                    "family_payload": first_family_payload
                 },
                 {
                     "id": "torque:second",
                     "kind": "spin_torque",
-                    "applies_to": [{"kind": "global"}],
-                    "solve_domain": [],
+                    "applies_to": [{"kind": "object", "object_id": "strip"}],
+                    "solve_domain": [{"object_id": "strip"}],
                     "depends_on": [],
                     "activation": "active",
                     "authored_state": "authored",
                     "capability": "reference_executable",
-                    "source_path": "/spin_torques/1",
-                    "family_payload": {"kind": "zhang_li"}
+                    "source_path": "/spin_torque_modules/1",
+                    "family_payload": second_family_payload
                 }
             ],
             "edges": []
         }));
-        let plan = test_execution_plan(None);
+        let mut plan = test_execution_plan(None);
+        let BackendPlanIR::Fdm(fdm_plan) = &mut plan.backend_plan else {
+            panic!("expected FDM plan");
+        };
+        // Give the object-scoped modules an identity in this fixture mask.
+        let grid_certificate = fdm_plan
+            .grid_certificate
+            .take()
+            .expect("artifact fixture grid certificate should exist");
+        fdm_plan.grid_certificate =
+            Some(grid_certificate.with_object_ids(vec!["strip".to_string()]));
         let executed = ExecutedRun {
             result: RunResult {
                 status: RunStatus::Completed,
@@ -5487,6 +5522,8 @@ mod tests {
             beta: 0.05,
             lande_g: Some(2.0),
         }];
+        let family_payload = serde_json::to_value(&problem.spin_torque_modules[0])
+            .expect("serialize canonical typed torque payload");
         problem.physics_graph = Some(serde_json::json!({
             "schema_version": "physics_graph.v1",
             "scene_revision": 1,
@@ -5500,7 +5537,7 @@ mod tests {
                 "authored_state": "authored",
                 "capability": "reference_executable",
                 "source_path": "/spin_torque_modules/0",
-                "family_payload": {"kind": "zhang_li"}
+                "family_payload": family_payload
             }],
             "edges": []
         }));
@@ -7200,7 +7237,11 @@ mod tests {
     fn metadata_persists_authoritative_stage_completion() {
         let problem = fem_execution_problem("cpu", ExecutionMode::Strict);
         let plan = test_fem_execution_plan();
-        let mut executed = final_execution_test_run(ExecutionProvenance::default());
+        let mut executed = final_execution_test_run(ExecutionProvenance {
+            execution_engine: "fem_cpu_native".to_string(),
+            precision: "double".to_string(),
+            ..ExecutionProvenance::default()
+        });
         executed.result.completion = Some(fullmag_ir::StageCompletionIR {
             status: "completed".to_string(),
             converged: true,

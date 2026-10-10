@@ -159,3 +159,26 @@ Generic i Floquet mają odrębne complex Ω filters; samo ich usunięcie może
 przyjąć mirror sector. Następny bounded etap wymaga physical projection,
 original residual i complex eigenvalue clustering, potem weak-alpha energy
 balance. Obecne Include reference nie jest exact solve i nie otwiera native gate.
+
+
+## Checkpoint 2101053 — ponowne CI
+
+`5c8d6480a259294f23ebe43d262e3e44f4e4bf5d` oraz
+`2101053ab52bdaa2ac3c8242ee902d076c1f7263` są na remote.
+Hosted #38072216297: 1572 PASS, 19 FAIL, 1 ignored. Wszystkie nowe typed i R2
+method cases nadal PASS; 11 z 12 wcześniej błędnych przypadków eigensolve
+przeszło. Bias producer-identity guard, synthetic K0 trzech pól, cztery
+Floquet classification fixtures, R4 i jawny Poisson block residual PASS.
+Ostatnia dispatch assertion zakładała brak klucza validated_scope, podczas
+gdy canonical Option emituje null. Source-reviewed korekta dopuszcza wyłącznie
+brak lub null, nadal odrzuca każdy string dla validation_state=unvalidated.
+
+Trzy dalsze fixture artifacts przygotowano zgodnie z produkcyjnym kontraktem:
+canonical typed torque family payloads, object identity dla scoped graph oraz
+jawny fem_cpu_native/double dla testu completion. Guardy i assertions
+wykonanych IDs/completion zachowane. To naprawy fixture, nie rozszerzenie
+fizyki FDM. Wykonanie nowych zmian oczekuje następnego CI.
+
+Pełny Rust/API #38072219897 trwa na exact 2101053; jego wynik nie jest
+przypisywany późniejszym zmianom. P4 native v2 search-stability/count-unavailable
+przygotowywane osobno; independent count i P0–P10 nadal nie są zamknięte.
