@@ -2978,9 +2978,11 @@ FullmagFemModalEigenRequest make_floquet_contour_request(
     request.operator_request.include_demag = 1;
     request.operator_request.demag_realization = "floquet_airbox";
     request.operator_request.spin_wave_bc_kind = "floquet";
-    request.operator_request.operator_diagnostics_json =
-        "{\"operator_family\":\"mfem_linearized_llg\","
-        "\"payload_kind\":\"bloch_floquet_tangent_operator\"}";
+    request.operator_request.operator_diagnostics_json = has_dense_descriptor
+        ? "{\"operator_family\":\"mfem_linearized_llg\","
+          "\"payload_kind\":\"bloch_floquet_tangent_operator\"}"
+        : "{\"operator_family\":\"mfem_linearized_llg\","
+          "\"payload_kind\":\"certified_shared_domain\"}";
     request.has_floquet_k_vector = 1;
     request.floquet_k_vector_rad_per_m[0] = fixture.k_vector[0];
     request.floquet_k_vector_rad_per_m[1] = fixture.k_vector[1];
