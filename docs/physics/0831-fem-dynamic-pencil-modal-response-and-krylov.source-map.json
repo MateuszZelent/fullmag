@@ -709,6 +709,20 @@
         "source-count-physical-fixture-contract",
         "source-count-composed-operator-oracle"
       ]
+    },
+    {
+      "id": "eq-box-airbox-step-size-resolution",
+      "symbols": [
+        "box_airbox_h_in",
+        "box_airbox_h_cap",
+        "box_airbox_body_hmax",
+        "box_airbox_h_min",
+        "box_airbox_h_max",
+        "box_airbox_growth_ratio"
+      ],
+      "sources": [
+        "source-box-airbox-step-sizes"
+      ]
     }
   ],
   "symbols": [
@@ -1545,6 +1559,42 @@
       "latex": "$\\ell$",
       "meaning": "długość krawędzi osiowego Tet4 w fixture",
       "si_unit": "$\\mathrm{m}$"
+    },
+    {
+      "id": "box_airbox_body_hmax",
+      "latex": "$h_{\\mathrm{body}}$",
+      "meaning": "Bazowy rozmiar siatki filmu przekazany generatorowi",
+      "si_unit": "$\\mathrm{m}$"
+    },
+    {
+      "id": "box_airbox_h_min",
+      "latex": "$h_{\\min}^{\\mathrm{air}}$",
+      "meaning": "Jawny rozmiar pierwszego kroku airboxu przy interfejsie",
+      "si_unit": "$\\mathrm{m}$"
+    },
+    {
+      "id": "box_airbox_h_max",
+      "latex": "$h_{\\max}^{\\mathrm{air}}$",
+      "meaning": "Jawny górny limit rozmiaru w dalekim polu",
+      "si_unit": "$\\mathrm{m}$"
+    },
+    {
+      "id": "box_airbox_h_in",
+      "latex": "$h_{\\mathrm{in}}$",
+      "meaning": "Rozwiązany rozmiar pierwszego kroku airboxu",
+      "si_unit": "$\\mathrm{m}$"
+    },
+    {
+      "id": "box_airbox_h_cap",
+      "latex": "$h_{\\mathrm{cap}}$",
+      "meaning": "Rozwiązany górny limit kroku airboxu",
+      "si_unit": "$\\mathrm{m}$"
+    },
+    {
+      "id": "box_airbox_growth_ratio",
+      "latex": "$r$",
+      "meaning": "AirboxOptions.grading_ratio (domyślnie 1.3)",
+      "si_unit": "$1$"
     }
   ],
   "sources": [
@@ -2257,7 +2307,13 @@
       "id": "source-box-layer-planes",
       "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py",
       "symbol": "_box_airbox_layer_levels",
-      "responsibility": "Exact film planes and independently graded airbox planes in SI"
+      "responsibility": "Plan exact film planes and independently graded airbox planes with exact closure at the outer boundary"
+    },
+    {
+      "id": "source-box-airbox-step-sizes",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py",
+      "symbol": "_resolve_box_airbox_layer_sizes",
+      "responsibility": "Resolve the exact Box and ring airbox interface size and finite outer cap; missing maximum uses four geometric growth increments, while an authored maximum remains an upper bound"
     },
     {
       "id": "source-box-layer-generator",
@@ -2276,6 +2332,30 @@
       "path": "scripts/test_box_layered_airbox_mesh.py",
       "symbol": "test_public_de_model_shared_domain_realizes_six_layers",
       "responsibility": "Real Gmsh shared-domain realization of canonical DE model layer request"
+    },
+    {
+      "id": "source-box-airbox-sizing-regression",
+      "path": "scripts/test_box_layered_airbox_mesh.py",
+      "symbol": "test_public_box_default_airbox_cap_realizes_geometric_vertical_growth",
+      "responsibility": "Real public DSL-to-ProblemIR-to-Gmsh coverage for the implicit vertical airbox cap, exact film planes, and unchanged body source mesh"
+    },
+    {
+      "id": "source-box-airbox-cap-regression",
+      "path": "scripts/test_box_layered_airbox_mesh.py",
+      "symbol": "test_public_box_explicit_airbox_cap_below_body_hmax_is_preserved",
+      "responsibility": "Real public DSL-to-ProblemIR-to-Gmsh coverage keeping an authored airbox maximum below the body target without raising the airbox cap"
+    },
+    {
+      "id": "source-box-airbox-explicit-minimum-regression",
+      "path": "scripts/test_box_layered_airbox_mesh.py",
+      "symbol": "test_public_box_explicit_airbox_minimum_above_body_hmax_is_preserved",
+      "responsibility": "Real public DSL-to-ProblemIR-to-Gmsh coverage preserving an authored airbox interface size above the body target without coarsening the body source face"
+    },
+    {
+      "id": "source-box-airbox-ring-default-regression",
+      "path": "scripts/test_box_layered_airbox_mesh.py",
+      "symbol": "test_ring_air_default_cap_realizes_geometric_vertical_resolution",
+      "responsibility": "Real Gmsh ring-route regression for default geometric air growth, exact film planes, cap, and outer-boundary closure"
     },
     {
       "id": "source-box-layer-report",

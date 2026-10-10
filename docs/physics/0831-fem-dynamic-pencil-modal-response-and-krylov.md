@@ -3533,15 +3533,56 @@ Python→ProblemIR→mesh workflow; nie zmienia materiału ani operatora demagu.
 Obsługiwany kierunek to z, powierzchnia źródłowa jest trójkątna,
 bez rekombinacji; niespełnione ograniczenia kończą się jawnym błędem.
 
-Powietrze ma niezależne płaszczyzny: pierwszy krok od interfejsu
-wynika z minimum rozmiaru filmu i zadanej minimalnej wielkości powietrza,
-następne rosną według `AirboxOptions.grading_ratio` do
-`maximum_element_size`. Ostatni krok domyka rzeczywistą granicę airboxu.
+Powietrze ma niezależne płaszczyzny. Rozmiar pierwszego kroku i skończony
+limit kroku powietrza wyznacza równanie
+{eq}`eq-box-airbox-step-size-resolution`. $h_{\mathrm{body}}$ jest bazowym rozmiarem
+filmu przekazanym generatorowi, $h_{\min}^{\mathrm{air}}$ i $h_{\max}^{\mathrm{air}}$ to odpowiednio
+jawne airbox minimum przy interfejsie i jawny far-air upper bound; długości
+podano w metrach. $r$ jest bezwymiarowym `AirboxOptions.grading_ratio`
+(domyślnie 1.3). Jeśli podano oba airbox rozmiary i
+$h_{\min}^{\mathrm{air}}>h_{\max}^{\mathrm{air}}$, wejście zostaje odrzucone przed Gmsh. Jawny
+$h_{\max}^{\mathrm{air}}$ nie jest podnoszony; przy braku jawnego minimum ogranicza też
+domyślny pierwszy krok, gdy jest mniejszy od $h_{\mathrm{body}}$. Przy braku jawnego
+maksimum skończony limit to $h_{\mathrm{in}}r^4$, czyli cztery geometryczne
+zwiększenia przed nasyceniem. Ostatni krok domyka rzeczywistą granicę
+airboxu.
+
+| Symbol | Znaczenie | Jednostka |
+|---|---|---|
+| $h_{\mathrm{body}}$ | Bazowy rozmiar siatki filmu przekazany generatorowi | $\mathrm{m}$ |
+| $h_{\min}^{\mathrm{air}}$ | Jawny rozmiar pierwszego kroku airboxu przy interfejsie | $\mathrm{m}$ |
+| $h_{\max}^{\mathrm{air}}$ | Jawny górny limit rozmiaru w dalekim polu | $\mathrm{m}$ |
+| $h_{\mathrm{in}}$ | Rozwiązany rozmiar pierwszego kroku airboxu | $\mathrm{m}$ |
+| $h_{\mathrm{cap}}$ | Rozwiązany górny limit kroku airboxu | $\mathrm{m}$ |
+| $r$ | AirboxOptions.grading_ratio (domyślnie 1.3) | $1$ |
+
+```{math}
+:label: eq-box-airbox-step-size-resolution
+
+h_{\mathrm{in}} =
+\begin{cases}
+h_{\min}^{\mathrm{air}}, & \text{gdy jawne minimum powietrza podano},\\
+\min(h_{\mathrm{body}},h_{\max}^{\mathrm{air}}),
+    & \text{gdy minimum pominięto, a jawne maksimum podano},\\
+h_{\mathrm{body}}, & \text{gdy pominięto oba rozmiary},
+\end{cases}
+\qquad
+h_{\mathrm{cap}} =
+\begin{cases}
+h_{\max}^{\mathrm{air}}, & \text{gdy jawne maksimum podano},\\
+h_{\mathrm{in}}r^4, & \text{gdy jawne maksimum pominięto}.
+\end{cases}
+```
+
+Wszystkie długości w równaniu są w metrach SI; $r$ jest bezwymiarowe.
+Nieskończony, niefinitywny lub niedodatni rozwiązany limit jest odrzucany
+przed wywołaniem Gmsh.
 Wszystkie wielkości wejściowe są w metrach; skalowanie GEO do mikrometrów
 nie zmienia wyniku ani translacji Floqueta w artefaktach SI.
 
-Ścieżka pierścienia zachowuje dotychczasowy podział; nowe stopniowanie
-dotyczy Box. FDM CPU/GPU nie korzystają z tej siatki. Generacja FEM jest
+Ścieżka pierścienia zachowuje dotychczasowy podział geometrii; wspólna
+reguła rozmiarów i stopniowania w osi z dotyczy zarówno Box, jak i
+Box minus Cylinder. FDM CPU/GPU nie korzystają z tej siatki. Generacja FEM jest
 wspólna, lecz solver FEM CPU wymaga odrębnego managed run, a FEM GPU
 pozostaje NOT VERIFIED. Test planu płaszczyzn nie stanowi dowodu fizyki.
 Bramki: dokładna liczba płaszczyzn magnetycznych, maksymalny pionowy
@@ -3558,9 +3599,14 @@ Indeks źródeł realizacji warstw:
 | ID | Plik | Symbol |
 |---|---|---|
 | source-box-layer-planes | `packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py` | `_box_airbox_layer_levels` |
+| source-box-airbox-step-sizes | `packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py` | `_resolve_box_airbox_layer_sizes` |
 | source-box-layer-generator | `packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py` | `generate_swept_tetrahedral_box_airbox_mesh` |
 | source-box-layer-routing | `packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py` | `_realize_fem_domain_mesh_asset_from_components_impl` |
 | source-box-layer-regression | `scripts/test_box_layered_airbox_mesh.py` | `test_public_de_model_shared_domain_realizes_six_layers` |
+| source-box-airbox-sizing-regression | `scripts/test_box_layered_airbox_mesh.py` | `test_public_box_default_airbox_cap_realizes_geometric_vertical_growth` |
+| source-box-airbox-cap-regression | `scripts/test_box_layered_airbox_mesh.py` | `test_public_box_explicit_airbox_cap_below_body_hmax_is_preserved` |
+| source-box-airbox-explicit-minimum-regression | `scripts/test_box_layered_airbox_mesh.py` | `test_public_box_explicit_airbox_minimum_above_body_hmax_is_preserved` |
+| source-box-airbox-ring-default-regression | `scripts/test_box_layered_airbox_mesh.py` | `test_ring_air_default_cap_realizes_geometric_vertical_resolution` |
 
 Kontrola szwów obejmuje także boczne powierzchnie pierwszej i ostatniej
 warstwy powietrza. Powierzchnia boczna dotykająca granicy z nie jest
@@ -3615,10 +3661,14 @@ Regresja generacji nie dowodzi zgodności częstotliwości eigensolve.
 Ekstruzja wspólnej domeny Box minus Cylinder musi realizować stopniowanie
 powietrza w osi z przez jawne płaszczyzny, tak samo jak pełny film Box.
 Samo pole rozmiaru Gmsh nie dzieli ekstruzji z jednym elementem na odcinek.
-Dla geometric pierwszy krok wynosi min(hmax filmu, jawne minimum powietrza),
-następne rosną przez grading_ratio do maximum_element_size; ostatni krok
-kończy się dokładnie na zewnętrznej granicy Dirichleta. Film zachowuje n
-jednakowych warstw. Zmiana n nie zmienia płaszczyzn zewnętrznego powietrza.
+Pierwszy krok ma rozmiar jawnego minimum powietrza, jeśli je podano; w
+przeciwnym razie używa bazowego `hmax` filmu, ograniczonego do jawnego
+airbox maksimum, jeżeli nie podano minimum. Przy braku jawnego maksimum
+warstwy rosną do skończonego limitu z równania
+{eq}`eq-box-airbox-step-size-resolution`; jawne maximum pozostaje
+górnym ograniczeniem. Ostatni krok kończy się dokładnie
+na zewnętrznej granicy Dirichleta. Film zachowuje n jednakowych warstw.
+Zmiana n nie zmienia płaszczyzn zewnętrznego powietrza.
 Jednostką długości w publicznym Python i IR jest metr; GEO używa skali 1e6,
 a eksport przywraca SI. Translacje PBC x/y obejmują wszystkie warstwy.
 Ta poprawka dotyczy generacji shared-domain dla FEM CPU/GPU, nie zmienia

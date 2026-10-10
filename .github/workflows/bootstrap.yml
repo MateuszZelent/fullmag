@@ -543,6 +543,11 @@ jobs:
           python -m pip install 'pytest>=9,<10'
           python -m pip install -e 'packages/fullmag-py[meshing,figures]'
 
+      - name: Run real Gmsh exact-layer airbox grading regressions
+        run: |
+          python -c "import gmsh"
+          python -m pytest -q scripts/test_box_layered_airbox_mesh.py
+
       - name: Run Göbel 2019 bimeron reproducibility contracts
         run: >-
           python -m pytest -q

@@ -1979,6 +1979,49 @@ def _scaled_airbox_maximum_element_size(
     return float(airbox.maximum_element_size) * float(scale)
 
 
+def _resolve_box_airbox_layer_sizes(
+    body_hmax: float,
+    airbox: AirboxOptions,
+) -> tuple[float, float]:
+    """Resolve the exact Box air-layer interface size and finite outer cap (SI)."""
+    base_hmax = float(body_hmax)
+    growth = float(airbox.grading_ratio)
+    if not math.isfinite(base_hmax) or base_hmax <= 0.0:
+        raise ValueError("Box airbox body maximum element size must be finite and positive")
+    if not math.isfinite(growth) or growth <= 1.0:
+        raise ValueError("Box airbox grading ratio must be finite and greater than 1.0")
+
+    explicit_inner = airbox.minimum_element_size
+    h_inner = float(explicit_inner) if explicit_inner is not None else base_hmax
+    if not math.isfinite(h_inner) or h_inner <= 0.0:
+        raise ValueError("Box airbox minimum element size must be finite and positive")
+
+    explicit_outer = airbox.maximum_element_size
+    if explicit_outer is not None:
+        h_outer = float(explicit_outer)
+        if not math.isfinite(h_outer) or h_outer <= 0.0:
+            raise ValueError("Box airbox maximum element size must be finite and positive")
+        if explicit_inner is not None and h_inner > h_outer:
+            raise ValueError(
+                "Box airbox minimum_element_size must be <= maximum_element_size"
+            )
+        if explicit_inner is None:
+            h_inner = min(h_inner, h_outer)
+        return h_inner, h_outer
+
+    # Match the existing lateral/OCC/GEO default: permit four geometric growth
+    # steps when no authored far-air size is available, while keeping the cap
+    # finite and positive before it reaches Gmsh.
+    h_outer = h_inner
+    for _ in range(4):
+        h_outer *= growth
+        if not math.isfinite(h_outer) or h_outer <= 0.0:
+            raise ValueError(
+                "implicit airbox outer element size must be finite and positive"
+            )
+    return h_inner, h_outer
+
+
 def generate_swept_tetrahedral_box_airbox_mesh(
     geometry: Box, hmax: float, n_layers: int, *, order: int,
     distribution: str, recombine: bool, airbox: AirboxOptions | None,
@@ -2036,6 +2079,11 @@ def _generate_coincident_ring_airbox_mesh(
 ) -> MeshData:
     """Mesh a Box or ring and exact-cell airbox as synchronized GEO partitions."""
     SCALE = 1.0e6
+    body_hmax_scaled = float(hmax) * SCALE
+    if not math.isfinite(body_hmax_scaled) or body_hmax_scaled <= 0.0:
+        raise ValueError(
+            "scaled Box body maximum element size must be finite and positive"
+        )
     sx, sy, sz = (float(value) for value in base.size)
     radius = float(tool.radius) if tool is not None else None
     xmin, ymin, zmin, xmax, ymax, zmax = (float(value) * SCALE for value in bounds)
@@ -2043,10 +2091,14 @@ def _generate_coincident_ring_airbox_mesh(
     body_top = 0.5 * sz * SCALE
     if airbox.grading_mode != "geometric":
         raise ValueError("exact-cell layered airbox currently supports only geometric airbox grading")
-    h_inner = float(hmax)
-    if airbox.minimum_element_size is not None:
-        h_inner = min(h_inner, float(airbox.minimum_element_size))
-    h_outer = float(airbox.maximum_element_size) if airbox.maximum_element_size is not None else float(hmax)
+    h_inner, h_outer = _resolve_box_airbox_layer_sizes(hmax, airbox)
+    h_inner_scaled = h_inner * SCALE
+    h_outer_scaled = h_outer * SCALE
+    if not all(
+        math.isfinite(value) and value > 0.0
+        for value in (h_inner_scaled, h_outer_scaled)
+    ):
+        raise ValueError("scaled Box airbox element sizes must be finite and positive")
     levels = [value * SCALE for value in _box_airbox_layer_levels(
         body_bottom / SCALE, body_top / SCALE, zmin / SCALE, zmax / SCALE,
         n_layers, h_inner=h_inner, h_outer=h_outer, growth=float(airbox.grading_ratio),
@@ -2066,7 +2118,7 @@ def _generate_coincident_ring_airbox_mesh(
     try:
         _configure_gmsh_threads(gmsh, requested_threads=1, honor_environment=False)
         gmsh.model.add("fullmag_swept_box_cylinder_ring_coincident_airbox")
-        source_hmax_scaled = float(hmax) * SCALE
+        source_hmax_scaled = body_hmax_scaled
         z_source = levels[0]
         outer_points = [
             gmsh.model.geo.addPoint(x, y, z_source, source_hmax_scaled)
@@ -2275,24 +2327,14 @@ def _generate_coincident_ring_airbox_mesh(
         )
         airbox_field = None
         if airbox_scaled.grading_ratio > 1.0 and interface_surfaces:
-            inner = (
-                airbox_scaled.minimum_element_size
-                if airbox_scaled.minimum_element_size is not None
-                else float(hmax) * SCALE
-            )
-            outer = (
-                airbox_scaled.maximum_element_size
-                if airbox_scaled.maximum_element_size is not None
-                else inner * float(airbox_scaled.grading_ratio) ** 4
-            )
             airbox_field = _add_airbox_grading_field(
                 gmsh,
                 surface_tags=interface_surfaces,
-                h_inner=inner,
-                h_outer=outer,
+                h_inner=h_inner_scaled,
+                h_outer=h_outer_scaled,
                 grading_ratio=float(airbox_scaled.grading_ratio),
                 grading_mode=str(airbox_scaled.grading_mode),
-                dist_max=max(inner, min(xmax - xmin, ymax - ymin, zmax - zmin)),
+                dist_max=max(h_inner_scaled, min(xmax - xmin, ymax - ymin, zmax - zmin)),
                 object_bounds_min=(xmin, ymin, body_bottom),
                 object_bounds_max=(xmax, ymax, body_top),
                 airbox_bounds_min=(xmin, ymin, zmin),
@@ -2314,12 +2356,12 @@ def _generate_coincident_ring_airbox_mesh(
             preexisting_fields.append(int(airbox_field))
         _apply_mesh_options(
             gmsh,
-            float(hmax) * SCALE,
+            body_hmax_scaled,
             order,
             final_options,
             hscale=SCALE,
             preexisting_field_ids=preexisting_fields,
-            airbox_maximum_element_size=airbox_scaled.maximum_element_size,
+            airbox_maximum_element_size=h_outer_scaled,
             component_volume_tags={geometry.geometry_name: body_volumes},
             component_surface_tags={
                 geometry.geometry_name: sorted(

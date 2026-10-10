@@ -11,6 +11,68 @@ from fullmag.meshing._gmsh_swept import (
 )
 
 
+def _realize_public_de_smoke_box(
+    monkeypatch, tmp_path, *, universe_mesh_call, fixture_name,
+):
+    import fullmag as fm
+    from fullmag.meshing.asset_pipeline import realize_fem_domain_mesh_asset_from_components_with_report
+
+    monkeypatch.setenv("FULLMAG_DE_SMOKE_THICKNESS_LAYERS", "6")
+    fm.reset()
+    try:
+        source_path = Path(__file__).resolve().parents[1] / "examples/fem_de_smoke_numeric.py"
+        source = source_path.read_text(encoding="utf-8")
+        authored_mesh_call = (
+            'study.universe.mesh(maximum_element_size=100e-9,\n'
+            '                    maximum_element_growth_rate=AIR_GROWTH_RATE, grading="geometric")'
+        )
+        assert source.count(authored_mesh_call) == 1
+        fixture_path = tmp_path / fixture_name
+        fixture_path.write_text(
+            source.replace(authored_mesh_call, universe_mesh_call, 1),
+            encoding="utf-8",
+        )
+        problem = fm.load_problem_from_script(
+            fixture_path, lightweight_assets=True,
+        ).stages[-1].problem
+        ir = problem.to_ir(
+            requested_backend="fem", execution_mode="strict",
+            execution_precision="double", include_geometry_assets=False,
+        )
+        meta = ir["problem_meta"]["runtime_metadata"]
+        return realize_fem_domain_mesh_asset_from_components_with_report(
+            geometries=[Box(size=(40e-9, 40e-9, 10e-9), name="film")],
+            hints=fm.FEM(order=1, hmax=10e-9),
+            study_universe=meta["study_universe"],
+            mesh_workflow=meta["mesh_workflow"],
+        )
+    finally:
+        fm.reset()
+
+
+def _assert_public_box_planes(mesh, *, layers, expected, maximum_air_step):
+    nodes = np.asarray(mesh.nodes)
+    cells = np.asarray(mesh.elements)
+    markers = np.asarray(mesh.element_markers)
+    actual = np.unique(np.round(nodes[:, 2], decimals=17))
+    np.testing.assert_allclose(actual, expected, atol=1e-16, rtol=0)
+    assert actual[0] == pytest.approx(-205e-9, abs=1e-16)
+    assert actual[-1] == pytest.approx(205e-9, abs=1e-16)
+    assert np.all(np.diff(actual) > 0)
+
+    body = cells[markers == 1]
+    body_z = nodes[body, 2]
+    assert len(np.unique(np.round(body_z.reshape(-1), 17))) == layers + 1
+    assert np.max(np.ptp(body_z, axis=1)) <= 10e-9 / layers + 1e-15
+
+    xyz = nodes[cells]
+    volumes = np.linalg.det(xyz[:, 1:] - xyz[:, :1]) / 6
+    assert np.all(volumes > 0)
+    air = markers == 0
+    air_z_spans = np.ptp(xyz[air, :, 2], axis=1)
+    assert np.max(air_z_spans) <= maximum_air_step * (1 + 1e-12)
+
+
 def test_graded_planes_keep_film_and_outer_bounds():
     levels = _box_airbox_layer_levels(-5e-9, 5e-9, -2.005e-6, 2.005e-6,
                                     6, h_inner=10e-9/6, h_outer=100e-9, growth=1.3)
@@ -88,6 +150,164 @@ def test_public_de_model_shared_domain_realizes_six_layers(monkeypatch):
         z = np.asarray(mesh.nodes)[body, 2]
         assert np.max(np.ptp(z, axis=1)) <= 10e-9/6 + 1e-15
         assert len(np.unique(np.round(z.reshape(-1), 17))) == 7
+    finally:
+        fm.reset()
+
+
+def test_public_box_default_airbox_cap_realizes_geometric_vertical_growth(monkeypatch, tmp_path):
+    pytest.importorskip("gmsh")
+    h_inner = 10e-9
+    growth = 1.3
+    h_outer = h_inner * growth**4
+    expected = _box_airbox_layer_levels(
+        -5e-9, 5e-9, -205e-9, 205e-9, 6,
+        h_inner=h_inner, h_outer=h_outer, growth=growth,
+    )
+    mesh, markers, report = _realize_public_de_smoke_box(
+        monkeypatch, tmp_path, universe_mesh_call="study.universe.mesh()",
+        fixture_name="implicit_airbox_cap.py",
+    )
+    assert report.build_mode == "single_geometry_geo_layered_box"
+    assert markers == [{"geometry_name": "film", "marker": 1}]
+    _assert_public_box_planes(
+        mesh, layers=6, expected=expected, maximum_air_step=h_outer,
+    )
+    positive_steps = np.diff(np.asarray(expected)[np.asarray(expected) >= 5e-9])
+    assert positive_steps[0] == pytest.approx(h_inner, rel=1e-12)
+    assert positive_steps[1] == pytest.approx(h_inner * growth, rel=1e-12)
+    assert np.max(positive_steps) > h_inner
+
+    # Raising only the implicit airbox cap must not coarsen the body source face.
+    reference, _, _ = _realize_public_de_smoke_box(
+        monkeypatch, tmp_path,
+        universe_mesh_call="study.universe.mesh(maximum_element_size=10e-9)",
+        fixture_name="body_hmax_airbox_cap.py",
+    )
+    body_ids = np.unique(np.asarray(mesh.elements)[np.asarray(mesh.element_markers) == 1])
+    reference_body_ids = np.unique(
+        np.asarray(reference.elements)[np.asarray(reference.element_markers) == 1]
+    )
+    body_xy = set(map(tuple, np.round(np.asarray(mesh.nodes)[body_ids, :2], 17)))
+    reference_body_xy = set(
+        map(tuple, np.round(np.asarray(reference.nodes)[reference_body_ids, :2], 17))
+    )
+    assert body_xy == reference_body_xy
+
+
+def test_public_box_explicit_airbox_cap_below_body_hmax_is_preserved(monkeypatch, tmp_path):
+    pytest.importorskip("gmsh")
+    cap = 5e-9
+    expected = _box_airbox_layer_levels(
+        -5e-9, 5e-9, -205e-9, 205e-9, 6,
+        h_inner=cap, h_outer=cap, growth=1.3,
+    )
+    mesh, _, report = _realize_public_de_smoke_box(
+        monkeypatch, tmp_path,
+        universe_mesh_call=f"study.universe.mesh(maximum_element_size={cap!r})",
+        fixture_name="small_explicit_airbox_cap.py",
+    )
+    assert report.build_mode == "single_geometry_geo_layered_box"
+    _assert_public_box_planes(
+        mesh, layers=6, expected=expected, maximum_air_step=cap,
+    )
+
+
+def test_public_box_explicit_airbox_minimum_above_body_hmax_is_preserved(monkeypatch, tmp_path):
+    pytest.importorskip("gmsh")
+    h_inner = 15e-9
+    growth = 1.3
+    h_outer = h_inner * growth**4
+    expected = _box_airbox_layer_levels(
+        -5e-9, 5e-9, -205e-9, 205e-9, 6,
+        h_inner=h_inner, h_outer=h_outer, growth=growth,
+    )
+    mesh, _, report = _realize_public_de_smoke_box(
+        monkeypatch, tmp_path,
+        universe_mesh_call="study.universe.mesh(minimum_element_size=15e-9)",
+        fixture_name="explicit_airbox_minimum.py",
+    )
+    assert report.build_mode == "single_geometry_geo_layered_box"
+    _assert_public_box_planes(
+        mesh, layers=6, expected=expected, maximum_air_step=h_outer,
+    )
+    reference, _, _ = _realize_public_de_smoke_box(
+        monkeypatch, tmp_path,
+        universe_mesh_call="study.universe.mesh(maximum_element_size=10e-9)",
+        fixture_name="body_hmax_reference.py",
+    )
+    body_ids = np.unique(np.asarray(mesh.elements)[np.asarray(mesh.element_markers) == 1])
+    reference_body_ids = np.unique(
+        np.asarray(reference.elements)[np.asarray(reference.element_markers) == 1]
+    )
+    body_xy = set(map(tuple, np.round(np.asarray(mesh.nodes)[body_ids, :2], 17)))
+    reference_body_xy = set(
+        map(tuple, np.round(np.asarray(reference.nodes)[reference_body_ids, :2], 17))
+    )
+    assert body_xy == reference_body_xy
+
+
+def test_box_airbox_invalid_targets_fail_before_gmsh(monkeypatch):
+    import fullmag.meshing._gmsh_swept as swept
+
+    def forbidden_gmsh_import():
+        pytest.fail("invalid airbox size controls must fail before Gmsh initialization")
+
+    monkeypatch.setattr(swept, "_import_gmsh", forbidden_gmsh_import)
+    with pytest.raises(ValueError, match="minimum_element_size.*maximum_element_size"):
+        generate_swept_tetrahedral_box_airbox_mesh(
+            Box(size=(40e-9, 40e-9, 10e-9)), 10e-9, 6, order=1,
+            distribution="fixed", recombine=False,
+            airbox=AirboxOptions(
+                size=(40e-9, 40e-9, 410e-9),
+                minimum_element_size=10e-9,
+                maximum_element_size=5e-9,
+            ),
+            options=MeshOptions(mesh_strategy="thin_film_tetrahedral"),
+        )
+    with pytest.raises(ValueError, match="implicit airbox outer element size.*finite"):
+        generate_swept_tetrahedral_box_airbox_mesh(
+            Box(size=(40e-9, 40e-9, 10e-9)), 10e-9, 6, order=1,
+            distribution="fixed", recombine=False,
+            airbox=AirboxOptions(
+                size=(40e-9, 40e-9, 410e-9), grading_ratio=1e100,
+            ),
+            options=MeshOptions(mesh_strategy="thin_film_tetrahedral"),
+        )
+    with pytest.raises(ValueError, match="scaled Box airbox element sizes.*finite"):
+        generate_swept_tetrahedral_box_airbox_mesh(
+            Box(size=(40e-9, 40e-9, 10e-9)), 1e303, 6, order=1,
+            distribution="fixed", recombine=False,
+            airbox=AirboxOptions(
+                size=(40e-9, 40e-9, 410e-9), grading_ratio=1.01,
+            ),
+            options=MeshOptions(mesh_strategy="thin_film_tetrahedral"),
+        )
+    with pytest.raises(ValueError, match="scaled Box body maximum element size.*finite"):
+        generate_swept_tetrahedral_box_airbox_mesh(
+            Box(size=(40e-9, 40e-9, 10e-9)), 1e303, 6, order=1,
+            distribution="fixed", recombine=False,
+            airbox=AirboxOptions(
+                size=(40e-9, 40e-9, 410e-9),
+                maximum_element_size=5e-9,
+            ),
+            options=MeshOptions(mesh_strategy="thin_film_tetrahedral"),
+        )
+
+
+def test_public_study_rejects_airbox_minimum_above_maximum():
+    import fullmag as fm
+
+    fm.reset()
+    try:
+        study = fm.study("invalid-airbox-size-targets")
+        study.universe(mode="manual", size=(40e-9, 40e-9, 410e-9))
+        with pytest.raises(
+            ValueError, match="minimum_element_size must be <= maximum_element_size"
+        ):
+            study.universe.mesh(
+                minimum_element_size=10e-9,
+                maximum_element_size=5e-9,
+            )
     finally:
         fm.reset()
 
@@ -203,6 +423,58 @@ def test_ring_air_realizes_graded_vertical_resolution(layers):
         mapped = {int(pair[key]) for pair in mesh.periodic_node_pairs
                   if pair["pair_id"] == pair_id for key in ("node_a", "node_b")}
         assert required <= mapped
+
+
+def test_ring_air_default_cap_realizes_geometric_vertical_resolution():
+    pytest.importorskip("gmsh")
+    from fullmag.model.geometry import Cylinder
+    from fullmag.meshing._gmsh_swept import generate_swept_box_cylinder_ring_mesh
+
+    layers = 3
+    h_inner = 10e-9
+    growth = 1.3
+    h_outer = h_inner * growth**4
+    geometry = Box(size=(40e-9, 40e-9, 10e-9)) - Cylinder(
+        radius=8e-9, height=10e-9,
+    )
+    mesh = generate_swept_box_cylinder_ring_mesh(
+        geometry, h_inner, layers, order=1, distribution="fixed", recombine=False,
+        airbox=AirboxOptions(
+            size=(40e-9, 40e-9, 410e-9), grading_ratio=growth,
+        ),
+        options=MeshOptions(
+            mesh_strategy="thin_film_tetrahedral",
+            periodic_pair_ids=["x_faces", "y_faces"],
+        ),
+    )
+    assert set(mesh.cell_types.tolist()) == {"tet4"}
+    nodes = np.asarray(mesh.nodes)
+    cells = np.asarray(mesh.elements)
+    xyz = nodes[cells]
+    volumes = np.linalg.det(xyz[:, 1:] - xyz[:, :1]) / 6
+    assert np.all(volumes > 0)
+
+    expected = _box_airbox_layer_levels(
+        -5e-9, 5e-9, -205e-9, 205e-9, layers,
+        h_inner=h_inner, h_outer=h_outer, growth=growth,
+    )
+    actual = np.unique(np.round(nodes[:, 2], decimals=17))
+    np.testing.assert_allclose(actual, expected, atol=1e-16, rtol=0)
+    assert actual[0] == pytest.approx(-205e-9, abs=1e-16)
+    assert actual[-1] == pytest.approx(205e-9, abs=1e-16)
+    assert np.all(np.diff(actual) > 0)
+    film_planes = actual[(actual >= -5e-9) & (actual <= 5e-9)]
+    np.testing.assert_allclose(
+        film_planes, np.linspace(-5e-9, 5e-9, layers + 1), atol=1e-16, rtol=0,
+    )
+
+    positive_steps = np.diff(actual[actual >= 5e-9])
+    assert positive_steps[0] == pytest.approx(h_inner, rel=1e-12)
+    assert positive_steps[1] == pytest.approx(h_inner * growth, rel=1e-12)
+    assert np.max(positive_steps) <= h_outer * (1 + 1e-12)
+    assert np.max(positive_steps) > h_inner
+    air = np.asarray(mesh.element_markers) == 0
+    assert np.max(np.ptp(xyz[air, :, 2], axis=1)) <= h_outer * (1 + 1e-12)
 
 
 def test_ring_linear_air_grading_is_rejected_before_gmsh(monkeypatch):
