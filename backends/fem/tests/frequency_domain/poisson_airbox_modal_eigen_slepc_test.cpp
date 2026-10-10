@@ -1742,90 +1742,36 @@ void FrequencyWindowDoesNotRetryWhenOnlyTheGlobalRequestIsSaturated()
           "window certificate must publish a bounded refinement ncv greater than nev");
 }
 
-void FrequencyWindowRetriesWhenALocalIntervalIsSaturated()
+void FrequencyWindowRetainsInteriorModesBeforePublicationCap()
 {
     const WindowSpectrumFixture fixture = make_window_spectrum_fixture(
         {0.20e9, 1.10e9, 1.12e9, 1.14e9, 1.16e9, 1.18e9, 1.20e9,
          2.50e9, 4.80e9});
     const fd::PoissonAirboxEigenBlockProblem problem = fixture.problem(
-        0.5e9,
-        4.5e9,
-        4);
-
+        0.5e9, 4.5e9, 4);
     fd::PoissonAirboxModalEigenResult result{};
-    check(
-        solve_window_fixture_with_bounded_diagnostics(
-            "FrequencyWindowRetriesWhenALocalIntervalIsSaturated", problem, &result) ==
-            fd::FrequencyDomainStatus::ok,
-        result.error_message);
-    check(!result.window_complete && result.accepted_mode_count == 4u,
-          "locally dense search must preserve selected modes after adaptive retry without a whole-window count");
+    check(solve_window_fixture_with_bounded_diagnostics(
+              "FrequencyWindowRetainsInteriorModesBeforePublicationCap",
+              problem, &result) == fd::FrequencyDomainStatus::ok,
+          result.error_message);
+    check(!result.window_complete && result.accepted_mode_count == 4u &&
+              result.accepted_modes.size() == 4u,
+          "discovery must preserve the final public cap without claiming an independent count");
     check_stable_selected_search_certificate(result);
-    const bool local_retry_observed = json_object_after_contains(
-        result.executed_subwindows_json,
-        "\"pass\":\"base\",\"subwindow_index\":2,",
-        "\"requested_mode_count\":4,\"retry_count\":1");
-    if (!local_retry_observed) {
-        constexpr std::size_t certificate_prefix_limit = 4096u;
-        constexpr std::size_t subwindow_prefix_limit = 8192u;
-        const char *base_subwindow = std::strstr(
-            result.executed_subwindows_json,
-            "\"pass\":\"base\",\"subwindow_index\":2,");
-        const char *subwindow_diagnostics = base_subwindow != nullptr
-            ? base_subwindow
-            : result.executed_subwindows_json;
-        const std::size_t certificate_length = std::min(
-            std::strlen(result.window_certificate_json), certificate_prefix_limit);
-        const std::size_t subwindow_length = std::min(
-            std::strlen(subwindow_diagnostics), subwindow_prefix_limit);
-        std::fprintf(
-            stderr,
-            "LOCAL RETRY FAILURE DIAGNOSTICS:\nwindow_certificate_prefix=%.*s%s\n"
-            "base_subwindow_json_prefix=%.*s%s\n",
-            static_cast<int>(certificate_length),
-            result.window_certificate_json,
-            certificate_length < std::strlen(result.window_certificate_json)
-                ? " [truncated]" : "",
-            static_cast<int>(subwindow_length),
-            subwindow_diagnostics,
-            subwindow_length < std::strlen(subwindow_diagnostics)
-                ? " [truncated]" : "");
+    const double expected[] = {1.10e9, 1.12e9, 1.14e9, 1.16e9};
+    for (std::size_t index = 0; index < 4u; ++index) {
+        check(std::abs(result.accepted_modes[index].frequency_hz - expected[index]) /
+                  expected[index] < 1.0e-8,
+              "dense interior discovery must retain each of the first four physical modes");
     }
-    check(local_retry_observed,
-          "a locally saturated base subwindow must retry with a larger request");
-    const std::string retried_base_subwindow = json_object_after(
+    const std::string base_subwindow = json_object_after(
         result.executed_subwindows_json,
         "\"pass\":\"base\",\"subwindow_index\":2,");
-    check(!retried_base_subwindow.empty() &&
-              contains(retried_base_subwindow.c_str(),
-                       "\"requested_mode_count\":4,\"retry_count\":1") &&
-              json_number_after(
-                  retried_base_subwindow.c_str(),
-                  "\"local_accepted_mode_count\":") == 4.0,
-          "the retried base subwindow must publish the capped local accepted-mode count and its retry");
-    const double raw_ritz_in_window_count = json_number_after(
-        retried_base_subwindow.c_str(),
-        "\"raw_ritz_in_window_count\":");
-    const double certified_spectral_guard_count = json_number_after(
-        retried_base_subwindow.c_str(),
-        "\"certified_spectral_guard_count\":");
-    const double selected_frequency_min_hz = json_number_after(
-        retried_base_subwindow.c_str(),
-        "\"selected_frequency_min_hz\":");
-    const double selected_frequency_max_hz = json_number_after(
-        retried_base_subwindow.c_str(),
-        "\"selected_frequency_max_hz\":");
-    check(raw_ritz_in_window_count >= 6.0 &&
-              certified_spectral_guard_count >= 2.0 &&
-              selected_frequency_min_hz < 1.0e9 &&
-              selected_frequency_max_hz > 1.25e9 &&
-              contains(retried_base_subwindow.c_str(),
-                       "\"lower_edge_covered\":true") &&
-              contains(retried_base_subwindow.c_str(),
-                       "\"upper_edge_covered\":true") &&
-              contains(retried_base_subwindow.c_str(),
-                       "\"local_coverage_certified\":true"),
-          "the raw local pool and certified exterior guards must cover both base-subwindow edges after retry");
+    check(!base_subwindow.empty() &&
+              json_number_after(base_subwindow.c_str(),
+                                "\"local_accepted_mode_count\":") == 6.0 &&
+              contains(base_subwindow.c_str(), "\"local_coverage_certified\":true"),
+          "private child discovery must preserve all six residual-certified interior modes");
     const double requested_nev = json_number_after(
         result.window_certificate_json,
         "\"requested_nev\":");
@@ -1842,11 +1788,11 @@ void FrequencyWindowRetriesWhenALocalIntervalIsSaturated()
     const std::uint64_t refined_nev_limit = std::min<std::uint64_t>(
         maximum_nev,
         4u * static_cast<std::uint64_t>(refined_requested_mode_count));
-    check(requested_nev == 16.0 && refined_nev > requested_nev &&
+    check(requested_nev >= 8.0 && requested_nev <= 16.0 && refined_nev > requested_nev &&
               refined_requested_mode_count >= 5.0 &&
               refined_requested_mode_count <= 8.0 &&
               refined_nev <= static_cast<double>(refined_nev_limit),
-          "refinement must resolve above base NEV 16 and remain within its count and actual split-dimension bounds");
+          "refinement must resolve above the actual base NEV and remain within its count and actual split-dimension bounds");
     const std::uint64_t expected_base_ncv = std::min(
         split_dimension,
         std::max<std::uint64_t>(
@@ -1854,7 +1800,7 @@ void FrequencyWindowRetriesWhenALocalIntervalIsSaturated()
             4u * static_cast<std::uint64_t>(requested_nev)));
     check(json_number_after(result.window_certificate_json, "\"requested_ncv\":") ==
               static_cast<double>(expected_base_ncv),
-          "local retry must publish the resolved ncv for its larger effective nev");
+          "window discovery must publish ncv for its actual effective nev");
     const std::uint64_t refined_nev_integer =
         static_cast<std::uint64_t>(refined_nev);
     const std::uint64_t expected_refined_ncv = std::min(
@@ -3148,7 +3094,7 @@ int main()
         };
         run_case("FrequencyWindowPublishesSelectedSearchStabilityWithoutCount", FrequencyWindowPublishesSelectedSearchStabilityWithoutCount);
         run_case("FrequencyWindowDoesNotRetryWhenOnlyTheGlobalRequestIsSaturated", FrequencyWindowDoesNotRetryWhenOnlyTheGlobalRequestIsSaturated);
-        run_case("FrequencyWindowRetriesWhenALocalIntervalIsSaturated", FrequencyWindowRetriesWhenALocalIntervalIsSaturated);
+        run_case("FrequencyWindowRetainsInteriorModesBeforePublicationCap", FrequencyWindowRetainsInteriorModesBeforePublicationCap);
         run_case("FrequencyWindowRetriesUntilBothClippedEdgesAreCovered", FrequencyWindowRetriesUntilBothClippedEdgesAreCovered);
         run_case("FrequencyWindowFailsClosedWhenMaximumRequestCannotCoverBothEdges", FrequencyWindowFailsClosedWhenMaximumRequestCannotCoverBothEdges);
         run_case("FrequencyWindowCertifiesDegenerateClusterByInvariantSubspace", FrequencyWindowCertifiesDegenerateClusterByInvariantSubspace);
@@ -3189,7 +3135,7 @@ int main()
     PublishesCanonicalResidualFieldsAndSolverReasons();
     FrequencyWindowPublishesSelectedSearchStabilityWithoutCount();
     FrequencyWindowDoesNotRetryWhenOnlyTheGlobalRequestIsSaturated();
-    FrequencyWindowRetriesWhenALocalIntervalIsSaturated();
+    FrequencyWindowRetainsInteriorModesBeforePublicationCap();
     FrequencyWindowRetriesUntilBothClippedEdgesAreCovered();
     FrequencyWindowFailsClosedWhenMaximumRequestCannotCoverBothEdges();
     FrequencyWindowCertifiesDegenerateClusterByInvariantSubspace();

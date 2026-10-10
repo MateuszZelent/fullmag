@@ -5343,3 +5343,17 @@ Hosted private assembly #38083353383 na f2bbdf31043ce80c2c859d5a58aa529867225574
 1/1 fem_poisson_airbox_shared_domain_contract PASS, w tym
 shared_domain_gilbert_mass_contract. MFEM ON, SLEPc OFF, GPU OFF.
 To dowód wykonania prywatnych regresji assembly, nie pełnego damped solve.
+
+
+### P4 — discovery pool a limit publikacji
+
+Prywatny child solve okna musi zachować cały deduplikowany, fizyczny,
+residual-certified Ritz pool, który już zrekonstruował. Limit publiczny
+nearest pozostaje bez zmian; okno filtruje kandydatów do przedziału child
+i stosuje publiczny limit dopiero przy finalnej selekcji klastrów.
+Nie dodajemy osobnej kopii pełnych eigenvectors. Endpoint guards służą
+wyszukiwaniu, nie niezależnemu count. Porównanie dwóch przebiegów
+częstotliwości/rank/subspace i residual gates pozostaje ścisłe.
+Sześciomodowa regresja sprawdza zachowanie pierwszych czterech fizycznych
+częstotliwości; retry jest wymagane tylko przez osobne edge-coverage cases,
+ponieważ EPS może poprawnie overdeliver cały gęsty pool bez retry.

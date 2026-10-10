@@ -4161,6 +4161,9 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
                     std::abs(
                         local_frequency_max_hz -
                         shifted_problem.target_frequency_hz));
+                // Preserve discovered interior modes before the global window
+                // selects clusters; endpoint guards cannot recover capped modes.
+                shifted_problem.retain_window_discovery_pool = true;
                 shifted_problem.progress_window_phase =
                     pass_index == 0u ? "base" : "refinement";
                 shifted_problem.progress_current_subwindow = current_subwindow;
@@ -4855,8 +4858,8 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
                 }
                 for (const PoissonAirboxModalEigenResult::AcceptedMode &mode :
                      shifted_result.accepted_modes) {
-                    if (mode.frequency_hz < problem.frequency_min_hz ||
-                        mode.frequency_hz > problem.frequency_max_hz) {
+                    if (mode.frequency_hz < local_frequency_min_hz ||
+                        mode.frequency_hz > local_frequency_max_hz) {
                         continue;
                     }
                     const bool duplicate = std::any_of(
@@ -6978,7 +6981,8 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
                       ? "no_accepted_positive_frequency_mode"
                       : "no_positive_frequency_eigenpair"));
     }
-    if (candidates.size() > requested_mode_count) {
+    if (!problem.retain_window_discovery_pool &&
+        candidates.size() > requested_mode_count) {
         candidates.resize(requested_mode_count);
     }
 

@@ -576,3 +576,18 @@ P0 direct C ABI: potwierdzona utrata intencji Include w shared-domain
 assembly. Korekta fail-closed w przygotowaniu; null zachowa legacy Ignore,
 unknown/empty token będzie validation_error, shared Include unavailable.
 Caller-provided matrices mają odrębnego właściciela i nie są globalnie blokowane.
+
+
+## P4 — korekta utraty interior modes przez publication cap
+
+Źródłowo potwierdzono, że child cap odrzucał wykryte fizyczne mody,
+a szersze signed guards mogły zatrzymać retry. Prywatny window child
+zachowuje teraz istniejący deduplikowany pool po residual certification;
+agregacja filtruje go do child interval. Public nearest i final global
+cap nie zmieniają się. Brak dodatkowej kopii eigenvectors lub zmiany ABI.
+
+Regresja dense interior sprawdza cztery właściwe częstotliwości
+1.10/1.12/1.14/1.16 GHz i sześć lokalnych modów; nie wymaga retry, jeśli
+EPS już zwrócił wystarczający pool. Osobne retry/edge-failure przypadki
+zachowano. Root i niezależny source review PASS, diff/map validator PASS.
+Hosted wykonanie pozostaje wymagane; spectrum count nadal not_performed.

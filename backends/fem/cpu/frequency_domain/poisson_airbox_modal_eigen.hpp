@@ -112,6 +112,9 @@ struct PoissonAirboxEigenBlockProblem {
     // is never accepted as production provenance and may use bounded
     // materialized validation operators.
     bool validation_only_adapter = false;
+    // Internal window children retain the already reconstructed physical pool.
+    // Public nearest solves keep their requested-mode publication cap.
+    bool retain_window_discovery_pool = false;
 
     // Runtime control callbacks are appended to preserve the algebraic block
     // layout.  Production CPU/GPU lanes poll cancellation from PETSc KSP
