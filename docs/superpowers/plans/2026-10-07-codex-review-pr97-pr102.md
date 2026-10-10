@@ -6,7 +6,7 @@ Pełny rejestr obejmuje 279 komentarzy liniowych Codex oraz 3 uwagi w treści re
 
 PR #102 zamknięto 2026-10-07, zachowując remote branch `codex/launcher-instance-isolation-20261002` przy `954ba797307c4cc773772d380123893210cfa447`. PR #97 pozostaje otwarty do ukończenia rozpatrzenia i uzasadnionych poprawek. Merge ani usuwanie branchy nie są częścią polecenia zamknięcia PR-ów. Wcześniejszy WIP meshing zachowany osobno.
 
-Stan rejestru: `already_fixed`: 31, `duplicate`: 91, `implemented`: 131, `implemented_pending_ci`: 6, `not_actionable`: 2, `unsupported_recommendation`: 3, `valid_unfixed`: 18. Łącznie 282 wpisów; wszystkie wpisy oceniono; zasadnych nienaprawionych i brakujących bramek nie uznaje się za zakończone.
+Stan rejestru: `already_fixed`: 31, `duplicate`: 91, `implemented`: 132, `implemented_pending_ci`: 5, `not_actionable`: 2, `unsupported_recommendation`: 3, `valid_unfixed`: 18. Łącznie 282 wpisów; wszystkie wpisy oceniono; zasadnych nienaprawionych i brakujących bramek nie uznaje się za zakończone.
 
 Legenda: `pending` — nierozpatrzona; `valid_unfixed` — zasadna, nie naprawiona; `already_fixed` — poprawka potwierdzona aktualnym kodem; `duplicate` — powtórzenie; `unsupported_recommendation` — konkretna rekomendacja nie odpowiada kontraktowi; `implemented` — poprawka z potwierdzoną regresją CI; `implemented_pending_ci` — poprawka przygotowana, regresja oczekuje CI; `implemented_pending_browser` — pokrywające CI przeszło, nadal wymaga celowanego dowodu z przeglądarki; `not_actionable` — uwaga zastąpiona późniejszą jawną decyzją użytkownika.
 
@@ -21,7 +21,7 @@ Legenda: `pending` — nierozpatrzona; `valid_unfixed` — zasadna, nie naprawio
 | [4060116248](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4060116248) / #97 | `scripts/local_runner/container_main.py` | already_fixed | health zwraca sorted(self.allowed_profiles), a submit waliduje tę samą skonfigurowaną allow-listę. |
 | [4060116253](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4060116253) / #97 | `backends/fem/src/frequency_domain/modal_eigen_solver.cpp` | implemented | GHA38035226580/job114164162803 na exact1cb3d026: dedykowany fem_modal_eigen_gamma_admission_contract PASS, marker native_floquet_gamma_admission_cabi_contract (log454-455). Obejmuje publiczne odrzucenie NaN/Inf, malformed lengths/pointers/fallback oraz poprawne implicit Gamma przy raw len0 bez czytania backing. Nie jest dowodem fizycznej kwalifikacji dyspersji. Pozostale dwa testy native sa FAIL i pozostaja otwarte. |
 | [4060116262](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4060116262) / #97 | `backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp` | implemented | FinalsuccessfulEPSiteration cancellation poll preserves observedUSER; persistent andoneshotcancel remain terminalcancelled while negativeAPI/solvererrors retainpriority. |
-| [4060116271](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4060116271) / #97 | `backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp` | implemented_pending_ci | AllsixFullmagCPU/GPU PETSc/SLEPc families share oneprocessmutex/init/cleanup boundary; retainedCPUgraph lifetime fence, explicitcheckedclose, unsafe graph latches andGPUcheckedpersistent/transientteardown denyunsafe finalization. PA-E3 explicitborrower retained, no recursive_mutex. |
+| [4060116271](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4060116271) / #97 | `backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp` | implemented | Uwaga dotyczy wspolnego mutexu adapterow Gamma/CSR i nonzero-k CPU. Oba obecnie uzywaja petsc_slepc_process_mutex. GHA38044235857 na415e58e: rzeczywisty fem_petsc_process_runtime_concurrency_contract PASS (log386) i quarantine PASS(log394). Test zatrzymuje obie rzeczywiste trasy pod wspolna blokada, po zwolnieniu porownuje sukces/czestotliwosci z sekwencyjna baza. Oryginalny race zamkniety; wykonanie GPU, kwalifikacja fizyczna oraz dwa niezalezne nieudane native fixture nie sa objete tym dowodem. |
 | [4060116277](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4060116277) / #97 | `scripts/run_fem_cpu_slepc_modal_contract.sh` | implemented_pending_ci | Exact CMake target path oraz SHA256/size prywatnej i runtime biblioteki muszą być identyczne. Loader każdego CTest wymaga private FEM; runtime dlopen osobno jawny. Pre/post sprawdzenie i trwała atestacja są bramką pass, bez kopiowania runtime. |
 | [4060116283](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4060116283) / #97 | `packages/fullmag-py/src/fullmag/world.py` | implemented | indices, branches, sample_indices i sample_labels są konwertowane przez `tuple(value or ())`. Dla wieloelementowej numpy.ndarray test prawdziwości rzuca ValueError przed walidacją SaveMode; dla np.array([0]) selektor jest potraktowany jak pusty. |
 | [4060116295](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4060116295) / #97 | `packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py` | implemented | Gmsh operuje w micrometrach, jakość jest wyliczana przed konwersją, a zwrócone węzły są dzielone przez 1e6. volume_min/max/mean/std i element_volume są przekazywane bez przeliczenia i pozostają w µm³, czyli są zawyżone względem SI o 1e18; to samo dotyczy per_domain_quality. |
@@ -3149,3 +3149,39 @@ Independent pełne8file review i ponowny przegląd trzech Required PASS. Wszystk
 GHA38049911432 naexact9c8b427a131b8e1a7a4e96dfe50e921b53109693 SUCCESS:107 testów/121 subtestów PASS, verifier5 PASS, artifact consumers95/61 PASS. Uwaga4080865441 zamknięta w zakresie kontraktu gate; nie jest to dowód rzeczywistej certyfikacji pełnego okna solvera.
 
 Sprawdzenie filtrów bootstrap ujawniło brak wykonania nowej regresji bias_field_branch_selection_tracks_native_publisher_artifacts_before_publication. Dodano jawny krok cargo test wyłącznie GHA. Planner branch regressions są już pokryte istniejącym krokiem. Bias sweep4226154721 pozostaje pendingCI do faktycznego wykonania nowej regresji, nie do samej kompilacji lub zielonego niepokrywającego workflow.
+
+### Checkpoint: pełny sukces eksportu, zakres mutexu i nowe prace źródłowe
+
+GHA38049931183 naexact9c8b427a131b8e1a7a4e96dfe50e921b53109693 SUCCESS:
+fullmag-session240 PASS; końcowy API1008 PASS/0FAIL/3ignored; quantity47 PASS
+oraz celowane CLI PASS. To potwierdza naprawę typed scene i fixture importu;
+nie obejmuje nowych zmian StepDataKind, które są nadal WIP w checkoutcie.
+
+Pierwotna uwaga4060116271 o dwóch niezależnych mutexach CPU Gamma/Floquet
+została zamknięta na podstawie GHA38044235857: real concurrent contract i
+quarantine PASS (log386/394), wspólny process mutex w obu entrypoints.
+Nie jest to dowód wykonania GPU ani pełnej kwalifikacji solvera; dwa niezależne
+native fixture w tym samym workflow nadal FAIL.
+
+Nowy jawny bias test wGHA38050227675 naE135 osiąga native publisher i zawodzi
+na brakującym eigen/metadata/eigen_summary.json. Trwa diagnoza kontraktu
+wewnętrznych outputs i czytnika; nie wstawiamy fikcyjnych artefaktów do fixture
+ani nie osłabiamy guardów. Uwaga4226154721 pozostaje pendingCI.
+
+Native fixture I10/okno: hipoteza błędnego okna wykluczona. Provider składa
+native FIELD A_qq i zastępuje carrier CSR. Log zawiera certyfikowany mod
+0,517405523835Hz, residual2,92e-11 i zgodny dense oracle. LivePC residual
+7,54e-8 wobec fresh izolowanegoLU5,15e-16 pozostaje nierozwiązany. Zaplanowano
+pomiar pełnej kopii actual borrowed Pmat i świeżego ownedLU z tej kopii;
+wartości requested/configured nie udają zmierzonej actual konfiguracji.
+Nota0831/mapa zaktualizowane przed kodem; implementacja/wykonanie pending.
+
+4204792253: ADR0004 i nota0831 określają kind physical/progress/legacy oraz
+oddzielny kanał telemetryczny bez fikcyjnego object_id. Rdzeń5plików SOURCEPASS
+z niezależnego pełnego review; dodatkowe serde negative3testy SOURCEPASS.
+Jednostki progress skorygowane: fraction/counters bezwymiarowe, elapsed w s,
+KSP norm w zadeklarowanej skali. Propagacja CLI/API/dynamic fields w toku;
+nie usuwamy historycznych bajtów, nie klasyfikujemy legacy heurystycznie.
+Pełny cross-layer source review i GHA nadal wymagane, uwaga valid_unfixed.
+
+Dalsza diagnoza bias fixture potwierdziła, że produkcyjny native_modal_artifacts zawsze emituje wymagany eigen_summary i dopiero potem wywołuje writerV2. Fixture uruchamiał tylko writerV2 i ręcznie spectrum, więc pomijał rzeczywistego właściciela wymaganych danych. Korekta testu używa pełnego native_modal_artifacts z NativeModalEigenpair; parser i publiczne flagi pozostają. To regresja pipeline publikacji, nie wykonanie solvera ani kwalifikacja fizyczna.

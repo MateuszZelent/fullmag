@@ -2999,7 +2999,7 @@
       "evidence_status": "source_visible",
       "responsibility": "Project ordered, compact per-sample execution metadata; summarize only common resolved and validation values, and distinguish homogeneous, mixed, partial, missing, and orchestrator-only reference evidence without copying raw diagnostics."
     },
-{
+    {
       "id": "source-eigen-diagnostics-python",
       "path": "packages/fullmag-py/src/fullmag/model/outputs.py",
       "symbol": "class SaveEigenDiagnostics",
@@ -3083,7 +3083,6 @@
       "evidence_status": "source_visible",
       "responsibility": "Consume root-level transport fields independently of the dispersion subsection."
     },
-
     {
       "id": "source-nearest-floquet-capability",
       "path": "crates/fullmag-runner/src/fem/eigen_capability.rs",
@@ -3846,6 +3845,36 @@
       "path": "scripts/test_fem_producer_provenance_replay.py",
       "symbol": "test_material_preimage_projection_matches_rust_zero_ku_rules",
       "responsibility": "Cover Ku absent, zero-Ku spatial-Ms/zero-axis V1 projection, uniform-Ms valid-axis V2, canonical name-only raw reuse, and rejection of changed Ms/A/Ku."
+    },
+    {
+      "id": "source-modal-record-kind-quantity",
+      "path": "crates/fullmag-quantities/src/step_data.rs",
+      "symbol": "GlobalQuantityRow",
+      "responsibility": "Kontrakt jawnego rodzaju physical/progress/legacy; wdrozenie w toku, GHA/runtime NOT VERIFIED."
+    },
+    {
+      "id": "source-modal-record-kind-runner",
+      "path": "crates/fullmag-runner/src/types.rs",
+      "symbol": "to_quantity_row",
+      "responsibility": "Kontrakt jawnego rodzaju physical/progress/legacy; wdrozenie w toku, GHA/runtime NOT VERIFIED."
+    },
+    {
+      "id": "source-modal-record-kind-api",
+      "path": "crates/fullmag-api/src/session.rs",
+      "symbol": "upsert_scalar_row",
+      "responsibility": "Kontrakt jawnego rodzaju physical/progress/legacy; wdrozenie w toku, GHA/runtime NOT VERIFIED."
+    },
+    {
+      "id": "source-live-pmat-owned-copy-plan",
+      "path": "backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp",
+      "symbol": "capture_candidate_live_pc_observation",
+      "responsibility": "Plan pelnego porownania actualPmat i ownedfreshLU; implementation/runtime NOT VERIFIED."
+    },
+    {
+      "id": "source-live-pmat-json-plan",
+      "path": "backends/fem/cpu/frequency_domain/production_cpu_modal_eigen.cpp",
+      "symbol": "std::string live_pc_observation_json",
+      "responsibility": "Plan pelnego porownania actualPmat i ownedfreshLU; implementation/runtime NOT VERIFIED."
     }
   ],
   "public_api": {
@@ -4218,8 +4247,9 @@
         "validation": "Same validation as `SaveSpectrum.quantity`.",
         "meaning": "Public stage selector for the eigenfrequency spectrum.",
         "backend_support": "Common authoring; runtime capability-gated",
-        "problem_ir": "Preserved as `sampling.outputs[].quantity`."},
-{
+        "problem_ir": "Preserved as `sampling.outputs[].quantity`."
+      },
+      {
         "python": "`SaveEigenDiagnostics.include_tracking` / `study.save.include_tracking`",
         "type": "`bool`",
         "default": "`True`",

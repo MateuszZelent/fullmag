@@ -4960,3 +4960,67 @@ agregatu gate nie może uznać pełnej kompletności okna dla takiego primary ru
 | source-comsol-primary-malformed-spectrum-regression | scripts/test_validate_comsol_dispersion_scientific_gate.py | test_validate_case_malformed_spectrum_samples_fail_closed_without_exception | Public validate_case zwraca NOT VERIFIED dla spectrum.samples=null lub int, bez wyjątku. |
 | source-comsol-primary-gamma-cap-regression | scripts/test_validate_comsol_dispersion_scientific_gate.py | test_campaign_contract_pass_cannot_qualify_inconsistent_tracking_replay | Public fixture potwierdza exact C0 count/certificate 1/1 oraz C1/A1 contour count 8 przy cap 24. |
 | source-comsol-primary-config-regression | scripts/test_validate_comsol_dispersion_scientific_gate.py | test_benchmark_config_consumes_canonical_search_sheet | Porównuje limity C0/C1 i okno emitowane przez konfigurację workflow z kanonicznym arkuszem parametrów. |
+
+## Rodzaj rekordu: progress nie jest obserwacją fizyczną
+
+Doprecyzowanie ADR0004 dla naprawy4204792253: każda nowa próbka ma jawny rodzaj
+`physical_observation` albo `solver_progress`. Modalny callback ma typowany
+kanał diagnostyczny `solver_progress.fem_eigen`; nie jest fikcyjnym obiektem
+sceny. Legalna nazwa obiektu `fem_eigen_progress` pozostaje zwykłym object_id.
+Placeholdery energii, średniej magnetyzacji lub momentu w compatibility shimie
+nie mogą być publikowane jako pomiar tylko dlatego, że mają wartość zero.
+Żadna zmiana równania LLG, jednostek SI ani metryki residual nie wynika z tego
+rozdzielenia. Ułamek postępu i liczniki są bezwymiarowe; czasy pozostają w sekundach,
+a normy KSP zachowują deklarowaną skalę algebraiczną. Kanał pozostaje
+telemetrią solvera; mod i stan równowagi wymagają niezależnych artefaktów
+i certyfikatów.
+
+Brak rodzaju w danych historycznych oznacza `legacy_unclassified`. Zachowujemy
+surowe dane, ale nie przypisujemy im automatycznie znaczenia fizycznego ani
+statusu kwalifikacji. Nowe typed kind i payload muszą być spójne na całej trasie
+runner→CLI→API; nieznany kind i sprzeczny payload są odrzucane. Dokumentacja
+opisuje kontrakt wdrażany: implementacja w toku, GHA/runtime **NOT VERIFIED**.
+
+| Source ID | Path | Symbol | Responsibility |
+|---|---|---|---|
+| source-modal-record-kind-quantity | crates/fullmag-quantities/src/step_data.rs | GlobalQuantityRow | Jawne admission ilości fizycznych; docelowy kontrakt typu rekordu, wdrożenie w toku. |
+| source-modal-record-kind-runner | crates/fullmag-runner/src/types.rs | to_quantity_row | Zachowanie rodzaju i oddzielenie numeric placeholders od pomiaru; wdrożenie w toku. |
+| source-modal-record-kind-api | crates/fullmag-api/src/session.rs | upsert_scalar_row | Admission physical rows bez klasyfikacji po identyfikatorze obiektu; wdrożenie w toku. |
+
+## Plan pomiaru kopii rzeczywistego Pmat — bez zmiany solvera
+
+Stan: projekt ograniczonej diagnostyki opt-in, kod i wykonanie **NOT VERIFIED**.
+Dla fixture w logu38044235857 mod0,517405523835Hz przechodził oryginalny
+residual około2,92e-11. Późniejszy hardKSP nie jest wyjaśniony oknem. LivePC
+powtarzalnie daje residual względny około7,54e-8, a świeże izolowane LU około
+5,15e-16. Zgodność wskaźnika i jednego działania Pmat nie dowodzi równości
+wszystkich wpisów ani struktury.
+
+Następny pomiar kopiuje rzeczywisty borrowed Pmat podczas istniejącego
+bezpiecznego callbacku, przed błędem EPS: MatDuplicate z MAT_COPY_VALUES,
+nie współdzielenie struktury przez MAT_SHARE_NONZERO_PATTERN. Sprawdza wymiar,
+strukturę, liczbę wpisów, pełną równość wartości, maksymalną różnicę wpisu i
+względny defekt normy Frobeniusa względem niezależnego exact snapshot.
+Dla reference norm=0 nie zgadujemy dzielnika ani poprawności; dostępność miary
+względnej musi być jawna. Pełne porównanie dotyczy macierzy z jawnymi wpisami;
+MatEqual dla matrix-free daje próbkowanie i nie wystarcza jako ten dowód.
+
+Świeży, wyłącznie owned PC/LU działa na tej kopii i tym samym prywatnym RHS.
+Zachowujemy faktycznie odczytany solver package i jawnie zapisane ustawienia
+konstrukcji. Ustawień requested/configured nie opisujemy jako zmierzonych
+actual; brak publicznego odczytu ustawienia jest reported jako unavailable,
+nie zastępowany założeniem. Kalibracja wektora rozwiązania i obie normy residual
+muszą korzystać z tych samych scale/RHS i oryginalnego operatora co live PC.
+Nie zmieniamy live PC, jego factor workspace, tolerancji ani okna wyszukiwania.
+Błędy i checked cleanup pozostają częścią prywatnej diagnostyki; nie wolno
+wykonywać zapytań do grafu po hard EPS error.
+
+Dokumentacja PETSc: [MatDuplicate](https://petsc.org/main/manualpages/Mat/MatDuplicate/),
+[MatEqual](https://petsc.org/release/manualpages/Mat/MatEqual/),
+[MatNorm](https://petsc.org/release/manualpages/Mat/MatNorm/),
+[PCFactorGetMatSolverType](https://petsc.org/main/manualpages/PC/PCFactorGetMatSolverType/).
+
+| Source ID | Path | Symbol | Responsibility |
+|---|---|---|---|
+| source-live-pmat-owned-copy-plan | backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp | capture_candidate_live_pc_observation | Ograniczony pomiar rzeczywistego Pmat w bezpiecznym callback; rozszerzenie w toku. |
+| source-live-pmat-json-plan | backends/fem/cpu/frequency_domain/production_cpu_modal_eigen.cpp | std::string live_pc_observation_json | Jawne availability, configured/actual i residual z tej samej skali; rozszerzenie w toku. |
