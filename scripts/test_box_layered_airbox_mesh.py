@@ -13,6 +13,10 @@ from fullmag.meshing._gmsh_swept import (
 )
 
 
+# Public DE fixture: 10 nm film and 2 um authored air padding per side.
+_PUBLIC_DE_AIRBOX_HALF_HEIGHT_M = 5e-9 + 2e-6
+
+
 def _realize_public_de_smoke_box(
     monkeypatch, tmp_path, *, universe_mesh_call, fixture_name,
 ):
@@ -69,8 +73,8 @@ def _assert_public_box_planes(mesh, *, layers, expected, maximum_air_step):
     markers = np.asarray(mesh.element_markers)
     actual = np.unique(np.round(nodes[:, 2], decimals=17))
     np.testing.assert_allclose(actual, expected, atol=1e-16, rtol=0)
-    assert actual[0] == pytest.approx(-205e-9, abs=1e-16)
-    assert actual[-1] == pytest.approx(205e-9, abs=1e-16)
+    assert actual[0] == pytest.approx(-_PUBLIC_DE_AIRBOX_HALF_HEIGHT_M, abs=1e-16)
+    assert actual[-1] == pytest.approx(_PUBLIC_DE_AIRBOX_HALF_HEIGHT_M, abs=1e-16)
     assert np.all(np.diff(actual) > 0)
 
     body = cells[markers == 1]
@@ -224,7 +228,8 @@ def test_public_box_default_airbox_cap_realizes_geometric_vertical_growth(monkey
     growth = 1.3
     h_outer = h_inner * growth**4
     expected = _box_airbox_layer_levels(
-        -5e-9, 5e-9, -205e-9, 205e-9, 6,
+        -5e-9, 5e-9,
+        -_PUBLIC_DE_AIRBOX_HALF_HEIGHT_M, _PUBLIC_DE_AIRBOX_HALF_HEIGHT_M, 6,
         h_inner=h_inner, h_outer=h_outer, growth=growth,
     )
     mesh, markers, report = _realize_public_de_smoke_box(
@@ -262,7 +267,8 @@ def test_public_box_explicit_airbox_cap_below_body_hmax_is_preserved(monkeypatch
     pytest.importorskip("gmsh")
     cap = 5e-9
     expected = _box_airbox_layer_levels(
-        -5e-9, 5e-9, -205e-9, 205e-9, 6,
+        -5e-9, 5e-9,
+        -_PUBLIC_DE_AIRBOX_HALF_HEIGHT_M, _PUBLIC_DE_AIRBOX_HALF_HEIGHT_M, 6,
         h_inner=cap, h_outer=cap, growth=1.3,
     )
     mesh, _, report = _realize_public_de_smoke_box(
@@ -282,7 +288,8 @@ def test_public_box_explicit_airbox_minimum_above_body_hmax_is_preserved(monkeyp
     growth = 1.3
     h_outer = h_inner * growth**4
     expected = _box_airbox_layer_levels(
-        -5e-9, 5e-9, -205e-9, 205e-9, 6,
+        -5e-9, 5e-9,
+        -_PUBLIC_DE_AIRBOX_HALF_HEIGHT_M, _PUBLIC_DE_AIRBOX_HALF_HEIGHT_M, 6,
         h_inner=h_inner, h_outer=h_outer, growth=growth,
     )
     mesh, _, report = _realize_public_de_smoke_box(
