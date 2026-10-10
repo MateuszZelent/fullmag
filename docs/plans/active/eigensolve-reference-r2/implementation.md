@@ -219,3 +219,33 @@ parser, diff i scientific source-map walidacja wymagane przed publikacjÄ….
 Plan P0â€“P10 pozostaje otwarty, szczegÃ³lnie exact damped pencil, count,
 large sparse producer, demag convergence, GPU/BEM/RF/DMI/STT/EASA i peÅ‚ny
 round-trip/qualification. Nowe poprawki nie sÄ… dowodem tych rozszerzeÅ„.
+
+
+## Checkpoint f9c29e2 — kolejne bramki i korekta przygotowania UI
+
+Commit `f9c29e2b2bc195d598e600bbcb3bd47316e58251` jest na remote.
+Hosted #38074310935: 1581 PASS, 10 FAIL, 1 ignored. Wszystkie wczeœniej
+naprawione przypadki eigensolve pozostaj¹ PASS. Po dopuszczeniu fallback
+w pozytywnym Extended fixture ujawni³a siê rzeczywista ró¿nica nazw:
+planner u¿ywa fdm_cpu_reference, producent zapisuje cpu_reference.
+Korekta ma rozpoznawaæ wy³¹cznie dwie istniej¹ce pary CPU/CUDA, bez
+przepisywania historycznych artefaktów i bez os³abienia Strict.
+
+Pe³na bramka Rust/API #38072219897 na exact 2101053 zakoñczy³a siê FAIL:
+1004 PASS, 6 FAIL, 3 ignored, 355 filtered w g³ównej suite API. B³êdy
+dotycz¹ completion compute_fields, trzech FrozenSpins FEM preview,
+materializacji mat_ms i authoritative live magnetization. Nie s¹ dowodem
+niepowodzenia fizyki modalnej, ale blokuj¹ pe³ne uznanie suite za zielon¹.
+Ich przyczyna wymaga osobnej analizy kontraktu; nie zmieniono oczekiwañ
+wy³¹cznie dla uzyskania PASS.
+
+UI #38074311071 na exact f9c29e2: FAIL przed wykonaniem testów. pnpm
+zatrzyma³ instalacjê na przygotowanym source node_modules symlink
+(ENOTDIR). Upload-artifact odrzuci³ dodatkowo œcie¿kê zawieraj¹c¹ .. .
+Naprawa przygotowuje wy³¹cznie root/app manifests w fizycznym, kanonicznym
+frontend_root resolvera, z SHA Ÿróde³ i pojedynczych manifestów. Instalacja
+u¿ywa tego katalogu; testy nadal korzystaj¹ z checkoutu przez istniej¹ce
+zarz¹dzane links. Upload wykorzystuje znormalizowane œcie¿ki. To korekta
+CI, nie dowód dzia³ania UI. AST/YAML sprawdzono; wykonanie tylko GHA.
+Native #38074313403 nadal trwa; exact Ÿród³a i wynik zostan¹ zapisane
+po terminalnym zakoñczeniu. P0–P10 pozostaje otwarty.
