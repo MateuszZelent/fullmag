@@ -4905,3 +4905,58 @@ kwalifikacji ciągłości fizycznych pasm.
 | source-comsol-a1-crossing-regression | scripts/test_validate_comsol_dispersion_scientific_gate.py | test_a1_selected_branches_may_cross_without_fundamental_identity | Sprawdza zamianę kolejności częstotliwości dwóch z ośmiu śledzonych gałęzi A1 przy zachowaniu tożsamości, unikalnych raw IDs i najniższego multizbioru; kontrola C1 nadal wymaga analitycznej gałęzi fundamentalnej. |
 | source-comsol-a1-public-crossing-regression | scripts/test_validate_comsol_dispersion_scientific_gate.py | test_validate_case_a1_allows_two_of_eight_branches_to_cross | Public validate_case zachowuje wybrany zestaw A1 po przecięciu dwóch gałęzi i oznacza kontrolę fundamental_branch_check jako not_applicable, bez deklarowania pełnej kwalifikacji przypadku. |
 | source-comsol-cross-run-branch-id-limitation | scripts/validate_comsol_dispersion_scientific_gate.py | _validate_convergence_pair | Obecne porównanie runów po branch ID pozostaje odrębne od seed-rankingu i nie jest dowodem fizycznego dopasowania modów między siatkami. |
+
+## Primary search request i kompletność okna
+
+Kanonicznym źródłem żądań jest `eigen_search` w pliku
+`parameters.json`: C0 przyjmuje dokładnie jeden żądany mod przy Γ, a C1/A1
+rozpoczynają wyszukiwanie z limitem 24 modów. Wspólne okno żądane w Hz to
+`frequency_window_hz = [1.0e6, 3.0e10]`. Są to żądania wejściowe, nie wyniki
+solvera ani ustawienia polityki kompletności.
+
+`requested_mode_count` jest dodatnim limitem liczby modów, które solver może
+zwrócić z danego przeszukania; nie jest wymaganiem, by C1/A1 opublikowały 24
+modów. Wybór ośmiu quality-admitted gałęzi do analizy dyspersji jest osobnym
+kontraktem selekcji. Osiem opublikowanych modów może odpowiadać limitowi 24,
+jeżeli natywne diagnostyki dla każdego `k` prawdziwie certyfikują, że właśnie
+tyle modów znajduje się w żądanym oknie i nie ma dalszych modów w tym zakresie.
+
+Authored `eigensolve`, `backend_plan.target/count` i diagnostyki solvera muszą
+zachować ten sam limit i żądane okno. `resolved_search_window_hz` może być
+szersze z powodu liczbowych guardów, ale musi obejmować całe żądane okno.
+Dla C1/A1 każde sample ma własne żądanie i rozstrzygnięcie kompletności; poprawny
+agregat nie może ukrywać sample z innym limitem, oknem lub statusem.
+
+Kompletność pełnego okna jest oddzielna od zgodności wejściowych parametrów i
+od wyboru ośmiu gałęzi. Do pełnej kwalifikacji każde wymagane sample musi mieć
+jawne `window_completeness.status = "certified"`, poprawną metodę certyfikacji
+i `additional_modes_may_exist = false`. Dla każdej próbki metoda
+`contour_interval_count` oraz liczniki `estimated_modes_in_window`,
+`certified_modes_in_window` i `returned_modes` muszą być jawne i zgodne.
+Jeśli producent publikuje `accepted_modes_before_cap`, pole to również musi
+być całkowite i równe `returned_modes`; jego brak jest dozwolony dla
+konturowego producenta, który tego pola nie emituje. Liczba zwróconych modów
+nie może przekraczać kanonicznego limitu requestu, a wynik nie może być
+oznaczony jako ucięty. Sam fakt, że liczba zwróconych modów jest równa limitowi, nie dowodzi
+ucięcia; rozstrzyga jawny status/truncation w diagnostyce. Podobnie sama liczba
+wybranych gałęzi ani status agregatu nie zastępują zgodnych certyfikatów
+poszczególnych próbek. Brak historycznych pól, status `not_certified`,
+`partial_convergence` albo `truncated_by_requested_count` pozostają
+`NOT VERIFIED`. Pole `window_completeness.policy` pozostaje diagnostyką
+backendu i nie jest nową opcją publicznego DSL.
+
+Obecny source writer ścieżki zapisuje agregat `not_certified` nawet wtedy, gdy
+dołącza per-sample diagnostics. Do czasu publikowania zgodnego, dowodliwego
+agregatu gate nie może uznać pełnej kompletności okna dla takiego primary runu.
+
+| Source ID | Plik | Symbol | Zakres dowodu |
+| --- | --- | --- | --- |
+| source-comsol-primary-search-config-consumer | tests/standard_problems/mumag/comsol_nonzero_k_dispersion/config.py | _canonical_eigen_search | Wczytuje kanoniczny limit C0, początkowy limit C1/A1 i wspólne okno Hz z docs/guides/comsol-dispersion-benchmark/parameters.json. |
+| source-comsol-primary-search-binding | scripts/validate_comsol_dispersion_scientific_gate.py | _validate_primary_search_parameters | Wiąże authored metadata, resolved FEM plan i aggregate/per-sample requested count oraz okna z canonical parameters. |
+| source-comsol-primary-window-completeness | scripts/validate_comsol_dispersion_scientific_gate.py | _validate_primary_window_completeness | Zachowuje rozdział między poprawnym requestem a pełnym certyfikatem; wymaga returned modes w granicach canonical cap i opcjonalnego accepted_modes_before_cap tylko gdy producer go emituje. |
+| source-comsol-primary-search-binding-regression | scripts/test_validate_comsol_dispersion_scientific_gate.py | test_primary_search_parameters_bind_count_and_window_without_requiring_full_cap | Odrzuca self-consistent, ale niekanoniczny limit, brakujące lub niezgodne sample requests i niedomknięte okna; dopuszcza szerszy resolved guard. |
+| source-comsol-primary-window-completeness-regression | scripts/test_validate_comsol_dispersion_scientific_gate.py | test_primary_window_completeness_requires_native_certificate_per_sample | Pokrywa contour schema bez accepted_modes_before_cap, opcjonalny licznik multi-shift, tryby 8/24 i 1/1 oraz odrzuca brak certyfikacji, sprzeczne liczniki i over-cap. |
+| source-comsol-primary-window-public-producer-regression | scripts/test_validate_comsol_dispersion_scientific_gate.py | test_validate_case_accepts_contour_counts_without_optional_counter_and_rejects_over_cap | Public validate_case przyjmuje contour schema bez accepted_modes_before_cap i poprawny wariant z polem opcjonalnym, a odrzuca per-sample count ponad cap 24. |
+| source-comsol-primary-malformed-spectrum-regression | scripts/test_validate_comsol_dispersion_scientific_gate.py | test_validate_case_malformed_spectrum_samples_fail_closed_without_exception | Public validate_case zwraca NOT VERIFIED dla spectrum.samples=null lub int, bez wyjątku. |
+| source-comsol-primary-gamma-cap-regression | scripts/test_validate_comsol_dispersion_scientific_gate.py | test_campaign_contract_pass_cannot_qualify_inconsistent_tracking_replay | Public fixture potwierdza exact C0 count/certificate 1/1 oraz C1/A1 contour count 8 przy cap 24. |
+| source-comsol-primary-config-regression | scripts/test_validate_comsol_dispersion_scientific_gate.py | test_benchmark_config_consumes_canonical_search_sheet | Porównuje limity C0/C1 i okno emitowane przez konfigurację workflow z kanonicznym arkuszem parametrów. |

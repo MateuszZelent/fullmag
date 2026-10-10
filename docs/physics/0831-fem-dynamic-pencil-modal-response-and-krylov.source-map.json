@@ -3782,6 +3782,60 @@
       "responsibility": "Exercise the public canonical v8/v7 path with explicit Ku=0 and authored zero axis while preserving the Rust physical V1 preimage."
     },
     {
+      "id": "source-comsol-primary-search-config-consumer",
+      "path": "tests/standard_problems/mumag/comsol_nonzero_k_dispersion/config.py",
+      "symbol": "_canonical_eigen_search",
+      "responsibility": "Loads counts and the requested Hz window from the canonical parameter sheet for the public workflow and its authored metadata."
+    },
+    {
+      "id": "source-comsol-primary-search-binding",
+      "path": "scripts/validate_comsol_dispersion_scientific_gate.py",
+      "symbol": "_validate_primary_search_parameters",
+      "responsibility": "Binds authored metadata, resolved FEM target/count, and aggregate/per-sample requested and resolved windows to canonical parameters."
+    },
+    {
+      "id": "source-comsol-primary-window-completeness",
+      "path": "scripts/validate_comsol_dispersion_scientific_gate.py",
+      "symbol": "_validate_primary_window_completeness",
+      "responsibility": "Separates request binding from exact non-truncated contour evidence per sample, binds returned count to the canonical cap, and checks accepted_modes_before_cap only when present."
+    },
+    {
+      "id": "source-comsol-primary-search-binding-regression",
+      "path": "scripts/test_validate_comsol_dispersion_scientific_gate.py",
+      "symbol": "test_primary_search_parameters_bind_count_and_window_without_requiring_full_cap",
+      "responsibility": "Rejects a self-consistent but noncanonical cap, missing or mismatched sample requests, and uncovered windows while allowing resolved guard bounds to extend the requested interval."
+    },
+    {
+      "id": "source-comsol-primary-window-completeness-regression",
+      "path": "scripts/test_validate_comsol_dispersion_scientific_gate.py",
+      "symbol": "test_primary_window_completeness_requires_native_certificate_per_sample",
+      "responsibility": "Covers the real contour count schema without accepted_modes_before_cap, optional multi-shift count, valid 8/24 and 1/1 cases, and rejects over-cap or contradictory certificates."
+    },
+    {
+      "id": "source-comsol-primary-window-public-producer-regression",
+      "path": "scripts/test_validate_comsol_dispersion_scientific_gate.py",
+      "symbol": "test_validate_case_accepts_contour_counts_without_optional_counter_and_rejects_over_cap",
+      "responsibility": "Runs the public validator against the contour schema without accepted_modes_before_cap, a producer that includes the optional field, and a per-sample count exceeding cap 24."
+    },
+    {
+      "id": "source-comsol-primary-malformed-spectrum-regression",
+      "path": "scripts/test_validate_comsol_dispersion_scientific_gate.py",
+      "symbol": "test_validate_case_malformed_spectrum_samples_fail_closed_without_exception",
+      "responsibility": "Runs public validate_case with null and integer spectrum.samples, requiring a NOT VERIFIED result instead of an exception."
+    },
+    {
+      "id": "source-comsol-primary-gamma-cap-regression",
+      "path": "scripts/test_validate_comsol_dispersion_scientific_gate.py",
+      "symbol": "test_campaign_contract_pass_cannot_qualify_inconsistent_tracking_replay",
+      "responsibility": "Publicly validates C0's exact one-mode request/certificate at cap 1 and C1/A1's exact eight-mode contour fixtures under cap 24."
+    },
+    {
+      "id": "source-comsol-primary-config-regression",
+      "path": "scripts/test_validate_comsol_dispersion_scientific_gate.py",
+      "symbol": "test_benchmark_config_consumes_canonical_search_sheet",
+      "responsibility": "Checks C0 and C1 authored counts and both windows emitted by the workflow configuration against the canonical parameter sheet."
+    },
+    {
       "id": "source-fem-producer-material-preimage",
       "path": "scripts/fem_producer_provenance_replay.py",
       "symbol": "_validate_material_preimages_from_exact_bytes",

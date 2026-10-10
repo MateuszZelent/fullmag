@@ -513,6 +513,310 @@ def _validate_explicit_eigen_solver_policy(
     return valid
 
 
+def _canonical_primary_search(
+    parameters: Mapping[str, Any], case: str, reasons: list[str],
+) -> tuple[int | None, tuple[float, float] | None]:
+    search = parameters.get("eigen_search")
+    if not isinstance(search, Mapping):
+        reasons.append("canonical parameters lack eigen_search for the primary modal request")
+        return None, None
+    count_field = "gamma_requested_modes" if case == "c0" else "initial_requested_modes"
+    count = search.get(count_field)
+    if type(count) is not int or count <= 0:
+        reasons.append(f"canonical eigen_search.{count_field} must be a positive integer")
+        count = None
+    window = search.get("frequency_window_hz")
+    if (
+        not isinstance(window, list)
+        or len(window) != 2
+        or not all(_finite(value) and float(value) > 0.0 for value in window)
+        or float(window[0]) >= float(window[1])
+    ):
+        reasons.append("canonical eigen_search.frequency_window_hz must contain two finite positive increasing bounds")
+        resolved_window = None
+    else:
+        resolved_window = (float(window[0]), float(window[1]))
+    return count, resolved_window
+
+
+def _validate_primary_search_parameters(
+    metadata: Mapping[str, Any],
+    diagnostics: Mapping[str, Any],
+    case: str,
+    parameters: Mapping[str, Any],
+    reasons: list[str],
+) -> dict[str, Any]:
+    """Bind authored, resolved and per-sample primary search requests."""
+
+    local_reasons: list[str] = []
+    requested_count, requested_window = _canonical_primary_search(
+        parameters, case, local_reasons,
+    )
+    if requested_count is None or requested_window is None:
+        reasons.extend(local_reasons)
+        return _new_check("fail", reasons=local_reasons)
+
+    def require_count(value: object, label: str) -> None:
+        if type(value) is not int or value != requested_count:
+            local_reasons.append(
+                f"{label}={value!r} does not match canonical requested mode cap {requested_count}"
+            )
+
+    def require_window(value: object, label: str) -> None:
+        if (
+            not isinstance(value, list)
+            or len(value) != 2
+            or not all(_finite(item) for item in value)
+        ):
+            local_reasons.append(f"{label} must contain two finite Hz bounds")
+            return
+        if any(
+            _relative_error(float(actual), expected) > 1.0e-12
+            for actual, expected in zip(value, requested_window)
+        ):
+            local_reasons.append(
+                f"{label}={value!r} does not match canonical requested window {list(requested_window)!r}"
+            )
+
+    def require_resolved_window(value: object, label: str) -> None:
+        if (
+            not isinstance(value, list)
+            or len(value) != 2
+            or not all(_finite(item) for item in value)
+            or float(value[0]) < 0.0
+            or float(value[0]) >= float(value[1])
+        ):
+            local_reasons.append(f"{label} must contain two finite increasing Hz bounds with a nonnegative lower bound")
+            return
+        if float(value[0]) > requested_window[0] or float(value[1]) < requested_window[1]:
+            local_reasons.append(
+                f"{label}={value!r} does not cover canonical requested window {list(requested_window)!r}"
+            )
+
+    benchmark = _metadata_benchmark_block(metadata)
+    eigensolve = benchmark.get("eigensolve") if isinstance(benchmark, Mapping) else None
+    if not isinstance(eigensolve, Mapping):
+        local_reasons.append("primary authored metadata lacks eigensolve search parameters")
+    else:
+        if eigensolve.get("target") != "frequency_window":
+            local_reasons.append("primary authored eigensolve.target must be frequency_window")
+        require_count(eigensolve.get("requested_mode_count"), "primary authored requested_mode_count")
+        require_window(eigensolve.get("frequency_window_hz"), "primary authored frequency_window_hz")
+
+    plan = _metadata_backend_plan(metadata)
+    if not isinstance(plan, Mapping):
+        local_reasons.append("primary metadata lacks resolved execution_plan.backend_plan")
+    else:
+        require_count(plan.get("count"), "primary backend_plan.count")
+        target = plan.get("target")
+        if not isinstance(target, Mapping) or target.get("kind") != "frequency_window":
+            local_reasons.append("primary backend_plan.target.kind must be frequency_window")
+        else:
+            require_window(
+                [target.get("frequency_min_hz"), target.get("frequency_max_hz")],
+                "primary backend_plan.target frequency bounds",
+            )
+
+    require_count(diagnostics.get("requested_mode_count"), "primary solver requested_mode_count")
+    require_window(diagnostics.get("requested_window_hz"), "primary solver requested_window_hz")
+    require_resolved_window(
+        diagnostics.get("resolved_search_window_hz"),
+        "primary solver resolved_search_window_hz",
+    )
+
+    sample_diagnostics = diagnostics.get("sample_solver_diagnostics")
+    if case in PATH_CASES and not isinstance(sample_diagnostics, list):
+        local_reasons.append("primary path solver diagnostics lack per-sample search requests")
+    if isinstance(sample_diagnostics, list):
+        expected_indices = set(range(EXPECTED_PATH_SAMPLE_COUNT)) if case in PATH_CASES else {0}
+        observed_indices: set[int] = set()
+        for ordinal, entry in enumerate(sample_diagnostics):
+            label = f"primary sample_solver_diagnostics[{ordinal}]"
+            if not isinstance(entry, Mapping):
+                local_reasons.append(f"{label} must be an object")
+                continue
+            sample_index = entry.get("sample_index")
+            if type(sample_index) is not int or sample_index < 0:
+                local_reasons.append(f"{label}.sample_index must be a nonnegative integer")
+                continue
+            if sample_index in observed_indices:
+                local_reasons.append(f"{label} duplicates sample_index {sample_index}")
+            observed_indices.add(sample_index)
+            sample = entry.get("diagnostics")
+            if not isinstance(sample, Mapping):
+                local_reasons.append(f"{label}.diagnostics must be an object")
+                continue
+            require_count(sample.get("requested_mode_count"), f"{label}.diagnostics.requested_mode_count")
+            require_window(sample.get("requested_window_hz"), f"{label}.diagnostics.requested_window_hz")
+            require_resolved_window(
+                sample.get("resolved_search_window_hz"),
+                f"{label}.diagnostics.resolved_search_window_hz",
+            )
+        if observed_indices != expected_indices:
+            local_reasons.append(
+                "primary per-sample solver diagnostics do not cover the expected sample indices exactly"
+            )
+
+    reasons.extend(local_reasons)
+    return _new_check(
+        "fail" if local_reasons else "pass",
+        requested_mode_count=requested_count,
+        requested_window_hz=list(requested_window),
+        sample_diagnostic_count=len(sample_diagnostics) if isinstance(sample_diagnostics, list) else 0,
+        reasons=local_reasons,
+    )
+
+
+def _window_certificate_issue(
+    completeness: object,
+    label: str,
+    *,
+    minimum_observed_modes: int,
+    requested_mode_count: int | None,
+    require_exact_counts: bool,
+) -> tuple[str, str | None]:
+    """Return whether native diagnostics prove complete search coverage."""
+
+    if not isinstance(completeness, Mapping):
+        return "not_verified", f"{label} has no window_completeness object"
+    status = completeness.get("status")
+    if status != "certified":
+        return "not_verified", f"{label} window status {status!r} is not certified"
+    if completeness.get("certification_method") != "contour_interval_count":
+        return "fail", f"{label} certified status lacks the native contour_interval_count method"
+    if completeness.get("additional_modes_may_exist") is not False:
+        return "fail", f"{label} claims certification while additional modes may exist or the field is missing"
+    if completeness.get("result_truncated") is not False:
+        return "fail", f"{label} claims certification while result_truncated is true or missing"
+    if not require_exact_counts:
+        return "pass", None
+
+    count_fields = (
+        "estimated_modes_in_window",
+        "certified_modes_in_window",
+        "returned_modes",
+    )
+    counts = [completeness.get(field) for field in count_fields]
+    if any(type(value) is not int or value < 0 for value in counts):
+        return "fail", f"{label} certified status lacks exact nonnegative native mode counts"
+    estimated, certified, returned = counts
+    if not (estimated == certified == returned and certified >= minimum_observed_modes):
+        return "fail", f"{label} certified counts contradict each other or the published modes"
+    if type(requested_mode_count) is not int or requested_mode_count <= 0:
+        return "fail", f"{label} cannot bind its returned count to the canonical positive mode cap"
+    if returned > requested_mode_count:
+        return "fail", f"{label} returned mode count exceeds the canonical requested mode cap"
+    if "accepted_modes_before_cap" in completeness:
+        before_cap = completeness.get("accepted_modes_before_cap")
+        if type(before_cap) is not int or before_cap < 0 or before_cap != returned:
+            return "fail", f"{label} accepted_modes_before_cap contradicts the certified returned count"
+    return "pass", None
+
+
+def _validate_primary_window_completeness(
+    diagnostics: Mapping[str, Any],
+    spectrum: Mapping[str, Any],
+    case: str,
+    reasons: list[str],
+    *,
+    requested_mode_count: int | None,
+) -> dict[str, Any]:
+    """Require an explicit, internally consistent native certificate per k sample."""
+
+    local_reasons: list[str] = []
+    raw_samples = spectrum.get("samples")
+    if not isinstance(raw_samples, list):
+        local_reasons.append("primary spectrum samples must be an array before window completeness can be checked")
+        raw_samples = []
+    sample_counts = {
+        sample.get("sample_index"): len(sample.get("modes", []))
+        for sample in raw_samples
+        if isinstance(sample, Mapping) and type(sample.get("sample_index")) is int
+        and isinstance(sample.get("modes"), list)
+    }
+    is_path = case in PATH_CASES
+    aggregate_issue_status, aggregate_issue = _window_certificate_issue(
+        diagnostics.get("window_completeness"),
+        "primary aggregate",
+        minimum_observed_modes=max(sample_counts.values(), default=0),
+        requested_mode_count=requested_mode_count,
+        require_exact_counts=not is_path,
+    )
+    if aggregate_issue is not None:
+        local_reasons.append(aggregate_issue)
+
+    per_sample_statuses: dict[int, str] = {}
+    sample_diagnostics = diagnostics.get("sample_solver_diagnostics")
+    if is_path:
+        if not isinstance(sample_diagnostics, list) or len(sample_diagnostics) != EXPECTED_PATH_SAMPLE_COUNT:
+            local_reasons.append("primary path completeness requires diagnostics for all 61 samples")
+        else:
+            observed: set[int] = set()
+            for ordinal, entry in enumerate(sample_diagnostics):
+                if not isinstance(entry, Mapping) or type(entry.get("sample_index")) is not int:
+                    local_reasons.append(f"primary sample completeness entry {ordinal} has no integer sample_index")
+                    continue
+                sample_index = entry["sample_index"]
+                if sample_index in observed:
+                    local_reasons.append(f"primary sample completeness duplicates index {sample_index}")
+                    continue
+                observed.add(sample_index)
+                sample = entry.get("diagnostics")
+                status, issue = _window_certificate_issue(
+                    sample.get("window_completeness") if isinstance(sample, Mapping) else None,
+                    f"primary sample {sample_index}",
+                    minimum_observed_modes=sample_counts.get(sample_index, 0),
+                    requested_mode_count=requested_mode_count,
+                    require_exact_counts=True,
+                )
+                per_sample_statuses[sample_index] = status
+                if issue is not None:
+                    local_reasons.append(issue)
+            if observed != set(range(EXPECTED_PATH_SAMPLE_COUNT)):
+                local_reasons.append("primary sample completeness does not cover indices 0 through 60 exactly")
+    elif isinstance(sample_diagnostics, list):
+        if (
+            len(sample_diagnostics) != 1
+            or not isinstance(sample_diagnostics[0], Mapping)
+            or type(sample_diagnostics[0].get("sample_index")) is not int
+            or sample_diagnostics[0].get("sample_index") != 0
+        ):
+            local_reasons.append("C0 sample completeness diagnostics must identify its sole Gamma sample")
+        else:
+            sample = sample_diagnostics[0].get("diagnostics")
+            status, issue = _window_certificate_issue(
+                sample.get("window_completeness") if isinstance(sample, Mapping) else None,
+                "C0 Gamma sample",
+                minimum_observed_modes=sample_counts.get(0, 0),
+                requested_mode_count=requested_mode_count,
+                require_exact_counts=True,
+            )
+            per_sample_statuses[0] = status
+            if issue is not None:
+                local_reasons.append(issue)
+
+    if local_reasons:
+        reasons.extend(local_reasons)
+    if aggregate_issue_status == "fail" or "fail" in per_sample_statuses.values():
+        status = "fail"
+    elif local_reasons or aggregate_issue_status != "pass" or any(
+        sample_status != "pass" for sample_status in per_sample_statuses.values()
+    ):
+        status = "not_verified"
+    else:
+        status = "pass"
+    return _new_check(
+        status,
+        aggregate_status=(
+            diagnostics.get("window_completeness", {}).get("status")
+            if isinstance(diagnostics.get("window_completeness"), Mapping)
+            else "missing"
+        ),
+        per_sample_statuses={str(index): value for index, value in sorted(per_sample_statuses.items())},
+        reasons=local_reasons,
+    )
+
+
 def _validate_benchmark_metadata(
     metadata: Mapping[str, Any],
     case: str,
@@ -3151,7 +3455,13 @@ def _validate_convergence_path(bundle, primary, label, reasons):
     if not isinstance(primary, Mapping):
         reasons.append(f"{label} requires the primary spectrum for path verification")
         return
-    reference_samples = primary.get("spectrum", {}).get("samples", [])
+    primary_spectrum = primary.get("spectrum")
+    raw_reference_samples = (
+        primary_spectrum.get("samples")
+        if isinstance(primary_spectrum, Mapping)
+        else None
+    )
+    reference_samples = raw_reference_samples if isinstance(raw_reference_samples, list) else []
     references = {item["sample_index"]: item.get("k_vector") for item in reference_samples
                   if isinstance(item, Mapping) and type(item.get("sample_index")) is int}
     for sample in bundle["spectrum"].get("samples", []):
@@ -3464,6 +3774,13 @@ def validate_case(
     _validate_payload_schemas(
         {"spectrum": spectrum, "branches": branches, "manifest": manifest}, "primary", reasons,
     )
+    primary_search_check = _validate_primary_search_parameters(
+        metadata, diagnostics, case, parameters or {}, reasons,
+    )
+    primary_window_check = _validate_primary_window_completeness(
+        diagnostics, spectrum, case, reasons,
+        requested_mode_count=primary_search_check.get("requested_mode_count"),
+    )
     sample_map: dict[int, dict[str, Any]] = {}
     mode_map: dict[tuple[int, int], float] = {}
     quality_mode_map: dict[tuple[int, int], float] = {}
@@ -3595,6 +3912,8 @@ def validate_case(
         "canonical_kpath": canonical_path_check,
         "artifact_binding": evidence_check,
         "numeric_source": source_check,
+        "primary_search_parameters": primary_search_check,
+        "primary_window_completeness": primary_window_check,
         "modal_field_phase": field_check,
         "primary_equilibrium": primary_equilibrium_check,
         "finite_values": finite_check,

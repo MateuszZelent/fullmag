@@ -65,6 +65,13 @@ def _write_json(path: Path, value: object) -> None:
     path.write_text(json.dumps(value, indent=2), encoding="utf-8")
 
 
+def _refresh_primary_artifact_binding(case_dir: Path, relative_path: str, binding_key: str) -> None:
+    evidence_path = case_dir / gate.EVIDENCE_RELATIVE_PATH
+    evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+    evidence["artifact_bindings"][binding_key] = _sha256(case_dir / relative_path)
+    _write_json(evidence_path, evidence)
+
+
 def _native_mode_diagnostics(mode):
     """Synthetic values using the actual native modal diagnostics field names."""
     frequency = mode["frequency_real_hz"]
@@ -142,6 +149,11 @@ def _native_metadata(case, mesh_id, airbox_m, requested_modes):
         "enable_demag": demag, "enable_exchange": True,
         "equilibrium_magnetization": [[1.0, 0.0, 0.0] for _ in nodes],
         "damping_policy": "ignore", "count": requested_modes,
+        "target": {
+            "kind": "frequency_window",
+            "frequency_min_hz": guide["eigensolve"]["frequency_window_hz"][0],
+            "frequency_max_hz": guide["eigensolve"]["frequency_window_hz"][1],
+        },
         "solver_policy": {
             "residual_tolerance": guide["eigensolve"]["eigen_solver"]["relative_tolerance"],
             "max_outer_iterations": guide["eigensolve"]["eigen_solver"]["max_outer_iterations"],
@@ -666,13 +678,77 @@ def _rewrite_mode_field_with_z_sign_profile(root: Path, *, sample_index: int = 0
     mode["payload_sha256"] = "sha256:" + hashlib.sha256(data).hexdigest()
     _write_json(mode_path, mode)
 
+def _synthetic_window_certificate(mode_count, *, include_before_cap=False):
+    """Structurally valid synthetic certificate fields; never solver evidence."""
+    certificate = {
+        "policy": "certified_count",
+        "status": "certified",
+        "certification_method": "contour_interval_count",
+        "estimated_modes_in_window": mode_count,
+        "certified_modes_in_window": mode_count,
+        "returned_modes": mode_count,
+        "result_truncated": False,
+        "additional_modes_may_exist": False,
+    }
+    if include_before_cap:
+        certificate["accepted_modes_before_cap"] = mode_count
+    return certificate
+
+
+def _synthetic_solver_diagnostics(case, requested_modes, modes_per_sample):
+    parameters = json.loads(PARAMETERS.read_text(encoding="utf-8"))
+    window = list(parameters["eigen_search"]["frequency_window_hz"])
+    sample_count = 1 if case == "c0" else gate.EXPECTED_PATH_SAMPLE_COUNT
+    samples = [
+        {
+            "sample_index": sample_index,
+            "diagnostics": {
+                "requested_mode_count": requested_modes,
+                "requested_window_hz": list(window),
+                "resolved_search_window_hz": list(window),
+                "window_completeness": _synthetic_window_certificate(modes_per_sample),
+            },
+        }
+        for sample_index in range(sample_count)
+    ]
+    return {
+        "requested_mode_count": requested_modes,
+        "requested_window_hz": list(window),
+        "resolved_search_window_hz": list(window),
+        "window_completeness": _synthetic_window_certificate(sample_count * modes_per_sample),
+        "sample_solver_diagnostics": samples,
+    }
+
+
 def _write_native_context(root, case, mesh_id, airbox_m, requested_modes, samples):
-    _write_json(root / "metadata.json", _native_metadata(case, mesh_id, airbox_m, requested_modes))
+    """Write synthetic native-shaped metadata, not a solver result."""
+    metadata = _native_metadata(case, mesh_id, airbox_m, requested_modes)
+    authored_window = metadata["problem_meta"]["runtime_metadata"][
+        "comsol_nonzero_k_dispersion"
+    ]["eigensolve"]["frequency_window_hz"]
+    per_sample = []
+    for sample in samples:
+        count = len(sample.get("modes", []))
+        per_sample.append({
+            "sample_index": sample["sample_index"],
+            "diagnostics": {
+                "requested_mode_count": requested_modes,
+                "requested_window_hz": list(authored_window),
+                "resolved_search_window_hz": list(authored_window),
+                "window_completeness": _synthetic_window_certificate(count),
+            },
+        })
+    total_modes = sum(len(sample.get("modes", [])) for sample in samples)
+    _write_json(root / "metadata.json", metadata)
     _write_json(root / "eigen/diagnostics/solver.v1.json", {
         "schema_version": "frequency_domain_modal_solver_diagnostics.v1",
         "solver_model": gate.PRODUCTION_SOLVER_MODEL, "production_native_solver_available": True,
         "validation_only": False, "complete": True, "status": "ready",
         "requested_mode_count": requested_modes,
+        "requested_window_hz": list(authored_window),
+        "resolved_search_window_hz": list(authored_window),
+        "window_completeness": _synthetic_window_certificate(total_modes),
+        "sample_solver_diagnostics": per_sample,
         "sample_count": len(samples), "mode_count": sum(len(sample["modes"]) for sample in samples),
     })
 
@@ -806,14 +882,16 @@ def _make_case(root: Path, case: str = "c1", *, primary_material=None, producer_
     path_rows = _canonical_path()
     parameters = json.loads(PARAMETERS.read_text(encoding="utf-8"))
     samples: list[dict[str, object]] = []
+    requested_modes = 1 if case == "c0" else 24
+    target_bands = 1 if case == "c0" else gate.EXPECTED_TARGET_BANDS
     branches: list[dict[str, object]] = [
         {"branch_id": band, "label": f"band_{band}", "points": []}
-        for band in range(gate.EXPECTED_TARGET_BANDS)
+        for band in range(target_bands)
     ]
     for index, row in enumerate(path_rows if case in gate.PATH_CASES else [path_rows[0]]):
         k = tuple(float(row[key]) for key in ("kx_rad_per_m", "ky_rad_per_m", "kz_rad_per_m"))
         if case == "c0":
-            frequencies = [parameters["controls_infinite_film_hz"]["no_demag_gamma"] + band * 1.0e8 for band in range(gate.EXPECTED_TARGET_BANDS)]
+            frequencies = [parameters["controls_infinite_film_hz"]["no_demag_gamma"]]
         elif index == 0:
             frequencies = [parameters["controls_finite_dirichlet_box"]["with_demag_gamma_hz"] + band * 1.0e8 for band in range(gate.EXPECTED_TARGET_BANDS)]
         else:
@@ -845,7 +923,7 @@ def _make_case(root: Path, case: str = "c1", *, primary_material=None, producer_
     for sample in samples:
         for mode in sample["modes"]:
             _native_mode_diagnostics(mode)
-    _write_native_context(case_dir, case, "mesh-L1", 2e-6, 24, samples)
+    _write_native_context(case_dir, case, "mesh-L1", 2e-6, requested_modes, samples)
     if primary_material is not None:
         metadata_path = case_dir / "metadata.json"
         metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
@@ -953,6 +1031,297 @@ def _make_case(root: Path, case: str = "c1", *, primary_material=None, producer_
 
 
 class ScientificGateTests(unittest.TestCase):
+    def test_benchmark_config_consumes_canonical_search_sheet(self):
+        parameters = json.loads(PARAMETERS.read_text(encoding="utf-8"))
+        c0 = _native_metadata("c0", "mesh-L1", 2.0e-6, 1)
+        c1 = _native_metadata("c1", "mesh-L1", 2.0e-6, 24)
+        for metadata, expected_count in ((c0, 1), (c1, 24)):
+            eigensolve = metadata["problem_meta"]["runtime_metadata"][
+                "comsol_nonzero_k_dispersion"
+            ]["eigensolve"]
+            self.assertEqual(eigensolve["requested_mode_count"], expected_count)
+            self.assertEqual(
+                eigensolve["frequency_window_hz"],
+                parameters["eigen_search"]["frequency_window_hz"],
+            )
+
+    def test_primary_search_parameters_bind_count_and_window_without_requiring_full_cap(self):
+        metadata = _native_metadata("c1", "mesh-L1", 2.0e-6, 24)
+        diagnostics = _synthetic_solver_diagnostics("c1", 24, 8)
+        reasons = []
+        check = gate._validate_primary_search_parameters(
+            metadata, diagnostics, "c1",
+            json.loads(PARAMETERS.read_text(encoding="utf-8")), reasons,
+        )
+        self.assertEqual(check["status"], "pass", reasons)
+        self.assertEqual(check["requested_mode_count"], 24)
+        self.assertEqual(
+            diagnostics["sample_solver_diagnostics"][0]["diagnostics"]["window_completeness"]["returned_modes"],
+            8,
+        )
+
+        def rejects(mutate, expected_text):
+            changed_metadata = copy.deepcopy(metadata)
+            changed_diagnostics = copy.deepcopy(diagnostics)
+            mutate(changed_metadata, changed_diagnostics)
+            local_reasons = []
+            result = gate._validate_primary_search_parameters(
+                changed_metadata, changed_diagnostics, "c1",
+                json.loads(PARAMETERS.read_text(encoding="utf-8")), local_reasons,
+            )
+            self.assertEqual(result["status"], "fail", local_reasons)
+            self.assertTrue(any(expected_text in reason for reason in local_reasons), local_reasons)
+
+        def self_consistent_eight(metadata, diagnostics):
+            metadata["problem_meta"]["runtime_metadata"]["comsol_nonzero_k_dispersion"]["eigensolve"]["requested_mode_count"] = 8
+            metadata["execution_plan"]["backend_plan"]["count"] = 8
+            diagnostics["requested_mode_count"] = 8
+            for entry in diagnostics["sample_solver_diagnostics"]:
+                entry["diagnostics"]["requested_mode_count"] = 8
+
+        rejects(self_consistent_eight, "canonical requested mode cap 24")
+        rejects(
+            lambda meta, diag: meta["problem_meta"]["runtime_metadata"]["comsol_nonzero_k_dispersion"]["eigensolve"].update(target="nearest"),
+            "target must be frequency_window",
+        )
+        rejects(
+            lambda meta, diag: meta["problem_meta"]["runtime_metadata"]["comsol_nonzero_k_dispersion"]["eigensolve"].update(frequency_window_hz=[1.0e6, 40.0e9]),
+            "does not match canonical requested window",
+        )
+        rejects(
+            lambda meta, diag: meta["execution_plan"]["backend_plan"]["target"].update(frequency_max_hz=40.0e9),
+            "canonical requested window",
+        )
+        rejects(
+            lambda meta, diag: diag.update(requested_mode_count=8),
+            "canonical requested mode cap 24",
+        )
+        rejects(
+            lambda meta, diag: diag.update(resolved_search_window_hz=[2.0e6, 31.0e9]),
+            "does not cover canonical requested window",
+        )
+        rejects(
+            lambda meta, diag: diag.update(resolved_search_window_hz=[-1.0e6, 31.0e9]),
+            "nonnegative lower bound",
+        )
+        rejects(
+            lambda meta, diag: diag.pop("sample_solver_diagnostics"),
+            "lack per-sample search requests",
+        )
+        rejects(
+            lambda meta, diag: diag["sample_solver_diagnostics"][30]["diagnostics"].update(requested_mode_count=8),
+            "canonical requested mode cap 24",
+        )
+        rejects(
+            lambda meta, diag: diag["sample_solver_diagnostics"][30]["diagnostics"].update(requested_window_hz=[1.0e6, 40.0e9]),
+            "does not match canonical requested window",
+        )
+        rejects(
+            lambda meta, diag: diag["sample_solver_diagnostics"].pop(30),
+            "sample indices exactly",
+        )
+
+        extended = copy.deepcopy(diagnostics)
+        extended["resolved_search_window_hz"] = [0.5e6, 31.0e9]
+        for entry in extended["sample_solver_diagnostics"]:
+            entry["diagnostics"]["resolved_search_window_hz"] = [0.5e6, 31.0e9]
+        reasons = []
+        check = gate._validate_primary_search_parameters(
+            metadata, extended, "c1",
+            json.loads(PARAMETERS.read_text(encoding="utf-8")), reasons,
+        )
+        self.assertEqual(check["status"], "pass", reasons)
+
+        c0_metadata = _native_metadata("c0", "mesh-L1", 2.0e-6, 1)
+        c0_diagnostics = _synthetic_solver_diagnostics("c0", 1, 1)
+        reasons = []
+        c0_check = gate._validate_primary_search_parameters(
+            c0_metadata, c0_diagnostics, "c0",
+            json.loads(PARAMETERS.read_text(encoding="utf-8")), reasons,
+        )
+        self.assertEqual(c0_check["status"], "pass", reasons)
+        self.assertEqual(c0_check["requested_mode_count"], 1)
+
+    def test_primary_window_completeness_requires_native_certificate_per_sample(self):
+        diagnostics = _synthetic_solver_diagnostics("c1", 24, 8)
+        spectrum = {"samples": [
+            {"sample_index": index, "modes": [{"raw_mode_index": mode} for mode in range(8)]}
+            for index in range(gate.EXPECTED_PATH_SAMPLE_COUNT)
+        ]}
+        reasons = []
+        check = gate._validate_primary_window_completeness(
+            diagnostics, spectrum, "c1", reasons, requested_mode_count=24,
+        )
+        self.assertEqual(check["status"], "pass", reasons)
+        self.assertEqual(check["per_sample_statuses"]["30"], "pass")
+
+        aggregate_not_certified = copy.deepcopy(diagnostics)
+        aggregate_not_certified["window_completeness"]["status"] = "not_certified"
+        reasons = []
+        check = gate._validate_primary_window_completeness(
+            aggregate_not_certified, spectrum, "c1", reasons, requested_mode_count=24,
+        )
+        self.assertEqual(check["status"], "not_verified")
+        self.assertTrue(any("aggregate window status" in reason for reason in reasons), reasons)
+
+        explicitly_truncated = copy.deepcopy(diagnostics)
+        explicitly_truncated["window_completeness"]["status"] = "truncated_by_requested_count"
+        reasons = []
+        check = gate._validate_primary_window_completeness(
+            explicitly_truncated, spectrum, "c1", reasons, requested_mode_count=24,
+        )
+        self.assertEqual(check["status"], "not_verified")
+        self.assertTrue(any("truncated_by_requested_count" in reason for reason in reasons), reasons)
+
+        one_sample_not_certified = copy.deepcopy(diagnostics)
+        one_sample_not_certified["sample_solver_diagnostics"][30]["diagnostics"]["window_completeness"]["status"] = "not_certified"
+        reasons = []
+        check = gate._validate_primary_window_completeness(
+            one_sample_not_certified, spectrum, "c1", reasons, requested_mode_count=24,
+        )
+        self.assertEqual(check["status"], "not_verified")
+        self.assertTrue(any("sample 30 window status" in reason for reason in reasons), reasons)
+
+        false_certificate = copy.deepcopy(diagnostics)
+        false_certificate["sample_solver_diagnostics"][30]["diagnostics"]["window_completeness"]["additional_modes_may_exist"] = True
+        reasons = []
+        check = gate._validate_primary_window_completeness(
+            false_certificate, spectrum, "c1", reasons, requested_mode_count=24,
+        )
+        self.assertEqual(check["status"], "fail")
+        self.assertTrue(any("additional modes may exist" in reason for reason in reasons), reasons)
+
+        contradictory_count = copy.deepcopy(diagnostics)
+        contradictory_count["sample_solver_diagnostics"][30]["diagnostics"]["window_completeness"]["returned_modes"] = 24
+        reasons = []
+        check = gate._validate_primary_window_completeness(
+            contradictory_count, spectrum, "c1", reasons, requested_mode_count=24,
+        )
+        self.assertEqual(check["status"], "fail")
+        self.assertTrue(any("certified counts contradict" in reason for reason in reasons), reasons)
+
+        c0_diagnostics = _synthetic_solver_diagnostics("c0", 1, 1)
+        c0_spectrum = {"samples": [{"sample_index": 0, "modes": [{"raw_mode_index": 0}]}]}
+        reasons = []
+        c0_check = gate._validate_primary_window_completeness(
+            c0_diagnostics, c0_spectrum, "c0", reasons, requested_mode_count=1,
+        )
+        self.assertEqual(c0_check["status"], "pass", reasons)
+
+        optional_count = copy.deepcopy(diagnostics)
+        for entry in optional_count["sample_solver_diagnostics"]:
+            entry["diagnostics"]["window_completeness"]["accepted_modes_before_cap"] = 8
+        reasons = []
+        check = gate._validate_primary_window_completeness(
+            optional_count, spectrum, "c1", reasons, requested_mode_count=24,
+        )
+        self.assertEqual(check["status"], "pass", reasons)
+
+        contradictory_optional_count = copy.deepcopy(optional_count)
+        contradictory_optional_count["sample_solver_diagnostics"][30]["diagnostics"]["window_completeness"]["accepted_modes_before_cap"] = 9
+        reasons = []
+        check = gate._validate_primary_window_completeness(
+            contradictory_optional_count, spectrum, "c1", reasons, requested_mode_count=24,
+        )
+        self.assertEqual(check["status"], "fail")
+        self.assertTrue(any("accepted_modes_before_cap contradicts" in reason for reason in reasons), reasons)
+
+        over_cap = copy.deepcopy(diagnostics)
+        over_cap_count = over_cap["sample_solver_diagnostics"][30]["diagnostics"]["window_completeness"]
+        over_cap_count.update(
+            estimated_modes_in_window=25,
+            certified_modes_in_window=25,
+            returned_modes=25,
+        )
+        reasons = []
+        check = gate._validate_primary_window_completeness(
+            over_cap, spectrum, "c1", reasons, requested_mode_count=24,
+        )
+        self.assertEqual(check["status"], "fail")
+        self.assertTrue(any("exceeds the canonical requested mode cap" in reason for reason in reasons), reasons)
+
+        for malformed_samples in (None, 61):
+            with self.subTest(malformed_samples=malformed_samples):
+                malformed_spectrum = {"samples": malformed_samples}
+                reasons = []
+                check = gate._validate_primary_window_completeness(
+                    diagnostics, malformed_spectrum, "c1", reasons,
+                    requested_mode_count=24,
+                )
+                self.assertEqual(check["status"], "not_verified")
+                self.assertTrue(any("samples must be an array" in reason for reason in reasons), reasons)
+
+    def test_validate_case_accepts_contour_counts_without_optional_counter_and_rejects_over_cap(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case_dir = _make_case(Path(directory), "c1")
+            diagnostics_path = case_dir / "eigen/diagnostics/solver.v1.json"
+            diagnostics = json.loads(diagnostics_path.read_text(encoding="utf-8"))
+            first_completeness = diagnostics["sample_solver_diagnostics"][0]["diagnostics"]["window_completeness"]
+            self.assertNotIn("accepted_modes_before_cap", first_completeness)
+            report = gate.validate_case(case_dir, "c1", parameters_path=PARAMETERS, kpath_path=KPATH)
+            self.assertEqual(report["checks"]["primary_search_parameters"]["status"], "pass")
+            self.assertEqual(report["checks"]["primary_window_completeness"]["status"], "pass", report["reasons"])
+
+            for entry in diagnostics["sample_solver_diagnostics"]:
+                completeness = entry["diagnostics"]["window_completeness"]
+                completeness["accepted_modes_before_cap"] = completeness["returned_modes"]
+            _write_json(diagnostics_path, diagnostics)
+            _refresh_primary_artifact_binding(
+                case_dir, "eigen/diagnostics/solver.v1.json", "solver_diagnostics_sha256",
+            )
+            report = gate.validate_case(case_dir, "c1", parameters_path=PARAMETERS, kpath_path=KPATH)
+            self.assertEqual(report["checks"]["primary_window_completeness"]["status"], "pass", report["reasons"])
+
+            completeness = diagnostics["sample_solver_diagnostics"][30]["diagnostics"]["window_completeness"]
+            completeness.update(
+                estimated_modes_in_window=25,
+                certified_modes_in_window=25,
+                returned_modes=25,
+                accepted_modes_before_cap=25,
+            )
+            _write_json(diagnostics_path, diagnostics)
+            _refresh_primary_artifact_binding(
+                case_dir, "eigen/diagnostics/solver.v1.json", "solver_diagnostics_sha256",
+            )
+            report = gate.validate_case(case_dir, "c1", parameters_path=PARAMETERS, kpath_path=KPATH)
+        self.assertEqual(report["checks"]["primary_window_completeness"]["status"], "fail")
+        self.assertTrue(
+            any("exceeds the canonical requested mode cap" in reason for reason in report["reasons"]),
+            report["reasons"],
+        )
+        self.assertEqual(report["status"], "not_qualified")
+
+    def test_validate_case_malformed_spectrum_samples_fail_closed_without_exception(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case_dir = _make_case(Path(directory), "c1")
+            spectrum_path = case_dir / "eigen/spectrum.v2.json"
+            valid_spectrum = json.loads(spectrum_path.read_text(encoding="utf-8"))
+            for malformed_samples in (None, 61):
+                with self.subTest(malformed_samples=malformed_samples):
+                    changed = copy.deepcopy(valid_spectrum)
+                    changed["samples"] = malformed_samples
+                    _write_json(spectrum_path, changed)
+                    _refresh_primary_artifact_binding(
+                        case_dir, "eigen/spectrum.v2.json", "spectrum_v2_sha256",
+                    )
+                    report = gate.validate_case(
+                        case_dir, "c1", parameters_path=PARAMETERS, kpath_path=KPATH,
+                    )
+                    self.assertEqual(
+                        report["checks"]["primary_window_completeness"]["status"],
+                        "not_verified",
+                        report["reasons"],
+                    )
+                    self.assertTrue(
+                        any("primary spectrum samples must be an array" in reason for reason in report["reasons"]),
+                        report["reasons"],
+                    )
+                    self.assertEqual(report["status"], "not_qualified")
+                    _write_json(spectrum_path, valid_spectrum)
+                    _refresh_primary_artifact_binding(
+                        case_dir, "eigen/spectrum.v2.json", "spectrum_v2_sha256",
+                    )
+
     def test_metadata_requires_explicit_eigen_solver_iteration_policy(self):
         parameters = json.loads(PARAMETERS.read_text(encoding="utf-8"))
         metadata = _native_metadata("c1", "mesh-L1", 2.0e-6, 24)
@@ -1598,6 +1967,8 @@ class ScientificGateTests(unittest.TestCase):
                     )
                     self.assertEqual(results[case]["campaign_contract_status"], "pass", results[case]["reasons"][:8])
                     self.assertEqual(results[case]["status"], "qualified" if case == "c0" else "not_qualified")
+                    self.assertEqual(results[case]["checks"]["primary_search_parameters"]["status"], "pass")
+                    self.assertEqual(results[case]["checks"]["primary_window_completeness"]["status"], "pass")
                     if case in gate.PATH_CASES:
                         self.assertEqual(results[case]["qualification"], "NOT VERIFIED")
                         # Full magnetic phase coverage does not prove consistency of
@@ -2056,6 +2427,8 @@ class ScientificGateTests(unittest.TestCase):
                 kpath_path=KPATH,
             )
         self.assertEqual(report["campaign_contract_status"], "pass", report["reasons"][:12])
+        self.assertEqual(report["checks"]["primary_search_parameters"]["status"], "pass")
+        self.assertEqual(report["checks"]["primary_window_completeness"]["status"], "pass")
         self.assertEqual(report["status"], "not_qualified")
         self.assertTrue(any("field-metric replay" in reason for reason in report["reasons"]))
         self.assertEqual(report["checks"]["tracked_branches"]["target_band_count"], 8)

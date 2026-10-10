@@ -8,8 +8,10 @@ contains no solver implementation.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 import math
 import os
+from pathlib import Path
 from typing import Literal
 
 import fullmag as fm
@@ -44,12 +46,56 @@ RELAX_TORQUE_TOLERANCE_A_PER_M = 1.0
 # runtime may stop earlier only after its torque-convergence check succeeds.
 RELAX_MAX_STEPS = 1_000_000  # 5 ns at the explicit 5 fs step.
 
-MODE_COUNT = 24
-C0_MODE_COUNT = 1
+def _canonical_eigen_search() -> tuple[int, int, tuple[float, float]]:
+    """Load the shared authored search limits and reject malformed contracts."""
+
+    parameters_path = (
+        Path(__file__).resolve().parents[4]
+        / "docs/guides/comsol-dispersion-benchmark/parameters.json"
+    )
+    try:
+        parameters = json.loads(parameters_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(
+            f"cannot load canonical COMSOL dispersion parameters from {parameters_path}"
+        ) from exc
+    search = parameters.get("eigen_search") if isinstance(parameters, dict) else None
+    if not isinstance(search, dict):
+        raise ValueError("canonical COMSOL parameters must contain eigen_search")
+
+    def positive_count(field: str) -> int:
+        value = search.get(field)
+        if type(value) is not int or value <= 0:
+            raise ValueError(f"eigen_search.{field} must be a positive integer")
+        return value
+
+    window = search.get("frequency_window_hz")
+    if (
+        not isinstance(window, list)
+        or len(window) != 2
+        or any(
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(float(value))
+            or float(value) <= 0.0
+            for value in window
+        )
+        or float(window[0]) >= float(window[1])
+    ):
+        raise ValueError(
+            "eigen_search.frequency_window_hz must be two finite, positive, increasing Hz bounds"
+        )
+    return (
+        positive_count("initial_requested_modes"),
+        positive_count("gamma_requested_modes"),
+        (float(window[0]), float(window[1])),
+    )
+
+
+MODE_COUNT, C0_MODE_COUNT, FREQUENCY_WINDOW_HZ = _canonical_eigen_search()
 TARGET_BANDS = 8
 MODE_FIELD_SAMPLE_INDICES = (0, 10, 20, 40, 50, 60)
 INITIAL_SHIFT_HZ = 1.0e9
-FREQUENCY_WINDOW_HZ = (1.0e6, 30.0e9)
 # The independently certified Hypre residual can be a small factor above the
 # requested stopping threshold on this airbox mesh; retain a strict explicit
 # gate while matching the guide's 1e-7 relaxation tolerance.

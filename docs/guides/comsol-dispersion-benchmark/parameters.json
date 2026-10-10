@@ -60,6 +60,8 @@
   "eigen_search": {
     "initial_shift_hz": 1000000000.0,
     "initial_requested_modes": 24,
+    "gamma_requested_modes": 1,
+    "frequency_window_hz": [1000000.0, 30000000000.0],
     "count_check_requested_modes": 48,
     "target_positive_physical_bands": 8,
     "relative_tolerance": 1e-08,
