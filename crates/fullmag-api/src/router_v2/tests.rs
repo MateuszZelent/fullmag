@@ -29,14 +29,15 @@ use crate::schemas::realtime::{
 };
 use crate::types::{
     AppState, CommandCompletionState, CommandLifecycleState, CurrentDisplaySelection,
-    CurrentLiveFieldFrameRequest, CurrentLiveSnapshotRequest, CurrentWorkspaceLayout,
-    CurrentWorkspaceRibbon, CurrentWorkspaceSelection, DisplayPresentationState,
-    GlobalScalarPreviewState, LatestFields, LiveState, PreviewState, RunManifest,
-    RuntimeLifecycleState, RuntimeStatusView, ScalarRow, SessionCommand, SessionManifest,
-    SessionStateResponse, SimulationPreparationClockAdjustmentSnapshot,
-    SimulationPreparationFailureSnapshot, SimulationPreparationLogEntrySnapshot,
-    SimulationPreparationSnapshot, SimulationPreparationStageSnapshot, StageExecutionRecord,
-    StageExecutionState, StageLifecycleState, StepUpdateView, TrackedCommandRecord,
+    CurrentLiveFieldFrameRequest, CurrentLiveRuntimeFrameRequest, CurrentLiveScalarFrameRequest,
+    CurrentLiveSnapshotRequest, CurrentWorkspaceLayout, CurrentWorkspaceRibbon,
+    CurrentWorkspaceSelection, DisplayPresentationState, GlobalScalarPreviewState, LatestFields,
+    LiveState, PreviewState, RunManifest, RuntimeLifecycleState, RuntimeStatusView, ScalarRow,
+    SessionCommand, SessionManifest, SessionStateResponse,
+    SimulationPreparationClockAdjustmentSnapshot, SimulationPreparationFailureSnapshot,
+    SimulationPreparationLogEntrySnapshot, SimulationPreparationSnapshot,
+    SimulationPreparationStageSnapshot, StageExecutionRecord, StageExecutionState,
+    StageLifecycleState, StepUpdateView, TrackedCommandRecord,
 };
 use crate::uuid_v4_hex;
 use fullmag_runner::eigen::{
@@ -2129,6 +2130,179 @@ fn sample_scalar_row(step: u64, time: f64, e_total: f64) -> ScalarRow {
         per_object_scalars: HashMap::new(),
         table_expressions: Vec::new(),
     }
+}
+
+fn physical_test_live_state(
+    step: u64,
+    time: f64,
+    grid: [u32; 3],
+    magnetization: Option<Vec<f64>>,
+) -> LiveState {
+    LiveState {
+        status: "running".into(),
+        updated_at_unix_ms: 1_700_000_000_100,
+        latest_step: StepUpdateView {
+            kind: fullmag_quantities::StepDataKind::PhysicalObservation,
+            solver_progress: None,
+            step,
+            time,
+            dt: 1.0e-13,
+            pseudo_time_s: None,
+            e_ex: 0.0,
+            e_demag: 0.0,
+            e_ext: 0.0,
+            e_ani: 0.0,
+            e_dmi: 0.0,
+            e_rotated_dmi: 0.0,
+            e_total: 0.0,
+            max_dm_dt: 0.0,
+            max_h_eff: 0.0,
+            max_h_demag: 0.0,
+            max_torque_Apm: 0.0,
+            max_torque_all_Apm: 0.0,
+            max_torque_T: 0.0,
+            frozen_reference_max_drift: 0.0,
+            active_dof_count: 0,
+            frozen_dof_count: 0,
+            free_dof_count: 0,
+            wall_time_ns: 100,
+            grid,
+            fem_mesh_generation_id: None,
+            fem_mesh: None,
+            magnetization,
+            per_object_scalars: HashMap::new(),
+            field_materialization_states: Vec::new(),
+            preview_field: None,
+            finished: false,
+        },
+    }
+}
+
+fn apply_test_runtime_frame(
+    snapshot: &mut SessionStateResponse,
+    live_state: LiveState,
+) -> Result<(), crate::error::ApiError> {
+    let session_id = snapshot.session.session_id.clone();
+    crate::session::apply_current_live_runtime_frame(
+        snapshot,
+        CurrentLiveRuntimeFrameRequest {
+            session_id,
+            live_state: Some(live_state),
+            frozen_spins_runtime_status: None,
+            engine_log: None,
+            solver_profile: None,
+            fem_mesh: None,
+        },
+    )
+}
+
+fn publish_test_latest_fields(
+    snapshot: &mut SessionStateResponse,
+    latest_fields: LatestFields,
+) -> Result<(), crate::error::ApiError> {
+    let session_id = snapshot.session.session_id.clone();
+    crate::session::apply_current_live_field_frame(
+        snapshot,
+        CurrentLiveFieldFrameRequest {
+            session_id,
+            latest_fields: Some(latest_fields),
+            replace_latest_fields: false,
+            field_generation: None,
+            preview_fields: None,
+            clear_preview_cache: false,
+        },
+    )
+}
+
+fn publish_test_preview_fields(
+    snapshot: &mut SessionStateResponse,
+    preview_fields: Vec<LivePreviewField>,
+) -> Result<(), crate::error::ApiError> {
+    let session_id = snapshot.session.session_id.clone();
+    crate::session::apply_current_live_field_frame(
+        snapshot,
+        CurrentLiveFieldFrameRequest {
+            session_id,
+            latest_fields: None,
+            replace_latest_fields: false,
+            field_generation: None,
+            preview_fields: Some(preview_fields),
+            clear_preview_cache: false,
+        },
+    )
+}
+
+fn publish_test_fields_from_physical_step(
+    snapshot: &mut SessionStateResponse,
+    mut live_state: LiveState,
+    mut latest_fields: LatestFields,
+) -> Result<(), crate::error::ApiError> {
+    if let Some(mesh) = snapshot.fem_mesh.as_ref() {
+        live_state.latest_step.fem_mesh_generation_id = mesh.generation_id.clone();
+    }
+    let source_step = live_state.latest_step.step;
+    let source_time = live_state.latest_step.time;
+    apply_test_runtime_frame(snapshot, live_state)?;
+    for (_, value) in latest_fields.entries_mut() {
+        let Some(object) = value.as_object_mut() else {
+            continue;
+        };
+        object
+            .entry("source_step")
+            .or_insert_with(|| serde_json::json!(source_step));
+        object
+            .entry("source_time_seconds")
+            .or_insert_with(|| serde_json::json!(source_time));
+    }
+    publish_test_latest_fields(snapshot, latest_fields)
+}
+
+fn admit_test_latest_fields_from_physical_step(
+    snapshot: &mut SessionStateResponse,
+    live_state: LiveState,
+) -> Result<(), crate::error::ApiError> {
+    let latest_fields = snapshot.latest_fields.clone();
+    publish_test_fields_from_physical_step(snapshot, live_state, latest_fields)
+}
+
+#[tokio::test]
+async fn test_field_publisher_rejects_unaccepted_and_solver_progress_sources() {
+    let state = test_app_state_with_live_session().await;
+    let mut guard = state.current_live_state.write().await;
+    let snapshot = guard.as_mut().expect("test live session");
+    let fields = || {
+        serde_json::from_value(serde_json::json!({
+            "m": {
+                "values": [[1.0, 0.0, 0.0]],
+                "source_step": 8,
+                "layout": { "grid_cells": [1, 1, 1] }
+            }
+        }))
+        .expect("source-negative field fixture")
+    };
+
+    apply_test_runtime_frame(
+        snapshot,
+        physical_test_live_state(7, 7.0e-12, [1, 1, 1], None),
+    )
+    .expect("physical source frame should apply");
+    let unknown_source = publish_test_latest_fields(snapshot, fields())
+        .expect_err("a field may not refer to a future, unaccepted source step");
+    assert!(unknown_source
+        .to_string()
+        .contains("no accepted physical observation source"));
+
+    let mut progress = physical_test_live_state(8, 8.0e-12, [1, 1, 1], None);
+    progress.latest_step.kind = fullmag_quantities::StepDataKind::SolverProgress;
+    progress.latest_step.solver_progress = Some(fullmag_quantities::SolverProgress::FemEigen {
+        metrics: HashMap::from([("progress_fraction".into(), 0.5)]),
+    });
+    apply_test_runtime_frame(snapshot, progress).expect("typed progress frame should apply");
+    let progress_source = publish_test_latest_fields(snapshot, fields())
+        .expect_err("solver progress must not qualify a physical field payload");
+    assert!(progress_source
+        .to_string()
+        .contains("no accepted physical observation source"));
 }
 
 async fn test_router_with_scene_document() -> axum::Router {
@@ -4815,7 +4989,7 @@ async fn fem_string_generation_identity_is_preserved_across_domain_status_catalo
         let mut mesh = sample_fem_mesh_payload();
         mesh.generation_id = Some(generation_id.to_string());
         snapshot.fem_mesh = Some(mesh);
-        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+        let latest_fields = serde_json::from_value(serde_json::json!({
             "m": {
                 "values": [
                     [1.0, 0.0, 0.0],
@@ -4827,6 +5001,19 @@ async fn fem_string_generation_identity_is_preserved_across_domain_status_catalo
             }
         }))
         .expect("FEM field fixture should deserialize");
+        publish_test_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(
+                1,
+                1.0e-12,
+                [4, 1, 1],
+                Some(vec![
+                    1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0,
+                ]),
+            ),
+            latest_fields,
+        )
+        .expect("FEM field should be admitted from a physical observation");
     }
     let app = build_v2_router().with_state(state);
 
@@ -5179,7 +5366,7 @@ async fn fdm_multilayer_field_slice_uses_common_grid_geometry() {
                 "layers": []
             }
         }));
-        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+        let latest_fields = serde_json::from_value(serde_json::json!({
             "m": {
                 "values": [
                     [1.0, 0.0, 0.0], [1.0, 0.0, 0.0],
@@ -5190,6 +5377,17 @@ async fn fdm_multilayer_field_slice_uses_common_grid_geometry() {
             }
         }))
         .expect("multilayer field payload should deserialize");
+        publish_test_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(
+                1,
+                1.0e-12,
+                [4, 2, 1],
+                Some(vec![[1.0, 0.0, 0.0]; 8].into_iter().flatten().collect()),
+            ),
+            latest_fields,
+        )
+        .expect("multilayer slice field should be admitted from a physical step");
     }
     let app = build_v2_router().with_state(state);
     let response = app
@@ -5811,8 +6009,8 @@ async fn field_meta_and_vector_resolve_active_live_preview_field_after_snapshot_
                         field_materialization_states: Vec::new(),
                         preview_field: Some(LivePreviewField {
                             config_revision: 4,
-                            source_step: 0,
-                            source_time_seconds: None,
+                            source_step: 10,
+                            source_time_seconds: Some(1e-9),
                             source_revision: 4,
                             materialized_at_unix_ms: 0,
                             materialization_wall_time_ns: 0,
@@ -5977,6 +6175,11 @@ async fn terminal_field_frame_removes_absent_quantity_from_field_api() {
     {
         let mut guard = state.current_live_state.write().await;
         let snapshot = guard.as_mut().expect("live session exists");
+        apply_test_runtime_frame(
+            snapshot,
+            physical_test_live_state(1, 1.0e-12, [1, 1, 1], None),
+        )
+        .expect("terminal field source observation should apply");
         snapshot.latest_fields = serde_json::from_value(serde_json::json!({
             "H_dmi": {
                 "values": [[1.0, 0.0, 0.0]],
@@ -5992,6 +6195,8 @@ async fn terminal_field_frame_removes_absent_quantity_from_field_api() {
                 latest_fields: Some(
                     serde_json::from_value(serde_json::json!({
                         "H_eff": {
+                            "source_step": 1,
+                            "source_time_seconds": 1.0e-12,
                             "values": [[0.0, 1.0, 0.0]],
                             "layout": { "grid_cells": [1, 1, 1] }
                         }
@@ -6031,6 +6236,11 @@ async fn field_frame_terminal_cache_wins_equal_generation_in_vector_route_body()
     {
         let mut guard = state.current_live_state.write().await;
         let snapshot = guard.as_mut().expect("live session exists");
+        apply_test_runtime_frame(
+            snapshot,
+            physical_test_live_state(52, 5.2e-12, [2, 1, 1], None),
+        )
+        .expect("cached preview source observation should apply");
         let runtime_preview = LivePreviewField {
             config_revision: 7,
             source_step: 52,
@@ -6054,7 +6264,7 @@ async fn field_frame_terminal_cache_wins_equal_generation_in_vector_route_body()
             auto_downscale_message: None,
             active_mask: None,
         };
-        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+        let latest_fields = serde_json::from_value(serde_json::json!({
             "H_demag": {
                 "values": [[0.0, 0.0, 0.0], [0.0, 0.0, 0.0]],
                 "field_revision": 7,
@@ -6065,14 +6275,14 @@ async fn field_frame_terminal_cache_wins_equal_generation_in_vector_route_body()
             }
         }))
         .expect("stale latest H_demag field");
+        publish_test_latest_fields(snapshot, latest_fields)
+            .expect("stale H_demag field should bind through the accepted field-frame publisher");
         snapshot
             .field_quantity_revisions
             .insert("H_demag".to_string(), 7);
         snapshot.field_samples_revision = 7;
-        crate::session::merge_cached_preview_fields(
-            &mut snapshot.preview_cache,
-            vec![runtime_preview.clone()],
-        );
+        publish_test_preview_fields(snapshot, vec![runtime_preview.clone()])
+            .expect("cached preview should publish through an accepted field frame");
     }
 
     let app = build_v2_router().with_state(state.clone());
@@ -6152,8 +6362,7 @@ async fn field_frame_terminal_cache_wins_equal_generation_in_vector_route_body()
 async fn field_vector_returns_304_when_etag_matches() {
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
-        snapshot.state_version = 23;
-        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+        let latest_fields = serde_json::from_value(serde_json::json!({
             "m": {
                 "values": [
                     [1.0, 0.0, 0.0],
@@ -6165,6 +6374,18 @@ async fn field_vector_returns_304_when_etag_matches() {
             }
         }))
         .expect("latest_fields payload should deserialize");
+        publish_test_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(
+                1,
+                1.0e-12,
+                [2, 1, 1],
+                Some(vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0]),
+            ),
+            latest_fields,
+        )
+        .expect("ETag field should publish from a physical observation");
+        snapshot.state_version = 23;
     }
     let app = build_v2_router().with_state(state);
 
@@ -6207,8 +6428,7 @@ async fn field_vector_returns_304_when_etag_matches() {
 async fn field_vector_component_projection_does_not_fallback_to_full_vector() {
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
-        snapshot.state_version = 23;
-        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+        let latest_fields = serde_json::from_value(serde_json::json!({
             "m": {
                 "values": [
                     [1.0, 10.0, 100.0],
@@ -6220,6 +6440,18 @@ async fn field_vector_component_projection_does_not_fallback_to_full_vector() {
             }
         }))
         .expect("latest_fields payload should deserialize");
+        publish_test_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(
+                1,
+                1.0e-12,
+                [2, 1, 1],
+                Some(vec![1.0, 10.0, 100.0, 2.0, 20.0, 200.0]),
+            ),
+            latest_fields,
+        )
+        .expect("component projection field should publish from a physical observation");
+        snapshot.state_version = 23;
     }
     let app = build_v2_router().with_state(state);
 
@@ -6272,8 +6504,7 @@ async fn field_vector_component_projection_does_not_fallback_to_full_vector() {
 async fn slice_meta_revision_changes_with_component() {
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
-        snapshot.state_version = 9;
-        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+        let latest_fields = serde_json::from_value(serde_json::json!({
             "m": {
                 "values": [
                     [1.0, 0.0, 0.0],
@@ -6287,6 +6518,20 @@ async fn slice_meta_revision_changes_with_component() {
             }
         }))
         .expect("latest_fields payload should deserialize");
+        publish_test_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(
+                1,
+                1.0e-12,
+                [2, 2, 1],
+                Some(vec![
+                    1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 0.0,
+                ]),
+            ),
+            latest_fields,
+        )
+        .expect("slice field should publish from a physical observation");
+        snapshot.state_version = 9;
     }
     let app = build_v2_router().with_state(state);
 
@@ -9054,6 +9299,7 @@ async fn frozen_spins_uses_quantity_catalog_field_catalog_and_fmvp_scalar_data_p
     let (app, state, artifact_dir) = test_router_with_session_state_and_artifact_dir().await;
     write_test_fdm_membership_artifact(&artifact_dir, [2, 1, 2]);
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        let source_state_revision = snapshot.state_version;
         snapshot.metadata = Some(serde_json::json!({
             "execution_plan": {
                 "backend_plan": {
@@ -9069,7 +9315,7 @@ async fn frozen_spins_uses_quantity_catalog_field_catalog_and_fmvp_scalar_data_p
             }
         }));
         snapshot.capabilities = Some(resolved_compute_fields_capabilities(&["frozen_spins"]));
-        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+        let latest_fields = serde_json::from_value(serde_json::json!({
             "frozen_spins": {
                 "quantity": "frozen_spins",
                 "unit": "1",
@@ -9087,6 +9333,13 @@ async fn frozen_spins_uses_quantity_catalog_field_catalog_and_fmvp_scalar_data_p
             }
         }))
         .expect("Frozen Spins scalar field fixture should deserialize");
+        publish_test_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(17, 1.7e-12, [2, 1, 2], None),
+            latest_fields,
+        )
+        .expect("Frozen Spins field should bind to an accepted physical observation");
+        snapshot.state_version = source_state_revision;
     }
     let quantities_response = app
         .clone()
@@ -9212,7 +9465,7 @@ async fn fem_frozen_spins_object_scope_uses_true_mesh_node_carrier() {
         snapshot.fem_mesh = Some(sample_scoped_fem_mesh_payload());
         snapshot.mesh_revision = 11;
         snapshot.capabilities = Some(resolved_compute_fields_capabilities(&["frozen_spins"]));
-        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+        let latest_fields = serde_json::from_value(serde_json::json!({
             "frozen_spins": {
                 "quantity": "frozen_spins",
                 "unit": "1",
@@ -9230,6 +9483,12 @@ async fn fem_frozen_spins_object_scope_uses_true_mesh_node_carrier() {
             }
         }))
         .expect("FEM Frozen Spins scalar field fixture should deserialize");
+        publish_test_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(19, 1.9e-12, [4, 1, 1], None),
+            latest_fields,
+        )
+        .expect("FEM Frozen Spins field should bind to an accepted physical observation");
     }
     let app = build_v2_router().with_state(state);
 
@@ -17337,7 +17596,7 @@ async fn planar_field_resources_publish_meta_binary_probe_png_and_etag() {
                 "cell_size": [1.0, 1.0, 1.0]
             }
         }));
-        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+        let latest_fields = serde_json::from_value(serde_json::json!({
             "m": {
                 "values": [
                     [1.0, 0.0, 0.0],
@@ -17360,6 +17619,19 @@ async fn planar_field_resources_publish_meta_binary_probe_png_and_etag() {
             }
         }))
         .unwrap();
+        publish_test_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(
+                1,
+                1.0e-12,
+                [2, 2, 1],
+                Some(vec![
+                    1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 0.0,
+                ]),
+            ),
+            latest_fields,
+        )
+        .expect("planar monitor magnetization should publish from a physical observation");
         snapshot.field_quantity_revisions.insert("m".to_string(), 7);
         snapshot
             .field_quantity_revisions
@@ -17718,13 +17990,19 @@ async fn planar_field_rejects_grid_values_without_a_truthful_spatial_carrier() {
         snapshot.session.script_path.clear();
         snapshot.metadata = None;
         snapshot.fem_mesh = None;
-        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+        let latest_fields = serde_json::from_value(serde_json::json!({
             "m": {
                 "values": [[1.0, 0.0, 0.0]],
                 "layout": {"grid_cells": [1, 1, 1]}
             }
         }))
         .expect("mock field should deserialize");
+        publish_test_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(1, 1.0e-12, [1, 1, 1], Some(vec![1.0, 0.0, 0.0])),
+            latest_fields,
+        )
+        .expect("unresolved spatial carrier field should have an accepted physical source");
     }
     let response = build_v2_router()
         .with_state(state)
@@ -17813,15 +18091,15 @@ async fn planar_field_fdm_object_target_uses_published_membership_and_grid_geome
                 "grid_cells": [2, 1, 1],
                 "origin_m": [0.0, 0.0, 0.0],
                 "cell_size": [1.0, 1.0, 1.0]
+            },
+            "execution_plan": {
+                "backend_plan": {
+                    "kind": "fdm",
+                    "grid": { "cells": [2, 1, 1] },
+                    "material": { "ms_field": [4.0, 9.0] }
+                }
             }
         }));
-        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
-            "mat_ms": {
-                "values": [4.0, 9.0],
-                "layout": {"grid_cells": [2, 1, 1]}
-            }
-        }))
-        .expect("mock FDM scalar field should deserialize");
     }
 
     let response = app
@@ -17879,7 +18157,7 @@ async fn planar_field_fem_overlay_is_fmcs_v4_and_mesh_part_scope_changes_samplin
         snapshot.scene_document = Some(scene);
         snapshot.session.script_path.clear();
         snapshot.fem_mesh = Some(sample_scoped_fem_mesh_payload());
-        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+        let latest_fields = serde_json::from_value(serde_json::json!({
             "m": {
                 "values": [
                     [1.0, 0.0, 0.0],
@@ -17895,6 +18173,20 @@ async fn planar_field_fem_overlay_is_fmcs_v4_and_mesh_part_scope_changes_samplin
             }
         }))
         .expect("scoped FEM field should deserialize");
+        publish_test_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(
+                1,
+                1.0e-12,
+                [8, 1, 1],
+                Some(vec![
+                    1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 2.0, 0.0, 0.0,
+                    2.0, 0.0, 0.0, 2.0, 0.0, 0.0, 2.0, 0.0,
+                ]),
+            ),
+            latest_fields,
+        )
+        .expect("scoped FEM field should publish from its physical observation");
     }
     let app = build_v2_router().with_state(state);
     let base = "/v2/sessions/current/data/fields/m/planar-monitors/fem_domain_xy";
@@ -22056,7 +22348,7 @@ async fn compute_fields_command_contract_resolves_fdm_full_requirement() {
             }
         }));
         snapshot.capabilities = Some(resolved_compute_fields_capabilities(&["m"]));
-        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+        let latest_fields = serde_json::from_value(serde_json::json!({
             "m": {
                 "values": [
                     [1.0, 0.0, 0.0],
@@ -22068,6 +22360,19 @@ async fn compute_fields_command_contract_resolves_fdm_full_requirement() {
             }
         }))
         .expect("FDM field fixture should deserialize");
+        publish_test_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(
+                1,
+                1.0e-12,
+                [2, 2, 1],
+                Some(vec![
+                    1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 0.0,
+                ]),
+            ),
+            latest_fields,
+        )
+        .expect("FDM field should be published from an admitted physical step");
         snapshot.field_quantity_revisions.insert("m".into(), 1);
     }
     let app = build_v2_router().with_state(state.clone());
@@ -22182,7 +22487,7 @@ async fn compute_fields_command_contract_resolves_multilayer_full_and_airbox_req
         snapshot.metadata.as_mut().expect("multilayer metadata")["capabilities"] =
             serde_json::json!({ "preview_quantities": ["m"] });
         snapshot.capabilities = Some(resolved_compute_fields_capabilities(&["m", "H_demag"]));
-        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+        let latest_fields = serde_json::from_value(serde_json::json!({
             "m": {
                 "values": [
                     [1.0, 0.0, 0.0],
@@ -22194,6 +22499,19 @@ async fn compute_fields_command_contract_resolves_multilayer_full_and_airbox_req
             }
         }))
         .expect("multilayer field fixture should deserialize");
+        publish_test_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(
+                1,
+                1.0e-12,
+                [4, 1, 1],
+                Some(vec![
+                    1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 0.0,
+                ]),
+            ),
+            latest_fields,
+        )
+        .expect("multilayer field should be published from an admitted physical step");
         snapshot.field_quantity_revisions.insert("m".into(), 1);
     }
 
@@ -22285,7 +22603,7 @@ async fn compute_fields_completion_requires_exact_quantity_scope_generation_and_
         snapshot.metadata.as_mut().expect("multilayer metadata")["capabilities"] =
             serde_json::json!({ "preview_quantities": ["m"] });
         snapshot.capabilities = Some(resolved_compute_fields_capabilities(&["m", "H_demag"]));
-        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+        let latest_fields = serde_json::from_value(serde_json::json!({
             "m": {
                 "values": [
                     [1.0, 0.0, 0.0],
@@ -22297,6 +22615,19 @@ async fn compute_fields_completion_requires_exact_quantity_scope_generation_and_
             }
         }))
         .expect("multilayer field fixture should deserialize");
+        publish_test_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(
+                1,
+                1.0e-12,
+                [4, 1, 1],
+                Some(vec![
+                    1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 0.0,
+                ]),
+            ),
+            latest_fields,
+        )
+        .expect("multilayer field should be published from an admitted physical step");
         snapshot.field_quantity_revisions.insert("m".into(), 1);
     }
 
@@ -22417,7 +22748,7 @@ async fn compute_fields_command_stays_dispatched_until_airbox_carrier_is_readabl
         snapshot.metadata.as_mut().expect("multilayer metadata")["capabilities"] =
             serde_json::json!({ "preview_quantities": ["m"] });
         snapshot.capabilities = Some(resolved_compute_fields_capabilities(&["m", "H_demag"]));
-        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+        let latest_fields = serde_json::from_value(serde_json::json!({
             "m": {
                 "values": [
                     [1.0, 0.0, 0.0],
@@ -22429,6 +22760,19 @@ async fn compute_fields_command_stays_dispatched_until_airbox_carrier_is_readabl
             }
         }))
         .expect("multilayer field fixture should deserialize");
+        publish_test_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(
+                1,
+                1.0e-12,
+                [4, 1, 1],
+                Some(vec![
+                    1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 0.0,
+                ]),
+            ),
+            latest_fields,
+        )
+        .expect("multilayer field should be published from an admitted physical step");
         snapshot.field_quantity_revisions.insert("m".into(), 1);
     }
 
@@ -22483,7 +22827,7 @@ async fn compute_fields_command_contract_resolves_fem_full_requirement() {
         }));
         snapshot.capabilities = Some(resolved_compute_fields_capabilities(&["m"]));
         snapshot.fem_mesh = Some(sample_fem_mesh_payload());
-        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+        let latest_fields = serde_json::from_value(serde_json::json!({
             "m": {
                 "values": [
                     [1.0, 0.0, 0.0],
@@ -22494,6 +22838,19 @@ async fn compute_fields_command_contract_resolves_fem_full_requirement() {
             }
         }))
         .expect("FEM field fixture should deserialize");
+        publish_test_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(
+                1,
+                1.0e-12,
+                [4, 1, 1],
+                Some(vec![
+                    1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0,
+                ]),
+            ),
+            latest_fields,
+        )
+        .expect("FEM field should be published from an admitted physical step");
         snapshot.field_quantity_revisions.insert("m".into(), 1);
     }
     let app = build_v2_router().with_state(state.clone());
@@ -31010,12 +31367,18 @@ async fn resolved_current_spatial_field_accepts_fem_element_cardinality() {
         snapshot.session.requested_backend = "fem".to_string();
         snapshot.session.resolved_backend = Some("fem_cpu_native".to_string());
         snapshot.fem_mesh = Some(sample_fem_mesh_payload());
-        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+        let latest_fields = serde_json::from_value(serde_json::json!({
             "eps": {
                 "values": [[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]]
             }
         }))
         .expect("FEM element field fixture should deserialize");
+        publish_test_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(1, 1.0e-12, [6, 1, 1], None),
+            latest_fields,
+        )
+        .expect("FEM element field should publish from an accepted physical observation");
     }
 
     let guard = state.current_live_state.read().await;
@@ -31465,13 +31828,24 @@ async fn fdm_field_vector_object_scope_uses_membership_cell_ordinals() {
                 "cell_size": [1.0, 1.0, 1.0]
             }
         }));
-        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+        let latest_fields = serde_json::from_value(serde_json::json!({
             "m": {
                 "values": [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
                 "layout": { "grid_cells": [2, 1, 1] }
             }
         }))
         .expect("FDM field fixture should deserialize");
+        publish_test_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(
+                1,
+                1.0e-12,
+                [2, 1, 1],
+                Some(vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0]),
+            ),
+            latest_fields,
+        )
+        .expect("FDM membership field should be admitted from a physical step");
     }
 
     let response = app
@@ -31556,13 +31930,24 @@ async fn fdm_field_vector_object_scope_rejects_mixed_default_numeric_membership(
                 "cell_size": [1.0, 1.0, 1.0]
             }
         }));
-        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+        let latest_fields = serde_json::from_value(serde_json::json!({
             "m": {
                 "values": [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
                 "layout": { "grid_cells": [2, 1, 1] }
             }
         }))
         .expect("FDM field fixture should deserialize");
+        publish_test_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(
+                1,
+                1.0e-12,
+                [2, 1, 1],
+                Some(vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0]),
+            ),
+            latest_fields,
+        )
+        .expect("FDM field should be admitted before the membership conflict check");
     }
 
     let response = app
@@ -31596,7 +31981,7 @@ async fn fdm_terminal_spatial_scalar_full_grid_preserves_values_and_object_indic
                 "cell_size": [1.0, 1.0, 1.0]
             }
         }));
-        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+        let latest_fields = serde_json::from_value(serde_json::json!({
             "eden_demag": {
                 "quantity": "eden_demag",
                 "unit": "J/m³",
@@ -31614,6 +31999,12 @@ async fn fdm_terminal_spatial_scalar_full_grid_preserves_values_and_object_indic
             }
         }))
         .expect("terminal scalar field should deserialize");
+        publish_test_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(52, 5.2e-12, [2, 1, 2], None),
+            latest_fields,
+        )
+        .expect("terminal scalar field should be admitted from its physical source");
     }
 
     let meta = app
@@ -31682,7 +32073,7 @@ async fn fdm_terminal_spatial_scalar_plane_is_not_a_current_3d_field() {
                 "cell_size": [1.0, 1.0, 1.0]
             }
         }));
-        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+        let latest_fields = serde_json::from_value(serde_json::json!({
             "eden_demag": {
                 "quantity": "eden_demag",
                 "unit": "J/m³",
@@ -31696,6 +32087,12 @@ async fn fdm_terminal_spatial_scalar_plane_is_not_a_current_3d_field() {
             }
         }))
         .expect("terminal scalar plane fixture should deserialize");
+        publish_test_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(52, 5.2e-12, [2, 1, 2], None),
+            latest_fields,
+        )
+        .expect("terminal plane should be source-qualified before its shape rejection");
     }
 
     let response = app
@@ -31758,13 +32155,19 @@ async fn fdm_field_vector_airbox_surface_and_max_samples_use_cell_ordinals() {
         let values = (0..27)
             .map(|index| [index as f64, 0.0, 0.0])
             .collect::<Vec<_>>();
-        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+        let latest_fields = serde_json::from_value(serde_json::json!({
             "H_demag": {
                 "values": values,
                 "layout": { "grid_cells": [3, 3, 3] }
             }
         }))
         .expect("FDM field fixture should deserialize");
+        publish_test_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(1, 1.0e-12, [3, 3, 3], None),
+            latest_fields,
+        )
+        .expect("FDM field should be admitted before scoped sampling");
     }
 
     let response = app
@@ -31836,13 +32239,24 @@ async fn fdm_field_vector_region_scope_requires_owner_for_duplicate_region_ids()
                 "cell_size": [1.0, 1.0, 1.0]
             }
         }));
-        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+        let latest_fields = serde_json::from_value(serde_json::json!({
             "m": {
                 "values": [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
                 "layout": { "grid_cells": [2, 1, 1] }
             }
         }))
         .expect("FDM field fixture should deserialize");
+        publish_test_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(
+                1,
+                1.0e-12,
+                [2, 1, 1],
+                Some(vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0]),
+            ),
+            latest_fields,
+        )
+        .expect("FDM region field should be admitted from a physical step");
     }
 
     let ambiguous = app
@@ -32039,7 +32453,7 @@ async fn fdm_multilayer_field_vector_layer_scope_uses_native_layer_layout() {
             }
         }));
         snapshot.live_state = None;
-        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+        let latest_fields = serde_json::from_value(serde_json::json!({
             "m": {
                 "values": [
                     [1.0, 0.0, 0.0],
@@ -32049,6 +32463,17 @@ async fn fdm_multilayer_field_vector_layer_scope_uses_native_layer_layout() {
             }
         }))
         .expect("multilayer field fixture should deserialize");
+        publish_test_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(
+                1,
+                1.0e-12,
+                [4, 1, 1],
+                Some(vec![1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0]),
+            ),
+            latest_fields,
+        )
+        .expect("multilayer field should be admitted from a physical step");
     }
     let app = build_v2_router().with_state(state.clone());
 
@@ -32197,8 +32622,7 @@ async fn fdm_multilayer_field_vector_object_scope_preserves_object_identity() {
                 }]
             }
         }));
-        snapshot.live_state = None;
-        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+        let latest_fields = serde_json::from_value(serde_json::json!({
             "m": {
                 "values": [
                     [1.0, 0.0, 0.0],
@@ -32208,6 +32632,17 @@ async fn fdm_multilayer_field_vector_object_scope_preserves_object_identity() {
             }
         }))
         .expect("multilayer field fixture should deserialize");
+        publish_test_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(
+                1,
+                1.0e-12,
+                [4, 1, 1],
+                Some(vec![1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0]),
+            ),
+            latest_fields,
+        )
+        .expect("multilayer field should be admitted from a physical step");
     }
     let app = build_v2_router().with_state(state);
 
@@ -33742,9 +34177,8 @@ async fn middleware_headers_on_all_endpoints() {
 async fn test_router_with_mock_field() -> axum::Router {
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
-        snapshot.state_version = 11;
         // 4 points × 3 components, interleaved: p0=[1,0,0], p1=[0,1,0], p2=[0,0,1], p3=[1,2,2]
-        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+        let latest_fields = serde_json::from_value(serde_json::json!({
             "m": {
                 "values": [
                     [1.0, 0.0, 0.0],
@@ -33758,6 +34192,20 @@ async fn test_router_with_mock_field() -> axum::Router {
             }
         }))
         .expect("mock latest_fields should deserialize");
+        publish_test_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(
+                1,
+                1.0e-12,
+                [2, 2, 1],
+                Some(vec![
+                    1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 1.0, 2.0, 2.0,
+                ]),
+            ),
+            latest_fields,
+        )
+        .expect("mock magnetization should be admitted and published from a physical step");
+        snapshot.state_version = 11;
     }
     build_v2_router().with_state(state)
 }
@@ -33765,9 +34213,8 @@ async fn test_router_with_mock_field() -> axum::Router {
 async fn test_router_with_fem_nodal_field() -> axum::Router {
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
-        snapshot.state_version = 17;
         snapshot.fem_mesh = Some(sample_fem_mesh_payload());
-        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+        let latest_fields = serde_json::from_value(serde_json::json!({
             "m": {
                 "values": [
                     [2.0, 0.0, 0.0],
@@ -33781,6 +34228,20 @@ async fn test_router_with_fem_nodal_field() -> axum::Router {
             }
         }))
         .expect("mock FEM latest_fields should deserialize");
+        publish_test_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(
+                1,
+                1.0e-12,
+                [4, 1, 1],
+                Some(vec![
+                    2.0, 0.0, 0.0, 2.0, 0.0, 0.0, 2.0, 0.0, 0.0, 2.0, 0.0, 0.0,
+                ]),
+            ),
+            latest_fields,
+        )
+        .expect("mock FEM magnetization should be admitted from a physical step");
+        snapshot.state_version = 17;
     }
     build_v2_router().with_state(state)
 }
@@ -33788,16 +34249,21 @@ async fn test_router_with_fem_nodal_field() -> axum::Router {
 async fn test_router_with_material_scalar_field() -> axum::Router {
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
-        snapshot.state_version = 18;
-        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
-            "mat_ms": {
-                "values": [800000.0, 800000.0, 400000.0, 400000.0],
-                "layout": {
-                    "grid_cells": [2, 2, 1]
+        crate::session::apply_current_live_metadata(
+            snapshot,
+            serde_json::json!({
+                "execution_plan": {
+                    "backend_plan": {
+                        "kind": "fdm",
+                        "grid": { "cells": [2, 2, 1] },
+                        "material": {
+                            "ms_field": [800000.0, 800000.0, 400000.0, 400000.0]
+                        }
+                    }
                 }
-            }
-        }))
-        .expect("mock material latest_fields should deserialize");
+            }),
+        );
+        snapshot.state_version = 18;
     }
     build_v2_router().with_state(state)
 }
@@ -33979,8 +34445,7 @@ async fn test_router_with_live_magnetization() -> axum::Router {
 async fn test_router_with_mock_field_fem_without_topology() -> axum::Router {
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
-        snapshot.state_version = 11;
-        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+        let latest_fields = serde_json::from_value(serde_json::json!({
             "m": {
                 "values": [
                     [1.0, 0.0, 0.0],
@@ -33994,6 +34459,20 @@ async fn test_router_with_mock_field_fem_without_topology() -> axum::Router {
             }
         }))
         .expect("mock latest_fields should deserialize");
+        publish_test_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(
+                1,
+                1.0e-12,
+                [2, 2, 1],
+                Some(vec![
+                    1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 1.0, 2.0, 2.0,
+                ]),
+            ),
+            latest_fields,
+        )
+        .expect("mock FEM field should be published from a physical observation");
+        snapshot.state_version = 11;
         snapshot.fem_mesh = Some(FemMeshPayload {
             mesh_name: "fem-empty-topology".to_string(),
             mesh_id: "fem-empty-topology:1".to_string(),
@@ -36891,7 +37370,11 @@ async fn v2_magnetization_meta_vector_revision_and_etag_follow_provenance_field_
         snapshot.field_quantity_revisions.insert("m".to_string(), 1);
         snapshot.field_samples_revision = 1;
 
-        let session_id = snapshot.session.session_id.clone();
+        apply_test_runtime_frame(
+            snapshot,
+            physical_test_live_state(2, 1.0e-12, [2, 1, 1], Some(legacy_a.clone())),
+        )
+        .expect("physical source step 2 should be admitted before field B");
         let latest_fields = serde_json::from_value(serde_json::json!({
             "m": {
                 "values": [[0.0, 1.0, 0.0], [0.0, -1.0, 0.0]],
@@ -36903,18 +37386,7 @@ async fn v2_magnetization_meta_vector_revision_and_etag_follow_provenance_field_
             }
         }))
         .expect("provenance-rich field B should deserialize");
-        crate::session::apply_current_live_field_frame(
-            snapshot,
-            CurrentLiveFieldFrameRequest {
-                session_id,
-                latest_fields: Some(latest_fields),
-                replace_latest_fields: false,
-                field_generation: None,
-                preview_fields: None,
-                clear_preview_cache: false,
-            },
-        )
-        .expect("field B frame should apply");
+        publish_test_latest_fields(snapshot, latest_fields).expect("field B frame should apply");
     }
 
     let app = build_v2_router().with_state(state.clone());
@@ -36993,7 +37465,11 @@ async fn v2_magnetization_meta_vector_revision_and_etag_follow_provenance_field_
     {
         let mut guard = state.current_live_state.write().await;
         let snapshot = guard.as_mut().expect("live session exists");
-        let session_id = snapshot.session.session_id.clone();
+        apply_test_runtime_frame(
+            snapshot,
+            physical_test_live_state(3, 1.0e-12, [2, 1, 1], Some(legacy_a.clone())),
+        )
+        .expect("physical source step 3 should be admitted before field C");
         let latest_fields = serde_json::from_value(serde_json::json!({
             "m": {
                 "values": [[-1.0, 0.0, 0.0], [-1.0, 0.0, 0.0]],
@@ -37005,18 +37481,7 @@ async fn v2_magnetization_meta_vector_revision_and_etag_follow_provenance_field_
             }
         }))
         .expect("provenance-rich field C should deserialize");
-        crate::session::apply_current_live_field_frame(
-            snapshot,
-            CurrentLiveFieldFrameRequest {
-                session_id,
-                latest_fields: Some(latest_fields),
-                replace_latest_fields: false,
-                field_generation: None,
-                preview_fields: None,
-                clear_preview_cache: false,
-            },
-        )
-        .expect("field C frame should apply");
+        publish_test_latest_fields(snapshot, latest_fields).expect("field C frame should apply");
     }
 
     let meta_c_response = app
@@ -37102,7 +37567,7 @@ async fn field_meta_component_query_reports_scoped_object_stats() {
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
         snapshot.fem_mesh = Some(sample_scoped_fem_mesh_payload());
-        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+        let latest_fields = serde_json::from_value(serde_json::json!({
             "m": {
                 "values": [
                     [10.0, 10.1, 10.2],
@@ -37120,6 +37585,20 @@ async fn field_meta_component_query_reports_scoped_object_stats() {
             }
         }))
         .expect("scoped latest_fields should deserialize");
+        publish_test_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(
+                1,
+                1.0e-12,
+                [8, 1, 1],
+                Some(vec![
+                    10.0, 10.1, 10.2, 11.0, 11.1, 11.2, 12.0, 12.1, 12.2, 13.0, 13.1, 13.2, 0.0,
+                    0.1, 0.2, 1.0, 1.1, 1.2, 2.0, 2.1, 2.2, 3.0, 3.1, 3.2,
+                ]),
+            ),
+            latest_fields,
+        )
+        .expect("scoped magnetization should publish from its physical source");
     }
     let app = build_v2_router().with_state(state);
 
@@ -37145,7 +37624,7 @@ async fn field_meta_component_query_reports_scoped_h_demag_object_stats() {
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
         snapshot.fem_mesh = Some(sample_scoped_fem_mesh_payload());
-        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+        let latest_fields = serde_json::from_value(serde_json::json!({
             "H_demag": {
                 "values": [
                     [10.0, 10.1, 10.2],
@@ -37163,6 +37642,12 @@ async fn field_meta_component_query_reports_scoped_h_demag_object_stats() {
             }
         }))
         .expect("scoped H_demag latest_fields should deserialize");
+        publish_test_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(1, 1.0e-12, [8, 1, 1], None),
+            latest_fields,
+        )
+        .expect("scoped H_demag field should publish from a physical source");
     }
     let app = build_v2_router().with_state(state);
 
@@ -37189,7 +37674,7 @@ async fn field_meta_energy_density_accepts_object_prefixed_scope_ids() {
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
         snapshot.fem_mesh = Some(sample_scoped_fem_mesh_payload());
-        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+        let latest_fields = serde_json::from_value(serde_json::json!({
             "eden_total": {
                 "values": [10.0, 11.0, 12.0, 13.0, 0.0, 1.0, 2.0, 3.0],
                 "layout": {
@@ -37198,6 +37683,12 @@ async fn field_meta_energy_density_accepts_object_prefixed_scope_ids() {
             }
         }))
         .expect("scoped eden_total latest_fields should deserialize");
+        publish_test_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(1, 1.0e-12, [8, 1, 1], None),
+            latest_fields,
+        )
+        .expect("scoped energy-density field should publish from a physical source");
     }
     let app = build_v2_router().with_state(state);
 
@@ -37231,7 +37722,7 @@ async fn field_meta_energy_density_accepts_geom_suffixed_part_ids() {
         mesh.mesh_parts[0].object_id = None;
         mesh.mesh_parts[0].geometry_id = None;
         snapshot.fem_mesh = Some(mesh);
-        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+        let latest_fields = serde_json::from_value(serde_json::json!({
             "eden_total": {
                 "values": [10.0, 11.0, 12.0, 13.0, 0.0, 1.0, 2.0, 3.0],
                 "layout": {
@@ -37240,6 +37731,12 @@ async fn field_meta_energy_density_accepts_geom_suffixed_part_ids() {
             }
         }))
         .expect("scoped eden_total latest_fields should deserialize");
+        publish_test_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(1, 1.0e-12, [8, 1, 1], None),
+            latest_fields,
+        )
+        .expect("scoped energy-density field should publish from a physical source");
     }
     let app = build_v2_router().with_state(state);
 
@@ -37271,7 +37768,7 @@ async fn field_meta_energy_density_accepts_geom_suffixed_object_segment_geometry
         mesh.object_segments[0].object_id = "native-segment-0".to_string();
         mesh.object_segments[0].geometry_id = Some("permalloy_layer_geom".to_string());
         snapshot.fem_mesh = Some(mesh);
-        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+        let latest_fields = serde_json::from_value(serde_json::json!({
             "eden_total": {
                 "values": [10.0, 11.0, 12.0, 13.0, 0.0, 1.0, 2.0, 3.0],
                 "layout": {
@@ -37280,6 +37777,12 @@ async fn field_meta_energy_density_accepts_geom_suffixed_object_segment_geometry
             }
         }))
         .expect("scoped eden_total latest_fields should deserialize");
+        publish_test_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(1, 1.0e-12, [8, 1, 1], None),
+            latest_fields,
+        )
+        .expect("scoped energy-density field should publish from a physical source");
     }
     let app = build_v2_router().with_state(state);
 
@@ -37306,8 +37809,7 @@ async fn field_meta_energy_density_accepts_geom_suffixed_object_segment_geometry
 async fn field_vector_etag_stays_stable_when_only_snapshot_state_version_changes() {
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
-        snapshot.state_version = 11;
-        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+        let latest_fields = serde_json::from_value(serde_json::json!({
             "m": {
                 "values": [
                     [1.0, 0.0, 0.0],
@@ -37321,6 +37823,20 @@ async fn field_vector_etag_stays_stable_when_only_snapshot_state_version_changes
             }
         }))
         .expect("mock latest_fields should deserialize");
+        publish_test_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(
+                1,
+                1.0e-12,
+                [2, 2, 1],
+                Some(vec![
+                    1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 1.0, 2.0, 2.0,
+                ]),
+            ),
+            latest_fields,
+        )
+        .expect("ETag magnetization should publish from a physical observation");
+        snapshot.state_version = 11;
     }
     let app = build_v2_router().with_state(state.clone());
     let uri = "/v2/sessions/current/data/fields/m/samples/vector?component=magnitude";
@@ -37778,9 +38294,9 @@ async fn v2_field_vector_normalizes_unset_fem_grid_without_losing_topology_ident
         snapshot.mesh_revision = 19;
         snapshot.fem_mesh = Some(mesh);
         snapshot.preview_cache = Default::default();
-        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+        let latest_fields = serde_json::from_value(serde_json::json!({
             "m": {
-                "values": values,
+                "values": values.clone(),
                 "source_step": 52,
                 "source_revision": 19,
                 "materialized_at_unix_ms": 1_700_000_000_456_u64,
@@ -37788,6 +38304,14 @@ async fn v2_field_vector_normalizes_unset_fem_grid_without_losing_topology_ident
             }
         }))
         .expect("terminal FEM m field should deserialize");
+        let live_magnetization = values.iter().flatten().copied().collect::<Vec<_>>();
+        publish_test_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(52, 5.2e-12, [0, 0, 0], Some(live_magnetization)),
+            latest_fields,
+        )
+        .expect("terminal FEM field should publish from its physical observation");
+        snapshot.state_version = 52;
     }
     let app = build_v2_router().with_state(state);
 
@@ -37836,8 +38360,7 @@ async fn v2_field_vector_normalizes_unset_fem_grid_without_losing_topology_ident
 async fn v2_field_vector_prefers_live_magnetization_over_stale_latest_field() {
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
-        snapshot.state_version = 24;
-        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+        let latest_fields = serde_json::from_value(serde_json::json!({
             "m": {
                 "values": [
                     [9.0, 9.0, 9.0],
@@ -37849,7 +38372,13 @@ async fn v2_field_vector_prefers_live_magnetization_over_stale_latest_field() {
             }
         }))
         .expect("mock latest_fields should deserialize");
-        snapshot.live_state = Some(LiveState {
+        publish_test_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(7, 1.9e-9, [2, 1, 1], None),
+            latest_fields,
+        )
+        .expect("stale latest magnetization should bind to its physical source step");
+        let current_live_state = LiveState {
             status: "running".into(),
             updated_at_unix_ms: 1_700_000_000_456,
             latest_step: StepUpdateView {
@@ -37886,7 +38415,10 @@ async fn v2_field_vector_prefers_live_magnetization_over_stale_latest_field() {
                 preview_field: None,
                 finished: false,
             },
-        });
+        };
+        apply_test_runtime_frame(snapshot, current_live_state)
+            .expect("current step 8 magnetization should apply as a physical observation");
+        snapshot.state_version = 24;
     }
     let app = build_v2_router().with_state(state);
     let response = app
@@ -38322,8 +38854,7 @@ async fn python_waveguide_box_region_ms_override_changes_backend_mat_ms_mean() {
 async fn v2_field_vector_prefers_fresh_m_preview_cache_over_stale_latest_field() {
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
-        snapshot.state_version = 25;
-        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+        let latest_fields = serde_json::from_value(serde_json::json!({
             "m": {
                 "values": [
                     [9.0, 9.0, 9.0],
@@ -38335,7 +38866,13 @@ async fn v2_field_vector_prefers_fresh_m_preview_cache_over_stale_latest_field()
             }
         }))
         .expect("mock latest_fields should deserialize");
-        snapshot.preview_cache.insert(LivePreviewField {
+        publish_test_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(3, 3.0e-12, [2, 1, 1], None),
+            latest_fields,
+        )
+        .expect("stale latest magnetization should bind to its physical source step");
+        let preview = LivePreviewField {
             config_revision: 4,
             source_step: 4,
             source_time_seconds: None,
@@ -38357,8 +38894,15 @@ async fn v2_field_vector_prefers_fresh_m_preview_cache_over_stale_latest_field()
             auto_downscaled: false,
             auto_downscale_message: None,
             active_mask: None,
-        });
-        snapshot.live_state = Some(LiveState {
+        };
+        apply_test_runtime_frame(
+            snapshot,
+            physical_test_live_state(4, 4.0e-12, [2, 1, 1], None),
+        )
+        .expect("fresh magnetization preview source step should apply");
+        publish_test_preview_fields(snapshot, vec![preview])
+            .expect("fresh magnetization preview should publish through an accepted field frame");
+        let current_live_state = LiveState {
             status: "running".into(),
             updated_at_unix_ms: 1_700_000_000_789,
             latest_step: StepUpdateView {
@@ -38395,7 +38939,10 @@ async fn v2_field_vector_prefers_fresh_m_preview_cache_over_stale_latest_field()
                 preview_field: None,
                 finished: false,
             },
-        });
+        };
+        apply_test_runtime_frame(snapshot, current_live_state)
+            .expect("current step 9 observation should advance the preview source");
+        snapshot.state_version = 25;
     }
     let app = build_v2_router().with_state(state);
     let response = app
@@ -38449,7 +38996,8 @@ async fn v2_fdm_vector_respects_max_samples_when_preview_would_be_downscaled() {
         snapshot.state_version = 26;
         // A reused session may still carry the previous FEM solver mesh.  The
         // requested FDM lane must not inherit its topology metadata.
-        snapshot.fem_mesh = Some(sample_fem_mesh_payload());
+        let stale_fem_mesh = Some(sample_fem_mesh_payload());
+        snapshot.fem_mesh = None;
         snapshot.metadata = Some(serde_json::json!({
             "execution_plan": { "backend_plan": {
                 "kind": "fdm",
@@ -38463,7 +39011,7 @@ async fn v2_fdm_vector_respects_max_samples_when_preview_would_be_downscaled() {
         }));
         // The solver domain is a 4-cell FDM grid.  Both the legacy materialized
         // field and the preview cache below only carry a 2-cell display preview.
-        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+        let latest_fields = serde_json::from_value(serde_json::json!({
             "m": {
                 "values": [
                     [9.0, 9.0, 9.0],
@@ -38478,7 +39026,13 @@ async fn v2_fdm_vector_respects_max_samples_when_preview_would_be_downscaled() {
             }
         }))
         .expect("downscaled latest preview should deserialize");
-        snapshot.preview_cache.insert(LivePreviewField {
+        publish_test_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(7, 2.9e-9, [4, 1, 1], None),
+            latest_fields,
+        )
+        .expect("downscaled latest field should bind to its physical FDM source");
+        let preview = LivePreviewField {
             config_revision: 8,
             source_step: 8,
             source_time_seconds: None,
@@ -38500,47 +39054,22 @@ async fn v2_fdm_vector_respects_max_samples_when_preview_would_be_downscaled() {
             auto_downscaled: true,
             auto_downscale_message: Some("preview only".to_string()),
             active_mask: None,
-        });
-        snapshot.live_state = Some(LiveState {
-            status: "running".into(),
-            updated_at_unix_ms: 1_700_000_000_789,
-            latest_step: StepUpdateView {
-                kind: fullmag_quantities::StepDataKind::PhysicalObservation,
-                solver_progress: None,
-                step: 8,
-                time: 3.0e-9,
-                dt: 1.0e-13,
-                pseudo_time_s: None,
-                e_ex: 0.0,
-                e_demag: 0.0,
-                e_ext: 0.0,
-                e_ani: 0.0,
-                e_dmi: 0.0,
-                e_rotated_dmi: 0.0,
-                e_total: 0.0,
-                max_dm_dt: 0.0,
-                max_h_eff: 0.0,
-                max_h_demag: 0.0,
-                max_torque_Apm: 0.0,
-                max_torque_T: 0.0,
-                max_torque_all_Apm: 0.0,
-                frozen_reference_max_drift: 0.0,
-                active_dof_count: 0,
-                frozen_dof_count: 0,
-                free_dof_count: 0,
-                wall_time_ns: 100,
-                grid: [4, 1, 1],
-                fem_mesh_generation_id: None,
-                fem_mesh: None,
-                magnetization: Some(vec![
-                    1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, -1.0, 0.0, 0.0,
-                ]),
-                per_object_scalars: Default::default(),
-                field_materialization_states: Vec::new(),
-                preview_field: None,
-                finished: false,
-            },
-        });
+        };
+        let mut current_live_state = physical_test_live_state(
+            8,
+            3.0e-9,
+            [4, 1, 1],
+            Some(vec![
+                1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, -1.0, 0.0, 0.0,
+            ]),
+        );
+        current_live_state.updated_at_unix_ms = 1_700_000_000_789;
+        apply_test_runtime_frame(snapshot, current_live_state)
+            .expect("current FDM physical step should apply");
+        publish_test_preview_fields(snapshot, vec![preview])
+            .expect("downscaled preview should publish through an accepted field frame");
+        snapshot.fem_mesh = stale_fem_mesh;
+        snapshot.state_version = 26;
     }
     let app = build_v2_router().with_state(state);
     let response = app
@@ -38602,8 +39131,7 @@ async fn v2_fdm_vector_respects_max_samples_when_preview_would_be_downscaled() {
 async fn v2_live_magnetization_preserves_capture_step_across_scalar_only_frames() {
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
-        snapshot.state_version = 25;
-        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+        let latest_fields = serde_json::from_value(serde_json::json!({
             "m": {
                 "values": [[0.0, 0.0, -1.0], [0.0, -1.0, 0.0]],
                 "source_step": 4,
@@ -38614,37 +39142,32 @@ async fn v2_live_magnetization_preserves_capture_step_across_scalar_only_frames(
             }
         }))
         .expect("captured magnetization field should deserialize");
-        snapshot.live_state = Some(
-            serde_json::from_value(serde_json::json!({
-                "status": "running",
-                "updated_at_unix_ms": 1_700_000_000_789_u64,
-                "latest_step": {
-                    "step": 9,
-                    "time": 3.0e-9,
-                    "dt": 1.0e-13,
-                    "e_ex": 0.0,
-                    "e_demag": 0.0,
-                    "e_ext": 0.0,
-                    "e_ani": 0.0,
-                    "e_dmi": 0.0,
-                    "e_total": 0.0,
-                    "max_dm_dt": 0.0,
-                    "max_h_eff": 0.0,
-                    "max_h_demag": 0.0,
-                    "max_torque_Apm": 0.0,
-                    "max_torque_T": 0.0,
-                    "wall_time_ns": 100,
-                    "grid": [2, 1, 1],
-                    "magnetization": [0.0, 0.0, -1.0, 0.0, -1.0, 0.0],
-                    "magnetization_source_step": 4,
-                    "magnetization_source_revision": 11,
-                    "magnetization_materialized_at_unix_ms": 1_700_000_000_456_u64,
-                    "magnetization_materialization_wall_time_ns": 80_000_000_u64,
-                    "finished": false
-                }
-            }))
-            .expect("live state with carried magnetization provenance should deserialize"),
-        );
+        publish_test_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(
+                4,
+                3.0e-9,
+                [2, 1, 1],
+                Some(vec![0.0, 0.0, -1.0, 0.0, -1.0, 0.0]),
+            ),
+            latest_fields,
+        )
+        .expect("capture-step magnetization should be admitted and published");
+        let session_id = snapshot.session.session_id.clone();
+        crate::session::apply_current_live_scalar_frame(
+            snapshot,
+            CurrentLiveScalarFrameRequest {
+                session_id,
+                latest_scalar_row: Some(sample_scalar_row(9, 3.0e-9, 0.0)),
+            },
+        )
+        .expect("scalar-only step 9 should be admitted");
+        apply_test_runtime_frame(
+            snapshot,
+            physical_test_live_state(9, 3.0e-9, [2, 1, 1], None),
+        )
+        .expect("step 9 runtime frame should advance the current source step");
+        snapshot.state_version = 25;
     }
     let app = build_v2_router().with_state(state);
 
@@ -38673,7 +39196,7 @@ async fn v2_h_demag_resource_prefers_newer_preview_cache_over_stale_latest_field
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
         snapshot.state_version = 25;
-        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+        let latest_fields = serde_json::from_value(serde_json::json!({
             "H_demag": {
                 "values": [
                     [9.0, 9.0, 9.0],
@@ -38688,7 +39211,13 @@ async fn v2_h_demag_resource_prefers_newer_preview_cache_over_stale_latest_field
             }
         }))
         .expect("mock latest_fields should deserialize");
-        snapshot.preview_cache.insert(LivePreviewField {
+        publish_test_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(0, 0.0, [2, 1, 1], None),
+            latest_fields,
+        )
+        .expect("stale H_demag field should still have its accepted source observation");
+        let preview = LivePreviewField {
             config_revision: 4,
             source_step: 52,
             source_time_seconds: None,
@@ -38710,45 +39239,15 @@ async fn v2_h_demag_resource_prefers_newer_preview_cache_over_stale_latest_field
             auto_downscaled: false,
             auto_downscale_message: None,
             active_mask: None,
-        });
-        snapshot.live_state = Some(LiveState {
-            status: "completed".into(),
-            updated_at_unix_ms: 1_700_000_000_789,
-            latest_step: StepUpdateView {
-                kind: fullmag_quantities::StepDataKind::PhysicalObservation,
-                solver_progress: None,
-                step: 52,
-                time: 5.2e-12,
-                dt: 1.0e-13,
-                pseudo_time_s: None,
-                e_ex: 0.0,
-                e_demag: 0.0,
-                e_ext: 0.0,
-                e_ani: 0.0,
-                e_dmi: 0.0,
-                e_rotated_dmi: 0.0,
-                e_total: 0.0,
-                max_dm_dt: 0.0,
-                max_h_eff: 0.0,
-                max_h_demag: 0.0,
-                max_torque_Apm: 0.0,
-                max_torque_T: 0.0,
-                max_torque_all_Apm: 0.0,
-                frozen_reference_max_drift: 0.0,
-                active_dof_count: 0,
-                frozen_dof_count: 0,
-                free_dof_count: 0,
-                wall_time_ns: 100,
-                grid: [2, 1, 1],
-                fem_mesh_generation_id: None,
-                fem_mesh: None,
-                magnetization: None,
-                per_object_scalars: Default::default(),
-                field_materialization_states: Vec::new(),
-                preview_field: None,
-                finished: true,
-            },
-        });
+        };
+        let mut latest_state = physical_test_live_state(52, 5.2e-12, [2, 1, 1], None);
+        latest_state.status = "completed".into();
+        latest_state.updated_at_unix_ms = 1_700_000_000_789;
+        latest_state.latest_step.finished = true;
+        apply_test_runtime_frame(snapshot, latest_state)
+            .expect("current H_demag physical observation should apply");
+        publish_test_preview_fields(snapshot, vec![preview])
+            .expect("H_demag preview should publish through an accepted field frame");
     }
     let app = build_v2_router().with_state(state);
     let response = app
@@ -38816,7 +39315,7 @@ async fn v2_h_demag_resource_prefers_newer_preview_cache_over_stale_latest_field
 async fn v2_h_demag_meta_prefers_equal_generation_latest_with_source_time() {
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
-        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+        let latest_fields = serde_json::from_value(serde_json::json!({
             "H_demag": {
                 "values": [[4.0, 0.0, 0.0], [4.0, 0.0, 0.0]],
                 "source_step": 4,
@@ -38827,7 +39326,7 @@ async fn v2_h_demag_meta_prefers_equal_generation_latest_with_source_time() {
             }
         }))
         .expect("complete latest H_demag field should deserialize");
-        snapshot.preview_cache.insert(LivePreviewField {
+        let preview = LivePreviewField {
             config_revision: 4,
             source_step: 4,
             source_time_seconds: None,
@@ -38849,45 +39348,17 @@ async fn v2_h_demag_meta_prefers_equal_generation_latest_with_source_time() {
             auto_downscaled: false,
             auto_downscale_message: None,
             active_mask: None,
-        });
-        snapshot.live_state = Some(LiveState {
-            status: "completed".into(),
-            updated_at_unix_ms: 1_700_000_000_789,
-            latest_step: StepUpdateView {
-                kind: fullmag_quantities::StepDataKind::PhysicalObservation,
-                solver_progress: None,
-                step: 4,
-                time: 4.0e-13,
-                dt: 1.0e-13,
-                pseudo_time_s: None,
-                e_ex: 0.0,
-                e_demag: 0.0,
-                e_ext: 0.0,
-                e_ani: 0.0,
-                e_dmi: 0.0,
-                e_rotated_dmi: 0.0,
-                e_total: 0.0,
-                max_dm_dt: 0.0,
-                max_h_eff: 0.0,
-                max_h_demag: 0.0,
-                max_torque_Apm: 0.0,
-                max_torque_T: 0.0,
-                max_torque_all_Apm: 0.0,
-                frozen_reference_max_drift: 0.0,
-                active_dof_count: 0,
-                frozen_dof_count: 0,
-                free_dof_count: 0,
-                wall_time_ns: 100,
-                grid: [2, 1, 1],
-                fem_mesh_generation_id: None,
-                fem_mesh: None,
-                magnetization: None,
-                per_object_scalars: Default::default(),
-                field_materialization_states: Vec::new(),
-                preview_field: None,
-                finished: true,
-            },
-        });
+        };
+        let mut live_state = physical_test_live_state(4, 4.0e-13, [2, 1, 1], None);
+        live_state.status = "completed".into();
+        live_state.updated_at_unix_ms = 1_700_000_000_789;
+        live_state.latest_step.finished = true;
+        apply_test_runtime_frame(snapshot, live_state)
+            .expect("equal-generation H_demag source observation should apply");
+        publish_test_latest_fields(snapshot, latest_fields)
+            .expect("equal-generation latest field should publish through the field-frame binder");
+        publish_test_preview_fields(snapshot, vec![preview])
+            .expect("equal-generation preview should publish through the field-frame binder");
     }
     let app = build_v2_router().with_state(state);
 
@@ -38994,7 +39465,7 @@ async fn v2_optional_field_materialization_pending_and_error_preserve_solver_and
 
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
-        snapshot.preview_cache.insert(LivePreviewField {
+        let preview = LivePreviewField {
             config_revision: 3,
             source_step: 4,
             source_time_seconds: None,
@@ -39016,8 +39487,15 @@ async fn v2_optional_field_materialization_pending_and_error_preserve_solver_and
             auto_downscaled: false,
             auto_downscale_message: None,
             active_mask: None,
-        });
-        snapshot.live_state = Some(LiveState {
+        };
+        apply_test_runtime_frame(
+            snapshot,
+            physical_test_live_state(4, 4.0e-12, [2, 1, 1], None),
+        )
+        .expect("last-good H_demag source observation should apply");
+        publish_test_preview_fields(snapshot, vec![preview])
+            .expect("last-good H_demag preview should publish through an accepted field frame");
+        let current_live_state = LiveState {
             status: "running".into(),
             updated_at_unix_ms: 1_700_000_000_789,
             latest_step: StepUpdateView {
@@ -39069,7 +39547,9 @@ async fn v2_optional_field_materialization_pending_and_error_preserve_solver_and
                 preview_field: None,
                 finished: false,
             },
-        });
+        };
+        apply_test_runtime_frame(snapshot, current_live_state)
+            .expect("current pending step 9 observation should apply");
     }
     let app = build_v2_router().with_state(state.clone());
 
@@ -39217,7 +39697,7 @@ async fn v2_optional_field_materialization_pending_and_error_preserve_solver_and
 async fn v2_energy_density_meta_exposes_fem_nodal_projection_location() {
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
-        snapshot.preview_cache.insert(LivePreviewField {
+        let preview = LivePreviewField {
             config_revision: 3,
             source_step: 4,
             source_time_seconds: None,
@@ -39239,7 +39719,14 @@ async fn v2_energy_density_meta_exposes_fem_nodal_projection_location() {
             auto_downscaled: false,
             auto_downscale_message: None,
             active_mask: Some(vec![true, true]),
-        });
+        };
+        apply_test_runtime_frame(
+            snapshot,
+            physical_test_live_state(4, 4.0e-12, [2, 1, 1], None),
+        )
+        .expect("energy-density source observation should apply");
+        publish_test_preview_fields(snapshot, vec![preview])
+            .expect("energy-density preview should publish through an accepted field frame");
     }
     let app = build_v2_router().with_state(state);
 
@@ -39863,6 +40350,12 @@ async fn v2_field_vector_supports_mesh_scoped_samples() {
             }
         }))
         .expect("scoped latest_fields should deserialize");
+        admit_test_latest_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(1, 1.0e-12, [8, 1, 1], None),
+        )
+        .expect("mesh-scoped H_demag field should bind to its physical FEM source");
+        snapshot.state_version = 29;
     }
     let app = build_v2_router().with_state(state);
 
@@ -39934,6 +40427,12 @@ async fn v2_field_vector_applies_max_samples_to_scoped_samples() {
             }
         }))
         .expect("scoped latest_fields should deserialize");
+        admit_test_latest_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(1, 1.0e-12, [8, 1, 1], None),
+        )
+        .expect("sampled H_demag field should bind to its physical FEM source");
+        snapshot.state_version = 29;
     }
     let app = build_v2_router().with_state(state);
 
@@ -40011,6 +40510,12 @@ async fn v2_fem_field_vector_max_samples_one_preserves_sampled_node_ordinal() {
             }
         }))
         .expect("scoped latest_fields should deserialize");
+        admit_test_latest_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(1, 1.0e-12, [8, 1, 1], None),
+        )
+        .expect("FEM airbox field should bind to its physical mesh source");
+        snapshot.state_version = 29;
     }
     let app = build_v2_router().with_state(state);
 
@@ -40062,6 +40567,12 @@ async fn v2_field_vector_applies_max_samples_to_part_scope() {
             }
         }))
         .expect("scoped latest_fields should deserialize");
+        admit_test_latest_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(1, 1.0e-12, [8, 1, 1], None),
+        )
+        .expect("part-scoped field should bind to its physical FEM source");
+        snapshot.state_version = 29;
     }
     let app = build_v2_router().with_state(state);
 
@@ -40122,6 +40633,11 @@ async fn v2_field_vector_applies_max_samples_to_unscoped_center_window() {
             }
         }))
         .expect("latest_fields should deserialize");
+        admit_test_latest_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(1, 1.0e-12, [5, 1, 1], None),
+        )
+        .expect("unscoped H_demag field should bind to a physical source");
     }
     let app = build_v2_router().with_state(state);
 
@@ -40179,6 +40695,20 @@ async fn v2_field_vector_rejects_magnetic_only_quantity_on_airbox_scope() {
             }
         }))
         .expect("scoped latest_fields should deserialize");
+        admit_test_latest_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(
+                1,
+                1.0e-12,
+                [8, 1, 1],
+                Some(vec![
+                    0.0, 0.1, 0.2, 1.0, 1.1, 1.2, 2.0, 2.1, 2.2, 3.0, 3.1, 3.2, 4.0, 4.1, 4.2, 5.0,
+                    5.1, 5.2, 6.0, 6.1, 6.2, 7.0, 7.1, 7.2,
+                ]),
+            ),
+        )
+        .expect("magnetic-only field should bind to its physical FEM source");
+        snapshot.state_version = 30;
     }
     let app = build_v2_router().with_state(state);
 
@@ -40254,6 +40784,12 @@ async fn v2_field_vector_accepts_quantity_alias_for_scoped_airbox_samples() {
             }
         }))
         .expect("scoped H_demag latest_fields should deserialize");
+        admit_test_latest_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(1, 1.0e-12, [8, 1, 1], None),
+        )
+        .expect("airbox H_demag field should bind to its physical FEM source");
+        snapshot.state_version = 30;
     }
     let app = build_v2_router().with_state(state);
 
@@ -40320,6 +40856,11 @@ async fn v2_field_vector_airbox_scope_excludes_shared_magnetic_nodes() {
             }
         }))
         .expect("scoped H_demag latest_fields should deserialize");
+        admit_test_latest_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(1, 1.0e-12, [10, 1, 1], None),
+        )
+        .expect("shared-node H_demag field should bind to its physical mesh source");
     }
     let app = build_v2_router().with_state(state);
 
@@ -40370,6 +40911,11 @@ async fn v2_field_vector_airbox_surface_scope_samples_only_surface_nodes() {
             }
         }))
         .expect("scoped H_demag latest_fields should deserialize");
+        admit_test_latest_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(1, 1.0e-12, [8, 1, 1], None),
+        )
+        .expect("surface H_demag field should bind to its physical mesh source");
     }
     let app = build_v2_router().with_state(state);
 
@@ -40440,6 +40986,11 @@ async fn v2_field_vector_rejects_airbox_surface_without_surface_membership() {
             }
         }))
         .expect("scoped H_demag latest_fields should deserialize");
+        admit_test_latest_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(1, 1.0e-12, [8, 1, 1], None),
+        )
+        .expect("surface-rejection field should bind to a physical FEM source");
     }
     let app = build_v2_router().with_state(state);
 
@@ -40485,6 +41036,19 @@ async fn v2_field_vector_object_scope_prefers_mesh_part_node_indices() {
             }
         }))
         .expect("scoped latest_fields should deserialize");
+        admit_test_latest_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(
+                1,
+                1.0e-12,
+                [8, 1, 1],
+                Some(vec![
+                    0.0, 0.1, 0.2, 1.0, 1.1, 1.2, 2.0, 2.1, 2.2, 3.0, 3.1, 3.2, 4.0, 4.1, 4.2, 5.0,
+                    5.1, 5.2, 6.0, 6.1, 6.2, 7.0, 7.1, 7.2,
+                ]),
+            ),
+        )
+        .expect("object-scoped magnetization should bind to its physical FEM source");
     }
     let app = build_v2_router().with_state(state);
 
@@ -40591,6 +41155,19 @@ async fn v2_field_vector_object_scope_fallback_uses_segment_element_nodes() {
             }
         }))
         .expect("scoped latest_fields should deserialize");
+        admit_test_latest_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(
+                1,
+                1.0e-12,
+                [8, 1, 1],
+                Some(vec![
+                    0.0, 0.1, 0.2, 1.0, 1.1, 1.2, 2.0, 2.1, 2.2, 3.0, 3.1, 3.2, 4.0, 4.1, 4.2, 5.0,
+                    5.1, 5.2, 6.0, 6.1, 6.2, 7.0, 7.1, 7.2,
+                ]),
+            ),
+        )
+        .expect("fallback object magnetization should bind to its physical FEM source");
     }
     let app = build_v2_router().with_state(state);
 
@@ -40645,6 +41222,20 @@ async fn v2_field_vector_supports_workspace_selection_scope() {
             }
         }))
         .expect("scoped latest_fields should deserialize");
+        admit_test_latest_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(
+                1,
+                1.0e-12,
+                [8, 1, 1],
+                Some(vec![
+                    0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 2.0, 0.0, 0.0, 3.0, 0.0, 0.0, 4.0, 0.0, 0.0, 5.0,
+                    0.0, 0.0, 6.0, 0.0, 0.0, 7.0, 0.0, 0.0,
+                ]),
+            ),
+        )
+        .expect("selection-scoped magnetization should bind to its physical FEM source");
+        snapshot.state_version = 30;
     }
     {
         let mut selection = state.current_workspace_selection.write().await;
@@ -41083,13 +41674,19 @@ async fn field_vector_cache_identity_includes_session_id() {
     {
         let mut guard = state.current_live_state.write().await;
         let snapshot = guard.as_mut().expect("live session exists");
-        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+        let latest_fields = serde_json::from_value(serde_json::json!({
             "H_demag": {
                 "values": [[1.0, 2.0, 3.0]],
                 "layout": { "grid_cells": [1, 1, 1] }
             }
         }))
         .unwrap();
+        publish_test_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(1, 1.0e-12, [1, 1, 1], None),
+            latest_fields,
+        )
+        .expect("first cache field should publish from a physical observation");
         snapshot.field_samples_revision = 1;
         snapshot
             .field_quantity_revisions
@@ -41110,13 +41707,19 @@ async fn field_vector_cache_identity_includes_session_id() {
         let mut guard = state.current_live_state.write().await;
         let snapshot = guard.as_mut().expect("live session exists");
         snapshot.session.session_id = "replacement-session".to_string();
-        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+        let latest_fields = serde_json::from_value(serde_json::json!({
             "H_demag": {
                 "values": [[4.0, 5.0, 6.0]],
                 "layout": { "grid_cells": [1, 1, 1] }
             }
         }))
         .unwrap();
+        publish_test_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(1, 1.0e-12, [1, 1, 1], None),
+            latest_fields,
+        )
+        .expect("replacement-session cache field should have a new physical source");
     }
 
     let second = app
@@ -41141,7 +41744,7 @@ async fn projection_and_slice_etags_are_scoped_to_session_identity() {
         let mut guard = state.current_live_state.write().await;
         let snapshot = guard.as_mut().expect("live session exists");
         snapshot.state_version = 11;
-        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+        let latest_fields = serde_json::from_value(serde_json::json!({
             "m": {
                 "values": [
                     [1.0, 0.0, 0.0],
@@ -41153,6 +41756,20 @@ async fn projection_and_slice_etags_are_scoped_to_session_identity() {
             }
         }))
         .expect("mock latest_fields should deserialize");
+        publish_test_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(
+                1,
+                1.0e-12,
+                [2, 2, 1],
+                Some(vec![
+                    1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 1.0, 2.0, 2.0,
+                ]),
+            ),
+            latest_fields,
+        )
+        .expect("projection field should publish from a physical observation");
+        snapshot.state_version = 11;
     }
     let app = build_v2_router().with_state(state.clone());
     let paths = [
@@ -41220,13 +41837,27 @@ async fn field_vector_topology_change_invalidates_etag_without_field_revision_ch
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
         snapshot.fem_mesh = Some(sample_scoped_fem_mesh_payload());
-        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+        let latest_fields = serde_json::from_value(serde_json::json!({
             "m": { "values": [
                 [1.0, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0, 0.0, 0.0],
                 [0.0, 1.0, 0.0], [0.0, 1.0, 0.0], [0.0, 1.0, 0.0], [0.0, 1.0, 0.0]
             ], "layout": { "grid_cells": [8, 1, 1] } }
         }))
         .unwrap();
+        publish_test_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(
+                1,
+                1.0e-12,
+                [8, 1, 1],
+                Some(vec![
+                    1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0,
+                    1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0,
+                ]),
+            ),
+            latest_fields,
+        )
+        .expect("topology ETag field should publish from a physical observation");
     }
     let app = build_v2_router().with_state(state.clone());
     let uri = "/v2/sessions/current/data/fields/m/samples/vector?scope_kind=object&scope_id=body";
@@ -42245,7 +42876,7 @@ async fn default_planar_fdm_test_state() -> Arc<AppState> {
                 "cell_size": [1.0, 2.0, 4.0]
             }
         }));
-        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+        let latest_fields = serde_json::from_value(serde_json::json!({
             "m": {
                 "values": [
                     [1.0, 0.0, 0.0],
@@ -42258,6 +42889,19 @@ async fn default_planar_fdm_test_state() -> Arc<AppState> {
             }
         }))
         .unwrap();
+        publish_test_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(
+                1,
+                1.0e-12,
+                [2, 2, 1],
+                Some(vec![
+                    1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 0.0,
+                ]),
+            ),
+            latest_fields,
+        )
+        .expect("default planar field should publish from a physical observation");
         snapshot.field_quantity_revisions.insert("m".to_string(), 7);
     }
     state
@@ -42289,7 +42933,7 @@ async fn planar_default_fdm_even_depth_uses_cell_centered_midplane() {
                 "cell_size": [1.0, 1.0, 1.0]
             }
         }));
-        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+        let latest_fields = serde_json::from_value(serde_json::json!({
             "m": {
                 "values": [
                     [1.0, 0.0, 0.0],
@@ -42306,6 +42950,20 @@ async fn planar_default_fdm_even_depth_uses_cell_centered_midplane() {
             }
         }))
         .expect("even-depth FDM field should deserialize");
+        publish_test_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(
+                1,
+                1.0e-12,
+                [2, 2, 2],
+                Some(vec![
+                    1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                    0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                ]),
+            ),
+            latest_fields,
+        )
+        .expect("even-depth FDM field should publish from a physical observation");
         snapshot.field_quantity_revisions.insert("m".to_string(), 8);
     }
     let app = build_v2_router().with_state(state);
@@ -42377,7 +43035,7 @@ async fn source_parity_across_meta_vector_and_planar() {
                 "cell_size": [1.0, 1.0, 1.0]
             }
         }));
-        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+        let latest_fields = serde_json::from_value(serde_json::json!({
             "m": {
                 "values": [
                     [1.0, 0.0, 0.0],
@@ -42394,6 +43052,20 @@ async fn source_parity_across_meta_vector_and_planar() {
             }
         }))
         .expect("source parity FDM field should deserialize");
+        publish_test_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(
+                1,
+                1.0e-12,
+                [2, 2, 2],
+                Some(vec![
+                    1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                    0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                ]),
+            ),
+            latest_fields,
+        )
+        .expect("source parity field should publish from a physical observation");
         snapshot.field_quantity_revisions.insert("m".to_string(), 8);
     }
     let app = build_v2_router().with_state(state);
@@ -42494,7 +43166,7 @@ async fn planar_default_meta_publishes_source_and_offset_domain_frame() {
                 "cell_size": [1.0, 2.0, 4.0]
             }
         }));
-        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+        let latest_fields = serde_json::from_value(serde_json::json!({
             "m": {
                 "values": [
                     [1.0, 0.0, 0.0],
@@ -42507,6 +43179,19 @@ async fn planar_default_meta_publishes_source_and_offset_domain_frame() {
             }
         }))
         .unwrap();
+        publish_test_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(
+                1,
+                1.0e-12,
+                [2, 2, 1],
+                Some(vec![
+                    1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 0.0,
+                ]),
+            ),
+            latest_fields,
+        )
+        .expect("offset planar field should publish from a physical observation");
         snapshot.field_quantity_revisions.insert("m".to_string(), 7);
     }
     let app = build_v2_router().with_state(state);
@@ -49017,6 +49702,7 @@ async fn frozen_spins_test_state() -> Arc<AppState> {
     let mut scene = sample_scene_document();
     scene.revision = 12;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        let source_state_revision = snapshot.state_version;
         // This fixture models idle authoring; hot-apply tests explicitly start a stage.
         snapshot.session.status = "awaiting_command".into();
         crate::session::refresh_runtime_status(snapshot);
@@ -49050,6 +49736,16 @@ async fn frozen_spins_test_state() -> Arc<AppState> {
             }
         }))
         .expect("frozen-spins magnetization fixture");
+        let mut live_state = physical_test_live_state(
+            1,
+            1.0e-12,
+            [3, 1, 1],
+            Some(vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]),
+        );
+        live_state.status = snapshot.session.status.clone();
+        publish_test_fields_from_physical_step(snapshot, live_state, latest_fields)
+            .expect("frozen-spins magnetization should come from a physical observation");
+        snapshot.state_version = source_state_revision;
         snapshot.field_quantity_revisions.insert("m".into(), 7);
     }
     state
@@ -49544,11 +50240,12 @@ async fn frozen_spins_preview_supports_authoritative_fem_p1_carrier() {
     let mesh = sample_fem_mesh_payload();
     let topology_fingerprint = fullmag_runner::fem_mesh_topology_fingerprint(&mesh);
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        let source_state_revision = snapshot.state_version;
         snapshot.metadata = Some(serde_json::json!({
             "artifact_layout": {"backend": "fem"}
         }));
         snapshot.fem_mesh = Some(mesh);
-        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+        let latest_fields = serde_json::from_value(serde_json::json!({
             "m": {
                 "values": [
                     [1.0, 0.0, 0.0],
@@ -49559,6 +50256,20 @@ async fn frozen_spins_preview_supports_authoritative_fem_p1_carrier() {
             }
         }))
         .expect("FEM nodal magnetization fixture");
+        publish_test_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(
+                2,
+                2.0e-12,
+                [4, 1, 1],
+                Some(vec![
+                    1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0,
+                ]),
+            ),
+            latest_fields,
+        )
+        .expect("FEM nodal magnetization should bind to its physical mesh frame");
+        snapshot.state_version = source_state_revision;
     }
     let app = build_v2_router().with_state(state);
     let response = app
@@ -49613,11 +50324,12 @@ async fn frozen_spins_fem_preview_uses_compact_local_to_global_mapping_with_airb
     });
     let topology_fingerprint = fullmag_runner::fem_mesh_topology_fingerprint(&mesh);
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        let source_state_revision = snapshot.state_version;
         snapshot.metadata = Some(serde_json::json!({
             "artifact_layout": {"backend": "fem"}
         }));
         snapshot.fem_mesh = Some(mesh);
-        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+        let latest_fields = serde_json::from_value(serde_json::json!({
             "m": {
                 "values": [
                     [1.0, 0.0, 0.0],
@@ -49628,6 +50340,20 @@ async fn frozen_spins_fem_preview_uses_compact_local_to_global_mapping_with_airb
             }
         }))
         .expect("compact FEM magnetic-node fixture");
+        publish_test_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(
+                2,
+                2.0e-12,
+                [4, 1, 1],
+                Some(vec![
+                    1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0,
+                ]),
+            ),
+            latest_fields,
+        )
+        .expect("compact FEM magnetization should bind to its physical mesh frame");
+        snapshot.state_version = source_state_revision;
     }
     let app = build_v2_router().with_state(state);
     let response = app
@@ -49680,11 +50406,12 @@ async fn frozen_spins_fem_preview_rejects_ambiguous_element_ownership() {
     mesh.object_segments.push(mesh.object_segments[0].clone());
     let topology_fingerprint = fullmag_runner::fem_mesh_topology_fingerprint(&mesh);
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        let source_state_revision = snapshot.state_version;
         snapshot.metadata = Some(serde_json::json!({
             "artifact_layout": {"backend": "fem"}
         }));
         snapshot.fem_mesh = Some(mesh);
-        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+        let latest_fields = serde_json::from_value(serde_json::json!({
             "m": {
                 "values": [
                     [1.0, 0.0, 0.0],
@@ -49695,6 +50422,20 @@ async fn frozen_spins_fem_preview_rejects_ambiguous_element_ownership() {
             }
         }))
         .expect("ambiguous FEM segment fixture");
+        publish_test_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(
+                2,
+                2.0e-12,
+                [4, 1, 1],
+                Some(vec![
+                    1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0,
+                ]),
+            ),
+            latest_fields,
+        )
+        .expect("ambiguous FEM fixture should retain a physical source identity");
+        snapshot.state_version = source_state_revision;
     }
     let response = build_v2_router()
         .with_state(state)
@@ -51088,6 +51829,7 @@ async fn frozen_spins_preview_intersects_all_magnetic_with_target_object() {
     )
     .expect("write membership mask");
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        let source_state_revision = snapshot.state_version;
         let mut scene = sample_scene_document();
         scene.revision = 12;
         let mut other = scene.objects[0].clone();
@@ -51109,7 +51851,7 @@ async fn frozen_spins_preview_intersects_all_magnetic_with_target_object() {
                 "cell_size": [1.0, 1.0, 1.0]
             }}}
         }));
-        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+        let latest_fields = serde_json::from_value(serde_json::json!({
             "m": {
                 "values": [
                     [1.0, 0.0, 0.0],
@@ -51120,7 +51862,19 @@ async fn frozen_spins_preview_intersects_all_magnetic_with_target_object() {
             }
         }))
         .expect("multi-object magnetization fixture");
+        publish_test_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(
+                1,
+                1.0e-12,
+                [3, 1, 1],
+                Some(vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]),
+            ),
+            latest_fields,
+        )
+        .expect("multi-object magnetization should bind to its physical FDM source");
         snapshot.field_quantity_revisions.insert("m".into(), 7);
+        snapshot.state_version = source_state_revision;
     }
 
     let response = app
