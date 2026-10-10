@@ -35041,7 +35041,7 @@ async fn hysteresis_analysis_resolves_stage_directory_artifact_refs() {
 }
 
 #[tokio::test]
-async fn hysteresis_analysis_accepts_active_hysteresis_kind_when_record_kind_is_algorithm() {
+async fn hysteresis_analysis_uses_active_hysteresis_kind_only_when_record_kind_is_missing() {
     let (app, state, artifact_dir) = test_router_with_session_state_and_artifact_dir().await;
     let stage_dir = artifact_dir
         .parent()
@@ -35079,7 +35079,7 @@ async fn hysteresis_analysis_accepts_active_hysteresis_kind_when_record_kind_is_
             stage_statuses: vec![StageLifecycleState::Running],
             stages: vec![StageExecutionRecord {
                 stage_id: Some("stage-000".into()),
-                kind: Some("relax".into()),
+                kind: None,
                 status: StageLifecycleState::Running,
                 command_id: None,
                 mesh_generation_id: None,
@@ -35139,6 +35139,7 @@ async fn hysteresis_analysis_accepts_active_hysteresis_kind_when_record_kind_is_
     assert_eq!(points[0]["field_value_mT"], 200.0);
 
     let progress_response = app
+        .clone()
         .oneshot(
             Request::builder()
                 .uri("/v2/sessions/current/simulation/stages/0/hysteresis/progress")
@@ -35153,6 +35154,40 @@ async fn hysteresis_analysis_accepts_active_hysteresis_kind_when_record_kind_is_
     assert_eq!(progress["stage_id"], "stage-000");
     assert_eq!(progress["stage_index"], 0);
     assert_eq!(progress["current_field_mT"], 200.0);
+
+    {
+        let mut guard = state.current_live_state.write().await;
+        let snapshot = guard.as_mut().expect("test session should be active");
+        snapshot
+            .stage_execution
+            .as_mut()
+            .expect("stage execution should be active")
+            .stages[0]
+            .kind = Some("relax".into());
+    }
+
+    let conflicting_kind_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/analysis/hysteresis/0/points")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(conflicting_kind_response.status(), StatusCode::NOT_FOUND);
+
+    let conflicting_progress_response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/simulation/stages/0/hysteresis/progress")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(conflicting_progress_response.status(), StatusCode::NOT_FOUND);
 
     let _ = fs::remove_dir_all(stage_dir);
     let _ = fs::remove_dir_all(artifact_dir);

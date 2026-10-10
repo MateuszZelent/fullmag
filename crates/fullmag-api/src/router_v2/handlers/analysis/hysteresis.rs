@@ -182,7 +182,7 @@ fn hysteresis_stage_point_artifact_candidates(
         .collect()
 }
 
-fn is_hysteresis_stage_at(
+pub(crate) fn is_hysteresis_stage_at(
     stage_exec: &StageExecutionState,
     index: usize,
     record: &crate::types::StageExecutionRecord,

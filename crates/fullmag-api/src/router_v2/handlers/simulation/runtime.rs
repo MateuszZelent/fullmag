@@ -12,8 +12,9 @@ use serde_json::Value;
 
 use crate::error::ApiError;
 use crate::router_v2::handlers::analysis::hysteresis::{
-    hysteresis_bookmarks_resource, read_hysteresis_minor_loops_if_available,
-    read_hysteresis_points_if_available, read_hysteresis_settle_trace_if_available,
+    hysteresis_bookmarks_resource, is_hysteresis_stage_at,
+    read_hysteresis_minor_loops_if_available, read_hysteresis_points_if_available,
+    read_hysteresis_settle_trace_if_available,
 };
 use crate::schemas::commands::CommandFailureRequest;
 use crate::schemas::hysteresis::{
@@ -1407,11 +1408,7 @@ async fn resolve_hysteresis_stage_progress(
             continue;
         }
 
-        let record_kind = record.kind.as_deref();
-        let active_stage_kind = stage_kind_for_index(stage_execution, index);
-        if !is_hysteresis_stage_kind(record_kind)
-            && !is_hysteresis_stage_kind(active_stage_kind.as_deref())
-        {
+        if !is_hysteresis_stage_at(stage_execution, index, record) {
             return Err(ApiError::not_found(format!(
                 "stage '{}' is not a hysteresis stage",
                 stage_id
@@ -1446,10 +1443,6 @@ async fn resolve_hysteresis_stage_progress(
         "hysteresis stage '{}' not found",
         stage_id
     )))
-}
-
-fn is_hysteresis_stage_kind(kind: Option<&str>) -> bool {
-    matches!(kind, Some("hysteresis" | "flat_hysteresis"))
 }
 
 fn enrich_hysteresis_progress_counts(
@@ -4121,15 +4114,107 @@ fn hysteresis_invalidation_stage_id(
     stage_linkage: Option<&CommandStageLinkage>,
 ) -> Option<String> {
     let stage_execution = snapshot.stage_execution.as_ref()?;
+    hysteresis_invalidation_stage_id_from_execution(stage_execution, stage_linkage)
+}
+
+fn hysteresis_invalidation_stage_id_from_execution(
+    stage_execution: &StageExecutionState,
+    stage_linkage: Option<&CommandStageLinkage>,
+) -> Option<String> {
     let linkage = stage_linkage?;
     let stage_index = linkage.stage_index? as usize;
     let stage_record = stage_execution.stages.get(stage_index)?;
-    if is_hysteresis_stage_kind(stage_record.kind.as_deref())
-        || is_hysteresis_stage_kind(stage_execution.active_stage_kind.as_deref())
-    {
+    if is_hysteresis_stage_at(stage_execution, stage_index, stage_record) {
         return linkage.stage_id.clone();
     }
     None
+}
+
+#[cfg(test)]
+mod hysteresis_invalidation_tests {
+    use super::{hysteresis_invalidation_stage_id_from_execution, CommandStageLinkage};
+    use crate::types::{RuntimeLifecycleState, StageExecutionState, StageLifecycleState};
+
+    fn stage_record(
+        stage_id: &str,
+        kind: Option<&str>,
+        status: StageLifecycleState,
+    ) -> crate::types::StageExecutionRecord {
+        serde_json::from_value(serde_json::json!({
+            "stage_id": stage_id,
+            "kind": kind,
+            "status": status.as_str(),
+        }))
+        .expect("stage execution fixture")
+    }
+
+    fn stage_execution(
+        stages: Vec<crate::types::StageExecutionRecord>,
+        active_stage_index: Option<usize>,
+        active_stage_kind: Option<&str>,
+    ) -> StageExecutionState {
+        StageExecutionState {
+            total_stages: stages.len(),
+            completed_stage_indexes: Vec::new(),
+            stages,
+            stage_statuses: Vec::new(),
+            active_stage_index,
+            active_stage_kind: active_stage_kind.map(str::to_string),
+            runtime_state: RuntimeLifecycleState::Running,
+        }
+    }
+
+    fn linkage(stage_index: u32) -> CommandStageLinkage {
+        CommandStageLinkage {
+            stage_id: Some(format!("stage-{stage_index:03}")),
+            stage_index: Some(stage_index),
+            started_at_unix_ms: None,
+            applied_step: None,
+            applied_time_seconds: None,
+            segment_id: None,
+            completed_at_unix_ms: None,
+            artifact_refs: Vec::new(),
+            checkpoint_ref: None,
+            loaded_state_ref: None,
+            resume_from_checkpoint_ref: None,
+            state_transition: None,
+        }
+    }
+
+    #[test]
+    fn invalidation_does_not_follow_hysteresis_kind_from_a_different_active_stage() {
+        let stage_execution = stage_execution(
+            vec![
+                stage_record("stage-000", None, StageLifecycleState::Running),
+                stage_record("stage-001", None, StageLifecycleState::Running),
+            ],
+            Some(1),
+            Some("flat_hysteresis"),
+        );
+
+        assert_eq!(
+            hysteresis_invalidation_stage_id_from_execution(&stage_execution, Some(&linkage(0))),
+            None
+        );
+    }
+
+    #[test]
+    fn invalidation_rejects_explicit_relax_kind_with_active_hysteresis_kind() {
+        let stage_execution = stage_execution(
+            vec![stage_record(
+                "stage-000",
+                Some("relax"),
+                StageLifecycleState::Running,
+            )],
+            Some(0),
+            Some("flat_hysteresis"),
+        );
+
+        assert_eq!(
+            hysteresis_invalidation_stage_id_from_execution(&stage_execution, Some(&linkage(0))),
+            None
+        );
+    }
 }
 
 fn push_hysteresis_command_invalidations(
