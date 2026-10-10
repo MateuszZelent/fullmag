@@ -63,6 +63,8 @@ from ._gmsh_extraction import (
     certify_extracted_periodic_mesh,
 )
 from ._gmsh_fields import (
+    _add_exact_plane_projected_cap_field,
+    _exact_plane_cap_seed_points,
     _add_surface_threshold_field,
     _apply_mesh_options,
     _apply_post_mesh_options,
@@ -2512,6 +2514,27 @@ def _generate_coincident_ring_airbox_mesh(
             current_annulus = next_annulus[0]
             current_hole = next_hole[0] if next_hole else None
 
+        if scoped_layer_partitioning:
+            # Seed the shared cap triangulation inside scoped region footprints
+            # at every exact layer plane (see _exact_plane_cap_seed_points).
+            cap_seed_points = _exact_plane_cap_seed_points(
+                size_fields=options.size_fields,
+                lower_bound_fields=options.lower_bound_fields,
+                layer_planes=[
+                    (body_bottom + index * (body_top - body_bottom) / n_layers) / SCALE
+                    for index in range(n_layers + 1)
+                ],
+                bounds_xy=(xmin / SCALE, ymin / SCALE, xmax / SCALE, ymax / SCALE),
+                excluded_disc=(0.0, 0.0, radius) if radius is not None else None,
+            )
+            if cap_seed_points:
+                seed_tags = [
+                    gmsh.model.geo.addPoint(x * SCALE, y * SCALE, z_source, h * SCALE)
+                    for x, y, h in cap_seed_points
+                ]
+                gmsh.model.geo.synchronize()
+                gmsh.model.mesh.embed(0, seed_tags, 2, int(annulus_surface))
+
         body_volumes = [volume for i, volume in enumerate(annulus_volumes)
                         if body_bottom < 0.5 * (levels[i] + levels[i + 1]) < body_top]
         air_volumes = [volume for volume in annulus_volumes if volume not in body_volumes] + hole_volumes
@@ -2632,6 +2655,27 @@ def _generate_coincident_ring_airbox_mesh(
         preexisting_fields = [*source_fields, int(body_upper_field)]
         if airbox_field is not None:
             preexisting_fields.append(int(airbox_field))
+        if scoped_layer_partitioning:
+            # The source cap is triangulated once and copied through every
+            # exact plane, but scoped region fields only exist between the
+            # planes. Evaluate them at each exact plane z_k and apply the
+            # result to the cap (see _add_exact_plane_projected_cap_field).
+            cap_field = _add_exact_plane_projected_cap_field(
+                gmsh,
+                size_fields=options.size_fields,
+                lower_bound_fields=options.lower_bound_fields,
+                layer_planes=[
+                    (body_bottom + index * (body_top - body_bottom) / n_layers) / SCALE
+                    for index in range(n_layers + 1)
+                ],
+                source_z=z_source / SCALE,
+                neutral_size=max(body_hmax_scaled, h_outer_scaled) / SCALE,
+                geometry_name=geometry.geometry_name,
+                cap_volume_tags=[annulus_volumes[0]],
+                hscale=SCALE,
+            )
+            if cap_field is not None:
+                preexisting_fields.append(int(cap_field))
         _apply_mesh_options(
             gmsh,
             body_hmax_scaled,
