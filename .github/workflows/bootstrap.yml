@@ -136,6 +136,9 @@ jobs:
           cargo test -p fullmag-runner path_potential_publication_tests --lib
           cargo test -p fullmag-runner deferred_physical_potential_tests --lib
 
+      - name: Run bias-field tracked mode publication contracts
+        run: cargo test -p fullmag-runner bias_field_branch_selection_tracks_native_publisher_artifacts_before_publication --lib
+
       - name: Run eigen artifact and Kittel residual evidence contracts
         run: cargo test -p fullmag-runner eigen::artifacts::tests --lib
 
