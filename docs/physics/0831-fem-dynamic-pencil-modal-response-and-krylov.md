@@ -5373,3 +5373,17 @@ Scope: queried_live_PCLU_configuration_during_ksp_monitor_not_actual_factor_pert
 Ustawienia PC nie dowodzą rzeczywistej perturbacji faktora ani przyczyny
 błędu GMRES. Bogatsza obserwacja candidate zachowuje swój obecny gate
 i JSON; obie obserwacje używają jednego helpera getterów.
+
+
+P2 source checkpoint: monitor i candidate korzystają teraz z jednego
+helpera zwracającego świeży POD. Monitor ma osobny cached record z
+query count, callback ordinal, iteration i EPS attempt; nie wymaga
+dodatniego recursive reason. Legacy candidate JSON i true-residual gate
+są zachowane. Root i niezależny source review PASS po korekcie error
+fixtures, lecz rzeczywisty pomiar getterów nadal wymaga GHA.
+
+| Source ID | Path | Symbol | Responsibility |
+|---|---|---|---|
+| source-r2-live-pclu-monitor-getters | backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp | PetscErrorCode capture_floquet_shifted_ksp_progress | Opt-in getter-only live PCLU configuration snapshot before positive convergence or hard EPS error; not actual factor perturbation |
+| source-r2-live-pclu-monitor-serializer | backends/fem/cpu/frequency_domain/production_cpu_modal_eigen.cpp | std::string live_pclu_monitor_observation_json | Cached scalar-only monitor configuration with independent getter errors and nullable values |
+| source-r2-live-pclu-monitor-regressions | backends/fem/tests/frequency_domain/modal_eigen_contract_test.cpp | void live_pclu_monitor_observation_serializer_states | Fresh getter-error snapshots, unknown enum and nonfinite serialization regressions; hosted execution pending |

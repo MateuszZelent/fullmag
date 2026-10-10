@@ -342,6 +342,206 @@ void borrowed_pmat_copy_serializer_optional_shift_fields()
         "partial mock preserves separate getter errors and nulls without fabricating shift values");
 }
 
+void live_pclu_monitor_observation_serializer_states()
+{
+    using Observation = fd::LivePcluMonitorObservation;
+    const std::string not_attempted =
+        fd::detail::serialize_live_pclu_monitor_observation_json(Observation{});
+    check(contains(not_attempted.c_str(),
+                   "\"schema_version\":\"floquet_live_pclu_monitor_observation.v1\"") &&
+              contains(not_attempted.c_str(),
+                       "\"requested\":false,\"query_count\":0") &&
+              contains(not_attempted.c_str(),
+                       "\"status\":\"not_attempted\",\"reason\":\"live_pclu_shift_configuration_query_not_started\"") &&
+              contains(not_attempted.c_str(),
+                       "\"shift_type_name_available\":false,\"shift_type_name\":null") &&
+              contains(not_attempted.c_str(),
+                       "\"shift_amount_available\":false,\"shift_amount\":null"),
+          "unrequested monitor observation serializes a not-attempted record with nullable getter data");
+
+    Observation none{};
+    none.requested = true;
+    none.query_count = 1u;
+    none.callback_ordinal_available = true;
+    none.callback_ordinal = 1u;
+    none.iteration_available = true;
+    none.iteration = 8;
+    none.eps_attempt_number_available = true;
+    none.eps_attempt_number = 1;
+    none.ksp_get_pc_error_code_available = true;
+    none.ksp_get_pc_error_code = 0;
+    none.configuration.status = "measured";
+    none.configuration.reason = "live_pclu_shift_configuration_observed";
+    none.configuration.pc_type_available = true;
+    none.configuration.pc_type_is_exact_pclu = true;
+    none.configuration.pc_type_query_error_code_available = true;
+    none.configuration.pc_type_query_error_code = 0;
+    none.configuration.factor_getters_attempted = true;
+    none.configuration.shift_type_query_error_code_available = true;
+    none.configuration.shift_type_query_error_code = 0;
+    none.configuration.shift_type_enum_value_available = true;
+    none.configuration.shift_type_enum_value = 0;
+    none.configuration.shift_type_name_available = true;
+    none.configuration.shift_type_name = "MAT_SHIFT_NONE";
+    none.configuration.shift_amount_query_error_code_available = true;
+    none.configuration.shift_amount_query_error_code = 0;
+    none.configuration.shift_amount_available = true;
+    none.configuration.shift_amount = 0.0;
+    none.configuration.shift_amount_nonfinite_available = true;
+    none.configuration.shift_amount_nonfinite = false;
+    const std::string none_json =
+        fd::detail::serialize_live_pclu_monitor_observation_json(none);
+    check(contains(none_json.c_str(),
+                   "\"callback_ordinal_available\":true,\"callback_ordinal\":1") &&
+              contains(none_json.c_str(),
+                       "\"iteration_available\":true,\"iteration\":8") &&
+              contains(none_json.c_str(),
+                       "\"eps_attempt_number_available\":true,\"eps_attempt_number\":1") &&
+              contains(none_json.c_str(),
+                       "\"ksp_get_pc_error_code_available\":true,\"ksp_get_pc_error_code\":0") &&
+              contains(none_json.c_str(),
+                       "\"shift_type_enum_value_available\":true,\"shift_type_enum_value\":0") &&
+              contains(none_json.c_str(),
+                       "\"shift_type_name_available\":true,\"shift_type_name\":\"MAT_SHIFT_NONE\"") &&
+              contains(none_json.c_str(),
+                       "\"shift_amount_available\":true,\"shift_amount\":0") &&
+              contains(none_json.c_str(),
+                       "\"actual_factorization_perturbation_measured\":false"),
+          "monitor serializer retains callback provenance and a finite MAT_SHIFT_NONE configuration");
+
+    Observation nonzero = none;
+    nonzero.configuration.shift_type_enum_value = 1;
+    nonzero.configuration.shift_type_name = "MAT_SHIFT_NONZERO";
+    nonzero.configuration.shift_amount = 0.125;
+    const std::string nonzero_json =
+        fd::detail::serialize_live_pclu_monitor_observation_json(nonzero);
+    check(contains(nonzero_json.c_str(),
+                   "\"shift_type_enum_value\":1") &&
+              contains(nonzero_json.c_str(),
+                       "\"shift_type_name\":\"MAT_SHIFT_NONZERO\"") &&
+              contains(nonzero_json.c_str(), "\"shift_amount\":0.125"),
+          "monitor serializer retains a finite MAT_SHIFT_NONZERO configuration");
+
+    Observation ksp_pc_error = none;
+    ksp_pc_error.configuration = {};
+    ksp_pc_error.ksp_get_pc_error_code = 41;
+    ksp_pc_error.configuration.status = "unavailable";
+    ksp_pc_error.configuration.reason = "live_ksp_pc_query_failed";
+    ksp_pc_error.configuration.pc_type_available = false;
+    ksp_pc_error.configuration.pc_type_query_error_code_available = false;
+    ksp_pc_error.configuration.factor_getters_attempted = false;
+    const std::string ksp_pc_error_json =
+        fd::detail::serialize_live_pclu_monitor_observation_json(ksp_pc_error);
+    check(contains(ksp_pc_error_json.c_str(),
+                   "\"ksp_get_pc_error_code_available\":true,\"ksp_get_pc_error_code\":41") &&
+              contains(ksp_pc_error_json.c_str(),
+                       "\"pc_type_available\":false,\"pc_type_is_exact_pclu\":null") &&
+              contains(ksp_pc_error_json.c_str(),
+                       "\"pc_type_query_error_code_available\":false,\"pc_type_query_error_code\":null") &&
+              contains(ksp_pc_error_json.c_str(),
+                       "\"factor_getters_attempted\":false") &&
+              contains(ksp_pc_error_json.c_str(),
+                       "\"shift_type_query_error_code_available\":false,\"shift_type_query_error_code\":null") &&
+              contains(ksp_pc_error_json.c_str(),
+                       "\"shift_type_enum_value_available\":false,\"shift_type_enum_value\":null") &&
+              contains(ksp_pc_error_json.c_str(),
+                       "\"shift_type_name_available\":false,\"shift_type_name\":null") &&
+              contains(ksp_pc_error_json.c_str(),
+                       "\"shift_amount_query_error_code_available\":false,\"shift_amount_query_error_code\":null") &&
+              contains(ksp_pc_error_json.c_str(),
+                       "\"shift_amount_available\":false,\"shift_amount\":null") &&
+              contains(ksp_pc_error_json.c_str(),
+                       "\"shift_amount_nonfinite_available\":false,\"shift_amount_nonfinite\":null"),
+          "monitor serializer emits fresh empty PC configuration after KSPGetPC failure");
+
+    Observation pc_type_error = none;
+    pc_type_error.configuration = {};
+    pc_type_error.configuration.status = "unavailable";
+    pc_type_error.configuration.reason = "live_pc_type_query_failed";
+    pc_type_error.configuration.pc_type_available = false;
+    pc_type_error.configuration.pc_type_is_exact_pclu = false;
+    pc_type_error.configuration.pc_type_query_error_code_available = true;
+    pc_type_error.configuration.pc_type_query_error_code = 43;
+    pc_type_error.configuration.factor_getters_attempted = false;
+    const std::string pc_type_error_json =
+        fd::detail::serialize_live_pclu_monitor_observation_json(pc_type_error);
+    check(contains(pc_type_error_json.c_str(),
+                   "\"pc_type_available\":false,\"pc_type_is_exact_pclu\":null") &&
+              contains(pc_type_error_json.c_str(),
+                       "\"pc_type_query_error_code_available\":true,\"pc_type_query_error_code\":43") &&
+              contains(pc_type_error_json.c_str(),
+                       "\"factor_getters_attempted\":false") &&
+              contains(pc_type_error_json.c_str(),
+                       "\"shift_type_query_error_code_available\":false,\"shift_type_query_error_code\":null") &&
+              contains(pc_type_error_json.c_str(),
+                       "\"shift_type_enum_value_available\":false,\"shift_type_enum_value\":null") &&
+              contains(pc_type_error_json.c_str(),
+                       "\"shift_type_name_available\":false,\"shift_type_name\":null") &&
+              contains(pc_type_error_json.c_str(),
+                       "\"shift_amount_query_error_code_available\":false,\"shift_amount_query_error_code\":null") &&
+              contains(pc_type_error_json.c_str(),
+                       "\"shift_amount_available\":false,\"shift_amount\":null") &&
+              contains(pc_type_error_json.c_str(),
+                       "\"shift_amount_nonfinite_available\":false,\"shift_amount_nonfinite\":null"),
+          "monitor serializer distinguishes PCGetType failure from fresh unattempted factor getters");
+
+    Observation getter_error = none;
+    getter_error.configuration.status = "partial";
+    getter_error.configuration.reason = "one_or_more_live_factor_shift_getters_failed";
+    getter_error.configuration.shift_type_query_error_code = 101;
+    getter_error.configuration.shift_type_enum_value_available = false;
+    getter_error.configuration.shift_type_name_available = false;
+    getter_error.configuration.shift_type_name = nullptr;
+    getter_error.configuration.shift_amount_query_error_code = 202;
+    getter_error.configuration.shift_amount_available = false;
+    getter_error.configuration.shift_amount =
+        std::numeric_limits<double>::quiet_NaN();
+    getter_error.configuration.shift_amount_nonfinite_available = false;
+    const std::string getter_error_json =
+        fd::detail::serialize_live_pclu_monitor_observation_json(getter_error);
+    check(contains(getter_error_json.c_str(),
+                   "\"shift_type_query_error_code_available\":true,\"shift_type_query_error_code\":101") &&
+              contains(getter_error_json.c_str(),
+                       "\"shift_amount_query_error_code_available\":true,\"shift_amount_query_error_code\":202") &&
+              contains(getter_error_json.c_str(),
+                       "\"shift_type_name_available\":false,\"shift_type_name\":null") &&
+              contains(getter_error_json.c_str(),
+                       "\"shift_amount_available\":false,\"shift_amount\":null"),
+          "monitor serializer preserves independent factor getter errors without stale values");
+
+    Observation unknown_enum = none;
+    unknown_enum.configuration.status = "partial";
+    unknown_enum.configuration.reason = "live_factor_shift_type_unrecognized";
+    unknown_enum.configuration.shift_type_enum_value = 91;
+    unknown_enum.configuration.shift_type_name_available = false;
+    unknown_enum.configuration.shift_type_name = nullptr;
+    const std::string unknown_enum_json =
+        fd::detail::serialize_live_pclu_monitor_observation_json(unknown_enum);
+    check(contains(unknown_enum_json.c_str(),
+                   "\"shift_type_enum_value_available\":true,\"shift_type_enum_value\":91") &&
+              contains(unknown_enum_json.c_str(),
+                       "\"shift_type_name_available\":false,\"shift_type_name\":null"),
+          "monitor serializer retains unknown raw shift enums while leaving the mapped name null");
+
+    Observation nonfinite = none;
+    nonfinite.configuration.status = "partial";
+    nonfinite.configuration.reason = "live_factor_shift_amount_nonfinite";
+    nonfinite.configuration.shift_amount_available = false;
+    nonfinite.configuration.shift_amount =
+        std::numeric_limits<double>::quiet_NaN();
+    nonfinite.configuration.shift_amount_nonfinite_available = true;
+    nonfinite.configuration.shift_amount_nonfinite = true;
+    const std::string nonfinite_json =
+        fd::detail::serialize_live_pclu_monitor_observation_json(nonfinite);
+    check(contains(nonfinite_json.c_str(),
+                   "\"shift_amount_available\":false,\"shift_amount\":null") &&
+              contains(nonfinite_json.c_str(),
+                       "\"shift_amount_nonfinite_available\":true,\"shift_amount_nonfinite\":true") &&
+              nonfinite_json.find("NaN") == std::string::npos &&
+              nonfinite_json.find("nan") == std::string::npos,
+          "monitor serializer emits null for non-finite configured shift amounts");
+}
+
 std::size_t count_occurrences(const char *haystack, const char *needle)
 {
     if (haystack == nullptr || needle == nullptr || needle[0] == '\0') {
@@ -7340,8 +7540,8 @@ void floquet_live_shift_configuration_uses_native_count_fixture()
     request.operator_request.operator_diagnostics_json =
         "{\"operator_family\":\"mfem_linearized_llg\","
         "\"payload_kind\":\"certified_shared_domain\"}";
-    // Reach the positive recursive-convergence callback before measuring the
-    // candidate; a one-iteration limit can fail before the observer runs.
+    // Keep a bounded iteration budget; the monitor getter must observe the
+    // live PC before EPS fails, even without a positive KSP convergence reason.
     request.max_linear_iterations = 64;
 
     const ScopedFloquetDiagnosticEnvironment diagnostic_environment{};
@@ -7411,21 +7611,21 @@ void floquet_live_shift_configuration_uses_native_count_fixture()
     const std::string error_snapshot = bounded_text(result.error_message, 512u);
     const std::string result_snapshot = bounded_text(result.result_json, 2048u);
     const char *diagnostics = result.diagnostics_json;
-    const std::string borrowed_pmat_json = json_object_after_key(
-        diagnostics, "\"borrowed_pmat_copy\":");
-    const std::string candidate_operator_json = json_object_after_key(
-        diagnostics, "\"candidate_operator_diagnostic\":");
-    const std::string live_pc_json = json_object_after_key(
-        diagnostics, "\"live_pc_observation\":");
     const std::string failure_probe_json = json_object_after_key(
         diagnostics, "\"shifted_ksp_failure_probe\":");
+    const std::string ksp_monitor_json = json_object_after_key(
+        diagnostics, "\"ksp_monitor_progress\":");
+    const std::string live_pclu_monitor_json = json_object_after_key(
+        ksp_monitor_json.c_str(), "\"live_pclu_configuration\":");
+    const std::string live_pclu_configuration_json = json_object_after_key(
+        live_pclu_monitor_json.c_str(), "\"configuration\":");
     const char *reason = result.result_json != nullptr
         ? std::strstr(result.result_json, "\"stop_reason\":")
         : nullptr;
     const std::string reason_snapshot = bounded_text(reason, 256u);
     const std::string query_snapshot = bounded_text(
-        !borrowed_pmat_json.empty()
-            ? borrowed_pmat_json.c_str()
+        !live_pclu_monitor_json.empty()
+            ? live_pclu_monitor_json.c_str()
             : diagnostics,
         4096u);
     std::fprintf(
@@ -7444,105 +7644,99 @@ void floquet_live_shift_configuration_uses_native_count_fixture()
               contains(failure_probe_json.c_str(),
                        "\"schema_version\":\"shifted_ksp_failure_probe.v1\""),
           "native-count nearest fixture must reach and report the real shifted SLEPc solve failure");
-    check(contains(candidate_operator_json.c_str(),
-                   "\"schema_version\":\"floquet_candidate_operator_diagnostic.v1\"") &&
-              contains(candidate_operator_json.c_str(), "\"requested\":true") &&
-              contains(live_pc_json.c_str(),
-                       "\"schema_version\":\"floquet_live_pc_observation.v1\"") &&
-              contains(borrowed_pmat_json.c_str(),
-                       "\"schema_version\":\"floquet_borrowed_pmat_copy.v1\",\"requested\":true"),
-          "native-count SLEPc failure must serialize its actual requested live-PC diagnostic");
-    check(contains(borrowed_pmat_json.c_str(),
-                   "\"live_shift_query_status_available\":true,\"live_shift_query_status\":\"measured\"") &&
-              contains(borrowed_pmat_json.c_str(),
-                       "\"actual_factorization_shift_type_available\":true") &&
-              contains(borrowed_pmat_json.c_str(),
-                       "\"actual_factorization_shift_type_enum_value_available\":true") &&
-              contains(borrowed_pmat_json.c_str(),
-                       "\"actual_factorization_shift_type_query_error_code_available\":true,\"actual_factorization_shift_type_query_error_code\":0") &&
-              contains(borrowed_pmat_json.c_str(),
-                       "\"actual_factorization_shift_amount_available\":true") &&
-              contains(borrowed_pmat_json.c_str(),
-                       "\"actual_factorization_shift_amount_query_error_code_available\":true,\"actual_factorization_shift_amount_query_error_code\":0") &&
-              contains(borrowed_pmat_json.c_str(),
+    check(contains(ksp_monitor_json.c_str(),
+                   "\"schema_version\":\"floquet_shifted_ksp_monitor_progress.v1\"") &&
+              contains(live_pclu_monitor_json.c_str(),
+                       "\"schema_version\":\"floquet_live_pclu_monitor_observation.v1\"") &&
+              contains(live_pclu_monitor_json.c_str(), "\"requested\":true") &&
+              contains(failure_probe_json.c_str(),
+                       "\"schema_version\":\"shifted_ksp_failure_probe.v1\""),
+          "native-count EPS failure serializes the opt-in live-PCLU record in monitor progress");
+    check(contains(live_pclu_monitor_json.c_str(),
+                   "\"measurement_scope\":\"queried_live_PCLU_configuration_during_ksp_monitor_not_actual_factor_perturbation\"") &&
+              contains(live_pclu_monitor_json.c_str(),
+                       "\"ksp_get_pc_error_code_available\":true,\"ksp_get_pc_error_code\":0") &&
+              contains(live_pclu_configuration_json.c_str(),
+                       "\"status\":\"measured\",\"reason\":\"live_pclu_shift_configuration_observed\"") &&
+              contains(live_pclu_configuration_json.c_str(),
+                       "\"pc_type_is_exact_pclu\":true") &&
+              contains(live_pclu_configuration_json.c_str(),
+                       "\"factor_getters_attempted\":true") &&
+              contains(live_pclu_configuration_json.c_str(),
+                       "\"pc_type_query_error_code_available\":true,\"pc_type_query_error_code\":0") &&
+              contains(live_pclu_configuration_json.c_str(),
+                       "\"shift_type_query_error_code_available\":true,\"shift_type_query_error_code\":0") &&
+              contains(live_pclu_configuration_json.c_str(),
+                       "\"shift_amount_query_error_code_available\":true,\"shift_amount_query_error_code\":0") &&
+              contains(live_pclu_configuration_json.c_str(),
                        "\"actual_factorization_perturbation_measured\":false"),
-          "native-count observation must report successful live PCLU getters without claiming applied perturbation");
+          "monitor-time KSP/PC getter codes must be zero without claiming factor perturbation");
 
-    const double shift_type_enum_value = extract_json_number(
-        borrowed_pmat_json.c_str(),
-        "\"actual_factorization_shift_type_enum_value\":",
-        "native_count_live_factor_shift_type_enum");
-    const double shift_amount = extract_json_number(
-        borrowed_pmat_json.c_str(),
-        "\"actual_factorization_shift_amount\":",
-        "native_count_live_factor_shift_amount");
-    const bool shift_type_is_mapped =
-        contains(borrowed_pmat_json.c_str(),
-                 "\"actual_factorization_shift_type\":\"MAT_SHIFT_NONE\"") ||
-        contains(borrowed_pmat_json.c_str(),
-                 "\"actual_factorization_shift_type\":\"MAT_SHIFT_NONZERO\"") ||
-        contains(borrowed_pmat_json.c_str(),
-                 "\"actual_factorization_shift_type\":\"MAT_SHIFT_POSITIVE_DEFINITE\"") ||
-        contains(borrowed_pmat_json.c_str(),
-                 "\"actual_factorization_shift_type\":\"MAT_SHIFT_INBLOCKS\"");
-    check(std::isfinite(shift_type_enum_value) &&
-              shift_type_enum_value >= 0.0 && shift_type_enum_value <= 3.0 &&
-              shift_type_enum_value == std::floor(shift_type_enum_value) &&
-              shift_type_is_mapped && std::isfinite(shift_amount) &&
-              contains(borrowed_pmat_json.c_str(),
-                       "\"actual_factorization_shift_amount_nonfinite_available\":true,\"actual_factorization_shift_amount_nonfinite\":false"),
-          "native-count live PCLU query must expose a mapped enum and finite configured amount");
     const double eps_attempt_number = extract_json_number(
         failure_probe_json.c_str(),
         "\"eps_attempt_number\":",
         "native_count_shift_failure_eps_attempt");
-    const double callback_count = extract_json_number(
-        failure_probe_json.c_str(),
-        "\"callback_count\":",
-        "native_count_shift_failure_callback_count");
-    const double pc_apply_attempt_count = extract_json_number(
-        live_pc_json.c_str(),
-        "\"pc_apply_attempt_count\":",
-        "native_count_live_pc_apply_attempt_count");
-    const double pc_apply_success_count = extract_json_number(
-        live_pc_json.c_str(),
-        "\"pc_apply_success_count\":",
-        "native_count_live_pc_apply_success_count");
-    const double repeat_pc_apply_attempt_count = extract_json_number(
-        live_pc_json.c_str(),
-        "\"repeat_pc_apply_attempt_count\":",
-        "native_count_live_repeat_pc_apply_attempt_count");
-    const double repeat_pc_apply_success_count = extract_json_number(
-        live_pc_json.c_str(),
-        "\"repeat_pc_apply_success_count\":",
-        "native_count_live_repeat_pc_apply_success_count");
-    check(eps_attempt_number >= 1.0 && callback_count >= 1.0 &&
-              pc_apply_attempt_count >= 1.0 &&
-              pc_apply_success_count == pc_apply_attempt_count &&
-              repeat_pc_apply_attempt_count >= 1.0 &&
-              repeat_pc_apply_success_count == repeat_pc_apply_attempt_count &&
-              contains(live_pc_json.c_str(),
-                       "\"pc_type_available\":true,\"pc_type_overflow\":false,\"pc_type\":\"lu\""),
-          "native-count measurement must retain actual EPS callback and successful live/repeated LU PC counters");
+    const double monitor_query_count = extract_json_number(
+        live_pclu_monitor_json.c_str(),
+        "\"query_count\":",
+        "native_count_live_pclu_monitor_query_count");
+    const double callback_ordinal = extract_json_number(
+        live_pclu_monitor_json.c_str(),
+        "\"callback_ordinal\":",
+        "native_count_live_pclu_monitor_callback_ordinal");
+    const double monitor_iteration = extract_json_number(
+        live_pclu_monitor_json.c_str(),
+        "\"iteration\":",
+        "native_count_live_pclu_monitor_iteration");
+    const double monitor_eps_attempt = extract_json_number(
+        live_pclu_monitor_json.c_str(),
+        "\"eps_attempt_number\":",
+        "native_count_live_pclu_monitor_eps_attempt");
+    const double shift_type_enum_value = extract_json_number(
+        live_pclu_configuration_json.c_str(),
+        "\"shift_type_enum_value\":",
+        "native_count_live_pclu_monitor_shift_type_enum");
+    const double shift_amount = extract_json_number(
+        live_pclu_configuration_json.c_str(),
+        "\"shift_amount\":",
+        "native_count_live_pclu_monitor_shift_amount");
+    const bool shift_type_is_mapped =
+        contains(live_pclu_configuration_json.c_str(),
+                 "\"shift_type_name\":\"MAT_SHIFT_NONE\"") ||
+        contains(live_pclu_configuration_json.c_str(),
+                 "\"shift_type_name\":\"MAT_SHIFT_NONZERO\"") ||
+        contains(live_pclu_configuration_json.c_str(),
+                 "\"shift_type_name\":\"MAT_SHIFT_POSITIVE_DEFINITE\"") ||
+        contains(live_pclu_configuration_json.c_str(),
+                 "\"shift_type_name\":\"MAT_SHIFT_INBLOCKS\"");
+    check(eps_attempt_number >= 1.0 && monitor_query_count >= 1.0 &&
+              callback_ordinal >= 1.0 && monitor_iteration >= 0.0 &&
+              monitor_eps_attempt == eps_attempt_number &&
+              callback_ordinal == monitor_query_count,
+          "monitor getter snapshot binds a real callback ordinal and EPS attempt before failure");
+    check(std::isfinite(shift_type_enum_value) &&
+              shift_type_enum_value >= 0.0 && shift_type_enum_value <= 3.0 &&
+              shift_type_enum_value == std::floor(shift_type_enum_value) &&
+              shift_type_is_mapped && std::isfinite(shift_amount) &&
+              contains(live_pclu_configuration_json.c_str(),
+                       "\"shift_amount_nonfinite_available\":true,\"shift_amount_nonfinite\":false"),
+          "monitor observation retains the actual mapped finite live PCLU shift configuration");
 
     std::fprintf(
         stdout,
-        "NATIVE-COUNT LIVE PCLU QUERY SNAPSHOT (diagnostic only): "
+        "NATIVE-COUNT LIVE PCLU MONITOR SNAPSHOT (diagnostic only): "
         "raw_status=%d tangent_frame_components=%llu eps_attempt=%.0f "
-        "callbacks=%.0f shift_enum=%.0f shift_amount=%.17g "
-        "pc_apply=%.0f/%.0f repeat_pc_apply=%.0f/%.0f "
-        "query_prefix=%s\n",
+        "queries=%.0f callback_ordinal=%.0f iteration=%.0f "
+        "shift_enum=%.0f shift_amount=%.17g query_prefix=%s\n",
         raw_status,
         static_cast<unsigned long long>(
             fixture.descriptor.tangent_frame_xyz_count),
         eps_attempt_number,
-        callback_count,
+        monitor_query_count,
+        callback_ordinal,
+        monitor_iteration,
         shift_type_enum_value,
         shift_amount,
-        pc_apply_attempt_count,
-        pc_apply_success_count,
-        repeat_pc_apply_attempt_count,
-        repeat_pc_apply_success_count,
         query_snapshot.c_str());
     fullmag_fem_frequency_domain_result_destroy(&result);
 #else
@@ -9144,6 +9338,7 @@ int main(int argc, char **argv)
 #endif
     }
     borrowed_pmat_copy_serializer_optional_shift_fields();
+    live_pclu_monitor_observation_serializer_states();
     if (argc > 1) {
         if (argc == 2 && std::strcmp(argv[1], "--floquet-gamma-admission") == 0) {
 #if FULLMAG_HAS_MFEM_STACK && FULLMAG_FEM_WITH_SLEPC

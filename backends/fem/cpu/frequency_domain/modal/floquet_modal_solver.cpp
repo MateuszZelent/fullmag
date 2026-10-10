@@ -1113,6 +1113,9 @@ struct NativeFloquetMatShellContext {
     char error_message[256]{};
 };
 
+LivePcluShiftConfiguration query_live_pclu_shift_configuration(
+    PC live_pc) noexcept;
+
 struct LastFloquetShiftedSolveSnapshot {
     Mat shifted_operator = nullptr; // Owns one PETSc reference.
     Vec rhs = nullptr;
@@ -1128,6 +1131,7 @@ struct LastFloquetShiftedSolveSnapshot {
         std::numeric_limits<double>::quiet_NaN();
     bool monitor_last_reason_available = false;
     int monitor_last_observed_reason = 0;
+    LivePcluMonitorObservation live_pclu_configuration_during_ksp_monitor{};
     int true_residual_sample_count = 0;
     int true_residual_measurement_failure_count = 0;
     double maximum_true_relative_residual = 0.0;
@@ -1270,6 +1274,36 @@ PetscErrorCode capture_floquet_shifted_ksp_progress(
         snapshot->monitor_last_reason_available
             ? static_cast<int>(reason)
             : 0;
+
+    auto &live_pclu_observation =
+        snapshot->live_pclu_configuration_during_ksp_monitor;
+    if (live_pclu_observation.requested) {
+        ++live_pclu_observation.query_count;
+        live_pclu_observation.callback_ordinal_available =
+            snapshot->monitor_observation_count > 0u;
+        live_pclu_observation.callback_ordinal =
+            snapshot->monitor_observation_count;
+        live_pclu_observation.iteration_available = iteration >= 0;
+        live_pclu_observation.iteration = iteration >= 0
+            ? static_cast<std::int64_t>(iteration)
+            : -1;
+        PC live_pc = nullptr;
+        const PetscErrorCode ksp_get_pc_error = ksp != nullptr
+            ? KSPGetPC(ksp, &live_pc)
+            : PETSC_ERR_ARG_NULL;
+        live_pclu_observation.ksp_get_pc_error_code_available = true;
+        live_pclu_observation.ksp_get_pc_error_code =
+            static_cast<int>(ksp_get_pc_error);
+        if (ksp_get_pc_error == PETSC_SUCCESS) {
+            live_pclu_observation.configuration =
+                query_live_pclu_shift_configuration(live_pc);
+        } else {
+            LivePcluShiftConfiguration configuration{};
+            configuration.status = "unavailable";
+            configuration.reason = "live_ksp_pc_query_failed";
+            live_pclu_observation.configuration = configuration;
+        }
+    }
     return 0;
 }
 
@@ -2241,95 +2275,85 @@ const char *petsc_factor_shift_type_name(MatFactorShiftType shift_type) noexcept
     }
 }
 
-void query_live_pclu_shift_configuration(
-    PC live_pc,
-    FloquetBorrowedPmatCopyObservation *observation) noexcept
+LivePcluShiftConfiguration query_live_pclu_shift_configuration(
+    PC live_pc) noexcept
 {
-    if (observation == nullptr) {
-        return;
-    }
+    LivePcluShiftConfiguration configuration{};
     if (live_pc == nullptr) {
-        observation->live_shift_query_status = "unavailable";
-        observation->live_shift_query_reason = "borrowed_live_pc_unavailable";
-        return;
+        configuration.status = "unavailable";
+        configuration.reason = "live_pc_unavailable";
+        return configuration;
     }
 
     PCType live_pc_type = nullptr;
     const PetscErrorCode pc_type_error = PCGetType(live_pc, &live_pc_type);
-    observation->live_pc_type_query_error_code_available = true;
-    observation->live_pc_type_query_error_code =
-        static_cast<int>(pc_type_error);
-    if (pc_type_error != PETSC_SUCCESS || live_pc_type == nullptr) {
-        observation->live_shift_query_status = "unavailable";
-        observation->live_shift_query_reason =
-            pc_type_error != PETSC_SUCCESS
-                ? "live_pc_type_query_failed"
-                : "live_pc_type_unavailable";
-        return;
+    configuration.pc_type_query_error_code_available = true;
+    configuration.pc_type_query_error_code = static_cast<int>(pc_type_error);
+    if (pc_type_error != PETSC_SUCCESS) {
+        configuration.status = "unavailable";
+        configuration.reason = "live_pc_type_query_failed";
+        return configuration;
     }
-    if (std::strcmp(live_pc_type, PCLU) != 0) {
-        observation->live_shift_query_status = "unavailable";
-        observation->live_shift_query_reason = "live_pc_is_not_exact_pclu";
-        return;
+    if (live_pc_type == nullptr) {
+        configuration.status = "unavailable";
+        configuration.reason = "live_pc_type_unavailable";
+        return configuration;
+    }
+    configuration.pc_type_available = true;
+    configuration.pc_type_is_exact_pclu = std::strcmp(live_pc_type, PCLU) == 0;
+    if (!configuration.pc_type_is_exact_pclu) {
+        configuration.status = "unavailable";
+        configuration.reason = "live_pc_is_not_exact_pclu";
+        return configuration;
     }
 
-    observation->live_shift_query_attempted = true;
+    configuration.factor_getters_attempted = true;
     MatFactorShiftType shift_type = MAT_SHIFT_NONE;
     const PetscErrorCode shift_type_error =
         PCFactorGetShiftType(live_pc, &shift_type);
-    observation->actual_factorization_shift_type_query_error_code_available =
-        true;
-    observation->actual_factorization_shift_type_query_error_code =
+    configuration.shift_type_query_error_code_available = true;
+    configuration.shift_type_query_error_code =
         static_cast<int>(shift_type_error);
     if (shift_type_error == PETSC_SUCCESS) {
-        observation->actual_factorization_shift_type_enum_value_available =
-            true;
-        observation->actual_factorization_shift_type_enum_value =
-            static_cast<int>(shift_type);
-        const char *shift_type_name = petsc_factor_shift_type_name(shift_type);
-        if (shift_type_name != nullptr) {
-            observation->actual_factorization_shift_type_available = true;
-            observation->actual_factorization_shift_type = shift_type_name;
-        }
+        configuration.shift_type_enum_value_available = true;
+        configuration.shift_type_enum_value = static_cast<int>(shift_type);
+        configuration.shift_type_name = petsc_factor_shift_type_name(shift_type);
+        configuration.shift_type_name_available =
+            configuration.shift_type_name != nullptr;
     }
 
     PetscReal shift_amount = static_cast<PetscReal>(0.0);
     const PetscErrorCode shift_amount_error =
         PCFactorGetShiftAmount(live_pc, &shift_amount);
-    observation->actual_factorization_shift_amount_query_error_code_available =
-        true;
-    observation->actual_factorization_shift_amount_query_error_code =
+    configuration.shift_amount_query_error_code_available = true;
+    configuration.shift_amount_query_error_code =
         static_cast<int>(shift_amount_error);
     if (shift_amount_error == PETSC_SUCCESS) {
         const double amount = static_cast<double>(shift_amount);
-        observation->actual_factorization_shift_amount_nonfinite_available =
-            true;
-        observation->actual_factorization_shift_amount_nonfinite =
-            !std::isfinite(amount);
-        if (!observation->actual_factorization_shift_amount_nonfinite) {
-            observation->actual_factorization_shift_amount_available = true;
-            observation->actual_factorization_shift_amount = amount;
+        configuration.shift_amount_nonfinite_available = true;
+        configuration.shift_amount_nonfinite = !std::isfinite(amount);
+        if (!configuration.shift_amount_nonfinite) {
+            configuration.shift_amount_available = true;
+            configuration.shift_amount = amount;
         }
     }
 
     if (shift_type_error != PETSC_SUCCESS ||
         shift_amount_error != PETSC_SUCCESS) {
-        observation->live_shift_query_status = "partial";
-        observation->live_shift_query_reason =
+        configuration.status = "partial";
+        configuration.reason =
             "one_or_more_live_factor_shift_getters_failed";
-    } else if (!observation->actual_factorization_shift_type_available) {
-        observation->live_shift_query_status = "partial";
-        observation->live_shift_query_reason =
-            "live_factor_shift_type_unrecognized";
-    } else if (!observation->actual_factorization_shift_amount_available) {
-        observation->live_shift_query_status = "partial";
-        observation->live_shift_query_reason =
-            "live_factor_shift_amount_nonfinite";
+    } else if (!configuration.shift_type_name_available) {
+        configuration.status = "partial";
+        configuration.reason = "live_factor_shift_type_unrecognized";
+    } else if (!configuration.shift_amount_available) {
+        configuration.status = "partial";
+        configuration.reason = "live_factor_shift_amount_nonfinite";
     } else {
-        observation->live_shift_query_status = "measured";
-        observation->live_shift_query_reason =
-            "live_pclu_shift_configuration_observed";
+        configuration.status = "measured";
+        configuration.reason = "live_pclu_shift_configuration_observed";
     }
+    return configuration;
 }
 
 PetscErrorCode prepare_candidate_owned_pmat_copy_and_lu(
@@ -2338,7 +2362,42 @@ PetscErrorCode prepare_candidate_owned_pmat_copy_and_lu(
     Mat borrowed_pmat) noexcept
 {
     auto &observation = workspace->summary.live_pc_observation.borrowed_pmat_copy;
-    query_live_pclu_shift_configuration(live_pc, &observation);
+    const LivePcluShiftConfiguration configuration =
+        query_live_pclu_shift_configuration(live_pc);
+    observation.live_shift_query_status = configuration.status;
+    observation.live_shift_query_reason = live_pc == nullptr
+        ? "borrowed_live_pc_unavailable"
+        : configuration.reason;
+    observation.live_shift_query_attempted =
+        configuration.factor_getters_attempted;
+    observation.live_pc_type_query_error_code_available =
+        configuration.pc_type_query_error_code_available;
+    observation.live_pc_type_query_error_code =
+        configuration.pc_type_query_error_code;
+    observation.actual_factorization_shift_type_available =
+        configuration.shift_type_name_available;
+    observation.actual_factorization_shift_type =
+        configuration.shift_type_name;
+    observation.actual_factorization_shift_type_enum_value_available =
+        configuration.shift_type_enum_value_available;
+    observation.actual_factorization_shift_type_enum_value =
+        configuration.shift_type_enum_value;
+    observation.actual_factorization_shift_type_query_error_code_available =
+        configuration.shift_type_query_error_code_available;
+    observation.actual_factorization_shift_type_query_error_code =
+        configuration.shift_type_query_error_code;
+    observation.actual_factorization_shift_amount_available =
+        configuration.shift_amount_available;
+    observation.actual_factorization_shift_amount =
+        configuration.shift_amount;
+    observation.actual_factorization_shift_amount_query_error_code_available =
+        configuration.shift_amount_query_error_code_available;
+    observation.actual_factorization_shift_amount_query_error_code =
+        configuration.shift_amount_query_error_code;
+    observation.actual_factorization_shift_amount_nonfinite_available =
+        configuration.shift_amount_nonfinite_available;
+    observation.actual_factorization_shift_amount_nonfinite =
+        configuration.shift_amount_nonfinite;
     do {
         if (borrowed_pmat == nullptr) {
             observation.reason = "borrowed_live_pmat_unavailable";
@@ -7475,6 +7534,14 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
         shifted_ksp = nullptr;
         shifted_pc = nullptr;
         last_shifted_solve = {};
+        last_shifted_solve.live_pclu_configuration_during_ksp_monitor.requested =
+            candidate_diagnostic.requested;
+        last_shifted_solve.live_pclu_configuration_during_ksp_monitor.
+            eps_attempt_number_available = result.eps_attempt_count > 0;
+        last_shifted_solve.live_pclu_configuration_during_ksp_monitor.
+            eps_attempt_number = result.eps_attempt_count;
+        result.live_pclu_configuration_during_ksp_monitor =
+            last_shifted_solve.live_pclu_configuration_during_ksp_monitor;
         shifted_ksp_true_convergence_context.reset();
         shifted_ksp_true_convergence_test_registration_attempted = false;
         if (EPSCreate(PETSC_COMM_SELF, &eps) != 0 ||
@@ -7896,6 +7963,8 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
     // first error authoritative and leave this one process-bounded EPS object
     // for OS reclamation; the runtime fails closed immediately afterwards.
     eps_cleanup_is_safe = eps_solve_error == 0;
+    result.live_pclu_configuration_during_ksp_monitor =
+        last_shifted_solve.live_pclu_configuration_during_ksp_monitor;
     // Copy only ordinary cached values here. In particular, a hard error
     // below must not query any PETSc handle to recover this progress.
     if (shifted_ksp_true_convergence_context != nullptr) {

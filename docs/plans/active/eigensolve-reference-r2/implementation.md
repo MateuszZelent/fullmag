@@ -662,3 +662,23 @@ Asercja wymaga teraz prawdziwego wzrostu resolved NEV/count względem
 actual base i zachowuje cap8, split-dimension oraz NCV policy; nie
 zmienia solvera, residualów ani certificate. Kolejne cases niewykonane
 w tym runie; cała selected-window gate nadal NOT VERIFIED.
+
+
+## P2 — getter-only monitor source checkpoint
+
+Implementacja ma świeży shared POD getterów i osobny opt-in monitor
+record w ksp_monitor_progress; zapisuje actual callback/iteration/attempt
+i osobne kody błędów, przed hard EPS unwind. Callback nie wykonuje
+PCApply/setup/MatMult/buildsolution. Legacy candidate JSON i true
+residual criterion pozostają; odczyty po hard EPS error nie występują.
+
+Native-count regression wymaga faktycznego monitor query/code0/finite
+configuration/ordinal/attempt. Nie wymaga dodatniego recursive reason
+ani candidate PCApply, których wcześniejszy hard failure nie osiągał.
+Serializer regressions zachowują null przy unavailable/unknown/nonfinite;
+error fixtures zostały poprawione na świeży rekord po review.
+Root i niezależny source review PASS; hosted pomiar jeszcze NOT VERIFIED.
+Ustawienia PCLU nie są pomiarem perturbacji faktora ani dowodem przyczyny.
+
+Focused API source run #38086656946 nafab55bab3ed45f82a20bbf150cfa4db5a155d623
+rzeczywiście wystartował przez on-push; wynik pending.

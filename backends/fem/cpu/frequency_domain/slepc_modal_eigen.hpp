@@ -54,6 +54,42 @@ floquet_complex_spectral_shift_distance(
 
 } // namespace detail
 
+struct LivePcluShiftConfiguration {
+    const char *status = "not_attempted";
+    const char *reason = "live_pclu_shift_configuration_query_not_started";
+    bool pc_type_available = false;
+    bool pc_type_is_exact_pclu = false;
+    bool pc_type_query_error_code_available = false;
+    int pc_type_query_error_code = 0;
+    bool factor_getters_attempted = false;
+    bool shift_type_query_error_code_available = false;
+    int shift_type_query_error_code = 0;
+    bool shift_type_enum_value_available = false;
+    int shift_type_enum_value = 0;
+    bool shift_type_name_available = false;
+    const char *shift_type_name = nullptr;
+    bool shift_amount_query_error_code_available = false;
+    int shift_amount_query_error_code = 0;
+    bool shift_amount_available = false;
+    double shift_amount = std::numeric_limits<double>::quiet_NaN();
+    bool shift_amount_nonfinite_available = false;
+    bool shift_amount_nonfinite = false;
+};
+
+struct LivePcluMonitorObservation {
+    bool requested = false;
+    std::uint64_t query_count = 0;
+    bool callback_ordinal_available = false;
+    std::uint64_t callback_ordinal = 0;
+    bool iteration_available = false;
+    std::int64_t iteration = -1;
+    bool eps_attempt_number_available = false;
+    int eps_attempt_number = 0;
+    bool ksp_get_pc_error_code_available = false;
+    int ksp_get_pc_error_code = 0;
+    LivePcluShiftConfiguration configuration{};
+};
+
 struct FloquetSharedDomainSparseModalOperator;
 
 // Callback-time scalar diagnostics for a hard shifted-KSP/EPS failure. These
@@ -421,6 +457,9 @@ struct FloquetShiftedKspFailureProbe {
 };
 
 namespace detail {
+
+std::string serialize_live_pclu_monitor_observation_json(
+    const LivePcluMonitorObservation &observation);
 
 std::string serialize_borrowed_pmat_copy_observation_json(
     const FloquetShiftedKspFailureProbe::CandidateOperatorDiagnostic::
@@ -836,6 +875,7 @@ struct SLEPcTinyGyrotropicModalEigenResult {
         std::numeric_limits<double>::quiet_NaN();
     bool ksp_monitor_last_reason_available = false;
     int ksp_monitor_last_observed_reason = 0;
+    LivePcluMonitorObservation live_pclu_configuration_during_ksp_monitor{};
     // Observed before EPSSolve; distinct from last-solve residual telemetry.
     bool shifted_ksp_configuration_before_eps_available = false;
     int shifted_ksp_pc_side_before_eps = -1;

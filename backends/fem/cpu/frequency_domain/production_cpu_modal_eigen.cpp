@@ -467,6 +467,112 @@ std::string borrowed_pmat_copy_observation_json(
     return json;
 }
 
+std::string live_pclu_monitor_observation_json(
+    const LivePcluMonitorObservation &observation)
+{
+    const auto &configuration = observation.configuration;
+    const auto optional_integer = [](bool available, long long value) {
+        return available ? std::to_string(value) : std::string("null");
+    };
+    const auto optional_unsigned = [](bool available, std::uint64_t value) {
+        return available ? std::to_string(value) : std::string("null");
+    };
+    const auto optional_bool = [](bool available, bool value) {
+        return available
+            ? std::string(value ? "true" : "false")
+            : std::string("null");
+    };
+    const auto optional_number = [](bool available, double value) {
+        return available && std::isfinite(value)
+            ? format_double(value)
+            : std::string("null");
+    };
+    return
+        "{\"schema_version\":\"floquet_live_pclu_monitor_observation.v1\","
+        "\"measurement_scope\":\"queried_live_PCLU_configuration_during_ksp_monitor_not_actual_factor_perturbation\","
+        "\"requested\":" +
+        std::string(observation.requested ? "true" : "false") +
+        ",\"query_count\":" + std::to_string(observation.query_count) +
+        ",\"callback_ordinal_available\":" +
+        std::string(observation.callback_ordinal_available ? "true" : "false") +
+        ",\"callback_ordinal\":" +
+        optional_unsigned(observation.callback_ordinal_available,
+                          observation.callback_ordinal) +
+        ",\"iteration_available\":" +
+        std::string(observation.iteration_available ? "true" : "false") +
+        ",\"iteration\":" +
+        optional_integer(observation.iteration_available, observation.iteration) +
+        ",\"eps_attempt_number_available\":" +
+        std::string(observation.eps_attempt_number_available ? "true" : "false") +
+        ",\"eps_attempt_number\":" +
+        optional_integer(observation.eps_attempt_number_available,
+                         observation.eps_attempt_number) +
+        ",\"ksp_get_pc_error_code_available\":" +
+        std::string(observation.ksp_get_pc_error_code_available ? "true" : "false") +
+        ",\"ksp_get_pc_error_code\":" +
+        optional_integer(observation.ksp_get_pc_error_code_available,
+                         observation.ksp_get_pc_error_code) +
+        ",\"configuration\":{"
+        "\"status\":\"" +
+        escape_json_string(configuration.status != nullptr
+                               ? configuration.status
+                               : "unknown") +
+        "\",\"reason\":\"" +
+        escape_json_string(configuration.reason != nullptr
+                               ? configuration.reason
+                               : "") +
+        "\",\"pc_type_available\":" +
+        std::string(configuration.pc_type_available ? "true" : "false") +
+        ",\"pc_type_is_exact_pclu\":" +
+        optional_bool(configuration.pc_type_available,
+                      configuration.pc_type_is_exact_pclu) +
+        ",\"pc_type_query_error_code_available\":" +
+        std::string(configuration.pc_type_query_error_code_available
+                        ? "true" : "false") +
+        ",\"pc_type_query_error_code\":" +
+        optional_integer(configuration.pc_type_query_error_code_available,
+                         configuration.pc_type_query_error_code) +
+        ",\"factor_getters_attempted\":" +
+        std::string(configuration.factor_getters_attempted ? "true" : "false") +
+        ",\"shift_type_query_error_code_available\":" +
+        std::string(configuration.shift_type_query_error_code_available
+                        ? "true" : "false") +
+        ",\"shift_type_query_error_code\":" +
+        optional_integer(configuration.shift_type_query_error_code_available,
+                         configuration.shift_type_query_error_code) +
+        ",\"shift_type_enum_value_available\":" +
+        std::string(configuration.shift_type_enum_value_available
+                        ? "true" : "false") +
+        ",\"shift_type_enum_value\":" +
+        optional_integer(configuration.shift_type_enum_value_available,
+                         configuration.shift_type_enum_value) +
+        ",\"shift_type_name_available\":" +
+        std::string(configuration.shift_type_name_available ? "true" : "false") +
+        ",\"shift_type_name\":" +
+        (configuration.shift_type_name_available &&
+                 configuration.shift_type_name != nullptr
+             ? "\"" + escape_json_string(configuration.shift_type_name) + "\""
+             : std::string("null")) +
+        ",\"shift_amount_query_error_code_available\":" +
+        std::string(configuration.shift_amount_query_error_code_available
+                        ? "true" : "false") +
+        ",\"shift_amount_query_error_code\":" +
+        optional_integer(configuration.shift_amount_query_error_code_available,
+                         configuration.shift_amount_query_error_code) +
+        ",\"shift_amount_available\":" +
+        std::string(configuration.shift_amount_available ? "true" : "false") +
+        ",\"shift_amount\":" +
+        optional_number(configuration.shift_amount_available,
+                        configuration.shift_amount) +
+        ",\"shift_amount_nonfinite_available\":" +
+        std::string(configuration.shift_amount_nonfinite_available
+                        ? "true" : "false") +
+        ",\"shift_amount_nonfinite\":" +
+        optional_bool(configuration.shift_amount_nonfinite_available,
+                      configuration.shift_amount_nonfinite) +
+        ",\"actual_factorization_perturbation_measured\":false}}";
+}
+
 std::string live_pc_observation_json(
     const FloquetShiftedKspFailureProbe::CandidateOperatorDiagnostic::
         LivePcObservation &observation)
@@ -810,7 +916,11 @@ std::string floquet_shifted_ksp_diagnostics_json_fields(
         (result.ksp_monitor_last_reason_available
             ? std::to_string(result.ksp_monitor_last_observed_reason)
             : std::string("null")) +
-        ",\"last_observed_reason_is_final\":false}" +
+        ",\"last_observed_reason_is_final\":false,"
+        "\"live_pclu_configuration\":" +
+        live_pclu_monitor_observation_json(
+            result.live_pclu_configuration_during_ksp_monitor) +
+        "}" +
         ",\"ksp_true_residual_criterion\":{"
         "\"schema_version\":\"floquet_shifted_ksp_true_residual_criterion.v1\","
         "\"reference_norm\":\"rhs_norm_zero_initial_guess\","
@@ -5003,6 +5113,12 @@ std::string detail::serialize_borrowed_pmat_copy_observation_json(
         BorrowedPmatCopyObservation &observation)
 {
     return borrowed_pmat_copy_observation_json(observation);
+}
+
+std::string detail::serialize_live_pclu_monitor_observation_json(
+    const LivePcluMonitorObservation &observation)
+{
+    return live_pclu_monitor_observation_json(observation);
 }
 
 #ifndef FULLMAG_FEM_PETSC_VERSION
