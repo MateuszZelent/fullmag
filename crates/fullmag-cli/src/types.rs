@@ -216,6 +216,10 @@ pub(crate) struct EngineLogEntry {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[allow(non_snake_case)]
 pub(crate) struct LiveStepView {
+    #[serde(default = "fullmag_quantities::StepDataKind::legacy_unclassified")]
+    pub kind: fullmag_quantities::StepDataKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub solver_progress: Option<fullmag_quantities::SolverProgress>,
     pub step: u64,
     pub time: f64,
     pub dt: f64,
@@ -248,6 +252,26 @@ pub(crate) struct LiveStepView {
     /// in `CurrentLiveSnapshotPayload`, not inside the step view.
     pub preview_field: Option<fullmag_runner::LivePreviewField>,
     pub finished: bool,
+}
+
+impl LiveStepView {
+    pub(crate) fn validate_record_kind(&self) -> Result<(), &'static str> {
+        self.kind
+            .validate_solver_progress(self.solver_progress.as_ref())?;
+        if self.kind.is_solver_progress()
+            && (!self.per_object_scalars.is_empty()
+                || self.magnetization.is_some()
+                || self.preview_field.is_some()
+                || !self.field_materialization_states.is_empty())
+        {
+            return Err("solver progress cannot include physical quantity payloads");
+        }
+        Ok(())
+    }
+
+    pub(crate) fn is_physical_observation(&self) -> bool {
+        self.kind.is_physical_observation() && self.validate_record_kind().is_ok()
+    }
 }
 
 #[cfg(test)]
@@ -444,6 +468,9 @@ mod solver_policy_compatibility_tests {
 #[derive(Debug, Clone, Serialize)]
 #[allow(non_snake_case)]
 pub(crate) struct CurrentLiveScalarRow {
+    pub kind: fullmag_quantities::StepDataKind,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub solver_progress: Option<fullmag_quantities::SolverProgress>,
     pub step: u64,
     pub time: f64,
     pub solver_dt: f64,
@@ -479,6 +506,21 @@ pub(crate) struct CurrentLiveScalarRow {
     pub per_object_scalars: HashMap<String, HashMap<String, f64>>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub table_expressions: Vec<String>,
+}
+
+impl CurrentLiveScalarRow {
+    pub(crate) fn validate_record_kind(&self) -> Result<(), &'static str> {
+        self.kind
+            .validate_solver_progress(self.solver_progress.as_ref())?;
+        if self.kind.is_solver_progress() {
+            return Err("solver progress cannot be admitted as a physical scalar row");
+        }
+        Ok(())
+    }
+
+    pub(crate) fn is_physical_observation(&self) -> bool {
+        self.kind.is_physical_observation() && self.validate_record_kind().is_ok()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

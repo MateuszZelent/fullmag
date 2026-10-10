@@ -2701,6 +2701,8 @@ mod live_delta_routing_tests {
         CurrentLiveSnapshotPayload {
             session_status: Some("running".to_string()),
             latest_scalar_row: Some(CurrentLiveScalarRow {
+                kind: fullmag_quantities::StepDataKind::PhysicalObservation,
+                solver_progress: None,
                 step: 1,
                 time: 0.0,
                 solver_dt: 0.0,

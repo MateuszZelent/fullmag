@@ -643,6 +643,12 @@ pub struct LiveFieldMaterializationStatus {
 #[allow(non_snake_case)]
 pub struct StepStats {
     pub step: u64,
+    /// Semantic kind of this step record. Historical JSON without a kind is unclassified.
+    #[serde(default = "fullmag_quantities::StepDataKind::legacy_unclassified")]
+    pub kind: fullmag_quantities::StepDataKind,
+    /// Typed solver progress, present only when `kind` is `SolverProgress`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub solver_progress: Option<fullmag_quantities::SolverProgress>,
     pub time: f64,
     pub dt: f64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1051,6 +1057,8 @@ impl Default for StepStats {
     fn default() -> Self {
         Self {
             step: 0,
+            kind: fullmag_quantities::StepDataKind::PhysicalObservation,
+            solver_progress: None,
             time: 0.0,
             dt: 0.0,
             pseudo_time_s: None,
@@ -1745,6 +1753,21 @@ pub(crate) fn split_rotated_only_dmi_energy(rotated_dmi_only: bool, aggregate: f
 }
 
 impl StepStats {
+    /// Check kind/channel coherence and keep solver progress out of object samples.
+    pub fn validate_record_kind(&self) -> Result<(), &'static str> {
+        self.kind
+            .validate_solver_progress(self.solver_progress.as_ref())?;
+        if self.kind.is_solver_progress() && !self.per_object_scalars.is_empty() {
+            return Err("solver progress records cannot carry per-object scalar samples");
+        }
+        Ok(())
+    }
+
+    /// Whether this row can be interpreted as a physical observation.
+    pub fn is_physical_observation(&self) -> bool {
+        self.kind.is_physical_observation() && self.validate_record_kind().is_ok()
+    }
+
     pub(crate) fn set_dmi_energy_components(
         &mut self,
         interfacial_dmi: f64,
@@ -1758,6 +1781,8 @@ impl StepStats {
     /// Extract solver diagnostics (non-physics telemetry).
     pub fn to_diagnostics(&self) -> fullmag_quantities::StepDiagnostics {
         fullmag_quantities::StepDiagnostics {
+            kind: self.kind,
+            solver_progress: self.solver_progress.clone(),
             step: self.step,
             time: self.time,
             dt: self.dt,
@@ -1809,8 +1834,17 @@ impl StepStats {
     }
 
     /// Extract per-step physical scalar observations.
+    ///
+    /// Invalid in-memory kind/channel pairs are quarantined as legacy so their
+    /// numeric compatibility fields cannot qualify; V2 validation then rejects
+    /// the mismatch against diagnostics.
     pub fn to_quantity_row(&self) -> fullmag_quantities::GlobalQuantityRow {
         fullmag_quantities::GlobalQuantityRow {
+            kind: if self.validate_record_kind().is_ok() {
+                self.kind
+            } else {
+                fullmag_quantities::StepDataKind::LegacyUnclassified
+            },
             step: self.step,
             time: self.time,
             mx: self.mx,
@@ -1834,6 +1868,86 @@ impl StepStats {
             max_torque_T: self.max_torque_T,
             per_object_scalars: self.per_object_scalars.clone(),
         }
+    }
+}
+
+#[cfg(test)]
+mod step_data_kind_tests {
+    use super::StepStats;
+    use fullmag_quantities::{SolverProgress, StepDataKind};
+    use std::collections::HashMap;
+
+    #[test]
+    fn physical_object_id_does_not_override_explicit_record_kind() {
+        let mut physical = StepStats {
+            e_total: 4.25,
+            ..StepStats::default()
+        };
+        physical.per_object_scalars.insert(
+            "fem_eigen_progress".into(),
+            HashMap::from([("percent".into(), 75.0)]),
+        );
+        assert!(physical.is_physical_observation());
+        assert_eq!(physical.to_quantity_row().scalar_value("e_total"), Some(4.25));
+
+        let progress = StepStats {
+            kind: StepDataKind::SolverProgress,
+            solver_progress: Some(SolverProgress::FemEigen {
+                metrics: HashMap::from([("percent".into(), 75.0)]),
+            }),
+            ..StepStats::default()
+        };
+        assert!(progress.validate_record_kind().is_ok());
+        assert!(!progress.is_physical_observation());
+        assert_eq!(progress.to_quantity_row().scalar_value("e_total"), None);
+        let diagnostics = progress.to_diagnostics();
+        assert_eq!(diagnostics.kind, StepDataKind::SolverProgress);
+        assert!(diagnostics.solver_progress.is_some());
+    }
+
+    #[test]
+    fn typed_channel_round_trips_and_missing_legacy_kind_stays_unqualified() {
+        let progress = StepStats {
+            kind: StepDataKind::SolverProgress,
+            solver_progress: Some(SolverProgress::FemEigen {
+                metrics: HashMap::from([("residual".into(), 2.5e-7)]),
+            }),
+            ..StepStats::default()
+        };
+        let encoded = serde_json::to_value(&progress).expect("typed progress serializes");
+        let decoded: StepStats = serde_json::from_value(encoded).expect("typed progress parses");
+        assert_eq!(decoded.kind, StepDataKind::SolverProgress);
+        match decoded.solver_progress.expect("typed channel is present") {
+            SolverProgress::FemEigen { metrics } => assert_eq!(metrics["residual"], 2.5e-7),
+        }
+
+        let mut legacy_value = serde_json::to_value(StepStats {
+            e_total: 2.5,
+            ..StepStats::default()
+        })
+        .expect("physical row serializes");
+        legacy_value.as_object_mut().expect("object value").remove("kind");
+        let legacy: StepStats = serde_json::from_value(legacy_value).expect("legacy row parses");
+        assert_eq!(legacy.kind, StepDataKind::LegacyUnclassified);
+        assert_eq!(legacy.e_total, 2.5);
+        assert_eq!(legacy.to_quantity_row().scalar_value("e_total"), None);
+    }
+
+    #[test]
+    fn contradictory_step_stats_cannot_qualify_scalar_placeholders() {
+        let invalid = StepStats {
+            kind: StepDataKind::PhysicalObservation,
+            solver_progress: Some(SolverProgress::FemEigen {
+                metrics: HashMap::new(),
+            }),
+            e_total: 8.0,
+            ..StepStats::default()
+        };
+        assert!(invalid.validate_record_kind().is_err());
+        assert!(!invalid.is_physical_observation());
+        let row = invalid.to_quantity_row();
+        assert_eq!(row.kind, StepDataKind::LegacyUnclassified);
+        assert_eq!(row.scalar_value("e_total"), None);
     }
 }
 

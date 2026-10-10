@@ -559,6 +559,10 @@ pub(crate) struct EigenDispersionResponse {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[allow(non_snake_case)]
 pub(crate) struct ScalarRow {
+    #[serde(default = "fullmag_quantities::StepDataKind::legacy_unclassified")]
+    pub kind: fullmag_quantities::StepDataKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub solver_progress: Option<fullmag_quantities::SolverProgress>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub observation_frame: Option<crate::schemas::common::AcceptedObservationFrameRef>,
     pub step: u64,
@@ -602,6 +606,21 @@ pub(crate) struct ScalarRow {
     pub table_expressions: Vec<String>,
 }
 
+impl ScalarRow {
+    pub(crate) fn validate_record_kind(&self) -> Result<(), &'static str> {
+        self.kind
+            .validate_solver_progress(self.solver_progress.as_ref())?;
+        if self.kind.is_solver_progress() {
+            return Err("solver progress cannot be admitted as a physical scalar row");
+        }
+        Ok(())
+    }
+
+    pub(crate) fn is_physical_observation(&self) -> bool {
+        self.kind.is_physical_observation() && self.validate_record_kind().is_ok()
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub(crate) struct LiveState {
     pub status: String,
@@ -625,6 +644,10 @@ pub(crate) struct EngineLogEntry {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[allow(non_snake_case)]
 pub(crate) struct StepUpdateView {
+    #[serde(default = "fullmag_quantities::StepDataKind::legacy_unclassified")]
+    pub kind: fullmag_quantities::StepDataKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub solver_progress: Option<fullmag_quantities::SolverProgress>,
     pub step: u64,
     pub time: f64,
     pub dt: f64,
@@ -684,6 +707,30 @@ pub(crate) struct StepUpdateView {
 }
 
 impl StepUpdateView {
+    pub(crate) fn validate_record_kind(&self) -> Result<(), &'static str> {
+        self.kind
+            .validate_solver_progress(self.solver_progress.as_ref())?;
+        if self.kind.is_solver_progress()
+            && (!self.per_object_scalars.is_empty()
+                || self.magnetization.is_some()
+                || self.preview_field.is_some()
+                || !self.field_materialization_states.is_empty())
+        {
+            return Err("solver progress cannot include physical quantity payloads");
+        }
+        Ok(())
+    }
+
+    pub(crate) fn is_physical_observation(&self) -> bool {
+        self.kind.is_physical_observation() && self.validate_record_kind().is_ok()
+    }
+
+    pub(crate) fn is_solver_progress(&self) -> bool {
+        self.kind.is_solver_progress() && self.validate_record_kind().is_ok()
+    }
+}
+
+impl StepUpdateView {
     /// Convert to the canonical V2 wire format.
     ///
     /// Maps the flat scalar fields to `GlobalQuantityRow` and wraps any
@@ -696,6 +743,8 @@ impl StepUpdateView {
         };
 
         let diagnostics = StepDiagnostics {
+            kind: self.kind.clone(),
+            solver_progress: self.solver_progress.clone(),
             step: self.step,
             time: self.time,
             dt: self.dt,
@@ -709,6 +758,7 @@ impl StepUpdateView {
         };
 
         let scalars = GlobalQuantityRow {
+            kind: self.kind.clone(),
             step: self.step,
             time: self.time,
             e_ex: self.e_ex,
@@ -745,12 +795,16 @@ impl StepUpdateView {
             });
         }
 
-        StepUpdateV2 {
+        let update = StepUpdateV2 {
             diagnostics,
             scalars,
             frames,
             finished: self.finished,
-        }
+        };
+        update
+            .validate()
+            .expect("coherent API step view should convert to V2");
+        update
     }
 }
 
@@ -945,7 +999,18 @@ pub(crate) struct QuantityDescriptor {
 pub(crate) struct LatestFields(BTreeMap<String, Value>);
 
 #[derive(Debug, Default, Clone)]
-pub(crate) struct CachedPreviewFields(BTreeMap<String, LivePreviewField>);
+pub(crate) struct CachedPreviewFields {
+    fields: BTreeMap<String, LivePreviewField>,
+    // Keep the accepted source identity separate from payload data so a later
+    // solver-progress callback cannot reclassify or erase a cached observation.
+    accepted_preview_source_frames: BTreeMap<
+        (String, u64, Option<u64>, u64, u64),
+        (u64, crate::schemas::common::AcceptedObservationFrameRef),
+    >,
+    accepted_latest_source_frames:
+        BTreeMap<String, crate::schemas::common::AcceptedObservationFrameRef>,
+    next_accepted_source_sequence: u64,
+}
 
 impl LatestFields {
     pub(crate) fn get(&self, quantity: &str) -> Option<&Value> {
@@ -975,20 +1040,89 @@ impl LatestFields {
 
 impl CachedPreviewFields {
     pub(crate) fn get(&self, quantity: &str) -> Option<&LivePreviewField> {
-        self.0.get(quantity)
+        self.fields.get(quantity)
     }
 
     pub(crate) fn insert(&mut self, field: LivePreviewField) {
-        self.0.insert(field.quantity.clone(), field);
+        self.fields.insert(field.quantity.clone(), field);
     }
 
     pub(crate) fn iter(&self) -> impl Iterator<Item = (&String, &LivePreviewField)> {
-        self.0.iter()
+        self.fields.iter()
     }
 
     pub(crate) fn is_empty(&self) -> bool {
-        self.0.is_empty()
+        self.fields.is_empty()
     }
+
+    pub(crate) fn clear_fields(&mut self) {
+        self.fields.clear();
+    }
+
+    pub(crate) fn remember_accepted_source(
+        &mut self,
+        field: &LivePreviewField,
+        frame: crate::schemas::common::AcceptedObservationFrameRef,
+    ) {
+        self.next_accepted_source_sequence = self.next_accepted_source_sequence.wrapping_add(1);
+        self.accepted_preview_source_frames.insert(
+            preview_source_key(field),
+            (self.next_accepted_source_sequence, frame),
+        );
+        let mut source_keys = self
+            .accepted_preview_source_frames
+            .iter()
+            .filter(|((quantity, _, _, _, _), _)| quantity == &field.quantity)
+            .map(|(key, (sequence, _))| (*sequence, key.clone()))
+            .collect::<Vec<_>>();
+        source_keys.sort_by_key(|(sequence, _)| *sequence);
+        let excess = source_keys.len().saturating_sub(8);
+        for (_, stale_key) in source_keys.into_iter().take(excess) {
+            self.accepted_preview_source_frames.remove(&stale_key);
+        }
+    }
+
+    pub(crate) fn accepted_source_frame(
+        &self,
+        field: &LivePreviewField,
+    ) -> Option<&crate::schemas::common::AcceptedObservationFrameRef> {
+        self.accepted_preview_source_frames
+            .get(&preview_source_key(field))
+            .map(|(_, frame)| frame)
+    }
+
+    pub(crate) fn remember_accepted_latest_source(
+        &mut self,
+        quantity: &str,
+        frame: crate::schemas::common::AcceptedObservationFrameRef,
+    ) {
+        self.accepted_latest_source_frames
+            .insert(quantity.to_string(), frame);
+    }
+
+    pub(crate) fn accepted_latest_source_frame(
+        &self,
+        quantity: &str,
+    ) -> Option<&crate::schemas::common::AcceptedObservationFrameRef> {
+        self.accepted_latest_source_frames.get(quantity)
+    }
+}
+
+fn preview_source_key(field: &LivePreviewField) -> (String, u64, Option<u64>, u64, u64) {
+    let payload_hash = field
+        .vector_field_values
+        .iter()
+        .fold(1469598103934665603_u64, |hash, value| {
+            hash.wrapping_mul(1099511628211)
+                .wrapping_add(value.to_bits())
+        });
+    (
+        field.quantity.clone(),
+        field.source_step,
+        field.source_time_seconds.map(f64::to_bits),
+        field.source_revision,
+        payload_hash,
+    )
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -1710,6 +1844,8 @@ mod tests {
         }))
         .expect("legacy scalar row should remain readable");
         assert_eq!(row.e_rotated_dmi, None);
+        assert_eq!(row.kind, fullmag_quantities::StepDataKind::LegacyUnclassified);
+        assert!(!row.is_physical_observation());
     }
 
     fn spatial_preview_with_domain_quality() -> Value {
@@ -2148,6 +2284,8 @@ mod tests {
     #[test]
     fn step_update_v2_uses_registry_metadata_for_magnetization() {
         let view = StepUpdateView {
+            kind: fullmag_quantities::StepDataKind::PhysicalObservation,
+            solver_progress: None,
             step: 12,
             time: 1.25,
             dt: 1.0e-12,
@@ -2191,5 +2329,68 @@ mod tests {
         assert_eq!(frame.unit, spec.unit);
         assert_eq!(frame.n_comp, spec.n_comp);
         assert!(!frame.unit.is_empty());
+    }
+
+    fn minimal_step_view_json() -> Value {
+        serde_json::json!({
+            "kind": "physical_observation",
+            "step": 1,
+            "time": 0.0,
+            "dt": 1.0e-12,
+            "e_ex": 0.0,
+            "e_demag": 0.0,
+            "e_ext": 0.0,
+            "e_total": 0.0,
+            "max_dm_dt": 0.0,
+            "max_h_eff": 0.0,
+            "wall_time_ns": 0,
+            "grid": [1, 1, 1],
+            "finished": false
+        })
+    }
+
+    #[test]
+    fn step_update_view_kind_roundtrips_and_missing_kind_stays_legacy() {
+        let serialized = minimal_step_view_json();
+        let view: StepUpdateView =
+            serde_json::from_value(serialized.clone()).expect("typed step view decodes");
+        assert!(view.is_physical_observation());
+        let roundtrip: StepUpdateView = serde_json::from_value(
+            serde_json::to_value(&view).expect("step view serializes"),
+        )
+        .expect("typed step view roundtrips");
+        assert_eq!(roundtrip.kind, fullmag_quantities::StepDataKind::PhysicalObservation);
+
+        let mut legacy = serialized.clone();
+        legacy
+            .as_object_mut()
+            .expect("step view is an object")
+            .remove("kind");
+        let legacy: StepUpdateView =
+            serde_json::from_value(legacy).expect("legacy step view remains readable");
+        assert_eq!(legacy.kind, fullmag_quantities::StepDataKind::LegacyUnclassified);
+        assert!(!legacy.is_physical_observation());
+
+        let mut unknown = serialized;
+        unknown["kind"] = serde_json::json!("future_kind");
+        assert!(serde_json::from_value::<StepUpdateView>(unknown).is_err());
+    }
+
+    #[test]
+    fn step_update_view_rejects_missing_or_contradictory_progress_channel() {
+        let mut progress = minimal_step_view_json();
+        progress["kind"] = serde_json::json!("solver_progress");
+        let missing_payload: StepUpdateView =
+            serde_json::from_value(progress.clone()).expect("record shape decodes");
+        assert!(missing_payload.validate_record_kind().is_err());
+
+        progress["solver_progress"] = serde_json::json!({
+            "kind": "fem_eigen",
+            "metrics": { "progress_fraction": 0.5 }
+        });
+        progress["magnetization"] = serde_json::json!([1.0, 0.0, 0.0]);
+        let contradictory: StepUpdateView =
+            serde_json::from_value(progress).expect("record shape decodes");
+        assert!(contradictory.validate_record_kind().is_err());
     }
 }

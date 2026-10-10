@@ -998,9 +998,13 @@ pub(crate) fn resolved_current_field_source<'a>(
     let latest = snapshot
         .latest_fields
         .get(quantity)
-        .filter(|value| json_field_matches_current_domain(snapshot, quantity, n_comp, value));
+        .filter(|value| {
+            latest_field_source_is_qualified(snapshot, quantity, value)
+                && json_field_matches_current_domain(snapshot, quantity, n_comp, value)
+        });
     let preview = snapshot.preview_cache.get(quantity).filter(|field| {
-        field_values_match_current_domain(snapshot, quantity, n_comp, &field.vector_field_values)
+        preview_field_source_is_qualified(snapshot, field)
+            && field_values_match_current_domain(snapshot, quantity, n_comp, &field.vector_field_values)
     });
     let cached_source = match (latest, preview) {
         (Some(_), Some(field)) if preview_cache_precedes_latest(snapshot, quantity) => {
@@ -1987,6 +1991,16 @@ fn apply_current_live_snapshot_in_place(
     mut req: CurrentLiveSnapshotRequest,
 ) -> Result<(), ApiError> {
     let apply_start = std::time::Instant::now();
+    if let Some(live_state) = req.live_state.as_ref() {
+        live_state
+            .latest_step
+            .validate_record_kind()
+            .map_err(|error| ApiError::bad_request(format!("invalid live step record: {error}")))?;
+    }
+    if let Some(row) = req.latest_scalar_row.as_ref() {
+        row.validate_record_kind()
+            .map_err(|error| ApiError::bad_request(format!("invalid scalar row: {error}")))?;
+    }
     if matches!(
         validate_terminal_field_replacement(
             current,
@@ -2103,7 +2117,14 @@ fn apply_current_live_snapshot_in_place(
         bind_scalar_observation_frame(current, row);
     }
     if let Some(latest_fields) = req.latest_fields.as_mut() {
-        bind_latest_field_observation_frames(current, latest_fields);
+        bind_latest_field_observation_frames_with_candidate(
+            current,
+            latest_fields,
+            req.latest_scalar_row.as_ref(),
+        )?;
+    }
+    if let Some(preview_fields) = req.preview_fields.as_ref() {
+        validate_preview_field_sources(current, preview_fields, req.latest_scalar_row.as_ref())?;
     }
     if let Some(row) = req.latest_scalar_row {
         if upsert_scalar_row(&mut current.scalar_rows, row) {
@@ -2126,7 +2147,7 @@ fn apply_current_live_snapshot_in_place(
         current.accepted_terminal_field_generation = req.field_generation;
     }
     if req.clear_preview_cache {
-        current.preview_cache = CachedPreviewFields::default();
+        current.preview_cache.clear_fields();
     }
     // Promote the active preview field into preview_cache so that API
     // query handlers (get_field_meta, get_field_vector, etc.) can find
@@ -2137,11 +2158,17 @@ fn apply_current_live_snapshot_in_place(
     // batch. The latter is the terminal/cache-authoritative channel and must
     // win an equal-generation conflict with a carried active field.
     if !req.replace_latest_fields {
-        if let Some(preview_field) = current
-            .live_state
-            .as_ref()
-            .and_then(|ls| ls.latest_step.preview_field.clone())
-        {
+        if let Some(preview_field) = current.live_state.as_ref().and_then(|ls| {
+            ls.latest_step
+                .is_physical_observation()
+                .then(|| ls.latest_step.preview_field.clone())
+                .flatten()
+        }) {
+            validate_preview_field_sources(
+                current,
+                std::slice::from_ref(&preview_field),
+                None,
+            )?;
             merge_cached_preview_fields(&mut current.preview_cache, vec![preview_field]);
         }
     }
@@ -2228,6 +2255,22 @@ pub(crate) fn apply_current_live_runtime_frame(
     current: &mut SessionStateResponse,
     frame: CurrentLiveRuntimeFrameRequest,
 ) -> Result<(), ApiError> {
+    let mut candidate = current.clone();
+    apply_current_live_runtime_frame_in_place(&mut candidate, frame)?;
+    *current = candidate;
+    Ok(())
+}
+
+fn apply_current_live_runtime_frame_in_place(
+    current: &mut SessionStateResponse,
+    frame: CurrentLiveRuntimeFrameRequest,
+) -> Result<(), ApiError> {
+    if let Some(live_state) = frame.live_state.as_ref() {
+        live_state
+            .latest_step
+            .validate_record_kind()
+            .map_err(|error| ApiError::bad_request(format!("invalid live step record: {error}")))?;
+    }
     let apply_start = std::time::Instant::now();
     let mut affected_field_quantities = BTreeSet::new();
     if let Some(preview_field) = current
@@ -2247,6 +2290,19 @@ pub(crate) fn apply_current_live_runtime_frame(
     }
     let previous_field_sources =
         capture_effective_field_sources(current, &affected_field_quantities);
+    if let Some(previous_preview) = current.live_state.as_ref().and_then(|live_state| {
+        live_state
+            .latest_step
+            .is_physical_observation()
+            .then(|| live_state.latest_step.preview_field.clone())
+            .flatten()
+    }) {
+        if let Some(frame) = accepted_preview_observation_frame(current, &previous_preview, None) {
+            current
+                .preview_cache
+                .remember_accepted_source(&previous_preview, frame);
+        }
+    }
     apply_frozen_spins_runtime_status(current, frame.frozen_spins_runtime_status);
     if let Some(mut live_state) = frame.live_state {
         if current.run.is_none() && current.session.status == "bootstrapping" {
@@ -2263,24 +2319,42 @@ pub(crate) fn apply_current_live_runtime_frame(
         // frames, causing the control-room 3D viewport to show stale /
         // static textures and vectors.
         if let Some(prev) = current.live_state.as_ref() {
-            if live_state.latest_step.magnetization.is_none() {
-                live_state.latest_step.magnetization = prev.latest_step.magnetization.clone();
+            if live_state.latest_step.is_physical_observation()
+                && live_state.latest_step.magnetization.is_none()
+            {
+                live_state.latest_step.magnetization = prev
+                    .latest_step
+                    .is_physical_observation()
+                    .then(|| prev.latest_step.magnetization.clone())
+                    .flatten();
             }
             if live_state.latest_step.fem_mesh_generation_id.is_none() {
                 live_state.latest_step.fem_mesh_generation_id =
                     prev.latest_step.fem_mesh_generation_id.clone();
             }
-            if live_state.latest_step.preview_field.is_none() {
-                live_state.latest_step.preview_field = prev.latest_step.preview_field.clone();
+            if live_state.latest_step.is_physical_observation()
+                && live_state.latest_step.preview_field.is_none()
+            {
+                live_state.latest_step.preview_field = prev
+                    .latest_step
+                    .is_physical_observation()
+                    .then(|| prev.latest_step.preview_field.clone())
+                    .flatten();
             }
         }
         // Promote the active preview field into preview_cache so that API
         // query handlers (get_field_meta, get_field_vector, etc.) can find
         // it — same rationale as in apply_current_live_snapshot.
-        if let Some(preview_field) = live_state.latest_step.preview_field.clone() {
+        let active_preview = live_state
+            .latest_step
+            .is_physical_observation()
+            .then(|| live_state.latest_step.preview_field.clone())
+            .flatten();
+        current.live_state = Some(live_state);
+        if let Some(preview_field) = active_preview {
+            validate_preview_field_sources(current, std::slice::from_ref(&preview_field), None)?;
             merge_cached_preview_fields(&mut current.preview_cache, vec![preview_field]);
         }
-        current.live_state = Some(live_state);
     }
     if let Some(fem_mesh) = frame.fem_mesh {
         apply_fem_mesh_update(current, fem_mesh);
@@ -2319,6 +2393,10 @@ pub(crate) fn apply_current_live_scalar_frame(
     current: &mut SessionStateResponse,
     mut frame: CurrentLiveScalarFrameRequest,
 ) -> Result<(), ApiError> {
+    if let Some(row) = frame.latest_scalar_row.as_ref() {
+        row.validate_record_kind()
+            .map_err(|error| ApiError::bad_request(format!("invalid scalar row: {error}")))?;
+    }
     if let Some(row) = frame.latest_scalar_row.as_mut() {
         bind_scalar_observation_frame(current, row);
     }
@@ -2393,7 +2471,10 @@ fn apply_current_live_field_frame_in_place(
     let previous_field_sources =
         capture_effective_field_sources(current, &affected_field_quantities);
     if let Some(latest_fields) = frame.latest_fields.as_mut() {
-        bind_latest_field_observation_frames(current, latest_fields);
+        bind_latest_field_observation_frames(current, latest_fields)?;
+    }
+    if let Some(preview_fields) = frame.preview_fields.as_ref() {
+        validate_preview_field_sources(current, preview_fields, None)?;
     }
     let has_latest_fields = frame.latest_fields.is_some();
     let has_preview_fields = frame.preview_fields.is_some();
@@ -2413,7 +2494,7 @@ fn apply_current_live_field_frame_in_place(
         current.accepted_terminal_field_generation = frame.field_generation;
     }
     if frame.clear_preview_cache {
-        current.preview_cache = CachedPreviewFields::default();
+        current.preview_cache.clear_fields();
     }
     if let Some(preview_fields) = frame.preview_fields {
         // An explicit field frame is the cache-authoritative channel, just
@@ -2462,24 +2543,20 @@ pub(crate) fn read_artifacts_from_dir(
 }
 
 /// A modal callback is diagnostic state, not a current physical observation.
-pub(crate) fn has_modal_latest_step(snapshot: &SessionStateResponse) -> bool {
+pub(crate) fn has_nonphysical_latest_step(snapshot: &SessionStateResponse) -> bool {
     snapshot.live_state.as_ref().map_or_else(
         || {
             snapshot
                 .scalar_rows
                 .last()
-                .is_some_and(|row| row.per_object_scalars.contains_key("fem_eigen_progress"))
+                .is_some_and(|row| !row.is_physical_observation())
         },
-        |live| {
-            live.latest_step
-                .per_object_scalars
-                .contains_key("fem_eigen_progress")
-        },
+        |live| !live.latest_step.is_physical_observation(),
     )
 }
 
 pub(crate) fn upsert_scalar_row(rows: &mut Vec<ScalarRow>, row: ScalarRow) -> bool {
-    if row.per_object_scalars.contains_key("fem_eigen_progress") {
+    if row.validate_record_kind().is_err() {
         return false;
     }
     match rows.last_mut() {
@@ -2516,7 +2593,269 @@ fn accepted_observation_frame_ref(
     )
 }
 
+fn accepted_frame_belongs_to_current_session(
+    current: &SessionStateResponse,
+    frame: &crate::schemas::common::AcceptedObservationFrameRef,
+) -> bool {
+    frame.session_epoch
+        == format!(
+            "{}@{}",
+            current.session.session_id, current.session.started_at_unix_ms
+        )
+}
+
+fn observation_source_time_matches(source_time_seconds: Option<f64>, row_time: f64) -> bool {
+    source_time_seconds.is_none_or(|source_time| {
+        source_time.is_finite() && row_time.is_finite() && source_time == row_time
+    })
+}
+
+fn accepted_observation_frame_for_source(
+    current: &SessionStateResponse,
+    source_step: u64,
+    source_time_seconds: Option<f64>,
+    candidate_row: Option<&ScalarRow>,
+) -> Option<crate::schemas::common::AcceptedObservationFrameRef> {
+    if let Some(row) = candidate_row.filter(|row| {
+        row.is_physical_observation()
+            && row.step == source_step
+            && observation_source_time_matches(source_time_seconds, row.time)
+    }) {
+        return accepted_scalar_observation_frame(current, row);
+    }
+    if let Some(row) = current.scalar_rows.iter().rev().find(|row| {
+        row.is_physical_observation()
+            && row.step == source_step
+            && observation_source_time_matches(source_time_seconds, row.time)
+    }) {
+        return accepted_scalar_observation_frame(current, row);
+    }
+    current
+        .live_state
+        .as_ref()
+        .filter(|state| {
+            state.latest_step.is_physical_observation()
+                && state.latest_step.step == source_step
+                && observation_source_time_matches(
+                    source_time_seconds,
+                    state.latest_step.time,
+                )
+        })
+        .map(|state| {
+            accepted_observation_frame_ref(
+                current,
+                state.latest_step.step,
+                Some(state.latest_step.time),
+            )
+        })
+}
+
+fn accepted_scalar_observation_frame(
+    current: &SessionStateResponse,
+    row: &ScalarRow,
+) -> Option<crate::schemas::common::AcceptedObservationFrameRef> {
+    let frame = row.observation_frame.as_ref()?;
+    let topology_revision = frame.topology_revision.parse::<u64>().ok()?;
+    let expected = crate::schemas::common::AcceptedObservationFrameRef::for_snapshot(
+        &current.session.session_id,
+        current.session.started_at_unix_ms,
+        frame.domain_generation_id.clone(),
+        topology_revision,
+        row.step,
+        Some(row.time),
+    );
+    (frame == &expected && row.time.is_finite()).then(|| frame.clone())
+}
+
+fn authored_material_field_values(
+    current: &SessionStateResponse,
+    quantity_id: &str,
+) -> Option<Vec<f64>> {
+    let plan = current.metadata.as_ref()?.get("execution_plan")?;
+    let backend_plan = plan.get("backend_plan")?;
+    let (field_values, scalar_value) = match quantity_id {
+        "mat_ms" => {
+            let material = backend_plan.get("material")?;
+            (
+                material.get("ms_field"),
+                finite_material_scalar(material, "saturation_magnetisation"),
+            )
+        }
+        "mat_aex" => {
+            let material = backend_plan.get("material")?;
+            (
+                material.get("a_field"),
+                finite_material_scalar(material, "exchange_stiffness"),
+            )
+        }
+        "mat_alpha" => {
+            let material = backend_plan.get("material")?;
+            (
+                material.get("alpha_field"),
+                finite_material_scalar(material, "damping"),
+            )
+        }
+        "mat_dind" => (
+            backend_plan.get("dind_field"),
+            finite_material_scalar(backend_plan, "interfacial_dmi"),
+        ),
+        "mat_dbulk" => (
+            backend_plan.get("dbulk_field"),
+            finite_material_scalar(backend_plan, "bulk_dmi"),
+        ),
+        _ => return None,
+    };
+    let mut values = field_values
+        .and_then(|value| serde_json::from_value::<Vec<f64>>(value.clone()).ok())
+        .or_else(|| scalar_value.map(|value| vec![value]))?;
+    if values.is_empty() || values.iter().any(|value| !value.is_finite()) {
+        return None;
+    }
+    let sample_count = backend_plan
+        .get("grid")
+        .and_then(|grid| grid.get("cells"))
+        .and_then(|cells| serde_json::from_value::<[u32; 3]>(cells.clone()).ok())
+        .and_then(material_field_grid_sample_count)
+        .or_else(|| current.fem_mesh.as_ref().map(|mesh| mesh.nodes.len()));
+    if values.len() == 1 {
+        if let Some(sample_count) = sample_count.filter(|count| *count > 1) {
+            values.resize(sample_count, values[0]);
+        }
+    }
+    Some(values)
+}
+
+fn authored_material_field_matches(
+    current: &SessionStateResponse,
+    quantity_id: &str,
+    raw: &Value,
+) -> bool {
+    let Some(expected) = authored_material_field_values(current, quantity_id) else {
+        return false;
+    };
+    let actual = flatten_json_field_values(raw);
+    if actual.is_empty() || actual.iter().any(|value| !value.is_finite()) {
+        return false;
+    }
+    (actual.len() == expected.len() && actual == expected)
+        || (expected.len() == 1 && actual.iter().all(|value| *value == expected[0]))
+}
+
+pub(crate) fn latest_field_source_is_qualified(
+    current: &SessionStateResponse,
+    quantity_id: &str,
+    raw: &Value,
+) -> bool {
+    if authored_material_field_matches(current, quantity_id, raw) {
+        return true;
+    }
+    let frame = raw
+        .get("observation_frame")
+        .and_then(|value| {
+            serde_json::from_value::<crate::schemas::common::AcceptedObservationFrameRef>(
+                value.clone(),
+            )
+            .ok()
+        });
+    let source_step = raw
+        .get("source_step")
+        .and_then(Value::as_u64)
+        .or_else(|| frame.as_ref().map(|frame| frame.source_step));
+    let source_time_seconds = raw
+        .get("source_time_seconds")
+        .and_then(Value::as_f64)
+        .or_else(|| frame.as_ref().and_then(|frame| frame.source_time_seconds));
+    let Some(source_step) = source_step else {
+        return false;
+    };
+    let accepted = accepted_observation_frame_for_source(
+        current,
+        source_step,
+        source_time_seconds,
+        None,
+    )
+    .or_else(|| accepted_latest_field_replay_frame(current, quantity_id, raw));
+    accepted.is_some_and(|accepted| frame.as_ref().is_none_or(|frame| frame == &accepted))
+}
+
+fn accepted_latest_field_replay_frame(
+    current: &SessionStateResponse,
+    quantity_id: &str,
+    incoming: &Value,
+) -> Option<crate::schemas::common::AcceptedObservationFrameRef> {
+    let stored = current.latest_fields.get(quantity_id)?;
+    let stored_frame = stored
+        .get("observation_frame")
+        .and_then(|value| {
+            serde_json::from_value::<crate::schemas::common::AcceptedObservationFrameRef>(
+                value.clone(),
+            )
+            .ok()
+        })?;
+    let accepted = current
+        .preview_cache
+        .accepted_latest_source_frame(quantity_id)?;
+    if accepted != &stored_frame || !accepted_frame_belongs_to_current_session(current, accepted) {
+        return None;
+    }
+    let mut stored_payload = stored.clone();
+    stored_payload.as_object_mut()?.remove("observation_frame");
+    let mut incoming_payload = incoming.clone();
+    if let Some(supplied) = incoming_payload
+        .as_object_mut()?
+        .remove("observation_frame")
+    {
+        let supplied = serde_json::from_value::<
+            crate::schemas::common::AcceptedObservationFrameRef,
+        >(supplied)
+        .ok()?;
+        if supplied != stored_frame {
+            return None;
+        }
+    }
+    (stored_payload == incoming_payload).then(|| accepted.clone())
+}
+
+pub(crate) fn preview_field_source_is_qualified(
+    current: &SessionStateResponse,
+    field: &LivePreviewField,
+) -> bool {
+    let actual = &field.vector_field_values;
+    if authored_material_field_values(current, &field.quantity).is_some_and(|expected| {
+        !actual.is_empty()
+            && actual.iter().all(|value| value.is_finite())
+            && ((actual.len() == expected.len() && actual == &expected)
+                || (expected.len() == 1 && actual.iter().all(|value| *value == expected[0])))
+    }) {
+        return true;
+    }
+    accepted_preview_observation_frame(current, field, None).is_some()
+}
+
+fn accepted_preview_observation_frame(
+    current: &SessionStateResponse,
+    field: &LivePreviewField,
+    candidate_row: Option<&ScalarRow>,
+) -> Option<crate::schemas::common::AcceptedObservationFrameRef> {
+    accepted_observation_frame_for_source(
+        current,
+        field.source_step,
+        field.source_time_seconds,
+        candidate_row,
+    )
+    .or_else(|| {
+        current
+            .preview_cache
+            .accepted_source_frame(field)
+            .filter(|frame| accepted_frame_belongs_to_current_session(current, frame))
+            .cloned()
+    })
+}
+
 fn bind_scalar_observation_frame(current: &SessionStateResponse, row: &mut ScalarRow) {
+    if !row.is_physical_observation() {
+        return;
+    }
     row.observation_frame = Some(accepted_observation_frame_ref(
         current,
         row.step,
@@ -2525,37 +2864,136 @@ fn bind_scalar_observation_frame(current: &SessionStateResponse, row: &mut Scala
 }
 
 fn bind_latest_field_observation_frames(
-    current: &SessionStateResponse,
+    current: &mut SessionStateResponse,
     latest_fields: &mut LatestFields,
-) {
-    for (_, value) in latest_fields.entries_mut() {
-        let Some(object) = value.as_object_mut() else {
+) -> Result<(), ApiError> {
+    bind_latest_field_observation_frames_with_candidate(current, latest_fields, None)
+}
+
+fn bind_latest_field_observation_frames_with_candidate(
+    current: &mut SessionStateResponse,
+    latest_fields: &mut LatestFields,
+    candidate_row: Option<&ScalarRow>,
+) -> Result<(), ApiError> {
+    let current_step = current.live_state.as_ref().map(|state| &state.latest_step);
+    let current_physical_step = current_step.filter(|step| step.is_physical_observation());
+    for (quantity_id, value) in latest_fields.entries_mut() {
+        let replay_frame = accepted_latest_field_replay_frame(current, quantity_id, value);
+        if authored_material_field_matches(current, quantity_id, value) {
             continue;
+        }
+        let Some(object) = value.as_object_mut() else {
+            return Err(ApiError::bad_request(format!(
+                "latest field '{quantity_id}' must carry an object payload"
+            )));
+        };
+        let supplied_frame = match object.get("observation_frame") {
+            Some(value) => Some(
+                serde_json::from_value::<crate::schemas::common::AcceptedObservationFrameRef>(
+                    value.clone(),
+                )
+                .map_err(|error| {
+                    ApiError::bad_request(format!(
+                        "latest field '{quantity_id}' has an invalid observation frame: {error}"
+                    ))
+                })?,
+            ),
+            None => None,
         };
         let source_step = object
             .get("source_step")
             .and_then(Value::as_u64)
+            .or_else(|| supplied_frame.as_ref().map(|frame| frame.source_step))
             .or_else(|| {
-                current
-                    .live_state
-                    .as_ref()
-                    .map(|state| state.latest_step.step)
+                current_physical_step.map(|step| step.step)
             })
-            .unwrap_or(0);
+            .or_else(|| {
+                candidate_row
+                    .filter(|row| row.is_physical_observation())
+                    .map(|row| row.step)
+            });
         let source_time_seconds = object
             .get("source_time_seconds")
             .and_then(Value::as_f64)
+            .or_else(|| supplied_frame.as_ref().and_then(|frame| frame.source_time_seconds))
             .or_else(|| {
-                current
-                    .live_state
-                    .as_ref()
-                    .map(|state| state.latest_step.time)
+                current_physical_step
+                    .filter(|step| Some(step.step) == source_step)
+                    .map(|step| step.time)
+            })
+            .or_else(|| {
+                candidate_row
+                    .filter(|row| row.is_physical_observation())
+                    .filter(|row| Some(row.step) == source_step)
+                    .map(|row| row.time)
             });
-        let frame = accepted_observation_frame_ref(current, source_step, source_time_seconds);
-        if let Ok(frame) = serde_json::to_value(frame) {
-            object.insert("observation_frame".to_string(), frame);
+        let accepted_frame = source_step
+            .and_then(|step| {
+                accepted_observation_frame_for_source(
+                    current,
+                    step,
+                    source_time_seconds,
+                    candidate_row,
+                )
+            })
+            .or(replay_frame);
+        let Some(accepted_frame) = accepted_frame else {
+            return Err(ApiError::bad_request(format!(
+                "latest field '{quantity_id}' has no accepted physical observation source"
+            )));
+        };
+        if supplied_frame
+            .as_ref()
+            .is_some_and(|supplied| supplied != &accepted_frame)
+        {
+            return Err(ApiError::bad_request(format!(
+                "latest field '{quantity_id}' observation frame does not match an accepted physical source"
+            )));
+        }
+        if supplied_frame.is_none() {
+            let frame_value = serde_json::to_value(&accepted_frame).map_err(|error| {
+                ApiError::internal(format!(
+                    "accepted observation frame serialization failed: {error}"
+                ))
+            })?;
+            object.insert("observation_frame".to_string(), frame_value);
+        }
+        current
+            .preview_cache
+            .remember_accepted_latest_source(quantity_id, accepted_frame);
+    }
+    Ok(())
+}
+
+fn validate_preview_field_sources(
+    current: &mut SessionStateResponse,
+    preview_fields: &[LivePreviewField],
+    candidate_row: Option<&ScalarRow>,
+) -> Result<(), ApiError> {
+    for field in preview_fields {
+        let authored_material = authored_material_field_values(current, &field.quantity)
+            .is_some_and(|expected| {
+                let actual = &field.vector_field_values;
+                !actual.is_empty()
+                    && actual.iter().all(|value| value.is_finite())
+                    && ((actual.len() == expected.len() && actual == &expected)
+                        || (expected.len() == 1
+                            && actual.iter().all(|value| *value == expected[0])))
+            });
+        let accepted_physical = accepted_preview_observation_frame(current, field, candidate_row);
+        if !authored_material && accepted_physical.is_none() {
+            return Err(ApiError::bad_request(format!(
+                "preview field '{}' has no accepted physical observation source",
+                field.quantity
+            )));
+        }
+        if let Some(frame) = accepted_physical {
+            current
+                .preview_cache
+                .remember_accepted_source(field, frame);
         }
     }
+    Ok(())
 }
 
 fn refresh_accepted_field_publication_bundles(
@@ -2580,7 +3018,10 @@ fn refresh_accepted_field_publication_bundles(
             .scalar_rows
             .iter()
             .rev()
-            .any(|row| row.observation_frame.as_ref() == Some(&observation_frame));
+            .any(|row| {
+                row.is_physical_observation()
+                    && row.observation_frame.as_ref() == Some(&observation_frame)
+            });
         if !scalar_matches_frame {
             continue;
         }
@@ -2892,6 +3333,8 @@ mod tests {
 
     fn scalar_row(step: u64, e_total: f64) -> ScalarRow {
         ScalarRow {
+            kind: fullmag_quantities::StepDataKind::PhysicalObservation,
+            solver_progress: None,
             observation_frame: None,
             step,
             time: step as f64 * 1e-12,
@@ -2922,11 +3365,26 @@ mod tests {
         }
     }
 
+    fn add_physical_observation(
+        current: &mut SessionStateResponse,
+        step: u64,
+        time: Option<f64>,
+    ) {
+        let mut row = scalar_row(step, 0.0);
+        if let Some(time) = time {
+            row.time = time;
+        }
+        bind_scalar_observation_frame(current, &mut row);
+        current.scalar_rows.push(row);
+    }
+
     fn live_state_with_magnetization(step: u64, magnetization: Vec<f64>) -> LiveState {
         LiveState {
             status: "running".to_string(),
             updated_at_unix_ms: 1_700_000_000_000 + step as u128,
             latest_step: StepUpdateView {
+                kind: fullmag_quantities::StepDataKind::PhysicalObservation,
+                solver_progress: None,
                 step,
                 time: step as f64 * 1e-12,
                 dt: 1e-12,
@@ -2976,28 +3434,504 @@ mod tests {
     fn upsert_scalar_row_rejects_modal_diagnostics_without_replacing_physical_sample() {
         let mut rows = vec![scalar_row(1, 1.25)];
         let mut modal = scalar_row(2, 0.0);
-        modal
-            .per_object_scalars
-            .insert("fem_eigen_progress".into(), Default::default());
+        modal.kind = fullmag_quantities::StepDataKind::SolverProgress;
+        modal.solver_progress = Some(fullmag_quantities::SolverProgress::FemEigen {
+            metrics: HashMap::from([("progress_fraction".into(), 0.5)]),
+        });
         assert!(!upsert_scalar_row(&mut rows, modal));
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].e_total, 1.25);
     }
 
     #[test]
-    fn modal_current_state_is_unavailable_but_physical_history_is_preserved() {
+    fn unclassified_current_state_is_unavailable_but_physical_history_is_preserved() {
         let mut current = test_current_snapshot();
         current.scalar_rows.push(scalar_row(1, 1.25));
-        assert!(!has_modal_latest_step(&current));
+        assert!(!has_nonphysical_latest_step(&current));
         let mut modal = scalar_row(2, 0.0);
+        modal.kind = fullmag_quantities::StepDataKind::LegacyUnclassified;
         modal
             .per_object_scalars
             .insert("fem_eigen_progress".into(), Default::default());
         current.scalar_rows.push(modal);
-        assert!(has_modal_latest_step(&current));
+        assert!(has_nonphysical_latest_step(&current));
         assert_eq!(current.scalar_rows[0].e_total, 1.25);
         current.scalar_rows.push(scalar_row(3, 0.0));
-        assert!(!has_modal_latest_step(&current));
+        assert!(!has_nonphysical_latest_step(&current));
+    }
+
+    #[test]
+    fn legal_progress_object_id_is_still_a_physical_scalar_row() {
+        let mut row = scalar_row(3, 4.0);
+        row.per_object_scalars.insert(
+            "fem_eigen_progress".into(),
+            HashMap::from([("measured_value".into(), 4.0)]),
+        );
+        assert!(row.is_physical_observation());
+        assert!(upsert_scalar_row(&mut Vec::new(), row));
+    }
+
+    #[test]
+    fn api_runtime_boundary_accepts_typed_progress_without_a_scalar_row() {
+        let mut current = test_current_snapshot();
+        let mut live_state = live_state_with_magnetization(8, vec![1.0, 0.0, 0.0]);
+        live_state.latest_step.magnetization = None;
+        live_state.latest_step.kind = fullmag_quantities::StepDataKind::SolverProgress;
+        live_state.latest_step.solver_progress = Some(
+            fullmag_quantities::SolverProgress::FemEigen {
+                metrics: HashMap::from([("progress_fraction".into(), 0.5)]),
+            },
+        );
+        let frame = CurrentLiveRuntimeFrameRequest {
+            session_id: current.session.session_id.clone(),
+            live_state: Some(live_state),
+            frozen_spins_runtime_status: None,
+            engine_log: None,
+            solver_profile: None,
+            fem_mesh: None,
+        };
+
+        apply_current_live_runtime_frame(&mut current, frame).expect("coherent progress record");
+
+        let latest = &current.live_state.as_ref().unwrap().latest_step;
+        assert!(latest.is_solver_progress());
+        assert!(current.scalar_rows.is_empty());
+        assert!(has_nonphysical_latest_step(&current));
+    }
+
+    #[test]
+    fn api_runtime_boundary_rejects_contradictory_progress_frames() {
+        let mut current = test_current_snapshot();
+        let mut live_state = live_state_with_magnetization(8, vec![1.0, 0.0, 0.0]);
+        live_state.latest_step.kind = fullmag_quantities::StepDataKind::SolverProgress;
+        live_state.latest_step.solver_progress = Some(
+            fullmag_quantities::SolverProgress::FemEigen {
+                metrics: HashMap::from([("progress_fraction".into(), 0.5)]),
+            },
+        );
+        let frame = CurrentLiveRuntimeFrameRequest {
+            session_id: current.session.session_id.clone(),
+            live_state: Some(live_state),
+            frozen_spins_runtime_status: None,
+            engine_log: None,
+            solver_profile: None,
+            fem_mesh: None,
+        };
+
+        assert!(apply_current_live_runtime_frame(&mut current, frame).is_err());
+        assert!(current.live_state.is_none());
+    }
+
+    #[test]
+    fn cached_physical_field_sources_survive_a_later_solver_progress_callback() {
+        let mut current = test_current_snapshot();
+        add_physical_observation(&mut current, 4, Some(4.0e-12));
+        let mut latest_fields: LatestFields = serde_json::from_value(json!({
+            "H_eff": {
+                "source_step": 4,
+                "source_time_seconds": 4.0e-12,
+                "values": [[1.0, 0.0, 0.0]],
+                "layout": { "grid_cells": [1, 1, 1] }
+            }
+        }))
+        .expect("physical field fixture");
+        bind_latest_field_observation_frames(&mut current, &mut latest_fields)
+            .expect("field should bind to the accepted physical row");
+        current.latest_fields = latest_fields;
+
+        let mut preview = preview_field("H_eff");
+        preview.source_step = 4;
+        preview.source_time_seconds = Some(4.0e-12);
+        apply_current_live_field_frame(
+            &mut current,
+            CurrentLiveFieldFrameRequest {
+                session_id: "test-session".to_string(),
+                latest_fields: None,
+                replace_latest_fields: false,
+                field_generation: None,
+                preview_fields: Some(vec![preview]),
+                clear_preview_cache: false,
+            },
+        )
+        .expect("preview should bind to the same accepted physical row");
+
+        let mut progress = live_state_with_magnetization(5, vec![1.0, 0.0, 0.0]);
+        progress.latest_step.kind = fullmag_quantities::StepDataKind::SolverProgress;
+        progress.latest_step.solver_progress = Some(
+            fullmag_quantities::SolverProgress::FemEigen {
+                metrics: HashMap::from([("progress_fraction".into(), 0.5)]),
+            },
+        );
+        progress.latest_step.magnetization = None;
+        apply_current_live_runtime_frame(
+            &mut current,
+            CurrentLiveRuntimeFrameRequest {
+                session_id: "test-session".to_string(),
+                live_state: Some(progress),
+                frozen_spins_runtime_status: None,
+                engine_log: None,
+                solver_profile: None,
+                fem_mesh: None,
+            },
+        )
+        .expect("coherent solver progress callback");
+
+        assert!(current.live_state.as_ref().unwrap().latest_step.is_solver_progress());
+        assert!(latest_field_source_is_qualified(
+            &current,
+            "H_eff",
+            current.latest_fields.get("H_eff").unwrap()
+        ));
+        assert!(preview_field_source_is_qualified(
+            &current,
+            current.preview_cache.get("H_eff").unwrap()
+        ));
+        assert!(resolved_current_field_source(&current, "H_eff", 3).is_some());
+    }
+
+    #[test]
+    fn progress_or_legacy_step_cannot_create_physical_field_provenance() {
+        for kind in [
+            fullmag_quantities::StepDataKind::SolverProgress,
+            fullmag_quantities::StepDataKind::LegacyUnclassified,
+        ] {
+            let mut current = test_current_snapshot();
+            let mut latest_step = live_state_with_magnetization(4, vec![1.0, 0.0, 0.0]).latest_step;
+            latest_step.kind = kind;
+            latest_step.magnetization = None;
+            latest_step.solver_progress = kind.is_solver_progress().then(|| {
+                fullmag_quantities::SolverProgress::FemEigen {
+                    metrics: HashMap::from([("progress_fraction".into(), 0.5)]),
+                }
+            });
+            current.live_state = Some(LiveState {
+                status: "running".to_string(),
+                updated_at_unix_ms: 1,
+                latest_step,
+            });
+            let latest_fields = serde_json::from_value(json!({
+                "H_eff": {
+                    "source_step": 4,
+                    "values": [[1.0, 0.0, 0.0]],
+                    "layout": { "grid_cells": [1, 1, 1] }
+                }
+            }))
+            .expect("unqualified field fixture");
+
+            let result = apply_current_live_field_frame(
+                &mut current,
+                CurrentLiveFieldFrameRequest {
+                    session_id: "test-session".to_string(),
+                    latest_fields: Some(latest_fields),
+                    replace_latest_fields: false,
+                    field_generation: None,
+                    preview_fields: None,
+                    clear_preview_cache: false,
+                },
+            );
+
+            assert!(result.is_err(), "{kind:?} must not qualify a raw field");
+            assert!(current.latest_fields.get("H_eff").is_none());
+        }
+    }
+
+    #[test]
+    fn cached_active_preview_keeps_its_accepted_frame_after_progress_without_scalar_row() {
+        let mut current = test_current_snapshot();
+        let mut initial = live_state_with_magnetization(10, vec![1.0, 0.0, 0.0]);
+        let mut preview = preview_field("H_eff");
+        preview.source_step = 10;
+        preview.source_time_seconds = Some(1e-11);
+        initial.latest_step.preview_field = Some(preview);
+        current.live_state = Some(initial);
+
+        let mut next_physical = live_state_with_magnetization(11, vec![0.0, 1.0, 0.0]);
+        next_physical.latest_step.preview_field = None;
+        apply_current_live_runtime_frame(
+            &mut current,
+            CurrentLiveRuntimeFrameRequest {
+                session_id: "test-session".to_string(),
+                live_state: Some(next_physical),
+                frozen_spins_runtime_status: None,
+                engine_log: None,
+                solver_profile: None,
+                fem_mesh: None,
+            },
+        )
+        .expect("physical frame should carry the accepted preview");
+        assert!(current.scalar_rows.is_empty());
+        assert!(current.preview_cache.get("H_eff").is_some());
+
+        let mut progress = live_state_with_magnetization(12, vec![0.0, 0.0, 1.0]);
+        progress.latest_step.kind = fullmag_quantities::StepDataKind::SolverProgress;
+        progress.latest_step.solver_progress = Some(
+            fullmag_quantities::SolverProgress::FemEigen {
+                metrics: HashMap::from([("progress_fraction".into(), 0.75)]),
+            },
+        );
+        progress.latest_step.magnetization = None;
+        progress.latest_step.preview_field = None;
+        apply_current_live_runtime_frame(
+            &mut current,
+            CurrentLiveRuntimeFrameRequest {
+                session_id: "test-session".to_string(),
+                live_state: Some(progress),
+                frozen_spins_runtime_status: None,
+                engine_log: None,
+                solver_profile: None,
+                fem_mesh: None,
+            },
+        )
+        .expect("progress frame should not evict an independent accepted preview");
+
+        let cached = current.preview_cache.get("H_eff").expect("cached preview");
+        assert!(current.live_state.as_ref().unwrap().latest_step.is_solver_progress());
+        assert!(preview_field_source_is_qualified(&current, cached));
+        assert!(resolved_current_field_source(&current, "H_eff", 3).is_some());
+    }
+
+    #[test]
+    fn accepted_latest_field_keeps_its_frame_after_progress_without_scalar_row() {
+        let mut current = test_current_snapshot();
+        current.live_state = Some(live_state_with_magnetization(4, vec![1.0, 0.0, 0.0]));
+        let latest_fields: LatestFields = serde_json::from_value(json!({
+            "H_eff": {
+                "source_step": 4,
+                "source_time_seconds": 4.0e-12,
+                "source_revision": 7,
+                "carrier_fingerprint": "accepted-carrier",
+                "values": [[1.0, 0.0, 0.0]],
+                "layout": { "grid_cells": [1, 1, 1] }
+            }
+        }))
+        .expect("physical latest-field fixture");
+        let replay = latest_fields.clone();
+        apply_current_live_field_frame(
+            &mut current,
+            CurrentLiveFieldFrameRequest {
+                session_id: "test-session".to_string(),
+                latest_fields: Some(latest_fields),
+                replace_latest_fields: false,
+                field_generation: None,
+                preview_fields: None,
+                clear_preview_cache: false,
+            },
+        )
+        .expect("field should bind to the current physical step");
+
+        let mut progress = live_state_with_magnetization(5, vec![0.0, 1.0, 0.0]);
+        progress.latest_step.kind = fullmag_quantities::StepDataKind::SolverProgress;
+        progress.latest_step.solver_progress = Some(
+            fullmag_quantities::SolverProgress::FemEigen {
+                metrics: HashMap::from([("progress_fraction".into(), 0.5)]),
+            },
+        );
+        progress.latest_step.magnetization = None;
+        apply_current_live_runtime_frame(
+            &mut current,
+            CurrentLiveRuntimeFrameRequest {
+                session_id: "test-session".to_string(),
+                live_state: Some(progress),
+                frozen_spins_runtime_status: None,
+                engine_log: None,
+                solver_profile: None,
+                fem_mesh: None,
+            },
+        )
+        .expect("solver progress should retain the independent latest field");
+
+        apply_current_live_field_frame(
+            &mut current,
+            CurrentLiveFieldFrameRequest {
+                session_id: "test-session".to_string(),
+                latest_fields: Some(replay),
+                replace_latest_fields: false,
+                field_generation: None,
+                preview_fields: None,
+                clear_preview_cache: false,
+            },
+        )
+        .expect("exact accepted field replay should keep its original frame");
+
+        let cached = current.latest_fields.get("H_eff").expect("latest field");
+        assert!(current.live_state.as_ref().unwrap().latest_step.is_solver_progress());
+        assert!(latest_field_source_is_qualified(&current, "H_eff", cached));
+        assert!(resolved_current_field_source(&current, "H_eff", 3).is_some());
+    }
+
+    #[test]
+    fn changed_latest_field_cannot_reuse_accepted_frame_after_progress_without_scalar_row() {
+        let mut current = test_current_snapshot();
+        current.live_state = Some(live_state_with_magnetization(4, vec![1.0, 0.0, 0.0]));
+        let latest_fields: LatestFields = serde_json::from_value(json!({
+            "H_eff": {
+                "source_step": 4,
+                "source_time_seconds": 4.0e-12,
+                "source_revision": 7,
+                "carrier_fingerprint": "accepted-carrier",
+                "values": [[1.0, 0.0, 0.0]],
+                "layout": { "grid_cells": [1, 1, 1] }
+            }
+        }))
+        .expect("physical latest-field fixture");
+        apply_current_live_field_frame(
+            &mut current,
+            CurrentLiveFieldFrameRequest {
+                session_id: "test-session".to_string(),
+                latest_fields: Some(latest_fields),
+                replace_latest_fields: false,
+                field_generation: None,
+                preview_fields: None,
+                clear_preview_cache: false,
+            },
+        )
+        .expect("field should bind to the current physical step");
+
+        let mut progress = live_state_with_magnetization(5, vec![0.0, 1.0, 0.0]);
+        progress.latest_step.kind = fullmag_quantities::StepDataKind::SolverProgress;
+        progress.latest_step.solver_progress = Some(
+            fullmag_quantities::SolverProgress::FemEigen {
+                metrics: HashMap::from([("progress_fraction".into(), 0.5)]),
+            },
+        );
+        progress.latest_step.magnetization = None;
+        apply_current_live_runtime_frame(
+            &mut current,
+            CurrentLiveRuntimeFrameRequest {
+                session_id: "test-session".to_string(),
+                live_state: Some(progress),
+                frozen_spins_runtime_status: None,
+                engine_log: None,
+                solver_profile: None,
+                fem_mesh: None,
+            },
+        )
+        .expect("solver progress should retain the independent latest field");
+        assert!(current.scalar_rows.is_empty());
+
+        let accepted = current
+            .latest_fields
+            .get("H_eff")
+            .expect("accepted latest field")
+            .clone();
+        let mut changed_payload = accepted.clone();
+        changed_payload["values"][0][0] = json!(2.0);
+        let mut changed_layout = accepted.clone();
+        changed_layout["layout"]["grid_cells"][0] = json!(2);
+        let mut changed_revision = accepted.clone();
+        changed_revision["source_revision"] = json!(8);
+        let mut changed_carrier = accepted.clone();
+        changed_carrier["carrier_fingerprint"] = json!("replacement-carrier");
+
+        for (change, value) in [
+            ("payload", changed_payload),
+            ("layout", changed_layout),
+            ("source revision", changed_revision),
+            ("carrier", changed_carrier),
+        ] {
+            assert!(
+                !latest_field_source_is_qualified(&current, "H_eff", &value),
+                "changed {change} must not inherit the accepted frame"
+            );
+            let mut latest_fields = LatestFields::default();
+            latest_fields.insert("H_eff".to_string(), value);
+            assert!(
+                apply_current_live_field_frame(
+                    &mut current,
+                    CurrentLiveFieldFrameRequest {
+                        session_id: "test-session".to_string(),
+                        latest_fields: Some(latest_fields),
+                        replace_latest_fields: false,
+                        field_generation: None,
+                        preview_fields: None,
+                        clear_preview_cache: false,
+                    },
+                )
+                .is_err(),
+                "changed {change} must be rejected after progress"
+            );
+        }
+
+        assert!(latest_field_source_is_qualified(
+            &current,
+            "H_eff",
+            current.latest_fields.get("H_eff").expect("accepted field remains")
+        ));
+        assert!(resolved_current_field_source(&current, "H_eff", 3).is_some());
+    }
+
+    #[test]
+    fn latest_field_without_time_uses_its_older_explicit_physical_step() {
+        let mut current = test_current_snapshot();
+        current.live_state = Some(live_state_with_magnetization(5, vec![1.0, 0.0, 0.0]));
+        apply_current_live_scalar_frame(
+            &mut current,
+            CurrentLiveScalarFrameRequest {
+                session_id: "test-session".to_string(),
+                latest_scalar_row: Some(scalar_row(4, 1.0)),
+            },
+        )
+        .expect("older physical scalar source should be accepted");
+
+        let mut fields: LatestFields = serde_json::from_value(json!({
+            "H_eff": {
+                "source_step": 4,
+                "values": [[1.0, 0.0, 0.0]],
+                "layout": { "grid_cells": [1, 1, 1] }
+            }
+        }))
+        .expect("field with explicit step and absent time");
+        bind_latest_field_observation_frames(&mut current, &mut fields)
+            .expect("field should bind to the matching older physical row");
+
+        let frame: crate::schemas::common::AcceptedObservationFrameRef = serde_json::from_value(
+            fields.get("H_eff").unwrap()["observation_frame"].clone(),
+        )
+        .expect("accepted source frame");
+        assert_eq!(frame.source_step, 4);
+        assert_eq!(frame.source_time_seconds, Some(4.0e-12));
+        assert_ne!(
+            frame,
+            accepted_observation_frame_ref(&current, 5, Some(5.0e-12)),
+            "an older source must never inherit the current step's frame"
+        );
+
+        let mut moved_time: LatestFields = serde_json::from_value(json!({
+            "H_ex": {
+                "source_step": 4,
+                "source_time_seconds": 5.0e-12,
+                "values": [[1.0, 0.0, 0.0]],
+                "layout": { "grid_cells": [1, 1, 1] }
+            }
+        }))
+        .expect("field with contradictory explicit source time");
+        assert!(bind_latest_field_observation_frames(&mut current, &mut moved_time).is_err());
+        assert!(moved_time.get("H_ex").unwrap().get("observation_frame").is_none());
+    }
+
+    #[test]
+    fn authored_material_fields_keep_only_exact_execution_plan_values() {
+        let mut current = test_current_snapshot();
+        apply_current_live_metadata(
+            &mut current,
+            json!({
+                "execution_plan": {
+                    "backend_plan": {
+                        "kind": "fdm",
+                        "grid": { "cells": [2, 1, 1] },
+                        "material": {
+                            "ms_field": [800000.0, 800000.0],
+                            "saturation_magnetisation": 800000.0
+                        }
+                    }
+                }
+            }),
+        );
+        let authored = current.latest_fields.get("mat_ms").expect("material field");
+        assert!(latest_field_source_is_qualified(&current, "mat_ms", authored));
+
+        let unrelated = json!({ "values": [0.0, 0.0] });
+        assert!(!latest_field_source_is_qualified(&current, "mat_ms", &unrelated));
     }
 
     #[test]
@@ -3443,7 +4377,8 @@ mod tests {
             }
         }))
         .expect("field fixture");
-        bind_latest_field_observation_frames(&current, &mut fields);
+        bind_latest_field_observation_frames(&mut current, &mut fields)
+            .expect("field should bind to the accepted scalar source");
 
         let scalar_frame = current.scalar_rows[0]
             .observation_frame
@@ -3666,7 +4601,7 @@ mod tests {
         }));
         current.latest_fields =
             serde_json::from_value(json!({"m": {"generation": 1}})).expect("valid fields fixture");
-        current.scalar_rows.push(scalar_row(1, 2.0));
+        add_physical_observation(&mut current, 1, None);
 
         let mut fields_command = tracked_command("cmd-fields", "compute_fields");
         fields_command.command.field_materialization_requirements =
@@ -3677,7 +4612,10 @@ mod tests {
                 generation_id: domain_generation_id(&current),
                 carrier_fingerprint: None,
             }];
-        merge_cached_preview_fields(&mut current.preview_cache, vec![preview_field("m")]);
+        let mut preview = preview_field("m");
+        preview.source_step = 1;
+        preview.source_time_seconds = Some(1e-12);
+        merge_cached_preview_fields(&mut current.preview_cache, vec![preview]);
         let mut ledger = VecDeque::from([
             fields_command,
             tracked_command("cmd-energies", "compute_energies"),
@@ -3730,6 +4668,8 @@ mod tests {
             status: "running".to_string(),
             updated_at_unix_ms: 1_700_000_000_000,
             latest_step: StepUpdateView {
+                kind: fullmag_quantities::StepDataKind::PhysicalObservation,
+                solver_progress: None,
                 step: 0,
                 time: 0.0,
                 dt: 0.0,
@@ -3790,6 +4730,8 @@ mod tests {
             status: "paused".to_string(),
             updated_at_unix_ms: 1_700_000_000_000,
             latest_step: StepUpdateView {
+                kind: fullmag_quantities::StepDataKind::PhysicalObservation,
+                solver_progress: None,
                 step: 0,
                 time: 0.0,
                 dt: 0.0,
@@ -4812,6 +5754,8 @@ mod tests {
                     status: "completed".to_string(),
                     updated_at_unix_ms: 1_700_000_000_001,
                     latest_step: StepUpdateView {
+                        kind: fullmag_quantities::StepDataKind::PhysicalObservation,
+                        solver_progress: None,
                         step: 1,
                         time: 1.0e-12,
                         dt: 1.0e-12,
@@ -5018,6 +5962,8 @@ mod tests {
                 status: "running".into(),
                 updated_at_unix_ms: 1_700_000_000_000,
                 latest_step: StepUpdateView {
+                    kind: fullmag_quantities::StepDataKind::PhysicalObservation,
+                    solver_progress: None,
                     step: 10,
                     time: 1e-9,
                     dt: 1e-13,
@@ -5046,7 +5992,12 @@ mod tests {
                     magnetization: None,
                     per_object_scalars: Default::default(),
                     field_materialization_states: Vec::new(),
-                    preview_field: Some(preview_field("H_eff")),
+                    preview_field: Some({
+                        let mut field = preview_field("H_eff");
+                        field.source_step = 10;
+                        field.source_time_seconds = Some(1e-9);
+                        field
+                    }),
                     finished: false,
                 },
             }),
@@ -5155,6 +6106,8 @@ mod tests {
                 status: "completed".into(),
                 updated_at_unix_ms: 1_700_000_000_300,
                 latest_step: StepUpdateView {
+                    kind: fullmag_quantities::StepDataKind::PhysicalObservation,
+                    solver_progress: None,
                     step: 52,
                     time: 52e-13,
                     dt: 1e-13,
@@ -5217,6 +6170,8 @@ mod tests {
     #[test]
     fn field_frame_terminal_cache_wins_equal_provenance_conflict_with_runtime_preview() {
         let mut current = test_current_snapshot();
+        add_physical_observation(&mut current, 52, None);
+        add_physical_observation(&mut current, 51, None);
         let mut runtime_preview = preview_field("H_demag");
         runtime_preview.source_step = 52;
         runtime_preview.source_revision = 7;
@@ -5279,6 +6234,7 @@ mod tests {
     #[test]
     fn effective_field_source_tracks_shared_latest_preview_precedence_without_revision_churn() {
         let mut current = test_current_snapshot();
+        add_physical_observation(&mut current, 52, None);
         current.latest_fields = serde_json::from_value(json!({
             "H_demag": {
                 "values": [[9.0, 9.0, 9.0]],
@@ -5348,6 +6304,7 @@ mod tests {
             }
         }))
         .expect("newer latest H_demag field");
+        add_physical_observation(&mut current, 53, None);
         apply_current_live_field_frame(
             &mut current,
             CurrentLiveFieldFrameRequest {
@@ -5371,6 +6328,7 @@ mod tests {
     #[test]
     fn equal_generation_complete_latest_precedes_later_incomplete_preview() {
         let mut current = test_current_snapshot();
+        add_physical_observation(&mut current, 4, Some(4.0e-13));
         current.latest_fields = serde_json::from_value(json!({
             "H_demag": {
                 "values": [[4.0, 0.0, 0.0]],
@@ -5403,6 +6361,7 @@ mod tests {
     #[test]
     fn equal_generation_complete_preview_precedes_later_incomplete_latest() {
         let mut current = test_current_snapshot();
+        add_physical_observation(&mut current, 4, Some(4.0e-13));
         current.latest_fields = serde_json::from_value(json!({
             "H_demag": {
                 "values": [[4.0, 0.0, 0.0]],
@@ -5431,6 +6390,7 @@ mod tests {
     #[test]
     fn equal_generation_with_equally_complete_provenance_keeps_preview_authority() {
         let mut current = test_current_snapshot();
+        add_physical_observation(&mut current, 4, Some(4.0e-13));
         current.latest_fields = serde_json::from_value(json!({
             "H_demag": {
                 "values": [[4.0, 0.0, 0.0]],
@@ -5534,6 +6494,8 @@ mod tests {
     #[test]
     fn genuinely_newer_field_wins_before_source_time_completeness() {
         let mut current = test_current_snapshot();
+        add_physical_observation(&mut current, 4, Some(4.0e-13));
+        add_physical_observation(&mut current, 5, None);
         current.latest_fields = serde_json::from_value(json!({
             "H_demag": {
                 "values": [[5.0, 0.0, 0.0]],
@@ -5562,6 +6524,7 @@ mod tests {
     #[test]
     fn latest_field_same_provenance_changed_payload_bumps_once_without_duplicate_churn() {
         let mut current = test_current_snapshot();
+        add_physical_observation(&mut current, 52, None);
         let field = |values: Vec<Vec<f64>>| -> LatestFields {
             serde_json::from_value(json!({
                 "H_demag": {
@@ -5614,6 +6577,8 @@ mod tests {
     #[test]
     fn terminal_authoritative_field_frame_replaces_stale_fields_without_replay_churn() {
         let mut current = test_current_snapshot();
+        add_physical_observation(&mut current, 10, None);
+        add_physical_observation(&mut current, 11, None);
         current.latest_fields = serde_json::from_value(json!({
             "H_dmi": {
                 "values": [[1.0, 0.0, 0.0]],
@@ -5722,6 +6687,7 @@ mod tests {
     #[test]
     fn stale_terminal_field_generation_is_rejected_without_revision_churn() {
         let mut current = test_current_snapshot();
+        current.live_state = Some(live_state_with_magnetization(0, vec![1.0, 0.0, 0.0]));
         let terminal_frame = |sequence: u64, value: f64| {
             serde_json::from_value(json!({
                 "session_id": "test-session",
@@ -5801,6 +6767,7 @@ mod tests {
     #[test]
     fn ordinary_live_field_frame_keeps_incremental_merge_semantics() {
         let mut current = test_current_snapshot();
+        current.live_state = Some(live_state_with_magnetization(0, vec![1.0, 0.0, 0.0]));
         let first = serde_json::from_value(json!({
             "session_id": "test-session",
             "latest_fields": { "H_dmi": { "values": [[1.0, 0.0, 0.0]], "layout": { "grid_cells": [1, 1, 1] } } }
@@ -5830,6 +6797,8 @@ mod tests {
             status: "running".into(),
             updated_at_unix_ms: 1_700_000_000_000,
             latest_step: StepUpdateView {
+                kind: fullmag_quantities::StepDataKind::PhysicalObservation,
+                solver_progress: None,
                 step: 10,
                 time: 1e-9,
                 dt: 1e-13,
@@ -5858,7 +6827,12 @@ mod tests {
                 magnetization: None,
                 per_object_scalars: Default::default(),
                 field_materialization_states: Vec::new(),
-                preview_field: Some(preview_field("H_eff")),
+                preview_field: Some({
+                    let mut field = preview_field("H_eff");
+                    field.source_step = 10;
+                    field.source_time_seconds = Some(1e-9);
+                    field
+                }),
                 finished: false,
             },
         });
@@ -5919,6 +6893,8 @@ mod tests {
             status: "running".into(),
             updated_at_unix_ms: 1_700_000_000_000,
             latest_step: StepUpdateView {
+                kind: fullmag_quantities::StepDataKind::PhysicalObservation,
+                solver_progress: None,
                 step: 10,
                 time: 1e-9,
                 dt: 1e-13,
@@ -5947,7 +6923,12 @@ mod tests {
                 magnetization: None,
                 per_object_scalars: Default::default(),
                 field_materialization_states: Vec::new(),
-                preview_field: Some(preview_field("H_eff")),
+                preview_field: Some({
+                    let mut field = preview_field("H_eff");
+                    field.source_step = 10;
+                    field.source_time_seconds = Some(1e-9);
+                    field
+                }),
                 finished: false,
             },
         });
@@ -5960,6 +6941,8 @@ mod tests {
                     status: "running".into(),
                     updated_at_unix_ms: 1_700_000_001_000,
                     latest_step: StepUpdateView {
+                        kind: fullmag_quantities::StepDataKind::PhysicalObservation,
+                        solver_progress: None,
                         step: 11,
                         time: 1.1e-9,
                         dt: 1e-13,

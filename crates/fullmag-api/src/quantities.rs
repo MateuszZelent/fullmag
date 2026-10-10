@@ -41,12 +41,9 @@ pub(crate) fn build_quantities(
     let scalar_available = |run_value: Option<f64>| {
         scalar_rows
             .iter()
-            .any(|row| !row.per_object_scalars.contains_key("fem_eigen_progress"))
+            .any(ScalarRow::is_physical_observation)
             || live_state.is_some_and(|state| {
-                !state
-                    .latest_step
-                    .per_object_scalars
-                    .contains_key("fem_eigen_progress")
+                state.latest_step.is_physical_observation()
             })
             || run_value.is_some()
     };
@@ -278,6 +275,11 @@ mod tests {
             "status": "running",
             "updated_at_unix_ms": 1,
             "latest_step": {
+                "kind": "solver_progress",
+                "solver_progress": {
+                    "kind": "fem_eigen",
+                    "metrics": { "progress_fraction": 0.5 }
+                },
                 "step": 2,
                 "time": 0.0,
                 "dt": 1.0e-12,
@@ -289,9 +291,7 @@ mod tests {
                 "max_h_eff": 0.0,
                 "wall_time_ns": 2,
                 "grid": [1, 1, 1],
-                "per_object_scalars": {
-                    "fem_eigen_progress": { "progress_fraction": 0.5 }
-                },
+                "per_object_scalars": {},
                 "finished": false
             }
         }))
@@ -300,6 +300,7 @@ mod tests {
 
     fn scalar_row(step: u64, modal_progress: bool) -> ScalarRow {
         serde_json::from_value(serde_json::json!({
+            "kind": if modal_progress { "legacy_unclassified" } else { "physical_observation" },
             "step": step,
             "time": 0.0,
             "solver_dt": 1.0e-12,
@@ -371,6 +372,18 @@ mod tests {
     }
 
     #[test]
+    fn physical_quantity_with_legal_progress_named_object_remains_available() {
+        let mut row = scalar_row(1, false);
+        row.per_object_scalars.insert(
+            "fem_eigen_progress".into(),
+            std::collections::HashMap::from([("measured_value".into(), 1.0)]),
+        );
+
+        assert!(row.is_physical_observation());
+        assert!(total_energy_available(None, None, &[row]));
+    }
+
+    #[test]
     fn run_manifest_scalar_remains_available_during_latest_modal_step() {
         let live_state = modal_latest_live_state();
         let mut run = completed_run_manifest();
@@ -390,6 +403,8 @@ mod tests {
             status: "running".to_string(),
             updated_at_unix_ms: 1,
             latest_step: StepUpdateView {
+                kind: fullmag_quantities::StepDataKind::PhysicalObservation,
+                solver_progress: None,
                 step: 1,
                 time: 0.0,
                 dt: 1.0e-12,

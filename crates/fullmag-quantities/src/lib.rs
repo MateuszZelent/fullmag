@@ -79,7 +79,7 @@ pub use solution_set::{
 };
 pub use step_data::{
     EndpointCacheTelemetry, FemMaterialFieldLocation, FemRepresentationReceipt,
-    FemStateRepresentation, GlobalQuantityRow, StepDiagnostics,
+    FemStateRepresentation, GlobalQuantityRow, SolverProgress, StepDataKind, StepDiagnostics,
 };
 pub use transport::{
     build_wire_catalog, LiveQuantityFrame, LiveQuantityFrameLayout, LiveQuantityFrameProvenance,

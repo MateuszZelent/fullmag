@@ -4979,13 +4979,21 @@ Brak rodzaju w danych historycznych oznacza `legacy_unclassified`. Zachowujemy
 surowe dane, ale nie przypisujemy im automatycznie znaczenia fizycznego ani
 statusu kwalifikacji. Nowe typed kind i payload muszą być spójne na całej trasie
 runner→CLI→API; nieznany kind i sprzeczny payload są odrzucane. Dokumentacja
-opisuje kontrakt wdrażany: implementacja w toku, GHA/runtime **NOT VERIFIED**.
+opisuje wdrożony kontrakt: niezależny source review **PASS**, GHA/runtime **NOT VERIFIED**.
+Poprzednio zaakceptowane pola mogą zachować swój odrębny dowód źródła po
+callbacku postępu. Cache-only admission wymaga dokładnego replay wartości,
+layoutu, revision i carrier; znajomość samego frame ID nie wystarcza. Jawny
+starszy source_step bez czasu jest wyszukiwany w jego własnym fizycznym źródle,
+bez dopisywania czasu bieżącego kroku. Magnetyzacja może być przenoszona tylko
+między dwoma spójnymi krokami fizycznymi, nigdy do solver-progress frame.
+Core producer→V2 i testy CLI/API są oddzielnymi regresjami; źródłowy test CLI
+używa typowanego helpera postępu, nie dowodzi bezpośredniego native runtime chain.
 
 | Source ID | Path | Symbol | Responsibility |
 |---|---|---|---|
-| source-modal-record-kind-quantity | crates/fullmag-quantities/src/step_data.rs | GlobalQuantityRow | Jawne admission ilości fizycznych; docelowy kontrakt typu rekordu, wdrożenie w toku. |
-| source-modal-record-kind-runner | crates/fullmag-runner/src/types.rs | to_quantity_row | Zachowanie rodzaju i oddzielenie numeric placeholders od pomiaru; wdrożenie w toku. |
-| source-modal-record-kind-api | crates/fullmag-api/src/session.rs | upsert_scalar_row | Admission physical rows bez klasyfikacji po identyfikatorze obiektu; wdrożenie w toku. |
+| source-modal-record-kind-quantity | crates/fullmag-quantities/src/step_data.rs | GlobalQuantityRow | Jawne admission ilości fizycznych; docelowy kontrakt typu rekordu, source review PASS; GHA/runtime NOT VERIFIED. |
+| source-modal-record-kind-runner | crates/fullmag-runner/src/types.rs | to_quantity_row | Zachowanie rodzaju i oddzielenie numeric placeholders od pomiaru; source review PASS; GHA/runtime NOT VERIFIED. |
+| source-modal-record-kind-api | crates/fullmag-api/src/session.rs | upsert_scalar_row | Admission physical rows bez klasyfikacji po identyfikatorze obiektu; source review PASS; GHA/runtime NOT VERIFIED. |
 
 ## Plan pomiaru kopii rzeczywistego Pmat — bez zmiany solvera
 

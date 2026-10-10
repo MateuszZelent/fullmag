@@ -1568,6 +1568,17 @@ fn has_heavy_live_payload(update: &fullmag_runner::StepUpdate) -> bool {
             .is_some_and(|fields| !fields.is_empty())
 }
 
+fn fem_eigen_progress_metrics(
+    stats: &fullmag_runner::StepStats,
+) -> Option<&std::collections::HashMap<String, f64>> {
+    if stats.validate_record_kind().is_err() || !stats.kind.is_solver_progress() {
+        return None;
+    }
+    match stats.solver_progress.as_ref()? {
+        fullmag_quantities::SolverProgress::FemEigen { metrics } => Some(metrics),
+    }
+}
+
 fn step_update_has_frequency_response_progress(update: &fullmag_runner::StepUpdate) -> bool {
     update
         .stats
@@ -1581,11 +1592,8 @@ fn step_update_has_frequency_response_progress(update: &fullmag_runner::StepUpda
 }
 
 fn step_update_has_parallel_execution_progress(update: &fullmag_runner::StepUpdate) -> bool {
-    update
-        .stats
-        .per_object_scalars
-        .get("fem_eigen_progress")
-        .is_some_and(|progress| progress.get("parallel_telemetry_available") == Some(&1.0))
+    fem_eigen_progress_metrics(&update.stats)
+        .is_some_and(|metrics| metrics.get("parallel_telemetry_available") == Some(&1.0))
 }
 
 fn publish_live_step_update(
@@ -1767,6 +1775,7 @@ fn apply_live_step_update_to_workspace_state(
         "running".to_string()
     };
     state.run = running_run_manifest_from_update(run_id, session_id, artifact_dir, &update);
+    let previous_step_is_physical = state.live_state.latest_step.is_physical_observation();
     let previous_magnetization = state.live_state.latest_step.magnetization.take();
     let previous_fem_mesh_generation_id =
         state.live_state.latest_step.fem_mesh_generation_id.take();
@@ -1797,7 +1806,9 @@ fn apply_live_step_update_to_workspace_state(
         finished: update.finished,
     };
     state.live_state = live_state_manifest_from_update(update);
-    if state.live_state.latest_step.magnetization.is_none()
+    if previous_step_is_physical
+        && state.live_state.latest_step.is_physical_observation()
+        && state.live_state.latest_step.magnetization.is_none()
         && !incoming_has_magnetization
         && !incoming_has_magnetization_preview
     {
@@ -1837,6 +1848,9 @@ fn ingest_magnetization_field_from_update(
     state: &mut LocalLiveWorkspaceState,
     update: &mut fullmag_runner::StepUpdate,
 ) -> bool {
+    if !update.stats.is_physical_observation() {
+        return false;
+    }
     let Some(values) = update.magnetization.take() else {
         return false;
     };
@@ -1880,6 +1894,9 @@ fn preserve_frequency_response_progress_scalars_from_live_state(
     state: &LocalLiveWorkspaceState,
     update: &mut fullmag_runner::StepUpdate,
 ) {
+    if !update.stats.is_physical_observation() {
+        return;
+    }
     if update
         .stats
         .per_object_scalars
@@ -1921,6 +1938,9 @@ fn apply_fem_frequency_response_progress_to_stage_execution(
     state: &mut LocalLiveWorkspaceState,
     update: &fullmag_runner::StepUpdate,
 ) {
+    if !update.stats.is_physical_observation() {
+        return;
+    }
     let Some(progress) = update
         .stats
         .per_object_scalars
@@ -2052,7 +2072,7 @@ fn apply_fem_eigen_progress_to_stage_execution(
     state: &mut LocalLiveWorkspaceState,
     update: &fullmag_runner::StepUpdate,
 ) {
-    let Some(progress) = update.stats.per_object_scalars.get("fem_eigen_progress") else {
+    let Some(progress) = fem_eigen_progress_metrics(&update.stats) else {
         return;
     };
     let Some(stage_execution) = state.stage_execution.as_mut() else {
@@ -2504,7 +2524,7 @@ fn append_detailed_fem_step_profile(line: &mut String, stats: &fullmag_runner::S
 }
 
 fn append_fem_eigen_step_progress(line: &mut String, stats: &fullmag_runner::StepStats) {
-    let Some(progress) = stats.per_object_scalars.get("fem_eigen_progress") else {
+    let Some(progress) = fem_eigen_progress_metrics(stats) else {
         return;
     };
     let window_phase = if progress
@@ -2669,7 +2689,7 @@ fn format_stage_progress_line(
             .unwrap_or_default();
         return format!("{prefix}  frequency sweep  {progress}{heartbeat}  [{wall_ms:.0}ms]");
     }
-    if let Some(progress) = stats.per_object_scalars.get("fem_eigen_progress") {
+    if let Some(progress) = fem_eigen_progress_metrics(stats) {
         let detail = fem_eigen_progress_detail(
             progress,
             fem_eigen_progress_phase(progress),
@@ -12153,6 +12173,8 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             &aggregated_steps,
         );
         state.latest_scalar_row = aggregated_steps.last().map(|step| CurrentLiveScalarRow {
+            kind: step.kind.clone(),
+            solver_progress: step.solver_progress.clone(),
             step: step.step,
             time: step.time,
             solver_dt: step.dt,
@@ -12364,6 +12386,14 @@ mod tests {
         PreparationStageId, PreparationStageStatus, PreparationStatus, SimulationPreparationState,
     };
     use crate::types::PythonProgressEvent;
+
+    fn set_fem_eigen_progress(
+        stats: &mut fullmag_runner::StepStats,
+        metrics: std::collections::HashMap<String, f64>,
+    ) {
+        stats.kind = fullmag_quantities::StepDataKind::SolverProgress;
+        stats.solver_progress = Some(fullmag_quantities::SolverProgress::FemEigen { metrics });
+    }
 
     #[test]
     fn fdm_override_wins_over_fem_override_in_summary_device() {
@@ -14068,10 +14098,7 @@ mod tests {
         progress.insert("subwindow_elapsed_seconds".to_string(), 2.5);
         progress.insert("window_elapsed_seconds".to_string(), 8.0);
         let mut update = test_step_update(37);
-        update
-            .stats
-            .per_object_scalars
-            .insert("fem_eigen_progress".to_string(), progress);
+        set_fem_eigen_progress(&mut update.stats, progress);
 
         let _ = apply_live_step_update_to_workspace_state(
             &mut state,
@@ -14109,10 +14136,20 @@ mod tests {
             &measured.stats,
         ));
         let mut modal = test_step_update(4);
-        modal.stats.per_object_scalars.insert(
-            "fem_eigen_progress".into(),
-            std::collections::HashMap::new(),
+        set_fem_eigen_progress(
+            &mut modal.stats,
+            std::collections::HashMap::from([("progress_fraction".into(), 0.5)]),
         );
+        let modal_live_state = crate::step_utils::live_state_manifest_from_update(modal.clone());
+        assert_eq!(
+            modal_live_state.latest_step.kind,
+            fullmag_quantities::StepDataKind::SolverProgress
+        );
+        assert!(matches!(
+            modal_live_state.latest_step.solver_progress,
+            Some(fullmag_quantities::SolverProgress::FemEigen { .. })
+        ));
+        assert!(modal_live_state.latest_step.per_object_scalars.is_empty());
         modal.finished = true;
         crate::live_workspace::set_latest_scalar_row_for_terminal_update(&mut state, &modal);
         assert_eq!(state.latest_scalar_row.as_ref().unwrap().e_total, -1.25e-18);
@@ -14133,6 +14170,118 @@ mod tests {
             &measured,
         );
         assert_eq!(physical.final_e_total, Some(-1.25e-18));
+    }
+
+    #[test]
+    fn eigen_progress_after_physical_magnetization_serializes_an_api_acceptable_frame() {
+        let mut state = test_workspace_state();
+        let mut initial_physical = test_step_update(3);
+        initial_physical.magnetization = Some(vec![1.0, 0.0, 0.0]);
+        state.live_state = crate::step_utils::live_state_manifest_from_update(
+            initial_physical.clone(),
+        );
+        let mut initial_field = initial_physical;
+        assert!(super::ingest_magnetization_field_from_update(
+            &mut state,
+            &mut initial_field
+        ));
+
+        let thin_physical = test_step_update(4);
+        let _ = apply_live_step_update_to_workspace_state(
+            &mut state,
+            "run-test",
+            "session-test",
+            PathBuf::from("/tmp/artifacts").as_path(),
+            thin_physical,
+            false,
+        );
+        assert!(state.live_state.latest_step.is_physical_observation());
+        assert_eq!(
+            state.live_state.latest_step.magnetization,
+            Some(vec![1.0, 0.0, 0.0]),
+            "physical-to-physical thin updates retain magnetization"
+        );
+
+        let mut progress = test_step_update(5);
+        set_fem_eigen_progress(
+            &mut progress.stats,
+            std::collections::HashMap::from([("progress_fraction".into(), 0.5)]),
+        );
+        let _ = apply_live_step_update_to_workspace_state(
+            &mut state,
+            "run-test",
+            "session-test",
+            PathBuf::from("/tmp/artifacts").as_path(),
+            progress,
+            false,
+        );
+
+        let latest_step = &state.live_state.latest_step;
+        assert!(!latest_step.is_physical_observation());
+        assert_eq!(
+            latest_step.kind,
+            fullmag_quantities::StepDataKind::SolverProgress
+        );
+        assert!(matches!(
+            latest_step.solver_progress.as_ref(),
+            Some(fullmag_quantities::SolverProgress::FemEigen { .. })
+        ));
+        assert!(latest_step.magnetization.is_none());
+        assert_eq!(
+            state.latest_fields.0["m"]["values"],
+            serde_json::json!([1.0, 0.0, 0.0]),
+            "the previously accepted field remains independently cached"
+        );
+
+        let api_live_state = serde_json::to_value(&state.live_state)
+            .expect("CLI live state should serialize to the API frame shape");
+        let api_step = &api_live_state["latest_step"];
+        assert_eq!(api_step["kind"], serde_json::json!("solver_progress"));
+        assert_eq!(
+            api_step["solver_progress"]["kind"],
+            serde_json::json!("fem_eigen")
+        );
+        assert!(api_step["magnetization"].is_null());
+        assert_eq!(api_step["per_object_scalars"], serde_json::json!({}));
+        assert_eq!(api_step["field_materialization_states"], serde_json::json!([]));
+        assert!(api_step["preview_field"].is_null());
+    }
+
+    #[test]
+    fn nonphysical_or_contradictory_magnetization_is_not_promoted_to_latest_fields() {
+        let cases = [
+            (
+                fullmag_quantities::StepDataKind::LegacyUnclassified,
+                None,
+            ),
+            (
+                fullmag_quantities::StepDataKind::SolverProgress,
+                Some(fullmag_quantities::SolverProgress::FemEigen {
+                    metrics: std::collections::HashMap::from([("progress_fraction".into(), 0.5)]),
+                }),
+            ),
+            (
+                fullmag_quantities::StepDataKind::PhysicalObservation,
+                Some(fullmag_quantities::SolverProgress::FemEigen {
+                    metrics: std::collections::HashMap::from([("progress_fraction".into(), 0.5)]),
+                }),
+            ),
+        ];
+
+        for (kind, solver_progress) in cases {
+            let mut state = test_workspace_state();
+            let mut update = test_step_update(5);
+            update.stats.kind = kind;
+            update.stats.solver_progress = solver_progress;
+            update.magnetization = Some(vec![1.0, 0.0, 0.0]);
+
+            assert!(!super::ingest_magnetization_field_from_update(
+                &mut state,
+                &mut update
+            ));
+            assert!(state.latest_fields.0.get("m").is_none());
+            assert!(update.magnetization.is_some());
+        }
     }
 
     #[test]
@@ -14165,11 +14314,12 @@ mod tests {
         progress.insert("subwindow_elapsed_seconds".to_string(), 4.25);
         progress.insert("window_elapsed_seconds".to_string(), 71.5);
         progress.insert("residual".to_string(), 2.0e-9);
-        let mut per_object_scalars = std::collections::HashMap::new();
-        per_object_scalars.insert("fem_eigen_progress".to_string(), progress);
         let stats = fullmag_runner::StepStats {
+            kind: fullmag_quantities::StepDataKind::SolverProgress,
+            solver_progress: Some(fullmag_quantities::SolverProgress::FemEigen {
+                metrics: progress,
+            }),
             step: 17,
-            per_object_scalars,
             ..fullmag_runner::StepStats::default()
         };
 
@@ -14214,14 +14364,12 @@ mod tests {
 
     #[test]
     fn terminal_stage_line_formats_tagged_ksp_without_relative_residual() {
-        let mut per_object_scalars = std::collections::HashMap::new();
-        per_object_scalars.insert(
-            "fem_eigen_progress".to_string(),
-            tagged_ksp_progress_for_cli(),
-        );
         let stats = fullmag_runner::StepStats {
+            kind: fullmag_quantities::StepDataKind::SolverProgress,
+            solver_progress: Some(fullmag_quantities::SolverProgress::FemEigen {
+                metrics: tagged_ksp_progress_for_cli(),
+            }),
             step: 17,
-            per_object_scalars,
             ..fullmag_runner::StepStats::default()
         };
 
@@ -14246,13 +14394,11 @@ mod tests {
 
     #[test]
     fn appended_fem_eigen_progress_formats_tagged_ksp_diagnostics() {
-        let mut per_object_scalars = std::collections::HashMap::new();
-        per_object_scalars.insert(
-            "fem_eigen_progress".to_string(),
-            tagged_ksp_progress_for_cli(),
-        );
         let stats = fullmag_runner::StepStats {
-            per_object_scalars,
+            kind: fullmag_quantities::StepDataKind::SolverProgress,
+            solver_progress: Some(fullmag_quantities::SolverProgress::FemEigen {
+                metrics: tagged_ksp_progress_for_cli(),
+            }),
             ..fullmag_runner::StepStats::default()
         };
         let mut line = "stage".to_string();
@@ -15147,10 +15293,7 @@ mod tests {
         let mut progress = std::collections::HashMap::new();
         progress.insert("parallel_telemetry_available".to_string(), 1.0);
         let mut update = test_step_update(257);
-        update
-            .stats
-            .per_object_scalars
-            .insert("fem_eigen_progress".to_string(), progress);
+        set_fem_eigen_progress(&mut update.stats, progress);
 
         assert!(!has_heavy_live_payload(&update));
         assert!(step_update_has_parallel_execution_progress(&update));

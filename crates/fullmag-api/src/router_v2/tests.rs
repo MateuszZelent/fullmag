@@ -2099,6 +2099,8 @@ async fn internal_idle_heartbeat_restores_connectivity_without_resource_revision
 
 fn sample_scalar_row(step: u64, time: f64, e_total: f64) -> ScalarRow {
     ScalarRow {
+        kind: fullmag_quantities::StepDataKind::PhysicalObservation,
+        solver_progress: None,
         observation_frame: None,
         step,
         time,
@@ -2303,6 +2305,8 @@ async fn test_router_with_runtime_read_models() -> axum::Router {
             status: "running".into(),
             updated_at_unix_ms: 1_700_000_000_123,
             latest_step: StepUpdateView {
+                kind: fullmag_quantities::StepDataKind::PhysicalObservation,
+                solver_progress: None,
                 step: 42,
                 time: 2.5e-9,
                 dt: 1.0e-13,
@@ -2337,6 +2341,8 @@ async fn test_router_with_runtime_read_models() -> axum::Router {
         });
         snapshot.scalar_rows = vec![
             ScalarRow {
+                kind: fullmag_quantities::StepDataKind::PhysicalObservation,
+                solver_progress: None,
                 observation_frame: None,
                 step: 41,
                 time: 2.4e-9,
@@ -2366,6 +2372,8 @@ async fn test_router_with_runtime_read_models() -> axum::Router {
                 table_expressions: Vec::new(),
             },
             ScalarRow {
+                kind: fullmag_quantities::StepDataKind::PhysicalObservation,
+                solver_progress: None,
                 observation_frame: None,
                 step: 42,
                 time: 2.5e-9,
@@ -2884,6 +2892,8 @@ async fn test_router_with_session_store_state() -> (axum::Router, Arc<AppState>,
             status: "paused".into(),
             updated_at_unix_ms: 1_700_000_000_123,
             latest_step: StepUpdateView {
+                kind: fullmag_quantities::StepDataKind::PhysicalObservation,
+                solver_progress: None,
                 step: 42,
                 time: 2.5e-9,
                 dt: 1.0e-13,
@@ -4095,6 +4105,8 @@ async fn domain_meta_uses_fdm_physical_cell_size_for_grid_and_bounds() {
             status: "running".into(),
             updated_at_unix_ms: 1_700_000_000_123,
             latest_step: StepUpdateView {
+                kind: fullmag_quantities::StepDataKind::PhysicalObservation,
+                solver_progress: None,
                 step: 7,
                 time: 2.5e-9,
                 dt: 1.0e-13,
@@ -4941,6 +4953,8 @@ async fn domain_meta_accepts_planar_fdm_zero_spacing_axis() {
             status: "running".into(),
             updated_at_unix_ms: 1_700_000_000_123,
             latest_step: StepUpdateView {
+                kind: fullmag_quantities::StepDataKind::PhysicalObservation,
+                solver_progress: None,
                 step: 7,
                 time: 2.5e-9,
                 dt: 1.0e-13,
@@ -5519,6 +5533,8 @@ async fn field_vector_returns_pending_metadata_for_materializer_request() {
             status: "running".into(),
             updated_at_unix_ms: 1_700_000_000_100,
             latest_step: StepUpdateView {
+                kind: fullmag_quantities::StepDataKind::PhysicalObservation,
+                solver_progress: None,
                 step: 4,
                 time: 4.0e-12,
                 dt: 1.0e-13,
@@ -5677,6 +5693,8 @@ async fn field_vector_keeps_unknown_scope_not_found_while_materialization_is_pen
             status: "running".into(),
             updated_at_unix_ms: 1_700_000_000_100,
             latest_step: StepUpdateView {
+                kind: fullmag_quantities::StepDataKind::PhysicalObservation,
+                solver_progress: None,
                 step: 4,
                 time: 4.0e-12,
                 dt: 1.0e-13,
@@ -5761,6 +5779,8 @@ async fn field_meta_and_vector_resolve_active_live_preview_field_after_snapshot_
                     status: "running".into(),
                     updated_at_unix_ms: 1_700_000_000_000,
                     latest_step: StepUpdateView {
+                        kind: fullmag_quantities::StepDataKind::PhysicalObservation,
+                        solver_progress: None,
                         step: 10,
                         time: 1e-9,
                         dt: 1e-13,
@@ -22673,6 +22693,8 @@ async fn commands_endpoint_keeps_compute_enabled_during_wait_for_compute_gate() 
             status: "running".into(),
             updated_at_unix_ms: 1_700_000_000_123,
             latest_step: StepUpdateView {
+                kind: fullmag_quantities::StepDataKind::PhysicalObservation,
+                solver_progress: None,
                 step: 0,
                 time: 0.0,
                 dt: 0.0,
@@ -24599,6 +24621,8 @@ async fn stage_execution_endpoint_projects_frequency_response_live_progress() {
             status: "running".into(),
             updated_at_unix_ms: 1_700_000_011_250,
             latest_step: StepUpdateView {
+                kind: fullmag_quantities::StepDataKind::PhysicalObservation,
+                solver_progress: None,
                 step: 257,
                 time: 0.0,
                 dt: 0.0,
@@ -26696,6 +26720,8 @@ async fn solver_status_does_not_infer_convergence_from_finished_sample() {
             status: "finished".into(),
             updated_at_unix_ms: 1_700_000_000_123,
             latest_step: StepUpdateView {
+                kind: fullmag_quantities::StepDataKind::PhysicalObservation,
+                solver_progress: None,
                 step: 50_000,
                 time: 0.0,
                 dt: 0.0,
@@ -26802,6 +26828,8 @@ async fn solver_status_endpoint_prefers_waiting_for_compute_gate_over_stale_live
             status: "running".into(),
             updated_at_unix_ms: 1_700_000_000_123,
             latest_step: StepUpdateView {
+                kind: fullmag_quantities::StepDataKind::PhysicalObservation,
+                solver_progress: None,
                 step: 0,
                 time: 0.0,
                 dt: 0.0,
@@ -26938,6 +26966,8 @@ async fn object_metrics_endpoint_prefers_per_object_solver_scalars() {
             status: "running".into(),
             updated_at_unix_ms: 1_700_000_000_123,
             latest_step: StepUpdateView {
+                kind: fullmag_quantities::StepDataKind::PhysicalObservation,
+                solver_progress: None,
                 step: 7,
                 time: 4.2e-12,
                 dt: 1.0e-13,
@@ -27019,6 +27049,8 @@ async fn object_metrics_keep_step_and_energy_without_inventing_magnetization() {
             status: "running".into(),
             updated_at_unix_ms: 1_700_000_000_123,
             latest_step: StepUpdateView {
+                kind: fullmag_quantities::StepDataKind::PhysicalObservation,
+                solver_progress: None,
                 step: 9,
                 time: 5.0e-12,
                 dt: 1.0e-13,
@@ -27082,6 +27114,8 @@ async fn object_metrics_endpoint_uses_mesh_part_node_indices_for_shared_fem_node
             status: "running".into(),
             updated_at_unix_ms: 1_700_000_000_123,
             latest_step: StepUpdateView {
+                kind: fullmag_quantities::StepDataKind::PhysicalObservation,
+                solver_progress: None,
                 step: 7,
                 time: 4.2e-12,
                 dt: 1.0e-13,
@@ -33902,6 +33936,8 @@ async fn test_router_with_live_magnetization() -> axum::Router {
             status: "running".into(),
             updated_at_unix_ms: 1_700_000_000_123,
             latest_step: StepUpdateView {
+                kind: fullmag_quantities::StepDataKind::PhysicalObservation,
+                solver_progress: None,
                 step: 7,
                 time: 1.0e-9,
                 dt: 1.0e-13,
@@ -36750,6 +36786,8 @@ async fn field_meta_component_query_uses_live_magnetization_before_stale_latest_
             status: "running".into(),
             updated_at_unix_ms: 1_700_000_000_456,
             latest_step: StepUpdateView {
+                kind: fullmag_quantities::StepDataKind::PhysicalObservation,
+                solver_progress: None,
                 step: 8,
                 time: 1.0e-9,
                 dt: 1.0e-13,
@@ -36816,6 +36854,8 @@ async fn v2_magnetization_meta_vector_revision_and_etag_follow_provenance_field_
             status: "running".into(),
             updated_at_unix_ms: 1_700_000_000_100,
             latest_step: StepUpdateView {
+                kind: fullmag_quantities::StepDataKind::PhysicalObservation,
+                solver_progress: None,
                 step: 1,
                 time: 1.0e-12,
                 dt: 1.0e-13,
@@ -37479,6 +37519,8 @@ async fn v2_field_catalog_rejects_non_finite_live_magnetization() {
             status: "running".into(),
             updated_at_unix_ms: 1_700_000_000_123,
             latest_step: StepUpdateView {
+                kind: fullmag_quantities::StepDataKind::PhysicalObservation,
+                solver_progress: None,
                 step: 7,
                 time: 1.0e-9,
                 dt: 1.0e-13,
@@ -37558,6 +37600,8 @@ async fn v2_field_catalog_rejects_fem_live_magnetization_with_wrong_point_count(
             status: "running".into(),
             updated_at_unix_ms: 1_700_000_000_123,
             latest_step: StepUpdateView {
+                kind: fullmag_quantities::StepDataKind::PhysicalObservation,
+                solver_progress: None,
                 step: 7,
                 time: 1.0e-9,
                 dt: 1.0e-13,
@@ -37656,6 +37700,8 @@ async fn v2_field_vector_accepts_fem_live_magnetization_on_magnetic_nodes() {
             status: "running".into(),
             updated_at_unix_ms: 1_700_000_000_123,
             latest_step: StepUpdateView {
+                kind: fullmag_quantities::StepDataKind::PhysicalObservation,
+                solver_progress: None,
                 step: 7,
                 time: 1.0e-9,
                 dt: 1.0e-13,
@@ -37807,6 +37853,8 @@ async fn v2_field_vector_prefers_live_magnetization_over_stale_latest_field() {
             status: "running".into(),
             updated_at_unix_ms: 1_700_000_000_456,
             latest_step: StepUpdateView {
+                kind: fullmag_quantities::StepDataKind::PhysicalObservation,
+                solver_progress: None,
                 step: 8,
                 time: 2.0e-9,
                 dt: 1.0e-13,
@@ -38314,6 +38362,8 @@ async fn v2_field_vector_prefers_fresh_m_preview_cache_over_stale_latest_field()
             status: "running".into(),
             updated_at_unix_ms: 1_700_000_000_789,
             latest_step: StepUpdateView {
+                kind: fullmag_quantities::StepDataKind::PhysicalObservation,
+                solver_progress: None,
                 step: 9,
                 time: 3.0e-9,
                 dt: 1.0e-13,
@@ -38455,6 +38505,8 @@ async fn v2_fdm_vector_respects_max_samples_when_preview_would_be_downscaled() {
             status: "running".into(),
             updated_at_unix_ms: 1_700_000_000_789,
             latest_step: StepUpdateView {
+                kind: fullmag_quantities::StepDataKind::PhysicalObservation,
+                solver_progress: None,
                 step: 8,
                 time: 3.0e-9,
                 dt: 1.0e-13,
@@ -38663,6 +38715,8 @@ async fn v2_h_demag_resource_prefers_newer_preview_cache_over_stale_latest_field
             status: "completed".into(),
             updated_at_unix_ms: 1_700_000_000_789,
             latest_step: StepUpdateView {
+                kind: fullmag_quantities::StepDataKind::PhysicalObservation,
+                solver_progress: None,
                 step: 52,
                 time: 5.2e-12,
                 dt: 1.0e-13,
@@ -38800,6 +38854,8 @@ async fn v2_h_demag_meta_prefers_equal_generation_latest_with_source_time() {
             status: "completed".into(),
             updated_at_unix_ms: 1_700_000_000_789,
             latest_step: StepUpdateView {
+                kind: fullmag_quantities::StepDataKind::PhysicalObservation,
+                solver_progress: None,
                 step: 4,
                 time: 4.0e-13,
                 dt: 1.0e-13,
@@ -38877,6 +38933,8 @@ async fn v2_terminal_eden_demag_metadata_keeps_final_solver_provenance() {
             status: "awaiting_command".into(),
             updated_at_unix_ms: 1_700_000_000_789,
             latest_step: StepUpdateView {
+                kind: fullmag_quantities::StepDataKind::PhysicalObservation,
+                solver_progress: None,
                 step: 52,
                 time: 5.2e-12,
                 dt: 1.0e-13,
@@ -38963,6 +39021,8 @@ async fn v2_optional_field_materialization_pending_and_error_preserve_solver_and
             status: "running".into(),
             updated_at_unix_ms: 1_700_000_000_789,
             latest_step: StepUpdateView {
+                kind: fullmag_quantities::StepDataKind::PhysicalObservation,
+                solver_progress: None,
                 step: 9,
                 time: 9.0e-12,
                 dt: 1.0e-13,
@@ -39231,6 +39291,8 @@ async fn topological_charge_reports_empty_support_when_m_field_exists_without_us
             status: "running".into(),
             updated_at_unix_ms: 1_700_000_000_789,
             latest_step: StepUpdateView {
+                kind: fullmag_quantities::StepDataKind::PhysicalObservation,
+                solver_progress: None,
                 step: 1,
                 time: 0.0,
                 dt: 1.0e-13,
@@ -39304,6 +39366,8 @@ async fn topological_charge_computes_uniform_fdm_grid_without_fem_mesh() {
             status: "running".into(),
             updated_at_unix_ms: 1_700_000_000_789,
             latest_step: StepUpdateView {
+                kind: fullmag_quantities::StepDataKind::PhysicalObservation,
+                solver_progress: None,
                 step: 1,
                 time: 0.0,
                 dt: 1.0e-13,
@@ -39392,6 +39456,8 @@ async fn topological_charge_cache_key_tracks_field_revision() {
             status: "running".into(),
             updated_at_unix_ms: 1_700_000_000_789,
             latest_step: StepUpdateView {
+                kind: fullmag_quantities::StepDataKind::PhysicalObservation,
+                solver_progress: None,
                 step: 1,
                 time: 0.0,
                 dt: 1.0e-13,
@@ -39524,6 +39590,8 @@ async fn topological_charge_default_fdm_support_uses_one_midplane_of_thinnest_ax
             status: "running".into(),
             updated_at_unix_ms: 1_700_000_000_789,
             latest_step: StepUpdateView {
+                kind: fullmag_quantities::StepDataKind::PhysicalObservation,
+                solver_progress: None,
                 step: 1,
                 time: 0.0,
                 dt: 1.0e-13,

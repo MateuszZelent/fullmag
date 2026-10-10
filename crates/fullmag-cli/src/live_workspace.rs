@@ -787,12 +787,7 @@ impl LocalLiveWorkspace {
 fn scalar_candidate_from_workspace_state(
     state: &LocalLiveWorkspaceState,
 ) -> Option<(ScalarSequenceKey, CurrentLiveScalarRow, bool)> {
-    if state
-        .live_state
-        .latest_step
-        .per_object_scalars
-        .contains_key("fem_eigen_progress")
-    {
+    if !state.live_state.latest_step.is_physical_observation() {
         return None;
     }
     let finished = state.live_state.latest_step.finished
@@ -814,8 +809,7 @@ fn scalar_candidate_from_workspace_state(
         .latest_scalar_row
         .clone()
         .filter(|row| {
-            row.step == state.live_state.latest_step.step
-                && !row.per_object_scalars.contains_key("fem_eigen_progress")
+            row.step == state.live_state.latest_step.step && row.is_physical_observation()
         })
         .map(|row| {
             (
@@ -1509,7 +1503,7 @@ impl PendingScalarRows {
         finished: bool,
         gate: &mut LiveTelemetryPublishGate,
     ) {
-        if row.per_object_scalars.contains_key("fem_eigen_progress") {
+        if row.validate_record_kind().is_err() || row.kind.is_solver_progress() {
             return;
         }
         {
@@ -2373,6 +2367,61 @@ mod tests {
         assert!(!super::should_ingest_preview_fields_from_update(
             true, &terminal
         ));
+    }
+
+    #[test]
+    fn nonphysical_and_contradictory_updates_cannot_ingest_preview_fields() {
+        let mut state = workspace_with_domain_mesh().snapshot();
+        let accepted = preview_field("H_eff", 1, 1.0);
+        replace_cached_preview_fields(&mut state, vec![accepted]);
+        let accepted_values = state.preview_fields.to_vec()[0].vector_field_values.clone();
+
+        let cases = [
+            (
+                fullmag_quantities::StepDataKind::LegacyUnclassified,
+                None,
+            ),
+            (
+                fullmag_quantities::StepDataKind::SolverProgress,
+                Some(fullmag_quantities::SolverProgress::FemEigen {
+                    metrics: HashMap::from([("progress_fraction".into(), 0.5)]),
+                }),
+            ),
+            (
+                fullmag_quantities::StepDataKind::PhysicalObservation,
+                Some(fullmag_quantities::SolverProgress::FemEigen {
+                    metrics: HashMap::from([("progress_fraction".into(), 0.5)]),
+                }),
+            ),
+        ];
+
+        for (kind, solver_progress) in cases {
+            let mut incoming = preview_field("H_demag", 2, 2.0);
+            incoming.spatial_kind = "grid".to_string();
+            incoming.quantity_domain = "full_domain".to_string();
+            incoming.preview_grid = [1, 1, 1];
+            incoming.original_grid = [1, 1, 1];
+            incoming.vector_field_values = vec![0.0, 0.0, 2.0];
+            let mut update = preview_update(incoming.clone());
+            update.stats.kind = kind.clone();
+            update.stats.solver_progress = solver_progress;
+            update.cached_preview_fields = Some(vec![incoming]);
+            update.grid = [1, 1, 1];
+
+            assert!(!super::should_ingest_preview_fields_from_update(
+                false, &update
+            ));
+            ingest_preview_fields_from_update(&mut state, &mut update);
+
+            assert!(state.latest_fields.get("H_demag").is_none());
+            assert!(state.pending_preview_fields.is_empty());
+            assert_eq!(
+                state.preview_fields.to_vec()[0].vector_field_values,
+                accepted_values
+            );
+            assert!(update.preview_field.is_none());
+            assert!(update.cached_preview_fields.is_none());
+        }
     }
 
     #[test]
@@ -3274,25 +3323,32 @@ mod tests {
     }
 
     #[test]
-    fn scalar_candidate_rejects_modal_state_even_with_matching_physical_row() {
+    fn scalar_candidate_uses_kind_and_preserves_legal_progress_object_ids() {
         let mut state = workspace_with_domain_mesh().snapshot();
         state.live_state.latest_step.step = 1;
         state.latest_scalar_row = Some(scalar_row(1));
         assert!(scalar_candidate_from_workspace_state(&state).is_some());
-        state
-            .live_state
-            .latest_step
-            .per_object_scalars
-            .insert("fem_eigen_progress".into(), Default::default());
+        state.live_state.latest_step.kind = fullmag_quantities::StepDataKind::SolverProgress;
+        state.live_state.latest_step.solver_progress = Some(
+            fullmag_quantities::SolverProgress::FemEigen {
+                metrics: HashMap::from([("percent".into(), 25.0)]),
+            },
+        );
         assert!(scalar_candidate_from_workspace_state(&state).is_none());
-        state.live_state.latest_step.per_object_scalars.clear();
+        state.live_state.latest_step.kind = fullmag_quantities::StepDataKind::PhysicalObservation;
+        state.live_state.latest_step.solver_progress = None;
         state
             .latest_scalar_row
             .as_mut()
             .unwrap()
             .per_object_scalars
-            .insert("fem_eigen_progress".into(), Default::default());
-        assert!(scalar_candidate_from_workspace_state(&state).is_none());
+            .insert("fem_eigen_progress".into(), HashMap::from([("measured".into(), 2.0)]));
+        state
+            .live_state
+            .latest_step
+            .per_object_scalars
+            .insert("fem_eigen_progress".into(), HashMap::from([("measured".into(), 2.0)]));
+        assert!(scalar_candidate_from_workspace_state(&state).is_some());
     }
 
     #[test]
@@ -4722,6 +4778,8 @@ mod tests {
 
     fn scalar_row(step: u64) -> CurrentLiveScalarRow {
         CurrentLiveScalarRow {
+            kind: fullmag_quantities::StepDataKind::PhysicalObservation,
+            solver_progress: None,
             step,
             time: step as f64,
             solver_dt: 1.0,
@@ -5642,6 +5700,8 @@ pub(crate) fn bootstrap_live_state(status: &str) -> LiveStateManifest {
         runtime_status: Some(fullmag_runner::RuntimeStatus::from_status_code(status)),
         updated_at_unix_ms: unix_time_millis().unwrap_or(0),
         latest_step: LiveStepView {
+            kind: fullmag_quantities::StepDataKind::PhysicalObservation,
+            solver_progress: None,
             step: 0,
             time: 0.0,
             dt: 0.0,
@@ -5693,6 +5753,8 @@ fn scalar_row_from_stats_with_active_runtime(
     active_runtime_s: f64,
 ) -> CurrentLiveScalarRow {
     CurrentLiveScalarRow {
+        kind: stats.kind.clone(),
+        solver_progress: stats.solver_progress.clone(),
         step: stats.step,
         time: stats.time,
         solver_dt: stats.dt,
@@ -5743,13 +5805,9 @@ fn set_latest_scalar_row(
     update: &fullmag_runner::StepUpdate,
     force: bool,
 ) {
-    // A modal solver callback has no measured physical scalar row, even
+    // A solver progress record has no measured physical scalar row, even
     // when a terminal/forced publication is requested.
-    if update
-        .stats
-        .per_object_scalars
-        .contains_key("fem_eigen_progress")
-    {
+    if update.stats.validate_record_kind().is_err() || update.stats.kind.is_solver_progress() {
         return;
     }
     // Skip scalar row accumulation if charts are disabled (benchmark mode)
@@ -6122,7 +6180,8 @@ fn should_ingest_preview_fields_from_update(
     preview_3d_disabled: bool,
     update: &fullmag_runner::StepUpdate,
 ) -> bool {
-    !preview_3d_disabled || terminal_authoritative_field_update(update)
+    update.stats.is_physical_observation()
+        && (!preview_3d_disabled || terminal_authoritative_field_update(update))
 }
 
 fn mesh_build_stage_status(

@@ -3850,19 +3850,19 @@
       "id": "source-modal-record-kind-quantity",
       "path": "crates/fullmag-quantities/src/step_data.rs",
       "symbol": "GlobalQuantityRow",
-      "responsibility": "Kontrakt jawnego rodzaju physical/progress/legacy; wdrozenie w toku, GHA/runtime NOT VERIFIED."
+      "responsibility": "Jawny rodzaj physical/progress/legacy; admission, exact cache replay i physical-only ingest; source review PASS, GHA/runtime NOT VERIFIED."
     },
     {
       "id": "source-modal-record-kind-runner",
       "path": "crates/fullmag-runner/src/types.rs",
       "symbol": "to_quantity_row",
-      "responsibility": "Kontrakt jawnego rodzaju physical/progress/legacy; wdrozenie w toku, GHA/runtime NOT VERIFIED."
+      "responsibility": "Jawny rodzaj physical/progress/legacy; admission, exact cache replay i physical-only ingest; source review PASS, GHA/runtime NOT VERIFIED."
     },
     {
       "id": "source-modal-record-kind-api",
       "path": "crates/fullmag-api/src/session.rs",
       "symbol": "upsert_scalar_row",
-      "responsibility": "Kontrakt jawnego rodzaju physical/progress/legacy; wdrozenie w toku, GHA/runtime NOT VERIFIED."
+      "responsibility": "Jawny rodzaj physical/progress/legacy; admission, exact cache replay i physical-only ingest; source review PASS, GHA/runtime NOT VERIFIED."
     },
     {
       "id": "source-live-pmat-owned-copy-plan",

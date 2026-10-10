@@ -400,6 +400,8 @@ pub(crate) fn live_state_manifest_from_update(
         runtime_status: Some(fullmag_runner::RuntimeStatus::from_status_code(status_str)),
         updated_at_unix_ms: unix_time_millis().unwrap_or(0),
         latest_step: LiveStepView {
+            kind: update.stats.kind.clone(),
+            solver_progress: update.stats.solver_progress.clone(),
             step: update.stats.step,
             time: update.stats.time,
             dt: update.stats.dt,
@@ -435,10 +437,7 @@ pub(crate) fn running_run_manifest_from_update(
     artifact_dir: &Path,
     update: &fullmag_runner::StepUpdate,
 ) -> RunManifest {
-    let physical = !update
-        .stats
-        .per_object_scalars
-        .contains_key("fem_eigen_progress");
+    let physical = update.stats.is_physical_observation();
     RunManifest {
         run_id: run_id.to_string(),
         session_id: session_id.to_string(),

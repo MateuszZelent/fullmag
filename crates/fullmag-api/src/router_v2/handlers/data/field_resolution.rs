@@ -286,6 +286,9 @@ pub(crate) fn live_magnetization_values_ref(
     snapshot: &SessionStateResponse,
 ) -> Option<(&[f64], [u32; 3])> {
     snapshot.live_state.as_ref().and_then(|ls| {
+        if !ls.latest_step.is_physical_observation() {
+            return None;
+        }
         let mag = ls.latest_step.magnetization.as_deref()?;
         if mag.is_empty() || mag.len() % 3 != 0 || mag.iter().any(|value| !value.is_finite()) {
             return None;

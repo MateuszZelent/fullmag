@@ -1186,16 +1186,15 @@ fn apply_step_stats_to_idle_live_state(
     state: &mut LocalLiveWorkspaceState,
     step_stats: &fullmag_runner::StepStats,
 ) {
-    if step_stats
-        .per_object_scalars
-        .contains_key("fem_eigen_progress")
-    {
+    if step_stats.validate_record_kind().is_err() || step_stats.kind.is_solver_progress() {
         return;
     }
     if step_stats.step < state.live_state.latest_step.step {
         return;
     }
     state.live_state.updated_at_unix_ms = unix_time_millis().unwrap_or(0);
+    state.live_state.latest_step.kind = step_stats.kind.clone();
+    state.live_state.latest_step.solver_progress = step_stats.solver_progress.clone();
     state.live_state.latest_step.step = step_stats.step;
     state.live_state.latest_step.time = step_stats.time;
     state.live_state.latest_step.dt = step_stats.dt;

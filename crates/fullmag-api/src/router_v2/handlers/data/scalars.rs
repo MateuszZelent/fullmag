@@ -68,7 +68,7 @@ pub async fn get_scalars(
     // source cursor offsets are preserved; persisted rows are not rewritten.
     let physical_window: Vec<_> = window
         .iter()
-        .filter(|row| !row.per_object_scalars.contains_key("fem_eigen_progress"))
+        .filter(|row| row.is_physical_observation())
         .collect();
     let window = &physical_window[..];
     let window = if query.tail.unwrap_or(false) {

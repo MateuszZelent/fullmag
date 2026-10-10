@@ -1483,7 +1483,7 @@ async fn attach_hysteresis_live_magnetization(
     let Some(snapshot) = guard.as_ref() else {
         return;
     };
-    if crate::session::has_modal_latest_step(snapshot) {
+    if crate::session::has_nonphysical_latest_step(snapshot) {
         return;
     }
     let m_avg = snapshot
@@ -1497,7 +1497,7 @@ async fn attach_hysteresis_live_magnetization(
                 .scalar_rows
                 .iter()
                 .rev()
-                .find(|row| !row.per_object_scalars.contains_key("fem_eigen_progress"))
+                .find(|row| row.is_physical_observation())
                 .map(|row| [row.mx, row.my, row.mz])
         });
     let Some(m_avg) = m_avg else {
@@ -1748,10 +1748,10 @@ pub async fn get_solver_status(
         state.current_live_session_epoch.load(std::sync::atomic::Ordering::Acquire),
     )?;
     let latest = snapshot.live_state.as_ref().map(|value| &value.latest_step)
-        .filter(|step| !step.per_object_scalars.contains_key("fem_eigen_progress"));
-    let latest_scalar_row = (!crate::session::has_modal_latest_step(snapshot))
+        .filter(|step| step.is_physical_observation());
+    let latest_scalar_row = (!crate::session::has_nonphysical_latest_step(snapshot))
         .then(|| snapshot.scalar_rows.iter().rev()
-            .find(|row| !row.per_object_scalars.contains_key("fem_eigen_progress")))
+            .find(|row| row.is_physical_observation()))
         .flatten();
     let runtime_status = build_runtime_status_view(&effective_runtime_status_code(snapshot));
     let mut warnings = material_field_plan_warnings(snapshot.metadata.as_ref());
@@ -1917,7 +1917,7 @@ pub async fn get_solver_energies_history(
     let physical_rows: Vec<&ScalarRow> = snapshot
         .scalar_rows
         .iter()
-        .filter(|row| !row.per_object_scalars.contains_key("fem_eigen_progress"))
+        .filter(|row| row.is_physical_observation())
         .collect();
     let total_rows = physical_rows.len();
     let start = query
@@ -2522,26 +2522,23 @@ pub async fn get_command_detail(
 }
 
 fn latest_energy_row(snapshot: &SessionStateResponse) -> Option<ScalarRow> {
-    if crate::session::has_modal_latest_step(snapshot) {
+    if crate::session::has_nonphysical_latest_step(snapshot) {
         return None;
     }
     snapshot
         .scalar_rows
         .iter()
         .rev()
-        .find(|row| !row.per_object_scalars.contains_key("fem_eigen_progress"))
+        .find(|row| row.is_physical_observation())
         .cloned()
         .or_else(|| {
             snapshot
                 .live_state
                 .as_ref()
-                .filter(|live_state| {
-                    !live_state
-                        .latest_step
-                        .per_object_scalars
-                        .contains_key("fem_eigen_progress")
-                })
+                .filter(|live_state| live_state.latest_step.is_physical_observation())
                 .map(|live_state| ScalarRow {
+                    kind: live_state.latest_step.kind.clone(),
+                    solver_progress: live_state.latest_step.solver_progress.clone(),
                     observation_frame: None,
                     step: live_state.latest_step.step,
                     time: live_state.latest_step.time,
@@ -2578,10 +2575,11 @@ fn latest_object_scalars<'a>(
     object_id: &str,
     object_name: &str,
 ) -> Option<&'a HashMap<String, f64>> {
-    let per_object = &snapshot.live_state.as_ref()?.latest_step.per_object_scalars;
-    if per_object.contains_key("fem_eigen_progress") {
+    let latest_step = &snapshot.live_state.as_ref()?.latest_step;
+    if !latest_step.is_physical_observation() {
         return None;
     }
+    let per_object = &latest_step.per_object_scalars;
     let get_fallback = |id: &str| {
         per_object.get(id).or_else(|| {
             if id.ends_with("_geom") {

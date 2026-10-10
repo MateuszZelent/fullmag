@@ -1265,6 +1265,8 @@ mod realtime_change_tests {
             run_id: Some(run_id.to_string()),
             revision,
             row: ScalarRow {
+                kind: fullmag_quantities::StepDataKind::PhysicalObservation,
+                solver_progress: None,
                 observation_frame: None,
                 step,
                 time: step as f64,
@@ -3981,7 +3983,7 @@ where
         current_live_realtime_state_from_snapshot(&state, &next, display_selection.revision).await;
     let scalar_sample =
         if has_scalar_row_update
-            && !has_modal_latest_step(&next)
+            && !has_nonphysical_latest_step(&next)
             && next.scalar_revision
                 > previous_snapshot
                     .as_ref()
@@ -4008,7 +4010,7 @@ where
     if state.current_live_session_epoch.load(Ordering::Relaxed) != admission_epoch {
         return Err(ApiError::conflict("current_live_session_transitioned"));
     }
-    if has_modal_latest_step(&next) {
+    if has_nonphysical_latest_step(&next) {
         // The transition lock also serializes delayed scalar flushes. Cancel
         // a pending physical sample before admitting diagnostic-only state.
         state
@@ -6348,14 +6350,18 @@ fn resolve_global_scalar_quantity(
 }
 
 fn current_preview_source(current: &SessionStateResponse) -> (u64, f64) {
-    if let Some(live_state) = current.live_state.as_ref() {
+    if let Some(live_state) = current
+        .live_state
+        .as_ref()
+        .filter(|state| state.latest_step.is_physical_observation())
+    {
         return (live_state.latest_step.step, live_state.latest_step.time);
     }
     if let Some(row) = current
         .scalar_rows
         .iter()
         .rev()
-        .find(|row| !row.per_object_scalars.contains_key("fem_eigen_progress"))
+        .find(|row| row.is_physical_observation())
     {
         return (row.step, row.time);
     }
@@ -6366,7 +6372,7 @@ fn current_preview_source(current: &SessionStateResponse) -> (u64, f64) {
 }
 
 fn current_global_scalar_value(current: &SessionStateResponse, quantity: &str) -> Option<f64> {
-    if has_modal_latest_step(current) {
+    if has_nonphysical_latest_step(current) {
         return None;
     }
     let metric_key = quantity_spec(quantity)?.scalar_metric_key?;
@@ -6374,18 +6380,13 @@ fn current_global_scalar_value(current: &SessionStateResponse, quantity: &str) -
         .scalar_rows
         .iter()
         .rev()
-        .find(|row| !row.per_object_scalars.contains_key("fem_eigen_progress"))
+        .find(|row| row.is_physical_observation())
         .and_then(|row| scalar_row_metric_value(row, metric_key))
         .or_else(|| {
             current
                 .live_state
                 .as_ref()
-                .filter(|state| {
-                    !state
-                        .latest_step
-                        .per_object_scalars
-                        .contains_key("fem_eigen_progress")
-                })
+                .filter(|state| state.latest_step.is_physical_observation())
                 .and_then(|state| live_step_metric_value(&state.latest_step, metric_key))
         })
         .or_else(|| {

@@ -72,21 +72,14 @@ fn annotate_runtime_quantity_state(
                 .iter()
                 .find(|status| status.quantity == entry.id)
         });
-        let source_is_present = snapshot.latest_fields.get(&entry.id).is_some()
-            || snapshot.preview_cache.get(&entry.id).is_some()
-            || (entry.id == "m"
-                && snapshot
-                    .live_state
-                    .as_ref()
-                    .and_then(|state| state.latest_step.magnetization.as_ref())
-                    .is_some());
-        let resolved_field = source_is_present
-            .then(|| resolve_current_spatial_field(snapshot, &entry.id, usize::from(spec.n_comp)))
-            .transpose()
-            .ok()
-            .flatten()
-            .flatten()
-            .filter(|field| !field.values.is_empty());
+        let resolved_field = resolve_current_spatial_field(
+            snapshot,
+            &entry.id,
+            usize::from(spec.n_comp),
+        )
+        .ok()
+        .flatten()
+        .filter(|field| !field.values.is_empty());
         let has_payload = resolved_field.is_some();
         let unavailable_payload_state = || {
             if supported {

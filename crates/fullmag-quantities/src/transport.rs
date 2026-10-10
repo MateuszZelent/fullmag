@@ -3,7 +3,7 @@
 //! These types define the canonical contract between the runner/backend
 //! and the API/frontend for streaming quantity data during simulation.
 
-use crate::step_data::{GlobalQuantityRow, StepDiagnostics};
+use crate::step_data::{GlobalQuantityRow, StepDataKind, StepDiagnostics};
 use serde::{Deserialize, Serialize};
 
 /// Provenance retained when a materialized preview field is promoted to the
@@ -70,18 +70,234 @@ pub struct LiveQuantityFrame {
 ///
 /// This is the target wire format; the existing `StepUpdate` remains
 /// as a backward-compatible shim during migration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct StepUpdateV2 {
     /// Solver telemetry for this step.
     pub diagnostics: StepDiagnostics,
-    /// Physical scalar observations (energies, averages).
+    /// Scalar compatibility row, qualified only when its kind is physical.
     pub scalars: GlobalQuantityRow,
     /// Zero or more spatial quantity frames (e.g., magnetization preview).
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub frames: Vec<LiveQuantityFrame>,
     /// True when the simulation has completed.
-    #[serde(default)]
     pub finished: bool,
+}
+
+impl StepUpdateV2 {
+    /// Validate that the step record has one coherent semantic kind and payload.
+    pub fn validate(&self) -> Result<(), &'static str> {
+        self.diagnostics.validate_record_kind()?;
+        if self.diagnostics.kind != self.scalars.kind {
+            return Err("step diagnostics and scalar row kinds must match");
+        }
+        match self.diagnostics.kind {
+            StepDataKind::PhysicalObservation => {}
+            StepDataKind::SolverProgress => {
+                if !self.scalars.per_object_scalars.is_empty() {
+                    return Err("solver progress records cannot carry per-object scalar samples");
+                }
+            }
+            StepDataKind::LegacyUnclassified => {
+                if !self.frames.is_empty() {
+                    return Err(
+                        "legacy unclassified records cannot carry physical quantity frames",
+                    );
+                }
+            }
+        }
+        if !self.diagnostics.kind.is_physical_observation() && !self.frames.is_empty() {
+            return Err("only physical observations can carry quantity frames");
+        }
+        Ok(())
+    }
+}
+
+impl Serialize for StepUpdateV2 {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+
+        self.validate().map_err(serde::ser::Error::custom)?;
+        let field_count = if self.frames.is_empty() { 3 } else { 4 };
+        let mut state = serializer.serialize_struct("StepUpdateV2", field_count)?;
+        state.serialize_field("diagnostics", &self.diagnostics)?;
+        state.serialize_field("scalars", &self.scalars)?;
+        if !self.frames.is_empty() {
+            state.serialize_field("frames", &self.frames)?;
+        }
+        state.serialize_field("finished", &self.finished)?;
+        state.end()
+    }
+}
+
+#[derive(Deserialize)]
+struct StepUpdateV2Repr {
+    diagnostics: StepDiagnostics,
+    scalars: GlobalQuantityRow,
+    #[serde(default)]
+    frames: Vec<LiveQuantityFrame>,
+    #[serde(default)]
+    finished: bool,
+}
+
+impl<'de> Deserialize<'de> for StepUpdateV2 {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        use serde::de::Error as _;
+
+        let repr = StepUpdateV2Repr::deserialize(deserializer)?;
+        let update = Self {
+            diagnostics: repr.diagnostics,
+            scalars: repr.scalars,
+            frames: repr.frames,
+            finished: repr.finished,
+        };
+        update.validate().map_err(D::Error::custom)?;
+        Ok(update)
+    }
+}
+
+#[cfg(test)]
+mod step_update_v2_validation_tests {
+    use super::{LiveQuantityFrame, StepUpdateV2};
+    use crate::{GlobalQuantityRow, SolverProgress, StepDataKind, StepDiagnostics};
+    use std::collections::HashMap;
+
+    fn progress_update() -> StepUpdateV2 {
+        StepUpdateV2 {
+            diagnostics: StepDiagnostics {
+                kind: StepDataKind::SolverProgress,
+                solver_progress: Some(SolverProgress::FemEigen {
+                    metrics: HashMap::from([("percent".into(), 50.0)]),
+                }),
+                ..StepDiagnostics::default()
+            },
+            scalars: GlobalQuantityRow {
+                kind: StepDataKind::SolverProgress,
+                ..GlobalQuantityRow::default()
+            },
+            frames: Vec::new(),
+            finished: false,
+        }
+    }
+
+    fn progress_update_json() -> serde_json::Value {
+        serde_json::to_value(progress_update()).expect("valid progress update serializes")
+    }
+
+    #[test]
+    fn typed_progress_round_trips_without_a_fake_object_namespace() {
+        let update = progress_update();
+        assert!(update.validate().is_ok());
+        let value = serde_json::to_value(&update).expect("progress update serializes");
+        assert_eq!(value["diagnostics"]["solver_progress"]["kind"], "fem_eigen");
+        assert_eq!(
+            value["diagnostics"]["solver_progress"]["metrics"]["percent"],
+            50.0
+        );
+        assert!(value["scalars"].get("per_object_scalars").is_none());
+
+        let restored: StepUpdateV2 =
+            serde_json::from_value(value).expect("progress update parses");
+        assert_eq!(restored.diagnostics.kind, StepDataKind::SolverProgress);
+        assert_eq!(restored.scalars.kind, StepDataKind::SolverProgress);
+        assert!(restored.validate().is_ok());
+    }
+
+    #[test]
+    fn serialization_and_deserialization_reject_contradictory_kinds_and_payloads() {
+        let mut invalid = progress_update();
+        invalid.diagnostics.solver_progress = None;
+        assert!(invalid.validate().is_err());
+        assert!(serde_json::to_value(&invalid).is_err());
+
+        let mut value = serde_json::to_value(progress_update()).expect("valid update serializes");
+        value["scalars"]["kind"] = serde_json::json!("physical_observation");
+        assert!(serde_json::from_value::<StepUpdateV2>(value).is_err());
+    }
+
+    #[test]
+    fn deserialization_rejects_null_and_contradictory_progress_payloads() {
+        let mut null_payload = progress_update_json();
+        null_payload["diagnostics"]["solver_progress"] = serde_json::Value::Null;
+        assert!(serde_json::from_value::<StepUpdateV2>(null_payload).is_err());
+
+        let mut physical_with_progress = progress_update_json();
+        physical_with_progress["diagnostics"]["kind"] =
+            serde_json::json!("physical_observation");
+        physical_with_progress["scalars"]["kind"] = serde_json::json!("physical_observation");
+        assert!(serde_json::from_value::<StepUpdateV2>(physical_with_progress).is_err());
+    }
+
+    #[test]
+    fn deserialization_rejects_progress_object_samples_and_physical_frames() {
+        let mut per_object_samples = progress_update_json();
+        per_object_samples["scalars"]["per_object_scalars"] = serde_json::json!({
+            "magnet": {"mx": 0.5}
+        });
+        assert!(serde_json::from_value::<StepUpdateV2>(per_object_samples).is_err());
+
+        let mut physical_frames = progress_update_json();
+        physical_frames["frames"] = serde_json::json!([{
+            "quantity_id": "m",
+            "unit": "1",
+            "grid": [1, 1, 1],
+            "n_comp": 3,
+            "values": [0.0, 0.0, 0.0]
+        }]);
+        assert!(serde_json::from_value::<StepUpdateV2>(physical_frames).is_err());
+    }
+
+    #[test]
+    fn missing_legacy_kinds_preserve_raw_scalars_without_quantity_admission() {
+        let update = StepUpdateV2 {
+            diagnostics: StepDiagnostics::default(),
+            scalars: GlobalQuantityRow {
+                e_total: 3.5,
+                ..GlobalQuantityRow::default()
+            },
+            frames: Vec::new(),
+            finished: false,
+        };
+        let mut value = serde_json::to_value(update).expect("physical update serializes");
+        value["diagnostics"]
+            .as_object_mut()
+            .expect("diagnostics object")
+            .remove("kind");
+        value["scalars"]
+            .as_object_mut()
+            .expect("scalar object")
+            .remove("kind");
+
+        let restored: StepUpdateV2 =
+            serde_json::from_value(value).expect("legacy update parses");
+        assert_eq!(restored.diagnostics.kind, StepDataKind::LegacyUnclassified);
+        assert_eq!(restored.scalars.kind, StepDataKind::LegacyUnclassified);
+        assert_eq!(restored.scalars.e_total, 3.5);
+        assert_eq!(restored.scalars.scalar_value("e_total"), None);
+    }
+
+    #[test]
+    fn progress_updates_reject_physical_frames() {
+        let mut update = progress_update();
+        update.frames.push(LiveQuantityFrame {
+            quantity_id: "m".into(),
+            unit: "1".into(),
+            grid: [1, 1, 1],
+            n_comp: 3,
+            values: vec![0.0; 3],
+            active_mask: None,
+            provenance: None,
+            spatial_kind: None,
+            quantity_domain: None,
+            layout: None,
+        });
+        assert!(update.validate().is_err());
+        assert!(serde_json::to_value(update).is_err());
+    }
 }
 
 /// A request from the frontend for a specific live quantity preview.

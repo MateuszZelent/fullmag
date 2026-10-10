@@ -3195,9 +3195,6 @@ fn fem_eigen_progress_update(
         (progress.warning == Some("dense_o_n3_eigensolve_without_iteration_progress")) as u8 as f64,
     );
 
-    let mut per_object_scalars = std::collections::HashMap::new();
-    per_object_scalars.insert("fem_eigen_progress".to_string(), progress_scalars);
-
     StepUpdate {
         coupled_checkpoint: None,
         stats: StepStats {
@@ -3205,7 +3202,10 @@ fn fem_eigen_progress_update(
                 .iteration
                 .map(u64::from)
                 .unwrap_or(u64::from(progress.phase_index)),
-            per_object_scalars,
+            kind: fullmag_quantities::StepDataKind::SolverProgress,
+            solver_progress: Some(fullmag_quantities::SolverProgress::FemEigen {
+                metrics: progress_scalars,
+            }),
             ..StepStats::default()
         },
         grid: [0, 0, 0],
@@ -5816,7 +5816,16 @@ mod tests {
             },
             None,
         );
-        let progress = &update.stats.per_object_scalars["fem_eigen_progress"];
+        let progress = match update
+            .stats
+            .solver_progress
+            .as_ref()
+            .expect("typed progress channel")
+        {
+            fullmag_quantities::SolverProgress::FemEigen { metrics } => metrics,
+        };
+        assert_eq!(update.stats.kind, fullmag_quantities::StepDataKind::SolverProgress);
+        assert!(update.stats.per_object_scalars.is_empty());
         assert_eq!(progress["residual"], 2.5e-7);
         assert_eq!(
             progress["solver_kind:slepc_multi_shift_invert_production_cpu_dense"],
@@ -5828,6 +5837,14 @@ mod tests {
         );
         assert_eq!(update.stats.max_h_eff, 0.0);
         assert!(!update.scalar_row_due);
+
+        let v2 = update.to_v2();
+        assert!(v2.validate().is_ok());
+        assert_eq!(v2.diagnostics.kind, fullmag_quantities::StepDataKind::SolverProgress);
+        assert_eq!(v2.scalars.kind, fullmag_quantities::StepDataKind::SolverProgress);
+        assert!(v2.diagnostics.solver_progress.is_some());
+        assert!(v2.scalars.per_object_scalars.is_empty());
+        assert_eq!(v2.scalars.scalar_value("max_h_eff"), None);
     }
 
     #[test]
@@ -5849,7 +5866,16 @@ mod tests {
             },
             None,
         );
-        let progress = &update.stats.per_object_scalars["fem_eigen_progress"];
+        let progress = match update
+            .stats
+            .solver_progress
+            .as_ref()
+            .expect("typed progress channel")
+        {
+            fullmag_quantities::SolverProgress::FemEigen { metrics } => metrics,
+        };
+        assert_eq!(update.stats.kind, fullmag_quantities::StepDataKind::SolverProgress);
+        assert!(update.stats.per_object_scalars.is_empty());
 
         assert_eq!(progress["iteration"], 17.0);
         assert_eq!(progress["max_iterations"], 300.0);

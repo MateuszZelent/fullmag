@@ -401,8 +401,8 @@ struct TableRowSelection {
     resync_required: bool,
 }
 
-fn is_hidden_legacy_table_row(row: &ScalarRow) -> bool {
-    row.per_object_scalars.contains_key("fem_eigen_progress")
+fn is_unqualified_table_row(row: &ScalarRow) -> bool {
+    !row.is_physical_observation()
 }
 
 fn table_row_passes_query_filters(
@@ -448,7 +448,7 @@ fn select_table_rows(all_rows: &[ScalarRow], query: &TableRowsQuery) -> TableRow
             if query.cursor.is_some_and(|after_cursor| cursor <= after_cursor) {
                 continue;
             }
-            if is_hidden_legacy_table_row(row) ||
+            if is_unqualified_table_row(row) ||
                 !table_row_passes_query_filters(index, row, query) {
                 continue;
             }
@@ -487,11 +487,11 @@ fn select_table_rows(all_rows: &[ScalarRow], query: &TableRowsQuery) -> TableRow
             let source_cursor = index as u64 + 1;
             if query.cursor.is_none() {
                 if query.to_row.is_some_and(|to_row| source_cursor > to_row) ||
-                    !is_hidden_legacy_table_row(row) ||
+                    !is_unqualified_table_row(row) ||
                     !table_row_passes_query_filters(index, row, query) {
                     break;
                 }
-            } else if !is_hidden_legacy_table_row(row) &&
+            } else if !is_unqualified_table_row(row) &&
                 table_row_passes_query_filters(index, row, query) {
                 // Do not advance past the next row this query could return,
                 // even if the visible-row limit has already been reached.
@@ -872,8 +872,9 @@ mod modal_history_tests {
     use super::*;
 
     #[test]
-    fn table_views_exclude_modal_rows_without_renumbering_source_cursors() {
+    fn table_views_exclude_unqualified_rows_without_renumbering_source_cursors() {
         let row: ScalarRow = serde_json::from_value(serde_json::json!({
+            "kind": "physical_observation",
             "step": 1, "time": 1.0, "solver_dt": 0.1,
             "mx": 1.0, "my": 0.0, "mz": 0.0,
             "e_ex": 0.0, "e_demag": 0.0, "e_ext": 0.0, "e_total": 1.25,
@@ -883,6 +884,7 @@ mod modal_history_tests {
         let mut modal = row.clone();
         modal.step = 2;
         modal.e_total = 0.0;
+        modal.kind = fullmag_quantities::StepDataKind::LegacyUnclassified;
         modal
             .per_object_scalars
             .insert("fem_eigen_progress".into(), Default::default());
@@ -912,6 +914,7 @@ mod modal_history_tests {
 
     fn table_row(step: u64, time: f64, e_total: f64) -> ScalarRow {
         serde_json::from_value(serde_json::json!({
+            "kind": "physical_observation",
             "step": step, "time": time, "solver_dt": 0.1,
             "mx": 1.0, "my": 0.0, "mz": 0.0,
             "e_ex": 0.0, "e_demag": 0.0, "e_ext": 0.0, "e_total": e_total,
@@ -922,9 +925,34 @@ mod modal_history_tests {
 
     fn hidden_modal_row(step: u64, time: f64) -> ScalarRow {
         let mut row = table_row(step, time, 0.0);
+        row.kind = fullmag_quantities::StepDataKind::LegacyUnclassified;
         row.per_object_scalars
             .insert("fem_eigen_progress".into(), Default::default());
         row
+    }
+
+    #[test]
+    fn physical_table_row_keeps_legal_fem_eigen_progress_object_id() {
+        let mut row = table_row(1, 1.0, 4.0);
+        row.per_object_scalars.insert(
+            "fem_eigen_progress".into(),
+            std::collections::HashMap::from([("measured_value".into(), 4.0)]),
+        );
+        let query = TableRowsQuery {
+            columns: Some("e_total".into()),
+            ..Default::default()
+        };
+
+        let window = build_table_rows_resource(
+            "default".into(),
+            &[row],
+            &query,
+            vec!["step".into(), "e_total".into()],
+        )
+        .unwrap();
+
+        assert_eq!(window.returned_rows, 1);
+        assert_eq!(window.rows, vec![vec![1.0, 4.0]]);
     }
 
     fn delta_query(cursor: u64, limit: u64) -> TableRowsQuery {

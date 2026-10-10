@@ -64,7 +64,8 @@ use crate::router_v2::handlers::sessions::status::{
 use crate::schemas::common::AcceptedObservationFrameRef;
 use crate::schemas::fields::*;
 use crate::session::{
-    current_artifact_dir, latest_field_source_precedence, preview_cache_precedes_latest,
+    current_artifact_dir, latest_field_source_is_qualified, latest_field_source_precedence,
+    preview_cache_precedes_latest, preview_field_source_is_qualified,
     preview_field_source_precedence, resolved_current_field_source, ResolvedCurrentFieldSource,
 };
 use crate::types::{AppState, CommandLifecycleState, SessionStateResponse};
@@ -1434,6 +1435,9 @@ fn preview_cache_is_fresher(snapshot: &SessionStateResponse, quantity_id: &str) 
     let Some(preview) = snapshot.preview_cache.get(quantity_id) else {
         return false;
     };
+    if !preview_field_source_is_qualified(snapshot, preview) {
+        return false;
+    }
     let n_comp = quantity_spec(quantity_id)
         .map(|spec| spec.n_comp as usize)
         .unwrap_or(3);
@@ -1445,7 +1449,10 @@ fn preview_cache_is_fresher(snapshot: &SessionStateResponse, quantity_id: &str) 
     ) {
         return false;
     }
-    if snapshot.latest_fields.get(quantity_id).is_none() {
+    let Some(latest) = snapshot.latest_fields.get(quantity_id) else {
+        return true;
+    };
+    if !latest_field_source_is_qualified(snapshot, quantity_id, latest) {
         return true;
     }
     preview_cache_precedes_latest(snapshot, quantity_id)
@@ -1855,6 +1862,7 @@ fn invalid_live_magnetization_is_present(snapshot: &SessionStateResponse) -> boo
     snapshot
         .live_state
         .as_ref()
+        .filter(|state| state.latest_step.is_physical_observation())
         .and_then(|state| state.latest_step.magnetization.as_ref())
         .is_some()
         && !live_magnetization_available(snapshot)
@@ -1869,7 +1877,8 @@ fn invalid_current_field_source_is_present(
         .latest_fields
         .get(quantity_id)
         .is_some_and(|value| {
-            !json_field_matches_current_domain(snapshot, quantity_id, n_comp, value)
+            latest_field_source_is_qualified(snapshot, quantity_id, value)
+                && !json_field_matches_current_domain(snapshot, quantity_id, n_comp, value)
         });
     let invalid_live = quantity_id == "m" && invalid_live_magnetization_is_present(snapshot);
     invalid_latest || invalid_live
@@ -1907,6 +1916,9 @@ pub async fn get_field_catalog(
         BTreeMap::<String, (String, Option<String>, String, String)>::new();
 
     for (qid, value) in snapshot.latest_fields.entries() {
+        if !latest_field_source_is_qualified(snapshot, qid, value) {
+            continue;
+        }
         if preview_cache_is_fresher(snapshot, qid) {
             continue;
         }
@@ -1935,6 +1947,9 @@ pub async fn get_field_catalog(
     }
 
     for (qid, field) in snapshot.preview_cache.iter() {
+        if !preview_field_source_is_qualified(snapshot, field) {
+            continue;
+        }
         if quantities.iter().any(|q| q.quantity_id == *qid) {
             continue;
         }
@@ -2725,6 +2740,7 @@ pub async fn get_field_meta(
     let location = snapshot
         .preview_cache
         .get(quantity_id)
+        .filter(|field| preview_field_source_is_qualified(snapshot, field))
         .filter(|field| field.spatial_kind.starts_with("fem_"))
         .map(|field| field.spatial_kind.clone())
         .unwrap_or_else(|| quantity_spatial_domain(quantity_id).to_string());
@@ -3134,6 +3150,7 @@ fn field_observation_frame_ref(
     snapshot
         .latest_fields
         .get(quantity_id)
+        .filter(|value| latest_field_source_is_qualified(snapshot, quantity_id, value))
         .and_then(|value| value.get("observation_frame"))
         .and_then(|value| serde_json::from_value(value.clone()).ok())
         .unwrap_or_else(|| {
@@ -4686,17 +4703,17 @@ async fn get_field_vector_unfenced(
                         .map(|(field, grid, _freshness)| (field.values.clone(), grid, Some(field)))
                 })
         };
+    let has_qualified_latest = snapshot.latest_fields.get(quantity_id).is_some_and(|value| {
+        latest_field_source_is_qualified(snapshot, quantity_id, value)
+    });
+    let has_qualified_preview = snapshot
+        .preview_cache
+        .get(quantity_id)
+        .is_some_and(|field| preview_field_source_is_qualified(snapshot, field));
     let has_field_source = airbox_field.is_some()
         || (!multilayer_airbox_scope
-            && (snapshot.latest_fields.get(quantity_id).is_some()
-                || snapshot.preview_cache.get(quantity_id).is_some()
-                || transport_field.is_some()))
-        || (quantity_id == "m"
-            && snapshot
-                .live_state
-                .as_ref()
-                .and_then(|state| state.latest_step.magnetization.as_ref())
-                .is_some());
+            && (has_qualified_latest || has_qualified_preview || transport_field.is_some()))
+        || (quantity_id == "m" && live_magnetization_available(snapshot));
 
     if raw_values_opt.is_none() {
         validate_pending_field_vector_scope(
@@ -8607,7 +8624,9 @@ fn urlencoding(s: &str) -> String {
 mod tests {
     use super::{
         analysis_complex_vector_view_values, analysis_frequency_response_view_values,
+        AcceptedObservationFrameRef,
         apply_field_scope, decode_complex_f64_pairs_little_endian,
+        domain_generation_id,
         insert_field_vector_binary_headers, is_fem_runtime, materializer_status,
         parse_analysis_eigen_mode_field_id, parse_analysis_frequency_response_field_id,
         parse_component, preview_cache_is_fresher, project_values, push_field_descriptor,
@@ -8657,6 +8676,39 @@ mod tests {
             supports_lossy_fallback_override: false,
         });
         snapshot
+    }
+
+    fn add_physical_field_source(
+        snapshot: &mut crate::types::SessionStateResponse,
+        step: u64,
+        time: Option<f64>,
+    ) {
+        let mut row: crate::types::ScalarRow = serde_json::from_value(serde_json::json!({
+            "kind": "physical_observation",
+            "step": step,
+            "time": time.unwrap_or(step as f64 * 1.0e-12),
+            "solver_dt": 1.0e-12,
+            "mx": 0.0,
+            "my": 0.0,
+            "mz": 1.0,
+            "e_ex": 0.0,
+            "e_demag": 0.0,
+            "e_ext": 0.0,
+            "e_total": 0.0,
+            "max_dm_dt": 0.0,
+            "max_h_eff": 0.0,
+            "max_h_demag": 0.0
+        }))
+        .expect("physical source row fixture");
+        row.observation_frame = Some(AcceptedObservationFrameRef::for_snapshot(
+            &snapshot.session.session_id,
+            snapshot.session.started_at_unix_ms,
+            domain_generation_id(snapshot),
+            snapshot.mesh_revision,
+            row.step,
+            Some(row.time),
+        ));
+        snapshot.scalar_rows.push(row);
     }
 
     #[test]
@@ -8809,6 +8861,7 @@ mod tests {
         snapshot
             .field_quantity_revisions
             .insert("H_demag".to_string(), 7);
+        add_physical_field_source(&mut snapshot, 3, None);
         snapshot.preview_cache.insert(LivePreviewField {
             config_revision: 1,
             source_step: 3,
@@ -8998,6 +9051,7 @@ mod tests {
                 "grid_cells": [2, 1, 1]
             }
         }));
+        add_physical_field_source(&mut snapshot, 2, None);
         snapshot.preview_cache.insert(LivePreviewField {
             config_revision: 1,
             source_step: 2,
@@ -9078,6 +9132,7 @@ mod tests {
             build_report: None,
         });
         snapshot.field_quantity_revisions.insert("m".to_string(), 9);
+        add_physical_field_source(&mut snapshot, 2, None);
         snapshot.preview_cache.insert(LivePreviewField {
             config_revision: 1,
             source_step: 2,
@@ -9255,6 +9310,7 @@ mod tests {
         snapshot
             .field_quantity_revisions
             .insert("H_demag".to_string(), 17);
+        add_physical_field_source(&mut snapshot, 5, None);
         snapshot.preview_cache.insert(LivePreviewField {
             config_revision: 31,
             source_step: 5,
@@ -9461,6 +9517,8 @@ mod tests {
             }
         }))
         .expect("full latest field should deserialize");
+        add_physical_field_source(&mut snapshot, 12, None);
+        add_physical_field_source(&mut snapshot, 13, None);
         snapshot.preview_cache.insert(LivePreviewField {
             config_revision: 13,
             source_step: 13,
