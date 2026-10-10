@@ -27838,6 +27838,84 @@ async fn session_import_missing_snapshot_rejects_before_mutating_state_or_store(
 }
 
 #[tokio::test]
+async fn compact_session_import_missing_declared_artifact_preserves_active_workspace() {
+    use base64::Engine;
+    use std::io::{Cursor, Read, Write};
+    use zip::write::SimpleFileOptions;
+
+    let (app, state, repo_root) = test_router_with_session_store_state().await;
+    let active_before = serde_json::to_value(state.current_live_state.read().await.clone())
+        .expect("active snapshot must serialize");
+    let selection_before = serde_json::to_value(state.current_display_selection.read().await.clone())
+        .expect("selection must serialize");
+    let presentation_before =
+        serde_json::to_value(state.current_display_presentation.read().await.clone())
+            .expect("presentation must serialize");
+    let response = app.clone().oneshot(
+        Request::builder().method("POST")
+            .uri("/v2/sessions/current/persistence/exports")
+            .header("content-type", "application/json")
+            .body(Body::from(serde_json::json!({"profile": "compact"}).to_string()))
+            .unwrap(),
+    ).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let exported = body_json(response).await;
+    let bytes = base64::engine::general_purpose::STANDARD.decode(
+        exported["fms_base64"].as_str().expect("export must return an archive"),
+    ).expect("archive must decode");
+
+    // Mutate a valid archive after the public writer has validated it. Retain
+    // its run, session, script digest and every payload; only declare one
+    // additional artifact without its member, with valid ZIP sizes and CRCs.
+    let mut source = zip::ZipArchive::new(Cursor::new(bytes)).unwrap();
+    let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    let options = SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated);
+    let mut changed_snapshot = false;
+    for index in 0..source.len() {
+        let mut member = source.by_index(index).unwrap();
+        let name = member.name().to_string();
+        let mut data = Vec::new();
+        member.read_to_end(&mut data).unwrap();
+        drop(member);
+        if name == "project/current_live_snapshot.json" {
+            let mut snapshot: serde_json::Value = serde_json::from_slice(&data).unwrap();
+            snapshot["artifacts"].as_array_mut().expect("typed artifact array")
+                .push(serde_json::json!({
+                    "path": "missing-spectrum.json", "kind": "eigen_spectrum"
+                }));
+            let run_id = snapshot["session"]["run_id"].as_str().unwrap();
+            assert!(source.by_name(&format!("runs/{run_id}/artifacts/missing-spectrum.json")).is_err());
+            data = serde_json::to_vec(&snapshot).unwrap();
+            changed_snapshot = true;
+        }
+        writer.start_file(name, options).unwrap();
+        writer.write_all(&data).unwrap();
+    }
+    assert!(changed_snapshot, "regression must mutate the actual persisted snapshot");
+    let malformed = writer.finish().unwrap().into_inner();
+    let response = app.oneshot(
+        Request::builder().method("POST")
+            .uri("/v2/sessions/current/persistence/imports")
+            .header("content-type", "application/json")
+            .body(Body::from(serde_json::json!({
+                "fms_base64": base64::engine::general_purpose::STANDARD.encode(malformed)
+            }).to_string())).unwrap(),
+    ).await.unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let error = body_json(response).await;
+    assert!(error.to_string().contains("missing-spectrum.json"),
+        "failure must identify the absent declared payload: {error}");
+    assert_eq!(serde_json::to_value(state.current_live_state.read().await.clone()).unwrap(), active_before);
+    assert_eq!(serde_json::to_value(state.current_display_selection.read().await.clone()).unwrap(), selection_before);
+    assert_eq!(serde_json::to_value(state.current_display_presentation.read().await.clone()).unwrap(), presentation_before);
+    let imports = repo_root.join(".fullmag/local-live/session-store/imports");
+    assert!(!imports.exists() || fs::read_dir(&imports).unwrap().next().is_none(),
+        "failed payload validation must not publish an import");
+    let _ = fs::remove_dir_all(&repo_root);
+}
+
+#[tokio::test]
 async fn session_import_rejects_late_run_snapshot_mismatch_without_publishing_or_mutating_live_state(
 ) {
     use base64::Engine;

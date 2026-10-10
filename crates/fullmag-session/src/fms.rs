@@ -218,6 +218,7 @@ pub fn pack_fms<W: Write + Seek>(
         &canonical_root,
         &run_entries,
         &solution_entries,
+        documents,
     )?;
     validate_export_plan(
         session,
@@ -365,6 +366,7 @@ fn plan_cas_entries(
     canonical_root: &Path,
     run_entries: &[PackEntry],
     solution_entries: &[PackEntry],
+    project_documents: &HashMap<String, Vec<u8>>,
 ) -> Result<Vec<CasPackEntry>> {
     let mut documents = HashMap::new();
     for entry in run_entries.iter().chain(solution_entries) {
@@ -385,7 +387,21 @@ fn plan_cas_entries(
             validate_store_source(store_root, canonical_root, &entry.path(), false)?;
         }
     }
-    let report = reachability::walk_export_file_documents(&documents, canonical_root)?;
+    // The separately supplied current workspace snapshot carries both CAS
+    // and ordinary run-artifact edges. Validate its exact export bytes against
+    // the selected inventory, not against extra files left in the source store.
+    let snapshot = project_documents.get("current_live_snapshot.json")
+        .or_else(|| project_documents.get("project/current_live_snapshot.json"));
+    let report = if let Some(snapshot) = snapshot {
+        let inline = HashMap::from([(
+            "project/current_live_snapshot.json".to_string(), snapshot.clone(),
+        )]);
+        reachability::walk_export_file_documents_with_project(
+            &documents, canonical_root, &inline,
+        )?
+    } else {
+        reachability::walk_export_file_documents(&documents, canonical_root)?
+    };
     report.require_complete()?;
 
     let mut entries = Vec::new();
@@ -1726,6 +1742,8 @@ impl Drop for ArchiveStagingOwner {
 pub fn unpack_fms_staged(preflight: &FmsStagedPreflight, store: &SessionStore) -> Result<FmsSessionManifest> {
     if matches!(preflight.session.profile, SaveProfile::Solved | SaveProfile::Resume | SaveProfile::Archive) {
         preflight.reachability.require_complete()?;
+    } else {
+        preflight.reachability.require_visualization_safe()?;
     }
     let _lease = store.write_transaction()?;
     ensure_unpack_destination_pristine(store.root())?;
@@ -2114,14 +2132,13 @@ fn unpack_fms_inner<R: Read + Seek>(
 ) -> Result<FmsSessionManifest> {
     let preflight = preflight_fms(reader, &[])?;
 
-    if require_complete_reachability {
-        if matches!(
+    if require_complete_reachability
+        && matches!(
             preflight.session.profile,
             SaveProfile::Solved | SaveProfile::Resume | SaveProfile::Archive
-        ) && !preflight.reachability.complete
-        {
-            preflight.reachability.require_complete()?;
-        }
+        )
+    {
+        preflight.reachability.require_complete()?;
     } else {
         preflight.reachability.require_visualization_safe()?;
     }
@@ -2328,7 +2345,7 @@ mod tests {
         SolutionArtifactRef, SolutionExecutionStatus, SolutionMember, SolutionSet,
         SolutionSetManifestState, SolutionSetProvenance, SOLUTION_SET_SCHEMA_VERSION,
     };
-    use std::io::{Cursor, Write};
+    use std::io::{Cursor, Read, Write};
 
     fn test_session() -> FmsSessionManifest {
         FmsSessionManifest::new("s-001", "Test", SaveProfile::Compact)
@@ -2730,11 +2747,11 @@ mod tests {
         assert_eq!(disk.object_refs, memory.object_refs);
         assert_eq!(disk.file_refs, memory.file_refs);
         assert!(!disk.object_refs.contains(&unused_ref));
-        let plan = plan_cas_entries(store.root(), &canonical_root, &[], &entries).unwrap();
+        let plan = plan_cas_entries(store.root(), &canonical_root, &[], &entries, &HashMap::new()).unwrap();
         assert_eq!(plan.len(), 1);
         assert_eq!(plan[0].byte_count, payload.len() as u64);
         fs::write(&plan[0].source, vec![24_u8; payload.len()]).unwrap();
-        assert!(plan_cas_entries(store.root(), &canonical_root, &[], &entries).is_err());
+        assert!(plan_cas_entries(store.root(), &canonical_root, &[], &entries, &HashMap::new()).is_err());
     }
 
     #[test]
@@ -3717,6 +3734,284 @@ mod tests {
             .iter()
             .any(|warning| warning.contains("no packaged artifacts")));
     }
+    fn live_snapshot_bytes(
+        run_id: &str,
+        artifacts: &[(&str, &str)],
+        object_ref: Option<&str>,
+    ) -> Vec<u8> {
+        let artifacts = artifacts
+            .iter()
+            .map(|&(path, kind)| serde_json::json!({"path": path, "kind": kind}))
+            .collect::<Vec<_>>();
+        let latest_fields = object_ref
+            .map(|object_ref| serde_json::json!({"m": {"payload_ref": object_ref}}))
+            .unwrap_or_else(|| serde_json::json!({}));
+        serde_json::to_vec(&serde_json::json!({
+            "session_protocol_version": "v2",
+            "capability_profile_version": "v1",
+            "session": {"session_id": "s-001", "run_id": run_id},
+            "runtime_status": {},
+            "artifacts": artifacts,
+            "display_selection": {},
+            "preview_config": {},
+            "mesh_revision": 1,
+            "mesh_build_revision": 1,
+            "latest_fields": latest_fields,
+        }))
+        .unwrap()
+    }
+
+    fn archive_with_live_snapshot(
+        script: &[u8],
+        snapshot: &[u8],
+        run_artifacts: impl IntoIterator<Item = (String, Vec<u8>)>,
+    ) -> Vec<u8> {
+        let mut entries = vec![
+            ("project/main.py".to_string(), script.to_vec()),
+            ("project/ui_state.json".to_string(), b"{}".to_vec()),
+            ("project/scene_document.json".to_string(), b"{}".to_vec()),
+            (
+                "project/current_live_snapshot.json".to_string(),
+                snapshot.to_vec(),
+            ),
+        ];
+        entries.extend(run_artifacts);
+        archive_with_entries(&test_workspace(script), entries)
+    }
+
+    fn assert_snapshot_import_left_destination_pristine(
+        store: &SessionStore,
+        owner_before: &[u8],
+    ) {
+        assert_eq!(
+            fs::read(store.root().join("WRITER.owner.json")).unwrap(),
+            owner_before
+        );
+        assert!(store.current_session().unwrap().is_none());
+        for relative in [
+            "project/main.py",
+            "project/ui_state.json",
+            "project/scene_document.json",
+            "project/current_live_snapshot.json",
+        ] {
+            assert_eq!(store.read_document(relative).unwrap(), None, "{relative}");
+        }
+        assert!(store.cas().list().unwrap().is_empty());
+        assert!(
+            !store
+                .root()
+                .join("runs/run-live/artifacts/eigen/spectrum.json")
+                .exists()
+        );
+        assert_eq!(
+            fs::read_dir(store.root().join("manifests"))
+                .unwrap()
+                .count(),
+            0
+        );
+    }
+
+    fn assert_imported_live_artifacts(store: &SessionStore) {
+        assert_eq!(
+            store.current_session().unwrap().unwrap().session_id,
+            "s-001"
+        );
+        assert_eq!(
+            store
+                .read_document("runs/run-live/artifacts/eigen/spectrum.json")
+                .unwrap()
+                .as_deref(),
+            Some(&b"spectrum bytes"[..])
+        );
+        assert_eq!(
+            store
+                .read_document("runs/run-live/artifacts/fields/m.zarr/.zgroup")
+                .unwrap()
+                .as_deref(),
+            Some(&b"{}"[..])
+        );
+        assert_eq!(
+            store
+                .read_document("runs/run-live/artifacts/fields/m.zarr/0")
+                .unwrap()
+                .as_deref(),
+            Some(&b"zarr chunk"[..])
+        );
+    }
+
+    #[test]
+    fn public_unpackers_reject_missing_snapshot_artifacts_before_store_mutation() {
+        let script = b"print('snapshot artifact')";
+        let snapshot = live_snapshot_bytes(
+            "run-live",
+            &[("eigen/spectrum.json", "json")],
+            None,
+        );
+        let archive = archive_with_live_snapshot(script, &snapshot, std::iter::empty::<(String, Vec<u8>)>());
+
+        let parent = tempfile::tempdir().unwrap();
+        let store = SessionStore::open(parent.path().join("store")).unwrap();
+        let owner_before = fs::read(store.root().join("WRITER.owner.json")).unwrap();
+
+        let error = unpack_fms(Cursor::new(archive.clone()), &store).unwrap_err();
+        assert!(
+            format!("{error:#}").contains("runs/run-live/artifacts/eigen/spectrum.json"),
+            "{error:#}"
+        );
+        assert_snapshot_import_left_destination_pristine(&store, &owner_before);
+
+        let error = unpack_fms_for_visualization(Cursor::new(archive.clone()), &store)
+            .unwrap_err();
+        assert!(
+            format!("{error:#}").contains("runs/run-live/artifacts/eigen/spectrum.json"),
+            "{error:#}"
+        );
+        assert_snapshot_import_left_destination_pristine(&store, &owner_before);
+
+        let staged = preflight_fms_staged(Cursor::new(archive), &[], parent.path()).unwrap();
+        assert!(!staged.reachability.complete);
+        let error = unpack_fms_staged(&staged, &store).unwrap_err();
+        assert!(
+            format!("{error:#}").contains("runs/run-live/artifacts/eigen/spectrum.json"),
+            "{error:#}"
+        );
+        assert_snapshot_import_left_destination_pristine(&store, &owner_before);
+        drop(staged);
+    }
+
+    #[test]
+    fn public_unpackers_accept_snapshot_file_and_nonempty_zarr_subtree() {
+        let script = b"print('snapshot artifacts')";
+        let snapshot = live_snapshot_bytes(
+            "run-live",
+            &[
+                ("eigen/spectrum.json", "json"),
+                ("fields/m.zarr", "zarr"),
+            ],
+            None,
+        );
+        let archive = archive_with_live_snapshot(
+            script,
+            &snapshot,
+            [
+                (
+                    "runs/run-live/artifacts/eigen/spectrum.json".to_string(),
+                    b"spectrum bytes".to_vec(),
+                ),
+                (
+                    "runs/run-live/artifacts/fields/m.zarr/.zgroup".to_string(),
+                    b"{}".to_vec(),
+                ),
+                (
+                    "runs/run-live/artifacts/fields/m.zarr/0".to_string(),
+                    b"zarr chunk".to_vec(),
+                ),
+            ],
+        );
+
+        let unpack_parent = tempfile::tempdir().unwrap();
+        let unpack_store = SessionStore::open(unpack_parent.path().join("store")).unwrap();
+        unpack_fms(Cursor::new(archive.clone()), &unpack_store).unwrap();
+        assert_imported_live_artifacts(&unpack_store);
+
+        let visualization_parent = tempfile::tempdir().unwrap();
+        let visualization_store =
+            SessionStore::open(visualization_parent.path().join("store")).unwrap();
+        unpack_fms_for_visualization(Cursor::new(archive.clone()), &visualization_store).unwrap();
+        assert_imported_live_artifacts(&visualization_store);
+
+        let staged_parent = tempfile::tempdir().unwrap();
+        let staged = preflight_fms_staged(
+            Cursor::new(archive),
+            &[],
+            staged_parent.path(),
+        )
+        .unwrap();
+        let staged_store = SessionStore::open(staged_parent.path().join("store")).unwrap();
+        unpack_fms_staged(&staged, &staged_store).unwrap();
+        assert_imported_live_artifacts(&staged_store);
+        drop(staged);
+    }
+
+    #[test]
+    fn compact_export_binds_snapshot_artifacts_and_preserves_cas_references() {
+        let (_directory, store, mut session, workspace, profile, base_documents) =
+            pack_fixture(SaveProfile::Compact);
+        assert!(matches!(profile.include_artifacts, ArtifactPolicy::None));
+        session
+            .run_refs
+            .push("runs/run-export/run_manifest.json".to_string());
+        store.commit_run(&test_run("run-export")).unwrap();
+
+        let payload = b"snapshot-owned CAS payload";
+        let object_ref = store.cas().put(payload).unwrap();
+        let source_artifact = store
+            .root()
+            .join("runs/run-export/artifacts/eigen/spectrum.json");
+        fs::create_dir_all(source_artifact.parent().unwrap()).unwrap();
+        fs::write(&source_artifact, b"spectrum exists in source store").unwrap();
+
+        for snapshot_key in [
+            "current_live_snapshot.json",
+            "project/current_live_snapshot.json",
+        ] {
+            let mut documents = base_documents.clone();
+            documents.insert("ui_state.json".to_string(), b"{}".to_vec());
+            documents.insert("scene_document.json".to_string(), b"{}".to_vec());
+            documents.insert(
+                snapshot_key.to_string(),
+                live_snapshot_bytes(
+                    "run-export",
+                    &[("eigen/spectrum.json", "json")],
+                    Some(&object_ref),
+                ),
+            );
+
+            let error = pack_fms(
+                Cursor::new(Vec::new()),
+                &store,
+                &session,
+                &workspace,
+                &profile,
+                &documents,
+                &PackOptions::default(),
+            )
+            .unwrap_err();
+            assert!(
+                format!("{error:#}")
+                    .contains("runs/run-export/artifacts/eigen/spectrum.json"),
+                "{error:#}"
+            );
+
+            documents.insert(
+                snapshot_key.to_string(),
+                live_snapshot_bytes("run-export", &[], Some(&object_ref)),
+            );
+            let mut output = Cursor::new(Vec::new());
+            pack_fms(
+                &mut output,
+                &store,
+                &session,
+                &workspace,
+                &profile,
+                &documents,
+                &PackOptions::default(),
+            )
+            .unwrap();
+            let archive = output.into_inner();
+            {
+                let mut zip = zip::ZipArchive::new(Cursor::new(&archive)).unwrap();
+                let name = format!("objects/sha256/{object_ref}");
+                let mut cas_object = zip.by_name(&name).unwrap();
+                let mut archived_payload = Vec::new();
+                cas_object.read_to_end(&mut archived_payload).unwrap();
+                assert_eq!(archived_payload, payload);
+            }
+            let preflight = preflight_fms(Cursor::new(archive), &[]).unwrap();
+            assert!(preflight.reachability.object_refs.contains(&object_ref));
+        }
+    }
+
 }
 
 #[cfg(test)]

@@ -1512,6 +1512,9 @@ fn publish_imported_session(
     if matches!(preflight.session.profile, SaveProfile::Solved | SaveProfile::Resume | SaveProfile::Archive) {
         preflight.reachability.require_complete()
             .map_err(|error| ApiError::bad_request(format!("invalid_fms_graph: {error}")))?;
+    } else {
+        preflight.reachability.require_visualization_safe()
+            .map_err(|error| ApiError::bad_request(format!("invalid_fms_graph: {error}")))?;
     }
     let imports = session_store_root(state).join("imports");
     std::fs::create_dir_all(&imports)
