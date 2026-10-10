@@ -105,6 +105,8 @@ def _check_workspace_dependencies(manifests: list[tuple[str, bytes]]) -> None:
     app_names: set[str] = set()
     parsed_manifests: list[tuple[str, dict]] = []
     for relative, content in manifests:
+        if Path(relative).name != "package.json":
+            continue
         try:
             value = json.loads(content)
         except (UnicodeDecodeError, json.JSONDecodeError) as error:
@@ -320,6 +322,8 @@ def prepare() -> dict:
     source_sha = _verify_github_checkout(repo)
     layout = _resolve_layout(repo)
     _, build_storage_root, frontend_root = _resolved_layout_roots(repo, layout)
+    # Preserve normalized status paths even if manifest admission fails.
+    _append_github_environment(frontend_root, build_storage_root)
 
     manifests = _manifest_sources(repo)
     records = []
@@ -349,7 +353,6 @@ def prepare() -> dict:
         if hashlib.sha256(destination.read_bytes()).hexdigest() != expected_digest:
             raise WorkspacePreparationError(f"Staged manifest verification failed: {destination}")
     _write_exact_bytes(frontend_root, metadata_target, metadata_bytes)
-    _append_github_environment(frontend_root, build_storage_root)
     return {
         "frontend_root": str(frontend_root),
         "build_storage_root": str(build_storage_root),

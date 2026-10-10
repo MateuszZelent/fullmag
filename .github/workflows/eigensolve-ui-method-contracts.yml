@@ -10,6 +10,7 @@ on:
       - 'apps/control-room/src/modules/inspector/panels/frequency-domain/EigenModeInspectorPanel*'
       - '.github/workflows/eigensolve-ui-method-contracts.yml'
       - 'scripts/ci/prepare_eigensolve_ui_workspace.py'
+      - 'scripts/ci/test_prepare_eigensolve_ui_workspace.py'
   pull_request:
     paths:
       - 'apps/control-room/src/shared/domain/analysis/modalDampingObservables*'
@@ -17,6 +18,7 @@ on:
       - 'apps/control-room/src/modules/inspector/panels/frequency-domain/EigenModeInspectorPanel*'
       - '.github/workflows/eigensolve-ui-method-contracts.yml'
       - 'scripts/ci/prepare_eigensolve_ui_workspace.py'
+      - 'scripts/ci/test_prepare_eigensolve_ui_workspace.py'
 
 permissions:
   contents: read
@@ -42,6 +44,8 @@ jobs:
           python-version: '3.11'
       - name: Prepare managed frontend paths
         run: python -B scripts/fullmag_storage.py prepare-links --profile linux-host --frontend
+      - name: Check pnpm manifest admission regression
+        run: python -B scripts/ci/test_prepare_eigensolve_ui_workspace.py
       - name: Stage pinned pnpm manifests in managed storage
         run: python -B scripts/ci/prepare_eigensolve_ui_workspace.py
       - name: Install pinned workspace dependencies

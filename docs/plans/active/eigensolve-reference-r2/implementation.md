@@ -249,3 +249,31 @@ zarz¹dzane links. Upload wykorzystuje znormalizowane œcie¿ki. To korekta
 CI, nie dowód dzia³ania UI. AST/YAML sprawdzono; wykonanie tylko GHA.
 Native #38074313403 nadal trwa; exact Ÿród³a i wynik zostan¹ zapisane
 po terminalnym zakoñczeniu. P0–P10 pozostaje otwarty.
+
+
+## Checkpoint 71dd3539 - terminalne bramki
+
+Commit `71dd3539aa9e5284c040eb734383dcab5eb7bba2` publikuje przygotowanie
+physical pnpm workspace. Hosted UI #38075838610 ujawnil blad helpera:
+analiza dependencies parsowala takze pnpm-lock.yaml jako JSON. Naprawa
+ogranicza parsowanie dependencies do package.json, nadal kopiuje dokladne
+YAML bytes i sprawdza apps/* oraz closure workspace dependencies. Dodano
+piec GHA regression cases. Znormalizowane env paths sa eksportowane po
+walidacji resolvera, przed admission manifests, aby zachowac final status
+rowniez przy nieudanym admission. Testy UI nadal NOT VERIFIED.
+
+Native #38074313403 na exact f9c29e2 zakonczyl sie FAIL podczas linkowania
+fem_poisson_airbox_modal_eigen_slepc_contract: szesc funkcji testowych GPU
+odwoluje sie do symboli nieobecnych w obrazie CPU. Runtime skip flag nie
+usuwa tych symboli z obiektu. Nie wykonano nowych trzech CTest cases.
+Naprawa ma odzwierciedlac rzeczywisty compile-time GPU source gate, bez
+stubow i bez zmiany dziewieciu CPU window assertions. Poprzedni phase/typed
+PASS #38068716019 pozostaje dowodem tylko niezmienionego zakresu.
+
+Consumer #38074310973 na exact f9c29e2: SUCCESS. Nie dowodzi runtime solvera.
+
+Source-reviewed FDM identity fix normalizuje tylko istniejace CPU/CUDA
+aliasy do porownan final writer; surowy zapis provenance zostaje zachowany.
+Piec regresji writer obejmuje sukces Extended, mismatch, pozorny fallback
+pomiedzy aliasami, unknown engine i zachowanie Strict rejection. Wykonanie
+tej poprawki oczekuje GHA. Pozne odrzucenie Strict fallback nadal otwarte.
