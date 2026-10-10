@@ -13,6 +13,8 @@ if str(SCRIPT_DIR) not in sys.path:
 
 from validate_parallel_execution_report import (  # noqa: E402
     ADMISSION_JOURNAL_SCHEMA,
+    REPORT_PROTOCOL_V1,
+    REPORT_PROTOCOL_V2,
     ValidationError,
     compare_serial_adaptive_policy,
     validate_parallel_execution_report,
@@ -63,7 +65,11 @@ def _event(at_ms: int, active: int, *, peak_cpu: float = 1.0) -> dict[str, objec
     }
 
 
-def _adaptive_report(*, events: list[dict[str, object]] | None = None) -> dict[str, object]:
+def _adaptive_report(
+    *,
+    events: list[dict[str, object]] | None = None,
+    protocol: str = REPORT_PROTOCOL_V1,
+) -> dict[str, object]:
     inputs = [
         {
             "sample_index": index,
@@ -110,7 +116,7 @@ def _adaptive_report(*, events: list[dict[str, object]] | None = None) -> dict[s
         for index in range(3)
     ]
     report = {
-        "protocol": "fullmag.eigen_k_worker.v1",
+        "protocol": protocol,
         "requested_mode": "adaptive",
         "resolved_mode": "adaptive_processes",
         "resolved_workers": 2,
@@ -137,8 +143,8 @@ def _adaptive_report(*, events: list[dict[str, object]] | None = None) -> dict[s
     }
 
 
-def _serial_report() -> dict[str, object]:
-    adaptive = _adaptive_report()
+def _serial_report(protocol: str = REPORT_PROTOCOL_V1) -> dict[str, object]:
+    adaptive = _adaptive_report(protocol=protocol)
     report = copy.deepcopy(adaptive["report"])
     assert isinstance(report, dict)
     report["requested_mode"] = "serial"
@@ -191,6 +197,12 @@ class ParallelExecutionReportTests(unittest.TestCase):
         self.assertEqual(result["concurrency"]["status"], "not_applicable")
         self.assertEqual(result["resource_quality"]["status"], "not_applicable")
 
+    def test_v2_serial_report_uses_same_strict_process_report_shape(self) -> None:
+        result = validate_parallel_execution_report(_serial_report(REPORT_PROTOCOL_V2))
+        self.assertEqual(result["status"], "pass")
+        self.assertEqual(result["requested_mode"], "serial")
+        self.assertEqual(result["source_schema"], ADMISSION_JOURNAL_SCHEMA)
+
     def test_direct_public_report_does_not_invent_terminal_completion(self) -> None:
         journal = _adaptive_report()
         direct = journal["report"]
@@ -198,6 +210,26 @@ class ParallelExecutionReportTests(unittest.TestCase):
         self.assertEqual(result["status"], "not_verified")
         self.assertEqual(result["completion_evidence"]["status"], "not_verified")
         self.assertIn("no terminal_state", result["completion_evidence"]["reason"])
+
+    def test_supported_v1_and_v2_protocols_keep_direct_completion_unverified(self) -> None:
+        for protocol in (REPORT_PROTOCOL_V1, REPORT_PROTOCOL_V2):
+            journal = _adaptive_report(protocol=protocol)
+            wrapped = validate_parallel_execution_report(journal)
+            self.assertEqual(wrapped["status"], "pass")
+            self.assertEqual(wrapped["schema"], "fullmag.parallel-execution-report.v1")
+
+            direct = validate_parallel_execution_report(journal["report"])
+            self.assertEqual(direct["status"], "not_verified")
+            self.assertEqual(direct["source_schema"], protocol)
+            self.assertEqual(direct["completion_evidence"]["status"], "not_verified")
+            self.assertIn("no terminal_state", direct["completion_evidence"]["reason"])
+
+    def test_unknown_worker_protocol_is_rejected_for_journal_and_direct_report(self) -> None:
+        journal = _adaptive_report(protocol="fullmag.eigen_k_worker.v3")
+        with self.assertRaisesRegex(ValidationError, "unsupported report.protocol"):
+            validate_parallel_execution_report(journal)
+        with self.assertRaisesRegex(ValidationError, "unsupported report.protocol"):
+            validate_parallel_execution_report(journal["report"])
 
     def test_failed_journal_does_not_publish_completed_completion_evidence(self) -> None:
         report = _adaptive_report()

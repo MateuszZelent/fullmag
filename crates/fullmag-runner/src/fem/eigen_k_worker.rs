@@ -19,6 +19,7 @@ use std::path::{Component, Path, PathBuf};
 use std::time::Instant;
 
 pub const EIGEN_K_WORKER_PROTOCOL_V1: &str = "fullmag.eigen_k_worker.v1";
+pub const EIGEN_K_WORKER_PROTOCOL_V2: &str = "fullmag.eigen_k_worker.v2";
 pub(crate) const EIGEN_K_WORKER_HANDSHAKE_V1: &str = "fullmag.eigen_k_worker.handshake.v1";
 
 /// Parent/child identity binding written beside each private request.
@@ -65,6 +66,29 @@ pub struct EigenKWorkerRequestV1 {
     pub protocol: String,
     pub plan: FemEigenPlanIR,
     pub outputs: Vec<OutputIR>,
+    pub execution: FemEigenExecutionResolutionIR,
+    pub parallel_policy: ParallelExecutionPolicyIR,
+    pub thread_budget: EigenKWorkerThreadBudgetV1,
+    pub sample_index: usize,
+    pub k_vector: [f64; 3],
+    pub expected_plan_sha256: String,
+    pub expected_equilibrium_artifact_sha256: String,
+    pub artifact_dir: PathBuf,
+    pub response_path: PathBuf,
+    #[serde(default)]
+    pub cancel_path: Option<PathBuf>,
+}
+
+/// V2 separates all-candidate tracking outputs from the public per-sample
+/// selector used to generate physical-potential sidecars.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EigenKWorkerRequestV2 {
+    pub protocol: String,
+    pub plan: FemEigenPlanIR,
+    pub outputs: Vec<OutputIR>,
+    pub publication_outputs: Vec<OutputIR>,
+    pub sample_label: Option<String>,
     pub execution: FemEigenExecutionResolutionIR,
     pub parallel_policy: ParallelExecutionPolicyIR,
     pub thread_budget: EigenKWorkerThreadBudgetV1,
@@ -214,6 +238,53 @@ impl EigenKWorkerRequestV1 {
             });
         }
         Ok(())
+    }
+}
+
+impl EigenKWorkerRequestV2 {
+    pub fn validate(&self) -> Result<(), RunError> {
+        if self.protocol != EIGEN_K_WORKER_PROTOCOL_V2 {
+            return Err(RunError {
+                message: format!(
+                    "eigen k worker protocol mismatch: expected {EIGEN_K_WORKER_PROTOCOL_V2}, got {}",
+                    self.protocol
+                ),
+            });
+        }
+        let legacy = self.clone().into_v1();
+        legacy.validate()?;
+        crate::eigen::output_selection::validate_eigen_spectrum_quantities(
+            &self.publication_outputs,
+        )
+        .map_err(|error| RunError {
+            message: format!("invalid eigen publication selector: {error}"),
+        })
+    }
+
+    fn potential_publication(&self) -> super::eigen_path::EigenPathPotentialPublication {
+        super::eigen_path::EigenPathPotentialPublication {
+            outputs: self.publication_outputs.clone(),
+            sample_index: self.sample_index,
+            sample_label: self.sample_label.clone(),
+        }
+    }
+
+    fn into_v1(self) -> EigenKWorkerRequestV1 {
+        EigenKWorkerRequestV1 {
+            protocol: EIGEN_K_WORKER_PROTOCOL_V1.to_string(),
+            plan: self.plan,
+            outputs: self.outputs,
+            execution: self.execution,
+            parallel_policy: self.parallel_policy,
+            thread_budget: self.thread_budget,
+            sample_index: self.sample_index,
+            k_vector: self.k_vector,
+            expected_plan_sha256: self.expected_plan_sha256,
+            expected_equilibrium_artifact_sha256: self.expected_equilibrium_artifact_sha256,
+            artifact_dir: self.artifact_dir,
+            response_path: self.response_path,
+            cancel_path: self.cancel_path,
+        }
     }
 }
 
@@ -723,7 +794,26 @@ fn apply_thread_budget(budget: &EigenKWorkerThreadBudgetV1) -> Result<(), RunErr
 
 /// Execute one process request.  The caller owns process spawning and writes
 /// the returned response atomically to `request.response_path`.
-pub(crate) fn execute_request(mut request: EigenKWorkerRequestV1) -> EigenKWorkerResponseV1 {
+pub(crate) fn execute_request(request: EigenKWorkerRequestV1) -> EigenKWorkerResponseV1 {
+    execute_request_internal(request, None)
+}
+
+fn execute_request_v2(request: EigenKWorkerRequestV2) -> EigenKWorkerResponseV1 {
+    if let Err(error) = request.validate() {
+        let mut response = response_for_error(&request.clone().into_v1(), error);
+        response.protocol = EIGEN_K_WORKER_PROTOCOL_V2.to_string();
+        return response;
+    }
+    let publication = request.potential_publication();
+    let mut response = execute_request_internal(request.into_v1(), Some(publication));
+    response.protocol = EIGEN_K_WORKER_PROTOCOL_V2.to_string();
+    response
+}
+
+fn execute_request_internal(
+    mut request: EigenKWorkerRequestV1,
+    potential_publication: Option<super::eigen_path::EigenPathPotentialPublication>,
+) -> EigenKWorkerResponseV1 {
     if let Err(error) = request.validate() {
         return response_for_error(&request, error);
     }
@@ -797,15 +887,30 @@ pub(crate) fn execute_request(mut request: EigenKWorkerRequestV1) -> EigenKWorke
             crate::types::StepAction::Continue
         }
     };
-    let run = match fem_eigen::execute_planned_fem_eigen_with_handoff_and_progress(
-        execution,
-        &request.plan,
-        &request.outputs,
-        None,
-        Some(&mut cancel),
-        request.sample_index,
-        Some(request.sample_index),
-    ) {
+    let run_result = if let Some(publication) = potential_publication.as_ref() {
+        crate::fem::eigen_execution::execute_fem_eigen_path_single_k(
+            execution,
+            &request.plan,
+            &request.outputs,
+            publication,
+            Some(&mut cancel),
+            request.sample_index,
+            Some(request.sample_index),
+            None,
+            None,
+        )
+    } else {
+        fem_eigen::execute_planned_fem_eigen_with_handoff_and_progress(
+            execution,
+            &request.plan,
+            &request.outputs,
+            None,
+            Some(&mut cancel),
+            request.sample_index,
+            Some(request.sample_index),
+        )
+    };
+    let run = match run_result {
         Ok(run) => run,
         Err(error) => return response_for_error(&request, error),
     };
@@ -867,15 +972,52 @@ pub fn run_request_file(request_path: &Path) -> Result<(), RunError> {
     let bytes = fs::read(request_path).map_err(|error| RunError {
         message: format!("read eigen k worker request: {error}"),
     })?;
-    let request: EigenKWorkerRequestV1 =
-        serde_json::from_slice(&bytes).map_err(|error| RunError {
-            message: format!("parse eigen k worker request: {error}"),
+    let envelope: serde_json::Value = serde_json::from_slice(&bytes).map_err(|error| RunError {
+        message: format!("parse eigen k worker request: {error}"),
+    })?;
+    let protocol = envelope
+        .get("protocol")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| RunError {
+            message: "eigen k worker request has no protocol token".into(),
         })?;
+    let is_v2 = protocol == EIGEN_K_WORKER_PROTOCOL_V2;
+    let (request, request_v2) = match protocol {
+        EIGEN_K_WORKER_PROTOCOL_V1 => (
+            serde_json::from_slice::<EigenKWorkerRequestV1>(&bytes).map_err(|error| RunError {
+                message: format!("parse eigen k worker v1 request: {error}"),
+            })?,
+            None,
+        ),
+        EIGEN_K_WORKER_PROTOCOL_V2 => {
+            let request =
+                serde_json::from_slice::<EigenKWorkerRequestV2>(&bytes).map_err(|error| {
+                    RunError {
+                        message: format!("parse eigen k worker v2 request: {error}"),
+                    }
+                })?;
+            (request.clone().into_v1(), Some(request))
+        }
+        other => {
+            return Err(RunError {
+                message: format!("unsupported eigen k worker protocol {other}"),
+            });
+        }
+    };
     let response_path = request.response_path.clone();
     let (namespace, request_index) = validate_request_namespace(Some(request_path), &request)?;
     let response = match validate_handshake(&namespace, &request, request_index) {
-        Ok(()) => execute_request(request),
-        Err(error) => response_for_error(&request, error),
+        Ok(()) => match request_v2 {
+            Some(request_v2) => execute_request_v2(request_v2),
+            None => execute_request(request),
+        },
+        Err(error) => {
+            let mut response = response_for_error(&request, error);
+            if is_v2 {
+                response.protocol = EIGEN_K_WORKER_PROTOCOL_V2.to_string();
+            }
+            response
+        }
     };
     let encoded = serde_json::to_vec_pretty(&response).map_err(|error| RunError {
         message: format!("encode eigen k worker response: {error}"),
@@ -946,6 +1088,32 @@ mod tests {
             artifact_dir: PathBuf::from("worker-artifacts"),
             response_path: PathBuf::from("worker-response.json"),
             cancel_path: None,
+        }
+    }
+
+    fn worker_request_v2(
+        plan: FemEigenPlanIR,
+        outputs: Vec<OutputIR>,
+        publication_outputs: Vec<OutputIR>,
+        sample_label: Option<String>,
+    ) -> EigenKWorkerRequestV2 {
+        let base = worker_request(plan);
+        EigenKWorkerRequestV2 {
+            protocol: EIGEN_K_WORKER_PROTOCOL_V2.into(),
+            plan: base.plan,
+            outputs,
+            publication_outputs,
+            sample_label,
+            execution: base.execution,
+            parallel_policy: base.parallel_policy,
+            thread_budget: base.thread_budget,
+            sample_index: base.sample_index,
+            k_vector: base.k_vector,
+            expected_plan_sha256: base.expected_plan_sha256,
+            expected_equilibrium_artifact_sha256: base.expected_equilibrium_artifact_sha256,
+            artifact_dir: base.artifact_dir,
+            response_path: base.response_path,
+            cancel_path: base.cancel_path,
         }
     }
 
@@ -1041,5 +1209,94 @@ mod tests {
             validate_input_digests(&expected, &expected, "sha256:changed", "sha256:original")
                 .is_err()
         );
+    }
+
+    #[test]
+    fn v2_worker_request_keeps_tracking_and_publication_selectors_separate() {
+        let mut plan = crate::fem::eigen_tests::minimal_native_modal_plan();
+        plan.equilibrium = EquilibriumSourceIR::Artifact {
+            path: "equilibrium.v8.json".into(),
+        };
+        let tracking = OutputIR::EigenMode {
+            field: "mode".into(),
+            all_modes: true,
+            indices: vec![],
+            branches: vec![],
+            sample_selector: None,
+        };
+        let publication = OutputIR::EigenMode {
+            field: "mode".into(),
+            all_modes: false,
+            indices: vec![1],
+            branches: vec![],
+            sample_selector: Some(fullmag_ir::SampleSelectorIR {
+                sample_indices: vec![1],
+                sample_labels: vec!["X".into()],
+            }),
+        };
+        let request = worker_request_v2(
+            plan,
+            vec![tracking.clone()],
+            vec![publication.clone()],
+            Some("X".into()),
+        );
+        request.validate().unwrap();
+        let mut invalid_protocol = request.clone();
+        invalid_protocol.protocol = "unsupported-worker-version".into();
+        let error_response = execute_request_v2(invalid_protocol);
+        assert_eq!(error_response.protocol, EIGEN_K_WORKER_PROTOCOL_V2);
+        assert!(!error_response.ok);
+        let roundtrip: EigenKWorkerRequestV2 =
+            serde_json::from_slice(&serde_json::to_vec(&request).unwrap()).unwrap();
+        assert_eq!(roundtrip.outputs, vec![tracking]);
+        assert_eq!(roundtrip.publication_outputs, vec![publication.clone()]);
+        assert_eq!(roundtrip.sample_label.as_deref(), Some("X"));
+        let selector = roundtrip.potential_publication();
+        assert_eq!(selector.outputs, vec![publication.clone()]);
+        assert_eq!(selector.sample_index, roundtrip.sample_index);
+        assert_eq!(selector.sample_label.as_deref(), Some("X"));
+        assert_eq!(
+            selector.selected_mode_indices(2).unwrap(),
+            std::collections::BTreeSet::from([1])
+        );
+        let branch = OutputIR::EigenMode {
+            field: "mode".into(),
+            all_modes: false,
+            indices: vec![],
+            branches: vec![7],
+            sample_selector: None,
+        };
+        let branch_request = worker_request_v2(
+            roundtrip.plan.clone(),
+            roundtrip.outputs.clone(),
+            vec![branch.clone()],
+            Some("X".into()),
+        );
+        let branch_selector = branch_request.potential_publication();
+        assert_eq!(
+            branch_selector.selected_mode_indices(2).unwrap(),
+            std::collections::BTreeSet::from([0, 1])
+        );
+        assert!(branch_selector.pretracking_mode_indices(2).unwrap().is_empty());
+
+        let mixed_request = worker_request_v2(
+            roundtrip.plan.clone(),
+            roundtrip.outputs.clone(),
+            vec![publication, branch],
+            Some("X".into()),
+        );
+        let mixed_selector = mixed_request.potential_publication();
+        assert_eq!(
+            mixed_selector.pretracking_mode_indices(2).unwrap(),
+            std::collections::BTreeSet::from([1])
+        );
+
+        let mut v1_with_v2_fields = serde_json::to_value(worker_request(
+            crate::fem::eigen_tests::minimal_native_modal_plan(),
+        ))
+        .unwrap();
+        v1_with_v2_fields["publication_outputs"] = serde_json::json!([]);
+        v1_with_v2_fields["sample_label"] = serde_json::json!(null);
+        assert!(serde_json::from_value::<EigenKWorkerRequestV1>(v1_with_v2_fields).is_err());
     }
 }

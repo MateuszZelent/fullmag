@@ -25,7 +25,11 @@ from typing import Any
 
 
 ADMISSION_JOURNAL_SCHEMA = "fullmag.eigen.admission_journal.v1"
-REPORT_PROTOCOL = "fullmag.eigen_k_worker.v1"
+REPORT_PROTOCOL_V1 = "fullmag.eigen_k_worker.v1"
+REPORT_PROTOCOL_V2 = "fullmag.eigen_k_worker.v2"
+SUPPORTED_REPORT_PROTOCOLS = frozenset((REPORT_PROTOCOL_V1, REPORT_PROTOCOL_V2))
+# Kept for the serial probe's legacy import; parsing uses the full allowlist.
+REPORT_PROTOCOL = REPORT_PROTOCOL_V1
 REPORT_SCHEMA = "fullmag.parallel-execution-report.v1"
 MAX_ADMISSION_EVENTS = 2048
 MAX_REPORT_BYTES = 4 * 1024 * 1024
@@ -159,7 +163,10 @@ def _unwrap(
         if not isinstance(report_truncated, bool) or report_truncated != top_truncated:
             raise ValidationError("journal and report events_truncated values disagree")
         return report, ADMISSION_JOURNAL_SCHEMA, terminal_state, top_truncated, None
-    return source, REPORT_PROTOCOL, None, None, None
+    protocol = _string(source.get("protocol"), "report.protocol")
+    if protocol not in SUPPORTED_REPORT_PROTOCOLS:
+        raise ValidationError(f"unsupported report.protocol: {protocol!r}")
+    return source, protocol, None, None, None
 
 
 def _validate_policy(policy: Mapping[str, Any]) -> dict[str, Any]:
@@ -483,8 +490,10 @@ def validate_parallel_execution_report(
         )
 
     protocol = _string(report.get("protocol"), "report.protocol")
-    if protocol != REPORT_PROTOCOL:
+    if protocol not in SUPPORTED_REPORT_PROTOCOLS:
         raise ValidationError(f"unsupported report.protocol: {protocol!r}")
+    if source_schema in SUPPORTED_REPORT_PROTOCOLS and source_schema != protocol:
+        raise ValidationError("direct report protocol differs from its source classification")
     requested_mode = _string(report.get("requested_mode"), "report.requested_mode")
     if requested_mode not in KNOWN_MODES:
         raise ValidationError("report.requested_mode must be serial or adaptive")
@@ -595,7 +604,7 @@ def validate_parallel_execution_report(
         }
         resource_quality = events_summary["resource_quality"]
 
-    direct_report_completion_unverified = source_schema == REPORT_PROTOCOL
+    direct_report_completion_unverified = source_schema in SUPPORTED_REPORT_PROTOCOLS
     status = "not_verified" if direct_report_completion_unverified else "pass"
     if terminal_state is not None and terminal_state != "completed":
         status = "not_verified"

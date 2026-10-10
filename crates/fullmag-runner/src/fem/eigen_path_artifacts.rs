@@ -3422,6 +3422,20 @@ pub(super) fn eigen_path_candidate_mode_indices(
     sample: &crate::eigen::KSampleDescriptor,
     available_mode_indices: &BTreeSet<u32>,
 ) -> BTreeSet<u32> {
+    eigen_path_candidate_mode_indices_for_sample(
+        outputs,
+        sample.sample_index,
+        sample.label.as_deref(),
+        available_mode_indices,
+    )
+}
+
+pub(super) fn eigen_path_candidate_mode_indices_for_sample(
+    outputs: &[OutputIR],
+    sample_index: usize,
+    sample_label: Option<&str>,
+    available_mode_indices: &BTreeSet<u32>,
+) -> BTreeSet<u32> {
     let mut result = BTreeSet::new();
     for output in outputs {
         let OutputIR::EigenMode {
@@ -3439,8 +3453,8 @@ pub(super) fn eigen_path_candidate_mode_indices(
                 || selector
                     .sample_indices
                     .iter()
-                    .any(|index| *index as usize == sample.sample_index)
-                || sample.label.as_ref().is_some_and(|label| {
+                    .any(|index| *index as usize == sample_index)
+                || sample_label.is_some_and(|label| {
                     selector
                         .sample_labels
                         .iter()
@@ -3457,6 +3471,411 @@ pub(super) fn eigen_path_candidate_mode_indices(
         }
     }
     result
+}
+
+/// Materialize shared-domain physical-potential sidecars only after path
+/// assignment has resolved branch selectors to exact sample/raw-mode IDs.
+/// The raw mode JSON and Floquet certificate payload remain in `artifacts`.
+pub(super) fn materialize_selected_path_physical_potential_artifacts(
+    plan: &FemEigenPlanIR,
+    samples: &[crate::eigen::KSampleDescriptor],
+    actual_mode_ids: &BTreeSet<SampleModeId>,
+    selected_mode_ids: &BTreeSet<SampleModeId>,
+    artifacts: &mut Vec<crate::types::AuxiliaryArtifact>,
+) -> Result<(), RunError> {
+    use num_complex::Complex64;
+
+    if selected_mode_ids.is_empty() {
+        return Ok(());
+    }
+    let mut topology = None;
+    let mut scalar_classes = None;
+    let mut scalar_class_count = None;
+    let mut expected_source_mesh = None;
+
+    for selected in selected_mode_ids {
+        let sample = samples
+            .iter()
+            .find(|sample| sample.sample_index == selected.sample_index)
+            .ok_or_else(|| RunError {
+                message: format!(
+                    "deferred physical-potential selector references missing sample {}",
+                    selected.sample_index
+                ),
+            })?;
+        if !actual_mode_ids.contains(selected) {
+            return Err(RunError {
+                message: format!(
+                    "deferred physical-potential selector references missing raw mode sample={} raw_mode={}",
+                    selected.sample_index, selected.raw_mode_index
+                ),
+            });
+        }
+        let raw_mode_index = u32::try_from(selected.raw_mode_index).map_err(|_| RunError {
+            message: "deferred physical-potential raw mode index exceeds selector range".into(),
+        })?;
+        let base = format!(
+            "eigen/mode_fields/sample_{:04}/mode_{raw_mode_index:04}",
+            selected.sample_index
+        );
+        let manifest_path = format!("{base}/physical_potential.v1.json");
+        let potential_path = format!("{base}/potential_full.bin");
+        let demag_path = format!("{base}/demag_element_full.bin");
+        let mode_path = format!(
+            "eigen/modes/sample_{:04}/mode_{raw_mode_index:04}.json",
+            selected.sample_index
+        );
+        let mut matching_mode = artifacts
+            .iter()
+            .filter(|artifact| artifact.relative_path == mode_path);
+        let mode_artifact = matching_mode.next().ok_or_else(|| RunError {
+            message: format!(
+                "deferred physical-potential mode certificate is missing: {mode_path}"
+            ),
+        })?;
+        if matching_mode.next().is_some() {
+            return Err(RunError {
+                message: format!(
+                    "deferred physical-potential mode certificate has duplicate owners: {mode_path}"
+                ),
+            });
+        }
+        let mode: Value = serde_json::from_slice(&mode_artifact.bytes).map_err(|error| RunError {
+            message: format!("deferred physical-potential mode certificate is invalid: {error}"),
+        })?;
+        let sample_index_u64 = u64::try_from(selected.sample_index).map_err(|_| RunError {
+            message: "deferred physical-potential sample index exceeds u64".into(),
+        })?;
+        let expected_raw_mode_index = u64::from(raw_mode_index);
+        let mut has_raw_mode_identity = false;
+        let raw_mode_identity_matches = ["index", "raw_mode_index"].into_iter().all(|key| {
+            let Some(value) = mode.get(key) else {
+                return true;
+            };
+            has_raw_mode_identity = true;
+            value.as_u64() == Some(expected_raw_mode_index)
+        });
+        if mode.get("sample_index").and_then(Value::as_u64) != Some(sample_index_u64)
+            || !has_raw_mode_identity
+            || !raw_mode_identity_matches
+        {
+            return Err(RunError {
+                message: format!(
+                    "deferred physical-potential mode certificate identity disagrees with {mode_path}"
+                ),
+            });
+        }
+        let shared_domain_mode = mode.get("assembly_kind").and_then(Value::as_str)
+            == Some("mfem_weak_form_shared_domain");
+        let existing_manifest = artifacts
+            .iter()
+            .filter(|artifact| artifact.relative_path == manifest_path)
+            .collect::<Vec<_>>();
+        if existing_manifest.is_empty() && !shared_domain_mode {
+            continue;
+        }
+        if expected_source_mesh.is_none() {
+            expected_source_mesh = Some(
+                plan.mesh
+                    .mixed_topology_fingerprint_v3()
+                    .map_err(|error| RunError {
+                        message: format!(
+                            "deferred physical-potential mesh identity is invalid: {error}"
+                        ),
+                    })?,
+            );
+        }
+        let expected_source_mesh_value = expected_source_mesh
+            .as_deref()
+            .ok_or_else(|| RunError {
+                message: "deferred physical-potential mesh identity is missing".into(),
+            })?;
+        if !existing_manifest.is_empty() {
+            if existing_manifest.len() != 1 {
+                return Err(RunError {
+                    message: format!(
+                        "deferred physical-potential manifest has duplicate owners: {manifest_path}"
+                    ),
+                });
+            }
+            let manifest: Value = serde_json::from_slice(&existing_manifest[0].bytes).map_err(
+                |error| RunError {
+                    message: format!(
+                        "deferred physical-potential manifest is invalid at {manifest_path}: {error}"
+                    ),
+                },
+            )?;
+            let source_mesh = require_path_source_digest(&mode, "source_mesh_topology_sha256")?;
+            let operator_signature =
+                require_path_source_digest(&mode, "operator_input_signature_sha256")?;
+            let phase_constraint = require_path_source_digest(&mode, "phase_constraint_sha256")?;
+            let potential_sidecars = artifacts
+                .iter()
+                .filter(|artifact| artifact.relative_path == potential_path)
+                .count();
+            let demag_sidecars = artifacts
+                .iter()
+                .filter(|artifact| artifact.relative_path == demag_path)
+                .count();
+            if manifest.get("sample_index").and_then(Value::as_u64) != Some(sample_index_u64)
+                || manifest.get("mode_index").and_then(Value::as_u64)
+                    != Some(u64::from(raw_mode_index))
+                || manifest
+                    .get("potential")
+                    .and_then(|value| value.get("path"))
+                    .and_then(Value::as_str)
+                    != Some(potential_path.as_str())
+                || manifest
+                    .get("demag_field")
+                    .and_then(|value| value.get("path"))
+                    .and_then(Value::as_str)
+                    != Some(demag_path.as_str())
+                || manifest
+                    .get("source_mesh_topology_sha256")
+                    .and_then(Value::as_str)
+                    != Some(source_mesh)
+                || manifest
+                    .get("operator_input_signature_sha256")
+                    .and_then(Value::as_str)
+                    != Some(operator_signature)
+                || manifest
+                    .get("phase_constraint_sha256")
+                    .and_then(Value::as_str)
+                    != Some(phase_constraint)
+                || source_mesh != expected_source_mesh_value
+                || !shared_domain_mode
+                || potential_sidecars != 1
+                || demag_sidecars != 1
+            {
+                return Err(RunError {
+                    message: format!(
+                        "deferred physical-potential artifact ownership is inconsistent at {manifest_path}"
+                    ),
+                });
+            }
+            continue;
+        }
+        if !shared_domain_mode {
+            continue;
+        }
+
+        if topology.is_none() {
+            topology = Some(
+                fullmag_engine::fem::MeshTopology::from_ir(&plan.mesh).map_err(|error| {
+                    RunError {
+                        message: format!(
+                            "deferred physical-potential mesh topology is invalid: {error}"
+                        ),
+                    }
+                })?,
+            );
+        }
+        if scalar_classes.is_none() {
+            let topology_ref = topology.as_ref().ok_or_else(|| RunError {
+                message: "deferred physical-potential topology was not constructed".into(),
+            })?;
+            let (classes, class_count_u64, _, _) =
+                super::super::eigen_shared_domain_geometry::modal_shared_domain_equivalence_classes(
+                    topology_ref,
+                )?;
+            scalar_classes = Some(classes);
+            scalar_class_count = Some(usize::try_from(class_count_u64).map_err(|_| RunError {
+                message: "deferred physical-potential scalar class count exceeds host dimensions"
+                    .into(),
+            })?);
+        }
+
+        let source_mesh = require_path_source_digest(&mode, "source_mesh_topology_sha256")?;
+        let operator_signature =
+            require_path_source_digest(&mode, "operator_input_signature_sha256")?;
+        let phase_constraint = require_path_source_digest(&mode, "phase_constraint_sha256")?;
+        if source_mesh != expected_source_mesh_value {
+            return Err(RunError {
+                message: format!(
+                    "deferred physical-potential source mesh identity disagrees with {mode_path}"
+                ),
+            });
+        }
+        let provenance = serde_json::json!({
+            "source_mesh_topology_sha256": source_mesh,
+            "operator_input_signature_sha256": operator_signature,
+            "phase_constraint_sha256": phase_constraint,
+        });
+
+        let phi_real = mode.get("phi_real").and_then(Value::as_array);
+        let phi_imag = mode.get("phi_imag").and_then(Value::as_array);
+        let reduced = match (phi_real, phi_imag) {
+            (Some(real), Some(imag)) if !real.is_empty() || !imag.is_empty() => {
+                if real.len() != imag.len() {
+                    return Err(RunError {
+                        message: format!(
+                            "deferred physical-potential phi real/imag lengths differ in {mode_path}"
+                        ),
+                    });
+                }
+                real.iter()
+                    .zip(imag)
+                    .map(|(real, imag)| {
+                        let real = real.as_f64().filter(|value| value.is_finite()).ok_or_else(
+                            || RunError {
+                                message: format!(
+                                    "deferred physical-potential phi real coefficient is invalid in {mode_path}"
+                                ),
+                            },
+                        )?;
+                        let imag = imag.as_f64().filter(|value| value.is_finite()).ok_or_else(
+                            || RunError {
+                                message: format!(
+                                    "deferred physical-potential phi imaginary coefficient is invalid in {mode_path}"
+                                ),
+                            },
+                        )?;
+                        Ok(Complex64::new(real, imag))
+                    })
+                    .collect::<Result<Vec<_>, RunError>>()?
+            }
+            (None, None) => read_deferred_floquet_potential(artifacts, selected, raw_mode_index)?,
+            (Some(real), Some(imag)) if real.is_empty() && imag.is_empty() => {
+                read_deferred_floquet_potential(artifacts, selected, raw_mode_index)?
+            }
+            _ => {
+                return Err(RunError {
+                    message: format!(
+                        "deferred physical-potential mode certificate has incomplete phi fields: {mode_path}"
+                    ),
+                });
+            }
+        };
+        let split_representation = mode
+            .get("potential_representation")
+            .and_then(Value::as_str)
+            == Some("doubled_real_split_complex_coefficients");
+        let reduced = if split_representation {
+            super::super::eigen_physical_potential::doubled_real_split_to_complex(
+                &reduced,
+                scalar_class_count.ok_or_else(|| RunError {
+                    message: "deferred physical-potential scalar class count is missing".into(),
+                })?,
+            )?
+        } else {
+            let expected_count = scalar_class_count.ok_or_else(|| RunError {
+                message: "deferred physical-potential scalar class count is missing".into(),
+            })?;
+            if reduced.len() != expected_count {
+                return Err(RunError {
+                    message: format!(
+                        "deferred physical-potential phi has {} coefficients; expected {expected_count} in {mode_path}",
+                        reduced.len(),
+                    ),
+                });
+            }
+            reduced
+        };
+        let topology_ref = topology.as_ref().ok_or_else(|| RunError {
+            message: "deferred physical-potential topology is missing".into(),
+        })?;
+        let scalar_classes_ref = scalar_classes.as_ref().ok_or_else(|| RunError {
+            message: "deferred physical-potential scalar classes are missing".into(),
+        })?;
+        let scalar_class_count = scalar_class_count.ok_or_else(|| RunError {
+            message: "deferred physical-potential scalar class count is missing".into(),
+        })?;
+        let point_plan = super::eigen_path_single_k_point_plan(plan, sample, false, None)?;
+        let phases = super::super::eigen_mass_metric::canonical_shared_domain_phases(
+            topology_ref,
+            &point_plan,
+        )?;
+        let generated = super::super::eigen_physical_potential::physical_potential_artifacts(
+            topology_ref,
+            &reduced,
+            scalar_class_count,
+            scalar_classes_ref,
+            &phases,
+            selected.sample_index,
+            selected.raw_mode_index,
+            &provenance,
+        )?;
+        for generated_artifact in generated {
+            if let Some(existing) = artifacts
+                .iter()
+                .find(|artifact| artifact.relative_path == generated_artifact.relative_path)
+            {
+                if existing.bytes != generated_artifact.bytes {
+                    return Err(RunError {
+                        message: format!(
+                            "deferred physical-potential sidecar conflicts with an existing owner: {}",
+                            generated_artifact.relative_path
+                        ),
+                    });
+                }
+            } else {
+                artifacts.push(generated_artifact);
+            }
+        }
+    }
+    Ok(())
+}
+
+fn read_deferred_floquet_potential(
+    artifacts: &[crate::types::AuxiliaryArtifact],
+    selected: &SampleModeId,
+    raw_mode_index: u32,
+) -> Result<Vec<num_complex::Complex64>, RunError> {
+    let split_path = super::super::eigen_output::floquet_potential_payload_path(
+        selected.sample_index,
+        u64::from(raw_mode_index),
+    );
+    let mut matching_split = artifacts
+        .iter()
+        .filter(|artifact| artifact.relative_path == split_path);
+    let split = matching_split.next().ok_or_else(|| RunError {
+        message: format!(
+            "deferred physical-potential raw phi certificate is missing: {split_path}"
+        ),
+    })?;
+    if matching_split.next().is_some() || split.bytes.is_empty() || split.bytes.len() % 16 != 0 {
+        return Err(RunError {
+            message: format!(
+                "deferred physical-potential raw phi certificate is malformed: {split_path}"
+            ),
+        });
+    }
+    split
+        .bytes
+        .chunks_exact(16)
+        .map(|chunk| {
+            let real = f64::from_le_bytes(chunk[0..8].try_into().map_err(|_| RunError {
+                message: format!("invalid real coefficient in {split_path}"),
+            })?);
+            let imag = f64::from_le_bytes(chunk[8..16].try_into().map_err(|_| RunError {
+                message: format!("invalid imaginary coefficient in {split_path}"),
+            })?);
+            if !real.is_finite() || !imag.is_finite() {
+                return Err(RunError {
+                    message: format!(
+                        "deferred physical-potential raw phi certificate is non-finite: {split_path}"
+                    ),
+                });
+            }
+            Ok(num_complex::Complex64::new(real, imag))
+        })
+        .collect()
+}
+
+fn require_path_source_digest<'a>(
+    mode: &'a Value,
+    key: &str,
+) -> Result<&'a str, RunError> {
+    let value = mode.get(key).and_then(Value::as_str).ok_or_else(|| RunError {
+        message: format!("deferred physical-potential mode certificate is missing {key}"),
+    })?;
+    let digest = value.strip_prefix("sha256:").unwrap_or_default();
+    if digest.len() != 64 || !digest.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(RunError {
+            message: format!("deferred physical-potential {key} is not a SHA-256 identity"),
+        });
+    }
+    Ok(value)
 }
 
 pub(super) fn remap_single_k_mode_artifacts(
@@ -4079,6 +4498,732 @@ mod tracking_payload_tests {
             k,
             true,
             "sha256:test",
+        )
+        .is_err());
+    }
+}
+
+#[cfg(test)]
+mod deferred_physical_potential_tests {
+    use super::*;
+    use crate::types::AuxiliaryArtifact;
+    use fullmag_engine::fem::MeshTopology;
+    use num_complex::Complex64;
+    use sha2::{Digest, Sha256};
+    use std::collections::BTreeMap;
+
+    fn shared_periodic_plan() -> FemEigenPlanIR {
+        let mut plan = crate::fem::eigen_tests::minimal_native_modal_plan();
+        plan.mesh.periodic_node_pairs = vec![fullmag_ir::MeshPeriodicNodePairIR {
+            pair_id: "x_faces".into(),
+            node_a: 0,
+            node_b: 1,
+        }];
+        plan.spin_wave_bc = fullmag_ir::SpinWaveBoundaryConditionIR::Config(
+            fullmag_ir::SpinWaveBoundaryConfigIR {
+                kind: fullmag_ir::SpinWaveBoundaryKindIR::Periodic,
+                boundary_pair_id: None,
+                pair_ids: vec!["x_faces".into()],
+                phase_convention: fullmag_ir::PhaseConventionIR::default(),
+                surface_anisotropy_ks: None,
+                surface_anisotropy_axis: None,
+            },
+        );
+        plan.enable_demag = true;
+        plan.operator.include_demag = true;
+        plan
+    }
+
+    fn shared_floquet_plan() -> FemEigenPlanIR {
+        let mut plan = shared_periodic_plan();
+        plan.spin_wave_bc = fullmag_ir::SpinWaveBoundaryConditionIR::Config(
+            fullmag_ir::SpinWaveBoundaryConfigIR {
+                kind: fullmag_ir::SpinWaveBoundaryKindIR::Floquet,
+                boundary_pair_id: Some("x_faces".into()),
+                pair_ids: Vec::new(),
+                phase_convention: fullmag_ir::PhaseConventionIR::default(),
+                surface_anisotropy_ks: None,
+                surface_anisotropy_axis: None,
+            },
+        );
+        plan.k_sampling = Some(fullmag_ir::KSamplingIR::Single {
+            k_vector: [1.0e6, 0.0, 0.0],
+        });
+        plan
+    }
+
+    fn native_shared_domain_mode(
+        raw_mode_index: usize,
+        scalar_class_count: usize,
+    ) -> crate::fem::eigen_native_result::NativeModalEigenpair {
+        let mut vector = vec![Complex64::new(0.0, 0.0); 8];
+        for node in 0..4 {
+            vector[2 * node] = Complex64::new(
+                if node == raw_mode_index { 1.0 } else { 0.1 },
+                0.025 * (raw_mode_index + 1) as f64,
+            );
+            vector[2 * node + 1] = Complex64::new(
+                0.05 * (node + 1) as f64,
+                if node == raw_mode_index { 0.75 } else { 0.02 },
+            );
+        }
+        let mode_offset = (raw_mode_index + 1) as f64;
+        let floquet_potential_real_split = (0..2 * scalar_class_count)
+            .map(|index| {
+                Complex64::new(
+                    mode_offset + index as f64,
+                    0.125 * mode_offset + 0.01 * index as f64,
+                )
+            })
+            .collect();
+        let frequency_hz = 1.0e9 + raw_mode_index as f64 * 1.0e8;
+        let omega_rad_s = std::f64::consts::TAU * frequency_hz;
+        crate::fem::eigen_native_result::NativeModalEigenpair {
+            cluster_id: raw_mode_index as u64,
+            frequency_hz,
+            omega_rad_s,
+            eigenvalue_real: 0.0,
+            eigenvalue_imag: omega_rad_s,
+            residual_absolute_l2: Some(1.0e-10),
+            residual_relative_l2: 1.0e-10,
+            residual_linf: Some(1.0e-10),
+            mass_norm: 1.0,
+            block_residual_q: 1.0e-10,
+            block_residual_phi: 1.0e-10,
+            block_residual_gauge: None,
+            backend_reported_residual: Some(1.0e-10),
+            q_vector: vector.clone(),
+            vector,
+            phi_vector: Vec::new(),
+            floquet_descriptor_certified: true,
+            floquet_full_descriptor_certified: false,
+            floquet_seam_frame_certified: false,
+            floquet_gauge_policy_satisfied: false,
+            floquet_geometric_bc_certified: false,
+            floquet_poisson_boundary_kind: Some("poisson_dirichlet".into()),
+            floquet_poisson_gauge_policy: Some("none".into()),
+            floquet_potential_representation: Some(
+                "doubled_real_split_complex_coefficients".into(),
+            ),
+            floquet_magnetic_relative_residual: Some(1.0e-10),
+            floquet_potential_relative_residual: Some(1.0e-10),
+            floquet_full_magnetic_relative_residual: None,
+            floquet_full_potential_relative_residual: None,
+            floquet_scalar_phase_seam_relative_residual: None,
+            floquet_tangent_frame_seam_relative_residual: None,
+            floquet_cartesian_magnetic_seam_relative_residual: None,
+            floquet_equilibrium_pair_relative_residual: None,
+            floquet_potential_real_split,
+        }
+    }
+
+    fn native_candidate_artifacts(
+        plan: &FemEigenPlanIR,
+        modes: &[crate::fem::eigen_native_result::NativeModalEigenpair],
+    ) -> Vec<AuxiliaryArtifact> {
+        let equilibrium = plan.equilibrium_magnetization.clone();
+        let active_nodes = (0..equilibrium.len()).collect::<Vec<_>>();
+        let reduction = ReductionMap {
+            active_nodes: active_nodes.clone(),
+            node_map: active_nodes.iter().copied().map(Some).collect(),
+            node_phases: vec![Complex64::new(1.0, 0.0); equilibrium.len()],
+            complex_reduction: true,
+        };
+        let bases = crate::fem::eigen_projection::tangent_bases(&equilibrium);
+        let mass_weights = vec![1.0; equilibrium.len()];
+        let outputs = [OutputIR::EigenMode {
+            field: "mode".into(),
+            all_modes: true,
+            indices: Vec::new(),
+            branches: Vec::new(),
+            sample_selector: None,
+        }];
+        crate::fem::eigen_native_artifacts::native_modal_artifacts(
+            plan,
+            &outputs,
+            &equilibrium,
+            &reduction,
+            &bases,
+            modes,
+            Some(&mass_weights),
+            serde_json::json!({
+                "solver_model": "native_shared_domain_fixture",
+                "solver_adapter": "floquet_dynamic_demag_shared_domain",
+                "solver_kind": "native_shared_domain_fixture",
+                "execution_lane": "production_cpu",
+                "assembly_kind": "mfem_weak_form_shared_domain",
+                "operator_input_signature_sha256": format!("sha256:{}", "a".repeat(64)),
+                "phase_constraint_sha256": format!("sha256:{}", "b".repeat(64)),
+            }),
+            0,
+            None,
+            None,
+            None,
+            None,
+            0,
+            None,
+        )
+        .expect("native modal producer emits candidate and raw Floquet artifacts")
+    }
+
+    fn path_sample_from_native_tracking_vectors(
+        sample_index: usize,
+        vectors: &[Vec<Complex64>],
+    ) -> crate::eigen::SingleKSolveResult {
+        let solver_model = crate::eigen::EigenSolverModel::ProductionCpuShiftInvert;
+        crate::eigen::SingleKSolveResult {
+            sample: crate::eigen::KSampleDescriptor {
+                sample_index,
+                label: Some(if sample_index == 5 { "X" } else { "Y" }.into()),
+                segment_index: Some(0),
+                path_s: (sample_index - 5) as f64,
+                t_in_segment: 0.5,
+                k_vector: [1.0e6, 0.0, 0.0],
+            },
+            modes: vectors
+                .iter()
+                .enumerate()
+                .map(|(raw_mode_index, vector)| {
+                    let frequency_real_hz = 1.0e9 + raw_mode_index as f64 * 1.0e8;
+                    crate::eigen::SingleKModeResult {
+                        raw_mode_index,
+                        branch_id: None,
+                        frequency_real_hz,
+                        frequency_imag_hz: 0.0,
+                        angular_frequency_rad_per_s:
+                            std::f64::consts::TAU * frequency_real_hz,
+                        eigenvalue_real: 0.0,
+                        eigenvalue_imag: std::f64::consts::TAU * frequency_real_hz,
+                        norm: 1.0,
+                        mass_norm: Some(1.0),
+                        max_amplitude: 1.0,
+                        residual_relative_l2: Some(1.0e-10),
+                        residual_norm: Some(1.0e-10),
+                        residual_linf: Some(1.0e-10),
+                        tangent_leakage_mean_abs: Some(0.0),
+                        tangent_leakage_max_abs: Some(0.0),
+                        tangent_leakage_weighted_relative_l2: Some(0.0),
+                        dominant_polarization: "linear".into(),
+                        reduced_vector: Some(vector.clone()),
+                        lifted_real: None,
+                        lifted_imag: None,
+                        amplitude: None,
+                        phase: None,
+                        node_mass_weights: Some(vec![1.0; 4]),
+                        consistent_p1_metric: None,
+                        component_participation:
+                            crate::eigen::ModalParticipationObservable::unavailable_without_context(
+                                "cpu",
+                            ),
+                    }
+                })
+                .collect(),
+            relaxation_steps: 0,
+            solver_model,
+            solver_notes: Vec::new(),
+            solver_diagnostics: None,
+        }
+    }
+
+    fn decode_complex_payload(artifact: &AuxiliaryArtifact) -> Vec<Complex64> {
+        assert_eq!(artifact.bytes.len() % 16, 0);
+        artifact
+            .bytes
+            .chunks_exact(16)
+            .map(|pair| {
+                Complex64::new(
+                    f64::from_le_bytes(pair[0..8].try_into().unwrap()),
+                    f64::from_le_bytes(pair[8..16].try_into().unwrap()),
+                )
+            })
+            .collect()
+    }
+
+    fn reference_mode_bundle_result() -> crate::eigen::PathSolveResult {
+        let solver_model = crate::eigen::EigenSolverModel::ReferenceScalarTangent;
+        let mut sample = path_sample_from_native_tracking_vectors(
+            6,
+            &[vec![Complex64::new(1.0, 0.0)]],
+        );
+        sample.solver_model = solver_model;
+        sample.solver_diagnostics = Some(serde_json::json!({
+            "mesh_id": "mesh:reference-mode-bundle-fixture",
+            "topology_fingerprint": format!("sha256:{}", "c".repeat(64)),
+        }));
+        let mode = &mut sample.modes[0];
+        mode.raw_mode_index = 3;
+        mode.reduced_vector = Some(vec![Complex64::new(1.0, 0.0)]);
+        mode.lifted_real = Some(vec![[1.0, 0.0, 0.0]]);
+        mode.lifted_imag = Some(vec![[0.0, 1.0, 0.0]]);
+        mode.amplitude = Some(vec![1.0]);
+        mode.phase = Some(vec![0.0]);
+        mode.node_mass_weights = None;
+        crate::eigen::PathSolveResult {
+            gamma0_rad_s_per_a_m: 2.211e5,
+            samples: vec![sample],
+            branches: Vec::new(),
+            solver_model,
+            notes: Vec::new(),
+            include_demag: false,
+            dispersion_validation: None,
+            k0_kittel_validation: None,
+            solver_policy: None,
+            dispersion_analytic_reference: None,
+            k0_kittel_periodic_airbox_demag: None,
+        }
+    }
+
+    #[test]
+    fn reference_mode_bundle_raw_identity_without_index_is_accepted_and_dual_identity_must_agree() {
+        let plan = crate::fem::eigen_tests::minimal_native_modal_plan();
+        let path_result = reference_mode_bundle_result();
+        let samples = path_result
+            .samples
+            .iter()
+            .map(|sample| sample.sample.clone())
+            .collect::<Vec<_>>();
+        let actual_mode_ids = path_result
+            .samples
+            .iter()
+            .flat_map(|sample| {
+                sample.modes.iter().map(|mode| {
+                    SampleModeId::new(sample.sample.sample_index, mode.raw_mode_index)
+                })
+            })
+            .collect::<BTreeSet<_>>();
+        let selected_mode_ids = actual_mode_ids.clone();
+        let mut artifacts = eigen_path_mode_artifacts_from_result(&path_result).unwrap();
+        let mode_path = "eigen/modes/sample_0006/mode_0003.json";
+        let mode_position = artifacts
+            .iter()
+            .position(|artifact| artifact.relative_path == mode_path)
+            .expect("actual reference mode-bundle writer emits its sample-scoped mode JSON");
+        let producer_mode: Value = serde_json::from_slice(&artifacts[mode_position].bytes).unwrap();
+        assert_eq!(producer_mode["sample_index"], 6);
+        assert_eq!(producer_mode["raw_mode_index"], 3);
+        assert!(producer_mode.get("index").is_none());
+        assert!(producer_mode["assembly_kind"].as_str().is_none());
+
+        materialize_selected_path_physical_potential_artifacts(
+            &plan,
+            &samples,
+            &actual_mode_ids,
+            &selected_mode_ids,
+            &mut artifacts,
+        )
+        .expect("reference mode producer's sample/raw identity does not require shared phi data");
+        assert!(!artifacts.iter().any(|artifact| artifact
+            .relative_path
+            .ends_with("physical_potential.v1.json")));
+
+        let mut matching_dual_identity = producer_mode.clone();
+        matching_dual_identity["index"] = serde_json::json!(3);
+        artifacts[mode_position].bytes = serde_json::to_vec(&matching_dual_identity).unwrap();
+        materialize_selected_path_physical_potential_artifacts(
+            &plan,
+            &samples,
+            &actual_mode_ids,
+            &selected_mode_ids,
+            &mut artifacts,
+        )
+        .expect("matching legacy and producer raw-mode identities are accepted");
+
+        for (field, wrong_value) in [("index", 4), ("sample_index", 5)] {
+            let mut mismatched = producer_mode.clone();
+            mismatched[field] = serde_json::json!(wrong_value);
+            artifacts[mode_position].bytes = serde_json::to_vec(&mismatched).unwrap();
+            assert!(materialize_selected_path_physical_potential_artifacts(
+                &plan,
+                &samples,
+                &actual_mode_ids,
+                &selected_mode_ids,
+                &mut artifacts,
+            )
+            .is_err());
+        }
+    }
+
+    #[test]
+    fn native_floquet_candidates_flow_through_tracking_selection_and_deferred_sidecars() {
+        let plan = shared_floquet_plan();
+        let topology = MeshTopology::from_ir(&plan.mesh).unwrap();
+        let (scalar_classes, scalar_class_count_u64, _, _) =
+            crate::fem::eigen_shared_domain_geometry::
+                modal_shared_domain_equivalence_classes(&topology)
+                .unwrap();
+        let scalar_class_count = scalar_class_count_u64 as usize;
+        let native_modes = (0..3)
+            .map(|raw_mode_index| native_shared_domain_mode(raw_mode_index, scalar_class_count))
+            .collect::<Vec<_>>();
+        let producer_artifacts = native_candidate_artifacts(&plan, &native_modes);
+        let source_mesh = plan.mesh.mixed_topology_fingerprint_v3().unwrap();
+        let active_nodes = (0..topology.n_nodes).collect::<Vec<_>>();
+        let candidate_vectors = (0..native_modes.len())
+            .map(|raw_mode_index| {
+                eigen_path_mode_tracking_vector(
+                    &producer_artifacts,
+                    raw_mode_index,
+                    Some(&active_nodes),
+                    &topology.coords,
+                    [1.0e6, 0.0, 0.0],
+                    true,
+                    &source_mesh,
+                )
+                .expect("producer mode fields satisfy the path tracking reader")
+                .expect("every retained candidate has a tracking field")
+            })
+            .collect::<Vec<_>>();
+
+        let all_raw_mode_indices = BTreeSet::from([0_u32, 1, 2]);
+        let source_artifacts = producer_artifacts
+            .iter()
+            .filter(|artifact| {
+                (0..native_modes.len()).any(|raw_mode_index| {
+                    artifact.relative_path
+                        == format!("eigen/modes/sample_0000/mode_{raw_mode_index:04}.json")
+                        || artifact.relative_path
+                            == crate::fem::eigen_output::floquet_potential_payload_path(
+                                0,
+                                raw_mode_index as u64,
+                            )
+                })
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut artifacts = Vec::new();
+        for sample_index in [5, 6] {
+            let remapped = remap_single_k_mode_artifacts(
+                &source_artifacts,
+                sample_index,
+                &all_raw_mode_indices,
+            )
+            .expect("native mode and raw phi artifacts remap to their path sample");
+            artifacts.extend(remapped);
+        }
+
+        let mut path_result = crate::eigen::PathSolveResult {
+            gamma0_rad_s_per_a_m: plan.gyromagnetic_ratio,
+            samples: vec![
+                path_sample_from_native_tracking_vectors(5, &candidate_vectors),
+                path_sample_from_native_tracking_vectors(6, &candidate_vectors),
+            ],
+            branches: Vec::new(),
+            solver_model: crate::eigen::EigenSolverModel::ProductionCpuShiftInvert,
+            notes: Vec::new(),
+            include_demag: true,
+            dispersion_validation: None,
+            k0_kittel_validation: None,
+            solver_policy: None,
+            dispersion_analytic_reference: None,
+            k0_kittel_periodic_airbox_demag: None,
+        };
+        let tracking = fullmag_ir::ModeTrackingIR {
+            method: fullmag_ir::ModeTrackingMethodIR::OverlapHungarian,
+            frequency_window_hz: None,
+            overlap_floor: 0.5,
+            max_branch_gap: 0,
+        };
+        crate::eigen::tracking::track_branches(&mut path_result, Some(&tracking));
+        let outputs = [OutputIR::EigenMode {
+            field: "mode".into(),
+            all_modes: false,
+            indices: vec![0],
+            branches: vec![0, 1],
+            sample_selector: Some(fullmag_ir::SampleSelectorIR {
+                sample_indices: vec![5],
+                sample_labels: Vec::new(),
+            }),
+        }];
+        let selection = crate::eigen::output_selection::select_eigen_outputs(
+            &path_result,
+            &outputs,
+        )
+        .expect("mixed explicit and tracked-branch selection resolves");
+        let selected_mode_ids = selection.field_mode_ids().clone();
+        assert_eq!(
+            selected_mode_ids,
+            BTreeSet::from([SampleModeId::new(5, 0), SampleModeId::new(5, 1)])
+        );
+        let samples = path_result
+            .samples
+            .iter()
+            .map(|sample| sample.sample.clone())
+            .collect::<Vec<_>>();
+        let actual_mode_ids = path_result
+            .samples
+            .iter()
+            .flat_map(|sample| {
+                sample.modes.iter().map(|mode| {
+                    SampleModeId::new(sample.sample.sample_index, mode.raw_mode_index)
+                })
+            })
+            .collect::<BTreeSet<_>>();
+        let original_certificates = artifacts
+            .iter()
+            .filter(|artifact| artifact.relative_path.starts_with("eigen/modes/sample_"))
+            .map(|artifact| (artifact.relative_path.clone(), artifact.bytes.clone()))
+            .collect::<BTreeMap<_, _>>();
+        let original_phi_payloads = artifacts
+            .iter()
+            .filter(|artifact| artifact.relative_path.ends_with("potential_real_split.bin"))
+            .map(|artifact| (artifact.relative_path.clone(), artifact.bytes.clone()))
+            .collect::<BTreeMap<_, _>>();
+        assert_eq!(original_certificates.len(), 6);
+        assert_eq!(original_phi_payloads.len(), 6);
+        for (path, bytes) in &original_phi_payloads {
+            assert!(!bytes.is_empty());
+            let mode_path = path
+                .replace("eigen/mode_fields/", "eigen/modes/")
+                .replace("/potential_real_split.bin", ".json");
+            let mode_artifact = artifacts
+                .iter()
+                .find(|artifact| artifact.relative_path == mode_path)
+                .expect("native mode certificate is emitted with its phi payload");
+            let mode: Value = serde_json::from_slice(&mode_artifact.bytes).unwrap();
+            assert_eq!(
+                mode["potential_representation"],
+                "doubled_real_split_complex_coefficients"
+            );
+            assert_eq!(mode["potential_payload_path"], path.as_str());
+            assert_eq!(
+                mode["potential_payload_sha256"],
+                format!("sha256:{:x}", Sha256::digest(bytes))
+            );
+        }
+
+        materialize_selected_path_physical_potential_artifacts(
+            &plan,
+            &samples,
+            &actual_mode_ids,
+            &selected_mode_ids,
+            &mut artifacts,
+        )
+        .unwrap();
+
+        let physical_artifacts = artifacts
+            .iter()
+            .filter(|artifact| artifact.relative_path.contains("physical_potential.v1.json"))
+            .collect::<Vec<_>>();
+        assert_eq!(physical_artifacts.len(), 2);
+        assert!(physical_artifacts.iter().all(|artifact| artifact
+            .relative_path
+            .contains("sample_0005/")));
+        assert!(physical_artifacts.iter().any(|artifact| artifact
+            .relative_path
+            .contains("sample_0005/mode_0000/")));
+        assert!(physical_artifacts.iter().any(|artifact| artifact
+            .relative_path
+            .contains("sample_0005/mode_0001/")));
+        assert!(!artifacts.iter().any(|artifact| artifact.relative_path.contains("mode_0002/")
+            && artifact.relative_path.ends_with("physical_potential.v1.json")));
+        assert!(!artifacts.iter().any(|artifact| artifact.relative_path.contains("sample_0006/")
+            && artifact.relative_path.ends_with("physical_potential.v1.json")));
+
+        let phases = crate::fem::eigen_mass_metric::canonical_shared_domain_phases(
+            &topology,
+            &crate::fem::eigen_path::eigen_path_single_k_point_plan(
+                &plan,
+                &samples[0],
+                false,
+                None,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        for selected in &selected_mode_ids {
+            let raw_mode = &native_modes[selected.raw_mode_index];
+            let reduced = crate::fem::eigen_physical_potential::
+                doubled_real_split_to_complex(
+                    &raw_mode.floquet_potential_real_split,
+                    scalar_class_count,
+                )
+                .unwrap();
+            let mode_path = format!(
+                "eigen/modes/sample_{:04}/mode_{:04}.json",
+                selected.sample_index, selected.raw_mode_index
+            );
+            let mode_artifact = artifacts
+                .iter()
+                .find(|artifact| artifact.relative_path == mode_path)
+                .unwrap();
+            let mode: Value = serde_json::from_slice(&mode_artifact.bytes).unwrap();
+            let expected = crate::fem::eigen_physical_potential::physical_potential_artifacts(
+                &topology,
+                &reduced,
+                scalar_class_count,
+                &scalar_classes,
+                &phases,
+                selected.sample_index,
+                selected.raw_mode_index,
+                &serde_json::json!({
+                    "source_mesh_topology_sha256": mode["source_mesh_topology_sha256"],
+                    "operator_input_signature_sha256": mode["operator_input_signature_sha256"],
+                    "phase_constraint_sha256": mode["phase_constraint_sha256"],
+                }),
+            )
+            .unwrap();
+            for expected_artifact in expected {
+                let actual = artifacts
+                    .iter()
+                    .find(|artifact| artifact.relative_path == expected_artifact.relative_path)
+                    .unwrap_or_else(|| panic!("deferred artifact missing: {}", expected_artifact.relative_path));
+                if expected_artifact.relative_path.ends_with(".bin") {
+                    assert_eq!(
+                        decode_complex_payload(actual),
+                        decode_complex_payload(&expected_artifact),
+                        "numerical full-phi/H payload differs at {}",
+                        expected_artifact.relative_path
+                    );
+                } else {
+                    assert_eq!(actual.bytes, expected_artifact.bytes);
+                }
+            }
+        }
+
+        for (path, bytes) in original_certificates {
+            let retained = artifacts
+                .iter()
+                .find(|artifact| artifact.relative_path == path)
+                .expect("candidate mode certificate remains available after sidecar emission");
+            assert_eq!(retained.bytes, bytes);
+        }
+        for (path, bytes) in original_phi_payloads {
+            let retained = artifacts
+                .iter()
+                .find(|artifact| artifact.relative_path == path)
+                .expect("raw Floquet phi certificate remains available after sidecar emission");
+            assert_eq!(retained.bytes, bytes);
+        }
+    }
+
+    #[test]
+    fn branch_selected_potential_sidecars_are_materialized_after_assignment_only_for_selected_raw_ids() {
+        let plan = shared_periodic_plan();
+        let source_mesh = plan.mesh.mixed_topology_fingerprint_v3().unwrap();
+        let operator_signature = format!("sha256:{}", "a".repeat(64));
+        let phase_constraint = format!("sha256:{}", "b".repeat(64));
+        let mut artifacts = (0..3)
+            .map(|index| {
+                let mode = serde_json::json!({
+                    "sample_index": 5,
+                    "index": index,
+                    "assembly_kind": "mfem_weak_form_shared_domain",
+                    "source_mesh_topology_sha256": source_mesh.clone(),
+                    "operator_input_signature_sha256": operator_signature.clone(),
+                    "phase_constraint_sha256": phase_constraint.clone(),
+                    "phi_real": [1.0 + index as f64, 2.0, 3.0],
+                    "phi_imag": [0.5, 0.25, 0.125],
+                });
+                AuxiliaryArtifact {
+                    relative_path: format!("eigen/modes/sample_0005/mode_{index:04}.json"),
+                    bytes: serde_json::to_vec(&mode).unwrap(),
+                }
+            })
+            .collect::<Vec<_>>();
+        let original_mode_bytes = artifacts
+            .iter()
+            .map(|artifact| artifact.bytes.clone())
+            .collect::<Vec<_>>();
+
+        let topology = MeshTopology::from_ir(&plan.mesh).unwrap();
+        let (scalar_classes, scalar_class_count_u64, _, _) =
+            super::super::super::eigen_shared_domain_geometry::
+                modal_shared_domain_equivalence_classes(&topology)
+                .unwrap();
+        let scalar_class_count = scalar_class_count_u64 as usize;
+        let phases = super::super::super::eigen_mass_metric::canonical_shared_domain_phases(
+            &topology,
+            &plan,
+        )
+        .unwrap();
+        let early_phi = [
+            Complex64::new(1.0, 0.5),
+            Complex64::new(2.0, 0.25),
+            Complex64::new(3.0, 0.125),
+        ];
+        let early = super::super::super::eigen_physical_potential::physical_potential_artifacts(
+            &topology,
+            &early_phi,
+            scalar_class_count,
+            &scalar_classes,
+            &phases,
+            5,
+            0,
+            &serde_json::json!({
+                "source_mesh_topology_sha256": source_mesh.clone(),
+                "operator_input_signature_sha256": operator_signature.clone(),
+                "phase_constraint_sha256": phase_constraint.clone(),
+            }),
+        )
+        .unwrap();
+        artifacts.extend(early);
+
+        let sample = crate::eigen::KSampleDescriptor {
+            sample_index: 5,
+            label: Some("X".into()),
+            segment_index: Some(0),
+            path_s: 1.0,
+            t_in_segment: 0.5,
+            k_vector: [0.0; 3],
+        };
+        let selected = BTreeSet::from([
+            SampleModeId::new(5, 0),
+            SampleModeId::new(5, 1),
+        ]);
+        let actual_modes = BTreeSet::from([
+            SampleModeId::new(5, 0),
+            SampleModeId::new(5, 1),
+            SampleModeId::new(5, 2),
+        ]);
+        materialize_selected_path_physical_potential_artifacts(
+            &plan,
+            &[sample.clone()],
+            &actual_modes,
+            &selected,
+            &mut artifacts,
+        )
+        .unwrap();
+
+        let physical_manifests = artifacts
+            .iter()
+            .filter(|artifact| artifact.relative_path.ends_with("physical_potential.v1.json"))
+            .collect::<Vec<_>>();
+        assert_eq!(physical_manifests.len(), 2);
+        assert!(physical_manifests.iter().any(|artifact| artifact
+            .relative_path
+            .contains("sample_0005/mode_0000/")));
+        assert!(physical_manifests.iter().any(|artifact| artifact
+            .relative_path
+            .contains("sample_0005/mode_0001/")));
+        assert!(!artifacts.iter().any(|artifact| artifact.relative_path.contains("mode_0002/")
+            && artifact.relative_path.ends_with("physical_potential.v1.json")));
+        for (index, original) in original_mode_bytes.iter().enumerate() {
+            let path = format!("eigen/modes/sample_0005/mode_{index:04}.json");
+            let retained = artifacts
+                .iter()
+                .find(|artifact| artifact.relative_path == path)
+                .expect("all candidate phi certificate JSON remains available");
+            assert_eq!(&retained.bytes, original);
+            let mode: Value = serde_json::from_slice(&retained.bytes).unwrap();
+            assert_eq!(mode["phi_real"].as_array().unwrap().len(), 3);
+        }
+
+        let before_empty_selection = artifacts.len();
+        materialize_selected_path_physical_potential_artifacts(
+            &plan,
+            &[sample],
+            &actual_modes,
+            &BTreeSet::new(),
+            &mut artifacts,
+        )
+        .unwrap();
+        assert_eq!(artifacts.len(), before_empty_selection);
+        assert!(materialize_selected_path_physical_potential_artifacts(
+            &plan,
+            &[],
+            &actual_modes,
+            &BTreeSet::from([SampleModeId::new(6, 1)]),
+            &mut artifacts,
         )
         .is_err());
     }

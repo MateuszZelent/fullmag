@@ -11,8 +11,8 @@ use crate::adaptive_resources::{
 };
 use crate::fem::eigen_k_worker::{
     build_identity_json, executable_sha256, worker_thread_environment, EigenKWorkerHandshakeV1,
-    EigenKWorkerRequestV1, EigenKWorkerResponseV1, EigenKWorkerThreadBudgetV1,
-    EIGEN_K_WORKER_HANDSHAKE_V1, EIGEN_K_WORKER_PROTOCOL_V1,
+    EigenKWorkerRequestV2, EigenKWorkerResponseV1, EigenKWorkerThreadBudgetV1,
+    EIGEN_K_WORKER_HANDSHAKE_V1, EIGEN_K_WORKER_PROTOCOL_V2,
 };
 use fullmag_ir::{ParallelExecutionModeIR, ParallelExecutionPolicyIR};
 use serde::Serialize;
@@ -636,10 +636,10 @@ impl EigenKProcessPool {
 
     fn prepare_request(
         &self,
-        source: &EigenKWorkerRequestV1,
+        source: &EigenKWorkerRequestV2,
         request_index: usize,
-    ) -> Result<(EigenKWorkerRequestV1, PathBuf, PathBuf), String> {
-        if source.protocol != EIGEN_K_WORKER_PROTOCOL_V1 {
+    ) -> Result<(EigenKWorkerRequestV2, PathBuf, PathBuf), String> {
+        if source.protocol != EIGEN_K_WORKER_PROTOCOL_V2 {
             return Err(format!(
                 "worker request {} has unsupported protocol {}",
                 source.sample_index, source.protocol
@@ -661,7 +661,7 @@ impl EigenKProcessPool {
 
     fn spawn_worker(
         &self,
-        source: &EigenKWorkerRequestV1,
+        source: &EigenKWorkerRequestV2,
         request_index: usize,
         thread_budget: EigenKWorkerThreadBudgetV1,
     ) -> Result<ActiveWorker, String> {
@@ -803,7 +803,7 @@ impl EigenKProcessPool {
         &self,
         response: &EigenKWorkerResponseV1,
     ) -> Result<Vec<crate::types::AuxiliaryArtifact>, String> {
-        if response.protocol != EIGEN_K_WORKER_PROTOCOL_V1 {
+        if response.protocol != EIGEN_K_WORKER_PROTOCOL_V2 {
             return Err("worker response protocol mismatch".into());
         }
         let Some(run) = response.run.as_ref() else {
@@ -883,10 +883,10 @@ impl EigenKProcessPool {
     /// contain at least one accepted finite mode.
     fn validate_terminal_response(
         &self,
-        request: &EigenKWorkerRequestV1,
+        request: &EigenKWorkerRequestV2,
         response: &EigenKWorkerResponseV1,
     ) -> Result<(), String> {
-        if response.protocol != EIGEN_K_WORKER_PROTOCOL_V1 {
+        if response.protocol != EIGEN_K_WORKER_PROTOCOL_V2 {
             return Err("worker response protocol mismatch".into());
         }
         if response.sample_index != request.sample_index {
@@ -1114,7 +1114,7 @@ impl EigenKProcessPool {
     /// order even though completion order is arbitrary.
     pub(crate) fn execute(
         &self,
-        requests: &[EigenKWorkerRequestV1],
+        requests: &[EigenKWorkerRequestV2],
         cancel: Arc<AtomicBool>,
         mut should_cancel: Option<&mut dyn FnMut(Option<&ProcessAdmissionEventV1>) -> bool>,
     ) -> Result<ProcessPoolResult, String> {
@@ -1135,7 +1135,7 @@ impl EigenKProcessPool {
             }
         }
         let mut report = ProcessPoolReportV1 {
-            protocol: EIGEN_K_WORKER_PROTOCOL_V1.to_string(),
+            protocol: EIGEN_K_WORKER_PROTOCOL_V2.to_string(),
             requested_mode: self.policy.mode,
             resolved_mode: "serial_processes".to_string(),
             resolved_workers: 0,
@@ -1900,7 +1900,7 @@ mod tests {
         event.worker_peak.as_mut().unwrap().cpu_cores = 2.0;
         assert!(!super::same_admission_state(&measured, &event));
         let mut report = super::ProcessPoolReportV1 {
-            protocol: super::EIGEN_K_WORKER_PROTOCOL_V1.into(),
+            protocol: super::EIGEN_K_WORKER_PROTOCOL_V2.into(),
             requested_mode: super::ParallelExecutionModeIR::Adaptive,
             resolved_mode: "adaptive".into(),
             resolved_workers: 1,

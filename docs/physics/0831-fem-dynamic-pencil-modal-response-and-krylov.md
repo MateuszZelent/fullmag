@@ -3153,8 +3153,27 @@ False jest pomijane w JSON, a brak pola odtwarza False. Istniejące
 selektory raw i branch zachowują semantykę. Eksport Python zachowuje
 all_modes=True. Rozstrzygnięcie selektora następuje po solve na rzeczywistych
 identyfikatorach, bez renumeracji i bez żądania dodatkowych eigenpairs.
-Wewnętrzny eksport kandydatów trackingu również używa rzeczywistego wyniku;
-nie może ograniczać pól do requested_count przed publikacją ścieżki.
+Wewnętrzny tracking zachowuje wektory magnetyczne wszystkich kandydatów
+wymaganych do przypisania gałęzi, a także `phi_vector` i payloady
+certyfikacyjne. Ten zakres wewnętrzny nie oznacza publicznego eksportu
+potencjału: `potential_full.bin`, `demag_element_full.bin` i ich manifest są
+tworzone przed rozwinięciem potencjału tylko dla rzeczywiście zwróconych
+modów wybranych przez `SaveMode` dla danej próbki. `all_modes=True` wybiera
+wszystkich kandydatów obecnych w wyniku; jawne raw IDs ograniczają rozwinięcie
+do tych identyfikatorów. Selektor gałęzi zachowuje magnetyczne wektory i surowe
+payloady potencjału do zakończenia trackingu; rozwinięcie `phi` i utworzenie
+sidecarów następują dopiero dla raw IDs wybranych po mapowaniu gałęzi. Przy
+połączeniu selektorów jawne raw IDs mogą być obsłużone wcześniej, a wyniki
+gałęzi po mapowaniu; wspólny sample/raw-mode path jest deduplikowany.
+Bez `SaveMode` nie powstają publiczne sidecary fizycznego potencjału.
+
+Wersjonowanie żądania procesu worker i schemat raportu pozostają osobnymi
+kontraktami. Worker używa tokenu protokołu V2 dla nowego żądania selektorów,
+ale publiczny raport nadal ma kształt `ProcessPoolReportV1` i schemat
+`fullmag.parallel-execution-report.v1`; pole `protocol` dopuszcza wyłącznie
+token worker V1 albo V2. Bezpośredni raport nadal nie zawiera
+`terminal_state`, więc jego kompletność wykonania pozostaje
+`not_verified`. Dziennik admission zachowuje własny terminalny stan.
 
 To backend-neutralny zamiar wyjścia dla istniejących ścieżek eigensolve,
 bez zmiany operatora, jednostek, requested/resolved device, fallbacku ani
@@ -3174,6 +3193,19 @@ runtime nowego selektora wymagają osobnej weryfikacji.
 | source-all-mode-selection | `crates/fullmag-runner/src/eigen/output_selection.rs` | `select_eigen_outputs` |
 | source-all-mode-native-result | `crates/fullmag-runner/src/fem/eigen_output.rs` | `requested_mode_indices_for_result` |
 | source-all-mode-path-retention | `crates/fullmag-runner/src/fem/eigen_path_artifacts.rs` | `eigen_path_candidate_mode_indices` |
+| source-all-mode-native-potential-publication | `crates/fullmag-runner/src/fem/eigen_native_window.rs` | `physical_potential_artifacts_for_path_selector` |
+| source-all-mode-path-execution-selector | `crates/fullmag-runner/src/fem/eigen_execution.rs` | `execute_fem_eigen_path_single_k` |
+| source-all-mode-path-publication-regression | `crates/fullmag-runner/src/fem/eigen_native_window.rs` | `path_potential_sidecars_follow_public_sample_and_mode_selection_before_expansion` |
+| source-all-mode-posttracking-potential-publication | `crates/fullmag-runner/src/fem/eigen_path_artifacts.rs` | `materialize_selected_path_physical_potential_artifacts` |
+| source-all-mode-posttracking-potential-regression | `crates/fullmag-runner/src/fem/eigen_path_artifacts.rs` | `native_floquet_candidates_flow_through_tracking_selection_and_deferred_sidecars` |
+| source-all-mode-reference-mode-identity-regression | `crates/fullmag-runner/src/fem/eigen_path_artifacts.rs` | `reference_mode_bundle_raw_identity_without_index_is_accepted_and_dual_identity_must_agree` |
+| source-all-mode-worker-request-v2 | `crates/fullmag-runner/src/fem/eigen_k_worker.rs` | `EigenKWorkerRequestV2` |
+| source-all-mode-worker-publication-regression | `crates/fullmag-runner/src/fem/eigen_k_worker.rs` | `v2_worker_request_keeps_tracking_and_publication_selectors_separate` |
+| source-all-mode-process-pool-v2 | `crates/fullmag-runner/src/eigen/k_process_pool.rs` | `prepare_request` |
+| source-all-mode-worker-v2-protocol | `crates/fullmag-runner/src/fem/eigen_k_worker.rs` | `EIGEN_K_WORKER_PROTOCOL_V2` |
+| source-all-mode-process-pool-report-v1-shape | `crates/fullmag-runner/src/eigen/k_process_pool.rs` | `ProcessPoolReportV1` |
+| source-all-mode-report-v1-v2-validator | `scripts/validate_parallel_execution_report.py` | `SUPPORTED_REPORT_PROTOCOLS` |
+| source-all-mode-report-protocol-regression | `scripts/test_validate_parallel_execution_report.py` | `test_supported_v1_and_v2_protocols_keep_direct_completion_unverified` |
 | source-all-mode-python-test | `packages/fullmag-py/tests/test_problem_ir.py` | `test_save_all_modes_has_explicit_intent_without_assumed_raw_ids` |
 
 ### Integralność legacy odczytu pól i wag

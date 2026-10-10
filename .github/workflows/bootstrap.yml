@@ -119,6 +119,11 @@ jobs:
       - name: Run sample-scoped eigen artifact contracts
         run: cargo test -p fullmag-runner output_publication_tests --lib
 
+      - name: Run selected-only path potential publication contracts
+        run: |
+          cargo test -p fullmag-runner path_potential_publication_tests --lib
+          cargo test -p fullmag-runner deferred_physical_potential_tests --lib
+
       - name: Run eigen artifact and Kittel residual evidence contracts
         run: cargo test -p fullmag-runner eigen::artifacts::tests --lib
 
@@ -520,6 +525,9 @@ jobs:
 
       - name: Run complete build receipt contracts
         run: python -B scripts/test_local_runner_build_executor.py -v
+
+      - name: Run strict eigen worker report protocol contracts
+        run: python -B scripts/test_validate_parallel_execution_report.py -v
 
       - name: Run retained FEM startup diagnostic contracts
         run: python -B scripts/test_diagnose_managed_fem_startup.py -v

@@ -23,6 +23,63 @@ use crate::fem_eigen;
 use crate::types::{AuxiliaryArtifact, ExecutedRun, RunError, RunStatus, StepStats};
 use fullmag_engine::fem::MeshTopology;
 
+/// Public outputs resolved for one path sample, kept separate from the
+/// all-candidate outputs required by internal mode tracking.
+#[derive(Debug, Clone)]
+pub(super) struct EigenPathPotentialPublication {
+    pub(super) outputs: Vec<OutputIR>,
+    pub(super) sample_index: usize,
+    pub(super) sample_label: Option<String>,
+}
+
+impl EigenPathPotentialPublication {
+    pub(super) fn selected_mode_indices(
+        &self,
+        returned_count: usize,
+    ) -> Result<BTreeSet<u32>, RunError> {
+        let count = u32::try_from(returned_count).map_err(|_| RunError {
+            message: "returned native mode count exceeds output selector range".to_string(),
+        })?;
+        let available = (0..count).collect();
+        Ok(eigen_path_candidate_mode_indices_for_sample(
+            &self.outputs,
+            self.sample_index,
+            self.sample_label.as_deref(),
+            &available,
+        ))
+    }
+
+    pub(super) fn pretracking_mode_indices(
+        &self,
+        returned_count: usize,
+    ) -> Result<BTreeSet<u32>, RunError> {
+        let early_outputs = self
+            .outputs
+            .iter()
+            .filter(|output| {
+                !matches!(
+                    output,
+                    OutputIR::EigenMode { branches, .. } if !branches.is_empty()
+                )
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        if early_outputs.len() == self.outputs.len() {
+            return self.selected_mode_indices(returned_count);
+        }
+        let count = u32::try_from(returned_count).map_err(|_| RunError {
+            message: "returned native mode count exceeds output selector range".to_string(),
+        })?;
+        let available = (0..count).collect();
+        Ok(eigen_path_candidate_mode_indices_for_sample(
+            &early_outputs,
+            self.sample_index,
+            self.sample_label.as_deref(),
+            &available,
+        ))
+    }
+}
+
 pub(crate) fn eigen_diagnostics_transport_metadata(
     result: &crate::eigen::PathSolveResult,
     plan: Option<&FemEigenPlanIR>,
@@ -37,6 +94,9 @@ mod eigen_path_guards;
 #[path = "eigen_path_manifest.rs"]
 mod eigen_path_manifest;
 use eigen_path_artifacts::*;
+pub(super) use eigen_path_artifacts::{
+    eigen_path_candidate_mode_indices_for_sample, eigen_path_tracking_outputs,
+};
 pub(super) use eigen_path_guards::eigen_path_single_k_point_plan;
 use eigen_path_guards::*;
 use eigen_path_manifest::*;
@@ -1176,88 +1236,22 @@ pub(crate) fn execute_fem_eigen_path_with_producer_identity_and_parallel_policy(
                     }),
                 Err(_) => crate::types::StepAction::Stop,
             };
-            let executed = if bias_field_sweep_requested(plan) {
-                let lane = match self.engine {
-                    FemEngine::CpuNative => FemEigenExecutionLane::Cpu,
-                    FemEngine::NativeGpu => FemEigenExecutionLane::Gpu,
-                };
-                super::eigen_execution::execute_bias_field_sample_with_relaxation(
-                    &point_plan,
-                    outputs,
-                    lane,
-                    Some(&mut forward),
-                    sample.sample_index,
-                    self.execution.resolution().map(|_| self.execution),
-                    self.producer_identity.as_ref(),
-                )?
-            } else if self.execution.resolution().is_some() {
-                if let Some(handoff) = source_stage_handoff {
-                    fem_eigen::execute_planned_fem_eigen_with_progress_and_stage_handoff(
-                        self.execution,
-                        &point_plan,
-                        outputs,
-                        &mut forward,
-                        handoff,
-                        sample.sample_index,
-                        Some(sample.sample_index),
-                    )?
-                } else {
-                    fem_eigen::execute_planned_fem_eigen_with_handoff_and_progress(
-                        self.execution,
-                        &point_plan,
-                        outputs,
-                        None,
-                        Some(&mut forward),
-                        sample.sample_index,
-                        Some(sample.sample_index),
-                    )?
-                }
-            } else {
-                match self.engine {
-                    FemEngine::CpuNative => {
-                        if let Some(handoff) = source_stage_handoff {
-                            fem_eigen::execute_cpu_fem_eigen_with_progress_and_stage_handoff(
-                                &point_plan,
-                                outputs,
-                                &mut forward,
-                                handoff,
-                                sample.sample_index,
-                                Some(sample.sample_index),
-                            )?
-                        } else {
-                            fem_eigen::execute_cpu_fem_eigen_with_handoff_and_progress(
-                                &point_plan,
-                                outputs,
-                                None,
-                                Some(&mut forward),
-                                sample.sample_index,
-                                Some(sample.sample_index),
-                            )?
-                        }
-                    }
-                    FemEngine::NativeGpu => {
-                        if let Some(handoff) = source_stage_handoff {
-                            fem_eigen::execute_gpu_fem_eigen_with_progress_and_stage_handoff(
-                                &point_plan,
-                                outputs,
-                                Some(&mut forward),
-                                handoff,
-                                sample.sample_index,
-                                Some(sample.sample_index),
-                            )?
-                        } else {
-                            fem_eigen::execute_gpu_fem_eigen_with_handoff(
-                                &point_plan,
-                                outputs,
-                                Some(&mut forward),
-                                None,
-                                sample.sample_index,
-                                Some(sample.sample_index),
-                            )?
-                        }
-                    }
-                }
+            let potential_publication = EigenPathPotentialPublication {
+                outputs: self.publication_outputs.clone(),
+                sample_index: sample.sample_index,
+                sample_label: sample.label.clone(),
             };
+            let executed = super::eigen_execution::execute_fem_eigen_path_single_k(
+                self.execution,
+                &point_plan,
+                outputs,
+                &potential_publication,
+                Some(&mut forward),
+                sample.sample_index,
+                Some(sample.sample_index),
+                source_stage_handoff,
+                self.producer_identity.as_ref(),
+            )?;
             // Preserve raw bytes first; only a completed native run may be
             // parsed or become the next sample's accepted equilibrium.
             match checkpoint_and_admit_single_k(
@@ -1538,6 +1532,7 @@ pub(crate) fn execute_fem_eigen_path_with_producer_identity_and_parallel_policy(
                 execution,
                 plan,
                 &tracking_outputs,
+                outputs,
                 parallel_policy,
                 absolute_process_root.as_deref(),
                 checkpoint_root.as_deref(),
@@ -1663,6 +1658,28 @@ pub(crate) fn execute_fem_eigen_path_with_producer_identity_and_parallel_policy(
     {
         mode_artifacts = eigen_path_mode_artifacts_from_result(&path_result)?;
     }
+
+    let sample_descriptors = path_result
+        .samples
+        .iter()
+        .map(|sample| sample.sample.clone())
+        .collect::<Vec<_>>();
+    let actual_mode_ids = path_result
+        .samples
+        .iter()
+        .flat_map(|sample| {
+            sample.modes.iter().map(|mode| {
+                SampleModeId::new(sample.sample.sample_index, mode.raw_mode_index)
+            })
+        })
+        .collect::<BTreeSet<_>>();
+    materialize_selected_path_physical_potential_artifacts(
+        plan,
+        &sample_descriptors,
+        &actual_mode_ids,
+        selection.field_mode_ids(),
+        &mut mode_artifacts,
+    )?;
 
     retain_selected_eigen_path_mode_artifacts(&mut mode_artifacts, selection.field_mode_ids());
     validate_eigen_path_selected_mode_artifacts(&mode_artifacts, selection.field_mode_ids())?;

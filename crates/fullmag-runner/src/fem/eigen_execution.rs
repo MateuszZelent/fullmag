@@ -13,6 +13,7 @@ use super::eigen_equilibrium_contract::{
     AcceptedFemRelaxStageHandoff, FemRelaxationProducerStageIdentity,
 };
 use super::eigen_execution_resolution::{FemEigenExecutionLane, PlannedFemEigenExecution};
+use super::eigen_path::EigenPathPotentialPublication;
 use super::eigen_math::{
     angular_frequency_from_eigenvalue, angular_frequency_from_raw_eigenvalue, norm,
 };
@@ -119,6 +120,200 @@ pub(crate) fn reject_unsupported_floquet_dynamic_demag(
         });
     }
     Ok(())
+}
+
+/// Execute one k-path sample while keeping private tracking outputs separate
+/// from the public selector that controls expensive phi/H sidecar generation.
+pub(super) fn execute_fem_eigen_path_single_k(
+    execution: PlannedFemEigenExecution<'_>,
+    plan: &FemEigenPlanIR,
+    tracking_outputs: &[OutputIR],
+    potential_publication: &EigenPathPotentialPublication,
+    progress: Option<&mut FemEigenProgressCallback<'_>>,
+    artifact_sample_index: usize,
+    state_artifact_sample_index: Option<usize>,
+    source_relax_handoff: Option<&AcceptedFemRelaxStageHandoff>,
+    producer_identity: Option<&FemRelaxationProducerStageIdentity>,
+) -> Result<ExecutedRun, RunError> {
+    let lane = execution.lane();
+    if bias_field_sweep_requested(plan) {
+        return execute_bias_field_sample_with_potential_publication(
+            plan,
+            tracking_outputs,
+            lane,
+            progress,
+            artifact_sample_index,
+            execution.resolution().map(|_| execution),
+            producer_identity,
+            Some(potential_publication),
+        );
+    }
+
+    if execution.resolution().is_some() {
+        if let Some(handoff) = source_relax_handoff {
+            validate_modal_solver_policy_admission(
+                plan,
+                lane == FemEigenExecutionLane::Gpu,
+                true,
+            )?;
+            let prepared = prepare_single_k_stage_continuation(plan, handoff)?;
+            validate_planned_execution(execution, &prepared)?;
+            let mut run = execute_fem_eigen_inner_with_potential_publication(
+                &prepared,
+                tracking_outputs,
+                lane == FemEigenExecutionLane::Gpu,
+                true,
+                progress,
+                artifact_sample_index,
+                state_artifact_sample_index,
+                None,
+                None,
+                Some(handoff),
+                Some(execution),
+                Some(potential_publication),
+            )?;
+            bind_stage_continuation_artifacts(&mut run, &prepared, handoff)?;
+            return Ok(run);
+        }
+        validate_planned_execution(execution, plan)?;
+        validate_modal_solver_policy_admission(
+            plan,
+            lane == FemEigenExecutionLane::Gpu,
+            true,
+        )?;
+        return execute_fem_eigen_inner_with_potential_publication(
+            plan,
+            tracking_outputs,
+            lane == FemEigenExecutionLane::Gpu,
+            true,
+            progress,
+            artifact_sample_index,
+            state_artifact_sample_index,
+            None,
+            None,
+            None,
+            Some(execution),
+            Some(potential_publication),
+        );
+    }
+
+    match lane {
+        FemEigenExecutionLane::Cpu => {
+            validate_modal_solver_policy_admission(
+                plan,
+                false,
+                native_cpu_modal_window_enabled(plan),
+            )?;
+            if let Some(handoff) = source_relax_handoff {
+                let prepared = prepare_single_k_stage_continuation(plan, handoff)?;
+                let mut run = execute_fem_eigen_inner_with_potential_publication(
+                    &prepared,
+                    tracking_outputs,
+                    false,
+                    native_cpu_modal_window_enabled(&prepared),
+                    progress,
+                    artifact_sample_index,
+                    state_artifact_sample_index,
+                    None,
+                    None,
+                    Some(handoff),
+                    None,
+                    Some(potential_publication),
+                )?;
+                bind_stage_continuation_artifacts(&mut run, &prepared, handoff)?;
+                Ok(run)
+            } else {
+                execute_fem_eigen_inner_with_potential_publication(
+                    plan,
+                    tracking_outputs,
+                    false,
+                    native_cpu_modal_window_enabled(plan),
+                    progress,
+                    artifact_sample_index,
+                    state_artifact_sample_index,
+                    None,
+                    None,
+                    None,
+                    None,
+                    Some(potential_publication),
+                )
+            }
+        }
+        FemEigenExecutionLane::Gpu => {
+            if source_relax_handoff.is_none()
+                && shared_domain_k0_modal_requested(plan)
+                && !native_shared_domain_magnetic_assembly_available(plan)
+            {
+                let mut error = shared_domain_k0_runtime_unavailable_error();
+                if let Some(detail) = native_shared_domain_magnetic_assembly_error(plan) {
+                    error.message.push_str("; producer validation: ");
+                    error.message.push_str(&detail);
+                }
+                return Err(error);
+            }
+            if source_relax_handoff.is_none() && native_gpu_k0_kittel_modal_supported(plan) {
+                return execute_native_gpu_k0_kittel_modal(
+                    plan,
+                    tracking_outputs,
+                    progress,
+                    None,
+                    artifact_sample_index,
+                    state_artifact_sample_index,
+                );
+            }
+            validate_modal_solver_policy_admission(plan, true, true)?;
+            if let Some(handoff) = source_relax_handoff {
+                let prepared = prepare_single_k_stage_continuation(plan, handoff)?;
+                if !native_gpu_shared_domain_modal_supported(&prepared) {
+                    return Err(RunError {
+                        message: "relax_to_eigen_handoff_requires_shared_domain_modal_execution"
+                            .to_string(),
+                    });
+                }
+                let mut run = execute_fem_eigen_inner_with_potential_publication(
+                    &prepared,
+                    tracking_outputs,
+                    true,
+                    true,
+                    progress,
+                    artifact_sample_index,
+                    state_artifact_sample_index,
+                    None,
+                    None,
+                    Some(handoff),
+                    None,
+                    Some(potential_publication),
+                )?;
+                bind_stage_continuation_artifacts(&mut run, &prepared, handoff)?;
+                Ok(run)
+            } else if native_gpu_shared_domain_modal_supported(plan) {
+                execute_fem_eigen_inner_with_potential_publication(
+                    plan,
+                    tracking_outputs,
+                    true,
+                    true,
+                    progress,
+                    artifact_sample_index,
+                    state_artifact_sample_index,
+                    None,
+                    None,
+                    None,
+                    None,
+                    Some(potential_publication),
+                )
+            } else {
+                execute_gpu_fem_eigen_with_handoff_and_progress_and_producer_identity(
+                    plan,
+                    tracking_outputs,
+                    progress,
+                    None,
+                    artifact_sample_index,
+                    state_artifact_sample_index,
+                    producer_identity,
+                )
+            }
+        }
+    }
 }
 
 #[allow(dead_code)]
@@ -247,6 +442,28 @@ pub(crate) fn execute_bias_field_sample_with_relaxation(
     planned_execution: Option<PlannedFemEigenExecution<'_>>,
     producer_identity: Option<&FemRelaxationProducerStageIdentity>,
 ) -> Result<ExecutedRun, RunError> {
+    execute_bias_field_sample_with_potential_publication(
+        sample_plan,
+        outputs,
+        lane,
+        progress,
+        sample_position,
+        planned_execution,
+        producer_identity,
+        None,
+    )
+}
+
+fn execute_bias_field_sample_with_potential_publication(
+    sample_plan: &FemEigenPlanIR,
+    outputs: &[OutputIR],
+    lane: FemEigenExecutionLane,
+    progress: Option<&mut FemEigenProgressCallback<'_>>,
+    sample_position: usize,
+    planned_execution: Option<PlannedFemEigenExecution<'_>>,
+    producer_identity: Option<&FemRelaxationProducerStageIdentity>,
+    potential_publication: Option<&EigenPathPotentialPublication>,
+) -> Result<ExecutedRun, RunError> {
     validate_modal_solver_policy_admission(sample_plan, lane == FemEigenExecutionLane::Gpu, true)?;
     if let Some(execution) = planned_execution {
         validate_planned_execution(execution, sample_plan)?;
@@ -344,7 +561,7 @@ pub(crate) fn execute_bias_field_sample_with_relaxation(
         producer_provenance_json,
     )?;
     let equilibrium = handoff.equilibrium_magnetization.clone();
-    execute_fem_eigen_inner(
+    execute_fem_eigen_inner_with_potential_publication(
         sample_plan,
         outputs,
         lane == FemEigenExecutionLane::Gpu,
@@ -356,6 +573,7 @@ pub(crate) fn execute_bias_field_sample_with_relaxation(
         None,
         Some(&handoff),
         planned_execution,
+        potential_publication,
     )
 }
 
@@ -1594,6 +1812,35 @@ pub(super) fn execute_fem_eigen_inner(
     outputs: &[OutputIR],
     try_gpu: bool,
     use_native_modal_production: bool,
+    progress: Option<&mut FemEigenProgressCallback<'_>>,
+    artifact_sample_index: usize,
+    state_artifact_sample_index: Option<usize>,
+    initial_magnetization_override: Option<&[Vector3]>,
+    expected_handoff: Option<&AcceptedFemEigenEquilibriumHandoff>,
+    source_relax_handoff: Option<&AcceptedFemRelaxStageHandoff>,
+    planned_execution: Option<PlannedFemEigenExecution<'_>>,
+) -> Result<ExecutedRun, RunError> {
+    execute_fem_eigen_inner_with_potential_publication(
+        plan,
+        outputs,
+        try_gpu,
+        use_native_modal_production,
+        progress,
+        artifact_sample_index,
+        state_artifact_sample_index,
+        initial_magnetization_override,
+        expected_handoff,
+        source_relax_handoff,
+        planned_execution,
+        None,
+    )
+}
+
+pub(super) fn execute_fem_eigen_inner_with_potential_publication(
+    plan: &FemEigenPlanIR,
+    outputs: &[OutputIR],
+    try_gpu: bool,
+    use_native_modal_production: bool,
     mut progress: Option<&mut FemEigenProgressCallback<'_>>,
     artifact_sample_index: usize,
     state_artifact_sample_index: Option<usize>,
@@ -1601,6 +1848,7 @@ pub(super) fn execute_fem_eigen_inner(
     expected_handoff: Option<&AcceptedFemEigenEquilibriumHandoff>,
     source_relax_handoff: Option<&AcceptedFemRelaxStageHandoff>,
     planned_execution: Option<PlannedFemEigenExecution<'_>>,
+    potential_publication: Option<&EigenPathPotentialPublication>,
 ) -> Result<ExecutedRun, RunError> {
     validate_modal_solver_policy_admission(plan, try_gpu, use_native_modal_production)?;
     crate::eigen::output_selection::validate_eigen_spectrum_quantities(outputs).map_err(
@@ -1764,6 +2012,7 @@ pub(super) fn execute_fem_eigen_inner(
             native_fem::NativeModalExecutionTarget::ProductionCpu,
             planned_execution,
             expected_handoff,
+            potential_publication,
         );
     }
 
@@ -1799,6 +2048,7 @@ pub(super) fn execute_fem_eigen_inner(
                     }),
                 planned_execution,
                 expected_handoff,
+                potential_publication,
             );
         }
         let (stiffness, mass) = assemble_full_2x2_operator_real(
@@ -1838,6 +2088,7 @@ pub(super) fn execute_fem_eigen_inner(
                     }),
                 planned_execution,
                 expected_handoff,
+                potential_publication,
             );
         }
         if use_sparse {

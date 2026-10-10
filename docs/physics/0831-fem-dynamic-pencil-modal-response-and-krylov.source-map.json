@@ -2972,7 +2972,85 @@
       "id": "source-all-mode-path-retention",
       "path": "crates/fullmag-runner/src/fem/eigen_path_artifacts.rs",
       "symbol": "eigen_path_candidate_mode_indices",
-      "responsibility": "Retain actual raw candidate IDs parsed from the returned spectrum"
+      "responsibility": "Resolve actual raw candidates by public sample and mode selectors; branch selectors retain candidates until tracking maps them"
+    },
+    {
+      "id": "source-all-mode-native-potential-publication",
+      "path": "crates/fullmag-runner/src/fem/eigen_native_window.rs",
+      "symbol": "physical_potential_artifacts_for_path_selector",
+      "responsibility": "Apply non-branch public sample/raw selectors before expanding phi; defer branch-selected physical sidecars while preserving internal tracking and certification payloads"
+    },
+    {
+      "id": "source-all-mode-path-execution-selector",
+      "path": "crates/fullmag-runner/src/fem/eigen_execution.rs",
+      "symbol": "execute_fem_eigen_path_single_k",
+      "responsibility": "Pass public sample publication intent separately from internal all-candidate tracking outputs"
+    },
+    {
+      "id": "source-all-mode-path-publication-regression",
+      "path": "crates/fullmag-runner/src/fem/eigen_native_window.rs",
+      "symbol": "path_potential_sidecars_follow_public_sample_and_mode_selection_before_expansion",
+      "responsibility": "Regression for no SaveMode, actual all-mode and explicit-ID selection, sample filtering, branch deferral, and unchanged single-k publication"
+    },
+    {
+      "id": "source-all-mode-posttracking-potential-publication",
+      "path": "crates/fullmag-runner/src/fem/eigen_path_artifacts.rs",
+      "symbol": "materialize_selected_path_physical_potential_artifacts",
+      "responsibility": "Rebuild phi/H sidecars after branch assignment from retained raw mode certificate payloads and the same per-sample topology classes/phases"
+    },
+    {
+      "id": "source-all-mode-posttracking-potential-regression",
+      "path": "crates/fullmag-runner/src/fem/eigen_path_artifacts.rs",
+      "symbol": "native_floquet_candidates_flow_through_tracking_selection_and_deferred_sidecars",
+      "responsibility": "Native artifact, tracking, remapping and final selector regression with split-phi hash checks and numerical full phi/H comparison against the existing emitter"
+    },
+    {
+      "id": "source-all-mode-reference-mode-identity-regression",
+      "path": "crates/fullmag-runner/src/fem/eigen_path_artifacts.rs",
+      "symbol": "reference_mode_bundle_raw_identity_without_index_is_accepted_and_dual_identity_must_agree",
+      "responsibility": "Exercise the real reference mode-bundle sample/raw identity shape, nonshared admission, and conflicting dual-identity rejection"
+    },
+    {
+      "id": "source-all-mode-worker-request-v2",
+      "path": "crates/fullmag-runner/src/fem/eigen_k_worker.rs",
+      "symbol": "EigenKWorkerRequestV2",
+      "responsibility": "Carry independent tracking and public publication outputs plus the sample label across the version-fenced worker boundary"
+    },
+    {
+      "id": "source-all-mode-worker-publication-regression",
+      "path": "crates/fullmag-runner/src/fem/eigen_k_worker.rs",
+      "symbol": "v2_worker_request_keeps_tracking_and_publication_selectors_separate",
+      "responsibility": "Verify V2 round-trips independent selectors, echoes the V2 response token, defers branch candidates, handles mixed selectors, and V1 rejects V2-only fields"
+    },
+    {
+      "id": "source-all-mode-process-pool-v2",
+      "path": "crates/fullmag-runner/src/eigen/k_process_pool.rs",
+      "symbol": "prepare_request",
+      "responsibility": "Fence selected-output worker requests and validate responses with the V2 protocol token"
+    },
+    {
+      "id": "source-all-mode-worker-v2-protocol",
+      "path": "crates/fullmag-runner/src/fem/eigen_k_worker.rs",
+      "symbol": "EIGEN_K_WORKER_PROTOCOL_V2",
+      "responsibility": "Version the private worker request and response carrying separate tracking and public publication selectors"
+    },
+    {
+      "id": "source-all-mode-process-pool-report-v1-shape",
+      "path": "crates/fullmag-runner/src/eigen/k_process_pool.rs",
+      "symbol": "ProcessPoolReportV1",
+      "responsibility": "Keep the existing process-pool report payload shape independent of the worker request protocol token"
+    },
+    {
+      "id": "source-all-mode-report-v1-v2-validator",
+      "path": "scripts/validate_parallel_execution_report.py",
+      "symbol": "SUPPORTED_REPORT_PROTOCOLS",
+      "responsibility": "Accept only worker protocol V1/V2 while retaining the stable public report schema and direct-report completion limits"
+    },
+    {
+      "id": "source-all-mode-report-protocol-regression",
+      "path": "scripts/test_validate_parallel_execution_report.py",
+      "symbol": "test_supported_v1_and_v2_protocols_keep_direct_completion_unverified",
+      "responsibility": "Check V1/V2 direct and journal reports, unchanged report schema, and fail-closed unknown-token handling"
     },
     {
       "id": "source-all-mode-python-test",

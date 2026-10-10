@@ -217,6 +217,7 @@ pub(super) fn prepare_process_pool_samples(
     execution: PlannedFemEigenExecution<'_>,
     plan: &FemEigenPlanIR,
     tracking_outputs: &[OutputIR],
+    publication_outputs: &[OutputIR],
     parallel_policy: &ParallelExecutionPolicyIR,
     process_root: Option<&Path>,
     checkpoint_root: Option<&Path>,
@@ -300,16 +301,23 @@ pub(super) fn prepare_process_pool_samples(
                 .map(|callback| callback(event))
                 .unwrap_or(crate::types::StepAction::Continue)
         };
-        let bootstrap_run = fem_eigen::execute_planned_fem_eigen_with_progress_and_stage_handoff_and_producer_identity(
-            execution,
-            &bootstrap_point_plan,
-            tracking_outputs,
-            &mut bootstrap_progress,
-            handoff,
-            bootstrap_sample.sample_index,
-            Some(bootstrap_sample.sample_index),
-            producer_identity,
-        )?;
+        let potential_publication = super::eigen_path::EigenPathPotentialPublication {
+            outputs: publication_outputs.to_vec(),
+            sample_index: bootstrap_sample.sample_index,
+            sample_label: bootstrap_sample.label.clone(),
+        };
+        let bootstrap_run =
+            crate::fem::eigen_execution::execute_fem_eigen_path_single_k(
+                execution,
+                &bootstrap_point_plan,
+                tracking_outputs,
+                &potential_publication,
+                Some(&mut bootstrap_progress),
+                bootstrap_sample.sample_index,
+                Some(bootstrap_sample.sample_index),
+                Some(handoff),
+                producer_identity,
+            )?;
         // A pool failure must not discard the serial bootstrap's raw bytes.
         // Workers already persist their own raw response/artifact closure.
         match super::eigen_path::checkpoint_and_admit_single_k(
@@ -376,7 +384,7 @@ pub(super) fn prepare_process_pool_samples(
         .collect::<Vec<_>>();
     if worker_samples.is_empty() {
         let report = crate::eigen::k_process_pool::ProcessPoolReportV1 {
-            protocol: crate::fem::eigen_k_worker::EIGEN_K_WORKER_PROTOCOL_V1.to_string(),
+            protocol: crate::fem::eigen_k_worker::EIGEN_K_WORKER_PROTOCOL_V2.to_string(),
             requested_mode: parallel_policy.mode,
             resolved_mode: "serial_bootstrap_only".into(),
             resolved_workers: 1,
@@ -399,8 +407,8 @@ pub(super) fn prepare_process_pool_samples(
     let requests = worker_samples
         .iter()
         .map(|sample| {
-            Ok(crate::fem::eigen_k_worker::EigenKWorkerRequestV1 {
-                protocol: crate::fem::eigen_k_worker::EIGEN_K_WORKER_PROTOCOL_V1.to_string(),
+            Ok(crate::fem::eigen_k_worker::EigenKWorkerRequestV2 {
+                protocol: crate::fem::eigen_k_worker::EIGEN_K_WORKER_PROTOCOL_V2.to_string(),
                 plan: super::eigen_path::eigen_path_single_k_point_plan(
                     &worker_plan,
                     sample,
@@ -408,6 +416,8 @@ pub(super) fn prepare_process_pool_samples(
                     None,
                 )?,
                 outputs: tracking_outputs.to_vec(),
+                publication_outputs: publication_outputs.to_vec(),
+                sample_label: sample.label.clone(),
                 execution: resolution.clone(),
                 parallel_policy: parallel_policy.clone(),
                 thread_budget: crate::fem::eigen_k_worker::EigenKWorkerThreadBudgetV1 {

@@ -11,6 +11,7 @@ use super::eigen_equilibrium_contract::{
     AcceptedFemEigenEquilibriumHandoff, AcceptedFemRelaxStageHandoff, LoadedEquilibriumArtifact,
 };
 use super::eigen_execution_resolution::PlannedFemEigenExecution;
+use super::eigen_path::EigenPathPotentialPublication;
 use super::eigen_mass_metric::{
     canonical_shared_domain_phases, validate_shared_domain_phase_anchors, SharedDomainSparseMass,
 };
@@ -75,6 +76,223 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::time::Instant;
 
+fn physical_potential_artifacts_for_path_selector<F>(
+    topology: &MeshTopology,
+    potential_payloads: &[(&[Complex64], &[Complex64])],
+    scalar_class_count: usize,
+    scalar_classes: &[u32],
+    phases: &[Complex64],
+    fallback_outputs: &[OutputIR],
+    publication: Option<&EigenPathPotentialPublication>,
+    sample_index: usize,
+    provenance: F,
+) -> Result<Vec<crate::types::AuxiliaryArtifact>, RunError>
+where
+    F: FnOnce() -> Result<serde_json::Value, RunError>,
+{
+    let selected = if let Some(publication) = publication {
+        if publication.sample_index != sample_index {
+            return Err(RunError {
+                message: "path potential selector sample index does not match its artifact sample"
+                    .to_string(),
+            });
+        }
+        publication.pretracking_mode_indices(potential_payloads.len())?
+    } else {
+        requested_mode_indices_for_result(fallback_outputs, potential_payloads.len())?
+    };
+    if selected.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let provenance = provenance()?;
+    let mut artifacts = Vec::new();
+    for raw_mode_index in selected {
+        let mode_index = raw_mode_index as usize;
+        let Some((phi_vector, floquet_potential_real_split)) =
+            potential_payloads.get(mode_index).copied()
+        else {
+            continue;
+        };
+        let reduced = if !phi_vector.is_empty() {
+            if phi_vector.len() != scalar_class_count {
+                return Err(RunError {
+                    message: format!(
+                        "native shared-domain phi payload has {} coefficients; expected {} scalar classes",
+                        phi_vector.len(), scalar_class_count
+                    ),
+                });
+            }
+            phi_vector.to_vec()
+        } else if !floquet_potential_real_split.is_empty() {
+            doubled_real_split_to_complex(floquet_potential_real_split, scalar_class_count)?
+        } else {
+            return Err(RunError {
+                message: format!(
+                    "requested shared-domain mode {mode_index} has no scalar potential payload"
+                ),
+            });
+        };
+        artifacts.extend(physical_potential_artifacts(
+            topology,
+            &reduced,
+            scalar_class_count,
+            scalar_classes,
+            phases,
+            sample_index,
+            mode_index,
+            &provenance,
+        )?);
+    }
+    Ok(artifacts)
+}
+
+#[cfg(test)]
+mod path_potential_publication_tests {
+    use super::*;
+
+    fn output(
+        all_modes: bool,
+        indices: Vec<u32>,
+        branches: Vec<u32>,
+        sample_selector: Option<fullmag_ir::SampleSelectorIR>,
+    ) -> OutputIR {
+        OutputIR::EigenMode {
+            field: "mode".into(),
+            all_modes,
+            indices,
+            branches,
+            sample_selector,
+        }
+    }
+
+    fn emit_for_path_publication(
+        outputs: Vec<OutputIR>,
+        sample_index: usize,
+        sample_label: Option<String>,
+    ) -> Vec<crate::types::AuxiliaryArtifact> {
+        let plan = crate::fem::eigen_tests::minimal_native_modal_plan();
+        let topology = MeshTopology::from_ir(&plan.mesh).expect("fixture topology is valid");
+        let classes = vec![0; topology.n_nodes];
+        let phases = vec![Complex64::new(1.0, 0.0); topology.n_nodes];
+        let phi_zero = [Complex64::new(1.0, 2.0)];
+        let phi_one = [Complex64::new(3.0, 4.0)];
+        let empty: [Complex64; 0] = [];
+        let payloads = [
+            (phi_zero.as_slice(), empty.as_slice()),
+            (phi_one.as_slice(), empty.as_slice()),
+        ];
+        let tracking_outputs = super::super::eigen_path::eigen_path_tracking_outputs(&[], 2);
+        assert!(tracking_outputs.iter().any(|output| matches!(
+            output,
+            OutputIR::EigenMode {
+                all_modes: true,
+                ..
+            }
+        )));
+        let publication = EigenPathPotentialPublication {
+            outputs,
+            sample_index,
+            sample_label,
+        };
+        let mut provenance_called = false;
+        let artifacts = physical_potential_artifacts_for_path_selector(
+            &topology,
+            &payloads,
+            1,
+            &classes,
+            &phases,
+            &tracking_outputs,
+            Some(&publication),
+            sample_index,
+            || {
+                provenance_called = true;
+                Ok(serde_json::json!({
+                    "source_mesh_topology_sha256": "sha256:fixture-mesh",
+                    "operator_input_signature_sha256": "sha256:fixture-operator",
+                    "phase_constraint_sha256": "sha256:fixture-phase",
+                }))
+            },
+        )
+        .expect("selected physical potential artifacts are generated");
+        assert_eq!(provenance_called, !artifacts.is_empty());
+        assert_eq!(phi_zero, [Complex64::new(1.0, 2.0)]);
+        assert_eq!(phi_one, [Complex64::new(3.0, 4.0)]);
+        artifacts
+    }
+
+    #[test]
+    fn path_potential_sidecars_follow_public_sample_and_mode_selection_before_expansion() {
+        assert!(emit_for_path_publication(vec![], 5, Some("X".into())).is_empty());
+
+        let explicit = output(
+            false,
+            vec![1],
+            vec![],
+            Some(fullmag_ir::SampleSelectorIR {
+                sample_indices: vec![5],
+                sample_labels: vec!["X".into()],
+            }),
+        );
+        let selected = emit_for_path_publication(vec![explicit], 5, Some("X".into()));
+        assert_eq!(selected.len(), 3);
+        assert!(selected.iter().all(|artifact| artifact
+            .relative_path
+            .contains("sample_0005/mode_0001/")));
+
+        let wrong_sample = output(
+            false,
+            vec![1],
+            vec![],
+            Some(fullmag_ir::SampleSelectorIR {
+                sample_indices: vec![6],
+                sample_labels: vec!["Y".into()],
+            }),
+        );
+        assert!(emit_for_path_publication(vec![wrong_sample], 5, Some("X".into())).is_empty());
+
+        let all_modes = emit_for_path_publication(vec![output(true, vec![], vec![], None)], 5, None);
+        assert_eq!(all_modes.len(), 6);
+        assert!(all_modes.iter().any(|artifact| artifact
+            .relative_path
+            .contains("sample_0005/mode_0000/")));
+        assert!(all_modes.iter().any(|artifact| artifact
+            .relative_path
+            .contains("sample_0005/mode_0001/")));
+
+        let branch_candidates =
+            emit_for_path_publication(vec![output(false, vec![], vec![7], None)], 5, None);
+        assert!(branch_candidates.is_empty());
+
+        let plan = crate::fem::eigen_tests::minimal_native_modal_plan();
+        let topology = MeshTopology::from_ir(&plan.mesh).unwrap();
+        let classes = vec![0; topology.n_nodes];
+        let phases = vec![Complex64::new(1.0, 0.0); topology.n_nodes];
+        let phi = [Complex64::new(1.0, 2.0)];
+        let empty: [Complex64; 0] = [];
+        let payloads = [(phi.as_slice(), empty.as_slice()), (phi.as_slice(), empty.as_slice())];
+        let legacy_single_k = physical_potential_artifacts_for_path_selector(
+            &topology,
+            &payloads,
+            1,
+            &classes,
+            &phases,
+            &[output(true, vec![], vec![], None)],
+            None,
+            5,
+            || {
+                Ok(serde_json::json!({
+                    "source_mesh_topology_sha256": "sha256:fixture-mesh",
+                    "operator_input_signature_sha256": "sha256:fixture-operator",
+                    "phase_constraint_sha256": "sha256:fixture-phase",
+                }))
+            },
+        )
+        .unwrap();
+        assert_eq!(legacy_single_k.len(), 6);
+    }
+}
+
 #[derive(Debug, Clone)]
 pub(super) struct NativeModalMagneticPencilPayload {
     pub(super) dependency_digest: String,
@@ -120,6 +338,7 @@ pub(super) fn execute_native_modal_window(
     execution_target: native_fem::NativeModalExecutionTarget,
     planned_execution: Option<PlannedFemEigenExecution<'_>>,
     expected_handoff: Option<&AcceptedFemEigenEquilibriumHandoff>,
+    potential_publication: Option<&EigenPathPotentialPublication>,
 ) -> Result<ExecutedRun, RunError> {
     let solver_kind = match execution_target {
         native_fem::NativeModalExecutionTarget::ProductionGpu => {
@@ -787,58 +1006,43 @@ pub(super) fn execute_native_modal_window(
         let phases = shared_domain_phases.as_deref().ok_or_else(|| RunError {
             message: "shared-domain phase map was not constructed".to_string(),
         })?;
-        let mut potential_provenance = shared_domain_identity.clone().ok_or_else(|| RunError {
-            message: "shared-domain physical potential export is missing solver identity"
-                .to_string(),
-        })?;
-        if let Some(object) = potential_provenance.as_object_mut() {
-            object.insert(
-                "source_mesh_topology_sha256".to_string(),
-                serde_json::json!(plan.mesh.mixed_topology_fingerprint_v3().map_err(|error| {
-                    RunError {
-                        message: format!("modal source mesh identity is invalid: {error}"),
-                    }
-                })?),
-            );
-        }
-        for raw_mode_index in requested_mode_indices_for_result(outputs, modes.len())? {
-            let mode_index = raw_mode_index as usize;
-            let Some(mode) = modes.get(mode_index) else {
-                continue;
-            };
-            let reduced = if !mode.phi_vector.is_empty() {
-                if mode.phi_vector.len() != *scalar_class_count {
-                    return Err(RunError {
-                        message: format!(
-                            "native shared-domain phi payload has {} coefficients; expected {} scalar classes",
-                            mode.phi_vector.len(), scalar_class_count
-                        ),
-                    });
+        let potential_payloads = modes
+            .iter()
+            .map(|mode| {
+                (
+                    mode.phi_vector.as_slice(),
+                    mode.floquet_potential_real_split.as_slice(),
+                )
+            })
+            .collect::<Vec<_>>();
+        auxiliary_artifacts.extend(physical_potential_artifacts_for_path_selector(
+            topology,
+            &potential_payloads,
+            *scalar_class_count,
+            scalar_classes,
+            phases,
+            outputs,
+            potential_publication,
+            artifact_sample_index,
+            || {
+                let mut potential_provenance =
+                    shared_domain_identity.clone().ok_or_else(|| RunError {
+                        message: "shared-domain physical potential export is missing solver identity"
+                            .to_string(),
+                    })?;
+                if let Some(object) = potential_provenance.as_object_mut() {
+                    object.insert(
+                        "source_mesh_topology_sha256".to_string(),
+                        serde_json::json!(plan.mesh.mixed_topology_fingerprint_v3().map_err(
+                            |error| RunError {
+                                message: format!("modal source mesh identity is invalid: {error}"),
+                            }
+                        )?),
+                    );
                 }
-                mode.phi_vector.clone()
-            } else if !mode.floquet_potential_real_split.is_empty() {
-                doubled_real_split_to_complex(
-                    &mode.floquet_potential_real_split,
-                    *scalar_class_count,
-                )?
-            } else {
-                return Err(RunError {
-                    message: format!(
-                        "requested shared-domain mode {mode_index} has no scalar potential payload"
-                    ),
-                });
-            };
-            auxiliary_artifacts.extend(physical_potential_artifacts(
-                topology,
-                &reduced,
-                *scalar_class_count,
-                scalar_classes,
-                phases,
-                artifact_sample_index,
-                mode_index,
-                &potential_provenance,
-            )?);
-        }
+                Ok(potential_provenance)
+            },
+        )?);
     }
     if interrupted {
         auxiliary_artifacts.push(json_artifact(
