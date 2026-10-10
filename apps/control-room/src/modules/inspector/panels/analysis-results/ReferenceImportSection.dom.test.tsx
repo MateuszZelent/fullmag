@@ -1,6 +1,6 @@
 import { act } from "react";
 import { createRoot } from "react-dom/client";
-import { describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 
 import { KernelContext } from "@/kernel/KernelContext";
 import type { KernelApi } from "@/kernel/types";
@@ -15,7 +15,19 @@ import {
 } from "@/kernel/layout/simulationPreparationTestDom.test-support";
 import { MAX_REFERENCE_FILE_BYTES } from "@/shared/domain/analysis/referenceImport";
 
-import { ReferenceImportSection } from "./ReferenceImportSection";
+let ReferenceImportSection: typeof import("./ReferenceImportSection").ReferenceImportSection;
+
+beforeAll(async () => {
+  // Radix selects its layout-effect implementation at module evaluation.
+  // Vitest isolates files in the node environment; install DOM before the
+  // component's first import, then keep each test's independent DOM lifetime.
+  const bootstrapDom = installSimulationPreparationTestDom();
+  try {
+    ({ ReferenceImportSection } = await import("./ReferenceImportSection"));
+  } finally {
+    bootstrapDom.restore();
+  }
+});
 
 type TestReferenceFile = Pick<File, "name" | "size" | "text">;
 
@@ -286,7 +298,19 @@ describe("ReferenceImportSection file selection", () => {
       expect(columnSelects.every(
         (element) => Object.getPrototypeOf(element) === nativeSelectConstructor.prototype,
       )).toBe(true);
-      expect(columnSelects.map((element) => element.value)).toEqual(["0", "1"]);
+      const actualValues = columnSelects.map((element) => element.value);
+      const diagnostics = actualValues[0] !== "0" || actualValues[1] !== "1"
+        ? JSON.stringify(columnSelects.map((element) => ({
+            value: element.value,
+            selectedIndex: (element as TestHTMLSelectElement).selectedIndex,
+            childTags: element.childNodes.slice(0, 8).map((node) => node.nodeName),
+            options: element.options.slice(0, 8).map((option) => ({
+              value: option.value,
+              selected: (option as TestHTMLOptionElement).selected,
+            })),
+          })))
+        : undefined;
+      expect(actualValues, diagnostics).toEqual(["0", "1"]);
     } finally {
       await act(async () => root.unmount());
       dom.restore();

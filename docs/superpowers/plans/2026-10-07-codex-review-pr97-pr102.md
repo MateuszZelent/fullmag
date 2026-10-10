@@ -2,7 +2,7 @@
 
 ## Zakres i stan
 
-Pełny rejestr obejmuje 281 komentarzy liniowych Codex oraz jedną dodatkową uwagę w treści review (ID5440044234) w PR #97. Wszystkie pobrano stronicowanym API. PR #102 nie zawiera sugestii do kodu od Codex; komentarze o limitach i podsumowania nie są żądaniami implementacji.
+Pełny rejestr obejmuje 279 komentarzy liniowych Codex oraz 3 uwagi w treści review (ID5440044234, ID5441017701, ID5475465669) w PR #97. Wszystkie pobrano stronicowanym API. PR #102 nie zawiera sugestii do kodu od Codex; komentarze o limitach i podsumowania nie są żądaniami implementacji.
 
 PR #102 zamknięto 2026-10-07, zachowując remote branch `codex/launcher-instance-isolation-20261002` przy `954ba797307c4cc773772d380123893210cfa447`. PR #97 pozostaje otwarty do ukończenia rozpatrzenia i uzasadnionych poprawek. Merge ani usuwanie branchy nie są częścią polecenia zamknięcia PR-ów. Wcześniejszy WIP meshing zachowany osobno.
 
@@ -2843,3 +2843,8 @@ GHA 38016899846, browser job 114109073307, exact917c SUCCESS. Zachowany analysis
 ### 2026-10-10 — kompletność treści review poza inline
 
 Ponowny odczyt wszystkich 32 Codex review bodies w PR #97 ujawnił dwa wcześniej pominięte wpisy. ID5441017701 powtarza naprawiony premature cap real-split modes i jest duplicate canonical4060116218. ID5475465669 jest zasadnym błędem Inspector range: pathS=-25→Gamma→25 ma cumulative span50e6, max norm25e6; nie może przekroczyć limitu30e6 z powodu długości ścieżki. Wpis dodano jako valid_unfixed; trwa poprawka norm opublikowanych k i regresja rzeczywistej funkcji porównania. Rejestr obejmuje teraz 282 wpisy, nie 280. Refresh24 inline nie wniósł nowych komentarzy; brak nowego inline nie zastępuje kontroli treści review.
+
+
+### 2026-10-10 — rzeczywista przyczyna pozostałej regresji DOM
+
+GHA 38017440439 exact7f6: browser114110768554 SUCCESS; ControlRoom114110768414 przeszedł typecheck/lint i7776testów, ale jeden hidden-select test nadal zwracał ['', '']. Nowa primitive select/option IDL regresja i12 scope-command regresji PASS. Niezależny trace wykazał przyczynę import-time: pinned Radix use-layout-effect1.1.1 wybiera no-op, jeśli document nie istnieje przy module evaluation. Statyczny import ReferenceImportSection przed installTestDom powodował brak rejestracji nativeOptions w zamkniętym SelectContent. Zmieniono test setup: bootstrap DOM przed pierwszym dynamic import komponentu, teardown w finally, osobny DOM każdej regresji nadal zachowany. KernelContext i testowy DOM nie preloadują Radix; Vitest node zachowuje domyślną izolację plików. Nie mockowano Select/hooków i nie zmieniono strict ['0','1']. Dodano failure-only bounded options/selectedIndex/child-tags snapshot. Wykonanie tej korekty wymaga GHA; brak lokalnych testów/importów komponentu.
