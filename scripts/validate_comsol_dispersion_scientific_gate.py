@@ -1641,13 +1641,18 @@ def _validate_spectrum(
     case: str,
     expected_path: Mapping[int, tuple[float, float, float]],
     reasons: list[str],
-) -> tuple[dict[int, dict[str, Any]], dict[tuple[int, int], float]]:
+) -> tuple[
+    dict[int, dict[str, Any]],
+    dict[tuple[int, int], float],
+    dict[tuple[int, int], float],
+]:
     samples = spectrum.get("samples")
     sample_map: dict[int, dict[str, Any]] = {}
     mode_map: dict[tuple[int, int], float] = {}
+    quality_admitted: dict[tuple[int, int], float] = {}
     if not isinstance(samples, list):
         reasons.append("spectrum.samples is missing or is not an array")
-        return sample_map, mode_map
+        return sample_map, mode_map, quality_admitted
     expected_count = 1 if case == "c0" else EXPECTED_PATH_SAMPLE_COUNT
     if len(samples) != expected_count:
         reasons.append(f"{case} requires {expected_count} spectrum samples, found {len(samples)}")
@@ -1694,12 +1699,14 @@ def _validate_spectrum(
             if key in mode_map:
                 reasons.append(f"spectrum contains duplicate raw_mode_index {raw} at sample {index}")
                 continue
-            _validate_modal_quality(mode, f"spectrum sample {index} mode {raw}", reasons)
+            quality_ok = _validate_modal_quality(mode, f"spectrum sample {index} mode {raw}", reasons)
             mode_map[key] = float(frequency)
+            if quality_ok and _finite_positive(frequency):
+                quality_admitted[key] = float(frequency)
     expected_indices = {0} if case == "c0" else set(range(EXPECTED_PATH_SAMPLE_COUNT))
     if set(sample_map) != expected_indices:
         reasons.append(f"spectrum sample indices are {sorted(sample_map)}, expected {sorted(expected_indices)}")
-    return sample_map, mode_map
+    return sample_map, mode_map, quality_admitted
 
 
 def _validate_branch_tracking_evidence(
@@ -1750,6 +1757,8 @@ def _validate_branches(
     case: str,
     mode_map: Mapping[tuple[int, int], float],
     reasons: list[str],
+    *,
+    quality_mode_map: Mapping[tuple[int, int], float] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     values = branches.get("branches")
     if not isinstance(values, list):
@@ -1777,6 +1786,7 @@ def _validate_branches(
     target = 1 if case == "c0" else EXPECTED_TARGET_BANDS
     complete: list[dict[str, Any]] = []
     seen_mode_bindings: set[tuple[int, int]] = set()
+    branch_for_initial_mode: dict[tuple[int, int], dict[str, Any]] = {}
     for branch in parsed:
         branch_id = int(branch["branch_id"])
         point_map: dict[int, Mapping[str, Any]] = {}
@@ -1803,6 +1813,8 @@ def _validate_branches(
             binding = (index, raw)
             if binding in seen_mode_bindings:
                 reasons.append(f"raw mode {raw} at sample {index} is assigned to multiple tracked branches")
+            else:
+                branch_for_initial_mode.setdefault(binding, branch)
             seen_mode_bindings.add(binding)
             if binding not in mode_map:
                 reasons.append(f"branch {branch_id} sample {index} references unknown spectrum raw mode {raw}")
@@ -1812,15 +1824,109 @@ def _validate_branches(
             complete.append(branch)
     if len(complete) < target:
         reasons.append(f"only {len(complete)} complete tracked branches are available; {target} are required")
-    selected = complete[:target]
-    # Branch IDs are bookkeeping, not a physical mode label.  The analytic
-    # coverage check consumes selected[0], so accepting an arbitrary complete
-    # branch here could compare a higher mode to the n=0 oracle and leave a
-    # mislabeled fundamental branch undetected.  Bind the first selected branch
-    # to the lowest positive raw spectrum frequency at every sample before any
-    # analytic comparison is allowed.
+    quality_modes = quality_mode_map if isinstance(quality_mode_map, Mapping) else {}
+    complete_branch_ids = {int(branch["branch_id"]) for branch in complete}
+    seed_modes = sorted(
+        (
+            (frequency, raw)
+            for (sample_index, raw), frequency in quality_modes.items()
+            if sample_index == 0 and _finite_positive(frequency)
+        ),
+        key=lambda item: (item[0], item[1]),
+    )
+    if len(seed_modes) < target:
+        reasons.append(
+            f"only {len(seed_modes)} quality-admitted positive seed modes are available; {target} are required"
+        )
+    selected: list[dict[str, Any]] = []
+    for _frequency, raw in seed_modes[:target]:
+        binding = (0, raw)
+        branch = branch_for_initial_mode.get(binding)
+        if branch is None:
+            reasons.append(f"lowest-frequency seed mode raw {raw} has no tracked branch")
+        elif int(branch["branch_id"]) not in complete_branch_ids:
+            reasons.append(
+                f"lowest-frequency seed mode raw {raw} has no complete tracked branch; higher modes cannot replace it"
+            )
+        else:
+            selected.append(branch)
+
+    # Branch IDs are bookkeeping, not a physical mode rank.  Select the seed
+    # set by the lowest quality-admitted positive frequencies, with raw index
+    # used only as a deterministic tie-breaker.  At every sample, retain those
+    # branch identities and compare their frequency multiset (including
+    # degeneracy multiplicity) with the lowest target frequencies.  Equal
+    # frequencies at a cutoff may be represented by any of the tied raw IDs.
+    lowest_frequency_multiset_check = "pass"
+    if len(selected) != target:
+        lowest_frequency_multiset_check = "fail"
+    selected_raw_ids_unique = True
+    for sample_index in sorted(expected_indices):
+        eligible = sorted(
+            (
+                (frequency, raw)
+                for (index, raw), frequency in quality_modes.items()
+                if index == sample_index and _finite_positive(frequency)
+            ),
+            key=lambda item: (item[0], item[1]),
+        )
+        if len(eligible) < target:
+            reasons.append(
+                f"sample {sample_index} has only {len(eligible)} quality-admitted positive modes; {target} are required"
+            )
+            lowest_frequency_multiset_check = "fail"
+            continue
+        selected_frequencies: list[float] = []
+        selected_raw_ids: set[int] = set()
+        for branch in selected:
+            point = next(
+                (
+                    item for item in branch.get("points", [])
+                    if isinstance(item, Mapping) and item.get("sample_index") == sample_index
+                ),
+                None,
+            )
+            raw = point.get("raw_mode_index") if isinstance(point, Mapping) else None
+            if not isinstance(raw, int) or isinstance(raw, bool):
+                reasons.append(
+                    f"selected branch {branch.get('branch_id')} has no valid raw mode at sample {sample_index}"
+                )
+                lowest_frequency_multiset_check = "fail"
+                continue
+            if raw in selected_raw_ids:
+                reasons.append(f"selected branches reuse raw mode {raw} at sample {sample_index}")
+                selected_raw_ids_unique = False
+                lowest_frequency_multiset_check = "fail"
+                continue
+            selected_raw_ids.add(raw)
+            binding = (sample_index, raw)
+            if binding not in quality_modes:
+                reasons.append(
+                    f"selected branch {branch.get('branch_id')} raw mode {raw} is not quality-admitted at sample {sample_index}"
+                )
+                lowest_frequency_multiset_check = "fail"
+                continue
+            frequency = point.get("frequency_real_hz", point.get("frequency_hz"))
+            if not _finite_positive(frequency):
+                lowest_frequency_multiset_check = "fail"
+                continue
+            selected_frequencies.append(float(frequency))
+        expected_frequencies = sorted(frequency for frequency, _raw in eligible[:target])
+        actual_frequencies = sorted(selected_frequencies)
+        if len(actual_frequencies) != target or any(
+            _relative_error(actual, expected) > 1.0e-9
+            for actual, expected in zip(actual_frequencies, expected_frequencies)
+        ):
+            reasons.append(
+                f"selected branches at sample {sample_index} do not match the lowest {target} quality-admitted frequency multiset"
+            )
+            lowest_frequency_multiset_check = "fail"
+
+    # C0's Kittel and C1's analytic checks consume selected[0], which must
+    # remain fundamental.  A1 has no single-branch oracle, so its tracked set
+    # may contain internal frequency crossings while preserving the full rank.
     fundamental_branch_check = "not_applicable"
-    if selected:
+    if selected and case in {"c0", "c1"}:
         fundamental_branch_check = "pass"
         first_branch = selected[0]
         first_points = {
@@ -1832,7 +1938,7 @@ def _validate_branches(
             point = first_points.get(sample_index)
             candidates = [
                 frequency
-                for (index, _raw), frequency in mode_map.items()
+                for (index, _raw), frequency in quality_modes.items()
                 if index == sample_index and _finite_positive(frequency)
             ]
             observed = point.get("frequency_real_hz", point.get("frequency_hz")) if point else None
@@ -1852,12 +1958,20 @@ def _validate_branches(
         branches, selected, sorted(expected_indices), reasons,
     ) if case in PATH_CASES else _new_check("not_applicable")
     return selected, _new_check(
-        "pass" if len(selected) == target and fundamental_branch_check != "fail" and len(reasons) == initial_reason_count else "fail",
+        "pass"
+        if len(selected) == target
+        and fundamental_branch_check != "fail"
+        and lowest_frequency_multiset_check != "fail"
+        and selected_raw_ids_unique
+        and len(reasons) == initial_reason_count
+        else "fail",
         branch_count=len(parsed),
         complete_branch_count=len(complete),
         target_band_count=target,
         sample_count=(1 if case == "c0" else EXPECTED_PATH_SAMPLE_COUNT),
         selected_branch_ids=[int(branch["branch_id"]) for branch in selected],
+        lowest_frequency_multiset_check=lowest_frequency_multiset_check,
+        selected_raw_ids_unique=selected_raw_ids_unique,
         fundamental_branch_check=fundamental_branch_check,
         tracking_provenance=tracking_evidence,
     )
@@ -2409,7 +2523,7 @@ def _load_numeric_bundle(
         reasons.append(f"{label} has no native metadata.json object")
     elif _metadata_backend_plan(metadata) is None:
         reasons.append(f"{label} has no metadata.execution_plan.backend_plan")
-    _validate_bundle_modal_payload(loaded, label, reasons)
+    loaded["_quality_admitted_mode_map"] = _validate_bundle_modal_payload(loaded, label, reasons)
     _validate_bundle_branches(loaded, label, reasons)
     loaded["_metadata_file"] = str(metadata_file)
     loaded["_metadata_hash"] = metadata_hash
@@ -2420,19 +2534,20 @@ def _validate_bundle_modal_payload(
     bundle: Mapping[str, Any],
     label: str,
     reasons: list[str],
-) -> None:
+) -> dict[tuple[int, int], float]:
     """Check every numeric comparison mode before it can feed an oracle."""
 
     spectrum = bundle.get("spectrum")
     diagnostics = bundle.get("diagnostics")
     if not isinstance(spectrum, Mapping) or not isinstance(diagnostics, Mapping):
-        return
+        return {}
     samples = spectrum.get("samples")
     if not isinstance(samples, list) or not samples:
         reasons.append(f"{label} spectrum has no samples array")
-        return
+        return {}
     mode_count = 0
     seen: set[tuple[int, int]] = set()
+    quality_admitted: dict[tuple[int, int], float] = {}
     sample_ids: set[int] = set()
     for sample in samples:
         if not isinstance(sample, Mapping) or type(sample.get("sample_index")) is not int or sample.get("sample_index", -1) < 0:
@@ -2457,13 +2572,22 @@ def _validate_bundle_modal_payload(
             key = (sample_index, raw_mode_index)
             if key in seen:
                 reasons.append(f"{label} spectrum contains duplicate raw mode {key}")
+                unique = False
+            else:
+                unique = True
             seen.add(key)
             mode_count += 1
-            _validate_modal_quality(mode, f"{label} spectrum sample {sample_index} mode {raw_mode_index}", reasons)
+            quality_ok = _validate_modal_quality(
+                mode, f"{label} spectrum sample {sample_index} mode {raw_mode_index}", reasons,
+            )
+            frequency = mode.get("frequency_real_hz", mode.get("frequency_hz"))
+            if unique and quality_ok and _finite_positive(frequency):
+                quality_admitted[key] = float(frequency)
     for source_name, source in (("spectrum", spectrum), ("solver diagnostics", diagnostics)):
         for key, expected in (("sample_count", len(samples)), ("mode_count", mode_count)):
             if type(source.get(key)) is not int or source[key] != expected:
                 reasons.append(f"{label} {source_name} {key} does not match spectrum contents")
+    return quality_admitted
 
 
 def _validate_bundle_branches(bundle, label, reasons):
@@ -3013,7 +3137,13 @@ def _validate_convergence_coverage(bundle, case, label, reasons):
              for mode in sample["modes"] if isinstance(mode, Mapping) and type(mode.get("raw_mode_index")) is int
              and _finite(mode.get("frequency_real_hz"))}
     branch_reasons = []
-    _validate_branches(bundle["branches"], case, modes, branch_reasons)
+    quality_mode_map = bundle.get("_quality_admitted_mode_map", {})
+    if not isinstance(quality_mode_map, Mapping):
+        quality_mode_map = {}
+    _validate_branches(
+        bundle["branches"], case, modes, branch_reasons,
+        quality_mode_map=quality_mode_map,
+    )
     reasons.extend(f"{label}: {reason}" for reason in branch_reasons)
 
 
@@ -3336,13 +3466,17 @@ def validate_case(
     )
     sample_map: dict[int, dict[str, Any]] = {}
     mode_map: dict[tuple[int, int], float] = {}
+    quality_mode_map: dict[tuple[int, int], float] = {}
     if spectrum:
-        sample_map, mode_map = _validate_spectrum(spectrum, case, expected_path, reasons)
+        sample_map, mode_map, quality_mode_map = _validate_spectrum(spectrum, case, expected_path, reasons)
     tracking_input_hashes = _tracking_input_hashes(case_dir, artifacts, mode_map) if case in PATH_CASES else {}
     selected_branches: list[dict[str, Any]] = []
     branch_check = _new_check("missing")
     if branches:
-        selected_branches, branch_check = _validate_branches(branches, case, mode_map, reasons)
+        selected_branches, branch_check = _validate_branches(
+            branches, case, mode_map, reasons,
+            quality_mode_map=quality_mode_map,
+        )
     csv_check = _new_check("missing")
     if Path("eigen/dispersion.csv") in artifacts:
         csv_check = _validate_dispersion_csv(

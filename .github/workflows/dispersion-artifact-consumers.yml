@@ -39,6 +39,7 @@ jobs:
         run: >-
           python -B -m pytest -q
           scripts/test_validate_comsol_dispersion_scientific_gate.py
+          scripts/test_comsol_tracking_provenance_gate.py
           scripts/test_fem_producer_provenance_replay.py
 
       - name: Run frequency-domain provenance verifier regressions

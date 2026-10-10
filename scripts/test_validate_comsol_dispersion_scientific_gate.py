@@ -1066,7 +1066,7 @@ class ScientificGateTests(unittest.TestCase):
         self.assertEqual(max(sin_squared), 0.5)
         self.assertFalse(any(abs(value - 1.0) < 1.0e-12 for value in sin_squared))
 
-    def test_selected_fundamental_branch_must_be_lowest_positive_mode(self):
+    def test_seed_branch_selection_uses_frequency_not_branch_id(self):
         modes = {(sample, raw): 1.0e9 + raw * 1.0e8 for sample in range(61) for raw in range(8)}
         branches = []
         for branch_id in range(8):
@@ -1084,10 +1084,139 @@ class ScientificGateTests(unittest.TestCase):
                 ],
             })
         reasons = []
-        selected, check = gate._validate_branches({"branches": branches}, "c1", modes, reasons)
+        selected, check = gate._validate_branches(
+            {"branches": branches}, "c1", modes, reasons,
+            quality_mode_map=modes,
+        )
         self.assertEqual(len(selected), 8)
         self.assertEqual(check["status"], "fail")
-        self.assertTrue(any("lowest positive branch" in reason for reason in reasons), reasons)
+        self.assertEqual(check["selected_branch_ids"][0], 1)
+        self.assertEqual(check["fundamental_branch_check"], "pass")
+        self.assertFalse(any("lowest positive branch" in reason for reason in reasons), reasons)
+
+    def test_lowest_eight_multiset_accepts_degeneracy_at_cutoff(self):
+        mode_map = {}
+        branches = []
+        selected_raw = (0, 10, 11, 12, 13, 14, 15, 20)
+        for raw in range(24):
+            branch_id = (raw * 7) % 24
+            points = []
+            for sample in range(61):
+                if raw == 0:
+                    frequency = 1.0e9
+                elif raw in range(10, 16):
+                    frequency = (raw - 8) * 1.0e9
+                elif raw == 20:
+                    frequency = 8.0e9
+                elif raw == 2:
+                    # At sample zero this mode lies above the cutoff; later it
+                    # ties the selected raw-20 mode at the eighth frequency.
+                    frequency = 9.0e9 if sample == 0 else 8.0e9
+                else:
+                    frequency = 20.0e9 + raw * 1.0e9
+                mode_map[(sample, raw)] = frequency
+                points.append({
+                    "sample_index": sample,
+                    "raw_mode_index": raw,
+                    "frequency_real_hz": frequency,
+                    "frequency_imag_hz": 0.0,
+                    "tracking_confidence": 1.0,
+                })
+            branches.append({"branch_id": branch_id, "points": points})
+        payload = _tracking_fixture_payload(branches)
+        reasons = []
+        selected, check = gate._validate_branches(
+            payload, "c1", mode_map, reasons,
+            quality_mode_map=mode_map,
+        )
+        self.assertEqual([point["raw_mode_index"] for point in selected[0]["points"][:1]], [0])
+        self.assertEqual(
+            [branch["branch_id"] for branch in selected],
+            [(raw * 7) % 24 for raw in selected_raw],
+        )
+        self.assertEqual(check["lowest_frequency_multiset_check"], "pass", reasons)
+        self.assertTrue(check["selected_raw_ids_unique"])
+        self.assertEqual(check["status"], "pass", reasons)
+
+    def test_a1_selected_branches_may_cross_without_fundamental_identity(self):
+        mode_map = {}
+        branches = []
+        for raw in range(8):
+            points = []
+            for sample in range(61):
+                frequency = 1.0e9 + raw * 1.0e8
+                if sample >= 30 and raw in (0, 1):
+                    frequency = 1.0e9 + (1 - raw) * 1.0e8
+                mode_map[(sample, raw)] = frequency
+                points.append({
+                    "sample_index": sample,
+                    "raw_mode_index": raw,
+                    "frequency_real_hz": frequency,
+                    "frequency_imag_hz": 0.0,
+                    "tracking_confidence": 1.0,
+                })
+            branches.append({"branch_id": raw, "points": points})
+        payload = _tracking_fixture_payload(branches)
+
+        a1_reasons = []
+        selected_a1, a1_check = gate._validate_branches(
+            payload, "a1", mode_map, a1_reasons,
+            quality_mode_map=mode_map,
+        )
+        self.assertEqual(len(selected_a1), 8)
+        self.assertEqual(a1_check["status"], "pass", a1_reasons)
+        self.assertEqual(a1_check["selected_branch_ids"], list(range(8)))
+        self.assertEqual(a1_check["lowest_frequency_multiset_check"], "pass")
+        self.assertEqual(a1_check["fundamental_branch_check"], "not_applicable")
+        self.assertEqual(a1_reasons, [])
+
+        # The same crossing remains invalid for C1 because selected[0] is the
+        # branch consumed by its homogeneous-film analytic n=0 oracle.
+        c1_reasons = []
+        _selected_c1, c1_check = gate._validate_branches(
+            payload, "c1", mode_map, c1_reasons,
+            quality_mode_map=mode_map,
+        )
+        self.assertEqual(c1_check["lowest_frequency_multiset_check"], "pass")
+        self.assertEqual(c1_check["fundamental_branch_check"], "fail")
+        self.assertEqual(c1_check["status"], "fail")
+        self.assertTrue(any("lowest positive branch" in reason for reason in c1_reasons), c1_reasons)
+
+    def test_spectrum_keeps_quality_failures_out_of_physical_ranking(self):
+        modes = []
+        for raw, frequency in ((0, 1.0e9), (1, 0.5e9)):
+            mode = {
+                "raw_mode_index": raw,
+                "frequency_real_hz": frequency,
+                "frequency_imag_hz": 0.0,
+            }
+            _native_mode_diagnostics(mode)
+            if raw == 1:
+                mode["residual_relative_l2"] = gate.MAX_EIGEN_RESIDUAL
+            modes.append(mode)
+        reasons = []
+        _samples, mode_map, quality_map = gate._validate_spectrum(
+            {"sample_count": 1, "samples": [{"sample_index": 0, "k_vector": [0.0, 0.0, 0.0], "modes": modes}]},
+            "c0", {}, reasons,
+        )
+        self.assertIn((0, 1), mode_map)
+        self.assertNotIn((0, 1), quality_map)
+        self.assertIn((0, 0), quality_map)
+        self.assertTrue(any("residual_relative_l2" in reason for reason in reasons), reasons)
+        branches = {"branches": [
+            {"branch_id": raw, "points": [{
+                "sample_index": 0,
+                "raw_mode_index": raw,
+                "frequency_real_hz": mode["frequency_real_hz"],
+                "frequency_imag_hz": mode["frequency_imag_hz"],
+            }]} for raw, mode in enumerate(modes)
+        ]}
+        selected, check = gate._validate_branches(
+            branches, "c0", mode_map, reasons,
+            quality_mode_map=quality_map,
+        )
+        self.assertEqual([branch["branch_id"] for branch in selected], [0])
+        self.assertEqual(check["lowest_frequency_multiset_check"], "pass")
 
     def test_airbox_boundary_sweep_is_not_compared_to_primary_same_physics(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -1792,6 +1921,132 @@ class ScientificGateTests(unittest.TestCase):
         ))
         self.assertTrue(any("gyromagnetic_ratio" in reason for reason in reasons))
 
+    def test_validate_case_selects_lowest_eight_by_seed_frequency_and_preserves_degeneracy(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case_dir = _make_case(Path(directory), "c1")
+            spectrum_path = case_dir / "eigen/spectrum.v2.json"
+            branches_path = case_dir / "eigen/branches.v2.json"
+
+            def rewrite_primary(*, cross_after_seed=False, omit_lower_sample=False):
+                spectrum = json.loads(spectrum_path.read_text(encoding="utf-8"))
+                branches = [{"branch_id": raw, "label": f"raw_{raw}", "points": []} for raw in range(24)]
+                for sample in spectrum["samples"]:
+                    sample_index = sample["sample_index"]
+                    old_fundamental = next(
+                        mode["frequency_real_hz"]
+                        for mode in sample["modes"]
+                        if mode["raw_mode_index"] == 0
+                    )
+                    modes = []
+                    for raw in range(24):
+                        if raw == 0:
+                            frequency = old_fundamental
+                        elif cross_after_seed and sample_index > 0 and raw in range(1, 8):
+                            frequency = old_fundamental + raw * 1.0e8
+                        elif cross_after_seed and sample_index > 0 and raw in range(8, 15):
+                            frequency = old_fundamental + (20 + raw) * 1.0e8
+                        elif not cross_after_seed and sample_index > 0 and raw == 15:
+                            frequency = old_fundamental + 7.0e8
+                        elif raw in range(8, 15):
+                            frequency = old_fundamental + (raw - 7) * 1.0e8
+                        elif raw in range(1, 8):
+                            frequency = old_fundamental + (10 + raw) * 1.0e8
+                        else:
+                            frequency = old_fundamental + (30 + raw) * 1.0e8
+                        mode = {
+                            "raw_mode_index": raw,
+                            "frequency_real_hz": frequency,
+                            "frequency_imag_hz": 0.0,
+                        }
+                        _native_mode_diagnostics(mode)
+                        modes.append(mode)
+                        if not (omit_lower_sample and raw == 8 and sample_index == 60):
+                            branches[raw]["points"].append({
+                                "sample_index": sample_index,
+                                "raw_mode_index": raw,
+                                "frequency_real_hz": frequency,
+                                "frequency_imag_hz": 0.0,
+                                "tracking_confidence": 1.0,
+                            })
+                    sample["modes"] = modes
+                spectrum["mode_count"] = sum(len(sample["modes"]) for sample in spectrum["samples"])
+                _write_json(spectrum_path, spectrum)
+                _write_json(branches_path, _tracking_fixture_payload(branches))
+
+            rewrite_primary()
+            seed_report = gate.validate_case(
+                case_dir, "c1", parameters_path=PARAMETERS, kpath_path=KPATH,
+            )
+            seed_check = seed_report["checks"]["tracked_branches"]
+            self.assertEqual(seed_check["status"], "pass", seed_report["reasons"])
+            self.assertEqual(seed_check["selected_branch_ids"], [0, 8, 9, 10, 11, 12, 13, 14])
+            self.assertEqual(seed_check["lowest_frequency_multiset_check"], "pass")
+
+            # The same branch identities remain selected, but their path
+            # frequencies now leave the lowest-eight multiset after the seed.
+            # A higher branch cannot be silently substituted mid-path.
+            rewrite_primary(cross_after_seed=True)
+            crossed_report = gate.validate_case(
+                case_dir, "c1", parameters_path=PARAMETERS, kpath_path=KPATH,
+            )
+            crossed_check = crossed_report["checks"]["tracked_branches"]
+            self.assertEqual(crossed_check["status"], "fail")
+            self.assertEqual(crossed_check["selected_branch_ids"], [0, 8, 9, 10, 11, 12, 13, 14])
+            self.assertTrue(any(
+                "lowest 8 quality-admitted frequency multiset" in reason
+                for reason in crossed_report["reasons"]
+            ), crossed_report["reasons"])
+
+            # A high complete branch cannot replace a lower seed candidate
+            # whose tracked history is incomplete.
+            rewrite_primary(omit_lower_sample=True)
+            incomplete_report = gate.validate_case(
+                case_dir, "c1", parameters_path=PARAMETERS, kpath_path=KPATH,
+            )
+            incomplete_check = incomplete_report["checks"]["tracked_branches"]
+            self.assertEqual(incomplete_check["status"], "fail")
+            self.assertEqual(incomplete_check["selected_branch_ids"], [0, 9, 10, 11, 12, 13, 14])
+            self.assertTrue(any(
+                "raw 8 has no complete tracked branch" in reason
+                for reason in incomplete_report["reasons"]
+            ), incomplete_report["reasons"])
+
+    def test_validate_case_a1_allows_two_of_eight_branches_to_cross(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case_dir = _make_case(Path(directory), "a1")
+            spectrum_path = case_dir / "eigen/spectrum.v2.json"
+            branches_path = case_dir / "eigen/branches.v2.json"
+            spectrum = json.loads(spectrum_path.read_text(encoding="utf-8"))
+            branches = json.loads(branches_path.read_text(encoding="utf-8"))
+            for sample in spectrum["samples"]:
+                if sample["sample_index"] >= 30:
+                    modes_by_raw = {mode["raw_mode_index"]: mode for mode in sample["modes"]}
+                    first = modes_by_raw[0]["frequency_real_hz"]
+                    second = modes_by_raw[1]["frequency_real_hz"]
+                    modes_by_raw[0]["frequency_real_hz"] = second
+                    modes_by_raw[1]["frequency_real_hz"] = first
+                    _native_mode_diagnostics(modes_by_raw[0])
+                    _native_mode_diagnostics(modes_by_raw[1])
+                modes_by_raw = {mode["raw_mode_index"]: mode for mode in sample["modes"]}
+                for branch in branches["branches"]:
+                    for point in branch["points"]:
+                        if point["sample_index"] == sample["sample_index"]:
+                            mode = modes_by_raw[point["raw_mode_index"]]
+                            point["frequency_real_hz"] = mode["frequency_real_hz"]
+                            point["frequency_imag_hz"] = mode["frequency_imag_hz"]
+            _write_json(spectrum_path, spectrum)
+            _write_json(branches_path, _tracking_fixture_payload(branches["branches"]))
+            _write_mode_fields(case_dir, spectrum["samples"])
+
+            report = gate.validate_case(
+                case_dir, "a1", parameters_path=PARAMETERS, kpath_path=KPATH,
+            )
+            check = report["checks"]["tracked_branches"]
+            self.assertEqual(check["status"], "pass", report["reasons"])
+            self.assertEqual(check["selected_branch_ids"], list(range(8)))
+            self.assertEqual(check["lowest_frequency_multiset_check"], "pass")
+            self.assertEqual(check["fundamental_branch_check"], "not_applicable")
+
     def test_full_c1_contract_pass_requires_controls_and_convergence_but_is_not_qualification(self):
         with tempfile.TemporaryDirectory() as directory:
             report = gate.validate_case(
@@ -1951,7 +2206,10 @@ class ScientificGateTests(unittest.TestCase):
                      "frequency_real_hz": 1e9 + raw} for sample in range(61)]} for raw in range(8)]
         modes = {(sample, raw): 1e9 + raw for sample in range(61) for raw in range(8)}
         reasons = []
-        selected, check = gate._validate_branches({"branches": branches}, "c1", modes, reasons)
+        selected, check = gate._validate_branches(
+            {"branches": branches}, "c1", modes, reasons,
+            quality_mode_map=modes,
+        )
         self.assertEqual(check["status"], "fail")
         self.assertEqual(len(selected), 1)
         self.assertTrue(any("unique" in reason for reason in reasons))
@@ -2087,7 +2345,15 @@ class ScientificGateTests(unittest.TestCase):
         branches = [{"branch_id": raw, "points": [{"sample_index": sample["sample_index"], "raw_mode_index": raw,
                      "frequency_real_hz": 1e9 + raw} for sample in samples]} for raw in range(8)]
         reasons = []
-        gate._validate_convergence_coverage({"spectrum": {"samples": samples}, "branches": {"branches": branches}}, "c1", "mesh fine", reasons)
+        mode_map = {
+            (sample["sample_index"], mode["raw_mode_index"]): mode["frequency_real_hz"]
+            for sample in samples for mode in sample["modes"]
+        }
+        gate._validate_convergence_coverage({
+            "spectrum": {"samples": samples},
+            "branches": {"branches": branches},
+            "_quality_admitted_mode_map": mode_map,
+        }, "c1", "mesh fine", reasons)
         self.assertTrue(any("complete benchmark sample set" in reason for reason in reasons))
         self.assertTrue(any("complete tracked branches" in reason for reason in reasons))
 

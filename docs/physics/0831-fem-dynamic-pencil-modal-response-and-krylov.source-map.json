@@ -3686,6 +3686,60 @@
       "responsibility": "Exercise public validate_case and require the modal_field_phase check itself to fail when a selected j=30 payload is missing or corrupt."
     },
     {
+      "id": "source-comsol-quality-admitted-spectrum-ranking",
+      "path": "scripts/validate_comsol_dispersion_scientific_gate.py",
+      "symbol": "_validate_spectrum",
+      "responsibility": "Preserve the positive, finite spectrum modes that pass _validate_modal_quality as per-sample ranking candidates."
+    },
+    {
+      "id": "source-comsol-convergence-quality-ranking",
+      "path": "scripts/validate_comsol_dispersion_scientific_gate.py",
+      "symbol": "_validate_bundle_modal_payload",
+      "responsibility": "Carries only quality-admitted positive modes from numeric convergence bundles into the same lowest-eight branch selection."
+    },
+    {
+      "id": "source-comsol-lowest-eight-branch-selection",
+      "path": "scripts/validate_comsol_dispersion_scientific_gate.py",
+      "symbol": "_validate_branches",
+      "responsibility": "Select tracked branches from the eight lowest quality-admitted seed frequencies and compare each sample's selected frequency multiset without deduplicating degeneracy or allowing branch-ID substitution; require a persistent lowest branch only for C0/C1, not A1 crossings."
+    },
+    {
+      "id": "source-comsol-lowest-eight-regressions",
+      "path": "scripts/test_validate_comsol_dispersion_scientific_gate.py",
+      "symbol": "test_validate_case_selects_lowest_eight_by_seed_frequency_and_preserves_degeneracy",
+      "responsibility": "Exercise public validate_case with 24 complete branch identities, late numeric IDs among the lowest seed modes, a degenerate cutoff, per-sample rank loss, and an incomplete lower seed branch that cannot be replaced by a higher ID."
+    },
+    {
+      "id": "source-comsol-lowest-eight-degenerate-cutoff-regression",
+      "path": "scripts/test_validate_comsol_dispersion_scientific_gate.py",
+      "symbol": "test_lowest_eight_multiset_accepts_degeneracy_at_cutoff",
+      "responsibility": "Uses permuted branch IDs and a later tie at the eighth-frequency cutoff to prove selection compares the frequency multiset with multiplicity rather than requiring the same tied raw-ID subset."
+    },
+    {
+      "id": "source-comsol-quality-admission-ranking-regression",
+      "path": "scripts/test_validate_comsol_dispersion_scientific_gate.py",
+      "symbol": "test_spectrum_keeps_quality_failures_out_of_physical_ranking",
+      "responsibility": "Confirms a positive but quality-failing mode is excluded from the ranking map while its original residual failure remains reported."
+    },
+    {
+      "id": "source-comsol-a1-crossing-regression",
+      "path": "scripts/test_validate_comsol_dispersion_scientific_gate.py",
+      "symbol": "test_a1_selected_branches_may_cross_without_fundamental_identity",
+      "responsibility": "Checks that two of the fixed eight A1 branches may exchange frequency order while retaining unique raw IDs, continuous tracking evidence, and the lowest-eight per-sample frequency multiset; the same fixture remains rejected by the C1 fundamental rule."
+    },
+    {
+      "id": "source-comsol-a1-public-crossing-regression",
+      "path": "scripts/test_validate_comsol_dispersion_scientific_gate.py",
+      "symbol": "test_validate_case_a1_allows_two_of_eight_branches_to_cross",
+      "responsibility": "Runs the public A1 validator after two selected branches cross, asserts tracked_branches passes and the fundamental check is not applicable, without claiming full case qualification."
+    },
+    {
+      "id": "source-comsol-cross-run-branch-id-limitation",
+      "path": "scripts/validate_comsol_dispersion_scientific_gate.py",
+      "symbol": "_validate_convergence_pair",
+      "responsibility": "Record that coarse/medium/fine observations still compare numeric branch IDs and this seed ranking does not qualify physical mode identity across independent runs (review 4080421130 remains open)."
+    },
+    {
       "id": "source-comsol-primary-equilibrium-gate",
       "path": "scripts/validate_comsol_dispersion_scientific_gate.py",
       "symbol": "_validate_primary_equilibrium",

@@ -4850,3 +4850,58 @@ replay i kwalifikacja operatora nadal należą do odrębnych bramek R4.
 | source-comsol-primary-canonical-v8-v7-regression | scripts/test_validate_comsol_dispersion_scientific_gate.py | test_primary_canonical_v8_v7_reuse_binds_both_raw_material_plans | Public validate_case dopuszcza różne producer/consumer raw preimage’y przy zgodnej fizycznej projekcji; accepted v8/v7 raw signature pozostaje consumer-bound. |
 | source-comsol-primary-canonical-material-regression | scripts/test_validate_comsol_dispersion_scientific_gate.py | test_primary_canonical_v8_v7_rejects_current_physical_material_changes | Odrzuca self-consistent consumer raw MaterialIR po zmianie Ms, A, Ku, ms_field lub a_field wobec zaakceptowanego producer physical signature. |
 | source-comsol-primary-ku0-preimage-regression | scripts/test_validate_comsol_dispersion_scientific_gate.py | test_primary_canonical_ku0_uses_physical_v1_preimage | Public canonical v8/v7 path zachowuje fizyczny EquilibriumMaterialSignaturePreimage.v1 dla jawnego Ku=0 z authored zerową osią. |
+
+## Ranking ośmiu najniższych modów w bramce C1/A1
+
+Dla każdej próbki ścieżki C1/A1 kandydatami do rankingu są wyłącznie dodatnie
+częstotliwości widma, których rekordy przechodzą walidację natywnych residuali,
+przecieku stycznego i pozostałych wymaganych pól jakości. Bramkę rozpoczyna
+fizyczny ranking w próbce seed `sample_index=0`: sortuje częstotliwości w Hz,
+a `raw_mode_index` służy wyłącznie do deterministycznego rozstrzygnięcia remisu
+podczas przypisania seedów do ciągłych gałęzi. Równe częstotliwości z różnymi
+raw ID pozostają osobnymi elementami multizbioru; nie są deduplikowane.
+
+Osiem gałęzi wybiera się przez powiązanie ośmiu najniższych modów seed z ich
+`branch_id`. `branch_id` jest tożsamością śledzonego rekordu, a nie rangą
+fizyczną. Bramkę przechodzi tylko kompletny, ciągły zestaw tych śledzonych
+tożsamości, którego osiem quality-admitted częstotliwości w każdej próbce ma
+ten sam uporządkowany multizbiór co osiem najniższych dodatnich częstotliwości
+tej próbki. Każda próbka nadal wymaga ośmiu odrębnych raw IDs, lecz przy remisie
+degeneracyjnym na granicy zestawu poprawnym jest dowolny wybór raw ID o tej
+samej częstotliwości; test nie narzuca seedowego tie-break każdej kolejnej
+próbce. Multizbiór zachowuje krotność zdegenerowanych częstotliwości. Brak
+niższego kandydata w śledzonym zestawie lub brak ciągłej gałęzi nie pozwala
+zastąpić go kolejną kompletną gałęzią według liczbowego branch ID. C0 nadal
+sprawdza jeden najniższy dodatni mod w Γ. Jest to kontrola zgodności artefaktów
+z zadanym zakresem widma, nie dowód kompletności fizycznego widma ani
+kwalifikacja solvera.
+
+Dodatkowy warunek tożsamości fundamentalnej dotyczy tylko C0 i C1. W C1
+`selected[0]` musi pozostać najniższą gałęzią w każdej próbce, ponieważ jest
+porównywana z analitycznym widmem Kalinikos-Slavin n=0 jednorodnej warstwy.
+A1 nie ma tego jednopasmowego oracle: antidot łamie założenie jednorodnej
+warstwy. Dlatego w A1 dwie wybrane, ciągle śledzone gałęzie mogą zamienić się
+kolejnością częstotliwości; wymagane pozostają kompletność, ciągłość ich
+tożsamości, jakość modów, unikalne raw IDs i per-sample multizbiór całej
+najniższej ósemki. Sam crossing nie wymaga utrzymania jednej gałęzi jako
+minimum.
+
+To sortowanie nie rozwiązuje niezależnej identyfikacji pasm między coarse,
+medium i fine runami. `_validate_convergence_pair` nadal pobiera obserwacje po
+`branch_id`; częstotliwościowy wybór w każdym runie nie dowodzi, że równe
+numery branch ID oznaczają ten sam fizyczny mod. Dopasowanie cross-run przez
+zweryfikowaną tożsamość/overlap pozostaje osobną otwartą bramką
+(review 4080421130); do jej zamknięcia porównania zbieżności nie stanowią
+kwalifikacji ciągłości fizycznych pasm.
+
+| Source ID | Plik | Symbol | Zakres dowodu |
+| --- | --- | --- | --- |
+| source-comsol-quality-admitted-spectrum-ranking | scripts/validate_comsol_dispersion_scientific_gate.py | _validate_spectrum | Zachowuje osobny zbiór dodatnich modów, które przechodzą _validate_modal_quality, do rankingu w każdej próbce. |
+| source-comsol-lowest-eight-branch-selection | scripts/validate_comsol_dispersion_scientific_gate.py | _validate_branches | Wybiera ciągłe gałęzie z ośmiu najniższych modów seed, sprawdza per-sample multizbiór z degeneracją i nie zastępuje brakującej gałęzi wyższym ID; minimum tej samej gałęzi jest dodatkowo wymagane tylko dla C0/C1, a A1 dopuszcza przecięcia wewnątrz wybranego zestawu. |
+| source-comsol-lowest-eight-regressions | scripts/test_validate_comsol_dispersion_scientific_gate.py | test_validate_case_selects_lowest_eight_by_seed_frequency_and_preserves_degeneracy | Public validate_case rozstrzyga permutowane branch IDs, degenerację jako odrębne raw IDs i brak ciągłego śledzenia niższego kandydata. |
+| source-comsol-convergence-quality-ranking | scripts/validate_comsol_dispersion_scientific_gate.py | _validate_bundle_modal_payload | Zachowuje dodatnie mody przechodzace kontrole jakosci w numeric convergence bundles dla tego samego rankingu; nie dopasowuje fizycznych pasm miedzy runami. |
+| source-comsol-lowest-eight-degenerate-cutoff-regression | scripts/test_validate_comsol_dispersion_scientific_gate.py | test_lowest_eight_multiset_accepts_degeneracy_at_cutoff | Zachowuje krotnosc przy remisie na osmym miejscu i dopuszcza rozne raw ID reprezentujace rowna czestotliwosc. |
+| source-comsol-quality-admission-ranking-regression | scripts/test_validate_comsol_dispersion_scientific_gate.py | test_spectrum_keeps_quality_failures_out_of_physical_ranking | Wyklucza dodatni mod z niepoprawnym residualem z rankingu i zachowuje powod jego odrzucenia. |
+| source-comsol-a1-crossing-regression | scripts/test_validate_comsol_dispersion_scientific_gate.py | test_a1_selected_branches_may_cross_without_fundamental_identity | Sprawdza zamianę kolejności częstotliwości dwóch z ośmiu śledzonych gałęzi A1 przy zachowaniu tożsamości, unikalnych raw IDs i najniższego multizbioru; kontrola C1 nadal wymaga analitycznej gałęzi fundamentalnej. |
+| source-comsol-a1-public-crossing-regression | scripts/test_validate_comsol_dispersion_scientific_gate.py | test_validate_case_a1_allows_two_of_eight_branches_to_cross | Public validate_case zachowuje wybrany zestaw A1 po przecięciu dwóch gałęzi i oznacza kontrolę fundamental_branch_check jako not_applicable, bez deklarowania pełnej kwalifikacji przypadku. |
+| source-comsol-cross-run-branch-id-limitation | scripts/validate_comsol_dispersion_scientific_gate.py | _validate_convergence_pair | Obecne porównanie runów po branch ID pozostaje odrębne od seed-rankingu i nie jest dowodem fizycznego dopasowania modów między siatkami. |

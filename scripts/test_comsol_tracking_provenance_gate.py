@@ -43,7 +43,10 @@ class TrackingProvenanceGateTests(unittest.TestCase):
         modes = {(point["sample_index"], point["raw_mode_index"]): 1e9 for point in branch["points"]}
         reasons = []
         with patch.object(gate, "EXPECTED_PATH_SAMPLE_COUNT", 3), patch.object(gate, "EXPECTED_TARGET_BANDS", 1):
-            selected, result = gate._validate_branches(dict(branches=[branch]), "c1", modes, reasons)
+            selected, result = gate._validate_branches(
+                dict(branches=[branch]), "c1", modes, reasons,
+                quality_mode_map=modes,
+            )
         self.assertEqual(len(selected), 1)
         self.assertEqual(result["status"], "fail")
         self.assertTrue(any("tracking provenance" in reason for reason in reasons))
