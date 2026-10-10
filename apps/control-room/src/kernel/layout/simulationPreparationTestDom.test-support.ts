@@ -325,13 +325,27 @@ export class TestElement extends TestNode {
     return this.attributes.has(this.normalizeAttributeName(name));
   }
 
+  /** Matches the simple tag and single-class selectors modeled by this test DOM. */
   matches(selector: string): boolean {
-    if (selector.startsWith(".")) {
+    if (/^[A-Za-z_][A-Za-z0-9_-]*$/.test(selector)) {
+      return this.tagName.toLowerCase() === selector.toLowerCase();
+    }
+    const className = /^\.([A-Za-z_][A-Za-z0-9_-]*)$/.exec(selector)?.[1];
+    if (className !== undefined) {
       return (this.getAttribute("class") ?? "")
         .split(/\s+/)
-        .includes(selector.slice(1));
+        .includes(className);
     }
-    return this.tagName.toLowerCase() === selector.toLowerCase();
+    return false;
+  }
+
+  closest(selector: string): TestElement | null {
+    let candidate: TestNode | null = this;
+    while (candidate) {
+      if (candidate instanceof TestElement && candidate.matches(selector)) return candidate;
+      candidate = candidate.parentNode;
+    }
+    return null;
   }
 
   querySelector<TElement extends TestElement = TestElement>(
@@ -357,6 +371,12 @@ export class TestElement extends TestNode {
 
   private normalizeAttributeName(name: string): string {
     return this.namespaceURI === SVG_NAMESPACE ? name : name.toLowerCase();
+  }
+}
+
+class TestDocumentFragment extends TestNode {
+  constructor(ownerDocument: TestDocument) {
+    super(ownerDocument, 11, "#document-fragment");
   }
 }
 
@@ -478,6 +498,11 @@ export function installSimulationPreparationTestDom({
   const previous = new Map<string, PropertyDescriptor | undefined>();
   const document = new TestDocument();
   class TestHtmlIFrameElement extends TestElement {}
+  class TestWindowDocumentFragment extends TestDocumentFragment {
+    constructor() {
+      super(document);
+    }
+  }
   class TestResizeObserver {
     disconnect(): void {}
     observe(): void {}
@@ -499,6 +524,7 @@ export function installSimulationPreparationTestDom({
   const navigator = { clipboard, userAgent: "FullmagTestDom/1.0" };
   const window = {
     document,
+    DocumentFragment: TestWindowDocumentFragment,
     navigator,
     Element: TestElement,
     Event: TestEvent,
@@ -520,6 +546,7 @@ export function installSimulationPreparationTestDom({
   document.defaultView = window;
   for (const [key, value] of Object.entries({
     document,
+    DocumentFragment: TestWindowDocumentFragment,
     navigator,
     Element: TestElement,
     Event: TestEvent,

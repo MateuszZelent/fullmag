@@ -32,6 +32,48 @@ async function flushRead(): Promise<void> {
 }
 
 describe("ReferenceImportSection file selection", () => {
+  it("matches simple selectors and searches closest from self through element ancestors", () => {
+    const dom = installSimulationPreparationTestDom();
+    try {
+      const form = dom.document.createElement("form");
+      const section = dom.document.createElement("section");
+      section.setAttribute("class", "reference-import");
+      const trigger = dom.document.createElement("button");
+      form.appendChild(section);
+      section.appendChild(trigger);
+
+      expect(form.matches("form")).toBe(true);
+      expect(section.matches(".reference-import")).toBe(true);
+      expect(trigger.matches("form")).toBe(false);
+      expect(dom.document.createElement("fm-result-panel").matches("fm-result-panel")).toBe(true);
+      expect(form.closest("form")).toBe(form);
+      expect(trigger.closest("button")).toBe(trigger);
+      expect(trigger.closest(".reference-import")).toBe(section);
+      expect(trigger.closest("form")).toBe(form);
+      expect(trigger.closest("dialog")).toBeNull();
+      expect(trigger.closest(".missing-ancestor")).toBeNull();
+      for (const unsupportedSelector of [".", ".reference-import.foo", "form button", "button:hover"]) {
+        expect(trigger.matches(unsupportedSelector)).toBe(false);
+        expect(trigger.closest(unsupportedSelector)).toBeNull();
+      }
+
+      const detached = dom.document.createElement("button");
+      expect(detached.closest("form")).toBeNull();
+
+      const fragmentConstructor = dom.document.defaultView?.DocumentFragment as
+        | (new () => { nodeType: number; ownerDocument: unknown })
+        | undefined;
+      if (!fragmentConstructor) {
+        throw new Error("The test DOM must expose the native DocumentFragment constructor used by Radix Select.");
+      }
+      const fragment = new fragmentConstructor();
+      expect(fragment.nodeType).toBe(11);
+      expect(fragment.ownerDocument).toBe(dom.document);
+    } finally {
+      dom.restore();
+    }
+  });
+
   it("clears old table data and fences pending and immediate results by newest selection", async () => {
     const dom = installSimulationPreparationTestDom();
     const container = dom.document.createElement("div");
@@ -63,6 +105,9 @@ describe("ReferenceImportSection file selection", () => {
         (element) => element.tagName.toLowerCase() === "button" && element.textContent.includes("Import reference"),
         "Import reference group trigger",
       );
+      // The production Inspector is not inside a form. Radix 2.2.6 omits its
+      // native bubble select in this real non-form path.
+      expect(trigger.closest("form")).toBeNull();
       await act(async () => { trigger.dispatchEvent(new TestEvent("click", { bubbles: true })); });
       expect(trigger.getAttribute("aria-expanded")).toBe("true");
       const content = findElement(
@@ -81,26 +126,11 @@ describe("ReferenceImportSection file selection", () => {
       expect(oversizedText).not.toHaveBeenCalled();
       expect(container.textContent).toContain("2 points.");
       expect(container.textContent).not.toContain("4 MiB or smaller");
-      const nativeSelectConstructor = dom.document.defaultView?.HTMLSelectElement as
-        | { prototype: object }
-        | undefined;
-      if (!nativeSelectConstructor) {
-        throw new Error("The test DOM must expose its native select constructor.");
-      }
-      const nativeValueSetter = Object.getOwnPropertyDescriptor(
-        nativeSelectConstructor.prototype,
-        "value",
-      )?.set;
-      expect(nativeValueSetter).toBeTypeOf("function");
       const columnSelects = findElements(
         container,
         (element) => element.tagName.toLowerCase() === "select",
       );
-      expect(columnSelects).toHaveLength(2);
-      expect(columnSelects.every(
-        (element) => Object.getPrototypeOf(element) === nativeSelectConstructor.prototype,
-      )).toBe(true);
-      expect(columnSelects.map((element) => element.value)).toEqual(["0", "1"]);
+      expect(columnSelects).toHaveLength(0);
 
       await act(async () => { chooseFile(input, slowFile); });
       expect(container.textContent).not.toContain("2 points.");
@@ -120,6 +150,63 @@ describe("ReferenceImportSection file selection", () => {
       expect(container.textContent).not.toContain("older.csv");
       expect(slowFile.text).toHaveBeenCalledTimes(1);
       expect(oversizedText).not.toHaveBeenCalled();
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it("uses the native bubble-select prototype only with an actual form ancestor", async () => {
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    const kernel = {} as unknown as KernelApi;
+
+    try {
+      await act(async () => {
+        root.render(
+          <KernelContext.Provider value={kernel}>
+            {/* Radix 2.2.6 mounts its native bubble input only for a form-associated trigger. */}
+            <form><ReferenceImportSection /></form>
+          </KernelContext.Provider>,
+        );
+      });
+      const trigger = findElement(
+        container,
+        (element) => element.tagName.toLowerCase() === "button" && element.textContent.includes("Import reference"),
+        "Import reference group trigger inside form",
+      );
+      expect(trigger.closest("form")?.tagName).toBe("FORM");
+      await act(async () => { trigger.dispatchEvent(new TestEvent("click", { bubbles: true })); });
+
+      const input = findElement(
+        container,
+        (element) => element.tagName.toLowerCase() === "input" && element.getAttribute("aria-label") === "Reference file",
+        "Reference file input inside form",
+      );
+      const validText = vi.fn().mockResolvedValue("s,f\n1,2\n3,4\n");
+      await act(async () => {
+        chooseFile(input, referenceFile("native-select.csv", 12, validText));
+        await flushRead();
+      });
+
+      const nativeSelectConstructor = dom.document.defaultView?.HTMLSelectElement as
+        | { prototype: object }
+        | undefined;
+      if (!nativeSelectConstructor) {
+        throw new Error("The test DOM must expose its native select constructor.");
+      }
+      expect(Object.getOwnPropertyDescriptor(nativeSelectConstructor.prototype, "value")?.set)
+        .toBeTypeOf("function");
+      const columnSelects = findElements(
+        container,
+        (element) => element.tagName.toLowerCase() === "select",
+      );
+      expect(columnSelects).toHaveLength(2);
+      expect(columnSelects.every(
+        (element) => Object.getPrototypeOf(element) === nativeSelectConstructor.prototype,
+      )).toBe(true);
+      expect(columnSelects.map((element) => element.value)).toEqual(["0", "1"]);
     } finally {
       await act(async () => root.unmount());
       dom.restore();
