@@ -38,7 +38,8 @@ use super::eigen_output::{
     classify_polarization, damping_imaginary_factor, damping_policy_label, dispersion_csv,
     dispersion_v2_csv, equilibrium_source_json, json_artifact, k_vector_json,
     merge_modal_transport_diagnostics, modal_sample_id, modal_tangent_transport_diagnostics,
-    normalization_label, requested_mode_indices_for_result, solver_capabilities, solver_kind_label,
+    normalization_label, reference_modal_method_evidence, requested_mode_indices_for_result,
+    solver_capabilities, solver_kind_label,
     solver_limitations, solver_notes, spin_wave_bc_json, spin_wave_bc_label,
     write_eigen_v2_bundle_with_outputs,
 };
@@ -1886,6 +1887,7 @@ pub(super) fn execute_fem_eigen_inner_with_potential_publication(
     planned_execution: Option<PlannedFemEigenExecution<'_>>,
     potential_publication: Option<&EigenPathPotentialPublication>,
 ) -> Result<ExecutedRun, RunError> {
+    let damping_factor = damping_imaginary_factor(plan.material.damping, plan.damping_policy)?;
     validate_modal_solver_policy_admission(plan, try_gpu, use_native_modal_production)?;
     crate::eigen::output_selection::validate_eigen_spectrum_quantities(outputs).map_err(
         |error| RunError {
@@ -2371,7 +2373,6 @@ pub(super) fn execute_fem_eigen_inner_with_potential_publication(
         .map(|&node| topology.magnetic_node_volumes[node])
         .collect::<Vec<_>>();
     let participation_solver_device = if try_gpu { "gpu" } else { "cpu" };
-    let damping_factor = damping_imaginary_factor(plan.material.damping, plan.damping_policy);
     let gamma_rad_s_t = gamma0_rad_s_per_a_m / MU0;
     let mu0_t_m_per_a = MU0;
     emit_fem_eigen_progress(
@@ -2521,6 +2522,20 @@ pub(super) fn execute_fem_eigen_inner_with_potential_publication(
             "not_applicable_real_reference"
         };
         let linewidth_fwhm_hz = 2.0 * frequency_imag_hz;
+        if [
+            angular_frequency_real,
+            angular_frequency_imag,
+            frequency_hz,
+            frequency_imag_hz,
+            linewidth_fwhm_hz,
+        ]
+        .iter()
+        .any(|value| !value.is_finite())
+        {
+            return Err(RunError {
+                message: "FEM eigen reference frequency or linewidth is non-finite".to_string(),
+            });
+        }
         let dominant_polarization = classify_polarization(
             &amplitude,
             &reduction.active_nodes,
@@ -2709,6 +2724,7 @@ pub(super) fn execute_fem_eigen_inner_with_potential_publication(
                 "mu0_T_m_per_A": mu0_t_m_per_a,
             },
             "orthogonality": dense_orthogonality,
+            "method_evidence": reference_modal_method_evidence(plan, modes_summary.len()),
         },
         "k_sampling": k_vector_json(plan.k_sampling.as_ref()),
         "relaxation_steps": relaxation_steps,

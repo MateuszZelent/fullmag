@@ -3349,8 +3349,24 @@ void modal_floquet_shared_domain_contour_original_k_certification(
               contains(original_adapter_result.result_json.c_str(),
                       "\"floquet_descriptor_certified\":true") &&
               contains(original_adapter_result.result_json.c_str(),
-                      "\"potential_vector_real\":"),
-          "the contour adapter baseline must publish a certified mode and potential");
+                      "\"mode_vector_transport\":\"typed_abi_v18\"") &&
+              contains(original_adapter_result.result_json.c_str(),
+                      "\"phi_layout\":\"doubled_real_split_complex_coefficients\"") &&
+              !contains(original_adapter_result.result_json.c_str(),
+                        "\"mode_vector_real\":[") &&
+              !contains(original_adapter_result.result_json.c_str(),
+                        "\"mode_vector_imag\":[") &&
+              !contains(original_adapter_result.result_json.c_str(),
+                        "\"potential_vector_real\":"),
+          "the contour adapter baseline must publish certified metadata without numeric JSON arrays");
+    check(original_adapter_result.modal_eigen.mode_lambda.size() == 1 &&
+              original_adapter_result.modal_eigen.mode_residuals.size() == 1 &&
+              original_adapter_result.modal_eigen.q_dof_count ==
+                  contour_result.modes.front().mode_vector.size() &&
+              original_adapter_result.modal_eigen.mode_phi_complex.size() ==
+                  accepted.potential_real_split.size() &&
+              original_adapter_result.modal_eigen.mode_cluster_ids.empty(),
+          "the contour adapter baseline transports q and certified phi through typed buffers");
     check(g_progress_event_count > 0,
           "the successful contour adapter baseline must publish progress");
 
@@ -3646,14 +3662,54 @@ void modal_floquet_shared_domain_original_descriptor_certification_is_fail_close
           "modal solver must append assembled provenance at the result top level");
     check(contains(result.result_json, "\"potential_relative_residual\":"),
           "shared-domain Floquet window must publish the original potential residual");
-    check(contains(result.result_json, "\"potential_vector_real\":[") &&
-              contains(result.result_json, "\"potential_vector_imag\":["),
-          "shared-domain Floquet window must publish both potential components");
+    check(contains(result.result_json,
+                   "\"mode_vector_transport\":\"typed_abi_v18\"") &&
+              contains(result.result_json,
+                       "\"q_layout\":\"doubled_real_split\"") &&
+              contains(result.result_json,
+                       "\"phi_layout\":\"doubled_real_split_complex_coefficients\"") &&
+              !contains(result.result_json, "\"mode_vector_real\":[") &&
+              !contains(result.result_json, "\"mode_q_real\":[") &&
+              !contains(result.result_json, "\"mode_q_imag\":[") &&
+              !contains(result.result_json, "\"mode_phi_real\":[") &&
+              !contains(result.result_json, "\"mode_phi_imag\":[") &&
+              !contains(result.result_json, "\"potential_vector_real\":[") &&
+              !contains(result.result_json, "\"potential_vector_imag\":["),
+          "shared-domain Floquet JSON carries transport metadata without numeric vectors");
+    check(result.mode_count == 1 && result.mode_lambda_count == result.mode_count &&
+              result.mode_residual_count == result.mode_count &&
+              result.q_dof_count > 0 && result.phi_dof_count > 0 &&
+              result.mode_q_complex_count == result.mode_count * result.q_dof_count &&
+              result.mode_phi_complex_count == result.mode_count * result.phi_dof_count &&
+              result.mode_cluster_id_count == 0,
+          "shared-domain Floquet C ABI transports one complete accepted q/phi mode without synthetic clusters");
+    bool floquet_typed_values_finite = result.mode_lambda != nullptr &&
+        result.mode_residuals != nullptr && result.mode_q_complex != nullptr &&
+        result.mode_phi_complex != nullptr;
+    for (std::uint64_t value_index = 0;
+         floquet_typed_values_finite && value_index < result.mode_q_complex_count;
+         ++value_index) {
+        floquet_typed_values_finite =
+            std::isfinite(result.mode_q_complex[value_index].real) &&
+            std::isfinite(result.mode_q_complex[value_index].imag);
+    }
+    for (std::uint64_t value_index = 0;
+         floquet_typed_values_finite && value_index < result.mode_phi_complex_count;
+         ++value_index) {
+        floquet_typed_values_finite =
+            std::isfinite(result.mode_phi_complex[value_index].real) &&
+            std::isfinite(result.mode_phi_complex[value_index].imag);
+    }
+    check(floquet_typed_values_finite,
+          "shared-domain Floquet typed q and phi values remain finite through the C ABI");
     check(contains(result.diagnostics_json, "\"floquet_potential_certificate\":"),
           "shared-domain Floquet diagnostics must retain the provider potential certificate");
     check(g_progress_event_count == 16,
           "shared-domain Floquet window progress must follow descriptor certification");
     fullmag_fem_frequency_domain_result_destroy(&result);
+    check(result.mode_q_complex == nullptr && result.mode_phi_complex == nullptr &&
+              result.mode_count == 0,
+          "shared-domain Floquet C ABI destroy releases and clears typed vector buffers");
 
     modal_floquet_shared_domain_contour_original_k_certification(
         fixture, magnetic_stiffness);
@@ -4971,10 +5027,43 @@ void modal_frequency_window_production_payload_contour_accepts_multiple_modes()
           "multi-mode contour result includes the lower positive mode");
     check(contains(result.result_json, "\"frequency_hz\":0.318309886183790"),
           "multi-mode contour result includes the upper positive mode");
-    check(contains(result.result_json, "\"mode_vector_real\":["),
-          "multi-mode contour result publishes global real mode vectors");
-    check(contains(result.result_json, "\"mode_vector_imag\":["),
-          "multi-mode contour result publishes global imaginary mode vectors");
+    check(contains(result.result_json,
+                   "\"mode_vector_transport\":\"typed_abi_v18\""),
+          "multi-mode contour result identifies typed ABI vector transport");
+    check(!contains(result.result_json, "\"mode_vector_real\":[") &&
+              !contains(result.result_json, "\"mode_vector_imag\":["),
+          "multi-mode contour result keeps numeric vectors out of JSON");
+    check(contains(result.result_json, "\"phi_layout\":null") &&
+              !contains(result.result_json, "\"potential_representation\":"),
+          "generic contour modes report zero phi without a coefficient representation");
+    check(result.mode_count == 2 && result.mode_lambda_count == 2 &&
+              result.mode_residual_count == 2 && result.q_dof_count == 4 &&
+              result.phi_dof_count == 0 && result.mode_q_complex_count == 8 &&
+              result.mode_phi_complex_count == 0 && result.mode_cluster_id_count == 0,
+          "multi-mode contour C ABI reports exact accepted mode and vector shapes");
+    check(result.mode_lambda != nullptr && result.mode_q_complex != nullptr &&
+              result.mode_residuals != nullptr &&
+              std::abs(result.mode_lambda[0].imag) <
+                  std::abs(result.mode_lambda[1].imag),
+          "multi-mode contour typed lambdas preserve ascending accepted-frequency order");
+    bool contour_typed_values_finite = result.mode_q_complex != nullptr &&
+        result.mode_residuals != nullptr;
+    for (std::uint64_t value_index = 0;
+         contour_typed_values_finite && value_index < result.mode_q_complex_count;
+         ++value_index) {
+        contour_typed_values_finite = contour_typed_values_finite &&
+            std::isfinite(result.mode_q_complex[value_index].real) &&
+            std::isfinite(result.mode_q_complex[value_index].imag);
+    }
+    for (std::uint64_t mode_index = 0;
+         contour_typed_values_finite && mode_index < result.mode_residual_count;
+         ++mode_index) {
+        contour_typed_values_finite = contour_typed_values_finite &&
+            std::isfinite(result.mode_residuals[mode_index]) &&
+            result.mode_residuals[mode_index] >= 0.0;
+    }
+    check(contour_typed_values_finite,
+          "multi-mode contour typed q and residual buffers remain finite");
     check(contains(result.result_json, "\"window_completeness\":\"certified\""),
           "multi-mode contour result exposes certified window completeness");
     check(g_progress_event_count == 16,
@@ -4984,6 +5073,9 @@ void modal_frequency_window_production_payload_contour_accepts_multiple_modes()
           "multi-mode production contour payload remains unavailable without SLEPc");
 #endif
     fullmag_fem_frequency_domain_result_destroy(&result);
+    check(result.mode_q_complex == nullptr && result.mode_lambda == nullptr &&
+              result.mode_q_complex_count == 0 && result.mode_count == 0,
+          "multi-mode contour C ABI destroy releases and clears typed buffers");
 }
 
 void modal_gamma_cabi_route_preserves_authored_k()
@@ -5900,18 +5992,17 @@ void assert_modal_phase_kinematics(
         (test_context + " retains a finite accepted residual").c_str());
 
     if (require_mode_vectors) {
-        const std::size_t real_vector = json.find("\"mode_vector_real\":[");
-        const std::size_t imag_vector = json.find("\"mode_vector_imag\":[");
-        check(real_vector != std::string::npos,
-              (test_context + " retains mode_vector_real").c_str());
-        check(imag_vector != std::string::npos,
-              (test_context + " retains mode_vector_imag").c_str());
-        const std::size_t real_end = json.find(']', real_vector);
-        const std::size_t imag_end = json.find(']', imag_vector);
-        check(real_end > real_vector + std::strlen("\"mode_vector_real\":["),
-              (test_context + " retains real mode-vector amplitudes").c_str());
-        check(imag_end > imag_vector + std::strlen("\"mode_vector_imag\":["),
-              (test_context + " retains imaginary mode-vector amplitudes").c_str());
+        check(contains(json.c_str(),
+                       "\"mode_vector_transport\":\"typed_abi_v18\""),
+              (test_context + " identifies the typed ABI vector transport").c_str());
+        check(json.find("\"mode_vector_real\":[") == std::string::npos &&
+                  json.find("\"mode_vector_imag\":[") == std::string::npos,
+              (test_context + " keeps numeric mode vectors out of JSON").c_str());
+        check(number("\"q_dof_count\":") > 0.0,
+              (test_context + " reports the typed q vector width").c_str());
+        check(contains(json.c_str(), "\"phi_layout\":null") &&
+                  json.find("\"potential_representation\":") == std::string::npos,
+              (test_context + " explicitly reports unavailable phi without a representation").c_str());
     }
 }
 
@@ -6055,7 +6146,35 @@ void generic_slepc_phase_convention_cabi()
                     expected_lambda_imag,
                     phasor_label,
                     true);
+                check(result.mode_count == 1 && result.mode_lambda_count == 1 &&
+                          result.mode_residual_count == 1,
+                      "generic SLEPc C ABI transports one accepted mode and residual");
+                check(result.q_dof_count == tangent_dof_count &&
+                          result.mode_q_complex_count ==
+                              result.mode_count * result.q_dof_count &&
+                          result.mode_phi_complex_count == 0 &&
+                          result.mode_cluster_id_count == 0,
+                      "generic SLEPc C ABI reports exact q width without invented phi or clusters");
+                check(result.mode_lambda != nullptr && result.mode_q_complex != nullptr &&
+                          result.mode_residuals != nullptr &&
+                          std::abs(result.mode_lambda[0].imag - expected_lambda_imag) <= 1.0e-5 &&
+                          std::isfinite(result.mode_residuals[0]) &&
+                          result.mode_residuals[0] >= 0.0,
+                      "generic SLEPc typed lambda and residual preserve accepted mode zero");
+                bool q_values_finite = result.mode_q_complex != nullptr;
+                for (std::uint64_t value_index = 0;
+                     q_values_finite && value_index < result.mode_q_complex_count;
+                     ++value_index) {
+                    q_values_finite = q_values_finite &&
+                        std::isfinite(result.mode_q_complex[value_index].real) &&
+                        std::isfinite(result.mode_q_complex[value_index].imag);
+                }
+                check(q_values_finite,
+                      "generic SLEPc typed q coefficients remain finite through the C ABI");
                 fullmag_fem_frequency_domain_result_destroy(&result);
+                check(result.mode_q_complex == nullptr && result.mode_lambda == nullptr &&
+                          result.mode_q_complex_count == 0 && result.mode_count == 0,
+                      "generic SLEPc C ABI destroy releases and clears typed mode buffers");
             }
         }
     }
@@ -8137,6 +8256,16 @@ void modal_poisson_airbox_tail_payload_resolves_augmented_gauge_schur_solver()
           "modal Poisson-airbox tail result reports magnetic pair count");
     check(contains(result.result_json, "\"airbox_pair_count\":1"),
           "modal Poisson-airbox tail result reports airbox pair count");
+    check(contains(result.result_json,
+                   "\"mode_vector_transport\":\"typed_abi_v18\"") &&
+              contains(result.result_json, "\"q_layout\":\"block_component_node\"") &&
+              contains(result.result_json, "\"phi_layout\":\"native_complex_dof\"") &&
+              !contains(result.result_json, "\"mode_vector_real\":[") &&
+              !contains(result.result_json, "\"mode_q_real\":[") &&
+              !contains(result.result_json, "\"mode_q_imag\":[") &&
+              !contains(result.result_json, "\"mode_phi_real\":[") &&
+              !contains(result.result_json, "\"mode_phi_imag\":["),
+          "modal Poisson-airbox CPU JSON publishes layout metadata without vector arrays");
     check(result.mode_count == 1, "modal Poisson-airbox ABI exposes one accepted mode");
     check(result.mode_lambda_count == result.mode_count,
           "modal Poisson-airbox ABI exposes one lambda per mode");
@@ -8146,14 +8275,49 @@ void modal_poisson_airbox_tail_payload_resolves_augmented_gauge_schur_solver()
           "modal Poisson-airbox ABI exposes mode-major phi vectors");
     check(result.mode_residual_count == result.mode_count,
           "modal Poisson-airbox ABI exposes one residual per mode");
+    check(contains(result.result_json, "\"mode_gauge_real\":") &&
+              contains(result.result_json, "\"mode_gauge_imag\":"),
+          "modal Poisson-airbox CPU metadata preserves augmented gauge coefficients");
+    check(result.q_dof_count == 2 && result.phi_dof_count == 2 &&
+              result.mode_cluster_id_count == 0,
+          "modal Poisson-airbox CPU ABI reports exact q/phi widths and no fabricated clusters");
     check(result.mode_lambda != nullptr && result.mode_q_complex != nullptr &&
               result.mode_phi_complex != nullptr && result.mode_residuals != nullptr,
           "modal Poisson-airbox ABI owns all accepted-mode buffers");
+    bool poisson_typed_values_finite = result.mode_lambda != nullptr &&
+        result.mode_q_complex != nullptr && result.mode_phi_complex != nullptr &&
+        result.mode_residuals != nullptr;
+    if (poisson_typed_values_finite) {
+        poisson_typed_values_finite =
+            std::isfinite(result.mode_lambda[0].real) &&
+            std::isfinite(result.mode_lambda[0].imag) &&
+            std::isfinite(result.mode_residuals[0]) &&
+            result.mode_residuals[0] >= 0.0;
+    }
+    for (std::uint64_t value_index = 0;
+         poisson_typed_values_finite && value_index < result.mode_q_complex_count;
+         ++value_index) {
+        poisson_typed_values_finite = poisson_typed_values_finite &&
+            std::isfinite(result.mode_q_complex[value_index].real) &&
+            std::isfinite(result.mode_q_complex[value_index].imag);
+    }
+    for (std::uint64_t value_index = 0;
+         poisson_typed_values_finite && value_index < result.mode_phi_complex_count;
+         ++value_index) {
+        poisson_typed_values_finite = poisson_typed_values_finite &&
+            std::isfinite(result.mode_phi_complex[value_index].real) &&
+            std::isfinite(result.mode_phi_complex[value_index].imag);
+    }
+    check(poisson_typed_values_finite,
+          "modal Poisson-airbox typed lambda, q, phi, and residual remain finite");
 #else
     check(result.status == FULLMAG_FEM_FD_UNAVAILABLE,
           "modal Poisson-airbox tail payload must require SLEPc when unavailable");
 #endif
     fullmag_fem_frequency_domain_result_destroy(&result);
+    check(result.mode_q_complex == nullptr && result.mode_phi_complex == nullptr &&
+              result.mode_count == 0 && result.mode_q_complex_count == 0,
+          "modal Poisson-airbox C ABI destroy releases and clears typed buffers");
 }
 
 void modal_poisson_airbox_tail_shift_invert_action_writes_artifact()
@@ -8386,6 +8550,17 @@ int main(int argc, char **argv)
             std::fprintf(
                 stderr,
                 "FAIL: --modal-slepc-phase-convention requires MFEM and SLEPc\n");
+            return 3;
+#endif
+        }
+        if (argc == 2 && std::strcmp(argv[1], "--typed-cpu-mode-transport") == 0) {
+#if FULLMAG_HAS_MFEM_STACK && FULLMAG_FEM_WITH_SLEPC
+            modal_frequency_window_production_payload_contour_accepts_multiple_modes();
+            modal_poisson_airbox_tail_payload_resolves_augmented_gauge_schur_solver();
+            std::printf("PASS: typed_cpu_mode_transport_contract\n");
+            return 0;
+#else
+            std::fprintf(stderr, "FAIL: --typed-cpu-mode-transport requires MFEM and SLEPc\n");
             return 3;
 #endif
         }

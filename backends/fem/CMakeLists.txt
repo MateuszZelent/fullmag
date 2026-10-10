@@ -1195,6 +1195,13 @@ if(FULLMAG_USE_MFEM_STACK AND FULLMAG_FEM_WITH_SLEPC)
         COMMAND fem_modal_eigen_contract --floquet-borrowed-pmat-pattern-mismatch-fixture-probe)
     set_tests_properties(modal_eigen_borrowed_pmat_pattern_mismatch_fixture
         PROPERTIES TIMEOUT 120)
+    # Isolate vector transport from unrelated full-suite Floquet failures.
+    add_custom_target(fem_modal_eigen_typed_cpu_transport_contract
+        DEPENDS fem_modal_eigen_contract)
+    add_test(NAME fem_modal_eigen_typed_cpu_transport_contract
+        COMMAND fem_modal_eigen_contract --typed-cpu-mode-transport)
+    set_tests_properties(fem_modal_eigen_typed_cpu_transport_contract
+        PROPERTIES TIMEOUT 120)
     # Run the public Gamma boundary independently without replacing the full suite.
     add_custom_target(fem_modal_eigen_gamma_admission_contract
         DEPENDS fem_modal_eigen_contract)

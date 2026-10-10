@@ -60,3 +60,26 @@ zamknięte, zanim zażądamy kwalifikacji P2/P9.
 - E18 ponownie sprawdzony w rzeczywistym Schur owner: base/refinement schedules
   porównują wybrane klastry. Coverage counter nie jest independent eigenvalue
   count. Integracja count i migracja nowej emisji pozostają zadaniem P4.
+
+
+## Checkpoint publikacji pierwszych korekt
+
+- Commit `39a20c4596231563e0568a2eec9cb4c4529aed56` jest na branchu remote;
+  zawiera baseline/plan/raport i naprawy syntetycznych fixture A1.
+- Hosted `dispersion-artifact-consumers` #38068292627 został uruchomiony na tym
+  SHA; terminalny wynik jeszcze nieznany.
+- Alfa/reference provenance: implementacja źródłowa przygotowana i reviewed;
+  `Ignore` też odrzuca nielegalne alfa, duże alfa nie przepełnia alpha²,
+  derived nonfinite frequencies nie są publikowane. `Include` pozostaje
+  jawnie przybliżone. Method evidence jest w summary, v2 sample,
+  diagnostics oraz manifeście przed hashowaniem rewizji.
+- Typed CPU transport: źródła reviewed, zachowują layout/phase/full phi/gauge;
+  brak bulk JSON i syntetycznych native cluster IDs; GPU legacy zachowane.
+  CABI/Rust execution pending GHA, nie ma promocji fizyki.
+- Migracja fixture API: pełny source review po poprawie scalar-only step9
+  bez powtórnej magnetyzacji. Oczekiwań statusów nie osłabiono; nadal wymaga
+  pełnego hosted run dla wcześniejszych 105 błędów.
+- P0 pozostaje częściowe; P1–P10 nie są uznane za zakończone. Najbliższy
+  krok po CI: domknąć compile/regression failures, potem count integration,
+  residual norms i rzeczywiste benchmarki P2/P9. Exact damping, GPU,
+  FEM/BEM/RF/DMI/STT/EASA oraz pełny UI pozostają w tabeli zakresu.

@@ -24,8 +24,9 @@ use super::eigen_nonshared_domain::{
 };
 use super::eigen_native_result::{
     diagnostics_number, is_native_poisson_airbox_modal_adapter,
-    merge_poisson_airbox_modal_result_diagnostics, native_bloch_floquet_modes_from_result_json,
-    native_modal_modes_from_result_json, normalize_native_window_subwindows,
+    merge_poisson_airbox_modal_result_diagnostics, native_bloch_floquet_modes_from_typed_result,
+    native_modal_modes_from_result_json, native_modal_modes_from_typed_result,
+    normalize_native_window_subwindows,
 };
 use super::eigen_output::{json_artifact, k_vector_json, requested_mode_indices_for_result};
 use super::eigen_physical_potential::{
@@ -918,20 +919,31 @@ pub(super) fn execute_native_modal_window(
         .and_then(serde_json::Value::as_array)
         .is_some();
     let modes = if has_modes_payload {
-        native_modal_modes_from_result_json(
-            plan,
-            &native_result.result_json,
-            runner_stiffness_omega.as_ref().and_then(|stiffness_omega| {
-                runner_operator.map(|(_, mass)| {
-                    (
-                        stiffness_omega,
-                        runner_gyrotropic_row_major.as_slice(),
-                        mass,
-                    )
-                })
-            }),
-            shared_mode_context.as_ref(),
-        )?
+        let runner_operator = runner_stiffness_omega.as_ref().and_then(|stiffness_omega| {
+            runner_operator.map(|(_, mass)| {
+                (
+                    stiffness_omega,
+                    runner_gyrotropic_row_major.as_slice(),
+                    mass,
+                )
+            })
+        });
+        if execution_target == native_fem::NativeModalExecutionTarget::ProductionCpu {
+            native_modal_modes_from_typed_result(
+                plan,
+                &native_result.result_json,
+                native_result.modal_eigen.as_ref(),
+                runner_operator,
+                shared_mode_context.as_ref(),
+            )?
+        } else {
+            native_modal_modes_from_result_json(
+                plan,
+                &native_result.result_json,
+                runner_operator,
+                shared_mode_context.as_ref(),
+            )?
+        }
     } else if interrupted {
         Vec::new()
     } else {
@@ -1617,7 +1629,12 @@ pub(super) fn execute_native_cpu_modal_window_from_bloch_floquet_complex_with_pr
         .and_then(serde_json::Value::as_array)
         .is_some();
     let modes = if has_modes_payload {
-        native_bloch_floquet_modes_from_result_json(plan, &native_result.result_json, &payload)?
+        native_bloch_floquet_modes_from_typed_result(
+            plan,
+            &native_result.result_json,
+            native_result.modal_eigen.as_ref(),
+            &payload,
+        )?
     } else if interrupted {
         Vec::new()
     } else {

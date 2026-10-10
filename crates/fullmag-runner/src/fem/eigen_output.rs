@@ -2375,24 +2375,34 @@ pub(super) fn write_eigen_v2_bundle_with_outputs(
             mode
         })
         .collect();
+    let spectrum_v2_mode_count = spectrum_v2_modes.len();
+    let mut spectrum_v2_sample = serde_json::json!({
+        "sample_id": modal_sample_id(plan, sample_index),
+        "sample_index": sample_index,
+        "label": label,
+        "k_vector": k_vector,
+        "path_s": 0.0,
+        "segment_index": 0,
+        "t_in_segment": 0.0,
+        "external_field_a_per_m": plan.external_field,
+        "mesh_id": plan.mesh_name,
+        "topology_revision": plan.mesh.topology_fingerprint_v6(),
+        "modes": spectrum_v2_modes,
+    });
+    if let Some(method_evidence) = summary_payload
+        .get("solver_diagnostics")
+        .and_then(|diagnostics| diagnostics.get("method_evidence"))
+    {
+        if let Some(sample) = spectrum_v2_sample.as_object_mut() {
+            sample.insert("method_evidence".to_string(), method_evidence.clone());
+        }
+    }
     let mut spectrum_v2 = serde_json::json!({
         "schema_version": "eigen_spectrum.v2",
         "solver_model": summary_payload["solver_kind"],
         "sample_count": 1,
-        "mode_count": spectrum_v2_modes.len(),
-        "samples": [{
-            "sample_id": modal_sample_id(plan, sample_index),
-            "sample_index": sample_index,
-            "label": label,
-            "k_vector": k_vector,
-            "path_s": 0.0,
-            "segment_index": 0,
-            "t_in_segment": 0.0,
-            "external_field_a_per_m": plan.external_field,
-            "mesh_id": plan.mesh_name,
-            "topology_revision": plan.mesh.topology_fingerprint_v6(),
-            "modes": spectrum_v2_modes,
-        }],
+        "mode_count": spectrum_v2_mode_count,
+        "samples": [spectrum_v2_sample],
     });
     insert_modal_publication_contract(&mut spectrum_v2, &publication_contract);
     let spectrum_v2_revision = if publish_spectrum_bundle {
@@ -3160,6 +3170,7 @@ pub(super) fn write_eigen_v2_bundle_with_outputs(
             "fields_available",
             "spectrum_completeness",
             "window_complete",
+            "method_evidence",
         ] {
             if let Some(value) = diagnostics_object.get(key) {
                 manifest_object.insert(key.to_string(), value.clone());
@@ -3226,6 +3237,52 @@ pub(super) fn normalization_label(normalization: EigenNormalizationIR) -> &'stat
     }
 }
 
+pub(super) fn reference_modal_method_evidence(
+    plan: &FemEigenPlanIR,
+    returned_count: usize,
+) -> serde_json::Value {
+    let resolved_method = match plan.damping_policy {
+        EigenDampingPolicyIR::Ignore => "undamped_reference_eigenbasis",
+        EigenDampingPolicyIR::Include => "reference_proportional_linewidth_correction",
+    };
+    let spectrum_completeness = if returned_count >= plan.count as usize {
+        "count_limited"
+    } else {
+        "unknown"
+    };
+    let mut operator_approximations = Vec::new();
+    if plan.interfacial_dmi.is_some() || plan.bulk_dmi.is_some() {
+        operator_approximations.push("dmi_signed_coefficient_and_k_not_qualified");
+    }
+    if matches!(
+        plan.spin_wave_bc.kind(),
+        SpinWaveBoundaryKindIR::SurfaceAnisotropy
+    ) {
+        operator_approximations.push("surface_anisotropy_scalar_curvature");
+    }
+
+    serde_json::json!({
+        "schema_version": "modal_method_evidence.v1",
+        "damping": {
+            "requested_policy": damping_policy_label(plan.damping_policy),
+            "resolved_method": resolved_method,
+            "alpha_in_pencil": false,
+            "base_alpha": plan.material.damping,
+            "alpha_field_present": plan.material.alpha_field.is_some(),
+            "alpha_field_used": false,
+            "exact_damped_eigenproblem": false,
+        },
+        "spectrum": {
+            "spectrum_completeness": spectrum_completeness,
+            "independent_count_performed": false,
+            "returned_mode_count": returned_count,
+            "requested_mode_cap": plan.count,
+        },
+        "operator_approximations": operator_approximations,
+        "physical_qualification": "not_established_by_method_evidence",
+    })
+}
+
 pub(super) fn modal_solver_diagnostics_json(
     plan: &FemEigenPlanIR,
     solver_model: &str,
@@ -3248,6 +3305,7 @@ pub(super) fn modal_solver_diagnostics_json(
         "sample_count": 1,
         "mode_count": mode_count,
         "requested_mode_count": plan.count,
+        "method_evidence": reference_modal_method_evidence(plan, mode_count),
         "normalization": normalization_label(plan.normalization),
     });
     merge_modal_transport_diagnostics(&mut diagnostics, modal_tangent_transport_diagnostics(plan));
@@ -3419,11 +3477,25 @@ pub(super) fn damping_policy_label(policy: EigenDampingPolicyIR) -> &'static str
     }
 }
 
-pub(super) fn damping_imaginary_factor(damping: f64, policy: EigenDampingPolicyIR) -> f64 {
-    match policy {
-        EigenDampingPolicyIR::Ignore => 0.0,
-        EigenDampingPolicyIR::Include => damping.abs() / (1.0 + damping * damping),
+pub(super) fn damping_imaginary_factor(
+    damping: f64,
+    policy: EigenDampingPolicyIR,
+) -> Result<f64, RunError> {
+    if !damping.is_finite() || damping < 0.0 {
+        return Err(RunError {
+            message: "modal damping alpha must be finite and non-negative".to_string(),
+        });
     }
+
+    let factor = match policy {
+        EigenDampingPolicyIR::Ignore => 0.0,
+        EigenDampingPolicyIR::Include if damping > 1.0 => {
+            let reciprocal = 1.0 / damping;
+            reciprocal / (1.0 + reciprocal * reciprocal)
+        }
+        EigenDampingPolicyIR::Include => damping / (1.0 + damping * damping),
+    };
+    Ok(factor)
 }
 
 pub(super) fn spin_wave_bc_label(bc: SpinWaveBoundaryConditionIR) -> &'static str {
@@ -3473,7 +3545,9 @@ pub(super) fn solver_notes(
     complex_reduction: bool,
     use_sparse: bool,
 ) -> &'static str {
-    if complex_reduction && matches!(plan.operator.kind, fullmag_ir::EigenOperatorIR::Full2x2) {
+    if matches!(plan.damping_policy, EigenDampingPolicyIR::Include) {
+        "include applies an approximate proportional linewidth correction over the undamped CPU reference eigenbasis; it does not solve the exact damped eigenproblem"
+    } else if complex_reduction && matches!(plan.operator.kind, fullmag_ir::EigenOperatorIR::Full2x2) {
         "phase-aware Floquet reduction on the full 2x2 tangent-frame block with phase*(T_node^T T_root) transport"
     } else if complex_reduction {
         "phase-aware periodic reduction on a real doubled Hermitian block"
@@ -3483,8 +3557,6 @@ pub(super) fn solver_notes(
         "sparse LOBPCG iterative eigensolver for large DOF systems"
     } else if matches!(plan.operator.kind, fullmag_ir::EigenOperatorIR::Full2x2) {
         "full 2×2 Herring-Kittel block operator in tangent plane (2N DOF)"
-    } else if matches!(plan.damping_policy, EigenDampingPolicyIR::Include) {
-        "damping artifacts use first-order alpha linewidth correction over the CPU reference eigenbasis"
     } else {
         "cpu reference symmetric eigen solve"
     }

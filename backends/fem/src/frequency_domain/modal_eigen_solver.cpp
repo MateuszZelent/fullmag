@@ -21,6 +21,7 @@
 #include <array>
 #include <complex>
 #include <cstddef>
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
@@ -245,6 +246,38 @@ bool accepted_modal_mode_vectors_valid(
         }
     }
     return true;
+}
+
+bool accepted_modal_mode_payload_finite(
+    const PoissonAirboxModalEigenResult &result) noexcept
+{
+    for (const PoissonAirboxModalEigenResult::AcceptedMode &mode : result.accepted_modes) {
+        if (!std::isfinite(mode.eigenvalue_real) ||
+            !std::isfinite(mode.eigenvalue_imag) ||
+            !std::isfinite(mode.relative_residual) || mode.relative_residual < 0.0) {
+            return false;
+        }
+        for (const std::complex<double> &value : mode.full_vector) {
+            if (!std::isfinite(value.real()) || !std::isfinite(value.imag())) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+void replace_json_status(std::string &json, const char *status)
+{
+    const std::string key = "\"status\":\"";
+    const std::size_t key_begin = json.find(key);
+    if (key_begin == std::string::npos) {
+        return;
+    }
+    const std::size_t value_begin = key_begin + key.size();
+    const std::size_t value_end = json.find('"', value_begin);
+    if (value_end != std::string::npos) {
+        json.replace(value_begin, value_end - value_begin, status);
+    }
 }
 
 DynamicPencilMetadata magnetic_pencil_metadata(
@@ -860,12 +893,14 @@ bool append_shared_domain_cartesian_modes(
 }
 
 std::string format_poisson_airbox_modes_json(
-    const PoissonAirboxModalEigenResult &result)
+    const PoissonAirboxModalEigenResult &result,
+    bool metadata_only)
 {
     // Keep the serializer fail-closed even if a future caller bypasses the
     // contract-result validation below.  Never index an accepted mode vector
     // until the complete q+phi(+gauge) extent has been checked.
-    if (!accepted_modal_mode_vectors_valid(result)) {
+    if (!accepted_modal_mode_vectors_valid(result) ||
+        (metadata_only && !accepted_modal_mode_payload_finite(result))) {
         return "[]";
     }
     std::string modes = "[";
@@ -907,49 +942,60 @@ std::string format_poisson_airbox_modes_json(
             "\"";
         const std::uint64_t q_count = result.q_dof_count;
         const std::uint64_t phi_count = result.phi_dof_count;
-        modes += ",\"mode_vector_real\":[";
-        for (std::uint64_t index = 0; index < q_count; ++index) {
-            if (index != 0) {
-                modes += ",";
+        if (metadata_only) {
+            modes += ",\"mode_vector_transport\":\"typed_abi_v18\","
+                "\"q_dof_count\":" + std::to_string(q_count) +
+                ",\"phi_dof_count\":" + std::to_string(phi_count);
+            modes += phi_count == 0
+                ? ",\"phi_layout\":null"
+                : ",\"phi_layout\":\"native_complex_dof\"";
+        } else {
+            modes += ",\"mode_vector_real\":[";
+            for (std::uint64_t index = 0; index < q_count; ++index) {
+                if (index != 0) {
+                    modes += ",";
+                }
+                modes += format_double(mode.full_vector[static_cast<std::size_t>(index)].real());
             }
-            modes += format_double(mode.full_vector[static_cast<std::size_t>(index)].real());
-        }
-        modes += "],\"mode_vector_imag\":[";
-        for (std::uint64_t index = 0; index < q_count; ++index) {
-            if (index != 0) {
-                modes += ",";
+            modes += "],\"mode_vector_imag\":[";
+            for (std::uint64_t index = 0; index < q_count; ++index) {
+                if (index != 0) {
+                    modes += ",";
+                }
+                modes += format_double(mode.full_vector[static_cast<std::size_t>(index)].imag());
             }
-            modes += format_double(mode.full_vector[static_cast<std::size_t>(index)].imag());
-        }
-        modes += "],\"mode_q_real\":[";
-        for (std::uint64_t index = 0; index < q_count; ++index) {
-            if (index != 0) {
-                modes += ",";
+            modes += "],\"mode_q_real\":[";
+            for (std::uint64_t index = 0; index < q_count; ++index) {
+                if (index != 0) {
+                    modes += ",";
+                }
+                modes += format_double(mode.full_vector[static_cast<std::size_t>(index)].real());
             }
-            modes += format_double(mode.full_vector[static_cast<std::size_t>(index)].real());
-        }
-        modes += "],\"mode_q_imag\":[";
-        for (std::uint64_t index = 0; index < q_count; ++index) {
-            if (index != 0) {
-                modes += ",";
+            modes += "],\"mode_q_imag\":[";
+            for (std::uint64_t index = 0; index < q_count; ++index) {
+                if (index != 0) {
+                    modes += ",";
+                }
+                modes += format_double(mode.full_vector[static_cast<std::size_t>(index)].imag());
             }
-            modes += format_double(mode.full_vector[static_cast<std::size_t>(index)].imag());
-        }
-        modes += "],\"mode_phi_real\":[";
-        for (std::uint64_t index = 0; index < phi_count; ++index) {
-            if (index != 0) {
-                modes += ",";
+            modes += "],\"mode_phi_real\":[";
+            for (std::uint64_t index = 0; index < phi_count; ++index) {
+                if (index != 0) {
+                    modes += ",";
+                }
+                modes += format_double(mode.full_vector[static_cast<std::size_t>(q_count + index)].real());
             }
-            modes += format_double(mode.full_vector[static_cast<std::size_t>(q_count + index)].real());
-        }
-        modes += "],\"mode_phi_imag\":[";
-        for (std::uint64_t index = 0; index < phi_count; ++index) {
-            if (index != 0) {
-                modes += ",";
+            modes += "],\"mode_phi_imag\":[";
+            for (std::uint64_t index = 0; index < phi_count; ++index) {
+                if (index != 0) {
+                    modes += ",";
+                }
+                modes += format_double(mode.full_vector[static_cast<std::size_t>(q_count + index)].imag());
             }
-            modes += format_double(mode.full_vector[static_cast<std::size_t>(q_count + index)].imag());
+            modes += "]";
         }
-        modes += "]";
+        // Gauge coefficients are scalar metadata, not bulk vector payloads.
+        // Preserve them on both lanes when the descriptor is augmented.
         if (result.gauge_augmented) {
             const std::size_t gauge_index = static_cast<std::size_t>(q_count + phi_count);
             modes += ",\"mode_gauge_real\":" +
@@ -2893,11 +2939,49 @@ FrequencyDomainContractResult solve_modal_eigen_contract(
                 ? (poisson_result.augmented_dof_count -
                    poisson_result.q_dof_count)
                 : 0;
+        const bool requested_gpu =
+            request.execution_target == ModalExecutionTarget::production_gpu;
+        std::string mode_transport_error;
+        if (!requested_gpu && !poisson_result.accepted_modes.empty()) {
+            if (!accepted_modal_mode_vectors_valid(poisson_result)) {
+                mode_transport_error = "invalid_mode_vector_extent";
+            } else if (!accepted_modal_mode_payload_finite(poisson_result)) {
+                mode_transport_error = "nonfinite_mode_payload";
+            } else if (!poisson_result.accepted_modes.empty()) {
+                const std::size_t mode_count = poisson_result.accepted_modes.size();
+                const std::uintmax_t size_limit =
+                    static_cast<std::uintmax_t>(std::numeric_limits<std::size_t>::max());
+                const std::uintmax_t q_count = poisson_result.q_dof_count;
+                const std::uintmax_t phi_count = poisson_result.phi_dof_count;
+                const std::size_t typed_limit =
+                    std::vector<std::complex<double>>{}.max_size();
+                if (poisson_result.q_dof_count == 0 ||
+                    poisson_result.phi_dof_count == 0 ||
+                    q_count > size_limit || phi_count > size_limit ||
+                    static_cast<std::uintmax_t>(mode_count) >
+                        std::numeric_limits<std::uint64_t>::max() ||
+                    q_count > size_limit / mode_count ||
+                    phi_count > size_limit / mode_count ||
+                    q_count * mode_count > typed_limit ||
+                    phi_count * mode_count > typed_limit) {
+                    mode_transport_error = "typed_mode_count_overflow";
+                }
+            }
+            if (!mode_transport_error.empty()) {
+                status = FrequencyDomainStatus::operator_error;
+            }
+        }
 
         FrequencyDomainContractResult result{};
         result.status = status;
-        result.error_message = poisson_result.error_message;
+        result.error_message = mode_transport_error.empty()
+            ? poisson_result.error_message
+            : "native FEM modal_eigen typed mode transport failed: " +
+                mode_transport_error;
         result.diagnostics_json = poisson_result.diagnostics_json;
+        if (!mode_transport_error.empty()) {
+            replace_json_status(result.diagnostics_json, "operator_error");
+        }
         const std::string request_k_vector_field = modal_request_k_vector_json_field(request);
         result.diagnostics_json = append_json_field(
             std::move(result.diagnostics_json), request_k_vector_field);
@@ -2935,7 +3019,6 @@ FrequencyDomainContractResult solve_modal_eigen_contract(
             status == FrequencyDomainStatus::operator_error ? "operator_error" :
             status == FrequencyDomainStatus::artifact_error ? "artifact_error" :
             "solve_error";
-        const bool requested_gpu = request.execution_target == ModalExecutionTarget::production_gpu;
         const char *requested_execution = requested_gpu ? "production_gpu" : "production_cpu";
         const char *requested_solver_adapter = requested_gpu
             ? "k0_poisson_airbox_gpu_petsc_slepc"
@@ -3024,16 +3107,20 @@ FrequencyDomainContractResult solve_modal_eigen_contract(
             ",\"airbox_pair_count\":" +
             std::to_string(poisson_result.airbox_pair_count) +
             "},\"modes\":" +
-            format_poisson_airbox_modes_json(poisson_result) +
+            format_poisson_airbox_modes_json(poisson_result, !requested_gpu) +
             "}";
         result.result_json = append_json_field(
             std::move(result.result_json),
             k0_demag_probe_json);
         append_shared_domain_operator_provenance(
             result, k0_shared_domain_provenance);
-        if ((status == FrequencyDomainStatus::ok ||
-             status == FrequencyDomainStatus::interrupted) &&
-            !poisson_result.accepted_modes.empty()) {
+        const bool publish_typed_mode_prefix =
+            !poisson_result.accepted_modes.empty() &&
+            (requested_gpu
+                ? (status == FrequencyDomainStatus::ok ||
+                   status == FrequencyDomainStatus::interrupted)
+                : mode_transport_error.empty());
+        if (publish_typed_mode_prefix) {
             result.modal_eigen.q_dof_count = poisson_result.q_dof_count;
             result.modal_eigen.phi_dof_count = poisson_result.phi_dof_count;
             result.modal_eigen.mode_lambda.reserve(poisson_result.accepted_modes.size());
@@ -3051,8 +3138,10 @@ FrequencyDomainContractResult solve_modal_eigen_contract(
                 result.modal_eigen.mode_lambda.emplace_back(
                     mode.eigenvalue_real, mode.eigenvalue_imag);
                 result.modal_eigen.mode_residuals.push_back(mode.relative_residual);
-                result.modal_eigen.mode_cluster_ids.push_back(
-                    static_cast<std::uint64_t>(mode_index));
+                if (requested_gpu) {
+                    result.modal_eigen.mode_cluster_ids.push_back(
+                        static_cast<std::uint64_t>(mode_index));
+                }
                 if (mode.full_vector.size() < required_modal_mode_vector_count(poisson_result)) {
                     result.modal_eigen = ModalEigenTypedResult{};
                     result.status = FrequencyDomainStatus::operator_error;
@@ -3084,7 +3173,9 @@ FrequencyDomainContractResult solve_modal_eigen_contract(
                     mode.full_vector.begin() + static_cast<std::ptrdiff_t>(
                         poisson_result.q_dof_count + poisson_result.phi_dof_count));
             }
-            if (request.poisson_airbox_shared_domain_enabled != 0) {
+            if ((status == FrequencyDomainStatus::ok ||
+                 status == FrequencyDomainStatus::interrupted) &&
+                request.poisson_airbox_shared_domain_enabled != 0) {
                 std::string cartesian_error;
                 if (!append_shared_domain_cartesian_modes(
                         *request.poisson_airbox_shared_domain_payload,
@@ -3112,6 +3203,15 @@ FrequencyDomainContractResult solve_modal_eigen_contract(
         }
         result.result_json = append_json_field(
             std::move(result.result_json), request_k_vector_field);
+        if (!mode_transport_error.empty()) {
+            const std::string error_field =
+                "\"mode_vector_transport_error\":\"" +
+                escape_json_string(mode_transport_error.c_str()) + "\"";
+            result.diagnostics_json = append_json_field(
+                std::move(result.diagnostics_json), error_field);
+            result.result_json = append_json_field(
+                std::move(result.result_json), error_field);
+        }
         return result;
     }
     // The nonzero-k Floquet provider materializes a dense real-split

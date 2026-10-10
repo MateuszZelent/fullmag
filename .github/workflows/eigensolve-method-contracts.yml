@@ -1,0 +1,40 @@
+name: eigensolve-method-contracts
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ['codex/**']
+    paths:
+      - 'crates/fullmag-runner/**'
+      - 'docs/physics/0600-fem-eigenmodes-linearized-llg*'
+      - '.github/workflows/eigensolve-method-contracts.yml'
+  pull_request:
+    paths:
+      - 'crates/fullmag-runner/**'
+      - 'docs/physics/0600-fem-eigenmodes-linearized-llg*'
+      - '.github/workflows/eigensolve-method-contracts.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  source-contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+      - name: Install existing Python authoring runtime
+        run: python -m pip install -e packages/fullmag-py
+      - name: Validate scientific source map
+        run: python -B .agents/skills/scientific-documentation-contract/scripts/validate_scientific_docs.py docs/physics/0600-fem-eigenmodes-linearized-llg.source-map.json --repo-root .
+      - name: Run scientific documentation contract regressions
+        run: python -B -m unittest discover -s .agents/skills/scientific-documentation-contract/scripts -p 'test_*.py'
+      - name: Run complete default-feature runner contracts
+        env:
+          RUST_MIN_STACK: 16777216
+        run: cargo test -p fullmag-runner --lib --no-fail-fast

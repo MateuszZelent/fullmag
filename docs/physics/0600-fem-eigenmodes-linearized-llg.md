@@ -1059,3 +1059,143 @@ ani obserwable fizyczne. Normy dotyczą wewnętrznych współrzędnych
 numerycznych, a ratios są bezwymiarowe. Poprawny produkcyjny wynik
 eigen/dispersion i kwalifikacja pozostałych realizacji nadal wymagają
 odrębnych bramek opisanych wcześniej na tej stronie.
+
+
+(native-cpu-modal-vector-transport)=
+### Transport wektorów native FEM CPU — kontrakt naprawy, wdrożenie w toku
+
+Wektory modów q i pełnego potencjału phi mają być przenoszone przez istniejące
+bufory typowane `ModalEigenTypedResult` i odpowiadający im C ABI v18. JSON
+rzeczywistego wyniku ma zawierać metadane i scalar diagnostics, bez pełnych
+wektorów i bez tekstowej kopii q jako mode_vector. Nie zmienia to operatora,
+normalizacji, fazy, jednostek ani kolejności zaakceptowanych modów.
+
+Producent musi zachować dokładny accepted-mode order, jawny układ q i phi,
+DOF counts, lambda oraz residuals. Wszystkie mnożenia długości i indeksy
+wymagają checked bounds. Dane pożyczone przez C ABI są kopiowane do własnego
+wyniku Rust przed zwolnieniem wyniku native. Payload nie może być ponownie
+zamieniony w bulk JSON ani użyty do omijania geometry/provenance/residual
+checks. Niezgodność mode index, count, layout, lambda lub danych skończonych
+ma kończyć admission błędem. Przerwanie zachowuje tylko zaakceptowany prefix.
+
+Reprezentacje fizycznie zespolone i doubled-real mają zachować swoje obecne
+mapowanie; bufor typowany nie oznacza automatycznie tej samej bazy dla obu.
+Historyczny parser JSON może pozostać jawnie legacy/offline, lecz nie może
+być cichym obejściem brakujących danych nowego producenta CPU. Publiczny
+Python DSL, ProblemIR, OpenAPI i zamrożony layout C ABI nie zmieniają się.
+FDM CPU/GPU nie dotyczy ten transport; istniejący FEM GPU nie jest tą poprawką
+rekwalifikowany.
+
+Mapa istniejących właścicieli: `modal_eigen_result.hpp::ModalEigenTypedResult`,
+`api.cpp` (kopiowanie/free wyniku), `native_fem/frequency_domain.rs` (owned
+Rust result), `production_cpu_modal_eigen.cpp::format_slepc_modes_json`
+i `eigen_native_result.rs` (admission). Wymagane dowody obejmują porównanie
+wektorów/φ/phase do dotychczasowej reprezentacji, wiele modów, wrong-count
+i ordering, nonfinite, interrupted-prefix oraz rzeczywisty C ABI → runner
+→ selected fields. Implementacja i hosted wykonanie pozostają NOT VERIFIED.
+
+
+| Source ID | Właściciel | Zakres i dowód |
+|---|---|---|
+| `source-native-modal-typed-vector-owner` | `modal_eigen_result.hpp::ModalEigenTypedResult` | Istniejące bufory C ABI, migracja CPU w toku |
+| `source-native-cpu-mode-json-formatter` | `production_cpu_modal_eigen.cpp`, DOC-ANCHOR native-cpu-modal-vector-transport | Metadata-only CPU, implementacja i CI pending |
+| `source-native-rust-owned-mode-vectors` | `native_fem/frequency_domain.rs::NativeModalEigenTypedResult` | Własność po kopiowaniu FFI, admission oddzielnie wymagane |
+| `source-native-mode-vector-admission` | `eigen_native_result.rs::native_modal_modes_from_result_json` | Historyczny parser i wspólna logika admission, typed migration pending |
+
+
+(reference-modal-method-evidence-r2)=
+## R2: pochodzenie referencyjnego tłumienia i kompletności
+
+Status: kontrakt korekty źródeł P0; wykonanie w CI i kwalifikacja fizyczna
+pozostają NOT VERIFIED. Native CPU Floquet z dynamicznym demagiem już istnieje;
+poniższa korekta dotyczy wyłącznie referencyjnej publikacji i nie odblokowuje
+native `Include`, GPU nonzero-k ani nowej fizyki.
+
+Obecne `damping_policy="include"` w Rust reference zachowuje nietłumioną bazę
+modów i dopisuje proporcjonalną część urojoną. Dokumentujemy dokładnie używany
+algorytm, bez przedstawiania go jako ogólnego rozwiązania Gilberta:
+
+```{math}
+:label: eq-0600-reference-linewidth-r2
+ g(\alpha)=\frac{\alpha}{1+\alpha^2},\qquad
+ \omega_{\mathrm{app}}''=\omega_0 g(\alpha),\qquad
+ \Delta f_{\mathrm{app}}=\frac{\omega_{\mathrm{app}}''}{\pi}.
+```
+
+| Symbol | Znaczenie | SI |
+|---|---|---|
+| $\alpha$ | Bazowy współczynnik materiałowy, skończony i nieujemny | $1$ |
+| $g$ | Historyczny współczynnik proporcjonalnej korekty | $1$ |
+| $\omega_0$ | Nietłumiona częstość reference | $\mathrm{rad\,s^{-1}}$ |
+| $\omega_{\mathrm{app}}''$ | Przybliżona szybkość zaniku reference | $\mathrm{s^{-1}}$ |
+| $\Delta f_{\mathrm{app}}$ | Przybliżone FWHM mocy izolowanego bieguna | $\mathrm{Hz}$ |
+
+Dla małego $\alpha$, $g(\alpha)=\alpha+O(\alpha^3)$, lecz dokładne tłumienie
+eliptycznego modu zależy od polaryzacji. Algorytm nie rozwiązuje $B_\alpha$,
+nie koryguje rzeczywistej częstości ani profilu i nie jest oracle dla
+niejednorodnego alfa lub overdamping. Nawet dla circular macrospin ten writer
+nie wykonuje kompletnego exact damped solve. Duże alfa ma jedynie legalną,
+skończoną ewaluację funkcji; nie rozszerza to zakresu dokładności fizycznej.
+
+Dla $\alpha>1$ obliczamy równoważnie
+$(1/\alpha)/(1+(1/\alpha)^2)$, aby nie przepełniać $\alpha^2$.
+Ujemne/NaN/nieskończone alfa jest błędem wejścia, także przy `ignore`.
+Nie zastępujemy go `abs`, nie interpretujemy jako gain/STT i odrzucamy
+nieskończony wynik przed publikacją. Żądanie `ignore` zachowuje zero korekty.
+Publiczny token i default pozostają odpowiednio `include`/`ignore`;
+Python→`StudyIR::Eigenmodes.damping_policy`→`FemEigenPlanIR.damping_policy`
+nie zmieniają mapowania.
+
+Nowy producer reference dodaje `method_evidence` z własnym
+`schema_version="modal_method_evidence.v1"`. Obiekt rozdziela żądanie damping,
+rozwiązaną metodę, brak alfa w pencil, użycie tylko bazowego alfa i brak
+niezależnego count. `complete` starszego artefaktu nadal opisuje jego własny
+kontrakt publikacji: nie staje się świadectwem pełnego widma. Osiągnięty cap
+jest oznaczany `count_limited`; wynik poniżej cap pozostaje `unknown`, dopóki
+nie wykonano niezależnego count. Two-pass zgodność jest `search_stable`, a nie
+licznością wszystkich modów. Native count/contour pozostaje osobnym właścicielem.
+
+Reference DMI tracący signed D/k oraz skalarna curvature surface anisotropy
+pozostają jawnymi przybliżeniami; nowa provenance nie przyznaje im statusu
+niezależnego fizycznego oracle. P8 ma wyprowadzić signed tangent Hessian/JVP/BC.
+Nie rekonstruujemy brakującej metody historycznego wyniku z samego `include`.
+
+| Realizacja | Zakres tej korekty | Kwalifikacja |
+|---|---|---|
+| FEM CPU reference | Stabilna ewaluacja korekty, odrzucenie nielegalnego alfa i provenance | CI/nauka NOT VERIFIED |
+| FEM CPU native | Istniejący undamped Floquet/demag; bez zmiany operatora | Osobne wymagane bramki P2/P3 |
+| FEM GPU | Bez rozszerzenia modalnej capability | Osobna kwalifikacja P5 |
+| FDM CPU/GPU | Nie jest właścicielem tego modalnego writera | Poza korektą |
+
+Regresje wymagane w GitHub Actions: legalne małe/zero/duże alfa; ujemne,
+NaN i nieskończone alfa przed pierwszym callbackiem; brak niepoprawnej
+serializacji; `Include` nigdy nie emituje exact damping claim; osiągnięcie
+count cap i liczba mniejsza od cap nigdy nie awansują do pełnego widma.
+To kontrole kontraktu, nie benchmark FEM ani walidacja częstotliwości.
+
+| Source ID | Path + symbol | Odpowiedzialność |
+|---|---|---|
+| source-reference-linewidth-factor-r2 | `crates/fullmag-runner/src/fem/eigen_output.rs::damping_imaginary_factor` | Historyczna funkcja i stabilna ewaluacja, korekta w toku |
+| source-reference-method-evidence-r2 | `crates/fullmag-runner/src/fem/eigen_output.rs::reference_modal_method_evidence` | Nowa wersjonowana provenance, implementacja w toku |
+| source-reference-damping-publication-r2 | `crates/fullmag-runner/src/fem/eigen_execution.rs::execute_fem_eigen_inner_with_potential_publication` | Walidacja przed wykonaniem i publikacja bez fałszywego exact claim |
+
+Właściciel dokładnego pencil i znaku zaniku:
+[0831](0831-fem-dynamic-pencil-modal-response-and-krylov.md).
+Wzorzec naukowy: W. F. Brown, *Micromagnetics*, Wiley (1963), oraz
+T. L. Gilbert, IEEE Trans. Magn. 40, 3443–3449 (2004),
+[doi:10.1109/TMAG.2004.836740](https://doi.org/10.1109/TMAG.2004.836740).
+
+
+| Source ID | Path | Symbol | Zakres |
+|---|---|---|---|
+| source-native-modal-typed-vector-owner | `backends/fem/cpu/frequency_domain/production_cpu_modal_eigen.cpp` | `populate_typed_modal_result` | Populate the existing typed result with checked finite uniform mode-major q/phi buffers; header owner is ModalEigenTypedResult. |
+| source-native-cpu-mode-json-formatter | `backends/fem/cpu/frequency_domain/production_cpu_modal_eigen.cpp` | `format_contour_modes_json` | Serialize contour metadata without bulk numeric arrays; existing SLEPc formatters use the same typed population owner. |
+| source-native-rust-owned-mode-vectors | `crates/fullmag-runner/src/native_fem/frequency_domain.rs` | `NativeModalEigenTypedResult` | Own copied buffers before native result free; count, scalar and representation admission is independently required. |
+| source-native-mode-vector-admission | `crates/fullmag-runner/src/fem/eigen_native_result.rs` | `native_modal_modes_from_result_json` | Existing admission; typed shared logic in progress, explicit legacy parser retained without live fallback. |
+| source-native-mode-vector-admission | `crates/fullmag-runner/src/fem/eigen_native_result.rs` | `native_modal_modes_from_typed_result` | Live CPU typed admission binds mode-major vectors to scalar metadata and preserves lane layout; the explicit historical JSON parser remains separate. |
+
+Source review R2: reference alfa/provenance oraz typed CPU transport mają
+sprawdzone źródła i regresje do wykonania w GHA. Kontrola mapy naukowej przeszła.
+Są to dowody źródeł, nie wykonanie solvera ani kwalifikacja P2/P3/P4.
+Osiągnięty count cap w `method_evidence` opisuje ograniczenie wyszukiwania;
+nie jest dowodem, że dodatkowe mody faktycznie istnieją lub zostały ucięte.

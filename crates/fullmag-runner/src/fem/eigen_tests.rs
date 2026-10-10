@@ -5201,6 +5201,7 @@ fn native_eigen_v2_mode_metadata_preserves_operator_provenance() {
         .get("component_participation")
         .is_none());
     assert_eq!(spectrum_v2["samples"][0]["sample_id"], "k-sample-0000");
+    assert!(spectrum_v2["samples"][0].get("method_evidence").is_none());
     assert_eq!(spectrum_v2["solve_succeeded"], true);
     assert_eq!(spectrum_v2["fields_available"], true);
     assert_eq!(spectrum_v2["spectrum_completeness"], "selected_only");
@@ -5828,20 +5829,181 @@ fn native_modal_lambda_i_omega_mapping_rejects_negative_branch() {
 }
 
 #[test]
-fn damping_linewidth_uses_exp_i_omega_t_decay_sign() {
-    let alpha = 0.05;
-    let factor = damping_imaginary_factor(alpha, EigenDampingPolicyIR::Include);
-
-    assert!(factor > 0.0);
-    assert!((factor - alpha / (1.0 + alpha * alpha)).abs() < 1.0e-15);
+fn damping_linewidth_factor_accepts_nonnegative_finite_alpha_and_is_stable() {
+    let small_alpha = 0.05;
+    let small_factor = damping_imaginary_factor(small_alpha, EigenDampingPolicyIR::Include)
+        .expect("small non-negative alpha should be accepted");
+    assert!(small_factor > 0.0);
+    assert!((small_factor - small_alpha / (1.0 + small_alpha * small_alpha)).abs() < 1.0e-15);
     assert_eq!(
-        damping_imaginary_factor(alpha, EigenDampingPolicyIR::Ignore),
+        damping_imaginary_factor(0.0, EigenDampingPolicyIR::Include)
+            .expect("zero alpha should be accepted"),
         0.0
     );
     assert_eq!(
-        damping_imaginary_factor(-alpha, EigenDampingPolicyIR::Include),
-        factor
+        damping_imaginary_factor(1.0, EigenDampingPolicyIR::Include)
+            .expect("unit alpha should be accepted"),
+        0.5
     );
+    let reciprocal = 1.0 / f64::MAX;
+    let large_factor = damping_imaginary_factor(f64::MAX, EigenDampingPolicyIR::Include)
+        .expect("finite maximum alpha should use the stable reciprocal form");
+    assert!(large_factor.is_finite() && large_factor > 0.0);
+    assert_eq!(large_factor, reciprocal / (1.0 + reciprocal * reciprocal));
+
+    for alpha in [0.0, small_alpha, 1.0, f64::MAX] {
+        assert_eq!(
+            damping_imaginary_factor(alpha, EigenDampingPolicyIR::Ignore)
+                .expect("ignore still accepts valid alpha"),
+            0.0
+        );
+    }
+}
+
+#[test]
+fn damping_linewidth_factor_rejects_invalid_alpha_for_both_policies() {
+    for policy in [EigenDampingPolicyIR::Ignore, EigenDampingPolicyIR::Include] {
+        for alpha in [-0.05, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            let error = damping_imaginary_factor(alpha, policy)
+                .expect_err("negative and non-finite alpha must fail closed");
+            assert!(error.message.contains("finite and non-negative"));
+        }
+    }
+}
+
+#[test]
+fn reference_modal_method_evidence_keeps_damping_and_spectrum_claims_separate() {
+    let mut plan = minimal_native_modal_plan();
+    plan.damping_policy = EigenDampingPolicyIR::Include;
+    plan.material.alpha_field = Some(vec![0.05; plan.mesh.nodes.len()]);
+
+    let capped = reference_modal_method_evidence(&plan, plan.count as usize);
+    assert_eq!(capped["schema_version"], "modal_method_evidence.v1");
+    assert_eq!(capped["damping"]["requested_policy"], "include");
+    assert_eq!(
+        capped["damping"]["resolved_method"],
+        "reference_proportional_linewidth_correction"
+    );
+    assert_eq!(capped["damping"]["alpha_in_pencil"], false);
+    assert_eq!(capped["damping"]["base_alpha"], plan.material.damping);
+    assert_eq!(capped["damping"]["alpha_field_present"], true);
+    assert_eq!(capped["damping"]["alpha_field_used"], false);
+    assert_eq!(capped["damping"]["exact_damped_eigenproblem"], false);
+    assert_eq!(capped["spectrum"]["spectrum_completeness"], "count_limited");
+    assert_eq!(capped["spectrum"]["independent_count_performed"], false);
+    assert_eq!(capped["spectrum"]["returned_mode_count"], plan.count);
+    assert_eq!(capped["spectrum"]["requested_mode_cap"], plan.count);
+    assert!(capped["spectrum"].get("complete").is_none());
+    assert_eq!(
+        capped["physical_qualification"],
+        "not_established_by_method_evidence"
+    );
+
+    let below_cap = reference_modal_method_evidence(&plan, plan.count as usize - 1);
+    assert_eq!(below_cap["spectrum"]["spectrum_completeness"], "unknown");
+    assert_eq!(
+        below_cap["spectrum"]["returned_mode_count"],
+        plan.count - 1
+    );
+    assert_ne!(below_cap["spectrum"]["spectrum_completeness"], "complete");
+}
+
+#[test]
+fn reference_modal_method_evidence_lists_operator_approximations_without_qualifying_oracle() {
+    let mut plan = minimal_native_modal_plan();
+    plan.interfacial_dmi = Some(1.0e-3);
+    plan.spin_wave_bc = SpinWaveBoundaryConditionIR::Config(
+        fullmag_ir::SpinWaveBoundaryConfigIR {
+            kind: SpinWaveBoundaryKindIR::SurfaceAnisotropy,
+            boundary_pair_id: None,
+            pair_ids: Vec::new(),
+            phase_convention: Default::default(),
+            surface_anisotropy_ks: Some(1.0e-3),
+            surface_anisotropy_axis: Some([0.0, 0.0, 1.0]),
+        },
+    );
+
+    let evidence = reference_modal_method_evidence(&plan, 0);
+    assert_eq!(
+        evidence["operator_approximations"],
+        serde_json::json!([
+            "dmi_signed_coefficient_and_k_not_qualified",
+            "surface_anisotropy_scalar_curvature"
+        ])
+    );
+    assert_eq!(
+        evidence["physical_qualification"],
+        "not_established_by_method_evidence"
+    );
+
+    let without_approximations =
+        reference_modal_method_evidence(&minimal_native_modal_plan(), 0);
+    assert_eq!(
+        without_approximations["operator_approximations"],
+        serde_json::json!([])
+    );
+    assert_eq!(
+        without_approximations["physical_qualification"],
+        "not_established_by_method_evidence"
+    );
+}
+
+#[test]
+fn include_solver_notes_precede_full2x2_sparse_and_floquet_descriptions() {
+    let mut full_2x2 = minimal_native_modal_plan();
+    full_2x2.damping_policy = EigenDampingPolicyIR::Include;
+    full_2x2.operator.kind = fullmag_ir::EigenOperatorIR::Full2x2;
+    let mut sparse = minimal_native_modal_plan();
+    sparse.damping_policy = EigenDampingPolicyIR::Include;
+    let mut floquet = minimal_native_modal_plan();
+    floquet.damping_policy = EigenDampingPolicyIR::Include;
+    configure_x_floquet_request(&mut floquet);
+
+    for (plan, complex_reduction, use_sparse) in [
+        (&full_2x2, false, false),
+        (&sparse, false, true),
+        (&floquet, true, false),
+    ] {
+        let notes = solver_notes(plan, complex_reduction, use_sparse);
+        assert!(notes.contains("approximate"), "missing approximation: {notes}");
+        assert!(
+            notes.contains("does not solve the exact damped eigenproblem"),
+            "missing non-exact damping statement: {notes}"
+        );
+    }
+}
+
+#[test]
+fn executor_rejects_invalid_alpha_before_progress_callbacks() {
+    for policy in [EigenDampingPolicyIR::Ignore, EigenDampingPolicyIR::Include] {
+        for alpha in [-0.05, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            let mut plan = minimal_native_modal_plan();
+            plan.damping_policy = policy;
+            plan.material.damping = alpha;
+            let callback_count = std::sync::atomic::AtomicUsize::new(0);
+            let mut progress = |_event: FemEigenProgress| {
+                callback_count.fetch_add(1, Ordering::Relaxed);
+                StepAction::Continue
+            };
+
+            let error = execute_fem_eigen_inner(
+                &plan,
+                &[],
+                false,
+                false,
+                Some(&mut progress),
+                0,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+            .expect_err("invalid alpha must fail before solver callbacks or equilibrium work");
+            assert!(error.message.contains("finite and non-negative"));
+            assert_eq!(callback_count.load(Ordering::Relaxed), 0);
+        }
+    }
 }
 
 #[test]
@@ -5935,6 +6097,10 @@ fn frequency_window_solver_diagnostics_publish_completeness() {
             .and_then(|value| value.as_u64()),
         Some(u64::from(plan.count))
     );
+    assert_eq!(diagnostics["complete"], true);
+    assert_eq!(diagnostics["method_evidence"]["schema_version"], "modal_method_evidence.v1");
+    assert_eq!(diagnostics["method_evidence"]["damping"]["exact_damped_eigenproblem"], false);
+    assert_eq!(diagnostics["method_evidence"]["spectrum"]["spectrum_completeness"], "count_limited");
     assert_eq!(
         diagnostics
             .get("window_completeness")
@@ -10481,6 +10647,9 @@ fn eigen_diagnostics_native_modal_publisher_all_false_preserves_counts_without_m
     assert_eq!(raw["solver_model"], "native_modal_diagnostics_fixture");
     assert_eq!(raw["mode_count"], 1);
     assert_eq!(raw["requested_mode_count"], 6);
+    assert!(raw.get("method_evidence").is_none());
+    let manifest = eigen_diagnostics_published_json(&artifacts, "frequency_domain/manifest.v1.json");
+    assert!(manifest.get("method_evidence").is_none());
 }
 
 #[test]
@@ -10631,6 +10800,34 @@ fn eigen_diagnostics_reference_single_k_executor_publishes_without_native_provid
     assert_eq!(diagnostics["residuals"]["data"]["mode_count"], diagnostics["mode_count"]);
     assert_eq!(diagnostics["tangent_leakage"]["data"]["mode_count"], diagnostics["mode_count"]);
 
+    let solver_diagnostics = eigen_diagnostics_published_json(
+        &run.auxiliary_artifacts,
+        "eigen/diagnostics/solver.v1.json",
+    );
+    let method_evidence = &solver_diagnostics["method_evidence"];
+    assert_eq!(method_evidence["schema_version"], "modal_method_evidence.v1");
+    assert_eq!(method_evidence["damping"]["requested_policy"], "ignore");
+    assert_eq!(
+        method_evidence["damping"]["resolved_method"],
+        "undamped_reference_eigenbasis"
+    );
+    assert_eq!(method_evidence["damping"]["exact_damped_eigenproblem"], false);
+    let reference_summary = eigen_diagnostics_published_json(
+        &run.auxiliary_artifacts,
+        "eigen/metadata/eigen_summary.json",
+    );
+    assert_eq!(
+        reference_summary["solver_diagnostics"]["method_evidence"],
+        *method_evidence
+    );
+
+    let manifest = eigen_diagnostics_published_json(
+        &run.auxiliary_artifacts,
+        "frequency_domain/manifest.v1.json",
+    );
+    assert_eq!(manifest["method_evidence"], *method_evidence);
+    assert_eq!(manifest["complete"], true);
+
     let mut empty_policy_plan = plan.clone();
     empty_policy_plan.solver_policy = Some(fullmag_ir::FemEigenSolverPolicyIR {
         residual_tolerance: None,
@@ -10663,6 +10860,104 @@ fn eigen_diagnostics_reference_single_k_executor_publishes_without_native_provid
         .execution_engine
         .contains("cpu_baseline_fem_eigen"));
     assert_eigen_diagnostics_only_artifacts(&empty_policy_run.auxiliary_artifacts);
+}
+
+#[test]
+fn reference_include_method_evidence_reaches_spectrum_v2_diagnostics_and_manifest() {
+    let mut plan = minimal_native_modal_plan();
+    plan.equilibrium = EquilibriumSourceIR::Provided;
+    plan.operator.kind = fullmag_ir::EigenOperatorIR::Full2x2;
+    plan.operator.include_demag = false;
+    plan.enable_demag = false;
+    plan.damping_policy = EigenDampingPolicyIR::Include;
+    plan.material.uniaxial_anisotropy = Some(1.0e4);
+    plan.material.anisotropy_axis = Some([1.0, 0.0, 0.0]);
+    plan.target = fullmag_ir::EigenTargetIR::Lowest;
+    plan.count = 1;
+    let handoff = AcceptedFemEigenEquilibriumHandoff::from_accepted_linearization(
+        &plan,
+        plan.equilibrium_magnetization.clone(),
+        format!("sha256:{}", "a".repeat(64)),
+        format!("sha256:{}", "b".repeat(64)),
+    )
+    .expect("the small in-memory plan should create an accepted-equilibrium fixture");
+    let outputs = [OutputIR::EigenSpectrum {
+        quantity: "eigenfrequency".to_string(),
+    }];
+
+    let run = execute_fem_eigen_inner(
+        &plan,
+        &outputs,
+        false,
+        false,
+        None,
+        0,
+        None,
+        None,
+        Some(&handoff),
+        None,
+        None,
+    )
+    .expect("reference Include run should publish without a native provider");
+
+    let solver_diagnostics = eigen_diagnostics_published_json(
+        &run.auxiliary_artifacts,
+        "eigen/diagnostics/solver.v1.json",
+    );
+    let method_evidence = &solver_diagnostics["method_evidence"];
+    assert_eq!(method_evidence["schema_version"], "modal_method_evidence.v1");
+    assert_eq!(method_evidence["damping"]["requested_policy"], "include");
+    assert_eq!(method_evidence["damping"]["alpha_in_pencil"], false);
+    assert_eq!(method_evidence["damping"]["exact_damped_eigenproblem"], false);
+
+    let spectrum_v2 = eigen_diagnostics_published_json(
+        &run.auxiliary_artifacts,
+        "eigen/spectrum.v2.json",
+    );
+    let spectrum_sample = &spectrum_v2["samples"][0];
+    assert_eq!(spectrum_sample["method_evidence"], *method_evidence);
+
+    let manifest = eigen_diagnostics_published_json(
+        &run.auxiliary_artifacts,
+        "frequency_domain/manifest.v1.json",
+    );
+    assert_eq!(manifest["method_evidence"], *method_evidence);
+
+    let reference_summary = eigen_diagnostics_published_json(
+        &run.auxiliary_artifacts,
+        "eigen/metadata/eigen_summary.json",
+    );
+    assert_eq!(
+        reference_summary["solver_diagnostics"]["method_evidence"],
+        *method_evidence
+    );
+    let notes = reference_summary["solver_notes"]
+        .as_str()
+        .expect("reference summary should describe its damping method");
+    assert!(notes.contains("approximate"));
+    assert!(notes.contains("does not solve the exact damped eigenproblem"));
+
+    let mode = &reference_summary["modes"][0];
+    let frequency_real_hz = mode["frequency_real_hz"]
+        .as_f64()
+        .expect("real reference frequency should be numeric");
+    let frequency_imag_hz = mode["frequency_imag_hz"]
+        .as_f64()
+        .expect("approximate reference damping rate should be numeric");
+    let linewidth_fwhm_hz = mode["linewidth_fwhm_hz"]
+        .as_f64()
+        .expect("approximate reference linewidth should be numeric");
+    let damping_factor = damping_imaginary_factor(plan.material.damping, plan.damping_policy)
+        .expect("the fixture damping should be legal");
+    let expected_frequency_imag_hz = frequency_real_hz * damping_factor;
+    let frequency_tolerance = expected_frequency_imag_hz.abs().max(1.0) * 1.0e-12;
+    assert!(frequency_imag_hz > 0.0);
+    assert!(
+        (frequency_imag_hz - expected_frequency_imag_hz).abs() <= frequency_tolerance,
+        "reference imaginary frequency should use the documented proportional correction"
+    );
+    let linewidth_tolerance = linewidth_fwhm_hz.abs().max(1.0) * 1.0e-12;
+    assert!((linewidth_fwhm_hz - 2.0 * frequency_imag_hz).abs() <= linewidth_tolerance);
 }
 
 #[test]

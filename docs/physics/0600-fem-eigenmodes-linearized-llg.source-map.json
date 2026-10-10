@@ -28,6 +28,20 @@
   ],
   "equations": [
     {
+      "id": "eq-0600-reference-linewidth-r2",
+      "symbols": [
+        "alpha_reference_r2",
+        "g_reference_r2",
+        "omega0_reference_r2",
+        "omega_imag_reference_r2",
+        "fwhm_reference_r2"
+      ],
+      "sources": [
+        "source-reference-linewidth-factor-r2",
+        "source-reference-damping-publication-r2"
+      ]
+    },
+    {
       "id": "eq-0600-modal-pencil",
       "symbols": ["q", "lambda", "B_alpha", "omega", "f"],
       "sources": ["source-runner-path", "source-plan-eigen"]
@@ -66,6 +80,36 @@
     }
   ],
   "symbols": [
+    {
+      "id": "alpha_reference_r2",
+      "latex": "$\\alpha$",
+      "meaning": "Bazowy współczynnik materiałowy, skończony i nieujemny",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "g_reference_r2",
+      "latex": "$g$",
+      "meaning": "Historyczny współczynnik proporcjonalnej korekty",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "omega0_reference_r2",
+      "latex": "$\\omega_0$",
+      "meaning": "Nietłumiona częstość reference",
+      "si_unit": "$\\mathrm{rad\\,s^{-1}}$"
+    },
+    {
+      "id": "omega_imag_reference_r2",
+      "latex": "$\\omega_{\\mathrm{app}}''$",
+      "meaning": "Przybliżona szybkość zaniku reference",
+      "si_unit": "$\\mathrm{s^{-1}}$"
+    },
+    {
+      "id": "fwhm_reference_r2",
+      "latex": "$\\Delta f_{\\mathrm{app}}$",
+      "meaning": "Przybliżone FWHM mocy izolowanego bieguna",
+      "si_unit": "$\\mathrm{Hz}$"
+    },
     {"id": "q", "latex": "$q$", "meaning": "tangent-plane modal coefficients", "si_unit": "$1$"},
     {"id": "lambda", "latex": "$\\lambda$", "meaning": "generalized eigenvalue", "si_unit": "$\\mathrm{s^{-1}}$"},
     {"id": "B_alpha", "latex": "$B_\\alpha$", "meaning": "gyrotropic/mass operator", "si_unit": "$\\mathrm{m^3}$"},
@@ -99,6 +143,48 @@
     }
   ],
   "sources": [
+    {
+      "id": "source-reference-linewidth-factor-r2",
+      "path": "crates/fullmag-runner/src/fem/eigen_output.rs",
+      "symbol": "damping_imaginary_factor",
+      "responsibility": "Stable evaluation of the explicitly approximate reference linewidth correction."
+    },
+    {
+      "id": "source-reference-method-evidence-r2",
+      "path": "crates/fullmag-runner/src/fem/eigen_output.rs",
+      "symbol": "reference_modal_method_evidence",
+      "responsibility": "Versioned reference method evidence; no exact damping or complete spectrum claim."
+    },
+    {
+      "id": "source-reference-damping-publication-r2",
+      "path": "crates/fullmag-runner/src/fem/eigen_execution.rs",
+      "symbol": "execute_fem_eigen_inner_with_potential_publication",
+      "responsibility": "Validate alpha before reference execution and publish explicit method evidence."
+    },
+    {
+      "id": "source-native-modal-typed-vector-owner",
+      "path": "backends/fem/cpu/frequency_domain/production_cpu_modal_eigen.cpp",
+      "symbol": "populate_typed_modal_result",
+      "responsibility": "Populate the existing typed result with checked finite uniform mode-major q/phi buffers; header owner is ModalEigenTypedResult."
+    },
+    {
+      "id": "source-native-cpu-mode-json-formatter",
+      "path": "backends/fem/cpu/frequency_domain/production_cpu_modal_eigen.cpp",
+      "symbol": "format_contour_modes_json",
+      "responsibility": "Serialize contour metadata without bulk numeric arrays; existing SLEPc formatters use the same typed population owner."
+    },
+    {
+      "id": "source-native-rust-owned-mode-vectors",
+      "path": "crates/fullmag-runner/src/native_fem/frequency_domain.rs",
+      "symbol": "NativeModalEigenTypedResult",
+      "responsibility": "Own copied buffers before native result free; count, scalar and representation admission is independently required."
+    },
+    {
+      "id": "source-native-mode-vector-admission",
+      "path": "crates/fullmag-runner/src/fem/eigen_native_result.rs",
+      "symbol": "native_modal_modes_from_typed_result",
+      "responsibility": "Live CPU typed admission binds mode-major vectors to scalar metadata and preserves lane layout; the explicit historical JSON parser remains separate."
+    },
     {
       "id": "source-python-eigenmodes",
       "path": "packages/fullmag-py/src/fullmag/model/study.py",

@@ -2928,3 +2928,36 @@ renderowania. Niezgodne mapowanie punktow do istniejacej siatki zwraca409
 analysis_field_node_mapping_unavailable zamiast niezweryfikowanego v2fallback.
 ETag analizy uwzglednia wersje i SHA256 rzeczywistych bajtow odpowiedzi,
 aby zmiana encodingu/topologii/wartosci nie odzyskala starego cachedpayloadu.
+
+
+## R2 — wersjonowane pochodzenie referencyjnej metody modalnej
+
+Nowe wyniki Rust reference publikują obiekt `method_evidence` w
+`solver_diagnostics`, a jego kopię w typed diagnostics i manifest.
+Obiekt ma własne `schema_version=modal_method_evidence.v1` i następujące pola:
+
+| Pole | Kontrakt |
+|---|---|
+| `damping.requested_policy` | Istniejące `ignore` lub `include`; nie dowodzi wykonanej metody |
+| `damping.resolved_method` | `undamped_reference_eigenbasis` lub `reference_proportional_linewidth_correction` |
+| `damping.alpha_in_pencil` | `false` dla tej referencji |
+| `damping.base_alpha` | Skończone nieujemne alfa używane w korekcie |
+| `damping.alpha_field_present` | Czy plan zawiera przestrzenne alfa |
+| `damping.alpha_field_used` | `false`: korekta używa tylko bazowego alfa |
+| `damping.exact_damped_eigenproblem` | `false`: nie jest rozwiązaniem dokładnego Gilberta |
+| `spectrum.spectrum_completeness` | `count_limited` po osiągnięciu cap; inaczej `unknown` |
+| `spectrum.independent_count_performed` | `false`; brak niezależnego count |
+| `spectrum.returned_mode_count` / `requested_mode_cap` | Rzeczywista liczba zwróconych modów i żądany cap |
+| `operator_approximations` | Tokeny `dmi_signed_coefficient_and_k_not_qualified`, `surface_anisotropy_scalar_curvature` gdy odpowiednie interakcje są aktywne |
+| `physical_qualification` | `not_established_by_method_evidence` |
+
+Puste `operator_approximations` nie jest dowodem poprawności fizycznej.
+`complete=true` legacy diagnostics pozostaje stanem publikacji/procedury,
+a nie niezależnym count. Brak `method_evidence` w historycznym dokumencie
+pozostaje nieznany; nie backfillujemy exact z tokenu `include` ani z nazwy
+`cpu_full_2x2_damped`. Native producer nie dziedziczy pól reference i wymaga
+osobnego własnego kontraktu. Nie zmieniamy istniejących schema ani pól OpenAPI.
+Pełna projekcja klienta/UI jest zadaniem P10, nie dowodem tego fragmentu.
+
+Właściciel: ADR 0056 oraz nota `0600-fem-eigenmodes-linearized-llg.md`,
+sekcja `reference-modal-method-evidence-r2`. Testy wykonujemy wyłącznie w GHA.

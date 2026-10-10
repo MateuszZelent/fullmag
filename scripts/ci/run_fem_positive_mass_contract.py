@@ -249,6 +249,15 @@ CONTRACT_PROFILES["modal-phase-slepc"] = {
             "-DFULLMAG_FEM_WITH_SLEPC=1",
             "-DFULLMAG_HAS_CUDA_RUNTIME=0",
         ],
+    }, {
+        "name": "fem_modal_eigen_typed_cpu_transport_contract",
+        "source_suffix": "backends/fem/tests/frequency_domain/modal_eigen_contract_test.cpp",
+        "marker": "PASS: typed_cpu_mode_transport_contract",
+        "compile_definitions": [
+            "-DFULLMAG_HAS_MFEM_STACK=1",
+            "-DFULLMAG_FEM_WITH_SLEPC=1",
+            "-DFULLMAG_HAS_CUDA_RUNTIME=0",
+        ],
     }],
 }
 

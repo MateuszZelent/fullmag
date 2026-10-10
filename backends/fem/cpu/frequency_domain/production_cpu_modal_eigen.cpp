@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <cmath>
 #include <complex>
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <limits>
@@ -1664,82 +1665,264 @@ FrequencyDomainContractResult nonzero_k_floquet_modal_dynamic_demag_k_missing(
     return result;
 }
 
-std::string format_slepc_modes_json(
-    const std::vector<SLEPcModalAcceptedMode> &accepted_modes,
-    FrequencyDomainPhaseConvention phase_convention)
+const char *frequency_domain_status_json_name(FrequencyDomainStatus status) noexcept
 {
+    switch (status) {
+    case FrequencyDomainStatus::ok:
+        return "ok";
+    case FrequencyDomainStatus::unavailable:
+        return "unavailable";
+    case FrequencyDomainStatus::validation_error:
+        return "validation_error";
+    case FrequencyDomainStatus::operator_error:
+        return "operator_error";
+    case FrequencyDomainStatus::solve_error:
+        return "solve_error";
+    case FrequencyDomainStatus::artifact_error:
+        return "artifact_error";
+    case FrequencyDomainStatus::interrupted:
+        return "interrupted";
+    }
+    return "solve_error";
+}
+
+bool modal_request_is_floquet_route(const ModalEigenRequest &request) noexcept
+{
+    return (request.operator_request.spin_wave_bc_kind != nullptr &&
+            std::strcmp(request.operator_request.spin_wave_bc_kind, "floquet") == 0) ||
+        request.floquet_shared_domain_operator != nullptr ||
+        request.poisson_airbox_block_enabled != 0;
+}
+
+struct NativeModeTransportView {
+    std::complex<double> lambda{};
+    double relative_residual = 0.0;
+    const std::vector<std::complex<double>> *q = nullptr;
+    const std::vector<std::complex<double>> *phi = nullptr;
+};
+
+struct NativeModesJsonResult {
+    std::string json;
+    std::string error;
+};
+
+bool finite_complex_values(const std::vector<std::complex<double>> &values) noexcept
+{
+    return std::all_of(values.begin(), values.end(), [](const std::complex<double> &value) {
+        return std::isfinite(value.real()) && std::isfinite(value.imag());
+    });
+}
+
+// DOC-ANCHOR: native-cpu-modal-vector-transport
+std::string populate_typed_modal_result(
+    const std::vector<NativeModeTransportView> &modes,
+    bool phi_required,
+    ModalEigenTypedResult &typed_result)
+{
+    typed_result = ModalEigenTypedResult{};
+    if (modes.empty()) {
+        return {};
+    }
+    if (static_cast<std::uintmax_t>(modes.size()) >
+        static_cast<std::uintmax_t>(std::numeric_limits<std::uint64_t>::max())) {
+        return "mode_count_overflow";
+    }
+    if (modes.front().q == nullptr || modes.front().phi == nullptr) {
+        return "mode_payload_unavailable";
+    }
+    const std::size_t q_count = modes.front().q->size();
+    const std::size_t phi_count = modes.front().phi->size();
+    if (q_count == 0) {
+        return "empty_q_vector";
+    }
+    if (phi_required && phi_count == 0) {
+        return "required_phi_vector_missing";
+    }
+    for (const NativeModeTransportView &mode : modes) {
+        if (mode.q == nullptr || mode.phi == nullptr) {
+            return "mode_payload_unavailable";
+        }
+        if (mode.q->size() != q_count) {
+            return "q_dof_count_mismatch";
+        }
+        if (mode.phi->size() != phi_count) {
+            return "phi_dof_count_mismatch";
+        }
+        if (!std::isfinite(mode.lambda.real()) || !std::isfinite(mode.lambda.imag()) ||
+            !std::isfinite(mode.relative_residual) || mode.relative_residual < 0.0 ||
+            !finite_complex_values(*mode.q) || !finite_complex_values(*mode.phi)) {
+            return "nonfinite_mode_payload";
+        }
+    }
+    const std::size_t mode_count = modes.size();
+    const std::size_t maximum = std::numeric_limits<std::size_t>::max();
+    if (mode_count > typed_result.mode_lambda.max_size() ||
+        mode_count > typed_result.mode_residuals.max_size() ||
+        q_count > maximum / mode_count || phi_count > maximum / mode_count) {
+        return "typed_mode_count_overflow";
+    }
+    const std::size_t q_value_count = mode_count * q_count;
+    const std::size_t phi_value_count = mode_count * phi_count;
+    if (q_value_count > typed_result.mode_q_complex.max_size() ||
+        phi_value_count > typed_result.mode_phi_complex.max_size() ||
+        static_cast<std::uintmax_t>(q_count) >
+            static_cast<std::uintmax_t>(std::numeric_limits<std::uint64_t>::max()) ||
+        static_cast<std::uintmax_t>(phi_count) >
+            static_cast<std::uintmax_t>(std::numeric_limits<std::uint64_t>::max())) {
+        return "typed_mode_count_overflow";
+    }
+
+    typed_result.q_dof_count = static_cast<std::uint64_t>(q_count);
+    typed_result.phi_dof_count = static_cast<std::uint64_t>(phi_count);
+    typed_result.mode_lambda.reserve(mode_count);
+    typed_result.mode_residuals.reserve(mode_count);
+    typed_result.mode_q_complex.reserve(q_value_count);
+    typed_result.mode_phi_complex.reserve(phi_value_count);
+    for (const NativeModeTransportView &mode : modes) {
+        typed_result.mode_lambda.push_back(mode.lambda);
+        typed_result.mode_residuals.push_back(mode.relative_residual);
+        typed_result.mode_q_complex.insert(
+            typed_result.mode_q_complex.end(), mode.q->begin(), mode.q->end());
+        typed_result.mode_phi_complex.insert(
+            typed_result.mode_phi_complex.end(), mode.phi->begin(), mode.phi->end());
+    }
+    return {};
+}
+
+void mark_mode_transport_failure(
+    FrequencyDomainContractResult &result,
+    const std::string &error)
+{
+    if (error.empty()) {
+        return;
+    }
+    result.status = FrequencyDomainStatus::solve_error;
+    const std::string message =
+        "native FEM modal_eigen typed mode transport failed: " + error;
+    if (result.error_message.empty()) {
+        result.error_message = message;
+    } else {
+        result.error_message += "; " + message;
+    }
+}
+
+void append_mode_transport_error_fields(
+    FrequencyDomainContractResult &result,
+    const NativeModesJsonResult &modes)
+{
+    if (modes.error.empty()) {
+        return;
+    }
+    const std::string field =
+        "\"mode_vector_transport_error\":\"" +
+        escape_json_string(modes.error.c_str()) + "\"";
+    append_optional_json_field(result.diagnostics_json, field);
+    append_optional_json_field(result.result_json, field);
+}
+
+void replace_json_status(std::string &json, const char *status)
+{
+    const std::string key = "\"status\":\"";
+    const std::size_t key_begin = json.find(key);
+    if (key_begin == std::string::npos) {
+        return;
+    }
+    const std::size_t value_begin = key_begin + key.size();
+    const std::size_t value_end = json.find('"', value_begin);
+    if (value_end != std::string::npos) {
+        json.replace(value_begin, value_end - value_begin, status);
+    }
+}
+
+void finalize_mode_transport_result(
+    FrequencyDomainContractResult &result,
+    const NativeModesJsonResult &modes)
+{
+    if (modes.error.empty()) {
+        return;
+    }
+    mark_mode_transport_failure(result, modes.error);
+    replace_json_status(result.diagnostics_json, "solve_error");
+    replace_json_status(result.result_json, "solve_error");
+    const std::string complete_true = "\"complete\":true";
+    const std::size_t complete = result.diagnostics_json.find(complete_true);
+    if (complete != std::string::npos) {
+        result.diagnostics_json.replace(
+            complete, complete_true.size(), "\"complete\":false");
+    }
+    append_mode_transport_error_fields(result, modes);
+}
+
+NativeModesJsonResult format_slepc_modes_json(
+    const std::vector<SLEPcModalAcceptedMode> &accepted_modes,
+    const ModalEigenRequest &request,
+    ModalEigenTypedResult &typed_result)
+{
+    NativeModesJsonResult formatted{};
+    const bool floquet_route = modal_request_is_floquet_route(request);
+    const bool phi_required = floquet_route &&
+        (request.operator_request.include_demag != 0 ||
+         request.floquet_shared_domain_operator != nullptr ||
+         request.poisson_airbox_block_enabled != 0);
+    static const std::vector<std::complex<double>> empty_phi{};
+    std::vector<NativeModeTransportView> views;
+    views.reserve(accepted_modes.size());
+    for (const SLEPcModalAcceptedMode &mode : accepted_modes) {
+        views.push_back({
+            {mode.lambda_real, mode.lambda_imag},
+            mode.relative_residual,
+            &mode.mode_vector,
+            floquet_route ? &mode.floquet_potential_real_split : &empty_phi});
+    }
+    formatted.error = populate_typed_modal_result(views, phi_required, typed_result);
+
     std::string modes = "[";
     for (std::size_t index = 0; index < accepted_modes.size(); ++index) {
         const SLEPcModalAcceptedMode &mode = accepted_modes[index];
         if (index != 0) {
             modes += ",";
         }
+        const bool physical_complex =
+            floquet_route && mode.floquet_mode_vector_physical_complex;
+        const bool phi_available =
+            floquet_route && !mode.floquet_potential_real_split.empty();
+        const char *q_layout = !floquet_route
+            ? "native_complex_dof"
+            : physical_complex ? "interleaved_node_component" : "doubled_real_split";
         modes +=
             "{\"mode_index\":" + std::to_string(index) +
+            ",\"mode_vector_transport\":\"typed_abi_v18\","
+            "\"q_dof_count\":" + std::to_string(mode.mode_vector.size()) +
+            ",\"phi_dof_count\":" +
+            std::to_string(floquet_route ? mode.floquet_potential_real_split.size() : 0u) +
+            ",\"q_layout\":\"" + q_layout + "\"";
+        if (floquet_route) {
+            modes += ",\"floquet_mode_vector_physical_complex\":" +
+                std::string(mode.floquet_mode_vector_physical_complex ? "true" : "false");
+        }
+        if (!phi_available) {
+            modes += ",\"phi_layout\":null";
+        } else if (floquet_route) {
+            modes += ",\"phi_layout\":\"" + std::string(physical_complex
+                ? "complex_coefficients"
+                : "doubled_real_split_complex_coefficients") + "\"";
+        } else {
+            modes += ",\"phi_layout\":\"native_complex_dof\"";
+        }
+        modes +=
             ",\"slepc_eigenpair_index\":" +
             std::to_string(mode.eigenpair_index) +
             ",\"positive_frequency_pair_index\":" +
             std::to_string(mode.positive_frequency_pair_index) +
             "," +
             mode_kinematics_json_fields(
-                {mode.lambda_real, mode.lambda_imag}, phase_convention) +
+                {mode.lambda_real, mode.lambda_imag}, request.phase_convention) +
             ",\"relative_residual\":" +
             format_double(mode.relative_residual) +
-            ",\"discarded_negative_frequency_partner\":true,"
-            "\"mode_vector_real\":[";
-        for (std::size_t component = 0; component < mode.mode_vector.size(); ++component) {
-            if (component != 0) {
-                modes += ",";
-            }
-            modes += format_double(std::real(mode.mode_vector[component]));
-        }
-        modes += "],\"mode_vector_imag\":[";
-        for (std::size_t component = 0; component < mode.mode_vector.size(); ++component) {
-            if (component != 0) {
-                modes += ",";
-            }
-            modes += format_double(std::imag(mode.mode_vector[component]));
-        }
-        modes += "]";
-        if (mode.floquet_mode_vector_physical_complex) {
-                modes += ",\"q_layout\":\"interleaved_node_component\",\"mode_q_real\":[";
-                for (std::size_t component = 0; component < mode.mode_vector.size(); ++component) {
-                    if (component != 0) {
-                        modes += ",";
-                    }
-                    modes += format_double(std::real(mode.mode_vector[component]));
-                }
-                modes += "],\"mode_q_imag\":[";
-                for (std::size_t component = 0; component < mode.mode_vector.size(); ++component) {
-                    if (component != 0) {
-                        modes += ",";
-                    }
-                    modes += format_double(std::imag(mode.mode_vector[component]));
-                }
-                modes += "],\"mode_phi_real\":[";
-                for (std::size_t component = 0;
-                     component < mode.floquet_potential_real_split.size();
-                     ++component) {
-                    if (component != 0) {
-                        modes += ",";
-                    }
-                    modes += format_double(
-                        mode.floquet_potential_real_split[component].real());
-                }
-                modes += "],\"mode_phi_imag\":[";
-                for (std::size_t component = 0;
-                     component < mode.floquet_potential_real_split.size();
-                     ++component) {
-                    if (component != 0) {
-                        modes += ",";
-                    }
-                    modes += format_double(
-                        mode.floquet_potential_real_split[component].imag());
-                }
-                modes += "],\"potential_dof_count\":" +
-                    std::to_string(mode.floquet_potential_real_split.size());
-        }
-        if (mode.floquet_mode_vector_physical_complex) {
+            ",\"discarded_negative_frequency_partner\":true";
+        if (physical_complex) {
+            modes += ",\"potential_dof_count\":" +
+                std::to_string(mode.floquet_potential_real_split.size());
             const double reduced_descriptor_residual = std::max(
                 mode.floquet_magnetic_residual,
                 mode.floquet_potential_residual);
@@ -1759,10 +1942,11 @@ std::string format_slepc_modes_json(
                 ",\"floquet_certificate_scope\":\"" +
                 std::string(mode.floquet_descriptor_certified
                     ? "full_projected_weak_form_and_periodic_seams"
-                    : "reduced_original_blocks_only") +
-                "\","
-                "\"potential_representation\":\"complex_coefficients\","
-                "\"magnetic_relative_residual\":" +
+                    : "reduced_original_blocks_only") + "\"";
+            if (phi_available) {
+                modes += ",\"potential_representation\":\"complex_coefficients\"";
+            }
+            modes += ",\"magnetic_relative_residual\":" +
                 format_double(mode.floquet_magnetic_residual) +
                 ",\"potential_relative_residual\":" +
                 format_double(mode.floquet_potential_residual) +
@@ -1790,40 +1974,109 @@ std::string format_slepc_modes_json(
                 format_double(mode.floquet_potential_residual) +
                 ",\"gauge_constraint_backward_error\":null,"
                 "\"gauge_constraint_policy\":\"nonzero_k_poisson_without_mean_constraint\","
-                "\"reduced_original_block_residuals\":{"
-                "\"magnetic\":" +
+                "\"reduced_original_block_residuals\":{\"magnetic\":" +
                 format_double(mode.floquet_magnetic_residual) +
                 ",\"potential\":" +
                 format_double(mode.floquet_potential_residual) +
-                ",\"full\":" +
-                format_double(reduced_descriptor_residual) + "}";
-        } else if (mode.floquet_descriptor_certified) {
+                ",\"full\":" + format_double(reduced_descriptor_residual) + "}";
+        } else if (floquet_route && mode.floquet_descriptor_certified) {
             modes += ",\"floquet_descriptor_certified\":true,"
-                "\"floquet_geometric_bc_certified\":false,"
-                "\"potential_representation\":\"doubled_real_split_complex_coefficients\","
-                "\"magnetic_relative_residual\":" + format_double(mode.floquet_magnetic_residual) +
-                ",\"potential_relative_residual\":" + format_double(mode.floquet_potential_residual);
-            for (int part=0; part<2; ++part) {
-                modes += part==0 ? ",\"potential_vector_real\":[" : ",\"potential_vector_imag\":[";
-                for (std::size_t i=0;i<mode.floquet_potential_real_split.size();++i) {
-                    if(i) modes += ",";
-                    modes += format_double(part==0 ? mode.floquet_potential_real_split[i].real()
-                                                  : mode.floquet_potential_real_split[i].imag());
-                }
-                modes += "]";
+                "\"floquet_geometric_bc_certified\":false";
+            if (phi_available) {
+                modes += ",\"potential_representation\":\"doubled_real_split_complex_coefficients\"";
             }
+            modes += ",\"magnetic_relative_residual\":" +
+                format_double(mode.floquet_magnetic_residual) +
+                ",\"potential_relative_residual\":" +
+                format_double(mode.floquet_potential_residual);
         }
         modes += "}";
     }
     modes += "]";
-    return modes;
+    formatted.json = std::move(modes);
+    return formatted;
 }
 
-std::string format_slepc_modes_json(
+NativeModesJsonResult format_slepc_modes_json(
     const SLEPcTinyGyrotropicModalEigenResult &slepc_result,
-    FrequencyDomainPhaseConvention phase_convention)
+    const ModalEigenRequest &request,
+    ModalEigenTypedResult &typed_result)
 {
-    return format_slepc_modes_json(slepc_result.accepted_modes, phase_convention);
+    return format_slepc_modes_json(
+        slepc_result.accepted_modes, request, typed_result);
+}
+
+NativeModesJsonResult format_contour_modes_json(
+    const std::vector<ContourIntervalMode> &accepted_modes,
+    const ModalEigenRequest &request,
+    ModalEigenTypedResult &typed_result)
+{
+    NativeModesJsonResult formatted{};
+    const bool floquet_route = modal_request_is_floquet_route(request);
+    const bool phi_required = floquet_route &&
+        (request.operator_request.include_demag != 0 ||
+         request.floquet_shared_domain_operator != nullptr ||
+         request.poisson_airbox_block_enabled != 0);
+    static const std::vector<std::complex<double>> empty_phi{};
+    std::vector<NativeModeTransportView> views;
+    views.reserve(accepted_modes.size());
+    for (const ContourIntervalMode &mode : accepted_modes) {
+        views.push_back({
+            mode.eigenvalue,
+            mode.relative_residual,
+            &mode.mode_vector,
+            floquet_route ? &mode.floquet_potential_real_split : &empty_phi});
+    }
+    formatted.error = populate_typed_modal_result(views, phi_required, typed_result);
+
+    std::string modes = "[";
+    for (std::size_t index = 0; index < accepted_modes.size(); ++index) {
+        const ContourIntervalMode &mode = accepted_modes[index];
+        if (index != 0) {
+            modes += ",";
+        }
+        const bool phi_available =
+            floquet_route && !mode.floquet_potential_real_split.empty();
+        modes +=
+            "{\"mode_index\":" + std::to_string(index) +
+            ",\"mode_vector_transport\":\"typed_abi_v18\","
+            "\"q_dof_count\":" + std::to_string(mode.mode_vector.size()) +
+            ",\"phi_dof_count\":" +
+            std::to_string(floquet_route ? mode.floquet_potential_real_split.size() : 0u) +
+            ",\"q_layout\":\"" +
+            std::string(floquet_route ? "doubled_real_split" : "native_complex_dof") + "\"";
+        if (!phi_available) {
+            modes += ",\"phi_layout\":null";
+        } else if (floquet_route) {
+            modes += ",\"phi_layout\":\"doubled_real_split_complex_coefficients\"";
+        } else {
+            modes += ",\"phi_layout\":\"native_complex_dof\"";
+        }
+        modes +=
+            ",\"positive_frequency_pair_index\":" + std::to_string(index) +
+            "," +
+            mode_kinematics_json_fields(
+                {std::real(mode.eigenvalue), std::imag(mode.eigenvalue)},
+                request.phase_convention) +
+            ",\"relative_residual\":" +
+            format_double(mode.relative_residual) +
+            ",\"discarded_negative_frequency_partner\":true";
+        if (floquet_route && mode.floquet_descriptor_certified) {
+            modes += ",\"floquet_descriptor_certified\":true,"
+                "\"floquet_geometric_bc_certified\":false";
+            if (phi_available) {
+                modes += ",\"potential_representation\":\"doubled_real_split_complex_coefficients\"";
+            }
+            modes += ",\"magnetic_relative_residual\":" +
+                format_double(mode.floquet_magnetic_residual) +
+                ",\"potential_relative_residual\":" +
+                format_double(mode.floquet_potential_residual);
+        }
+        modes += "}";
+    }
+    modes += "]";
+    formatted.json = std::move(modes);
+    return formatted;
 }
 
 std::string generic_slepc_nev_refill_json_field(
@@ -2734,73 +2987,6 @@ double contour_max_relative_residual(
     return residual;
 }
 
-std::string format_contour_modes_json(
-    const std::vector<ContourIntervalMode> &accepted_modes,
-    FrequencyDomainPhaseConvention phase_convention)
-{
-    std::string modes = "[";
-    for (std::size_t index = 0; index < accepted_modes.size(); ++index) {
-        const ContourIntervalMode &mode = accepted_modes[index];
-        if (index != 0) {
-            modes += ",";
-        }
-        modes +=
-            "{\"mode_index\":" + std::to_string(index) +
-            ",\"positive_frequency_pair_index\":" +
-            std::to_string(index) +
-            "," +
-            mode_kinematics_json_fields(
-                {std::real(mode.eigenvalue), std::imag(mode.eigenvalue)},
-                phase_convention) +
-            ",\"relative_residual\":" +
-            format_double(mode.relative_residual) +
-            ",\"discarded_negative_frequency_partner\":true,"
-            "\"mode_vector_real\":[";
-        for (std::size_t component = 0; component < mode.mode_vector.size(); ++component) {
-            if (component != 0) {
-                modes += ",";
-            }
-            modes += format_double(std::real(mode.mode_vector[component]));
-        }
-        modes += "],\"mode_vector_imag\":[";
-        for (std::size_t component = 0; component < mode.mode_vector.size(); ++component) {
-            if (component != 0) {
-                modes += ",";
-            }
-            modes += format_double(std::imag(mode.mode_vector[component]));
-        }
-        modes += "]";
-        if (mode.floquet_descriptor_certified) {
-            modes += ",\"floquet_descriptor_certified\":true,"
-                "\"floquet_geometric_bc_certified\":false,"
-                "\"potential_representation\":\"doubled_real_split_complex_coefficients\","
-                "\"magnetic_relative_residual\":" +
-                format_double(mode.floquet_magnetic_residual) +
-                ",\"potential_relative_residual\":" +
-                format_double(mode.floquet_potential_residual);
-            for (int part = 0; part < 2; ++part) {
-                modes += part == 0 ? ",\"potential_vector_real\":[" :
-                    ",\"potential_vector_imag\":[";
-                for (std::size_t i = 0;
-                     i < mode.floquet_potential_real_split.size();
-                     ++i) {
-                    if (i != 0) {
-                        modes += ",";
-                    }
-                    modes += format_double(
-                        part == 0 ?
-                            mode.floquet_potential_real_split[i].real() :
-                            mode.floquet_potential_real_split[i].imag());
-                }
-                modes += "]";
-            }
-        }
-        modes += "}";
-    }
-    modes += "]";
-    return modes;
-}
-
 FrequencyDomainContractResult contour_descriptor_certification_error(
     const ModalEigenRequest &request,
     const ModalSolverSelection &selection,
@@ -3127,6 +3313,8 @@ FrequencyDomainContractResult solve_dense_production_modal_contour_payload(
             "certified" :
             "not_certified");
     FrequencyDomainContractResult result{};
+    const NativeModesJsonResult mode_transport = format_contour_modes_json(
+        contour_result.modes, request, result.modal_eigen);
     result.status = FrequencyDomainStatus::ok;
     result.error_message.clear();
     result.diagnostics_json =
@@ -3195,9 +3383,9 @@ FrequencyDomainContractResult solve_dense_production_modal_contour_payload(
         ",\"window_completeness\":\"" +
         completeness_status +
         "\",\"modes\":" +
-        format_contour_modes_json(
-            contour_result.modes, request.phase_convention) + "}";
+        mode_transport.json + "}";
     append_nearest_frequency_metadata(result.result_json, request, result.status);
+    finalize_mode_transport_result(result, mode_transport);
     result.artifact_manifest_path.clear();
     return result;
 }
@@ -3562,6 +3750,8 @@ FrequencyDomainContractResult solve_dense_production_modal_window_payload(
     result.diagnostics_json += "}";
     result.diagnostics_json =
         with_modal_request_diagnostics(result.diagnostics_json, request, result.status);
+    const NativeModesJsonResult mode_transport = format_slepc_modes_json(
+        accepted_modes, request, result.modal_eigen);
     result.result_json =
         "{\"schema_version\":\"frequency_domain_modal_result.v1\","
         "\"study_product\":\"modal_eigen\","
@@ -3583,7 +3773,8 @@ FrequencyDomainContractResult solve_dense_production_modal_window_payload(
         std::string(window_completeness_status) +
         "\","
         "\"modes\":" +
-        format_slepc_modes_json(accepted_modes, request.phase_convention) + "}";
+        mode_transport.json + "}";
+    finalize_mode_transport_result(result, mode_transport);
     result.artifact_manifest_path.clear();
     return result;
 }
@@ -3842,6 +4033,8 @@ FrequencyDomainContractResult solve_dense_production_modal_payload(
     append_optional_json_field(
         result.diagnostics_json,
         generic_slepc_nev_refill_json_field(slepc_result));
+    const NativeModesJsonResult mode_transport = format_slepc_modes_json(
+        slepc_result, request, result.modal_eigen);
     result.result_json =
         "{\"schema_version\":\"frequency_domain_modal_result.v1\","
         "\"study_product\":\"modal_eigen\","
@@ -3863,8 +4056,9 @@ FrequencyDomainContractResult solve_dense_production_modal_payload(
         ",\"shift_omega_rad_s\":" +
         format_double(shift.shift_omega_rad_s) +
         ",\"modes\":" +
-        format_slepc_modes_json(slepc_result, request.phase_convention) + "}";
+        mode_transport.json + "}";
     append_nearest_frequency_metadata(result.result_json, request, result.status);
+    finalize_mode_transport_result(result, mode_transport);
     result.artifact_manifest_path.clear();
     return result;
 }
@@ -4036,10 +4230,13 @@ FrequencyDomainContractResult solve_sparse_production_modal_payload(
             ",\"stop_reason\":\"" +
             std::string(stop_reason) +
             "\"";
+        NativeModesJsonResult mode_transport{};
         if (!generic_slepc_result) {
+            mode_transport = format_slepc_modes_json(
+                slepc_result, request, result.modal_eigen);
             result.result_json +=
                 ",\"modes\":" +
-                format_slepc_modes_json(slepc_result, request.phase_convention);
+                mode_transport.json;
         }
         result.result_json += "}";
         append_nearest_frequency_metadata(result.result_json, request, result.status);
@@ -4051,6 +4248,7 @@ FrequencyDomainContractResult solve_sparse_production_modal_payload(
             result.diagnostics_json, schur_action_diagnostic_json_field);
         append_optional_json_field(
             result.result_json, schur_action_diagnostic_json_field);
+        finalize_mode_transport_result(result, mode_transport);
         return result;
     }
 
@@ -4169,6 +4367,8 @@ FrequencyDomainContractResult solve_sparse_production_modal_payload(
     append_optional_json_field(
         result.diagnostics_json,
         generic_slepc_nev_refill_json_field(slepc_result));
+    const NativeModesJsonResult mode_transport = format_slepc_modes_json(
+        slepc_result, request, result.modal_eigen);
     result.result_json =
         "{\"schema_version\":\"frequency_domain_modal_result.v1\","
         "\"study_product\":\"modal_eigen\","
@@ -4190,7 +4390,7 @@ FrequencyDomainContractResult solve_sparse_production_modal_payload(
         ",\"shift_omega_rad_s\":" +
         format_double(shift.shift_omega_rad_s) +
         ",\"modes\":" +
-        format_slepc_modes_json(slepc_result, request.phase_convention) + "}";
+        mode_transport.json + "}";
     append_nearest_frequency_metadata(result.result_json, request, result.status);
     append_optional_json_field(
         result.diagnostics_json, shifted_ksp_diagnostics_json_fields);
@@ -4200,6 +4400,7 @@ FrequencyDomainContractResult solve_sparse_production_modal_payload(
         result.diagnostics_json, schur_action_diagnostic_json_field);
     append_optional_json_field(
         result.result_json, schur_action_diagnostic_json_field);
+    finalize_mode_transport_result(result, mode_transport);
     result.artifact_manifest_path.clear();
     return result;
 }
@@ -4553,12 +4754,16 @@ FrequencyDomainContractResult solve_sparse_production_modal_window_payload(
             "\"window_completeness\":\"solver_error\","
             "\"failure_reason\":\"" +
             escape_json_string(failure_reason) + "\"";
+        NativeModesJsonResult mode_transport{};
         if (native_floquet_sparse) {
+            mode_transport = format_slepc_modes_json(
+                accepted_modes, request, result.modal_eigen);
             result.result_json +=
                 ",\"modes\":" +
-                format_slepc_modes_json(accepted_modes, request.phase_convention);
+                mode_transport.json;
         }
         result.result_json += "}";
+        finalize_mode_transport_result(result, mode_transport);
         return result;
     }
     if (accepted_modes.empty()) {
@@ -4730,6 +4935,8 @@ FrequencyDomainContractResult solve_sparse_production_modal_window_payload(
     result.diagnostics_json += "}";
     result.diagnostics_json =
         with_modal_request_diagnostics(result.diagnostics_json, request, result.status);
+    const NativeModesJsonResult mode_transport = format_slepc_modes_json(
+        accepted_modes, request, result.modal_eigen);
     result.result_json =
         "{\"schema_version\":\"frequency_domain_modal_result.v1\","
         "\"study_product\":\"modal_eigen\","
@@ -4757,7 +4964,8 @@ FrequencyDomainContractResult solve_sparse_production_modal_window_payload(
         ",\"window_completeness\":\"" +
         std::string(window_completeness_status) +
         "\",\"modes\":" +
-        format_slepc_modes_json(accepted_modes, request.phase_convention) + "}";
+        mode_transport.json + "}";
+    finalize_mode_transport_result(result, mode_transport);
     result.artifact_manifest_path.clear();
     return result;
 }
