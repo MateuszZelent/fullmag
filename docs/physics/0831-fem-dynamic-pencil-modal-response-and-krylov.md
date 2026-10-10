@@ -130,8 +130,44 @@ No modal, driven, reduced, CPU, or GPU adapter may own a different `L`,
 `B_alpha`, `A_omega`, or drive sign. The real-split representation is an
 algebraic realization of this complex contract, not another convention.
 
+### RF implementation boundary (R2 source review)
+
+The torque expression for `b` above is the required physical contract, not
+a claim that every existing driven adapter implements it. The inspected
+`crates/fullmag-runner/src/frequency_response.rs` +
+`build_native_production_cpu_payload` constructs the direct tangent projection
+of the authored RF field in A/m.
+`backends/fem/cpu/frequency_domain/production_cpu_driven_response.cpp` +
+`solve_production_cpu_driven_response` copies the supplied drive into its RHS.
+These operations alone do not establish the gyromagnetic cross-product and
+row-mass conversion required by the stated dynamic pencil. The shared-domain
+modal assembly request also carries no RF RHS. Consequently RF sign, SI
+conversion and direct-response parity remain open P7 gates. Correcting the
+unit table does not qualify the current RF implementation or change runtime
+capability.
+
 (symbols-and-si-units)=
 ### 2.2 Typed symbols and SI units
+
+The operator owner determines the row normalization. The local LLG/JVP
+realization has a dynamic operator in inverse seconds and a dimensionless
+frequency mass. A volume-tested dynamic weak form instead has magnetic rows
+in cubic metres per second and mass in cubic metres. The shared-domain
+Poisson/airbox modal owner assembles an energy Hessian in joules and a
+gyrotropic matrix in joule seconds. These are compatible generalized-pencil
+representations; their matrices and RF right-hand sides are not interchangeable
+without the corresponding row transformation. The geometric overlap mass
+remains a separate matrix in cubic metres.
+
+The exchange and constrained-field energy rows are owned by
+`backends/fem/cpu/frequency_domain/operators/poisson_airbox_shared_domain.cpp`
++ `assemble_native_magnetic_a_qq`; the shared-domain gyrotropic weight is
+assembled by `assemble_poisson_airbox_shared_domain_payload`. Local precession
+and frequency mass are owned by `backends/fem/src/frequency_domain/operator_terms.cpp`
++ `apply_tangent_precession_operator` and `apply_tangent_frequency_mass_operator`.
+The generic pencil algebra alone does not establish weak integration or SI
+normalization.
+
 
 | Field or symbol | Meaning | SI unit / allowed representation |
 |---|---|---|
@@ -154,16 +190,16 @@ algebraic realization of this complex contract, not another convention.
 | $f$ | cyclic frequency, $f=\operatorname{Re}(\omega)/(2\pi)$ | $\mathrm{Hz}$ |
 | $\lambda$, $\sigma$ | generalized eigenvalue and complex spectral shift | $\mathrm{s^{-1}}$ |
 | $\sigma_{\mathrm{R}}$, $\sigma_{\mathrm{I}}$ | real and imaginary parts of the spectral shift | $\mathrm{s^{-1}}$, $\mathrm{rad\,s^{-1}}$ |
-| $L$, $K$, $A_{qq}$, $A_{qq}^{\mathrm{full}}$ | dynamic, energy-Hessian and full-space magnetic restoring operators | $\mathrm{m^3\,s^{-1}}$ |
-| $B_\alpha$, $B_{qq}$, $B_{qq}^{\mathrm{full}}$, $G$ | damped gyrotropic/mass operators | $\mathrm{m^3}$ |
-| $A_\omega$ | driven harmonic operator $\mathrm{i}\omega B_\alpha-L$ | $\mathrm{m^3\,s^{-1}}$ |
-| $b$ | projected tangent RF drive | $\mathrm{m^3\,s^{-1}}$ |
+| $L$, $K$, $A_{qq}$, $A_{qq}^{\mathrm{full}}$ | Owner-scoped restoring operators; shared-domain $L=K$ is an energy Hessian | Local dynamic $L$: $\mathrm{s^{-1}}$; volume-tested dynamic $L$: $\mathrm{m^3\,s^{-1}}$; shared-domain $K$, $A_{qq}$, $A_{qq}^{\mathrm{full}}$: $\mathrm{J}$ |
+| $B_\alpha$, $B_{qq}$, $B_{qq}^{\mathrm{full}}$, $G$ | Owner-scoped frequency/gyrotropic mass; native damped energy mass remains proposed | Local: $1$; volume-tested dynamic: $\mathrm{m^3}$; shared-domain energy: $\mathrm{J\,s}$ |
+| $A_\omega$ | driven harmonic operator $\mathrm{i}\omega B_\alpha-L$, with the same owner normalization | Local: $\mathrm{s^{-1}}$; volume-tested dynamic: $\mathrm{m^3\,s^{-1}}$; energy: $\mathrm{J}$ |
+| $b$ | Required RF right-hand side in the same row normalization as $A_\omega q$; actual RF conversion remains unverified | Local: $\mathrm{s^{-1}}$; volume-tested dynamic: $\mathrm{m^3\,s^{-1}}$; energy: $\mathrm{J}$ |
 | $\phi$, $\phi_r$, $\delta\phi$ | full and reduced scalar-potential coefficient vectors and perturbation | $\mathrm{A}$ |
-| $A_{q\phi}$, $A_{q\phi}^{\mathrm{full}}$ | full/reduced potential-to-magnetic coupling blocks | $\mathrm{m^3\,A^{-1}\,s^{-1}}$ |
+| $A_{q\phi}$, $A_{q\phi}^{\mathrm{full}}$ | full/reduced potential-to-magnetic coupling blocks, with owner-scoped magnetic rows | Volume-tested dynamic: $\mathrm{m^3\,A^{-1}\,s^{-1}}$; shared-domain energy: $\mathrm{J\,A^{-1}}$ |
 | $A_{\phi q}$, $A_{\phi q}^{\mathrm{full}}$ | full/reduced magnetic-to-potential coupling blocks | $\mathrm{A\,m}$ |
 | $P$, $P^{\mathrm{full}}$ | reduced and full scalar Poisson blocks | $\mathrm{m}$ |
 | $c$, $\eta$ | mean-zero gauge vector and Lagrange multiplier | $\mathrm{m^3}$, $\mathrm{A\,m^{-2}}$ |
-| $r_q$, $r_q^{\mathrm{full}}$, $r_\phi$, $r_\phi^{\mathrm{full}}$, $r_g$ | reduced/full magnetic, reduced/full scalar and gauge residuals | $\mathrm{m^3\,s^{-1}}$, $\mathrm{A\,m}$, $\mathrm{A\,m^3}$ |
+| $r_q$, $r_q^{\mathrm{full}}$, $r_\phi$, $r_\phi^{\mathrm{full}}$, $r_g$ | reduced/full magnetic, scalar and gauge residuals | Magnetic rows: local $\mathrm{s^{-1}}$, volume-tested dynamic $\mathrm{m^3\,s^{-1}}$, shared-domain energy $\mathrm{J}$; scalar $\mathrm{A\,m}$; gauge $\mathrm{A\,m^3}$ |
 | $\epsilon_{\phi,\mathrm{probe}}$ | maximum componentwise original potential-equation backward error in the K0 probe | $1$ |
 | $i$ | row index of original scalar potential equation | $1$ |
 | $\epsilon_q$, $\epsilon_\phi$, $\epsilon_{q,\mathrm{proj}}$, $\epsilon_{\phi,\mathrm{proj}}$, $\epsilon_g$, $\epsilon_{\mathrm{full}}$ | normalized reduced, projected full-block and gauge residuals | $1$ |
@@ -5154,3 +5190,11 @@ fixtures. SOURCE nie jest dowodem odczytu ani kwalifikacji fizyki.
 |---|---|---|---|
 | source-live-pmat-shift-query-r2 | backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp | PetscErrorCode prepare_candidate_owned_pmat_copy_and_lu | Query live PCLU shift configuration through pinned public getters before graph failure; never infer factor perturbation. |
 | source-live-pmat-json-plan | backends/fem/cpu/frequency_domain/production_cpu_modal_eigen.cpp | std::string live_pc_observation_json | Preserve optional measured configuration and explicit unavailable/error states. |
+
+
+| Source ID | Path | Symbol | Responsibility |
+|---|---|---|---|
+| source-r2-local-precession-units | backends/fem/src/frequency_domain/operator_terms.cpp | FrequencyDomainStatus apply_tangent_precession_operator | Local gamma-times-field generator normalization; source proof only |
+| source-r2-local-frequency-mass-units | backends/fem/src/frequency_domain/operator_terms.cpp | FrequencyDomainStatus apply_tangent_frequency_mass_operator | Dimensionless local Gilbert frequency mass, distinct from energy and geometric mass |
+| source-r2-rf-payload-conversion-gap | crates/fullmag-runner/src/frequency_response.rs | build_native_production_cpu_payload | Direct tangent RF field projection does not establish required torque and weak-row conversion |
+| source-r2-rf-rhs-copy-gap | backends/fem/cpu/frequency_domain/production_cpu_driven_response.cpp | FrequencyDomainStatus solve_production_cpu_driven_response | Supplied drive copied to RHS; physical RF conversion and parity remain unverified |

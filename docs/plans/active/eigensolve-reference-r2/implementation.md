@@ -403,3 +403,26 @@ Root i niezależny source review: PASS po poprawce źródła liczników PCApply
 (rodzic live_pc_observation; gettery w borrowed_pmat_copy). Faktyczne wejście
 do SLEPc, oczekiwany hard failure i wykonanie getterów pozostają NOT VERIFIED
 do hosted CTest. Nie zastępuje to rozwiązania problemu KSP ani kwalifikacji P2.
+
+
+## P3/P7 — korekta jednostek właścicieli i potwierdzona luka RF
+
+Kanoniczna nota 0831 rozdziela lokalny generator LLG (1/s, masa
+bezwymiarowa), objętościową formę dynamiczną (m3/s, m3) i shared-domain
+hesjan energii (J, Js). Sprzężenie potencjału do wiersza energii ma J/A;
+magnetyczny residual tego właściciela ma J. Geometryczna masa overlap
+w m3 pozostaje oddzielna. Root i niezależny source review: PASS;
+walidator mapy naukowej: PASS. Korekta nie zmienia macierzy runtime.
+
+Nowy podpunkt P7: obecny producer RF projektuje bezpośrednio pole w A/m
+na tangent frame, a driven solver kopiuje przekazaną projekcję do RHS.
+Nie wykazano realizacji wymaganego torque i przekształcenia wierszy SI.
+Przed kwalifikacją RF należy poprawić konwersję u konkretnego właściciela
+i potwierdzić circular/elliptic macrospin, amplitudę, fazę, znak oraz
+direct-response parity. Shared-domain modal assembler nie ma obecnie RF
+RHS. Nie zmieniamy wejściowego raportu R2 ani nie deklarujemy, że ta luka
+została naprawiona tylko przez aktualizację dokumentacji.
+
+P2 getter fixture jest na remote `b8675a329e34db1ea491a5b96aa9410cdca66e63`;
+hosted floquet-count-slepc [38080625714](https://github.com/MateuszZelent/fullmag/actions/runs/38080625714)
+trwa, oczekiwany pomiar pozostaje NOT VERIFIED.

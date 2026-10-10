@@ -932,26 +932,26 @@
     {
       "id": "restoring_operators",
       "latex": "$L$, $K$, $A_{qq}$, $A_{qq}^{\\mathrm{full}}$",
-      "meaning": "dynamic, energy-Hessian and full-space magnetic restoring operators",
-      "si_unit": "$\\mathrm{m^3\\,s^{-1}}$"
+      "meaning": "Owner-scoped restoring operators; shared-domain $L=K$ is an energy Hessian",
+      "si_unit": "Local dynamic $L$: $\\mathrm{s^{-1}}$; volume-tested dynamic $L$: $\\mathrm{m^3\\,s^{-1}}$; shared-domain $K$, $A_{qq}$, $A_{qq}^{\\mathrm{full}}$: $\\mathrm{J}$"
     },
     {
       "id": "mass_operators",
       "latex": "$B_\\alpha$, $B_{qq}$, $B_{qq}^{\\mathrm{full}}$, $G$",
-      "meaning": "damped gyrotropic/mass operators",
-      "si_unit": "$\\mathrm{m^3}$"
+      "meaning": "Owner-scoped frequency/gyrotropic mass; native damped energy mass remains proposed",
+      "si_unit": "Local: $1$; volume-tested dynamic: $\\mathrm{m^3}$; shared-domain energy: $\\mathrm{J\\,s}$"
     },
     {
       "id": "harmonic_operator",
       "latex": "$A_\\omega$",
-      "meaning": "driven harmonic operator $\\mathrm{i}\\omega B_\\alpha-L$",
-      "si_unit": "$\\mathrm{m^3\\,s^{-1}}$"
+      "meaning": "driven harmonic operator $\\mathrm{i}\\omega B_\\alpha-L$, with the same owner normalization",
+      "si_unit": "Local: $\\mathrm{s^{-1}}$; volume-tested dynamic: $\\mathrm{m^3\\,s^{-1}}$; energy: $\\mathrm{J}$"
     },
     {
       "id": "drive",
       "latex": "$b$",
-      "meaning": "projected tangent RF drive",
-      "si_unit": "$\\mathrm{m^3\\,s^{-1}}$"
+      "meaning": "Required RF right-hand side in the same row normalization as $A_\\omega q$; actual RF conversion remains unverified",
+      "si_unit": "Local: $\\mathrm{s^{-1}}$; volume-tested dynamic: $\\mathrm{m^3\\,s^{-1}}$; energy: $\\mathrm{J}$"
     },
     {
       "id": "potential",
@@ -962,8 +962,8 @@
     {
       "id": "Aqphi",
       "latex": "$A_{q\\phi}$, $A_{q\\phi}^{\\mathrm{full}}$",
-      "meaning": "full/reduced potential-to-magnetic coupling blocks",
-      "si_unit": "$\\mathrm{m^3\\,A^{-1}\\,s^{-1}}$"
+      "meaning": "full/reduced potential-to-magnetic coupling blocks, with owner-scoped magnetic rows",
+      "si_unit": "Volume-tested dynamic: $\\mathrm{m^3\\,A^{-1}\\,s^{-1}}$; shared-domain energy: $\\mathrm{J\\,A^{-1}}$"
     },
     {
       "id": "Aphiq",
@@ -986,8 +986,8 @@
     {
       "id": "residuals",
       "latex": "$r_q$, $r_q^{\\mathrm{full}}$, $r_\\phi$, $r_\\phi^{\\mathrm{full}}$, $r_g$",
-      "meaning": "reduced/full magnetic, reduced/full scalar and gauge residuals",
-      "si_unit": "$\\mathrm{m^3\\,s^{-1}}$, $\\mathrm{A\\,m}$, $\\mathrm{A\\,m^3}$"
+      "meaning": "reduced/full magnetic, scalar and gauge residuals",
+      "si_unit": "Magnetic rows: local $\\mathrm{s^{-1}}$, volume-tested dynamic $\\mathrm{m^3\\,s^{-1}}$, shared-domain energy $\\mathrm{J}$; scalar $\\mathrm{A\\,m}$; gauge $\\mathrm{A\\,m^3}$"
     },
     {
       "id": "normalized_residuals",
@@ -3911,6 +3911,30 @@
       "path": "backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp",
       "symbol": "PetscErrorCode prepare_candidate_owned_pmat_copy_and_lu",
       "responsibility": "Query live PCLU shift configuration through pinned PETSc public getters before hard EPS error; preserve null/error and never infer actual factor perturbation; execution NOT VERIFIED."
+    },
+    {
+      "id": "source-r2-local-precession-units",
+      "path": "backends/fem/src/frequency_domain/operator_terms.cpp",
+      "symbol": "FrequencyDomainStatus apply_tangent_precession_operator",
+      "responsibility": "Local gamma-times-field generator normalization; source proof only"
+    },
+    {
+      "id": "source-r2-local-frequency-mass-units",
+      "path": "backends/fem/src/frequency_domain/operator_terms.cpp",
+      "symbol": "FrequencyDomainStatus apply_tangent_frequency_mass_operator",
+      "responsibility": "Dimensionless local Gilbert frequency mass, distinct from energy and geometric mass"
+    },
+    {
+      "id": "source-r2-rf-payload-conversion-gap",
+      "path": "crates/fullmag-runner/src/frequency_response.rs",
+      "symbol": "build_native_production_cpu_payload",
+      "responsibility": "Direct tangent RF field projection does not establish required torque and weak-row conversion"
+    },
+    {
+      "id": "source-r2-rf-rhs-copy-gap",
+      "path": "backends/fem/cpu/frequency_domain/production_cpu_driven_response.cpp",
+      "symbol": "FrequencyDomainStatus solve_production_cpu_driven_response",
+      "responsibility": "Supplied drive copied to RHS; physical RF conversion and parity remain unverified"
     }
   ],
   "public_api": {
