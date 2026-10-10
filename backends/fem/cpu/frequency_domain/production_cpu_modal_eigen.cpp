@@ -2,6 +2,7 @@
 #include "frequency_domain/modal_eigen_solver.hpp"
 
 #include "cpu/frequency_domain/contour_interval_solver.hpp"
+#include "cpu/frequency_domain/floquet_k_classification.hpp"
 #include "cpu/frequency_domain/mode_deduplication.hpp"
 #include "cpu/frequency_domain/modal/floquet_modal_solver.hpp"
 #include "cpu/frequency_domain/slepc_modal_eigen.hpp"
@@ -1266,27 +1267,41 @@ std::string with_modal_request_diagnostics(
         request.operator_request.operator_diagnostics_json);
 }
 
-bool modal_request_is_nonzero_k_floquet(const ModalEigenRequest &request) noexcept
+floquet_k::Classification modal_request_floquet_k_classification(
+    const ModalEigenRequest &request) noexcept
 {
+    if (request.operator_request.spin_wave_bc_kind == nullptr ||
+        std::strcmp(request.operator_request.spin_wave_bc_kind, "floquet") != 0) {
+        return floquet_k::Classification::invalid;
+    }
+
     const double *k_vector = request.operator_request.k_vector_rad_m;
     int k_vector_len = request.operator_request.k_vector_len;
+    const bool has_explicit_k_vector = request.has_floquet_k_vector ||
+        k_vector_len != 0;
+    if (!has_explicit_k_vector) {
+        return floquet_k::Classification::gamma;
+    }
     if ((k_vector == nullptr || k_vector_len <= 0) &&
         request.has_floquet_k_vector) {
         k_vector = request.floquet_k_vector_rad_per_m;
         k_vector_len = 3;
     }
-    if (request.operator_request.spin_wave_bc_kind == nullptr ||
-        std::strcmp(request.operator_request.spin_wave_bc_kind, "floquet") != 0 ||
-        k_vector == nullptr ||
-        k_vector_len <= 0) {
-        return false;
-    }
-    for (int index = 0; index < k_vector_len; ++index) {
-        if (std::abs(k_vector[index]) > 0.0) {
-            return true;
-        }
-    }
-    return false;
+    return floquet_k::classify_components(k_vector, k_vector_len);
+}
+
+bool modal_request_is_nonzero_k_floquet(const ModalEigenRequest &request) noexcept
+{
+    return modal_request_floquet_k_classification(request) ==
+        floquet_k::Classification::nonzero;
+}
+
+bool modal_request_has_invalid_floquet_k(const ModalEigenRequest &request) noexcept
+{
+    return request.operator_request.spin_wave_bc_kind != nullptr &&
+        std::strcmp(request.operator_request.spin_wave_bc_kind, "floquet") == 0 &&
+        modal_request_floquet_k_classification(request) ==
+            floquet_k::Classification::invalid;
 }
 
 bool modal_request_has_bloch_floquet_tangent_operator_payload(
@@ -1974,6 +1989,26 @@ FrequencyDomainContractResult dense_payload_validation_error(
         "\"status\":\"validation_error\","
         "\"accepted_mode_count\":0}";
     append_nearest_frequency_metadata(result.result_json, request, result.status);
+    return result;
+}
+
+FrequencyDomainContractResult floquet_wavevector_validation_error() noexcept
+{
+    FrequencyDomainContractResult result{};
+    result.status = FrequencyDomainStatus::validation_error;
+    result.error_message =
+        "native FEM modal_eigen Floquet wavevector must contain exactly three finite components";
+    // Do not serialize the invalid raw vector: it may contain NaN/Inf or have
+    // an invalid length, and the caller-owned pointer must not be traversed.
+    result.diagnostics_json =
+        "{\"schema_version\":\"frequency_domain_modal_diagnostics.v1\","
+        "\"study_product\":\"modal_eigen\",\"status\":\"validation_error\","
+        "\"complete\":false,\"execution_lane\":\"production_cpu\","
+        "\"reason\":\"invalid_floquet_wavevector\"}";
+    result.result_json =
+        "{\"schema_version\":\"frequency_domain_modal_result.v1\","
+        "\"study_product\":\"modal_eigen\",\"status\":\"validation_error\","
+        "\"accepted_mode_count\":0}";
     return result;
 }
 
@@ -4568,6 +4603,9 @@ FrequencyDomainContractResult production_cpu_modal_eigen_unavailable(
     const ModalEigenRequest &request,
     const FloquetPotentialReconstruction *reconstruction) noexcept
 {
+    if (modal_request_has_invalid_floquet_k(request)) {
+        return floquet_wavevector_validation_error();
+    }
     FrequencyDomainContractResult result{};
     result.status = FrequencyDomainStatus::unavailable;
     if (dynamic_demag_k_payload_is_declared(request) &&

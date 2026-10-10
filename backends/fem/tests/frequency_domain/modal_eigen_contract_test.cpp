@@ -4614,7 +4614,7 @@ void modal_frequency_window_production_payload_contour_accepts_multiple_modes()
     fullmag_fem_frequency_domain_result_destroy(&result);
 }
 
-void modal_shift_invert_payload_can_be_assembled_from_mfem_operator()
+void modal_gamma_cabi_route_preserves_authored_k()
 {
     namespace fd = fullmag::fem::frequency_domain;
 
@@ -4741,42 +4741,169 @@ void modal_shift_invert_payload_can_be_assembled_from_mfem_operator()
         payload_result.linearized_pencil_gamma0_m_per_a_s;
     request.operator_request.operator_diagnostics_json =
         "{\"operator_family\":\"mfem_linearized_llg\",\"payload_kind\":\"dense_linearized_mfem_operator\"}";
-    constexpr double k_vector_rad_m[] = {0.0, 0.0, 0.0};
+    request.operator_request.spin_wave_bc_kind = "floquet";
+    // Each component lies on the closed Gamma boundary although the vector norm exceeds it.
+    constexpr double k_vector_rad_m[] = {1.0e-12, -1.0e-12, 1.0e-12};
     request.operator_request.k_vector_rad_m = k_vector_rad_m;
     request.operator_request.k_vector_len = 3;
 
     FullmagFemFrequencyDomainResult result = fullmag_fem_modal_eigen_solve(&request);
+    const std::string diagnostics_json = result.diagnostics_json != nullptr
+        ? result.diagnostics_json
+        : "";
 #if FULLMAG_FEM_WITH_SLEPC
     check(result.status == FULLMAG_FEM_FD_OK,
           "MFEM-assembled modal payload should solve through production SLEPc path");
-    check(contains(result.diagnostics_json, "\"execution_lane\":\"production_cpu\""),
+    check(contains(diagnostics_json.c_str(), "\"execution_lane\":\"production_cpu\""),
           "MFEM-assembled modal payload diagnostics report production lane");
-    check(contains(result.diagnostics_json, payload_result.operator_digest),
+    check(contains(diagnostics_json.c_str(), payload_result.operator_digest),
           "magnetic modal route publishes the payload's canonical pencil digest");
     check(contains(
-              result.diagnostics_json,
+              diagnostics_json.c_str(),
               "\"linearized_dynamic_pencil_gamma0_m_per_a_s\":1"),
           "magnetic modal route reports payload-sourced canonical pencil metadata");
-    check(contains(result.diagnostics_json, "\"solver_family\":\"slepc_multi_shift_invert_production_cpu_dense\""),
+    check(contains(diagnostics_json.c_str(), "\"solver_family\":\"slepc_multi_shift_invert_production_cpu_dense\""),
           "MFEM-assembled modal payload diagnostics report production multi-shift SLEPc family");
-    check(contains(result.diagnostics_json, "\"solver_model\":\"slepc_multi_shift_invert_production_cpu_dense\""),
-          "MFEM-assembled modal payload diagnostics publish production multi-shift solver model");
-    check(contains(result.diagnostics_json, "\"deduplication_mass_matrix\":\"provided\""),
+    check(contains(diagnostics_json.c_str(), "\"solver_model\":\"slepc_multi_shift_invert_production_cpu_dense\""),
+          "a vector on the componentwise Gamma boundary routes through the production K0 modal solver");
+    check(contains(diagnostics_json.c_str(), "\"deduplication_mass_matrix\":\"provided\""),
           "MFEM-assembled modal payload diagnostics report provided tangent mass");
     const double frequency_hz =
         extract_json_number(
             result.result_json,
             "\"frequency_hz\":",
-            "modal_shift_invert_payload_can_be_assembled_from_mfem_operator");
+            "modal_gamma_cabi_route_preserves_authored_k");
     check(std::abs(frequency_hz - 0.15915494309189535) < 1.0e-10,
           "MFEM-assembled modal payload frequency matches one radian per second");
 #else
     check(result.status == FULLMAG_FEM_FD_UNAVAILABLE,
           "MFEM-assembled modal payload remains unavailable without SLEPc");
 #endif
-    check(contains(result.diagnostics_json, "\"k_vector_rad_m\":[0,0,0]"),
-          "MFEM-assembled modal payload diagnostics preserve explicit k-vector");
+    check(!contains(
+              diagnostics_json.c_str(),
+              "\"production_cpu_rejection_reason\":\"production_cpu_modal_nonzero_k_floquet_operator_missing\""),
+          "a Gamma-class C ABI vector does not request the nonzero-k Floquet operator");
+    const std::string k_vector_marker = "\"k_vector_rad_m\":[";
+    const std::size_t k_vector_position =
+        diagnostics_json.find(k_vector_marker);
+    bool preserved_authored_k_vector = false;
+    if (k_vector_position != std::string::npos) {
+        const char *components = diagnostics_json.c_str() +
+            k_vector_position + k_vector_marker.size();
+        char *kx_end = nullptr;
+        const double kx = std::strtod(components, &kx_end);
+        bool parsed_components = kx_end != components && *kx_end == ',';
+        double ky = 0.0;
+        double kz = 0.0;
+        if (parsed_components) {
+            const char *ky_begin = kx_end + 1;
+            char *ky_end = nullptr;
+            ky = std::strtod(ky_begin, &ky_end);
+            parsed_components = ky_end != ky_begin && *ky_end == ',';
+            if (parsed_components) {
+                const char *kz_begin = ky_end + 1;
+                char *kz_end = nullptr;
+                kz = std::strtod(kz_begin, &kz_end);
+                parsed_components = kz_end != kz_begin && *kz_end == ']';
+            }
+        }
+        preserved_authored_k_vector = parsed_components &&
+            kx == k_vector_rad_m[0] && ky == k_vector_rad_m[1] &&
+            kz == k_vector_rad_m[2];
+    }
+    check(preserved_authored_k_vector,
+          "public C ABI diagnostics preserve all authored Floquet k components exactly");
+    check(contains(diagnostics_json.c_str(), "\"k_vector_len\":3"),
+          "public C ABI diagnostics preserve the authored k-vector length");
     fullmag_fem_frequency_domain_result_destroy(&result);
+
+    const double empty_slice_backing[] = {2.0e-12, 0.0, 0.0};
+    FullmagFemModalEigenRequest empty_raw_k_request = request;
+    empty_raw_k_request.operator_request.k_vector_rad_m = empty_slice_backing;
+    empty_raw_k_request.operator_request.k_vector_len = 0;
+    FullmagFemFrequencyDomainResult empty_raw_k_result =
+        fullmag_fem_modal_eigen_solve(&empty_raw_k_request);
+    const std::string empty_raw_diagnostics =
+        empty_raw_k_result.diagnostics_json != nullptr
+            ? empty_raw_k_result.diagnostics_json
+            : "";
+#if FULLMAG_FEM_WITH_SLEPC
+    check(empty_raw_k_result.status == FULLMAG_FEM_FD_OK,
+          "a zero-count raw C ABI k slice remains the legacy implicit-Gamma route");
+#else
+    check(empty_raw_k_result.status == FULLMAG_FEM_FD_UNAVAILABLE,
+          "a zero-count raw C ABI k slice remains unavailable only for missing SLEPc");
+#endif
+    check(!contains(
+              empty_raw_diagnostics.c_str(),
+              "\"production_cpu_rejection_reason\":\"production_cpu_modal_nonzero_k_floquet_operator_missing\""),
+          "a zero-count raw C ABI pointer is ignored rather than routed as nonzero-k");
+    check(empty_raw_diagnostics.find("\"k_vector_rad_m\"") == std::string::npos,
+          "an omitted zero-count C ABI slice is not serialized as a k-vector");
+    fullmag_fem_frequency_domain_result_destroy(&empty_raw_k_result);
+}
+
+void production_cpu_modal_eigen_direct_entry_validates_floquet_k()
+{
+    const double malformed_k[] = {1.0, 0.0};
+    const double nonfinite_k[] = {
+        std::numeric_limits<double>::quiet_NaN(), 0.0, 0.0};
+    struct InvalidFloquetVectorCase {
+        const double *values;
+        int length;
+    };
+    const InvalidFloquetVectorCase invalid_cases[] = {
+        {malformed_k, 2},
+        {nonfinite_k, 3},
+        {nullptr, 3},
+        {malformed_k, -1},
+    };
+    for (const auto &invalid_case : invalid_cases) {
+        fd::ModalEigenRequest invalid_request{};
+        invalid_request.operator_request.spin_wave_bc_kind = "floquet";
+        invalid_request.operator_request.k_vector_rad_m = invalid_case.values;
+        invalid_request.operator_request.k_vector_len = invalid_case.length;
+        const fd::FrequencyDomainContractResult invalid_result =
+            fd::production_cpu_modal_eigen_unavailable(invalid_request, nullptr);
+        check(invalid_result.status == fd::FrequencyDomainStatus::validation_error,
+              "direct production CPU entry rejects every malformed declared Floquet vector");
+        check(invalid_result.diagnostics_json.find("\"k_vector_rad_m\"") ==
+                  std::string::npos &&
+                  invalid_result.diagnostics_json.find("nan") == std::string::npos,
+              "invalid Floquet k errors omit the raw vector so NaN cannot break JSON");
+    }
+
+    const double empty_slice_backing[] = {2.0e-12, 0.0, 0.0};
+    fd::ModalEigenRequest empty_raw_request{};
+    empty_raw_request.operator_request.spin_wave_bc_kind = "floquet";
+    empty_raw_request.operator_request.k_vector_rad_m = empty_slice_backing;
+    empty_raw_request.operator_request.k_vector_len = 0;
+    const fd::FrequencyDomainContractResult empty_raw_result =
+        fd::production_cpu_modal_eigen_unavailable(empty_raw_request, nullptr);
+    check(empty_raw_result.status == fd::FrequencyDomainStatus::unavailable &&
+              empty_raw_result.diagnostics_json.find(
+                  "production_cpu_modal_nonzero_k_floquet_operator_missing") ==
+                  std::string::npos,
+          "direct production entry treats a nonnull zero-count raw slice as implicit Gamma");
+
+    fd::ModalEigenRequest empty_raw_with_fixed = empty_raw_request;
+    empty_raw_with_fixed.has_floquet_k_vector = true;
+    empty_raw_with_fixed.floquet_k_vector_rad_per_m[0] = 2.0e-12;
+    empty_raw_with_fixed.floquet_k_vector_rad_per_m[1] = 0.0;
+    empty_raw_with_fixed.floquet_k_vector_rad_per_m[2] = 0.0;
+    const fd::FrequencyDomainContractResult fixed_fallback_result =
+        fd::production_cpu_modal_eigen_unavailable(empty_raw_with_fixed, nullptr);
+    check(fixed_fallback_result.status == fd::FrequencyDomainStatus::unavailable &&
+              fixed_fallback_result.diagnostics_json.find(
+                  "production_cpu_modal_nonzero_k_floquet_operator_missing") !=
+                  std::string::npos,
+          "a zero-count raw view selects the declared fixed vector when present");
+
+    fd::ModalEigenRequest legacy_non_floquet_request{};
+    const fd::FrequencyDomainContractResult legacy_result =
+        fd::production_cpu_modal_eigen_unavailable(legacy_non_floquet_request, nullptr);
+    check(legacy_result.status == fd::FrequencyDomainStatus::unavailable,
+          "a valid non-Floquet legacy request remains on its existing production route");
 }
 
 void modal_dynamic_demag_materialization_preserves_legacy_s_sign()
@@ -7569,7 +7696,8 @@ int main(int argc, char **argv)
     frequency_window_wide_auto_selects_contour_interval_solver();
     modal_frequency_window_production_payload_contour_accepts_multiple_modes();
     modal_floquet_shared_domain_original_descriptor_certification_is_fail_closed();
-    modal_shift_invert_payload_can_be_assembled_from_mfem_operator();
+    modal_gamma_cabi_route_preserves_authored_k();
+    production_cpu_modal_eigen_direct_entry_validates_floquet_k();
     modal_dynamic_demag_materialization_preserves_legacy_s_sign();
     modal_shift_invert_dense_full_2x2_payload_accepts_k0_kittel_macrospin();
     modal_shift_invert_sparse_payload_can_be_assembled_from_mfem_operator();

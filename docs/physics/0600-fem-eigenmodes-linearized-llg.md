@@ -135,6 +135,28 @@ without MFEM must prove:
 
 ## Nonzero-k Floquet dynamic demag-k payload boundary
 
+For native FEM CPU admission, the existing Rust convention is the componentwise bound below. The selected vector must contain exactly three finite components.
+
+```{math}
+:label: eq-0600-floquet-gamma-admission
+\operatorname{class}_{\Gamma}(\mathbf{k}) =
+\begin{cases}
+\mathrm{invalid}, & \exists i \in \{x,y,z\}: \neg \operatorname{finite}(k_i),\\
+\Gamma, & \max_{i \in \{x,y,z\}} |k_i| \le \varepsilon_{\Gamma,\mathrm{comp}},\\
+\mathrm{nonzero}, & \max_{i \in \{x,y,z\}} |k_i| > \varepsilon_{\Gamma,\mathrm{comp}},
+\end{cases}
+\qquad
+\varepsilon_{\Gamma,\mathrm{comp}} = 10^{-12}\,\mathrm{rad\,m^{-1}}.
+```
+
+Here $i$ indexes $x$, $y$, and $z$; $\operatorname{finite}$ tests one IEEE floating-point component, and $\max$ takes the largest component magnitude. The boundary is closed, so both signed values at the threshold classify as $\Gamma$. Three components each below the threshold remain $\Gamma$ even when their Euclidean norm exceeds the threshold.
+
+Payload selection retains the existing request contract: a nonnull raw pointer with a positive length takes precedence; a null pointer or nonpositive raw length uses the declared fixed-size vector when present. A selected vector with the wrong length or a nonfinite component is invalid and cannot fall back. Where the legacy request permits an omitted vector, that omission retains implicit $\Gamma$ behavior.
+
+A zero-length raw slice is omitted even when its pointer is nonnull, as can occur for Rust `Some(&[])`; its storage is never dereferenced. If a fixed-size vector is declared, the existing fallback selects it; otherwise the request retains implicit $\Gamma$ behavior.
+
+This threshold controls native CPU admission and routing only. It does not round, replace, or rewrite the requested components in diagnostics or operator inputs. Existing physical squared-wave-number finite and overflow checks continue to use those requested components. The generic Floquet airbox operator remains usable at $\Gamma$; the nonzero-$k$ admission gate does not wrap its mathematical domain.
+
 For a Bloch/Floquet modal problem with nonzero wavevector `k`, the tangent
 operator is partitioned as
 
@@ -703,6 +725,9 @@ P_{00}(x)=1+\frac{\exp(-x)-1}{x}, \qquad x=|k|t,
 | $f'_i$ | imaginary component of comparison complex frequency | $\mathrm{Hz}$ |
 | $P_{00}$ | thin-film demagnetizing factor | $1$ |
 | $k$ | in-plane wave vector magnitude | $\mathrm{rad\,m^{-1}}$ |
+| $\mathbf{k}$ | selected three-component Bloch/Floquet wavevector | $\mathrm{rad\,m^{-1}}$ |
+| $k_i$ | wavevector component for $i \in \{x,y,z\}$ | $\mathrm{rad\,m^{-1}}$ |
+| $\varepsilon_{\Gamma,\mathrm{comp}}$ | closed componentwise Gamma-admission threshold | $\mathrm{rad\,m^{-1}}$ |
 | $t$ | film thickness | $\mathrm{m}$ |
 
 (assumptions-and-validity)=
@@ -774,6 +799,18 @@ ferromagnetic films*, J. Phys. C 19 (1986), DOI:10.1088/0022-3719/19/35/7013.
 | `crates/fullmag-runner/src/fem/eigen_path.rs` | `execute_fem_eigen_path` | Execute k samples and publish postsolve comparisons. |
 | `backends/fem/core/petsc_slepc_runtime.cpp` | `petsc_slepc_process_mutex` | Own one nonrecursive PETSc/SLEPc operation boundary for CPU/GPU, with unsafe retained-graph shutdown protection. |
 | `backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp` | `stop_native_floquet_eps` | Preserve negative EPS reasons and poll cancellation on the final successful iteration. |
+| `backends/fem/cpu/frequency_domain/floquet_k_classification.hpp` | `classify_components` | Apply the finite, componentwise Rust-compatible Gamma admission class without changing authored wavevector values. |
+| `crates/fullmag-runner/src/fem/eigen_constants.rs` | `GAMMA_K_TOLERANCE_RAD_PER_M` | Define the SI componentwise Gamma threshold used by Rust FEM eigen reduction and policy checks. |
+| `crates/fullmag-plan/src/fem.rs` | `FEM_EIGEN_POLICY_GAMMA_K_TOLERANCE_RAD_PER_M` | Define the matching componentwise threshold used by Rust FEM eigen-policy resolution. |
+| `crates/fullmag-runner/src/fem/eigen_reduction.rs` | `is_gamma_k_sampling` | Apply the Rust componentwise finite-value Gamma rule and retain omitted-k Gamma behavior. |
+| `crates/fullmag-runner/src/fem/eigen_reduction.rs` | `gamma_threshold_agrees_with_single_k_policy` | Regress Rust Gamma boundary, subthreshold, and non-finite single-k classification. |
+| `crates/fullmag-runner/src/native_fem/frequency_domain.rs` | `GAMMA_POINT_K_COMPONENT_ABS_TOLERANCE_RAD_PER_M` | Define the matching threshold used while the Rust native FEM planner resolves Floquet k. |
+| `crates/fullmag-runner/src/native_fem/frequency_domain.rs` | `solve_native_modal_eigen` | Dispatch to the FFI conversion that maps Rust optional k slices to pointer/count, including empty slices with zero count. |
+| `backends/fem/src/frequency_domain/modal_eigen_solver.cpp` | `modal_request_floquet_k_classification` | Preserve invalid payload errors and route only the shared nonzero class to nonzero-k Floquet providers. |
+| `backends/fem/cpu/frequency_domain/production_cpu_modal_eigen.cpp` | `modal_request_has_invalid_floquet_k` | Keep malformed direct Floquet requests as validation errors before route fallback. |
+| `backends/fem/tests/frequency_domain/floquet_modal_solver_test.cpp` | `void floquet_admission_uses_rust_gamma_threshold` | Regress the closed Gamma boundary and matching dense/sparse admissions. |
+| `backends/fem/tests/frequency_domain/modal_eigen_contract_test.cpp` | `void modal_gamma_cabi_route_preserves_authored_k` | Assert public C ABI Gamma routing and preservation of the requested wavevector in diagnostics. |
+| `backends/fem/tests/frequency_domain/modal_eigen_contract_test.cpp` | `void production_cpu_modal_eigen_direct_entry_validates_floquet_k` | Regress direct-entry validation, empty raw slices, fixed fallback, and legacy non-Floquet requests. |
 | `backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp` | `prepare_candidate_operator_diagnostic` | Prepare the bounded isolated Poisson workspace and attach its owner to the true-probe callback; hosted candidate measurements observed, full solve unqualified. |
 | `backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp` | `capture_candidate_shifted_lu_comparison` | Observe isolated current/NONE LU on the actual RHS with source-calibrated operator residual; hosted comparison observed, full production solve still fails. |
 | `backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp` | `capture_candidate_live_pc_observation` | Observe borrowed live PC on private RHS/vectors and isolated Schur action; source reviewed, hosted execution pending. |

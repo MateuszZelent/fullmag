@@ -33,6 +33,11 @@
       "sources": ["source-runner-path", "source-plan-eigen"]
     },
     {
+      "id": "eq-0600-floquet-gamma-admission",
+      "symbols": ["k_vector", "k_component", "epsilon_gamma_component"],
+      "sources": ["source-rust-gamma-k-threshold", "source-rust-plan-gamma-k-threshold", "source-rust-gamma-k-classifier", "source-rust-gamma-k-test", "source-rust-native-gamma-k-threshold", "source-rust-native-empty-k-ffi", "source-native-floquet-k-classifier", "source-native-modal-k-route", "source-native-production-cpu-k-guard", "source-native-floquet-admission-test", "source-native-floquet-cabi-route-test", "source-native-floquet-direct-entry-test"]
+    },
+    {
       "id": "eq-0600-p00-reference",
       "symbols": ["P00", "k", "t"],
       "sources": ["source-p00"]
@@ -68,6 +73,9 @@
     {"id": "f_i_prime", "latex": "$f'_i$", "meaning": "imaginary component of comparison complex frequency", "si_unit": "$\\mathrm{Hz}$"},
     {"id": "P00", "latex": "$P_{00}$", "meaning": "thin-film demagnetizing factor", "si_unit": "$1$"},
     {"id": "k", "latex": "$k$", "meaning": "in-plane wave vector magnitude", "si_unit": "$\\mathrm{rad\\,m^{-1}}$"},
+    {"id": "k_vector", "latex": "$\\mathbf{k}$", "meaning": "selected three-component Bloch/Floquet wavevector", "si_unit": "$\\mathrm{rad\\,m^{-1}}$"},
+    {"id": "k_component", "latex": "$k_i$", "meaning": "wavevector component for $i \\in \\{x,y,z\\}$", "si_unit": "$\\mathrm{rad\\,m^{-1}}$"},
+    {"id": "epsilon_gamma_component", "latex": "$\\varepsilon_{\\Gamma,\\mathrm{comp}}$", "meaning": "closed componentwise Gamma-admission threshold", "si_unit": "$\\mathrm{rad\\,m^{-1}}$"},
     {"id": "t", "latex": "$t$", "meaning": "film thickness", "si_unit": "$\\mathrm{m}$"},
     {
       "id": "M_toy",
@@ -226,6 +234,78 @@
       "path": "backends/fem/tests/frequency_domain/modal_eigen_contract_test.cpp",
       "symbol": "void modal_nonzero_k_floquet_shared_domain_nearest_reports_shifted_ksp_diagnostics",
       "responsibility": "Run the diagnostic apply fault assertion via a dedicated fresh-process CLI path; hosted execution pending."
+    },
+    {
+      "id": "source-native-floquet-k-classifier",
+      "path": "backends/fem/cpu/frequency_domain/floquet_k_classification.hpp",
+      "symbol": "classify_components",
+      "responsibility": "Classify selected native Floquet wavevectors componentwise with the SI Gamma admission threshold; preserve authored k and physical operator inputs."
+    },
+    {
+      "id": "source-native-modal-k-route",
+      "path": "backends/fem/src/frequency_domain/modal_eigen_solver.cpp",
+      "symbol": "modal_request_floquet_k_classification",
+      "responsibility": "Keep invalid declarations as validation errors and route only the shared nonzero class to native nonzero-k Floquet providers."
+    },
+    {
+      "id": "source-native-floquet-admission-test",
+      "path": "backends/fem/tests/frequency_domain/floquet_modal_solver_test.cpp",
+      "symbol": "void floquet_admission_uses_rust_gamma_threshold",
+      "responsibility": "Regress the closed componentwise Gamma boundary, invalid inputs, and consistent dense/sparse admission."
+    },
+    {
+      "id": "source-native-floquet-cabi-route-test",
+      "path": "backends/fem/tests/frequency_domain/modal_eigen_contract_test.cpp",
+      "symbol": "void modal_gamma_cabi_route_preserves_authored_k",
+      "responsibility": "Exercise public C ABI Gamma routing and assert the requested k remains visible in diagnostics."
+    },
+    {
+      "id": "source-rust-gamma-k-threshold",
+      "path": "crates/fullmag-runner/src/fem/eigen_constants.rs",
+      "symbol": "GAMMA_K_TOLERANCE_RAD_PER_M",
+      "responsibility": "Define the canonical SI componentwise Gamma threshold used by Rust FEM eigen reduction and policy checks."
+    },
+    {
+      "id": "source-rust-plan-gamma-k-threshold",
+      "path": "crates/fullmag-plan/src/fem.rs",
+      "symbol": "FEM_EIGEN_POLICY_GAMMA_K_TOLERANCE_RAD_PER_M",
+      "responsibility": "Define the matching componentwise Gamma threshold used by the Rust FEM planner’s eigen-policy resolution."
+    },
+    {
+      "id": "source-rust-gamma-k-classifier",
+      "path": "crates/fullmag-runner/src/fem/eigen_reduction.rs",
+      "symbol": "is_gamma_k_sampling",
+      "responsibility": "Classify a single k-vector by finite componentwise magnitude and retain implicit Gamma for omitted sampling."
+    },
+    {
+      "id": "source-rust-gamma-k-test",
+      "path": "crates/fullmag-runner/src/fem/eigen_reduction.rs",
+      "symbol": "gamma_threshold_agrees_with_single_k_policy",
+      "responsibility": "Regress Rust Gamma threshold routing against the single-k execution policy."
+    },
+    {
+      "id": "source-rust-native-gamma-k-threshold",
+      "path": "crates/fullmag-runner/src/native_fem/frequency_domain.rs",
+      "symbol": "GAMMA_POINT_K_COMPONENT_ABS_TOLERANCE_RAD_PER_M",
+      "responsibility": "Define the matching componentwise Gamma threshold in the Rust native FEM planner."
+    },
+    {
+      "id": "source-rust-native-empty-k-ffi",
+      "path": "crates/fullmag-runner/src/native_fem/frequency_domain.rs",
+      "symbol": "solve_native_modal_eigen",
+      "responsibility": "Dispatch native FEM eigen requests to the FFI conversion that maps optional k slices to pointer/count; Some(&[]) can carry a nonnull pointer with zero count."
+    },
+    {
+      "id": "source-native-production-cpu-k-guard",
+      "path": "backends/fem/cpu/frequency_domain/production_cpu_modal_eigen.cpp",
+      "symbol": "modal_request_has_invalid_floquet_k",
+      "responsibility": "Return a validation error for malformed Floquet k before direct production CPU route classification can collapse invalid into Gamma."
+    },
+    {
+      "id": "source-native-floquet-direct-entry-test",
+      "path": "backends/fem/tests/frequency_domain/modal_eigen_contract_test.cpp",
+      "symbol": "void production_cpu_modal_eigen_direct_entry_validates_floquet_k",
+      "responsibility": "Regress direct production invalid/nonfinite Floquet k, empty raw-slice behavior, fixed fallback, and non-Floquet legacy routing."
     }
   ],
   "public_api": {

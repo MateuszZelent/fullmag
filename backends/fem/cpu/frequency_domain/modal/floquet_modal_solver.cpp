@@ -1,4 +1,5 @@
 #include "cpu/frequency_domain/modal/floquet_modal_solver.hpp"
+#include "cpu/frequency_domain/floquet_k_classification.hpp"
 #include "core/petsc_slepc_runtime.hpp"
 #include "cpu/frequency_domain/modal_krylov_tuning.hpp"
 #include "cpu/frequency_domain/mode_deduplication.hpp"
@@ -64,27 +65,23 @@ void initialize_floquet_schur_action_diagnostic(
         std::numeric_limits<double>::quiet_NaN();
 }
 
-bool finite_nonzero_k(const ModalEigenRequest &request) noexcept
+floquet_k::Classification request_floquet_k_classification(
+    const ModalEigenRequest &request) noexcept
 {
     const double *values = request.operator_request.k_vector_rad_m;
-    const int length = request.operator_request.k_vector_len;
+    int length = request.operator_request.k_vector_len;
     const bool use_embedded_vector =
         (values == nullptr || length <= 0) && request.has_floquet_k_vector;
     if (use_embedded_vector) {
         values = request.floquet_k_vector_rad_per_m;
+        length = 3;
     }
-    const int effective_length = use_embedded_vector ? 3 : length;
-    if (values == nullptr || effective_length != 3) {
-        return false;
+    if (length == 0 && !request.has_floquet_k_vector) {
+        // Rust empty slices may carry a non-null dangling pointer.  The zero
+        // count makes that raw view omitted; do not inspect its storage.
+        return floquet_k::Classification::gamma;
     }
-    bool nonzero = false;
-    for (int index = 0; index < effective_length; ++index) {
-        if (!std::isfinite(values[index])) {
-            return false;
-        }
-        nonzero = nonzero || std::abs(values[index]) > 0.0;
-    }
-    return nonzero;
+    return floquet_k::classify_components(values, length);
 }
 
 bool floquet_k_payload_is_consistent(const ModalEigenRequest &request) noexcept
@@ -747,14 +744,10 @@ FloquetFullDescriptorDiagnostics certify_floquet_full_descriptor(
     FloquetFullDescriptorDiagnostics diagnostics{};
     const PoissonAirboxSharedDomainAssemblyResult *assembly =
         operator_view.full_descriptor_assembly;
-    const bool finite_k = std::all_of(
-        operator_view.k_rad_per_m.begin(),
-        operator_view.k_rad_per_m.end(),
-        [](double value) { return std::isfinite(value); });
-    const bool nonzero_k = finite_k && std::any_of(
-        operator_view.k_rad_per_m.begin(),
-        operator_view.k_rad_per_m.end(),
-        [](double value) { return value != 0.0; });
+    const floquet_k::Classification k_classification =
+        floquet_k::classify(operator_view.k_rad_per_m);
+    const bool nonzero_k =
+        k_classification == floquet_k::Classification::nonzero;
     const bool poisson_policy_matches =
         operator_view.boundary_kind != nullptr &&
         operator_view.gauge_policy != nullptr &&
@@ -5590,7 +5583,13 @@ FloquetModalSolverAdmission admit_floquet_modal_request(
         admission.reason = "floquet_modal_k_vector_payload_mismatch";
         return admission;
     }
-    if (!finite_nonzero_k(request)) {
+    const floquet_k::Classification k_classification =
+        request_floquet_k_classification(request);
+    if (k_classification == floquet_k::Classification::invalid) {
+        admission.reason = "floquet_modal_requires_finite_nonzero_three_vector";
+        return admission;
+    }
+    if (k_classification == floquet_k::Classification::gamma) {
         admission.reason = "floquet_modal_requires_finite_nonzero_three_vector";
         return admission;
     }
@@ -5652,7 +5651,13 @@ FloquetModalSolverAdmission admit_floquet_modal_sparse_request(
         admission.reason = "floquet_modal_k_vector_payload_mismatch";
         return admission;
     }
-    if (!finite_nonzero_k(request)) {
+    const floquet_k::Classification k_classification =
+        request_floquet_k_classification(request);
+    if (k_classification == floquet_k::Classification::invalid) {
+        admission.reason = "floquet_modal_requires_finite_nonzero_three_vector";
+        return admission;
+    }
+    if (k_classification == floquet_k::Classification::gamma) {
         admission.reason = "floquet_modal_requires_finite_nonzero_three_vector";
         return admission;
     }

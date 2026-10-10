@@ -7,6 +7,7 @@
 #include "cpu/frequency_domain/mode_filter.hpp"
 #include "cpu/frequency_domain/poisson_airbox_modal_eigen.hpp"
 #include "cpu/frequency_domain/floquet_airbox_operator.hpp"
+#include "cpu/frequency_domain/floquet_k_classification.hpp"
 #include "cpu/frequency_domain/modal/floquet_modal_solver.hpp"
 #include "cpu/frequency_domain/operators/poisson_airbox_shared_domain.hpp"
 #include "cpu/frequency_domain/modal_shared_domain_provider_status.hpp"
@@ -117,8 +118,25 @@ bool modal_request_has_explicit_floquet_k_vector(
     const ModalEigenRequest &request) noexcept
 {
     return request.has_floquet_k_vector ||
-        request.operator_request.k_vector_rad_m != nullptr ||
         request.operator_request.k_vector_len != 0;
+}
+
+floquet_k::Classification modal_request_floquet_k_classification(
+    const ModalEigenRequest &request) noexcept
+{
+    if (request.operator_request.spin_wave_bc_kind == nullptr ||
+        std::strcmp(request.operator_request.spin_wave_bc_kind, "floquet") != 0) {
+        return floquet_k::Classification::invalid;
+    }
+    if (!modal_request_has_explicit_floquet_k_vector(request)) {
+        // Preserve the legacy omitted-vector representation as implicit Gamma.
+        return floquet_k::Classification::gamma;
+    }
+    std::array<double, 3> k_vector{};
+    if (!modal_request_floquet_k_vector(request, k_vector)) {
+        return floquet_k::Classification::invalid;
+    }
+    return floquet_k::classify(k_vector);
 }
 
 bool modal_request_floquet_k_vector_is_valid_if_declared(
@@ -131,29 +149,20 @@ bool modal_request_floquet_k_vector_is_valid_if_declared(
         // implicit-k=0 representation and validate only declared vectors.
         return true;
     }
-    std::array<double, 3> k_vector{};
-    return modal_request_floquet_k_vector(request, k_vector);
+    return modal_request_floquet_k_classification(request) !=
+        floquet_k::Classification::invalid;
 }
 
 // The legacy Poisson-airbox modal path is assembled with real, k=0 blocks.
-// Route only an explicit, finite, three-component nonzero Floquet vector to
-// the nonzero-k capability checks.
+// Route only the shared componentwise nonzero class to nonzero-k providers.
 bool modal_request_is_nonzero_k_floquet(const ModalEigenRequest &request) noexcept
 {
     if (request.operator_request.spin_wave_bc_kind == nullptr ||
         std::strcmp(request.operator_request.spin_wave_bc_kind, "floquet") != 0) {
         return false;
     }
-    std::array<double, 3> k_vector{};
-    if (!modal_request_floquet_k_vector(request, k_vector)) {
-        return false;
-    }
-    for (double component : k_vector) {
-        if (std::abs(component) > 0.0) {
-            return true;
-        }
-    }
-    return false;
+    return modal_request_floquet_k_classification(request) ==
+        floquet_k::Classification::nonzero;
 }
 
 std::string escape_json_string(const char *value)

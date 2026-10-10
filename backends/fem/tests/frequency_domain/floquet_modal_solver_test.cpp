@@ -1,8 +1,10 @@
 #include "cpu/frequency_domain/modal/floquet_modal_solver.hpp"
 #include "cpu/frequency_domain/operators/poisson_airbox_shared_domain.hpp"
+#include "cpu/frequency_domain/floquet_k_classification.hpp"
 #include "core/petsc_slepc_runtime.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <complex>
 #include <cstdint>
@@ -591,6 +593,194 @@ void accepts_raw_or_fixed_k_vectors()
         false,
         "floquet_modal_requires_finite_nonzero_three_vector",
         "a request with neither a raw vector nor a declared fixed fallback is rejected");
+}
+
+void floquet_admission_uses_rust_gamma_threshold()
+{
+    using fd::floquet_k::Classification;
+    constexpr double threshold = fd::floquet_k::kGammaAdmissionThresholdRadPerM;
+    const double immediately_above = std::nextafter(
+        threshold, std::numeric_limits<double>::infinity());
+    const auto expect_both_admissions = [](fd::ModalEigenRequest request,
+                                           bool expected_accepted,
+                                           const char *message) {
+        const auto dense_admission =
+            fd::admit_floquet_modal_request(request, spectral_request());
+        check(dense_admission.accepted == expected_accepted &&
+                  (expected_accepted || std::strcmp(
+                      dense_admission.reason,
+                      "floquet_modal_requires_finite_nonzero_three_vector") == 0),
+              message);
+
+        request.operator_request.include_demag = 0;
+        const auto sparse_admission = fd::admit_floquet_modal_sparse_request(
+            request, sparse_spectral_request());
+        check(sparse_admission.accepted == expected_accepted &&
+                  (expected_accepted || std::strcmp(
+                      sparse_admission.reason,
+                      "floquet_modal_requires_finite_nonzero_three_vector") == 0),
+              message);
+    };
+
+    const double subthreshold = 0.9 * threshold;
+    const std::array<std::array<double, 3>, 6> gamma_vectors = {{
+        {{0.0, 0.0, 0.0}},
+        {{5.0e-13, 0.0, 0.0}},
+        {{-5.0e-13, 0.0, 0.0}},
+        {{threshold, 0.0, 0.0}},
+        {{-threshold, 0.0, 0.0}},
+        {{subthreshold, subthreshold, subthreshold}},
+    }};
+    check(std::hypot(
+              gamma_vectors.back()[0],
+              gamma_vectors.back()[1],
+              gamma_vectors.back()[2]) > threshold,
+          "componentwise Gamma fixture has Euclidean norm above the threshold");
+    for (const auto &k_vector : gamma_vectors) {
+        check(fd::floquet_k::classify(k_vector) == Classification::gamma,
+              "closed componentwise boundary and subthreshold vectors classify as Gamma");
+        fd::ModalEigenRequest request = valid_request();
+        request.operator_request.k_vector_rad_m = k_vector.data();
+        request.operator_request.k_vector_len = 3;
+        expect_both_admissions(
+            request,
+            false,
+            "dense and sparse Floquet admissions reject the shared Gamma class");
+    }
+
+    const double nonfinite_components[] = {
+        std::numeric_limits<double>::quiet_NaN(),
+        std::numeric_limits<double>::infinity(),
+        -std::numeric_limits<double>::infinity(),
+    };
+    for (double component : nonfinite_components) {
+        const std::array<double, 3> raw_k{{component, 0.0, 0.0}};
+        check(fd::floquet_k::classify(raw_k) == Classification::invalid,
+              "NaN and both infinities remain invalid instead of Gamma");
+        fd::ModalEigenRequest raw_request = valid_request();
+        raw_request.operator_request.k_vector_rad_m = raw_k.data();
+        raw_request.operator_request.k_vector_len = 3;
+        expect_both_admissions(
+            raw_request,
+            false,
+            "dense and sparse Floquet admissions reject non-finite raw vectors");
+
+        fd::ModalEigenRequest fixed_request = valid_request();
+        fixed_request.operator_request.k_vector_rad_m = nullptr;
+        fixed_request.operator_request.k_vector_len = 0;
+        fixed_request.has_floquet_k_vector = true;
+        fixed_request.floquet_k_vector_rad_per_m[0] = component;
+        fixed_request.floquet_k_vector_rad_per_m[1] = 0.0;
+        fixed_request.floquet_k_vector_rad_per_m[2] = 0.0;
+        expect_both_admissions(
+            fixed_request,
+            false,
+            "dense and sparse Floquet admissions reject non-finite fixed fallbacks");
+    }
+
+    const double immediately_above_components[] = {
+        immediately_above,
+        -immediately_above,
+    };
+    for (double component : immediately_above_components) {
+        const std::array<double, 3> k_vector{{component, 0.0, 0.0}};
+        check(fd::floquet_k::classify(k_vector) == Classification::nonzero,
+              "the next representable component above the boundary is nonzero");
+        fd::ModalEigenRequest request = valid_request();
+        request.operator_request.k_vector_rad_m = k_vector.data();
+        request.operator_request.k_vector_len = 3;
+        expect_both_admissions(
+            request,
+            true,
+            "dense and sparse Floquet admissions accept the first components outside Gamma");
+    }
+
+    fd::ModalEigenRequest raw_precedence = valid_request();
+    const std::array<double, 3> raw_gamma{{5.0e-13, 0.0, 0.0}};
+    raw_precedence.operator_request.k_vector_rad_m = raw_gamma.data();
+    raw_precedence.operator_request.k_vector_len = 3;
+    raw_precedence.has_floquet_k_vector = true;
+    raw_precedence.floquet_k_vector_rad_per_m[0] = immediately_above;
+    raw_precedence.floquet_k_vector_rad_per_m[1] = 0.0;
+    raw_precedence.floquet_k_vector_rad_per_m[2] = 0.0;
+    check(fd::floquet_k::classify(raw_gamma) == Classification::gamma,
+          "a selected raw vector is classified before the fixed fallback");
+    expect_both_admissions(
+        raw_precedence,
+        false,
+        "a selected raw Gamma vector takes precedence over a nonzero fixed fallback");
+
+    fd::ModalEigenRequest fixed_boundary = valid_request();
+    fixed_boundary.operator_request.k_vector_rad_m = nullptr;
+    fixed_boundary.operator_request.k_vector_len = 0;
+    fixed_boundary.has_floquet_k_vector = true;
+    fixed_boundary.floquet_k_vector_rad_per_m[0] = -threshold;
+    fixed_boundary.floquet_k_vector_rad_per_m[1] = threshold;
+    fixed_boundary.floquet_k_vector_rad_per_m[2] = threshold;
+    check(fd::floquet_k::classify_components(fixed_boundary.floquet_k_vector_rad_per_m, 3) ==
+              Classification::gamma,
+          "the fixed fallback uses the same closed componentwise Gamma boundary");
+    expect_both_admissions(
+        fixed_boundary,
+        false,
+        "dense and sparse admissions apply the Gamma threshold to fixed fallbacks");
+
+    fd::ModalEigenRequest fixed_nonzero = valid_request();
+    fixed_nonzero.operator_request.k_vector_rad_m = nullptr;
+    fixed_nonzero.operator_request.k_vector_len = 0;
+    fixed_nonzero.has_floquet_k_vector = true;
+    fixed_nonzero.floquet_k_vector_rad_per_m[0] = -immediately_above;
+    fixed_nonzero.floquet_k_vector_rad_per_m[1] = 0.0;
+    fixed_nonzero.floquet_k_vector_rad_per_m[2] = 0.0;
+    check(fd::floquet_k::classify_components(fixed_nonzero.floquet_k_vector_rad_per_m, 3) ==
+              Classification::nonzero,
+          "fixed fallback components just outside Gamma use the shared classifier");
+    expect_both_admissions(
+        fixed_nonzero,
+        true,
+        "dense and sparse admissions accept the fixed vector just outside Gamma");
+
+    const std::array<double, 3> empty_raw_backing{{0.0, 0.0, 0.0}};
+    fd::ModalEigenRequest empty_raw = valid_request();
+    empty_raw.operator_request.k_vector_rad_m = empty_raw_backing.data();
+    empty_raw.operator_request.k_vector_len = 0;
+    expect_both_admissions(
+        empty_raw,
+        false,
+        "a nonnull zero-count raw slice with no fixed fallback is implicit Gamma");
+
+    fd::ModalEigenRequest empty_raw_with_fixed = empty_raw;
+    empty_raw_with_fixed.has_floquet_k_vector = true;
+    empty_raw_with_fixed.floquet_k_vector_rad_per_m[0] = immediately_above;
+    empty_raw_with_fixed.floquet_k_vector_rad_per_m[1] = 0.0;
+    empty_raw_with_fixed.floquet_k_vector_rad_per_m[2] = 0.0;
+    expect_both_admissions(
+        empty_raw_with_fixed,
+        true,
+        "a nonnull zero-count raw slice selects the declared fixed-vector fallback");
+
+    const double short_k[2] = {1.0, 0.0};
+    fd::ModalEigenRequest short_raw = valid_request();
+    short_raw.operator_request.k_vector_rad_m = short_k;
+    short_raw.operator_request.k_vector_len = 2;
+    short_raw.has_floquet_k_vector = false;
+    check(fd::floquet_k::classify_components(short_k, 2) == Classification::invalid,
+          "a selected raw vector with the wrong length remains invalid");
+    expect_both_admissions(
+        short_raw,
+        false,
+        "dense and sparse admissions reject a wrong-length selected raw vector");
+
+    fd::ModalEigenRequest null_raw_with_length = valid_request();
+    null_raw_with_length.operator_request.k_vector_rad_m = nullptr;
+    null_raw_with_length.operator_request.k_vector_len = 3;
+    null_raw_with_length.has_floquet_k_vector = false;
+    check(fd::floquet_k::classify_components(nullptr, 3) == Classification::invalid,
+          "a null selected raw vector without a fixed fallback is invalid");
+    expect_both_admissions(
+        null_raw_with_length,
+        false,
+        "dense and sparse admissions reject null positive-length raw vectors without fallback");
 }
 
 void rejects_invalid_frequency_windows()
@@ -2144,6 +2334,7 @@ int main(int argc, char **argv)
     rejects_missing_dynamic_payload_and_gpu();
     rejects_zero_k_and_missing_pairs();
     accepts_raw_or_fixed_k_vectors();
+    floquet_admission_uses_rust_gamma_threshold();
     rejects_invalid_frequency_windows();
     admits_sparse_bloch_operator_without_demag();
     admits_certified_shared_domain_sparse_operator();

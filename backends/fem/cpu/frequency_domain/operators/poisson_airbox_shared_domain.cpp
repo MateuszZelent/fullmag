@@ -1,5 +1,6 @@
 #include "cpu/frequency_domain/operators/poisson_airbox_shared_domain.hpp"
 #include "cpu/frequency_domain/floquet_airbox_operator.hpp"
+#include "cpu/frequency_domain/floquet_k_classification.hpp"
 
 #if FULLMAG_HAS_MFEM_STACK
 
@@ -3518,8 +3519,24 @@ FrequencyDomainStatus assemble_poisson_airbox_shared_domain_payload(
                 }
                 floquet_k_squared += static_cast<long double>(component) * component;
             }
+            const floquet_k::Classification k_classification =
+                floquet_k::classify(*floquet_k_rad_per_m);
+            if (k_classification == floquet_k::Classification::invalid) {
+                copy_error(
+                    out_result->error_message,
+                    "Floquet dynamic demag-k wavevector must contain finite values");
+                out_result->status = FrequencyDomainStatus::validation_error;
+                return out_result->status;
+            }
+            if (!std::isfinite(static_cast<double>(floquet_k_squared))) {
+                copy_error(
+                    out_result->error_message,
+                    "Floquet dynamic demag-k request requires a nonzero wavevector");
+                out_result->status = FrequencyDomainStatus::validation_error;
+                return out_result->status;
+            }
             if (!(floquet_k_squared > 0.0L) ||
-                !std::isfinite(static_cast<double>(floquet_k_squared))) {
+                k_classification != floquet_k::Classification::nonzero) {
                 copy_error(
                     out_result->error_message,
                     "Floquet dynamic demag-k request requires a nonzero wavevector");
