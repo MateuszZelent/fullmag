@@ -735,7 +735,17 @@ void modal_damping_policy_tokens_and_nonshared_matrices()
     tiny_request.tiny_validation_mass_matrix_row_major = tiny_gyrotropic;
     FullmagFemFrequencyDomainResult tiny_result =
         fullmag_fem_modal_eigen_solve(&tiny_request);
-    check(tiny_result.status == FULLMAG_FEM_FD_OK && tiny_result.mode_count == 1u,
+    const bool tiny_matrix_accepted =
+        tiny_result.status == FULLMAG_FEM_FD_OK &&
+        contains(tiny_result.result_json, "\"accepted_mode_count\":1");
+    if (!tiny_matrix_accepted) {
+        std::fprintf(stderr,
+                     "TINY DAMPING ADMISSION FAILURE: status=%d typed_count=%llu result=%.*s\n",
+                     static_cast<int>(tiny_result.status),
+                     static_cast<unsigned long long>(tiny_result.mode_count),
+                     1024, tiny_result.result_json != nullptr ? tiny_result.result_json : "<null>");
+    }
+    check(tiny_matrix_accepted,
           "Include does not reject a caller-provided tiny matrix outside shared-domain assembly");
     check(!contains(tiny_result.diagnostics_json,
                     "shared_domain_exact_damping_unavailable"),

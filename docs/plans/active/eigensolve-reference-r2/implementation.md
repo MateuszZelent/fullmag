@@ -682,3 +682,19 @@ Ustawienia PCLU nie są pomiarem perturbacji faktora ani dowodem przyczyny.
 
 Focused API source run #38086656946 nafab55bab3ed45f82a20bbf150cfa4db5a155d623
 rzeczywiście wystartował przez on-push; wynik pending.
+
+
+## P0 — tiny transport fixture correction
+
+#38085900429 na3be9ed87496e24e2fc0582e1b10443715bc46bd5: native
+build/phase/typed PASS, admission fixture FAIL przed shared cases.
+Tiny owner publikuje historyczny JSON accepted_mode_count, nie typed
+mode_lambda; C ABI mode_count pochodzi wyłącznie z typed payload.
+Nowy test błędnie wymagał typed_count=1. Korekta wymaga statusOK i
+rzeczywistego JSON accepted_mode_count=1, bez zmiany produkcji/ABI.
+Dodano bounded failure snapshot. Shared admission execution nadal
+NOT VERIFIED; nie interpretujemy tej odmowy jako błędu common guard.
+
+P2 monitor na remote66daacf174f8706989d6dddb1ab25b5ec7a3a918.
+Hosted #38087023290 (count/monitor) i #38087026506 (phase/window/admission)
+w toku; drugi ma jeszcze starą tiny fixture i wymaga nowego źródła.

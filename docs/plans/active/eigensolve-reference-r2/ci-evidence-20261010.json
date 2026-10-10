@@ -325,6 +325,25 @@
       "failure": "stale refined requested count lower bound >=5 despite actual unsaturated base count2",
       "receipt_sha256": "655ec1730f7c2664ea66d9a1a69356b365326fed85370e3e3313c5f32792c34a",
       "qualification_claimed": false
+    },
+    {
+      "run_id": 38085900429,
+      "sha": "3be9ed87496e24e2fc0582e1b10443715bc46bd5",
+      "conclusion": "failure",
+      "scope": "modal-phase-slepc",
+      "native_build": "passed",
+      "passed_ctests": [
+        "fem_modal_eigen_phase_convention_contract",
+        "fem_modal_eigen_typed_cpu_transport_contract"
+      ],
+      "failed_ctests": [
+        "fem_modal_eigen_damping_admission_contract",
+        "fem_poisson_airbox_selected_window_contract"
+      ],
+      "failure": "tiny validation fixture incorrectly expects typed mode_count=1; legacy tiny publishes accepted count in JSON; window refined bound stale",
+      "shared_damping_admission_cases_executed": false,
+      "receipt_sha256": "8b43bd27f3ba3a8f3015ac4aef30c6cad0c4a33962e17ccff6ac267075cc292a",
+      "qualification_claimed": false
     }
   ]
 }
