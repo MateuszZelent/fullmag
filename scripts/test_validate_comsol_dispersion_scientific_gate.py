@@ -87,7 +87,7 @@ def _native_mode_diagnostics(mode):
     })
 
 
-def _a1_fixture_mesh(geometry, *, shape="circle", radius=None, center=(0.0, 0.0)):
+def _a1_fixture_mesh(geometry, *, shape="circle", radius=None, center=(0.0, 0.0), segments=64):
     """Build a small resolved Tet4 ring fixture for the A1 geometry contract."""
     period = float(geometry["lattice_period_m"])
     thickness = float(geometry["film_size_m"][2])
@@ -97,7 +97,10 @@ def _a1_fixture_mesh(geometry, *, shape="circle", radius=None, center=(0.0, 0.0)
         cross_section = [(-half, -half), (half, -half), (half, half), (-half, half)]
         triangles = [(0, 1, 2), (0, 2, 3)]
     else:
-        segments = 64
+        # Synthetic contract fixture: refine the cylindrical wall with the
+        # declared nominal mesh tier. This is not a FEM convergence result.
+        if segments < 4 or segments % 4:
+            raise AssertionError("A1 wall fixture requires a multiple of four segments")
         inner = []
         outer = []
         for index in range(segments):
@@ -212,7 +215,10 @@ def _native_metadata(case, mesh_id, airbox_m, requested_modes):
         [0, 5, 1, 7],
     ]
     if case == "a1":
-        nodes, tet4_connectivity, node_pairs = _a1_fixture_mesh(guide["geometry"])
+        tier = {"mesh-L1": 0, "mesh-L2": 1, "mesh-L3": 2}.get(mesh_id, 0)
+        nodes, tet4_connectivity, node_pairs = _a1_fixture_mesh(
+            guide["geometry"], segments=64 * (2 ** tier)
+        )
     canonical_cells = {
         "types": ["tet4"] * len(tet4_connectivity),
         "offsets": list(range(0, 4 * len(tet4_connectivity) + 1, 4)),
@@ -242,7 +248,7 @@ def _native_metadata(case, mesh_id, airbox_m, requested_modes):
             },
         ],
         "hmax": (
-            guide["mesh"]["near_film_hmax_m"] if case == "a1"
+            guide["mesh"]["near_film_hmax_m"] / (2 ** tier) if case == "a1"
             else {"mesh-L1": 5e-9, "mesh-L2": 2.5e-9, "mesh-L3": 1.25e-9}.get(mesh_id, 5e-9)
         ), "fe_order": 1,
         "material": {"name": "Permalloy", "saturation_magnetisation": 800000.0,
@@ -2565,7 +2571,7 @@ class ScientificGateTests(unittest.TestCase):
         canonical = _native_metadata("a1", "mesh-L1", 2e-6, 24)
         radius = parameters["geometry"]["hole_radius_m"]
         defects = (
-            ("full slab", {"shape": "slab"}, "no exposed cylindrical through-hole boundary"),
+            ("full slab", {"shape": "slab"}, "exposed film face caps the canonical through-hole"),
             ("wrong radius", {"radius": 0.9 * radius}, "inside the canonical through-hole"),
             ("wrong shape", {"shape": "ellipse"}, "inside the canonical through-hole"),
             ("wrong location", {"center": (0.1 * radius, 0.0)}, "inside the canonical through-hole"),
