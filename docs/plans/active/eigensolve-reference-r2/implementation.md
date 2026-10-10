@@ -531,3 +531,25 @@ Root i niezależny source review PASS. Hosted powtórzenie wymagane.
 P3 private assembly jest na remote `f2bbdf31043ce80c2c859d5a58aa529867225574`;
 hosted positive-mass [38083353383](https://github.com/MateuszZelent/fullmag/actions/runs/38083353383)
 uruchomiony. Wykonanie wciąż NOT VERIFIED.
+
+
+## Hosted checkpoint — osiem oracle PASS, API compile fixture correction
+
+[38083332284](https://github.com/MateuszZelent/fullmag/actions/runs/38083332284)
+na `f2bbdf31043ce80c2c859d5a58aa529867225574`: **8/8 PASS** niezależnego
+complex-QZ/physical-sector oracle, także genuine growth przy dodatnim
+alpha. To nadal nie jest assembly/runtime FEM qualification.
+
+[38082733810](https://github.com/MateuszZelent/fullmag/actions/runs/38082733810)
+na `21403fc7331d6dd01e22fb4057ab09e059490592`: kompilacja nowych API
+regresji zatrzymała się na E0597, tymczasowym RwLockWriteGuard w tail
+expression testu zmiany topologii. Poprawka tylko fixture: jawny guard
+i obowiązkowe expect obecnej sesji. Source parse PASS; brak production
+code change. Nowy hosted run jest wymagany; wcześniejszy nie wykonał
+nowych regresji i nie dowodzi runtime.
+
+Native fixture observability jest na remote
+`c26c87f934309d625aa64a87124e61e4fe9b7ed6`. Ponowienia z tym source SHA:
+count/live LU [38083482772](https://github.com/MateuszZelent/fullmag/actions/runs/38083482772)
+oraz selected-window/phase/typed [38083492602](https://github.com/MateuszZelent/fullmag/actions/runs/38083492602).
+Oba pending; private assembly #38083353383 również pending.

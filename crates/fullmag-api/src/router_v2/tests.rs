@@ -39142,32 +39142,32 @@ async fn v2_unqualified_physical_m_does_not_replace_previous_live_source() {
 #[tokio::test]
 async fn v2_m_cached_source_is_invalidated_by_same_cardinality_topology_change() {
     let state = test_app_state_with_live_session().await;
-    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
-        let latest_fields = serde_json::from_value(serde_json::json!({
-            "m": {
-                "values": [[0.0, 1.0, 0.0], [0.0, 1.0, 0.0]],
-                "layout": { "grid_cells": [2, 1, 1] }
-            }
-        }))
-        .expect("source fixture should deserialize");
-        publish_test_fields_from_physical_step(
-            snapshot,
-            physical_test_live_state(7, 7.0e-12, [2, 1, 1], None),
-            latest_fields,
-        )
-        .expect("step 7 source should publish before the topology changes");
-        let cached_m = snapshot.latest_fields.get("m").expect("cached m");
-        assert!(crate::session::latest_field_source_is_qualified(
-            snapshot, "m", cached_m
-        ));
+    let mut guard = state.current_live_state.write().await;
+    let snapshot = guard.as_mut().expect("topology fixture requires a live session");
+    let latest_fields = serde_json::from_value(serde_json::json!({
+        "m": {
+            "values": [[0.0, 1.0, 0.0], [0.0, 1.0, 0.0]],
+            "layout": { "grid_cells": [2, 1, 1] }
+        }
+    }))
+    .expect("source fixture should deserialize");
+    publish_test_fields_from_physical_step(
+        snapshot,
+        physical_test_live_state(7, 7.0e-12, [2, 1, 1], None),
+        latest_fields,
+    )
+    .expect("step 7 source should publish before the topology changes");
+    let cached_m = snapshot.latest_fields.get("m").expect("cached m");
+    assert!(crate::session::latest_field_source_is_qualified(
+        snapshot, "m", cached_m
+    ));
 
-        snapshot.mesh_revision = snapshot.mesh_revision.saturating_add(1);
-        let cached_m = snapshot.latest_fields.get("m").expect("cached m remains");
-        assert!(!crate::session::latest_field_source_is_qualified(
-            snapshot, "m", cached_m
-        ));
-        assert!(crate::session::resolved_current_field_source(snapshot, "m", 3).is_none());
-    }
+    snapshot.mesh_revision = snapshot.mesh_revision.saturating_add(1);
+    let cached_m = snapshot.latest_fields.get("m").expect("cached m remains");
+    assert!(!crate::session::latest_field_source_is_qualified(
+        snapshot, "m", cached_m
+    ));
+    assert!(crate::session::resolved_current_field_source(snapshot, "m", 3).is_none());
 }
 
 #[tokio::test]

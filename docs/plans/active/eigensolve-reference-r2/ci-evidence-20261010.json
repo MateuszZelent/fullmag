@@ -223,6 +223,29 @@
       "failure": "one_iteration_fixture_budget_failed_before_positive_recursive_callback_and_candidate_observer",
       "receipt_sha256": "3c5a05b00527a8499cd3dffe89f0e4fae27fd8197503b2d4e192f555b368021d",
       "qualification_claimed": false
+    },
+    {
+      "run_id": 38083332284,
+      "sha": "f2bbdf31043ce80c2c859d5a58aa529867225574",
+      "conclusion": "success",
+      "scope": "independent_small_pencil_damping_oracle",
+      "tests_passed": 8,
+      "genuine_positive_alpha_growth_case_passed": true,
+      "log_sha256": "175726218ec2c1b4f92cf04c342445819b039b56d32d2af42aba29053b4e579c",
+      "native_assembly": "NOT VERIFIED",
+      "native_exact_damping": "NOT VERIFIED",
+      "qualification_claimed": false
+    },
+    {
+      "run_id": 38082733810,
+      "sha": "21403fc7331d6dd01e22fb4057ab09e059490592",
+      "conclusion": "failure",
+      "scope": "rust",
+      "phase": "API_test_compilation",
+      "failure": "E0597 temporary RwLockWriteGuard outlives state in topology regression",
+      "production_runtime": "NOT VERIFIED",
+      "new_API_regressions_executed": false,
+      "qualification_claimed": false
     }
   ]
 }
