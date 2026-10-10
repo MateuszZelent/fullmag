@@ -63,11 +63,25 @@
       "id": "eq-finite-airbox-open-limit",
       "symbols": ["N_z_D", "N_parallel_D", "q", "t", "d"],
       "sources": ["source-finite-reference", "source-open-reference"]
+    },
+    {
+      "id": "eq-finite-airbox-sampled-wavevector-bound",
+      "symbols": ["k_vector_sample", "k_x_sample", "k_y_sample", "k_z_sample", "q_sample", "q_max_path", "sample_index", "sample_index_set"],
+      "sources": ["source-inspector-k-validity-range"]
     }
   ],
   "symbols": [
     {"id": "q", "latex": "q", "meaning": "wartość bezwzględna wektora falowego", "si_unit": "\\mathrm{m^{-1}}"},
     {"id": "k", "latex": "k", "meaning": "signed składowa ścieżki DE/BV", "si_unit": "\\mathrm{m^{-1}}"},
+    {"id": "k_vector_sample", "latex": "\\mathbf{k}_j", "meaning": "trójwymiarowy wektor falowy próbki $j$", "si_unit": "\\mathrm{rad\\,m^{-1}}"},
+    {"id": "k_x_sample", "latex": "k_{x,j}", "meaning": "składowa $x$ wektora falowego próbki $j$", "si_unit": "\\mathrm{rad\\,m^{-1}}"},
+    {"id": "k_y_sample", "latex": "k_{y,j}", "meaning": "składowa $y$ wektora falowego próbki $j$", "si_unit": "\\mathrm{rad\\,m^{-1}}"},
+    {"id": "k_z_sample", "latex": "k_{z,j}", "meaning": "składowa $z$ wektora falowego próbki $j$", "si_unit": "\\mathrm{rad\\,m^{-1}}"},
+    {"id": "q_sample", "latex": "q_j", "meaning": "norma euklidesowa wektora $\\mathbf{k}_j$", "si_unit": "\\mathrm{rad\\,m^{-1}}"},
+    {"id": "q_max_path", "latex": "q_{\\max,\\mathrm{path}}", "meaning": "największa norma falowa na całej próbkowanej ścieżce", "si_unit": "\\mathrm{rad\\,m^{-1}}"},
+    {"id": "path_s", "latex": "s_j", "meaning": "skumulowana współrzędna ścieżki używana na osi wykresu", "si_unit": "\\mathrm{rad\\,m^{-1}}"},
+    {"id": "sample_index", "latex": "j", "meaning": "indeks próbki ścieżki", "si_unit": "1"},
+    {"id": "sample_index_set", "latex": "\\mathcal{S}", "meaning": "zbiór indeksów próbek ścieżki użyty w granicy", "si_unit": "1"},
     {"id": "t", "latex": "t", "meaning": "grubość filmu", "si_unit": "\\mathrm{m}"},
     {"id": "d", "latex": "d", "meaning": "odległość od powierzchni filmu do płaszczyzny Dirichleta", "si_unit": "\\mathrm{m}"},
     {"id": "L", "latex": "L", "meaning": "położenie płaszczyzny Dirichleta, $d+t/2$", "si_unit": "\\mathrm{m}"},
@@ -149,6 +163,24 @@
       "path": "scripts/test_signed_de_bv_dispersion.py",
       "symbol": "test_nearest_record_binds_native_target_and_full_residual",
       "responsibility": "Nearest collector artifact binding regression."
+    },
+    {
+      "id": "source-inspector-k-validity-range",
+      "path": "apps/control-room/src/modules/inspector/panels/frequency-domain/EigenDispersionInspectorModel.ts",
+      "symbol": "dispersionReferenceComparison",
+      "responsibility": "Compare a declared max_k_rad_per_m against the maximum Euclidean norm of complete per-sample wavevectorKf values; never substitute cumulative pathS and leave incomplete coverage unknown."
+    },
+    {
+      "id": "source-inspector-k-validity-range-test",
+      "path": "apps/control-room/src/modules/inspector/panels/frequency-domain/EigenDispersionInspectorPanel.test.tsx",
+      "symbol": "uses_wavevector_norm_not_cumulative_path_span_for_validity",
+      "responsibility": "Regression for signed k, Gamma, three-dimensional vector norms, and nonzero path offsets."
+    },
+    {
+      "id": "source-inspector-k-validity-range-unknown-test",
+      "path": "apps/control-room/src/modules/inspector/panels/frequency-domain/EigenDispersionInspectorPanel.test.tsx",
+      "symbol": "leaves_declared_k_range_unverified_without_complete_finite_wavevectors",
+      "responsibility": "Verify missing, partial, NaN, infinite, and overflowed per-sample wavevectors keep a declared range unknown while preserving other comparison statuses."
     }
   ],
   "public_api": {

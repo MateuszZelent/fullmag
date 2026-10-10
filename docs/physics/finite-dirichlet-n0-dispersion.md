@@ -2,7 +2,7 @@
 
 - Status: diagnostyczna referencja analityczna; `source-visible / unvalidated`
 - Właściciel: FEM frequency-domain DE/BV dispersion
-- Aktualizacja: 2026-10-02
+- Aktualizacja: 2026-10-10
 - Powiązany model: `examples/fem_de_smoke_numeric.py`
 - Powiązany audyt: `docs/audits/2026-09-15-eigensolve-dispersion-correctness-audit.md`, finding M15
 
@@ -147,6 +147,15 @@ wartości zmiennoprzecinkowej daje skończony czynnik w przedziale $[0,1]$.
 |---|---|---|
 | $q$ | wartość bezwzględna wektora falowego | $\mathrm{m^{-1}}$ |
 | $k$ | signed składowa ścieżki DE/BV | $\mathrm{m^{-1}}$ |
+| $\mathbf{k}_j$ | trójwymiarowy wektor falowy próbki $j$ | $\mathrm{rad\,m^{-1}}$ |
+| $k_{x,j}$ | składowa $x$ wektora falowego próbki $j$ | $\mathrm{rad\,m^{-1}}$ |
+| $k_{y,j}$ | składowa $y$ wektora falowego próbki $j$ | $\mathrm{rad\,m^{-1}}$ |
+| $k_{z,j}$ | składowa $z$ wektora falowego próbki $j$ | $\mathrm{rad\,m^{-1}}$ |
+| $q_j$ | norma euklidesowa wektora $\mathbf{k}_j$ | $\mathrm{rad\,m^{-1}}$ |
+| $q_{\max,\mathrm{path}}$ | największa norma falowa na całej próbkowanej ścieżce | $\mathrm{rad\,m^{-1}}$ |
+| $s_j$ | skumulowana współrzędna ścieżki używana na osi wykresu | $\mathrm{rad\,m^{-1}}$ |
+| $j$ | indeks próbki ścieżki | $1$ |
+| $\mathcal{S}$ | zbiór indeksów próbek ścieżki użyty w granicy | $1$ |
 | $t$ | grubość filmu | $\mathrm{m}$ |
 | $d$ | odległość od powierzchni filmu do płaszczyzny Dirichleta | $\mathrm{m}$ |
 | $L$ | położenie płaszczyzny Dirichleta, $d+t/2$ | $\mathrm{m}$ |
@@ -194,6 +203,33 @@ je na $H_0=B_0/\mu_0$. Wszystkie wartości są pobierane z resolved metadata.
   przed zaokrągleniem, a nie metodą poprawy dokładności.
 - Przy braku resolved `air_padding_each_side_m` kolektor i ploter raportują
   `finite_dirichlet_n0=NOT_AVAILABLE`; nie podstawiają wartości `d` z przykładu.
+
+### 4.1. Norma próbkowanego wektora a współrzędna ścieżki
+
+Granica ważności `max_k_rad_per_m` odnosi się do największej normy
+trójwymiarowego wektora falowego w próbkach, nie do długości narysowanej
+ścieżki. Dla punktów $\mathbf{k}_j=(k_{x,j},k_{y,j},k_{z,j})$:
+
+```{math}
+:label: eq-finite-airbox-sampled-wavevector-bound
+q_j=\lVert\mathbf{k}_j\rVert_2
+=\sqrt{k_{x,j}^2+k_{y,j}^2+k_{z,j}^2},
+\qquad
+q_{\max,\mathrm{path}}=\max_{j\in\mathcal{S}}q_j.
+```
+
+Współrzędna $s_j$ jest skumulowanym przebiegiem po uporządkowanej ścieżce.
+Może rosnąć podczas powrotu w kierunku mniejszego $|k|$ i nie jest
+zastępstwem dla $q_j$. Dla podpisanej ścieżki
+$-25\cdot10^6\to0\to+25\cdot10^6\,\mathrm{rad\,m^{-1}}$ koniec ścieżki ma
+$s=50\cdot10^6\,\mathrm{rad\,m^{-1}}$, lecz
+$q_{\max,\mathrm{path}}=25\cdot10^6\,\mathrm{rad\,m^{-1}}$.
+
+Inspektor wyznacza tę granicę wyłącznie z kompletnego, skończonego
+`wavevectorKf` każdego punktu dyspersji. Brakujący, niepełny lub niefinitywny
+wektor pozostawia test zakresu nieznany; nie wolno rekonstruować $\mathbf{k}$
+z $s_j$, etykiety ani końców ścieżki. Status zgodności założeń nadal opisuje
+wyłącznie metadane założeń i śledzenia gałęzi; nie jest walidacją fizyczną.
 
 (python-api)=
 ## 5. Python API i przykład
@@ -360,6 +396,9 @@ pozostaje `NOT VERIFIED`.
 | Niezależna kwadratura | `scripts/test_finite_dirichlet_thin_film_oracle.py::test_surface_and_volume_green_quadrature_reproduce_both_factors` | source-level math | PASS; bez native build |
 | Binding plotera | `scripts/test_plot_de_bv_dispersion_comparison.py::test_plot_selected_only_rejects_unqualified_record` | artifact diagnostic | PASS |
 | Binding kolektora | `scripts/test_signed_de_bv_dispersion.py::test_nearest_record_binds_native_target_and_full_residual` | artifact diagnostic | PASS |
+| Zakres falowego wektora w Inspectorze | `apps/control-room/src/modules/inspector/panels/frequency-domain/EigenDispersionInspectorModel.ts::dispersionReferenceComparison` | Control Room analysis | max norma `wavevectorKf`; `pathS` pozostaje współrzędną wykresu |
+| Regresja wektora falowego w Inspectorze | `apps/control-room/src/modules/inspector/panels/frequency-domain/EigenDispersionInspectorPanel.test.tsx::uses_wavevector_norm_not_cumulative_path_span_for_validity` | source regression | signed-k, Gamma, norma 3D i niezerowa współrzędna ścieżki |
+| Nieznany zakres w Inspectorze | `apps/control-room/src/modules/inspector/panels/frequency-domain/EigenDispersionInspectorPanel.test.tsx::leaves_declared_k_range_unverified_without_complete_finite_wavevectors` | source regression | brak, niekompletny, niefinitywny i przepełniony wektor; zachowanie pozostałych statusów; wykonanie lokalne pominięte |
 
 Źródła i testy pokazują implementację referencji; żaden z nich nie zastępuje
 managed runtime, dowodu GPU, zbieżności FEM ani porównania COMSOL.

@@ -83,7 +83,6 @@ export function useEigenDispersionInspectorSummary() {
   const comparison = dispersionReferenceComparison(
     manifestPayload,
     dispersionModel.points,
-    pathValues,
     record(record(branches.data?.payload)?.diagnostics),
     referenceModels.data?.models ?? [],
   );
@@ -121,25 +120,22 @@ export function useEigenDispersionInspectorSummary() {
 }
 
 /** Comparison status from metadata only; curve agreement never yields "matching". */
-function dispersionReferenceComparison(
+export function dispersionReferenceComparison(
   manifestPayload: Record<string, unknown> | null,
   points: readonly EigenDispersionPoint[],
-  pathValues: readonly number[],
   branchDiagnostics: Record<string, unknown> | null,
   referenceModels: readonly AnalyticReferenceModelResource[],
 ) {
   const validation = record(record(manifestPayload?.validation)?.dispersion_validation);
   const requested = record(manifestPayload?.requested_execution);
   const trackingSource = stringValue(branchDiagnostics?.tracking_score_source);
-  const maxPath = pathValues.reduce<number | null>(
-    (max, value) => (Number.isFinite(value) ? Math.max(max ?? 0, Math.abs(value)) : max),
-    null,
-  );
-  return referenceComparisonStatus({
+  const maxPathWavevectorRadPerM = maxSampleWavevectorMagnitude(points);
+  const validityMaxWavevectorRadPerM = finiteNumber(validation?.max_k_rad_per_m) ?? null;
+  const comparison = referenceComparisonStatus({
     branchTrackingConfirmed: trackingSource?.startsWith("modal_overlap_") === true &&
       trackingSource !== "modal_overlap_unavailable",
     hasReferencePoints: points.some((point) => point.analyticFrequencyHz != null),
-    maxPathWavevectorRadPerM: maxPath,
+    maxPathWavevectorRadPerM,
     referenceBoundaryAssumption: publishedOrKnownBoundaryAssumption(
       stringValue(validation?.analytic_model) ?? null,
       referenceModels,
@@ -147,8 +143,45 @@ function dispersionReferenceComparison(
     runBoundaryAssumption:
       stringValue(requested?.boundary_assumption) ??
       runBoundaryAssumptionFromMagnetostaticBc(stringValue(requested?.magnetostatic_bc) ?? null),
-    validityMaxWavevectorRadPerM: finiteNumber(validation?.max_k_rad_per_m) ?? null,
+    validityMaxWavevectorRadPerM,
   });
+  if (maxPathWavevectorRadPerM != null || validityMaxWavevectorRadPerM == null) {
+    return comparison;
+  }
+
+  const rangeUnavailableReason =
+    "The declared k validity range cannot be checked because the complete per-sample wavevectors are missing or invalid; the cumulative path coordinate is not a substitute.";
+  if (comparison.status === "matching") {
+    return {
+      reasons: [rangeUnavailableReason],
+      status: "assumptions_not_recorded" as const,
+    };
+  }
+  return {
+    ...comparison,
+    reasons: [...comparison.reasons, rangeUnavailableReason],
+  };
+}
+
+function maxSampleWavevectorMagnitude(
+  points: readonly EigenDispersionPoint[],
+): number | null {
+  if (points.length === 0) return null;
+  let maximum = 0;
+  for (const point of points) {
+    const wavevector = point.wavevectorKf;
+    if (
+      !Array.isArray(wavevector) ||
+      wavevector.length !== 3 ||
+      !wavevector.every((component) => Number.isFinite(component))
+    ) {
+      return null;
+    }
+    const magnitude = Math.hypot(wavevector[0], wavevector[1], wavevector[2]);
+    if (!Number.isFinite(magnitude)) return null;
+    maximum = Math.max(maximum, magnitude);
+  }
+  return maximum;
 }
 
 /** The backend-published model is authoritative; the client table covers older servers. */
