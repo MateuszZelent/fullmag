@@ -3299,8 +3299,8 @@ void modal_floquet_shared_domain_contour_original_k_certification(
 
     fd::ModalEigenRequest mismatched_request{};
     mismatched_request.target_kind = "frequency_window";
-    mismatched_request.frequency_min_hz = 0.01;
-    mismatched_request.frequency_max_hz = 1.0;
+    mismatched_request.frequency_min_hz = contour_frequency_min_hz;
+    mismatched_request.frequency_max_hz = contour_frequency_max_hz;
     mismatched_request.requested_mode_count = 1;
     mismatched_request.residual_tolerance = 1.0e-10;
     mismatched_request.max_outer_iterations = 32;
@@ -3326,6 +3326,30 @@ void modal_floquet_shared_domain_contour_original_k_certification(
     mismatched_request.floquet_periodic_pair_count = fixture.native_pairs.size();
     mismatched_request.phase_convention =
         fd::FrequencyDomainPhaseConvention::exp_i_omega_t;
+    reset_progress_capture();
+    mismatched_request.progress_callback = capture_progress;
+    const fd::FrequencyDomainContractResult original_adapter_result =
+        fd::production_cpu_modal_eigen_unavailable(
+            mismatched_request,
+            &reconstruction);
+    const std::string original_adapter_diagnostics =
+        original_adapter_result.diagnostics_json.substr(0u, 512u);
+    const std::string original_adapter_failure =
+        "the contour adapter must first solve and certify the original K; status=" +
+        std::to_string(static_cast<int>(original_adapter_result.status)) +
+        " diagnostics=" + original_adapter_diagnostics;
+    check(original_adapter_result.status == fd::FrequencyDomainStatus::ok,
+          original_adapter_failure.c_str());
+    check(!contains(original_adapter_result.result_json.c_str(),
+                    "\"accepted_mode_count\":0") &&
+              contains(original_adapter_result.result_json.c_str(),
+                      "\"floquet_descriptor_certified\":true") &&
+              contains(original_adapter_result.result_json.c_str(),
+                      "\"potential_vector_real\":"),
+          "the contour adapter baseline must publish a certified mode and potential");
+    check(g_progress_event_count > 0,
+          "the successful contour adapter baseline must publish progress");
+
     fd::FloquetPotentialReconstruction mismatched_reconstruction = reconstruction;
     mismatched_reconstruction.magnetic_stiffness_real_split =
         perturbed_stiffness.data();
@@ -3337,6 +3361,9 @@ void modal_floquet_shared_domain_contour_original_k_certification(
             &mismatched_reconstruction);
     check(mismatched_result.status == fd::FrequencyDomainStatus::solve_error,
           "the contour adapter must fail when its original K certificate is perturbed");
+    check(contains(mismatched_result.diagnostics_json.c_str(),
+                   "\"unsupported_reason\":\"floquet_original_descriptor_residual_failed\""),
+          "the wrong-K contour adapter failure must come from original descriptor certification");
     check(contains(mismatched_result.result_json.c_str(), "\"accepted_mode_count\":0"),
           "a failed original-K contour certificate must publish no accepted modes");
     check(contains(mismatched_result.result_json.c_str(),
@@ -6109,6 +6136,17 @@ void modal_floquet_wavevector_validation_precedes_tiny_dispatch()
         FullmagFemFrequencyDomainResult result =
             fullmag_fem_modal_eigen_solve(&request);
         check_tiny_matrix_buffer_bindings(case_name, "after solve", request);
+        if (result.status != FULLMAG_FEM_FD_VALIDATION_ERROR) {
+            std::fprintf(
+                stderr,
+                "INFO: invalid Floquet fixture case=%s raw_len=%d has_fallback=%u status=%u error=%.512s diagnostics=%.2048s\n",
+                case_name,
+                static_cast<int>(request.operator_request.k_vector_len),
+                static_cast<unsigned int>(request.has_floquet_k_vector),
+                static_cast<unsigned int>(result.status),
+                result.error_message != nullptr ? result.error_message : "",
+                result.diagnostics_json != nullptr ? result.diagnostics_json : "");
+        }
         check(result.status == FULLMAG_FEM_FD_VALIDATION_ERROR,
               "an invalid declared Floquet wavevector must fail validation");
         check(contains(result.diagnostics_json, "invalid_floquet_wavevector"),
@@ -6158,13 +6196,30 @@ void modal_floquet_wavevector_validation_precedes_tiny_dispatch()
     invalid_length.operator_request.k_vector_len = 2;
     expect_invalid_wavevector("short_raw_vector", invalid_length);
 
-    const int invalid_raw_lengths[] = {0, -1, 4};
+    // A zero-count raw slice is omitted, irrespective of its backing pointer.
+    const double ignored_raw_backing[] = {
+        std::numeric_limits<double>::quiet_NaN(),
+        std::numeric_limits<double>::infinity(),
+        -std::numeric_limits<double>::infinity(),
+    };
+    FullmagFemModalEigenRequest omitted_raw_slice = tiny_floquet_request();
+    omitted_raw_slice.operator_request.k_vector_rad_m = ignored_raw_backing;
+    omitted_raw_slice.operator_request.k_vector_len = 0;
+    FullmagFemFrequencyDomainResult omitted_raw_result =
+        fullmag_fem_modal_eigen_solve(&omitted_raw_slice);
+    report_unexpected_success_status("omitted_nonnull_raw_slice", omitted_raw_result);
+    check(omitted_raw_result.status == FULLMAG_FEM_FD_OK &&
+              contains(omitted_raw_result.diagnostics_json,
+                       "\"tiny_validation_solver\":true"),
+          "a nonnull zero-count raw slice preserves implicit Gamma without reading nonfinite backing data");
+    fullmag_fem_frequency_domain_result_destroy(&omitted_raw_result);
+
+    const int invalid_raw_lengths[] = {-1, 4};
     const char *const invalid_raw_length_case_names[] = {
-        "zero_raw_length",
         "negative_raw_length",
         "long_raw_length",
     };
-    for (std::size_t index = 0; index < 3; ++index) {
+    for (std::size_t index = 0; index < 2; ++index) {
         const int invalid_raw_length = invalid_raw_lengths[index];
         FullmagFemModalEigenRequest invalid_raw_length_request = tiny_floquet_request();
         invalid_raw_length_request.operator_request.k_vector_rad_m =
