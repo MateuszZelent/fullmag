@@ -2,6 +2,14 @@ name: eigensolve-api-source-contracts
 
 on:
   workflow_dispatch:
+  push:
+    branches: ['codex/**']
+    paths:
+      - '.github/workflows/eigensolve-api-source-contracts.yml'
+      - 'crates/fullmag-api/src/session.rs'
+      - 'crates/fullmag-api/src/router_v2/tests.rs'
+      - 'crates/fullmag-api/src/router_v2/handlers/data/fields.rs'
+      - 'crates/fullmag-api/src/router_v2/handlers/data/quantities.rs'
 
 permissions:
   contents: read

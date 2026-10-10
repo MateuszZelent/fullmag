@@ -642,3 +642,10 @@ Dodano ręcznie uruchamiany focused GHA source gate: session ownership
 i dwa konkretne router publication/bundle cases. Nowy wynik wymagany.
 Zachowane1016PASS z poprzedniego exactsource pozostają scoped evidence;
 failing historyczny workflow nie jest przemianowany na PASS.
+
+
+Focused API workflow na ab493a4b7c5635f7c44f8b31f7d2fc28bc7bef3a
+nie zostało uruchomione: workflow_dispatch zwrócił404, gdyż pliku nie ma
+na default branch. Dodajemy zwykły on-push dla pliku workflow i
+konkretnych API source paths na codex branches; nie zmieniamy mastera
+ani nie traktujemy błędu dispatch jako wykonanego testu.
