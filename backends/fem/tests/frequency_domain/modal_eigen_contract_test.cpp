@@ -7051,6 +7051,253 @@ void modal_nonzero_k_floquet_bloch_payload_with_dynamic_demag_k_is_admitted()
     fullmag_fem_frequency_domain_result_destroy(&nearest_result);
 }
 
+void floquet_live_shift_configuration_uses_native_count_fixture()
+{
+#if FULLMAG_HAS_MFEM_STACK && FULLMAG_FEM_WITH_SLEPC
+    FloquetContourSharedDomainFixture fixture{};
+    fixture.initialize(5u, true);
+    initialize_native_count_fixture(fixture);
+    verify_native_count_fixture_composed_operator(fixture);
+    const FullmagFemCsrMatrixView &legacy_magnetic_a_qq =
+        fixture.payload.magnetic_a_qq_csr;
+    check(legacy_magnetic_a_qq.row_count == 0u &&
+              legacy_magnetic_a_qq.column_count == 0u &&
+              legacy_magnetic_a_qq.row_offsets == nullptr &&
+              legacy_magnetic_a_qq.row_offsets_len == 0u &&
+              legacy_magnetic_a_qq.column_indices == nullptr &&
+              legacy_magnetic_a_qq.column_indices_len == 0u &&
+              legacy_magnetic_a_qq.values == nullptr &&
+              legacy_magnetic_a_qq.values_len == 0u,
+          "native-count fixture must reach production through its shared-domain owner without a legacy A_qq CSR");
+    check(fixture.descriptor.tangent_frame_xyz != nullptr &&
+              fixture.descriptor.node_count == fixture.nodes.size() / 3u &&
+              fixture.descriptor.tangent_frame_xyz_count ==
+                  6u * fixture.descriptor.node_count,
+          "native-count modal payload preserves its canonical two-vector tangent frame at every mesh node");
+
+    FullmagFemModalEigenRequest request =
+        make_floquet_contour_request(fixture, nullptr, nullptr);
+    request.target_kind = "nearest_frequency";
+    request.target_frequency_hz = fixture.reference_frequency_hz;
+    request.frequency_min_hz = 0.0;
+    request.frequency_max_hz = 0.0;
+    request.eigensolver_family = 1;
+    request.mfem_operator_enabled = 0;
+    request.mfem_tangent_dof_count = 0u;
+    request.mfem_stiffness_matrix_row_major = nullptr;
+    request.mfem_gyrotropic_matrix_row_major = nullptr;
+    request.operator_request.operator_diagnostics_json =
+        "{\"operator_family\":\"mfem_linearized_llg\","
+        "\"payload_kind\":\"certified_shared_domain\"}";
+    request.max_linear_iterations = 1;
+
+    const ScopedFloquetDiagnosticEnvironment diagnostic_environment{};
+    check(diagnostic_environment.ready,
+          "enable the opt-in Floquet diagnostics for the native-count shift measurement");
+    FullmagFemFrequencyDomainResult result =
+        fullmag_fem_modal_eigen_solve(&request);
+
+    const auto bounded_text = [](const char *value, std::size_t maximum) {
+        if (value == nullptr) {
+            return std::string("<null>");
+        }
+        return std::string(value, std::min(std::strlen(value), maximum));
+    };
+    const auto copy_json_object = [](const char *object_begin) {
+        if (object_begin == nullptr || *object_begin != '{') {
+            return std::string{};
+        }
+        std::size_t brace_depth = 0u;
+        bool inside_string = false;
+        bool escaped = false;
+        for (const char *cursor = object_begin; *cursor != '\0'; ++cursor) {
+            if (inside_string) {
+                if (escaped) {
+                    escaped = false;
+                } else if (*cursor == '\\') {
+                    escaped = true;
+                } else if (*cursor == '"') {
+                    inside_string = false;
+                }
+                continue;
+            }
+            if (*cursor == '"') {
+                inside_string = true;
+            } else if (*cursor == '{') {
+                ++brace_depth;
+            } else if (*cursor == '}') {
+                if (brace_depth == 0u) {
+                    return std::string{};
+                }
+                --brace_depth;
+                if (brace_depth == 0u) {
+                    return std::string(object_begin, cursor + 1);
+                }
+            }
+        }
+        return std::string{};
+    };
+    const auto json_object_after_key = [&copy_json_object](
+                                           const char *json,
+                                           const char *key) {
+        if (json == nullptr || key == nullptr || key[0] == '\0') {
+            return std::string{};
+        }
+        const char *key_position = std::strstr(json, key);
+        if (key_position == nullptr) {
+            return std::string{};
+        }
+        const char *object_begin = key_position + std::strlen(key);
+        while (*object_begin == ' ' || *object_begin == '\t' ||
+               *object_begin == '\r' || *object_begin == '\n') {
+            ++object_begin;
+        }
+        return copy_json_object(object_begin);
+    };
+    const int raw_status = static_cast<int>(result.status);
+    const std::string error_snapshot = bounded_text(result.error_message, 512u);
+    const std::string result_snapshot = bounded_text(result.result_json, 2048u);
+    const char *diagnostics = result.diagnostics_json;
+    const std::string borrowed_pmat_json = json_object_after_key(
+        diagnostics, "\"borrowed_pmat_copy\":");
+    const std::string candidate_operator_json = json_object_after_key(
+        diagnostics, "\"candidate_operator_diagnostic\":");
+    const std::string live_pc_json = json_object_after_key(
+        diagnostics, "\"live_pc_observation\":");
+    const std::string failure_probe_json = json_object_after_key(
+        diagnostics, "\"shifted_ksp_failure_probe\":");
+    const char *reason = result.result_json != nullptr
+        ? std::strstr(result.result_json, "\"stop_reason\":")
+        : nullptr;
+    const std::string reason_snapshot = bounded_text(reason, 256u);
+    const std::string query_snapshot = bounded_text(
+        !borrowed_pmat_json.empty()
+            ? borrowed_pmat_json.c_str()
+            : diagnostics,
+        4096u);
+    std::fprintf(
+        stderr,
+        "NATIVE-COUNT FLOQUET SHIFT DIAGNOSTIC (not solve qualification): "
+        "raw_status=%d error=%s reason=%s result_prefix=%s query_prefix=%s\n",
+        raw_status,
+        error_snapshot.c_str(),
+        reason_snapshot.c_str(),
+        result_snapshot.c_str(),
+        query_snapshot.c_str());
+
+    check(result.status == FULLMAG_FEM_FD_SOLVE_ERROR &&
+              contains(result.result_json,
+                       "\"stop_reason\":\"floquet_slepc_solve_failed\"") &&
+              contains(failure_probe_json.c_str(),
+                       "\"schema_version\":\"shifted_ksp_failure_probe.v1\""),
+          "native-count nearest fixture must reach and report the real shifted SLEPc solve failure");
+    check(contains(candidate_operator_json.c_str(),
+                   "\"schema_version\":\"floquet_candidate_operator_diagnostic.v1\"") &&
+              contains(candidate_operator_json.c_str(), "\"requested\":true") &&
+              contains(live_pc_json.c_str(),
+                       "\"schema_version\":\"floquet_live_pc_observation.v1\"") &&
+              contains(borrowed_pmat_json.c_str(),
+                       "\"schema_version\":\"floquet_borrowed_pmat_copy.v1\",\"requested\":true"),
+          "native-count SLEPc failure must serialize its actual requested live-PC diagnostic");
+    check(contains(borrowed_pmat_json.c_str(),
+                   "\"live_shift_query_status_available\":true,\"live_shift_query_status\":\"measured\"") &&
+              contains(borrowed_pmat_json.c_str(),
+                       "\"actual_factorization_shift_type_available\":true") &&
+              contains(borrowed_pmat_json.c_str(),
+                       "\"actual_factorization_shift_type_enum_value_available\":true") &&
+              contains(borrowed_pmat_json.c_str(),
+                       "\"actual_factorization_shift_type_query_error_code_available\":true,\"actual_factorization_shift_type_query_error_code\":0") &&
+              contains(borrowed_pmat_json.c_str(),
+                       "\"actual_factorization_shift_amount_available\":true") &&
+              contains(borrowed_pmat_json.c_str(),
+                       "\"actual_factorization_shift_amount_query_error_code_available\":true,\"actual_factorization_shift_amount_query_error_code\":0") &&
+              contains(borrowed_pmat_json.c_str(),
+                       "\"actual_factorization_perturbation_measured\":false"),
+          "native-count observation must report successful live PCLU getters without claiming applied perturbation");
+
+    const double shift_type_enum_value = extract_json_number(
+        borrowed_pmat_json.c_str(),
+        "\"actual_factorization_shift_type_enum_value\":",
+        "native_count_live_factor_shift_type_enum");
+    const double shift_amount = extract_json_number(
+        borrowed_pmat_json.c_str(),
+        "\"actual_factorization_shift_amount\":",
+        "native_count_live_factor_shift_amount");
+    const bool shift_type_is_mapped =
+        contains(borrowed_pmat_json.c_str(),
+                 "\"actual_factorization_shift_type\":\"MAT_SHIFT_NONE\"") ||
+        contains(borrowed_pmat_json.c_str(),
+                 "\"actual_factorization_shift_type\":\"MAT_SHIFT_NONZERO\"") ||
+        contains(borrowed_pmat_json.c_str(),
+                 "\"actual_factorization_shift_type\":\"MAT_SHIFT_POSITIVE_DEFINITE\"") ||
+        contains(borrowed_pmat_json.c_str(),
+                 "\"actual_factorization_shift_type\":\"MAT_SHIFT_INBLOCKS\"");
+    check(std::isfinite(shift_type_enum_value) &&
+              shift_type_enum_value >= 0.0 && shift_type_enum_value <= 3.0 &&
+              shift_type_enum_value == std::floor(shift_type_enum_value) &&
+              shift_type_is_mapped && std::isfinite(shift_amount) &&
+              contains(borrowed_pmat_json.c_str(),
+                       "\"actual_factorization_shift_amount_nonfinite_available\":true,\"actual_factorization_shift_amount_nonfinite\":false"),
+          "native-count live PCLU query must expose a mapped enum and finite configured amount");
+    const double eps_attempt_number = extract_json_number(
+        failure_probe_json.c_str(),
+        "\"eps_attempt_number\":",
+        "native_count_shift_failure_eps_attempt");
+    const double callback_count = extract_json_number(
+        failure_probe_json.c_str(),
+        "\"callback_count\":",
+        "native_count_shift_failure_callback_count");
+    const double pc_apply_attempt_count = extract_json_number(
+        live_pc_json.c_str(),
+        "\"pc_apply_attempt_count\":",
+        "native_count_live_pc_apply_attempt_count");
+    const double pc_apply_success_count = extract_json_number(
+        live_pc_json.c_str(),
+        "\"pc_apply_success_count\":",
+        "native_count_live_pc_apply_success_count");
+    const double repeat_pc_apply_attempt_count = extract_json_number(
+        live_pc_json.c_str(),
+        "\"repeat_pc_apply_attempt_count\":",
+        "native_count_live_repeat_pc_apply_attempt_count");
+    const double repeat_pc_apply_success_count = extract_json_number(
+        live_pc_json.c_str(),
+        "\"repeat_pc_apply_success_count\":",
+        "native_count_live_repeat_pc_apply_success_count");
+    check(eps_attempt_number >= 1.0 && callback_count >= 1.0 &&
+              pc_apply_attempt_count >= 1.0 &&
+              pc_apply_success_count == pc_apply_attempt_count &&
+              repeat_pc_apply_attempt_count >= 1.0 &&
+              repeat_pc_apply_success_count == repeat_pc_apply_attempt_count &&
+              contains(live_pc_json.c_str(),
+                       "\"pc_type_available\":true,\"pc_type_overflow\":false,\"pc_type\":\"lu\""),
+          "native-count measurement must retain actual EPS callback and successful live/repeated LU PC counters");
+
+    std::fprintf(
+        stdout,
+        "NATIVE-COUNT LIVE PCLU QUERY SNAPSHOT (diagnostic only): "
+        "raw_status=%d tangent_frame_components=%llu eps_attempt=%.0f "
+        "callbacks=%.0f shift_enum=%.0f shift_amount=%.17g "
+        "pc_apply=%.0f/%.0f repeat_pc_apply=%.0f/%.0f "
+        "query_prefix=%s\n",
+        raw_status,
+        static_cast<unsigned long long>(
+            fixture.descriptor.tangent_frame_xyz_count),
+        eps_attempt_number,
+        callback_count,
+        shift_type_enum_value,
+        shift_amount,
+        pc_apply_attempt_count,
+        pc_apply_success_count,
+        repeat_pc_apply_attempt_count,
+        repeat_pc_apply_success_count,
+        query_snapshot.c_str());
+    fullmag_fem_frequency_domain_result_destroy(&result);
+#else
+    check(false,
+          "native-count live PCLU configuration probe requires MFEM and SLEPc");
+#endif
+}
+
 void modal_nonzero_k_floquet_shared_domain_nearest_reports_shifted_ksp_diagnostics(
     bool count_certificate_only = false,
     bool fault_quarantine_only = false,
@@ -8699,7 +8946,7 @@ int main(int argc, char **argv)
         }
         if (argc == 2 && std::strcmp(argv[1], "--floquet-live-shift-configuration") == 0) {
 #if FULLMAG_HAS_MFEM_STACK && FULLMAG_FEM_WITH_SLEPC
-            modal_nonzero_k_floquet_shared_domain_nearest_reports_shifted_ksp_diagnostics();
+            floquet_live_shift_configuration_uses_native_count_fixture();
             std::printf("PASS: floquet_live_factor_shift_configuration_contract\n");
             return 0;
 #else

@@ -384,3 +384,22 @@ actual getter measurement pozostaje NOT VERIFIED. Poprawka ma uzyc
 kanonicznego native FIELD/DEMAG fixture, ktory przeszedl count-admission,
 zamiast oslabienia R4. Bounded failure diagnostic jest wymagany przed
 asercja, aby zachowac rzeczywisty status i powod odrzucenia.
+
+
+## Checkpoint b176d824 — poprawione fixtures P2/P4
+
+Poprawka lokalnego retry i odczytu zagnieżdżonych obiektów JSON jest na remote
+`b176d824ce21eca7f96132ebac6579e61d53a753`. Hosted modal-phase-slepc
+[38080351130](https://github.com/MateuszZelent/fullmag/actions/runs/38080351130)
+trwa; nie zapisujemy sukcesu przed terminalnym receipt.
+
+Osobna fixture pomiaru konfiguracji PCLU korzysta teraz z fizycznego
+shared-domain/native-count owner, pustego legacy Aqq CSR i targetu gamma0 H /
+(2 pi) z niezależnego oracle. Zachowuje dotychczasowe strict admission i limit
+jednej iteracji. Wypisuje ograniczoną diagnostykę przed asercjami. Pomiar
+konfiguracji getterów nie oznacza pomiaru faktycznej perturbacji faktoryzacji.
+
+Root i niezależny source review: PASS po poprawce źródła liczników PCApply
+(rodzic live_pc_observation; gettery w borrowed_pmat_copy). Faktyczne wejście
+do SLEPc, oczekiwany hard failure i wykonanie getterów pozostają NOT VERIFIED
+do hosted CTest. Nie zastępuje to rozwiązania problemu KSP ani kwalifikacji P2.
