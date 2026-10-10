@@ -65,3 +65,12 @@ nie usuwamy danych i nie rekwalifikujemy ich na podstawie obecnych bajtów.
 Rollback może wyłączyć nowe wydawanie dowodu, ale konsument nie może
 akceptować niepoświadczonych metadanych jako zweryfikowanych. Stan wdrożenia:
 SOURCE review korekt: PASS; GitHub Actions oraz runtime NOT VERIFIED.
+
+
+Potwierdzenie 10.10.2026: [GHA38061668386](https://github.com/MateuszZelent/fullmag/actions/runs/38061668386)
+na SHA `2dd8d2187d964a13cf0f6f42c700db5d69557cf5` zakończyło trzy joby
+SUCCESS. Producent: Ubuntu 44 i Windows 43 testy Rust bez błędów. Czytnik:
+Ubuntu 16 testów; Windows 15 i jeden jawny POSIX-only skip. Named regresje
+contention/retry, interrupted stamp, Windows replacement oraz FIFO na
+Ubuntu przeszły. Kontrole konsumentów także przeszły. To zastępuje wcześniejszy
+pending status tych bramek; pełny solver runtime i nauka pozostają NOT VERIFIED.

@@ -6,7 +6,7 @@ Pełny rejestr obejmuje 279 komentarzy liniowych Codex oraz 3 uwagi w treści re
 
 PR #102 zamknięto 2026-10-07, zachowując remote branch `codex/launcher-instance-isolation-20261002` przy `954ba797307c4cc773772d380123893210cfa447`. PR #97 pozostaje otwarty do ukończenia rozpatrzenia i uzasadnionych poprawek. Merge ani usuwanie branchy nie są częścią polecenia zamknięcia PR-ów. Wcześniejszy WIP meshing zachowany osobno.
 
-Stan rejestru: `already_fixed`: 31, `duplicate`: 91, `implemented`: 133, `implemented_pending_ci`: 5, `not_actionable`: 2, `unsupported_recommendation`: 3, `valid_unfixed`: 17. Łącznie 282 wpisów; wszystkie wpisy oceniono; zasadnych nienaprawionych i brakujących bramek nie uznaje się za zakończone.
+Stan rejestru: `already_fixed`: 31, `duplicate`: 91, `implemented`: 134, `implemented_pending_ci`: 5, `not_actionable`: 2, `unsupported_recommendation`: 3, `valid_unfixed`: 16. Łącznie 282 wpisów; wszystkie wpisy oceniono; zasadnych nienaprawionych i brakujących bramek nie uznaje się za zakończone.
 
 Legenda: `pending` — nierozpatrzona; `valid_unfixed` — zasadna, nie naprawiona; `already_fixed` — poprawka potwierdzona aktualnym kodem; `duplicate` — powtórzenie; `unsupported_recommendation` — konkretna rekomendacja nie odpowiada kontraktowi; `implemented` — poprawka z potwierdzoną regresją CI; `implemented_pending_ci` — poprawka przygotowana, regresja oczekuje CI; `implemented_pending_browser` — pokrywające CI przeszło, nadal wymaga celowanego dowodu z przeglądarki; `not_actionable` — uwaga zastąpiona późniejszą jawną decyzją użytkownika.
 
@@ -217,7 +217,7 @@ Legenda: `pending` — nierozpatrzona; `valid_unfixed` — zasadna, nie naprawio
 | [4207002995](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4207002995) / #97 | `crates/fullmag-runner/src/fem/single_k_checkpoint.rs` | duplicate | Duplikat checkpoint directory durability, tak samo jak4206911487. Powtórzenie 4204615025. |
 | [4207003016](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4207003016) / #97 | `scripts/local_runner/retention_executor.py` | implemented | Full logs używają jawnego bounded stream, strictUTF8/hash/count i no-clobber archive/receipt przed checked POSIX parent barrier i exactrm. Windows jawnieodmawia delete bezdirectorybarrier, zachowując archiwum. Rzeczywisty child>16MiB/longline, before-delete failure i cleanup/capacity regresje potwierdzono na obuOS. RealDocker/storage/power-loss osobneNOTVERIFIED. |
 | [4207003028](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4207003028) / #97 | `packages/fullmag-py/src/fullmag/world.py` | duplicate | Spectrum scope wciąż Python-emitted, ale aktywny OutputIR ma tylko quantity. Global semantyka pozostaje nierozstrzygnięta; nie została cicho uznana za naprawioną. Powtórzenie 4060116242. |
-| [4207003038](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4207003038) / #97 | `scripts/managed_runtime_artifact_root.py` | valid_unfixed | Nowy producer-binding gap: terminal manifest wiąże metadata tylko path/kind i identity source/run; resolver hashuje aktualne bajty. Zmiana payloadu zachowująca identity przechodzi i otrzymuje nowy binding. Nie jest tym samym co brak weryfikacji już producer-recorded hashes w comparatorze. |
+| [4207003038](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4207003038) / #97 | `scripts/managed_runtime_artifact_root.py` | implemented | Producer attestation rawmetadata+terminalmanifest i identity zostalo wdrozone z immutable retry/legacyrefusal, kernelwriter gate i no-clobber publication. Rzeczywiste GHAUbuntuWindows przeszlo named contention/retry, interruptedstamp, eligiblefailure, Windowsreplacement i POSIXFIFO. Konsumenci/plot/parity zachowuja zgodnosc. Integralnosc pod zaufanymfinalizerem, bez sciencequalification. |
 | [4207003048](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4207003048) / #97 | `crates/fullmag-plan/src/validate.rs` | duplicate | Branch selectors poza Path nadal admitted, single-k requested indices nie obsługuje branches. Ten sam utracony output contract. Powtórzenie 4060116309. |
 | [4207003056](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4207003056) / #97 | `backends/fem/src/frequency_domain/modal_eigen_solver.cpp` | duplicate | Naprawione źródłowo: declared Floquet vector jest sprawdzany dokładnie3finite przed tiny/production dispatch, a predicate korzysta z walidującego helpera. Pełna raw/fixed matrix dodana; native CI rerun po brakującym cstdio pending. Powtórzenie 4060116253. |
 | [4207003063](https://github.com/MateuszZelent/fullmag/pull/97#discussion_r4207003063) / #97 | `crates/fullmag-ir/src/plan.rs` | implemented | Nowy validation/provenance bug: FemEigenSolverPolicyIR nie ma deny_unknown_fields, więc typo daje allNone policy; planner przyjmuje ją, runner raportuje resolved_fem_eigen_plan/delegates=false mimo zlecenia native defaults. Unknown keys odrzucić; pusty policy jawnie normalizować do None albo odrzucać po udokumentowaniu, nie zakładać automatycznie zakazu {}. |
@@ -3339,3 +3339,26 @@ producer/reader oraz runtime pozostają NOT VERIFIED. Dedykowany job
 Poświadczenie jest dowodem integralności pod zaufanym finalizerem, nie
 podpisem ani kwalifikacją naukową. Gate serializuje współpracujących writerów;
 Windows ochrona rozpoczyna się po open, bez obietnicy pinning przed open.
+
+
+### 2026-10-10 — poświadczenia potwierdzone, kolejna naprawa compile boundary
+
+GHA 38061668386 exact `2dd8d2187d964a13cf0f6f42c700db5d69557cf5`: SUCCESS
+wszystkich trzech jobów. Ubuntu producer 44 PASS/reader 16 PASS; Windows
+producer 43 PASS/reader 15 PASS i 1 POSIX-only skip. Named OS safety
+regresje przeszły. Konsumenci 107 PASS + 121 subtests, verifier 5 PASS,
+root/plot/parity 104 PASS + 70 subtests. Uwaga 4207003038 ma implemented;
+rejestr: 134 implemented, 31 already_fixed, 16 valid_unfixed, 5 pending CI.
+
+Native GHA 38060060960 exact `e8317bd5ee5c12295ddf23211a43f9fedcd6111d`
+zatrzymało się na kompilacji formattera: `PCLU` poza źródłem PETSc.
+Formatter emituje teraz token `lu` pod niezmienioną flagą configured,
+bez dodawania zależności PETSc do adaptera. Rzeczywisty PCSetType pozostaje
+PCLU; [oficjalny pinned header](https://github.com/petsc/petsc/blob/v3.24.6/include/petscpctypes.h#L28)
+potwierdza równoważność tokenu. Niezależne SOURCE review PASS; kompilacja
+i dwanaście CTestów wymagają ponownego GHA. Brak zmian progów i fizyki.
+
+Review A1 wykazało trzy Required: maskowanie orientacji przez abs(det),
+możliwość dodania nakładającego się małego Tet4 poza sprawdzaną ścianą otworu
+i bound chord oparty tylko na końcowych rings. Poprawka A1 pozostaje WIP
+poza commitem; wymaga walidacji całego support i warstw pośrednich.
