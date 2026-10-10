@@ -300,15 +300,15 @@
       "id": "ring-volume-source",
       "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py",
       "symbol": "_generate_coincident_ring_airbox_mesh",
-      "responsibility": "Creates exact-layer Box/ring volumes and extracts the straight-sided tetrahedral mesh.",
+      "responsibility": "Creates exact-layer Box/ring CAD volumes; scoped fields are resolved by one conforming 3D mesh using owner-volume and air-volume fields rather than a copied source-face triangulation.",
       "evidence_status": "implemented"
     },
     {
       "id": "ring-volume-regression",
       "path": "packages/fullmag-py/tests/test_meshing.py",
       "symbol": "test_scoped_exact_ring_lower_bound_uses_layer_route_and_report",
-      "responsibility": "Derives all body boundary faces from tetrahedron incidence, classifies each exactly once, and verifies closed-shell and cap/outer planar coverage before applying the conditional chordal volume bound.",
-      "evidence_status": "planned_contract"
+      "responsibility": "Verifies exact body planes, positive tetrahedra, closed body boundary geometry, shared body-seam incidence, owner-floor provenance, body/air size separation in one region, and actual periodic node translations before the conditional chordal volume bound.",
+      "evidence_status": "implemented"
     },
     {
       "id": "ring-prism-bound-regression",
@@ -318,17 +318,24 @@
       "evidence_status": "implemented"
     },
     {
-      "id": "scoped-layer-geometry-only-plan",
+      "id": "scoped-layer-geometry-only",
       "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py",
       "symbol": "_generate_coincident_ring_airbox_mesh",
-      "responsibility": "Planned geometry-only exact-layer extrusion before owner-volume/air-volume mesh fields; not implemented or runtime-qualified.",
-      "evidence_status": "planned_contract"
+      "responsibility": "Creates scoped exact CAD partitions with geometry-only extrusion, then applies owner-volume floors/upper targets and air-volume grading in one conforming 3D mesh; GHA qualification remains pending.",
+      "evidence_status": "implemented"
     },
     {
       "id": "box-layer-size-resolution",
       "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py",
       "symbol": "_resolve_box_airbox_layer_sizes",
       "responsibility": "Resolves numeric interface and outer targets used by the exact-layer Box/ring generator.",
+      "evidence_status": "implemented"
+    },
+    {
+      "id": "implicit-airbox-cap-regression",
+      "path": "packages/fullmag-py/tests/test_meshing.py",
+      "symbol": "test_exact_layer_implicit_airbox_cap_coarsens_far_air",
+      "responsibility": "Measures near- and far-air tetrahedral sizes on the exact-layer route when no outer target is authored, checking that geometric growth produces actual far-air coarsening.",
       "evidence_status": "implemented"
     },
     {

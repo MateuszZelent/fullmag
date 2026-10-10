@@ -14453,6 +14453,17 @@ class RegionMeshPolicyTests(unittest.TestCase):
             all(incidence in {1, 2} for incidence in body_face_incidence.values()),
             "body tetrahedra contain a nonmanifold face",
         )
+        for plane in body_planes[1:-1]:
+            seam_faces = [
+                incidence
+                for face, incidence in body_face_incidence.items()
+                if all(abs(nodes[node, 2] - plane) <= coordinate_tolerance for node in face)
+            ]
+            self.assertTrue(seam_faces, f"body partition plane z={plane:.17g} m has no seam faces")
+            self.assertTrue(
+                all(incidence == 2 for incidence in seam_faces),
+                f"body partition plane z={plane:.17g} m has an open or duplicated seam",
+            )
         body_boundary_keys = sorted(
             key for key, incidence in body_face_incidence.items() if incidence == 1
         )
@@ -14663,10 +14674,110 @@ class RegionMeshPolicyTests(unittest.TestCase):
         self.assertGreater(body_median, 4e-9)
         self.assertLess(body_median, 16e-9)
         self.assertLess(air_median, body_median)
+        periodic_pair_ids = {"x_faces", "y_faces"}
+        periodic_node_pairs = [
+            pair
+            for pair in mesh.periodic_node_pairs
+            if str(pair["pair_id"]) in periodic_pair_ids
+        ]
         self.assertTrue(
-            {"x_faces", "y_faces"}.issubset(
-                {str(pair["pair_id"]) for pair in mesh.periodic_node_pairs}
+            periodic_pair_ids.issubset(
+                {str(pair["pair_id"]) for pair in periodic_node_pairs}
             )
+        )
+        for pair_id, axis in (("x_faces", 0), ("y_faces", 1)):
+            matched_pairs = [
+                pair for pair in periodic_node_pairs if str(pair["pair_id"]) == pair_id
+            ]
+            self.assertTrue(matched_pairs, f"periodic pair {pair_id} has no node mapping")
+            expected_offset = np.zeros(3, dtype=np.float64)
+            expected_offset[axis] = 40e-9
+            for pair in matched_pairs:
+                node_a = int(pair["node_a"])
+                node_b = int(pair["node_b"])
+                self.assertNotEqual(node_a, node_b)
+                np.testing.assert_allclose(
+                    np.abs(nodes[node_b] - nodes[node_a]),
+                    expected_offset,
+                    rtol=0.0,
+                    atol=coordinate_tolerance,
+                    err_msg=f"periodic pair {pair_id} does not map opposite cell faces",
+                )
+
+    def test_exact_layer_implicit_airbox_cap_coarsens_far_air(self) -> None:
+        try:
+            import gmsh  # noqa: F401
+        except ImportError:
+            self.skipTest("gmsh not available")
+
+        geometry = fm.Box(40e-9, 40e-9, 10e-9, name="implicit_cap_box")
+        mesh_workflow = {
+            "mesh_options": {
+                "mesh_strategy": "thin_film_tetrahedral",
+                "through_thickness_elements": 3,
+                "periodic_pair_ids": ["x_faces", "y_faces"],
+                "compute_quality": False,
+                "per_element_quality": False,
+                "size_fields": [
+                    {
+                        "kind": "ComponentVolumeConstant",
+                        "params": {
+                            "GeometryName": geometry.geometry_name,
+                            "VIn": 10e-9,
+                            "VOut": 20e-9,
+                        },
+                    }
+                ],
+            }
+        }
+        mesh, region_markers, _report = realize_fem_domain_mesh_asset_from_components_with_report(
+            geometries=[geometry],
+            hints=fm.FEM(order=1, hmax=10e-9),
+            study_universe={
+                "mode": "manual",
+                "size": [40e-9, 40e-9, 130e-9],
+                "center": [0.0, 0.0, 0.0],
+                "airbox_hmin": 2e-9,
+                "airbox_growth_rate": 1.3,
+            },
+            mesh_workflow=mesh_workflow,
+        )
+
+        nodes = np.asarray(mesh.nodes, dtype=np.float64)
+        cells = np.asarray(mesh.elements, dtype=np.int32)
+        markers = np.asarray(mesh.element_markers, dtype=np.int32)
+        body_marker = next(
+            int(entry["marker"])
+            for entry in region_markers
+            if entry.get("geometry_name") == geometry.geometry_name
+        )
+        centroids = np.mean(nodes[cells], axis=1)
+        air_mask = markers != body_marker
+        near_air = air_mask & (np.abs(centroids[:, 2]) >= 8e-9) & (
+            np.abs(centroids[:, 2]) <= 20e-9
+        )
+        far_air = air_mask & (np.abs(centroids[:, 2]) >= 50e-9)
+        self.assertGreater(int(np.count_nonzero(near_air)), 0)
+        self.assertGreater(int(np.count_nonzero(far_air)), 0)
+
+        tetrahedra = nodes[cells]
+        edge_pairs = ((0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3))
+        per_tet_median_edge = np.median(
+            np.stack(
+                [
+                    np.linalg.norm(tetrahedra[:, first] - tetrahedra[:, second], axis=1)
+                    for first, second in edge_pairs
+                ],
+                axis=1,
+            ),
+            axis=1,
+        )
+        near_air_median = float(np.median(per_tet_median_edge[near_air]))
+        far_air_median = float(np.median(per_tet_median_edge[far_air]))
+        self.assertGreater(
+            far_air_median,
+            1.2 * near_air_median,
+            "the unauthored outer cap must allow the exact-layer air mesh to coarsen",
         )
 
     def test_exact_layer_body_target_precedence_survives_air_and_local_fields(self) -> None:

@@ -63,8 +63,6 @@ from ._gmsh_extraction import (
     certify_extracted_periodic_mesh,
 )
 from ._gmsh_fields import (
-    _add_exact_plane_projected_cap_field,
-    _exact_plane_cap_seed_points,
     _add_surface_threshold_field,
     _apply_mesh_options,
     _apply_post_mesh_options,
@@ -2468,20 +2466,28 @@ def _generate_coincident_ring_airbox_mesh(
             source_entities = [(2, current_annulus)] + (
                 [(2, current_hole)] if current_hole is not None else []
             )
-            # Keep every requested z interval to one extrusion layer. In the
-            # unscoped route, the already-meshed source triangulation is copied
-            # through air; scoped owner fields instead leave the source unmeshed
-            # so final volume fields can preserve magnetic/air ownership.
-            # Exact layer planes and actual regional density remain separate gates.
-            extruded = gmsh.model.geo.extrude(
-                source_entities,
-                0.0,
-                0.0,
-                step,
-                numElements=[1],
-                heights=[1.0],
-                recombine=True,
-            )
+            # Keep every requested z interval as a separate CAD volume. The
+            # unscoped compatibility route still extrudes its premeshed source
+            # triangulation; scoped fields require geometry-only extrusion so
+            # the final conforming 3D mesh resolves magnetic-owner and air
+            # sizing independently instead of copying one cap mesh everywhere.
+            if scoped_layer_partitioning:
+                extruded = gmsh.model.geo.extrude(
+                    source_entities,
+                    0.0,
+                    0.0,
+                    step,
+                )
+            else:
+                extruded = gmsh.model.geo.extrude(
+                    source_entities,
+                    0.0,
+                    0.0,
+                    step,
+                    numElements=[1],
+                    heights=[1.0],
+                    recombine=True,
+                )
             gmsh.model.geo.synchronize()
             volumes = [int(tag) for dim, tag in extruded if int(dim) == 3]
             if len(volumes) != (2 if tool is not None else 1):
@@ -2513,27 +2519,6 @@ def _generate_coincident_ring_airbox_mesh(
                 raise RuntimeError("coincident ring extrusion top-face identity is ambiguous")
             current_annulus = next_annulus[0]
             current_hole = next_hole[0] if next_hole else None
-
-        if scoped_layer_partitioning:
-            # Seed the shared cap triangulation inside scoped region footprints
-            # at every exact layer plane (see _exact_plane_cap_seed_points).
-            cap_seed_points = _exact_plane_cap_seed_points(
-                size_fields=options.size_fields,
-                lower_bound_fields=options.lower_bound_fields,
-                layer_planes=[
-                    (body_bottom + index * (body_top - body_bottom) / n_layers) / SCALE
-                    for index in range(n_layers + 1)
-                ],
-                bounds_xy=(xmin / SCALE, ymin / SCALE, xmax / SCALE, ymax / SCALE),
-                excluded_disc=(0.0, 0.0, radius) if radius is not None else None,
-            )
-            if cap_seed_points:
-                seed_tags = [
-                    gmsh.model.geo.addPoint(x * SCALE, y * SCALE, z_source, h * SCALE)
-                    for x, y, h in cap_seed_points
-                ]
-                gmsh.model.geo.synchronize()
-                gmsh.model.mesh.embed(0, seed_tags, 2, int(annulus_surface))
 
         body_volumes = [volume for i, volume in enumerate(annulus_volumes)
                         if body_bottom < 0.5 * (levels[i] + levels[i + 1]) < body_top]
@@ -2653,53 +2638,8 @@ def _generate_coincident_ring_airbox_mesh(
             max(body_hmax_scaled, h_outer_scaled),
         )
         preexisting_fields = [*source_fields, int(body_upper_field)]
-        if scoped_layer_partitioning:
-            # The shared extrusion cap lies at the outer z face, in the air, so
-            # neither the owner-volume upper field above nor the air grading
-            # field (which tends to the far-air cap there) constrains it.
-            # Its triangulation is copied through every exact plane, i.e. it
-            # *is* the body XY triangulation; bound it by the body target so
-            # that raising only the airbox cap cannot coarsen the body
-            # (docs/physics/0102 section 11). VOut is neutral for the Min
-            # composition, so no other surface is refined.
-            source_cap_field = gmsh.model.mesh.field.add("Constant")
-            gmsh.model.mesh.field.setNumbers(
-                source_cap_field,
-                "SurfacesList",
-                [int(annulus_surface)]
-                + ([int(hole_surface)] if hole_surface is not None else []),
-            )
-            gmsh.model.mesh.field.setNumber(
-                source_cap_field, "VIn", body_hmax_scaled
-            )
-            gmsh.model.mesh.field.setNumber(
-                source_cap_field, "VOut", max(body_hmax_scaled, h_outer_scaled)
-            )
-            gmsh.model.mesh.field.setNumber(source_cap_field, "IncludeBoundary", 1)
-            preexisting_fields.append(int(source_cap_field))
         if airbox_field is not None:
             preexisting_fields.append(int(airbox_field))
-        if scoped_layer_partitioning:
-            # The source cap is triangulated once and copied through every
-            # exact plane, but scoped region fields only exist between the
-            # planes. Evaluate them at each exact plane z_k and apply the
-            # result to the cap (see _add_exact_plane_projected_cap_field).
-            cap_field = _add_exact_plane_projected_cap_field(
-                gmsh,
-                size_fields=options.size_fields,
-                lower_bound_fields=options.lower_bound_fields,
-                layer_planes=[
-                    (body_bottom + index * (body_top - body_bottom) / n_layers) / SCALE
-                    for index in range(n_layers + 1)
-                ],
-                source_z=z_source / SCALE,
-                neutral_size=max(body_hmax_scaled, h_outer_scaled) / SCALE,
-                geometry_name=geometry.geometry_name,
-                cap_volume_tags=[annulus_volumes[0]],
-                hscale=SCALE,
-            )
-            if cap_field is not None:
-                preexisting_fields.append(int(cap_field))
         _apply_mesh_options(
             gmsh,
             body_hmax_scaled,
