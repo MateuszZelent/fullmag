@@ -6377,51 +6377,130 @@ void modal_nonzero_k_floquet_shared_domain_nearest_reports_shifted_ksp_diagnosti
         FullmagFemFrequencyDomainResult fault_result =
             fullmag_fem_modal_eigen_solve(&fault_request);
         fault_environment.restore();
-        if (!contains(fault_result.diagnostics_json,
-                      "\"pc_apply_fault_injected\":true")) {
-            std::fprintf(
-                stderr,
-                "FAIL: fresh process did not reach the injected live-PC callback; status=%d error=%s diagnostics=%s\n",
-                static_cast<int>(fault_result.status),
-                fault_result.error_message != nullptr
-                    ? fault_result.error_message : "<null>",
-                fault_result.diagnostics_json != nullptr
-                    ? fault_result.diagnostics_json
-                    : "<null>");
-        }
-        check(fault_result.status == FULLMAG_FEM_FD_SOLVE_ERROR &&
-                  contains(fault_result.diagnostics_json,
-                           "\"unsupported_reason\":\"floquet_slepc_solve_failed\"") &&
-                  contains(fault_result.diagnostics_json,
-                           "\"live_pc_observation\":{\"schema_version\":\"floquet_live_pc_observation.v1\"") &&
-                  contains(fault_result.diagnostics_json,
-                           "\"pc_apply_fault_injected\":true") &&
-                  contains(fault_result.diagnostics_json,
-                           "\"pc_apply_error_code_available\":true") &&
-                  contains(fault_result.diagnostics_json,
-                           "\"pmat_residual_l2_norm_available\":false,\"pmat_residual_l2_norm\":null") &&
-                  contains(fault_result.diagnostics_json,
-                           "\"shifted_operator_residual_l2_norm_available\":false,\"shifted_operator_residual_l2_norm\":null") &&
-                  contains(fault_result.diagnostics_json,
-                           "\"pc_apply_attempt_count\":1,\"pc_apply_success_count\":0") &&
-                  contains(fault_result.diagnostics_json,
-                           "\"repeat_pc_apply_attempt_count\":0") &&
-                  contains(fault_result.diagnostics_json,
-                           "\"pmat_action_attempt_count\":0,\"shifted_operator_action_attempt_count\":0") &&
-                  contains(fault_result.diagnostics_json,
-                           "\"sample_available\":false") &&
-                  contains(fault_result.result_json, "\"status\":\"solve_error\""),
-              "fresh-process injected PCApply failure stops before residual actions, repeat apply, or candidate admission");
-        fullmag_fem_frequency_domain_result_destroy(&fault_result);
-        bool process_unsafe = false;
+        const std::array<std::pair<bool, const char *>, 12> fault_contract_checks{{
+            {
+                fault_result.status == FULLMAG_FEM_FD_SOLVE_ERROR,
+                "injected PCApply failure returns solve_error",
+            },
+            {
+                contains(fault_result.diagnostics_json,
+                         "\"unsupported_reason\":\"floquet_slepc_solve_failed\""),
+                "hard EPS failure reason is serialized",
+            },
+            {
+                contains(fault_result.diagnostics_json,
+                         "\"live_pc_observation\":{\"schema_version\":\"floquet_live_pc_observation.v1\""),
+                "live-PC observation is serialized",
+            },
+            {
+                contains(fault_result.diagnostics_json,
+                         "\"pc_apply_fault_injected\":true"),
+                "fresh process reached the injected PCApply callback",
+            },
+            {
+                contains(fault_result.diagnostics_json,
+                         "\"pc_apply_error_code_available\":true"),
+                "injected PCApply error code is available",
+            },
+            {
+                contains(fault_result.diagnostics_json,
+                         "\"pmat_residual_l2_norm_available\":false,\"pmat_residual_l2_norm\":null"),
+                "Pmat residual is unavailable after failed PCApply",
+            },
+            {
+                contains(fault_result.diagnostics_json,
+                         "\"shifted_operator_residual_l2_norm_available\":false,\"shifted_operator_residual_l2_norm\":null"),
+                "shifted-operator residual is unavailable after failed PCApply",
+            },
+            {
+                contains(fault_result.diagnostics_json,
+                         "\"pc_apply_attempt_count\":1,\"pc_apply_success_count\":0"),
+                "exactly one PCApply was attempted and none succeeded",
+            },
+            {
+                contains(fault_result.diagnostics_json,
+                         "\"repeat_pc_apply_attempt_count\":0"),
+                "repeat PCApply was not attempted after the injected failure",
+            },
+            {
+                contains(fault_result.diagnostics_json,
+                         "\"pmat_action_attempt_count\":0,\"shifted_operator_action_attempt_count\":0"),
+                "Pmat and shifted-operator residual actions were not attempted",
+            },
+            {
+                contains(fault_result.diagnostics_json,
+                         "\"sample_available\":false"),
+                "candidate sample was not admitted after failed capture",
+            },
+            {
+                contains(fault_result.result_json, "\"status\":\"solve_error\""),
+                "result JSON reports solve_error",
+            },
+        }};
+        bool process_unsafe_before_destroy = false;
         {
             std::lock_guard<std::mutex> lock(
                 fullmag::fem::runtime::petsc_slepc_process_mutex());
-            process_unsafe =
+            process_unsafe_before_destroy =
                 fullmag::fem::runtime::petsc_slepc_process_is_unsafe_locked();
         }
-        check(process_unsafe,
-              "the actual hard EPS error marks the canonical PETSc/SLEPc process state unsafe");
+        const auto bounded_fault_text = [](const char *value, std::size_t maximum) {
+            if (value == nullptr) {
+                return std::string("<null>");
+            }
+            return std::string(value, std::min(std::strlen(value), maximum));
+        };
+        const std::string fault_error_message =
+            bounded_fault_text(fault_result.error_message, 512u);
+        const std::string fault_diagnostics =
+            bounded_fault_text(fault_result.diagnostics_json, 12288u);
+        const std::string fault_result_json =
+            bounded_fault_text(fault_result.result_json, 2048u);
+        const int fault_status = static_cast<int>(fault_result.status);
+        std::string failed_fault_checks;
+        for (const auto &contract_check : fault_contract_checks) {
+            if (contract_check.first) {
+                continue;
+            }
+            if (!failed_fault_checks.empty()) {
+                failed_fault_checks += ", ";
+            }
+            failed_fault_checks += contract_check.second;
+        }
+        if (!failed_fault_checks.empty()) {
+            std::fprintf(
+                stderr,
+                "FAIL: fresh-process PCApply quarantine checks=[%s] unsafe_before_destroy=%s status=%d error=%.512s diagnostics=%.12288s result=%.2048s\n",
+                failed_fault_checks.c_str(),
+                process_unsafe_before_destroy ? "true" : "false",
+                fault_status,
+                fault_error_message.c_str(),
+                fault_diagnostics.c_str(),
+                fault_result_json.c_str());
+        }
+        fullmag_fem_frequency_domain_result_destroy(&fault_result);
+        bool process_unsafe_after_destroy = false;
+        {
+            std::lock_guard<std::mutex> lock(
+                fullmag::fem::runtime::petsc_slepc_process_mutex());
+            process_unsafe_after_destroy =
+                fullmag::fem::runtime::petsc_slepc_process_is_unsafe_locked();
+        }
+        if (!process_unsafe_after_destroy) {
+            std::fprintf(
+                stderr,
+                "FAIL: canonical PETSc/SLEPc process safety was lost after result destruction; unsafe_before_destroy=%s status=%d error=%.512s diagnostics=%.12288s result=%.2048s\n",
+                process_unsafe_before_destroy ? "true" : "false",
+                fault_status,
+                fault_error_message.c_str(),
+                fault_diagnostics.c_str(),
+                fault_result_json.c_str());
+        }
+        check(process_unsafe_after_destroy,
+              "the actual hard EPS error leaves canonical PETSc/SLEPc process state unsafe after result destruction");
+        for (const auto &contract_check : fault_contract_checks) {
+            check(contract_check.first, contract_check.second);
+        }
         return;
     }
 
