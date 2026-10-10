@@ -3763,10 +3763,17 @@ void modal_shared_domain_floquet_mixed_dense_real_split_contract()
     payload_only_request.completeness_policy = 0;
     FullmagFemFrequencyDomainResult payload_only_result =
         fullmag_fem_modal_eigen_solve(&payload_only_request);
+    const std::string payload_only_failure =
+        "payload-only shared-domain Floquet routing must certify its sparse descriptor; status=" +
+        std::to_string(static_cast<int>(payload_only_result.status)) +
+        " diagnostics=" + std::string(payload_only_result.diagnostics_json != nullptr
+            ? payload_only_result.diagnostics_json : "<null>").substr(0u, 2048u) +
+        " result=" + std::string(payload_only_result.result_json != nullptr
+            ? payload_only_result.result_json : "<null>").substr(0u, 2048u);
     check(payload_only_result.status == FULLMAG_FEM_FD_OK &&
               contains(payload_only_result.result_json,
                        "\"floquet_descriptor_certified\":true"),
-          "payload-only shared-domain Floquet routing still certifies its provider-owned sparse descriptor");
+          payload_only_failure.c_str());
     fullmag_fem_frequency_domain_result_destroy(&payload_only_result);
 
     FullmagFemModalEigenRequest mixed_request =
