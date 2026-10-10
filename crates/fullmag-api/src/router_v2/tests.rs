@@ -49743,7 +49743,7 @@ async fn frozen_spins_test_state() -> Arc<AppState> {
             Some(vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]),
         );
         live_state.status = snapshot.session.status.clone();
-        publish_test_fields_from_physical_step(snapshot, live_state, latest_fields)
+        admit_test_latest_fields_from_physical_step(snapshot, live_state)
             .expect("frozen-spins magnetization should come from a physical observation");
         snapshot.state_version = source_state_revision;
         snapshot.field_quantity_revisions.insert("m".into(), 7);
