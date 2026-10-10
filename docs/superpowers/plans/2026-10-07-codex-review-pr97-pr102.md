@@ -2775,3 +2775,9 @@ Pełny niezależny SOURCE review trzech plików PASS; parser rustfmt --emit stdo
 ### 2026-10-10 — hosted lint korekta closest bez aliasowania this
 
 Control Room job 114096741202 w GHA 38012917074 exact6b8 zakończył się failure. Typecheck PASS; ESLint zatrzymał job na jednej regule no-this-alias w closest, więc Vitest nie wykonano. Sprawdzanie elementu self oddzielono od pętli po parentNode, bez aliasowania this i bez zmiany semantyki selektorów. Niezależny dwuwierszowy SOURCE review i diff-check PASS. Lint oraz mounted Vitest po tej korekcie nadal wymagają GHA, bez lokalnego wykonania.
+
+### 2026-10-10 — hosted timeout fixture dyspersji z błędnym boundary_context
+
+Browser job 114096741369 w GHA 38012917074 exact6b8 zakończył się failure podczas oczekiwania na grupę k-resolved w Results. Zachowano log i artefakt 11654412253. Trace producenta drzewa pokazuje, że classifyKContext traktuje finite_open jako układ bez k także przy obecnym k_sampling. Fixture referencji deklarował właśnie finite_open wraz z path, więc UI prawidłowo nie publikował grupy dyspersji.
+
+Zmieniono wyłącznie referenceImport fixture na boundary_context=floquet_periodic, zachowując wszystkie inne fixture finite. Nie zmieniono produkcyjnego klasyfikatora, endpointów ani solvera. Na porażkę celowanego importu zapisuje się teraz ograniczony raport JSON (maks. 128 wierszy drzewa, 100 request records, 20 skróconych komunikatów) i screenshot w istniejącym acceptance directory. Pierwotny exception pozostaje przyczyną porażki; strona jest zamykana. Niezależny pełny SOURCE review 31-wierszowej delty, node --check i diff-check PASS. Faktyczne wejście do poprawnego dispersion Inspector i celowany browser proof pozostają NOT VERIFIED.

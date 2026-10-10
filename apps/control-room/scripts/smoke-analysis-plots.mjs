@@ -1223,6 +1223,35 @@ async function verifyReferenceImportResultInspector(browser, workspaceUrl, baseU
       },
       rejectedOversize: overlimitEvidence,
     };
+  } catch (error) {
+    try {
+      mkdirSync(acceptanceDirectory, { recursive: true });
+      const treeRows = await page.locator(".fm-explorer [role=\"treeitem\"]").evaluateAll((rows) =>
+        rows.slice(0, 128).map((row) => ({
+          nodeId: row.getAttribute("data-node-id"),
+          expanded: row.getAttribute("aria-expanded"),
+          selected: row.getAttribute("aria-selected"),
+          text: (row.textContent ?? "").slice(0, 256),
+        })),
+      );
+      writeFileSync(
+        path.join(acceptanceDirectory, "analysis-reference-import-failure.json"),
+        JSON.stringify({
+          fixture: fixture.id,
+          error: String(error.message ?? error).slice(0, 2048),
+          errors: errors.slice(-20).map((message) => String(message).slice(0, 1024)),
+          resourceRequests: resourceRequests.slice(-100),
+          treeRows,
+        }, null, 2) + "\n",
+      );
+      await page.screenshot({
+        path: path.join(acceptanceDirectory, "analysis-reference-import-failure.png"),
+        fullPage: true,
+      });
+    } catch (captureError) {
+      console.warn("Reference-import failure capture unavailable: " + String(captureError.message ?? captureError));
+    }
+    throw error;
   } finally {
     await page.close();
   }
@@ -2636,7 +2665,7 @@ function frequencyDomainManifestFixture(fixture) {
       phase_convention: "exp_minus_i_omega_t",
     },
     requested_execution: {
-      boundary_context: "finite_open",
+      boundary_context: fixture.referenceImport ? "floquet_periodic" : "finite_open",
       calculation_mode: fixture.calculationMode,
       ...(fixture.referenceImport && fixture.kSampling ? { k_sampling: fixture.kSampling } : {}),
     },
