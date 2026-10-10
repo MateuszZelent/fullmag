@@ -221,34 +221,34 @@ large sparse producer, demag convergence, GPU/BEM/RF/DMI/STT/EASA i peÅ‚ny
 round-trip/qualification. Nowe poprawki nie sÄ… dowodem tych rozszerzeÅ„.
 
 
-## Checkpoint f9c29e2 — kolejne bramki i korekta przygotowania UI
+## Checkpoint f9c29e2 â€” kolejne bramki i korekta przygotowania UI
 
 Commit `f9c29e2b2bc195d598e600bbcb3bd47316e58251` jest na remote.
-Hosted #38074310935: 1581 PASS, 10 FAIL, 1 ignored. Wszystkie wczeœniej
-naprawione przypadki eigensolve pozostaj¹ PASS. Po dopuszczeniu fallback
-w pozytywnym Extended fixture ujawni³a siê rzeczywista ró¿nica nazw:
-planner u¿ywa fdm_cpu_reference, producent zapisuje cpu_reference.
-Korekta ma rozpoznawaæ wy³¹cznie dwie istniej¹ce pary CPU/CUDA, bez
-przepisywania historycznych artefaktów i bez os³abienia Strict.
+Hosted #38074310935: 1581 PASS, 10 FAIL, 1 ignored. Wszystkie wczeÅ›niej
+naprawione przypadki eigensolve pozostajÄ… PASS. Po dopuszczeniu fallback
+w pozytywnym Extended fixture ujawniÅ‚a siÄ™ rzeczywista rÃ³Å¼nica nazw:
+planner uÅ¼ywa fdm_cpu_reference, producent zapisuje cpu_reference.
+Korekta ma rozpoznawaÄ‡ wyÅ‚Ä…cznie dwie istniejÄ…ce pary CPU/CUDA, bez
+przepisywania historycznych artefaktÃ³w i bez osÅ‚abienia Strict.
 
-Pe³na bramka Rust/API #38072219897 na exact 2101053 zakoñczy³a siê FAIL:
-1004 PASS, 6 FAIL, 3 ignored, 355 filtered w g³ównej suite API. B³êdy
-dotycz¹ completion compute_fields, trzech FrozenSpins FEM preview,
-materializacji mat_ms i authoritative live magnetization. Nie s¹ dowodem
-niepowodzenia fizyki modalnej, ale blokuj¹ pe³ne uznanie suite za zielon¹.
-Ich przyczyna wymaga osobnej analizy kontraktu; nie zmieniono oczekiwañ
-wy³¹cznie dla uzyskania PASS.
+PeÅ‚na bramka Rust/API #38072219897 na exact 2101053 zakoÅ„czyÅ‚a siÄ™ FAIL:
+1004 PASS, 6 FAIL, 3 ignored, 355 filtered w gÅ‚Ã³wnej suite API. BÅ‚Ä™dy
+dotyczÄ… completion compute_fields, trzech FrozenSpins FEM preview,
+materializacji mat_ms i authoritative live magnetization. Nie sÄ… dowodem
+niepowodzenia fizyki modalnej, ale blokujÄ… peÅ‚ne uznanie suite za zielonÄ….
+Ich przyczyna wymaga osobnej analizy kontraktu; nie zmieniono oczekiwaÅ„
+wyÅ‚Ä…cznie dla uzyskania PASS.
 
-UI #38074311071 na exact f9c29e2: FAIL przed wykonaniem testów. pnpm
-zatrzyma³ instalacjê na przygotowanym source node_modules symlink
-(ENOTDIR). Upload-artifact odrzuci³ dodatkowo œcie¿kê zawieraj¹c¹ .. .
-Naprawa przygotowuje wy³¹cznie root/app manifests w fizycznym, kanonicznym
-frontend_root resolvera, z SHA Ÿróde³ i pojedynczych manifestów. Instalacja
-u¿ywa tego katalogu; testy nadal korzystaj¹ z checkoutu przez istniej¹ce
-zarz¹dzane links. Upload wykorzystuje znormalizowane œcie¿ki. To korekta
-CI, nie dowód dzia³ania UI. AST/YAML sprawdzono; wykonanie tylko GHA.
-Native #38074313403 nadal trwa; exact Ÿród³a i wynik zostan¹ zapisane
-po terminalnym zakoñczeniu. P0–P10 pozostaje otwarty.
+UI #38074311071 na exact f9c29e2: FAIL przed wykonaniem testÃ³w. pnpm
+zatrzymaÅ‚ instalacjÄ™ na przygotowanym source node_modules symlink
+(ENOTDIR). Upload-artifact odrzuciÅ‚ dodatkowo Å›cieÅ¼kÄ™ zawierajÄ…cÄ… .. .
+Naprawa przygotowuje wyÅ‚Ä…cznie root/app manifests w fizycznym, kanonicznym
+frontend_root resolvera, z SHA ÅºrÃ³deÅ‚ i pojedynczych manifestÃ³w. Instalacja
+uÅ¼ywa tego katalogu; testy nadal korzystajÄ… z checkoutu przez istniejÄ…ce
+zarzÄ…dzane links. Upload wykorzystuje znormalizowane Å›cieÅ¼ki. To korekta
+CI, nie dowÃ³d dziaÅ‚ania UI. AST/YAML sprawdzono; wykonanie tylko GHA.
+Native #38074313403 nadal trwa; exact ÅºrÃ³dÅ‚a i wynik zostanÄ… zapisane
+po terminalnym zakoÅ„czeniu. P0â€“P10 pozostaje otwarty.
 
 
 ## Checkpoint 71dd3539 - terminalne bramki
@@ -277,3 +277,33 @@ aliasy do porownan final writer; surowy zapis provenance zostaje zachowany.
 Piec regresji writer obejmuje sukces Extended, mismatch, pozorny fallback
 pomiedzy aliasami, unknown engine i zachowanie Strict rejection. Wykonanie
 tej poprawki oczekuje GHA. Pozne odrzucenie Strict fallback nadal otwarte.
+
+
+## Checkpoint ea59d2cb - wykonane kontrakty FDM i frontend
+
+Commity `26bf0b0abe5870d94a3d5fa5cd750a8effef967d` i
+`ea59d2cb201d4e24c7755ec48a6335b7143854a7` sa na remote.
+Hosted #38076097697: 1593 PASS, 3 FAIL, 1 ignored. Wszystkie piec nowych
+writer regressions FDM identity PASS; auto batch/live, managed override,
+session registries i prescribed current artifact tez PASS. Pozostaly trzy
+stare oczekiwania topology/capability fixtures; source-reviewed korekty
+zachowuja fail-closed frequency/GPU-provenance/unsupported integrator.
+
+Hosted UI #38076097699 na exact ea59: manifest regression, physical install,
+architecture i pelny typecheck PASS. Vitest: 100 PASS, 1 FAIL: undamped
+minus phasor generowal -0 zamiast kanonicznego +0. Poprawka dotyczy wylacznie
+zera; cztery nowe Â±0/phasor combinations, signed growth bez zmian.
+Inspector siedem i chart osiemdziesiat trzy przypadki PASS. Browser nie
+zostal wykonany. React Doctor FAIL: 617 issues (9 errors), score 57/100
+w analizowanej aplikacji. Nie omijamy bramki; zachowujemy raporty jako
+artefakty i wymagamy klasyfikacji zakresu/przyczyn. To nie dowod, ze wszystkie
+617 zostaly wprowadzone przez te poprawki.
+
+Przygotowano native CPU-link correction: compile-time GPU macro odpowiada
+rzeczywistemu warunkowi dolaczenia modal_petsc_slepc.cpp. GPU helper bodies
+i calls znikaja z CPU obiektu; runtime skip flag pozostaje dla GPU buildu.
+Dziewiec focused CPU window cases i ich assertions sa niezmienione.
+SOURCE review i kolejne hosted native wykonanie wymagane.
+
+Sprawdzono kodowanie UTF-8 tracker; poprawiono wylacznie dopisane checkpointy
+z niepoprawnym kodowaniem Windows. Historyczny prefix zachowany.

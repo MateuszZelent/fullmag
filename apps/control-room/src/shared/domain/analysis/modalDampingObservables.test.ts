@@ -55,6 +55,20 @@ describe("modalDampingObservables", () => {
     });
   });
 
+  it.each([
+    ["exp_i_omega_t", 0],
+    ["exp_i_omega_t", -0],
+    ["exp_minus_i_omega_t", 0],
+    ["exp_minus_i_omega_t", -0],
+  ] as const)("canonicalizes undamped zero for %s and %s", (phasor, zero) => {
+    const result = modalDampingObservables(10, zero, phasor);
+    expect(result.decayRateHz).toBe(0);
+    expect(result.linewidthFwhmHz).toBe(0);
+    expect(result.stability).toBe("undamped");
+    expect(result.qualityFactor).toBeNull();
+    expect(result.lifetimeSeconds).toBeNull();
+  });
+
   it("makes missing, unknown, and nonfinite inputs unavailable", () => {
     const unavailable = {
       decayRateHz: null,

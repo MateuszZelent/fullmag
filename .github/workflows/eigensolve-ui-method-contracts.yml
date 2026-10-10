@@ -77,4 +77,5 @@ jobs:
           path: |
             ${{ env.FULLMAG_CI_BUILD_STORAGE_ROOT }}/builds/**/build-status.json
             ${{ env.FULLMAG_CI_FRONTEND_WORKSPACE_ROOT }}/pnpm-workspace-manifests.json
+            ${{ env.FULLMAG_CI_BUILD_STORAGE_ROOT }}/tmp/**/react-doctor-*/**
           if-no-files-found: error

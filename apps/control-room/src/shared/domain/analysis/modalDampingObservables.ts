@@ -42,7 +42,8 @@ export function modalDampingObservables(
   }
 
   const { decayRateSign } = phasorAdapter(phaseConvention);
-  const decayRateHz = decayRateSign * imaginaryFrequencyHz;
+  // Both phasors describe the same undamped zero; retain nonzero growth signs.
+  const decayRateHz = imaginaryFrequencyHz === 0 ? 0 : decayRateSign * imaginaryFrequencyHz;
   if (!Number.isFinite(decayRateHz)) {
     return unavailableObservables();
   }
