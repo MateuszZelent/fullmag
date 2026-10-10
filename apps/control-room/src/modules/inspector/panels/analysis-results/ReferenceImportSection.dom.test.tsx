@@ -10,6 +10,8 @@ import {
   installSimulationPreparationTestDom,
   TestEvent,
   type TestElement,
+  type TestHTMLOptionElement,
+  type TestHTMLSelectElement,
 } from "@/kernel/layout/simulationPreparationTestDom.test-support";
 import { MAX_REFERENCE_FILE_BYTES } from "@/shared/domain/analysis/referenceImport";
 
@@ -76,24 +78,15 @@ describe("ReferenceImportSection file selection", () => {
 
   it("reflects option values and selectedness through a native select", () => {
     const dom = installSimulationPreparationTestDom();
-    type TestOptionElement = TestElement & {
-      defaultSelected: boolean;
-      selected: boolean;
-    };
-    type TestSelectElement = Omit<TestElement, "options"> & {
-      options: TestOptionElement[];
-      selectedIndex: number;
-    };
-
-    const option = (value: string): TestOptionElement => {
-      const element = dom.document.createElement("option") as TestOptionElement;
+    const option = (value: string): TestHTMLOptionElement => {
+      const element = dom.document.createElement("option") as TestHTMLOptionElement;
       element.value = value;
       element.textContent = `Label ${value}`;
       return element;
     };
 
     try {
-      const reflectedOption = dom.document.createElement("option") as TestOptionElement;
+      const reflectedOption = dom.document.createElement("option") as TestHTMLOptionElement;
       reflectedOption.setAttribute("value", "attribute-value");
       reflectedOption.textContent = "Text fallback";
       expect(reflectedOption.value).toBe("attribute-value");
@@ -112,7 +105,7 @@ describe("ReferenceImportSection file selection", () => {
       expect(reflectedOption.hasAttribute("selected")).toBe(false);
       expect(reflectedOption.selected).toBe(false);
 
-      const select = dom.document.createElement("select") as TestSelectElement;
+      const select = dom.document.createElement("select") as TestHTMLSelectElement;
       const disabledDirect = option("disabled-direct");
       disabledDirect.setAttribute("disabled", "");
       const disabledGroup = dom.document.createElement("optgroup");

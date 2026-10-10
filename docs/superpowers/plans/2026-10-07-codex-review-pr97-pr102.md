@@ -2817,3 +2817,15 @@ Control Room job 114103726858 przeszedł lint i typecheck, lecz zatrzymał się 
 ### 2026-10-10 — doprecyzowanie typu opcji regresji DOM
 
 GHA 38016899846, Control Room job 114109073375, exact917c zakończył typecheck błędem TS2339 w nowej regresji: intersection TestElement & { options: TestOptionElement[] } zachowywał przeciążenie bazowego array.every z TestElement. Typ fixture select używa teraz Omit<TestElement, "options"> i jawnie definiuje options z option.selected. Jest to poprawka opisu typu testowego DOM; żadnej asercji zachowania ani produkcyjnego selektora nie zmieniono. Poprzedni browser job 114109073307 pozostaje osobnym wykonaniem i nie jest anulowany z powodu tego błędu.
+
+
+### 2026-10-10 — typy regresji bez powielania interfejsów DOM
+
+Control Room job 114109909091 w GHA 38017163932 wykrył następny błąd TS2352: fabryka zwraca bazowy TestElement, a ręcznie utworzony typ Omit nie ma relacji dziedziczenia. Usunięto oba ręczne typy fixture. Regresja importuje teraz rzeczywiste TestHTMLOptionElement i TestHTMLSelectElement z testowego helpera (type-only), a asercje fabryki opisują jego rzeczywiste podklasy. Zachowanie selecta i wszystkie asercje pozostały niezmienione. To korekta przyczyny problemu typowania, bez lokalnego typecheck; wymagane kolejne GHA.
+
+
+### 2026-10-10 — dalsza diagnoza live PC i pełny review publikacji
+
+Z artefaktu native job 114096749507 zachowano pełne podokno index10. EPS error_code=91; callback true residual 3.3035507064e-10 przy progu 2.4125808522e-14 daje ratio 13693.0155, mimo recursive_residual=0. Bezpośredni live PCApply daje relative residual 7.5427005485e-8 i jest powtarzalny; existing expected_pmat_action defect=0 dotyczy tylko jednego wektora. Niezależny trace źródeł potwierdził, że fresh LU używa snapshotu expected matrix, a pc_pmat_matches_expected jest równością wskaźników. Brakuje pełnego MatEqual względem własnego snapshotu i fresh LU na kopii aktualnego borrowed Pmat; te dowody trzeba dodać przed przypisaniem przyczyny faktoryzacji. Plan: osobny zakres diagnostyczny live-Pmat, identyczne parametry faktoryzacji, residual na jego kopii, niezmienność kandydata/Pmat, istniejące błędy partial/fatal/quarantine; regresja actual captures_near_pole_failure_probe, GHA floquet-modal-slepc. Nie wdrożono jeszcze tej diagnostyki i nie zmieniono tolerancji.
+
+Pełny SOURCE review WIP publikacji 4080421133 (9 plików, 1555 add/178 del) znalazł trzy wymagane korekty: legalny reference writer emituje raw_mode_index zamiast index; nowy worker protocol v2 nie jest akceptowany przez wspólny Python report validator; regresja musi przejść actual producer→tracking/branch selector→deferred Floquet binary i porównać wartości phi/H, zamiast tylko manifest paths. Worker poprawia te punkty; rozszerzono właścicielstwo wyłącznie o wspólny validator i jego testy. Całość pozostaje WIP, bez commita i bez promocji uwagi do implemented.

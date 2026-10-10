@@ -410,7 +410,7 @@ function serializeTestNode(node: TestNode): string {
   return `<${node.tagName.toLowerCase()}${attributes}>${node.childNodes.map(serializeTestNode).join("")}</${node.tagName.toLowerCase()}>`;
 }
 
-class TestHTMLOptionElement extends TestElement {
+export class TestHTMLOptionElement extends TestElement {
   private selectedness = false;
   private selectednessIsDirty = false;
 
@@ -496,7 +496,7 @@ class TestHTMLOptionElement extends TestElement {
  * Model the select/option value and selectedness IDL used by React DOM and
  * Radix's hidden form control, without changing TestElement input values.
  */
-class TestHTMLSelectElement extends TestElement {
+export class TestHTMLSelectElement extends TestElement {
   private explicitNoSelection = false;
 
   override get value(): string {
