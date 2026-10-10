@@ -13649,8 +13649,9 @@ class RegionMeshPolicyTests(unittest.TestCase):
             "params": {"GeometryName": owner_name, "VIn": 20e-9, "VOut": 20e-9},
         }
         interface_refinement = {
-            "kind": "Box",
+            "kind": "ComponentRestrictedBox",
             "params": {
+                "GeometryName": owner_name,
                 "VIn": 2e-9,
                 "VOut": 20e-9,
                 "XMin": -18e-9,
@@ -14238,6 +14239,7 @@ class RegionMeshPolicyTests(unittest.TestCase):
         gmsh.model.getBoundingBox.side_effect = bounding_box
         gmsh.model.getBoundary.return_value = []
 
+        gmsh.model.mesh.field.add.side_effect = next_tag
         with contextlib.ExitStack() as stack:
             for patcher in (
                 patch.object(gmsh_swept, "_import_gmsh", return_value=gmsh),

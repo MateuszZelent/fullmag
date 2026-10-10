@@ -1,5 +1,7 @@
 """Lightweight real-Gmsh regression for the exact-layer periodic film mesh."""
 import ast
+import hashlib
+import json
 import math
 import sys
 from pathlib import Path
@@ -222,6 +224,65 @@ def test_public_de_model_shared_domain_realizes_six_layers(monkeypatch):
         fm.reset()
 
 
+def _body_xy_failure_diagnostics(mesh, report, reference, reference_report,
+                                 body_xy, reference_body_xy):
+    # Diagnostics must never replace the original strict comparison failure.
+    try:
+        return _body_xy_failure_diagnostics_impl(
+            mesh, report, reference, reference_report, body_xy, reference_body_xy,
+        )
+    except Exception as error:
+        return f"BODY_XY_DIAGNOSTICS unavailable: {type(error).__name__}: {str(error)[:300]}"
+
+
+def _body_xy_failure_diagnostics_impl(mesh, report, reference, reference_report,
+                                      body_xy, reference_body_xy):
+    """Describe existing meshes only; hashes are diagnostics, not provenance."""
+    def metrics(candidate, candidate_report, xy):
+        nodes = np.asarray(candidate.nodes)
+        body = np.asarray(candidate.elements)[np.asarray(candidate.element_markers) == 1]
+        body_ids = np.unique(body)
+        edge_indices = np.asarray(((0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)))
+        edges = np.unique(np.sort(body[:, edge_indices].reshape(-1, 2), axis=1), axis=0)
+        projected_lengths = np.linalg.norm(nodes[edges[:, 1], :2] - nodes[edges[:, 0], :2], axis=1)
+        nonzero_lengths = projected_lengths[projected_lengths > 0.0]
+        rounded_xy = [list(map(float, point)) for point in sorted(xy)]
+        xy_bytes = json.dumps(rounded_xy, separators=(",", ":"), allow_nan=False).encode("utf-8")
+        report_data = candidate_report.to_dict()
+        targets = report_data.get("effective_per_object_targets", {})
+        return {
+            "body_tet_count": int(len(body)),
+            "body_node_count": int(len(body_ids)),
+            "body_xy_count": int(len(xy)),
+            "rounded_body_xy_sha256": hashlib.sha256(xy_bytes).hexdigest(),
+            "projected_tet_edge_p50_p95_max_m": (
+                [float(np.percentile(nonzero_lengths, 50)),
+                 float(np.percentile(nonzero_lengths, 95)), float(np.max(nonzero_lengths))]
+                if len(nonzero_lengths) else None
+            ),
+            "owner_targets": targets.get("film") if isinstance(targets, dict) else targets,
+            "build_mode": report_data.get("build_mode"),
+            "used_size_field_kinds": report_data.get("used_size_field_kinds"),
+            "effective_airbox_target": report_data.get("effective_airbox_target"),
+            "size_fields_realized": [
+                {key: field[key] for key in ("role", "kind", "target", "status", "source", "reason")
+                 if key in field}
+                for field in report_data.get("size_fields_realized", [])
+            ],
+        }
+
+    extra = sorted(body_xy - reference_body_xy)
+    missing = sorted(reference_body_xy - body_xy)
+    diagnostic = {
+        "candidate": metrics(mesh, report, body_xy),
+        "reference": metrics(reference, reference_report, reference_body_xy),
+        "extra_xy_count": len(extra), "missing_xy_count": len(missing),
+        "extra_xy_first_12_m": [list(map(float, point)) for point in extra[:12]],
+        "missing_xy_first_12_m": [list(map(float, point)) for point in missing[:12]],
+    }
+    return "BODY_XY_DIAGNOSTICS: " + json.dumps(diagnostic, sort_keys=True, allow_nan=False)
+
+
 def test_public_box_default_airbox_cap_realizes_geometric_vertical_growth(monkeypatch, tmp_path):
     pytest.importorskip("gmsh")
     h_inner = 10e-9
@@ -247,7 +308,7 @@ def test_public_box_default_airbox_cap_realizes_geometric_vertical_growth(monkey
     assert np.max(positive_steps) > h_inner
 
     # Raising only the implicit airbox cap must not coarsen the body source face.
-    reference, _, _ = _realize_public_de_smoke_box(
+    reference, _, reference_report = _realize_public_de_smoke_box(
         monkeypatch, tmp_path,
         universe_mesh_call="study.universe.mesh(maximum_element_size=10e-9)",
         fixture_name="body_hmax_airbox_cap.py",
@@ -260,7 +321,9 @@ def test_public_box_default_airbox_cap_realizes_geometric_vertical_growth(monkey
     reference_body_xy = set(
         map(tuple, np.round(np.asarray(reference.nodes)[reference_body_ids, :2], 17))
     )
-    assert body_xy == reference_body_xy
+    assert body_xy == reference_body_xy, _body_xy_failure_diagnostics(
+        mesh, report, reference, reference_report, body_xy, reference_body_xy,
+    )
 
 
 def test_public_box_explicit_airbox_cap_below_body_hmax_is_preserved(monkeypatch, tmp_path):
@@ -301,7 +364,7 @@ def test_public_box_explicit_airbox_minimum_above_body_hmax_is_preserved(monkeyp
     _assert_public_box_planes(
         mesh, layers=6, expected=expected, maximum_air_step=h_outer,
     )
-    reference, _, _ = _realize_public_de_smoke_box(
+    reference, _, reference_report = _realize_public_de_smoke_box(
         monkeypatch, tmp_path,
         universe_mesh_call="study.universe.mesh(maximum_element_size=10e-9)",
         fixture_name="body_hmax_reference.py",
@@ -314,7 +377,9 @@ def test_public_box_explicit_airbox_minimum_above_body_hmax_is_preserved(monkeyp
     reference_body_xy = set(
         map(tuple, np.round(np.asarray(reference.nodes)[reference_body_ids, :2], 17))
     )
-    assert body_xy == reference_body_xy
+    assert body_xy == reference_body_xy, _body_xy_failure_diagnostics(
+        mesh, report, reference, reference_report, body_xy, reference_body_xy,
+    )
 
 
 def test_box_airbox_invalid_targets_fail_before_gmsh(monkeypatch):
