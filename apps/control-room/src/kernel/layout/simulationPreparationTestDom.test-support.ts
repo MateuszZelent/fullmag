@@ -340,7 +340,8 @@ export class TestElement extends TestNode {
   }
 
   closest(selector: string): TestElement | null {
-    let candidate: TestNode | null = this;
+    if (this.matches(selector)) return this;
+    let candidate: TestNode | null = this.parentNode;
     while (candidate) {
       if (candidate instanceof TestElement && candidate.matches(selector)) return candidate;
       candidate = candidate.parentNode;
