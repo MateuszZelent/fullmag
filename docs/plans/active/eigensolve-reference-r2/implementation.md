@@ -354,3 +354,33 @@ falszywie nadac mu nowy step, a meta/frame/bundle/readiness maja oddzielne
 selektory. Nastepna poprawka musi zachowac payload source identity i atomowe
 bundle, a status materializer oceniac wzgledem wybranego zrodla.
 Nie zmieniono oczekiwania failing live-vector testu ani guards produkcyjnych.
+
+
+## P4 - poprawne wymuszenie lokalnego retry
+
+Native #38076759242 na exact fe99244d zbudowal CPU test poprawnie. Phase
+i typed transport CTest PASS; selected-window FAIL na wymaganiu lokalnego
+retry. Dotychczasowe trzy bliskie modes nie wymuszaja nasycenia nowego
+4x NEV raw pool. Source-reviewed fixture ma szesc bliskich frequencies i
+zewnetrzne witnesses: base request 2/NEV8 musi powiekszyc sie do4/NEV16.
+Final lokalny accepted list jest ograniczony do4; raw pool i certified
+guards osobno dowodza krawedzi. Refined NEV/NCV pozostaja bounded actual
+split dimension. Nie zmieniono produkcji, tolerancji ani rank gates.
+
+Review nowej assertion ujawnil drugi problem helpera testowego: pierwszy
+'}' nie zamyka calego subwindow przy nested modal_krylov_tuning. Matcher
+teraz uwzglednia nesting, strings i escapes. Wszystkie nowe odczyty sa
+ograniczone do jednego obiektu; osobna regresja odrzuca pole z nastepnego
+obiektu oraz unclosed JSON. SOURCE review PASS, wykonanie wymaga GHA.
+Private live-factor query w b6e13fc60 ma osobny hosted run #38078081246;
+nie przypisujemy jego ewentualnego wyniku pozniejszym fixture sources.
+
+
+Private query run #38078081246 na exact b6e13fc60: native build PASS,
+count-admission CTest PASS (certified_count odrzuca brak count certificate).
+Serializer regression przed CLI branches wykonala sie bez bledu. Osobny
+live-shift CTest FAIL przed production SLEPc na legacy synthetic fixture;
+actual getter measurement pozostaje NOT VERIFIED. Poprawka ma uzyc
+kanonicznego native FIELD/DEMAG fixture, ktory przeszedl count-admission,
+zamiast oslabienia R4. Bounded failure diagnostic jest wymagany przed
+asercja, aby zachowac rzeczywisty status i powod odrzucenia.

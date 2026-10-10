@@ -156,21 +156,96 @@ std::size_t count_occurrences(const char *haystack, const char *needle)
     return count;
 }
 
+std::string json_object_after(
+    const char *haystack,
+    const char *object_anchor)
+{
+    if (haystack == nullptr || object_anchor == nullptr || object_anchor[0] == '\0') {
+        return {};
+    }
+    const char *anchor = std::strstr(haystack, object_anchor);
+    if (anchor == nullptr) {
+        return {};
+    }
+    const char *first_member = anchor;
+    while (first_member > haystack &&
+           (first_member[-1] == ' ' || first_member[-1] == '\t' ||
+            first_member[-1] == '\r' || first_member[-1] == '\n')) {
+        --first_member;
+    }
+    if (first_member == haystack || first_member[-1] != '{') {
+        return {};
+    }
+
+    const char *object_begin = first_member - 1;
+    std::size_t brace_depth = 0u;
+    bool inside_string = false;
+    bool escaped = false;
+    for (const char *cursor = object_begin; *cursor != '\0'; ++cursor) {
+        if (inside_string) {
+            if (escaped) {
+                escaped = false;
+            } else if (*cursor == '\\') {
+                escaped = true;
+            } else if (*cursor == '"') {
+                inside_string = false;
+            }
+            continue;
+        }
+        if (*cursor == '"') {
+            inside_string = true;
+        } else if (*cursor == '{') {
+            ++brace_depth;
+        } else if (*cursor == '}') {
+            if (brace_depth == 0u) {
+                return {};
+            }
+            --brace_depth;
+            if (brace_depth == 0u) {
+                return std::string(object_begin, cursor + 1);
+            }
+        }
+    }
+    return {};
+}
+
 bool json_object_after_contains(
     const char *haystack,
     const char *object_anchor,
     const char *needle)
 {
-    if (haystack == nullptr || object_anchor == nullptr || needle == nullptr) {
+    if (needle == nullptr) {
         return false;
     }
-    const char *object_begin = std::strstr(haystack, object_anchor);
-    if (object_begin == nullptr) {
-        return false;
-    }
-    const char *object_end = std::strchr(object_begin, '}');
-    const char *match = std::strstr(object_begin, needle);
-    return object_end != nullptr && match != nullptr && match < object_end;
+    const std::string object = json_object_after(haystack, object_anchor);
+    return !object.empty() && object.find(needle) != std::string::npos;
+}
+
+void JsonObjectSliceBoundsNestedValuesAndRejectsCrossObjectMatches()
+{
+    const char *json =
+        "[{\"pass\":\"base\",\"subwindow_index\":2,"
+        "\"modal_krylov_tuning\":{\"label\":\"quoted } { and escaped \\\" quote\"},"
+        "\"history\":[{\"value\":1}],\"target_present\":true},"
+        "{\"pass\":\"base\",\"subwindow_index\":3,\"later_only\":42}]";
+    constexpr const char *target_anchor =
+        "\"pass\":\"base\",\"subwindow_index\":2,";
+    const std::string target = json_object_after(json, target_anchor);
+    check(!target.empty() &&
+              target.find("\"target_present\":true") != std::string::npos,
+          "JSON object slicing must include the full outer object after nested objects and quoted braces");
+    check(target.find("\"later_only\":42") == std::string::npos &&
+              !json_object_after_contains(
+                  json, target_anchor, "\"later_only\":42"),
+          "JSON object slicing must not match a field from a later object");
+    check(json_object_after_contains(
+              json, target_anchor, "\"target_present\":true"),
+          "JSON object slicing must find a field in the anchored object");
+
+    const char *unclosed =
+        "[{\"pass\":\"base\",\"subwindow_index\":2,\"nested\":{\"value\":1}]";
+    check(json_object_after(unclosed, target_anchor).empty(),
+          "JSON object slicing must reject an unclosed outer object");
 }
 
 int always_cancel(void *)
@@ -1643,7 +1718,8 @@ void FrequencyWindowDoesNotRetryWhenOnlyTheGlobalRequestIsSaturated()
 void FrequencyWindowRetriesWhenALocalIntervalIsSaturated()
 {
     const WindowSpectrumFixture fixture = make_window_spectrum_fixture(
-        {0.20e9, 1.10e9, 1.15e9, 1.20e9, 2.50e9, 4.80e9});
+        {0.20e9, 1.10e9, 1.12e9, 1.14e9, 1.16e9, 1.18e9, 1.20e9,
+         2.50e9, 4.80e9});
     const fd::PoissonAirboxEigenBlockProblem problem = fixture.problem(
         0.5e9,
         4.5e9,
@@ -1657,20 +1733,92 @@ void FrequencyWindowRetriesWhenALocalIntervalIsSaturated()
     check(!result.window_complete && result.accepted_mode_count == 4u,
           "locally dense search must preserve selected modes after adaptive retry without a whole-window count");
     check_stable_selected_search_certificate(result);
-    check(contains(result.executed_subwindows_json, "\"retry_count\":1"),
+    const bool local_retry_observed = json_object_after_contains(
+        result.executed_subwindows_json,
+        "\"pass\":\"base\",\"subwindow_index\":2,",
+        "\"requested_mode_count\":4,\"retry_count\":1");
+    if (!local_retry_observed) {
+        constexpr std::size_t certificate_prefix_limit = 4096u;
+        constexpr std::size_t subwindow_prefix_limit = 8192u;
+        const char *base_subwindow = std::strstr(
+            result.executed_subwindows_json,
+            "\"pass\":\"base\",\"subwindow_index\":2,");
+        const char *subwindow_diagnostics = base_subwindow != nullptr
+            ? base_subwindow
+            : result.executed_subwindows_json;
+        const std::size_t certificate_length = std::min(
+            std::strlen(result.window_certificate_json), certificate_prefix_limit);
+        const std::size_t subwindow_length = std::min(
+            std::strlen(subwindow_diagnostics), subwindow_prefix_limit);
+        std::fprintf(
+            stderr,
+            "LOCAL RETRY FAILURE DIAGNOSTICS:\nwindow_certificate_prefix=%.*s%s\n"
+            "base_subwindow_json_prefix=%.*s%s\n",
+            static_cast<int>(certificate_length),
+            result.window_certificate_json,
+            certificate_length < std::strlen(result.window_certificate_json)
+                ? " [truncated]" : "",
+            static_cast<int>(subwindow_length),
+            subwindow_diagnostics,
+            subwindow_length < std::strlen(subwindow_diagnostics)
+                ? " [truncated]" : "");
+    }
+    check(local_retry_observed,
           "a locally saturated base subwindow must retry with a larger request");
-    check(contains(result.executed_subwindows_json,
-                   "\"local_accepted_mode_count\":3,\"required_local_coverage_radius_hz\":"),
-          "the retried subwindow must publish the final local accepted-mode count");
+    const std::string retried_base_subwindow = json_object_after(
+        result.executed_subwindows_json,
+        "\"pass\":\"base\",\"subwindow_index\":2,");
+    check(!retried_base_subwindow.empty() &&
+              contains(retried_base_subwindow.c_str(),
+                       "\"requested_mode_count\":4,\"retry_count\":1") &&
+              json_number_after(
+                  retried_base_subwindow.c_str(),
+                  "\"local_accepted_mode_count\":") == 4.0,
+          "the retried base subwindow must publish the capped local accepted-mode count and its retry");
+    const double raw_ritz_in_window_count = json_number_after(
+        retried_base_subwindow.c_str(),
+        "\"raw_ritz_in_window_count\":");
+    const double certified_spectral_guard_count = json_number_after(
+        retried_base_subwindow.c_str(),
+        "\"certified_spectral_guard_count\":");
+    const double selected_frequency_min_hz = json_number_after(
+        retried_base_subwindow.c_str(),
+        "\"selected_frequency_min_hz\":");
+    const double selected_frequency_max_hz = json_number_after(
+        retried_base_subwindow.c_str(),
+        "\"selected_frequency_max_hz\":");
+    check(raw_ritz_in_window_count >= 6.0 &&
+              certified_spectral_guard_count >= 2.0 &&
+              selected_frequency_min_hz < 1.0e9 &&
+              selected_frequency_max_hz > 1.25e9 &&
+              contains(retried_base_subwindow.c_str(),
+                       "\"lower_edge_covered\":true") &&
+              contains(retried_base_subwindow.c_str(),
+                       "\"upper_edge_covered\":true") &&
+              contains(retried_base_subwindow.c_str(),
+                       "\"local_coverage_certified\":true"),
+          "the raw local pool and certified exterior guards must cover both base-subwindow edges after retry");
     const double requested_nev = json_number_after(
         result.window_certificate_json,
         "\"requested_nev\":");
     const double refined_nev = json_number_after(
         result.window_certificate_json,
         "\"refined_nev\":");
-    check(requested_nev == 16.0 && refined_nev > requested_nev,
-          "refinement must start above the effective base request after retry");
+    const double refined_requested_mode_count = json_number_after(
+        result.window_certificate_json,
+        "\"refined_requested_mode_count\":");
     const std::uint64_t split_dimension = 2u * result.q_dof_count;
+    const std::uint64_t maximum_nev = split_dimension > 0u
+        ? split_dimension - 1u
+        : 0u;
+    const std::uint64_t refined_nev_limit = std::min<std::uint64_t>(
+        maximum_nev,
+        4u * static_cast<std::uint64_t>(refined_requested_mode_count));
+    check(requested_nev == 16.0 && refined_nev > requested_nev &&
+              refined_requested_mode_count >= 5.0 &&
+              refined_requested_mode_count <= 8.0 &&
+              refined_nev <= static_cast<double>(refined_nev_limit),
+          "refinement must resolve above base NEV 16 and remain within its count and actual split-dimension bounds");
     const std::uint64_t expected_base_ncv = std::min(
         split_dimension,
         std::max<std::uint64_t>(
@@ -1679,12 +1827,16 @@ void FrequencyWindowRetriesWhenALocalIntervalIsSaturated()
     check(json_number_after(result.window_certificate_json, "\"requested_ncv\":") ==
               static_cast<double>(expected_base_ncv),
           "local retry must publish the resolved ncv for its larger effective nev");
-    const double refined_requested_mode_count = json_number_after(
-        result.window_certificate_json,
-        "\"refined_requested_mode_count\":");
-    check(refined_requested_mode_count >= 5.0 &&
-              refined_requested_mode_count <= 8.0,
-          "certificate must publish the bounded effective refinement request");
+    const std::uint64_t refined_nev_integer =
+        static_cast<std::uint64_t>(refined_nev);
+    const std::uint64_t expected_refined_ncv = std::min(
+        split_dimension,
+        std::max<std::uint64_t>(
+            refined_nev_integer + 1u,
+            4u * refined_nev_integer));
+    check(json_number_after(result.window_certificate_json, "\"refined_ncv\":") ==
+              static_cast<double>(expected_refined_ncv),
+          "refinement ncv must follow the bounded policy at the actual split dimension");
 }
 
 void FrequencyWindowRetriesUntilBothClippedEdgesAreCovered()
@@ -2945,6 +3097,7 @@ void CertifiesChargeFreeProbeWithoutDividingByCancelledSource()
 
 int main()
 {
+    JsonObjectSliceBoundsNestedValuesAndRejectsCrossObjectMatches();
     CertifiesChargeFreeProbeWithoutDividingByCancelledSource();
 #if defined(FULLMAG_POISSON_AIRBOX_MODAL_GPU_AVAILABLE)
     // Hosts without a CUDA driver may run the CPU/SLEPc contract explicitly;

@@ -137,6 +137,42 @@
         "artifact_diagnostics_sha256": "2cb699880a6151ccb7818ac1967279b7c1afb6bf2bfa2520d8ae847a255a4030"
       },
       "browser": "NOT VERIFIED"
+    },
+    {
+      "run_id": 38076759242,
+      "sha": "fe99244d060489a3f67c4afc7de09445bdba5220",
+      "conclusion": "failure",
+      "scope": "modal-phase-slepc",
+      "phase": "ctest",
+      "native_build": "passed",
+      "passed_ctests": [
+        "fem_modal_eigen_phase_convention_contract",
+        "fem_modal_eigen_typed_cpu_transport_contract"
+      ],
+      "failed_ctests": [
+        "fem_poisson_airbox_selected_window_contract"
+      ],
+      "failure": "local_retry_fixture_does_not_force_retry",
+      "receipt_sha256": "659363266c391c62127b8688a8ba2139bdc6cb75c459b58d3356169c6a666be4",
+      "qualification_claimed": false
+    },
+    {
+      "run_id": 38078081246,
+      "sha": "b6e13fc60f1ef6421ad03579fa10bc5458b6c9c3",
+      "conclusion": "failure",
+      "scope": "floquet-count-slepc",
+      "native_build": "passed",
+      "passed_ctests": [
+        "fem_modal_eigen_floquet_count_contract"
+      ],
+      "failed_ctests": [
+        "fem_modal_eigen_live_shift_configuration_contract"
+      ],
+      "serializer_regression_reached_before_cli_branches": true,
+      "actual_live_factor_query": "NOT VERIFIED",
+      "failure": "legacy_fixture_rejected_before_production_SLEPc",
+      "receipt_sha256": "50da93d180270a0b88c75442e63f3a4c548238ec6ea90f95478227ceb4eeeb51",
+      "qualification_claimed": false
     }
   ]
 }
