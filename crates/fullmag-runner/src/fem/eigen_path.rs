@@ -735,6 +735,176 @@ pub(crate) mod test_support {
     /// Exercise the production native artifact publisher with deterministic
     /// modal data. This is an artifact-pipeline fixture, not a solver or
     /// physical-validation proof.
+    fn bias_field_fixture_periodic_mesh() -> fullmag_ir::MeshIR {
+        fullmag_ir::MeshIR {
+            mesh_name: "bias_field_artifact_pipeline_mesh".to_string(),
+            nodes: vec![
+                [0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [1.0, 1.0, 0.0],
+                [0.0, 0.0, 1.0],
+                [1.0, 0.0, 1.0],
+                [0.0, 1.0, 1.0],
+                [1.0, 1.0, 1.0],
+            ],
+            cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![
+                [0, 1, 3, 7],
+                [0, 3, 2, 7],
+                [0, 2, 6, 7],
+                [0, 6, 4, 7],
+                [0, 4, 5, 7],
+                [0, 5, 1, 7],
+            ]),
+            element_markers: vec![1; 6],
+            facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![
+                [0, 6, 2],
+                [0, 4, 6],
+                [1, 3, 7],
+                [1, 7, 5],
+                [0, 1, 5],
+                [0, 5, 4],
+                [2, 7, 3],
+                [2, 6, 7],
+                [0, 3, 1],
+                [0, 2, 3],
+                [4, 5, 7],
+                [4, 7, 6],
+            ]),
+            boundary_markers: vec![1, 1, 2, 2, 3, 3, 3, 3, 3, 3, 3, 3],
+            periodic_boundary_pairs: vec![fullmag_ir::MeshPeriodicBoundaryPairIR {
+                pair_id: "test-periodic-x".to_string(),
+                source_marker: None,
+                destination_marker: None,
+                marker_a: 1,
+                marker_b: 2,
+                translation: Some([1.0, 0.0, 0.0]),
+                tolerance: Some(1.0e-12),
+                axis_hint: Some("x".to_string()),
+                orientation: None,
+                pairing_policy: None,
+            }],
+            periodic_node_pairs: [(0, 1), (2, 3), (4, 5), (6, 7)]
+                .into_iter()
+                .map(|(node_a, node_b)| fullmag_ir::MeshPeriodicNodePairIR {
+                    pair_id: "test-periodic-x".to_string(),
+                    node_a,
+                    node_b,
+                })
+                .collect(),
+            per_domain_quality: std::collections::HashMap::new(),
+        }
+    }
+
+    fn bias_field_fixture_relax_source_plan(
+        plan: &FemEigenPlanIR,
+    ) -> fullmag_ir::FemPlanIR {
+        let mut source_plan = fullmag_ir::FemPlanIR::default();
+        source_plan.mesh_name = plan.mesh_name.clone();
+        source_plan.mesh_source = plan.mesh_source.clone();
+        source_plan.mesh = plan.mesh.clone();
+        source_plan.object_segments = plan.object_segments.clone();
+        source_plan.mesh_parts = plan.mesh_parts.clone();
+        source_plan.mesh_build_report = plan.mesh_build_report.clone();
+        source_plan.domain_mesh_mode = plan.domain_mesh_mode;
+        source_plan.domain_frame = plan.domain_frame.clone();
+        source_plan.fe_order = plan.fe_order;
+        source_plan.hmax = plan.hmax;
+        source_plan.initial_magnetization = plan.equilibrium_magnetization.clone();
+        source_plan.material = plan.material.clone();
+        source_plan.enable_exchange = plan.enable_exchange;
+        source_plan.enable_demag = plan.enable_demag;
+        source_plan.external_field = plan.external_field;
+        source_plan.gyromagnetic_ratio = plan.gyromagnetic_ratio;
+        source_plan.precision = plan.precision;
+        source_plan.exchange_bc = plan.exchange_bc;
+        source_plan.integrator = Some(fullmag_ir::IntegratorChoice::Heun);
+        source_plan.fixed_timestep = Some(1.0e-13);
+        source_plan.relaxation = Some(fullmag_ir::RelaxationControlIR {
+            algorithm: fullmag_ir::RelaxationAlgorithmIR::LlgOverdamped,
+            stop: fullmag_ir::RelaxStopIR {
+                torque_tolerance_apm: Some(1.0e-4),
+                energy_tolerance_j: None,
+                max_steps: Some(8),
+                max_relaxation_time_s: None,
+            },
+        });
+        source_plan.demag_realization = plan.demag_realization;
+        source_plan.air_box_config = plan.air_box_config.clone();
+        source_plan.interfacial_dmi = plan.interfacial_dmi;
+        source_plan.dmi_interface_normal = plan.dmi_interface_normal;
+        source_plan.bulk_dmi = plan.bulk_dmi;
+        source_plan
+    }
+
+    fn bias_field_fixture_linearization_state(
+        point_plan: &FemEigenPlanIR,
+    ) -> Result<crate::fem::eigen_types::SharedDomainLinearizationState, RunError> {
+        let topology = MeshTopology::from_ir(&point_plan.mesh).map_err(|error| RunError {
+            message: error.to_string(),
+        })?;
+        let mut materialization_plan = point_plan.clone();
+        materialization_plan.equilibrium = fullmag_ir::EquilibriumSourceIR::Provided;
+        let (problem, equilibrium, _, observables, _) =
+            crate::fem::eigen_equilibrium::materialize_equilibrium(
+                &materialization_plan,
+                &point_plan.equilibrium_magnetization,
+                None,
+            )?;
+        let phi0 = problem
+            .demag_potential_from_vectors(&equilibrium)
+            .map_err(|error| RunError {
+                message: format!("fixture equilibrium potential failed: {error}"),
+            })?;
+        let certified_fields = crate::types::CertifiedFemEquilibriumFields::from_fields(
+            observables.exchange_field.clone(),
+            observables.demag_field.clone(),
+            observables.external_field.clone(),
+            observables.effective_field.clone(),
+            phi0,
+        )
+        .map_err(|error| RunError {
+            message: error.to_string(),
+        })?;
+        let source_plan = bias_field_fixture_relax_source_plan(point_plan);
+        let source_mesh = crate::types::FemMeshPayload::from(&source_plan);
+        let completion = fullmag_ir::StageCompletionIR {
+            status: "completed".to_string(),
+            converged: true,
+            reason: Some(fullmag_ir::StageStopReason::Torque),
+            metric: Some(fullmag_ir::StageMetricKind::MaxTorqueApm),
+            metric_name: Some("max_torque_apm".to_string()),
+            metric_value: Some(5.0e-5),
+            threshold: Some(1.0e-4),
+        };
+        let handoff = crate::fem_eigen::AcceptedFemRelaxStageHandoff::from_completed_relax(
+            "run-bias-field-fixture",
+            "stage-000",
+            "flat_relax",
+            true,
+            &source_plan,
+            &source_mesh,
+            &completion,
+            equilibrium.clone(),
+            certified_fields,
+        )?;
+        let (problem, equilibrium, _, observables, _) =
+            crate::fem::eigen_equilibrium::materialize_equilibrium(
+                point_plan,
+                &equilibrium,
+                Some(&handoff),
+            )?;
+        crate::fem::eigen_shared_domain::build_shared_domain_linearization_state(
+            point_plan,
+            &topology,
+            &problem,
+            None,
+            Some(&handoff),
+            &equilibrium,
+            &observables,
+        )
+    }
+
     fn bias_field_native_artifact_pipeline_fixture(
         point_plan: &FemEigenPlanIR,
         sample_index: usize,
@@ -743,7 +913,7 @@ pub(crate) mod test_support {
         let topology = MeshTopology::from_ir(&point_plan.mesh).map_err(|error| RunError {
             message: error.to_string(),
         })?;
-        let (_, scalar_class_count, _, _) =
+        let (scalar_classes, scalar_class_count, magnetic_classes, magnetic_class_count) =
             crate::fem::eigen_shared_domain_geometry::modal_shared_domain_equivalence_classes(
                 &topology,
             )?;
@@ -759,6 +929,50 @@ pub(crate) mod test_support {
         let bases = crate::fem::eigen_projection::tangent_bases(
             &point_plan.equilibrium_magnetization,
         );
+        let linearization_state = bias_field_fixture_linearization_state(point_plan)?;
+        let k_vector = match point_plan.k_sampling.as_ref() {
+            Some(fullmag_ir::KSamplingIR::Single { k_vector }) => serde_json::json!(k_vector),
+            _ => serde_json::Value::Null,
+        };
+        let phase_constraint = serde_json::json!({
+            "phase_convention": format!("{:?}", point_plan.spin_wave_bc.phase_convention()),
+            "k_vector": k_vector,
+            "periodic_node_pairs": point_plan.mesh.periodic_node_pairs,
+            "periodic_boundary_pairs": point_plan.mesh.periodic_boundary_pairs,
+            "magnetic_reduced_node": magnetic_classes,
+            "scalar_reduced_node": scalar_classes,
+            "tangent_bases": bases,
+        });
+        let phase_constraint_sha256 = crate::fem::eigen_digest::shared_domain_content_digest(
+            "phase_constraint",
+            &phase_constraint,
+        )?;
+        // Fixture provenance digests bind the actual sample plan and accepted
+        // state inputs. This pipeline fixture does not claim a native operator
+        // was assembled or solved.
+        let operator_input_signature = serde_json::json!({
+            "schema_version": "frequency_domain_operator_input_signature.v1",
+            "assembly_kind": "bias_field_native_artifact_pipeline_fixture",
+            "sample_index": sample_index,
+            "external_field_a_per_m": point_plan.external_field,
+            "k_vector": k_vector,
+            "mesh_snapshot_id": linearization_state.mesh_snapshot_id,
+            "material_snapshot_id": linearization_state.material_snapshot_id,
+            "physics_snapshot_id": linearization_state.physics_snapshot_id,
+            "boundary_snapshot_id": linearization_state.boundary_snapshot_id,
+            "periodic_mesh_certificate_sha256":
+                linearization_state.periodic_mesh_certificate_digest,
+            "periodic_modal_equivalence_map_binding_sha256":
+                linearization_state.periodic_mesh_certificate_map_binding_digest,
+            "magnetic_reduced_node_count": magnetic_class_count,
+            "scalar_reduced_node_count": scalar_class_count,
+            "gyromagnetic_ratio_m_per_a_s": point_plan.gyromagnetic_ratio,
+        });
+        let operator_input_signature_sha256 =
+            crate::fem::eigen_digest::shared_domain_content_digest(
+                "operator_input_signature",
+                &operator_input_signature,
+            )?;
         let modes = (0..2_usize)
             .map(|raw_mode_index| {
                 let follows_low_frequency_branch =
@@ -850,16 +1064,16 @@ pub(crate) mod test_support {
                     "fields_available": true,
                     "spectrum_completeness": "complete",
                     "window_complete": true,
-                    "operator_input_signature_sha256": format!("sha256:{}", "1".repeat(64)),
-                    "phase_constraint_sha256": format!("sha256:{}", "2".repeat(64)),
+                    "operator_input_signature_sha256": operator_input_signature_sha256,
+                    "phase_constraint_sha256": phase_constraint_sha256,
                 }),
                 0,
-                None,
+                Some(&linearization_state),
                 None,
                 None,
                 None,
                 sample_index,
-                None,
+                Some(sample_index),
             )?;
 
         Ok(crate::types::ExecutedRun {
@@ -915,6 +1129,7 @@ pub(crate) mod test_support {
         sample_index: usize,
         raw_mode_index: usize,
         scalar_class_count: usize,
+        mode_metadata: &Value,
     ) -> Vec<crate::types::AuxiliaryArtifact> {
         let topology = MeshTopology::from_ir(&plan.mesh).expect("test mesh is valid");
         let (classes, _, _, _) =
@@ -938,14 +1153,10 @@ pub(crate) mod test_support {
             })
             .map(|value| num_complex::Complex64::new(value, 0.0))
             .collect::<Vec<_>>();
-        let source_mesh = plan
-            .mesh
-            .mixed_topology_fingerprint_v3()
-            .expect("test mesh identity is valid");
         let provenance = serde_json::json!({
-            "source_mesh_topology_sha256": source_mesh,
-            "operator_input_signature_sha256": format!("sha256:{}", "1".repeat(64)),
-            "phase_constraint_sha256": format!("sha256:{}", "2".repeat(64)),
+            "source_mesh_topology_sha256": mode_metadata["source_mesh_topology_sha256"],
+            "operator_input_signature_sha256": mode_metadata["operator_input_signature_sha256"],
+            "phase_constraint_sha256": mode_metadata["phase_constraint_sha256"],
         });
         crate::fem::eigen_physical_potential::physical_potential_artifacts(
             &topology,
@@ -968,28 +1179,9 @@ pub(crate) mod test_support {
         plan.k_sampling = Some(fullmag_ir::KSamplingIR::Single {
             k_vector: [5.0e-13, 0.0, 0.0],
         });
-        plan.mesh.facets = fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![
-            [0, 2, 3],
-            [1, 2, 3],
-        ]);
-        plan.mesh.boundary_markers = vec![1, 2];
-        plan.mesh.periodic_boundary_pairs.push(fullmag_ir::MeshPeriodicBoundaryPairIR {
-            pair_id: "test-periodic-x".to_string(),
-            source_marker: None,
-            destination_marker: None,
-            marker_a: 1,
-            marker_b: 2,
-            translation: Some([1.0, 0.0, 0.0]),
-            tolerance: Some(1e-12),
-            axis_hint: None,
-            orientation: None,
-            pairing_policy: None,
-        });
-        plan.mesh.periodic_node_pairs.push(fullmag_ir::MeshPeriodicNodePairIR {
-            pair_id: "test-periodic-x".to_string(),
-            node_a: 0,
-            node_b: 1,
-        });
+        plan.mesh = bias_field_fixture_periodic_mesh();
+        plan.mesh_name = plan.mesh.mesh_name.clone();
+        plan.equilibrium_magnetization = vec![[1.0, 0.0, 0.0]; plan.mesh.nodes.len()];
         plan.spin_wave_bc = fullmag_ir::SpinWaveBoundaryConditionIR::Legacy(
             fullmag_ir::SpinWaveBoundaryKindIR::Periodic,
         );
@@ -1068,6 +1260,15 @@ pub(crate) mod test_support {
         assert_eq!(samples[1]["modes"][0]["mode_field_available"], true);
         assert_eq!(samples[0]["modes"][0]["k_vector"], serde_json::json!([5.0e-13, 0.0, 0.0]));
         assert_eq!(samples[1]["modes"][0]["k_vector"], serde_json::json!([5.0e-13, 0.0, 0.0]));
+        let field_sweep: Value = serde_json::from_slice(
+            artifact_bytes(&merged, "eigen/field_sweep.v1.json")
+                .expect("native field-sweep provenance is published"),
+        )
+        .expect("native field-sweep JSON is valid");
+        let field_sweep_samples = field_sweep["samples"]
+            .as_array()
+            .expect("native field-sweep samples are published");
+        assert_eq!(field_sweep_samples.len(), 2);
         let (_, scalar_class_count, _, _) = crate::fem::eigen_shared_domain_geometry::
             modal_shared_domain_equivalence_classes(
                 &MeshTopology::from_ir(&plan.mesh).expect("test mesh is valid"),
@@ -1126,11 +1327,79 @@ pub(crate) mod test_support {
             assert_eq!(zarr_attrs["sample_index"], sample_index);
             assert_eq!(zarr_attrs["raw_mode_index"], raw_mode_index);
             assert_eq!(zarr_attrs["branch_id"], 0);
+            let mode_metadata = &samples[sample_index]["modes"][0];
+            for key in [
+                "operator_input_signature_sha256",
+                "phase_constraint_sha256",
+                "equilibrium_artifact_sha256",
+                "linearization_state_sha256",
+                "periodic_mesh_certificate_sha256",
+            ] {
+                let digest = mode_metadata[key]
+                    .as_str()
+                    .unwrap_or_else(|| panic!("selected mode is missing {key}"));
+                assert!(
+                    crate::fem::eigen_digest::is_sha256_digest(digest),
+                    "selected mode {key} must be a SHA-256 identity"
+                );
+            }
+            let sample_metadata_prefix = format!("eigen/metadata/sample_{sample_index:04}");
+            let equilibrium_artifact: Value = serde_json::from_slice(
+                artifact_bytes(
+                    &merged,
+                    &format!("{sample_metadata_prefix}/equilibrium_artifact.v7.json"),
+                )
+                .expect("sample equilibrium artifact is preserved"),
+            )
+            .expect("sample equilibrium artifact JSON is valid");
+            let linearization_state: Value = serde_json::from_slice(
+                artifact_bytes(
+                    &merged,
+                    &format!("{sample_metadata_prefix}/linearization_state.v6.json"),
+                )
+                .expect("sample linearization state is preserved"),
+            )
+            .expect("sample linearization state JSON is valid");
+            assert_eq!(
+                mode_metadata["equilibrium_artifact_sha256"],
+                equilibrium_artifact["content_sha256"]
+            );
+            assert_eq!(
+                mode_metadata["linearization_state_sha256"],
+                linearization_state["content_sha256"]
+            );
+            let certificate_digest =
+                crate::fem::eigen_digest::shared_domain_content_digest(
+                    "periodic_mesh_certificate_v6",
+                    &equilibrium_artifact["periodic_mesh_certificate"],
+                )
+                .expect("published periodic certificate identity is digestible");
+            assert_eq!(
+                mode_metadata["periodic_mesh_certificate_sha256"],
+                serde_json::json!(certificate_digest)
+            );
+            assert_eq!(
+                linearization_state["periodic_mesh_certificate"],
+                mode_metadata["periodic_mesh_certificate_sha256"]
+            );
+            assert_eq!(
+                field_sweep_samples[sample_index]["equilibrium_artifact_sha256"],
+                mode_metadata["equilibrium_artifact_sha256"]
+            );
+            assert_eq!(
+                field_sweep_samples[sample_index]["linearization_state_sha256"],
+                mode_metadata["linearization_state_sha256"]
+            );
+            assert_eq!(
+                field_sweep_samples[sample_index]["operator_input_signature_sha256"],
+                mode_metadata["operator_input_signature_sha256"]
+            );
             let expected = expected_bias_field_potential_bytes(
                 &plan,
                 sample_index,
                 raw_mode_index,
                 scalar_class_count,
+                mode_metadata,
             );
             for expected_artifact in expected {
                 assert_eq!(
@@ -1139,6 +1408,21 @@ pub(crate) mod test_support {
                     "selected branch potential artifact {} must retain the exact publisher-bound values",
                     expected_artifact.relative_path
                 );
+            }
+            let potential_manifest_path = format!(
+                "eigen/mode_fields/sample_{sample_index:04}/mode_{raw_mode_index:04}/physical_potential.v1.json"
+            );
+            let potential_manifest: Value = serde_json::from_slice(
+                artifact_bytes(&merged, &potential_manifest_path)
+                    .expect("selected physical-potential manifest is published"),
+            )
+            .expect("selected physical-potential manifest is valid JSON");
+            for key in [
+                "source_mesh_topology_sha256",
+                "operator_input_signature_sha256",
+                "phase_constraint_sha256",
+            ] {
+                assert_eq!(potential_manifest[key], mode_metadata[key]);
             }
         }
         for (sample_index, raw_mode_index) in [(0, 1), (1, 0)] {

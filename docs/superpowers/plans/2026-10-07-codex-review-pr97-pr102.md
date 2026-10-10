@@ -3192,3 +3192,28 @@ Dalsza diagnoza bias fixture potwierdziła, że produkcyjny native_modal_artifac
 Przyczyna FAIL GHA38050227675: fixture omijała kanoniczny finalizer i nie produkowała wymaganego `eigen/metadata/eigen_summary.json`. Poprawka przekazuje deterministyczne `NativeModalEigenpair` przez `native_modal_artifacts`; zachowuje parser, tracker i reguły selekcji. Review SOURCE PASS obejmuje wszystkich pięciu konsumentów fixture, wymagany `assembly_kind`, pola zespolone oraz brak payloadów nie wybranych modów. To fixture potoku artefaktów, nie dowód działania solvera ani fizyki.
 
 Workflow `bias-field-artifacts` uruchamia nazwany test publikacji i planera, poprzedzone kontrolą zakresów workflow. Rejestr `CONTRACT_SCOPES` uzupełniony; pozostałe ścieżki push/PR zachowane. Review źródeł CI PASS; wykonanie pozostaje NOT VERIFIED do terminalnego wyniku GitHub Actions. Nie wykonywano testów ani kompilacji lokalnie. Uwaga 4226154721 pozostaje `implemented_pending_ci`.
+
+
+### Review prywatnej diagnostyki borrowed-Pmat — 2026-10-10
+
+Przeczytano pełny diff czterech plików oraz callback/cleanup. Wykryto dwa Required przed publikacją: P2 — licznik NNZ sumowany po `MatRestoreRow`, które zeruje liczniki; P1 — drugi restore wykonywany po błędzie pierwszego, zamiast natychmiastowego quarantine. Korekta musi zachować pierwotny błąd i osobny kod cleanup oraz dodać regresje rzeczywiście używanej ścieżki lifecycle. Zmiany diagnostyczne pozostają nieopublikowane; runtime/nauka NOT VERIFIED. Nie obniżono progów ani nie zmieniono okna solvera.
+
+Poprawka bias-field fixture i dedykowany workflow opublikowane w `f241be3c6bffd6f1b02846e1611d0ad1bc94b2e2`. GHA38054163976/job114219097962 przyjęło dokładnie ten commit; kontrola workflow PASS, nazwany etap Rust w toku przy ostatnim odczycie. PR97 OPEN, PR102 CLOSED, bez merge. Lokalny HEAD, index, stash oraz siedem chronionych plików zachowane.
+
+GHA38054163976 zakończone FAIL: kontrola workflow PASS, nazwany test bias-field 0PASS/1FAIL na wymaganej tożsamości `spectrum mode.equilibrium_artifact_sha256`; etap planera SKIPPED. Finalizer otrzymywał `linearization_state=None`. Kolejna korekta musi dostarczyć stan z kanonicznego producenta i powiązane tożsamości/artefakty, bez fałszywych hashy ani poluzowania parsera. Naprawa fixture w toku; status uwagi pending_ci zachowany.
+
+### Aktualizacja review i rejestracja lifecycle regression — 2026-10-10
+
+Refresh31: PR97 ma 282 komentarze inline, w tym 279 Codex; zero nowych identyfikatorów Codex względem rejestru. 34 review, ostatnie5475465669. PR102 bez komentarzy i review. Trzy inne inline są historycznymi uwagami Copilot/React Doctor, a rejestr dodatkowo zawiera ocenione uwagi z treści review; nie podwajano licznika napraw.
+
+Dodano osobny CTest `modal_eigen_borrowed_pmat_row_restore_fault_quarantine` i wpis w istniejącym profilu `floquet-modal-slepc`. Test ma własny proces i timeout120s; wymagany success marker i compile definitions MFEM/SLEPc pozostają kontrolowane przez CI. AST profilu i diff-check PASS, bez lokalnych testów/kompilacji. Implementacja poprawki dwóch Required jest nadal w toku; rejestracja nie oznacza wykonania.
+
+Druga izolowana regresja `modal_eigen_borrowed_pmat_row_primary_cleanup_fault_quarantine` została zarejestrowana w CMake i tym samym profilu. Zachowano wszystkie dziewięć poprzednich testów; profil obejmie jedenaście przypadków. Oba nowe przypadki oczekują na kompletną implementację worker i niezależny review przed publikacją/GHA. Nie zgadywano NNZ z nieistniejących wcześniejszych pomiarów; warunek dla rzeczywistego Pmat ma wynikać z wpisów strukturalnej diagonali, a pełna negatywna regresja wymaga odrębnej, jawnie oznaczonej fixture.
+
+Do profilu dodano trzeci osobny CTest `modal_eigen_borrowed_pmat_pattern_mismatch_fixture`: ten sam comparator, owned SeqAIJ2x2 o3vs4wpisach, odrębne pola fixture. Cel to wykrywanie nierównego NNZ/pattern, bez fałszowania metryk rzeczywistego Pmat. Profil ma teraz12zarejestrowanychprzypadków, poprzednie9zachowane; nowe3pending source review/GHA. AST i diff-check rejestracji PASS.
+
+### Poprawka kanonicznego stanu fixture bias-field — 2026-10-10
+
+Źródłowy review pełnego delta eigen_path: fixture buduje pełny x-periodyczny sześcian8nodes/6Tet4, materializuje pola, tworzy typed test handoff i wywołuje kanoniczny build_shared_domain_linearization_state. Finalizer dostaje Some(state) i zgodny sample index. Pięć provenance identities wiązanych z sidecarami/field_sweep/potential manifests; brak powtarzanych placeholder SHA. Source review obejmuje konstruktory, wersje legacy bez Ku (v7/v6), certyfikat i wszystkie pięć konsumentów fixture. To potok artefaktów, bez executed relaxation/modal solver proof. Parser/producent produkcyjny i progi bez zmian. Rustfmt parse PASS, wykonanie GHA pending.
+
+Review typed consumers wykryło Required: P1 carry-forward magnetization do progress frame; P1 cached frame autoryzuje changed payload; P2 explicit older source_step dostaje current time. Korekty i regresje w toku, bez publikacji typed WIP.

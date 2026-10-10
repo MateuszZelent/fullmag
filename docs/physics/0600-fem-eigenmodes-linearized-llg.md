@@ -503,7 +503,12 @@ The source-level regression passes deterministic typed modal data through
 the canonical native artifact finalizer, shared artifact parser, tracker,
 branch selector, and sweep writer. It checks the artifact pipeline only; it is
 not an eigensolver or physical-validation proof. Hosted verification remains
-pending until the required CI lane runs.
+pending until the required CI lane runs. The fixture materializes fields on a
+complete x-periodic cube, creates a typed test relaxation handoff, and uses the
+canonical shared-domain state builder. It checks the equilibrium, linearization,
+and periodic-certificate hashes against the published sample sidecars; fixture
+operator-input and phase hashes derive from their actual plan/state preimages.
+The test completion record is not evidence of an executed relaxation solver.
 
 ## Artifact contract
 

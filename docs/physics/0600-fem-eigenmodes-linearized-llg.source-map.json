@@ -139,7 +139,7 @@
       "id": "source-bias-field-native-publisher-regression",
       "path": "crates/fullmag-runner/src/fem/eigen_path.rs",
       "symbol": "bias_field_branch_selection_tracks_native_publisher_artifacts_before_publication",
-      "responsibility": "Exercise deterministic typed modal data through the canonical native artifact finalizer, shared parser, physical-metric branch tracking, selection, selected binary and Zarr artifacts with tracked metadata, no unselected payload leakage, authored Gamma-vector metadata, raw-index compatibility, and final publication; artifact-pipeline fixture only, not solver or physical validation, CI execution pending."
+      "responsibility": "Exercise canonical state builder from materialized fixture fields and typed test relaxation handoff, verify equilibrium/linearization/certificate hashes against sample sidecars, and track/select/publish deterministic modal data with matching potential manifests; artifact-pipeline fixture only, not relaxation/eigensolver/physical proof, hosted execution pending."
     },
     {
       "id": "source-tracking-frequency-cluster-policy",
