@@ -5,7 +5,7 @@
 //! only bounded identity, coordinates, summaries, and resource links.
 
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, BTreeSet, HashMap},
     io::Read,
     path::Path,
     sync::Arc,
@@ -38,7 +38,7 @@ use crate::router_v2::handlers::analysis::spin_wave_response::{
     SpinWavePeakResource, MAX_DYNAMIC_STRUCTURE_FACTOR_CELLS,
 };
 use crate::schemas::hysteresis::HysteresisPointSchema;
-use crate::types::AppState;
+use crate::types::{AppState, StageLifecycleState};
 
 pub const ANALYSIS_RESULT_INDEX_SCHEMA_VERSION: &str = "fullmag.analysis.result_dataset_index.v1";
 const DEFAULT_PAGE_LIMIT: usize = 100;
@@ -1243,12 +1243,11 @@ async fn load_result_indices(state: &Arc<AppState>) -> Result<ResultIndexCollect
         )?);
     }
 
-    for (stage_id, path) in
-        super::hysteresis::hysteresis_stage_point_artifacts(state).await?
-    {
-        let file = std::fs::File::open(&path).map_err(|error| {
+    for artifact in super::hysteresis::hysteresis_stage_point_artifacts(state).await? {
+        let file = std::fs::File::open(&artifact.path).map_err(|error| {
             ApiError::internal(format!(
-                "failed to open hysteresis points of stage '{stage_id}': {error}"
+                "failed to open hysteresis points of stage '{}': {error}",
+                artifact.stage_id
             ))
         })?;
         let (value, digest) = decode_result_artifact_snapshot(
@@ -1259,7 +1258,13 @@ async fn load_result_indices(state: &Arc<AppState>) -> Result<ResultIndexCollect
         let points = serde_json::from_value::<Vec<HysteresisPointSchema>>(value).map_err(
             |error| ApiError::internal(format!("invalid hysteresis points artifact: {error}")),
         )?;
-        datasets.push(build_hysteresis_index(&points, digest, &run_id, &stage_id));
+        datasets.push(build_hysteresis_index(
+            &points,
+            digest,
+            &run_id,
+            &artifact.stage_id,
+            artifact.lifecycle,
+        ));
     }
 
     crate::validate_current_live_request_context(state, &request_context).await?;
@@ -2025,6 +2030,7 @@ fn build_hysteresis_index(
     source_digest: String,
     run_id: &str,
     stage_id: &str,
+    stage_lifecycle: Option<StageLifecycleState>,
 ) -> ResultDatasetIndex {
     const MU0: f64 = 4.0e-7 * std::f64::consts::PI;
     let dataset_id = format!("result:{run_id}:{stage_id}:hysteresis-loop");
@@ -2054,15 +2060,8 @@ fn build_hysteresis_index(
         Vec::new(),
     );
     axis.label = "Applied field".to_string();
-    let axes = vec![finalize_axis(axis, values.clone(), 1)];
-    let status = status_facets(
-        "complete",
-        "published",
-        if points.is_empty() { "partial" } else { "complete" },
-        "legacy",
-        None,
-        None,
-    );
+    let axes = vec![finalize_axis(axis, values.clone(), 0)];
+    let status = hysteresis_dataset_status(points, stage_lifecycle);
     let sample = AnalysisResultSampleIndexEntry {
         sample_id: sample_id.clone(),
         sample_index: Some(0),
@@ -2081,8 +2080,13 @@ fn build_hysteresis_index(
         revision: source_digest.clone(),
         relation: "adapter_source".to_string(),
     }];
-    let dataset_revision =
-        derived_dataset_revision(&dataset_id, &source_digest, &axes, &source_artifacts);
+    let dataset_revision = derived_hysteresis_dataset_revision(
+        &dataset_id,
+        &source_digest,
+        &axes,
+        &source_artifacts,
+        stage_lifecycle,
+    );
     let projections = BTreeMap::new();
     let mut manifest = build_manifest(
         dataset_id,
@@ -2103,7 +2107,6 @@ fn build_hysteresis_index(
         "A/m",
     );
     manifest.capabilities.item_paging = false;
-    manifest.capabilities.live_partial_results = false;
     ResultDatasetIndex {
         manifest,
         samples: vec![sample],
@@ -2111,6 +2114,75 @@ fn build_hysteresis_index(
         axis_values: BTreeMap::from([(String::from("applied-field"), values)]),
         projections,
     }
+}
+
+fn hysteresis_dataset_status(
+    points: &[HysteresisPointSchema],
+    stage_lifecycle: Option<StageLifecycleState>,
+) -> AnalysisResultStatusFacets {
+    let complete = stage_lifecycle == Some(StageLifecycleState::Completed)
+        && has_complete_hysteresis_data(points);
+    let reason_code = if complete {
+        None
+    } else {
+        Some(match stage_lifecycle {
+            Some(StageLifecycleState::Completed) => "hysteresis_artifact_incomplete",
+            Some(StageLifecycleState::Failed) => "hysteresis_stage_failed",
+            Some(StageLifecycleState::Cancelled) => "hysteresis_stage_cancelled",
+            Some(StageLifecycleState::Stopped) => "hysteresis_stage_stopped",
+            Some(
+                StageLifecycleState::Pending
+                | StageLifecycleState::Running
+                | StageLifecycleState::Paused,
+            ) => {
+                "hysteresis_stage_nonterminal"
+            }
+            Some(StageLifecycleState::Skipped) => "hysteresis_stage_skipped",
+            Some(StageLifecycleState::Unknown) | None => "hysteresis_stage_lifecycle_unknown",
+        })
+    };
+    status_facets(
+        "ready",
+        stage_lifecycle
+            .map(StageLifecycleState::as_str)
+            .unwrap_or("unknown"),
+        if complete { "complete" } else { "partial" },
+        "legacy",
+        reason_code,
+        None,
+    )
+}
+
+fn has_complete_hysteresis_data(points: &[HysteresisPointSchema]) -> bool {
+    if points.is_empty() {
+        return false;
+    }
+
+    let mut point_ids = BTreeSet::new();
+    points.iter().all(|point| {
+        let point_status_is_complete = is_completed_hysteresis_point_status(&point.status)
+            && point
+                .run_status
+                .as_deref()
+                .map(is_completed_hysteresis_point_status)
+                .unwrap_or(true);
+        point_ids.insert(point.point_id)
+            && point_status_is_complete
+            && point.field_value_m_t.is_finite()
+            && point.m_parallel.is_finite()
+            && point.m_oop.is_finite()
+            && point.m_ip.is_finite()
+            && point.m_avg.iter().all(|value| value.is_finite())
+            && point
+                .field_vector_a_per_m
+                .as_ref()
+                .map(|vector| vector.iter().all(|value| value.is_finite()))
+                .unwrap_or(true)
+    })
+}
+
+fn is_completed_hysteresis_point_status(status: &str) -> bool {
+    status.eq_ignore_ascii_case("complete") || status.eq_ignore_ascii_case("completed")
 }
 
 fn build_gamma_index(
@@ -3661,6 +3733,17 @@ fn derived_dataset_revision(
     ))
 }
 
+fn derived_hysteresis_dataset_revision(
+    dataset_id: &str,
+    source_revision: &str,
+    axes: &[AnalysisResultAxisResource],
+    sources: &[AnalysisResultSourceArtifactRef],
+    stage_lifecycle: Option<StageLifecycleState>,
+) -> String {
+    let data_revision = derived_dataset_revision(dataset_id, source_revision, axes, sources);
+    digest_json(&(data_revision, stage_lifecycle.map(StageLifecycleState::as_str)))
+}
+
 fn digest_json<T: Serialize>(value: &T) -> String {
     let bytes = serde_json::to_vec(value).expect("result index values must serialize");
     format!("sha256:{:x}", Sha256::digest(bytes))
@@ -4867,10 +4950,18 @@ mod tests {
              "m_ip": -1.0, "m_avg": [-1.0, 0.0, 0.0], "status": "complete", "branch_id": "descending"}
         ]))
         .expect("hysteresis fixture");
-        let index = build_hysteresis_index(&points, "sha256:abc".to_string(), "run:1", "stage-002");
+        let index = build_hysteresis_index(
+            &points,
+            "sha256:abc".to_string(),
+            "run:1",
+            "stage-002",
+            Some(StageLifecycleState::Completed),
+        );
         let manifest = &index.manifest;
         assert_eq!(manifest.dataset_id, "result:run:1:stage-002:hysteresis-loop");
         assert_eq!(manifest.stage_id, "stage-002");
+        assert_eq!(manifest.status.execution, "completed");
+        assert_eq!(manifest.status.completeness, "complete");
         assert_eq!(
             serde_json::to_value(&manifest.product_kind).unwrap(),
             serde_json::json!("hysteresis_loop")
@@ -4884,6 +4975,107 @@ mod tests {
         assert!((first.scalar_si.unwrap() - expected).abs() < 1e-6 * expected);
         assert!(index.items.is_empty());
         assert!(!manifest.capabilities.item_paging);
+        assert!(manifest.capabilities.live_partial_results);
+    }
+
+    #[test]
+    fn running_hysteresis_publishes_accepted_axis_values_as_partial_and_revises_on_completion() {
+        let points: Vec<HysteresisPointSchema> = serde_json::from_value(serde_json::json!([
+            {"point_id": 0, "field_value_mT": 100.0, "m_parallel": 1.0, "m_oop": 0.0,
+             "m_ip": 1.0, "m_avg": [1.0, 0.0, 0.0], "status": "Completed", "branch_id": "descending"}
+        ]))
+        .expect("hysteresis fixture");
+        let running = build_hysteresis_index(
+            &points,
+            "sha256:abc".to_string(),
+            "run:1",
+            "stage-002",
+            Some(StageLifecycleState::Running),
+        );
+        assert_eq!(running.manifest.status.execution, "running");
+        assert_eq!(running.manifest.status.completeness, "partial");
+        assert!(running.manifest.capabilities.live_partial_results);
+        assert_eq!(running.axis_values["applied-field"].len(), 1);
+        assert_eq!(running.manifest.axes[0].cardinality, 1);
+
+        let completed = build_hysteresis_index(
+            &points,
+            "sha256:abc".to_string(),
+            "run:1",
+            "stage-002",
+            Some(StageLifecycleState::Completed),
+        );
+        assert_eq!(completed.manifest.status.execution, "completed");
+        assert_eq!(completed.manifest.status.completeness, "complete");
+        assert_ne!(
+            running.manifest.dataset_revision,
+            completed.manifest.dataset_revision,
+            "stage lifecycle must invalidate result resource identity when point bytes stay unchanged"
+        );
+    }
+
+    #[test]
+    fn hysteresis_dataset_lifecycle_failures_and_unknown_state_remain_partial() {
+        let points: Vec<HysteresisPointSchema> = serde_json::from_value(serde_json::json!([
+            {"point_id": 0, "field_value_mT": 100.0, "m_parallel": 1.0, "m_oop": 0.0,
+             "m_ip": 1.0, "m_avg": [1.0, 0.0, 0.0], "status": "Completed"}
+        ]))
+        .expect("hysteresis fixture");
+
+        for lifecycle in [
+            StageLifecycleState::Failed,
+            StageLifecycleState::Cancelled,
+            StageLifecycleState::Stopped,
+            StageLifecycleState::Pending,
+            StageLifecycleState::Paused,
+            StageLifecycleState::Skipped,
+            StageLifecycleState::Unknown,
+        ] {
+            let index = build_hysteresis_index(
+                &points,
+                "sha256:abc".to_string(),
+                "run:1",
+                "stage-002",
+                Some(lifecycle),
+            );
+            assert_eq!(index.manifest.status.execution, lifecycle.as_str());
+            assert_eq!(index.manifest.status.completeness, "partial");
+        }
+
+        let missing_lifecycle =
+            build_hysteresis_index(&points, "sha256:abc".to_string(), "run:1", "stage-002", None);
+        assert_eq!(missing_lifecycle.manifest.status.execution, "unknown");
+        assert_eq!(missing_lifecycle.manifest.status.completeness, "partial");
+    }
+
+    #[test]
+    fn empty_or_point_failed_hysteresis_artifact_is_not_complete() {
+        let empty = build_hysteresis_index(
+            &[],
+            "sha256:empty".to_string(),
+            "run:1",
+            "stage-002",
+            Some(StageLifecycleState::Completed),
+        );
+        assert_eq!(empty.manifest.status.execution, "completed");
+        assert_eq!(empty.manifest.status.completeness, "partial");
+        assert_eq!(empty.manifest.axes[0].cardinality, 0);
+        assert!(empty.axis_values["applied-field"].is_empty());
+
+        let failed_point: Vec<HysteresisPointSchema> = serde_json::from_value(serde_json::json!([
+            {"point_id": 0, "field_value_mT": 100.0, "m_parallel": 1.0, "m_oop": 0.0,
+             "m_ip": 1.0, "m_avg": [1.0, 0.0, 0.0], "status": "complete", "run_status": "Failed"}
+        ]))
+        .expect("hysteresis fixture");
+        let incomplete = build_hysteresis_index(
+            &failed_point,
+            "sha256:failed-point".to_string(),
+            "run:1",
+            "stage-002",
+            Some(StageLifecycleState::Completed),
+        );
+        assert_eq!(incomplete.manifest.status.execution, "completed");
+        assert_eq!(incomplete.manifest.status.completeness, "partial");
     }
 
     #[test]

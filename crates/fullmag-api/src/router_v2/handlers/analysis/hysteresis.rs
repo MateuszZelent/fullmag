@@ -23,7 +23,9 @@ use crate::artifacts::require_current_live_artifact_dir;
 use crate::error::ApiError;
 use crate::router_v2::handlers::simulation::runtime::resolve_hysteresis_scene_stage;
 use crate::session::unix_time_millis_now;
-use crate::types::{AppState, HysteresisBookmarkStageStore};
+use crate::types::{
+    AppState, HysteresisBookmarkStageStore, StageExecutionState, StageLifecycleState,
+};
 
 const HYSTERESIS_ZARR_STORE: &str = "hysteresis.zarr";
 const HYSTERESIS_STORAGE_FORMAT: &str = "zarr_v2_json_fallback";
@@ -59,24 +61,24 @@ async fn resolve_stage_artifact_path(
         if let Some(ref stage_exec) = snapshot.stage_execution {
             for (idx, record) in stage_exec.stages.iter().enumerate() {
                 if stage_identifier_matches(record, idx, stage_id) {
-                    let active_stage_kind = stage_kind_for_index(stage_exec, idx);
-                    if !is_hysteresis_stage_kind(record.kind.as_deref())
-                        && !is_hysteresis_stage_kind(active_stage_kind.as_deref())
-                    {
+                    if !is_hysteresis_stage_at(stage_exec, idx, record) {
                         return Err(ApiError::not_found(format!(
                             "stage {} is not a hysteresis stage",
                             stage_id
                         )));
                     }
-                    for ref_path in &record.artifact_refs {
-                        if let Some(path) =
-                            resolve_hysteresis_artifact_ref(&artifact_dir, ref_path, filename)?
+                    if let Some(path) = resolve_hysteresis_artifact_refs(
+                        &artifact_dir,
+                        &record.artifact_refs,
+                        filename,
+                    )? {
+                        return Ok(path);
+                    }
+                    if sole_hysteresis_stage_index(stage_exec) == Some(idx) {
+                        if let Some(path) = resolve_flat_hysteresis_artifact(&artifact_dir, filename)
                         {
                             return Ok(path);
                         }
-                    }
-                    if let Some(path) = resolve_flat_hysteresis_artifact(&artifact_dir, filename) {
-                        return Ok(path);
                     }
                     return Err(ApiError::not_found(format!(
                         "stage artifact '{}' not found for stage {}",
@@ -111,41 +113,97 @@ async fn resolve_stage_artifact_path(
 
 /// Published `hysteresis_points.json` files of every hysteresis stage in the
 /// current run, keyed by the producing stage id (not the active stage).
+#[derive(Debug, Clone)]
+pub(crate) struct HysteresisStagePointArtifact {
+    pub stage_id: String,
+    pub path: PathBuf,
+    pub lifecycle: Option<StageLifecycleState>,
+}
+
+#[derive(Debug, Clone)]
+struct HysteresisStagePointArtifactCandidate {
+    stage_id: String,
+    artifact_refs: Vec<String>,
+    lifecycle: Option<StageLifecycleState>,
+}
+
 pub(crate) async fn hysteresis_stage_point_artifacts(
     state: &Arc<AppState>,
-) -> Result<Vec<(String, PathBuf)>, ApiError> {
-    let stage_ids = {
+) -> Result<Vec<HysteresisStagePointArtifact>, ApiError> {
+    let artifact_dir = require_current_live_artifact_dir(state).await?;
+    let candidates = {
         let guard = state.current_live_state.read().await;
         let Some(stage_exec) = guard.as_ref().and_then(|snapshot| snapshot.stage_execution.as_ref())
         else {
             return Ok(Vec::new());
         };
-        stage_exec
-            .stages
-            .iter()
-            .enumerate()
-            .filter(|(index, record)| {
-                is_hysteresis_stage_kind(record.kind.as_deref())
-                    || is_hysteresis_stage_kind(stage_kind_for_index(stage_exec, *index).as_deref())
-            })
-            .map(|(index, record)| {
-                record
-                    .stage_id
-                    .clone()
-                    .unwrap_or_else(|| format!("stage-{index:03}"))
-            })
-            .collect::<Vec<_>>()
+        hysteresis_stage_point_artifact_candidates(stage_exec)
     };
     let mut artifacts = Vec::new();
-    for stage_id in stage_ids {
-        match resolve_stage_artifact_path(state, &stage_id, "hysteresis_points.json").await {
-            Ok(path) if path.is_file() => artifacts.push((stage_id, path)),
-            Ok(_) => {}
-            Err(error) if error.status == axum::http::StatusCode::NOT_FOUND => {}
-            Err(error) => return Err(error),
+    let allow_flat_fallback = candidates.len() == 1;
+    for candidate in candidates {
+        let path = resolve_hysteresis_artifact_refs(
+            &artifact_dir,
+            &candidate.artifact_refs,
+            "hysteresis_points.json",
+        )?;
+        let path = path.or_else(|| {
+            allow_flat_fallback
+                .then(|| resolve_flat_hysteresis_artifact(&artifact_dir, "hysteresis_points.json"))
+                .flatten()
+        });
+        if let Some(path) = path.filter(|path| path.is_file()) {
+            artifacts.push(HysteresisStagePointArtifact {
+                stage_id: candidate.stage_id,
+                path,
+                lifecycle: candidate.lifecycle,
+            });
         }
     }
     Ok(artifacts)
+}
+
+fn hysteresis_stage_point_artifact_candidates(
+    stage_exec: &StageExecutionState,
+) -> Vec<HysteresisStagePointArtifactCandidate> {
+    stage_exec
+        .stages
+        .iter()
+        .enumerate()
+        .filter(|(index, record)| is_hysteresis_stage_at(stage_exec, *index, record))
+        .map(|(index, record)| HysteresisStagePointArtifactCandidate {
+            stage_id: record
+                .stage_id
+                .clone()
+                .unwrap_or_else(|| format!("stage-{index:03}")),
+            artifact_refs: record.artifact_refs.clone(),
+            lifecycle: Some(record.status),
+        })
+        .collect()
+}
+
+fn is_hysteresis_stage_at(
+    stage_exec: &StageExecutionState,
+    index: usize,
+    record: &crate::types::StageExecutionRecord,
+) -> bool {
+    if let Some(kind) = record.kind.as_deref() {
+        return is_hysteresis_stage_kind(Some(kind));
+    }
+    stage_kind_for_index(stage_exec, index)
+        .as_deref()
+        .is_some_and(|kind| is_hysteresis_stage_kind(Some(kind)))
+}
+
+fn sole_hysteresis_stage_index(stage_exec: &StageExecutionState) -> Option<usize> {
+    let mut hysteresis_indices = stage_exec
+        .stages
+        .iter()
+        .enumerate()
+        .filter(|(index, record)| is_hysteresis_stage_at(stage_exec, *index, record))
+        .map(|(index, _)| index);
+    let only = hysteresis_indices.next()?;
+    hysteresis_indices.next().is_none().then_some(only)
 }
 
 fn resolve_flat_hysteresis_artifact(artifact_dir: &FsPath, filename: &str) -> Option<PathBuf> {
@@ -166,6 +224,19 @@ fn stage_kind_for_index(stage: &crate::types::StageExecutionState, index: usize)
         return stage.active_stage_kind.clone();
     }
     None
+}
+
+fn resolve_hysteresis_artifact_refs(
+    artifact_dir: &FsPath,
+    artifact_refs: &[String],
+    filename: &str,
+) -> Result<Option<PathBuf>, ApiError> {
+    for ref_path in artifact_refs {
+        if let Some(path) = resolve_hysteresis_artifact_ref(artifact_dir, ref_path, filename)? {
+            return Ok(Some(path));
+        }
+    }
+    Ok(None)
 }
 
 struct HysteresisResourceStageMetadata {
@@ -1591,4 +1662,123 @@ pub async fn get_settle_trace(
     }
     crate::validate_current_live_request_context(&state, &request_context).await?;
     Ok(Json(point_trace))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::{RuntimeLifecycleState, StageExecutionRecord, StageExecutionState};
+    use serde_json::json;
+
+    fn stage_record(
+        stage_id: &str,
+        kind: Option<&str>,
+        status: StageLifecycleState,
+        artifact_ref: &str,
+    ) -> StageExecutionRecord {
+        serde_json::from_value(json!({
+            "stage_id": stage_id,
+            "kind": kind,
+            "status": status.as_str(),
+            "artifact_refs": [artifact_ref],
+        }))
+        .expect("stage record fixture")
+    }
+
+    fn stage_execution(
+        stages: Vec<StageExecutionRecord>,
+        active_stage_index: Option<usize>,
+        active_stage_kind: Option<&str>,
+    ) -> StageExecutionState {
+        StageExecutionState {
+            total_stages: stages.len(),
+            completed_stage_indexes: Vec::new(),
+            stages,
+            stage_statuses: Vec::new(),
+            active_stage_index,
+            active_stage_kind: active_stage_kind.map(str::to_string),
+            runtime_state: RuntimeLifecycleState::Running,
+        }
+    }
+
+    #[test]
+    fn active_stage_kind_only_identifies_the_matching_stage() {
+        let stage_exec = stage_execution(
+            vec![
+                stage_record(
+                    "producer",
+                    None,
+                    StageLifecycleState::Completed,
+                    "artifacts/producer",
+                ),
+                stage_record(
+                    "active",
+                    None,
+                    StageLifecycleState::Running,
+                    "artifacts/active",
+                ),
+            ],
+            Some(1),
+            Some("hysteresis"),
+        );
+
+        let candidates = hysteresis_stage_point_artifact_candidates(&stage_exec);
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].stage_id, "active");
+        assert_eq!(candidates[0].artifact_refs[0].as_str(), "artifacts/active");
+        assert_eq!(candidates[0].lifecycle, Some(StageLifecycleState::Running));
+        assert_eq!(sole_hysteresis_stage_index(&stage_exec), Some(1));
+    }
+
+    #[test]
+    fn explicit_stage_kind_wins_over_conflicting_active_kind() {
+        let stage_exec = stage_execution(
+            vec![
+                stage_record(
+                    "producer",
+                    Some("hysteresis"),
+                    StageLifecycleState::Completed,
+                    "artifacts/producer",
+                ),
+                stage_record(
+                    "active",
+                    Some("relax"),
+                    StageLifecycleState::Running,
+                    "artifacts/active",
+                ),
+            ],
+            Some(1),
+            Some("hysteresis"),
+        );
+
+        let candidates = hysteresis_stage_point_artifact_candidates(&stage_exec);
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].stage_id, "producer");
+        assert_eq!(candidates[0].artifact_refs[0].as_str(), "artifacts/producer");
+        assert_eq!(sole_hysteresis_stage_index(&stage_exec), Some(0));
+    }
+
+    #[test]
+    fn run_level_artifact_fallback_is_ambiguous_with_multiple_hysteresis_stages() {
+        let stage_exec = stage_execution(
+            vec![
+                stage_record(
+                    "first",
+                    Some("hysteresis"),
+                    StageLifecycleState::Completed,
+                    "artifacts/first",
+                ),
+                stage_record(
+                    "second",
+                    Some("hysteresis"),
+                    StageLifecycleState::Running,
+                    "artifacts/second",
+                ),
+            ],
+            Some(1),
+            Some("hysteresis"),
+        );
+
+        assert_eq!(sole_hysteresis_stage_index(&stage_exec), None);
+    }
 }
