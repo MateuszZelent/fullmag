@@ -18100,6 +18100,24 @@ async fn planar_field_fdm_object_target_uses_published_membership_and_grid_geome
                 }
             }
         }));
+        let latest_fields = serde_json::from_value(serde_json::json!({
+            "mat_ms": {
+                "values": [4.0, 9.0],
+                "layout": { "grid_cells": [2, 1, 1] }
+            }
+        }))
+        .expect("FDM material Ms field should deserialize");
+        publish_test_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(
+                1,
+                1.0e-12,
+                [2, 1, 1],
+                Some(vec![1.0, 0.0, 0.0, 1.0, 0.0, 0.0]),
+            ),
+            latest_fields,
+        )
+        .expect("FDM material Ms field should be published from an accepted physical step");
     }
 
     let response = app
@@ -22653,15 +22671,27 @@ async fn compute_fields_completion_requires_exact_quantity_scope_generation_and_
         .and_then(|snapshot| snapshot.latest_fields.get("m"))
         .cloned()
         .expect("full magnetization field should be present");
+    let saved_live_magnetization = state
+        .current_live_state
+        .read()
+        .await
+        .as_ref()
+        .and_then(|snapshot| snapshot.live_state.as_ref())
+        .and_then(|live_state| live_state.latest_step.magnetization.clone())
+        .expect("physical source magnetization should be present");
 
     dispatch_compute_fields_command(&state, &command_id).await;
 
     {
         let mut guard = state.current_live_state.write().await;
-        guard
+        let snapshot = guard.as_mut().expect("live session should exist");
+        snapshot.latest_fields = LatestFields::default();
+        snapshot
+            .live_state
             .as_mut()
-            .expect("live session should exist")
-            .latest_fields = LatestFields::default();
+            .expect("physical source should remain present")
+            .latest_step
+            .magnetization = None;
     }
     assert!(
         !reconcile_compute_fields_command(&state).await,
@@ -22670,11 +22700,14 @@ async fn compute_fields_completion_requires_exact_quantity_scope_generation_and_
 
     {
         let mut guard = state.current_live_state.write().await;
-        guard
+        let snapshot = guard.as_mut().expect("live session should exist");
+        snapshot.latest_fields.insert("m".into(), saved_m);
+        snapshot
+            .live_state
             .as_mut()
-            .expect("live session should exist")
-            .latest_fields
-            .insert("m".into(), saved_m);
+            .expect("physical source should remain present")
+            .latest_step
+            .magnetization = Some(saved_live_magnetization);
     }
 
     {
@@ -50271,6 +50304,15 @@ async fn frozen_spins_preview_supports_authoritative_fem_p1_carrier() {
         .expect("FEM nodal magnetization should bind to its physical mesh frame");
         snapshot.state_version = source_state_revision;
     }
+    let expected_source_state_revision = {
+        let guard = state.current_live_state.read().await;
+        guard
+            .as_ref()
+            .and_then(|snapshot| snapshot.field_quantity_revisions.get("m"))
+            .copied()
+            .filter(|revision| *revision > 0)
+            .expect("accepted FEM magnetization should expose a source-state revision")
+    };
     let app = build_v2_router().with_state(state);
     let response = app
         .oneshot(
@@ -50281,7 +50323,7 @@ async fn frozen_spins_preview_supports_authoritative_fem_p1_carrier() {
                 .body(Body::from(
                     serde_json::json!({
                         "expected_revision": 12,
-                        "expected_source_state_revision": 7,
+                        "expected_source_state_revision": expected_source_state_revision,
                         "expected_topology_fingerprint": topology_fingerprint,
                         "target_object_id": "body",
                         "selector": {"kind": "all_magnetic"}
@@ -50355,6 +50397,15 @@ async fn frozen_spins_fem_preview_uses_compact_local_to_global_mapping_with_airb
         .expect("compact FEM magnetization should bind to its physical mesh frame");
         snapshot.state_version = source_state_revision;
     }
+    let expected_source_state_revision = {
+        let guard = state.current_live_state.read().await;
+        guard
+            .as_ref()
+            .and_then(|snapshot| snapshot.field_quantity_revisions.get("m"))
+            .copied()
+            .filter(|revision| *revision > 0)
+            .expect("accepted FEM magnetization should expose a source-state revision")
+    };
     let app = build_v2_router().with_state(state);
     let response = app
         .clone()
@@ -50366,7 +50417,7 @@ async fn frozen_spins_fem_preview_uses_compact_local_to_global_mapping_with_airb
                 .body(Body::from(
                     serde_json::json!({
                         "expected_revision": 12,
-                        "expected_source_state_revision": 7,
+                        "expected_source_state_revision": expected_source_state_revision,
                         "expected_topology_fingerprint": topology_fingerprint,
                         "target_object_id": "body",
                         "selector": {"kind": "all_magnetic"}
@@ -50437,6 +50488,15 @@ async fn frozen_spins_fem_preview_rejects_ambiguous_element_ownership() {
         .expect("ambiguous FEM fixture should retain a physical source identity");
         snapshot.state_version = source_state_revision;
     }
+    let expected_source_state_revision = {
+        let guard = state.current_live_state.read().await;
+        guard
+            .as_ref()
+            .and_then(|snapshot| snapshot.field_quantity_revisions.get("m"))
+            .copied()
+            .filter(|revision| *revision > 0)
+            .expect("accepted FEM magnetization should expose a source-state revision")
+    };
     let response = build_v2_router()
         .with_state(state)
         .oneshot(
@@ -50447,7 +50507,7 @@ async fn frozen_spins_fem_preview_rejects_ambiguous_element_ownership() {
                 .body(Body::from(
                     serde_json::json!({
                         "expected_revision": 12,
-                        "expected_source_state_revision": 7,
+                        "expected_source_state_revision": expected_source_state_revision,
                         "expected_topology_fingerprint": topology_fingerprint,
                         "target_object_id": "body",
                         "selector": {"kind": "all_magnetic"}
