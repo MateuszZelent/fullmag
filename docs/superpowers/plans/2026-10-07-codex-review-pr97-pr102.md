@@ -3362,3 +3362,36 @@ Review A1 wykazało trzy Required: maskowanie orientacji przez abs(det),
 możliwość dodania nakładającego się małego Tet4 poza sprawdzaną ścianą otworu
 i bound chord oparty tylko na końcowych rings. Poprawka A1 pozostaje WIP
 poza commitem; wymaga walidacji całego support i warstw pośrednich.
+
+
+### 2026-10-10 — finalny SOURCE PASS geometrii A1 i nowe fakty CI
+
+Uwaga 4061898663 ma pełną poprawkę źródłową po trzech rundach review.
+Bramka wykorzystuje rzeczywiste shared mesh/Tet4 selectors, full coords
+i native epsilon, positive conforming cell complex, connected through-hole
+wall oraz all-wall chord bound. Publiczne negatives wiążą metadata hash
+i wymagają geometry-specific rejection. Naprawiono także overflow dla
+extreme finite air coordinate. SOURCE review/AST PASS; GHA pending.
+Kwalifikacja nie jest dowiedziona samym matching case_id lub metadata.
+
+GHA 38062145700 na SHA `f41f996b3db16fe5681d8147ce93d3ed32b7cf7e`
+przeszło kompilację native i wykonało dwanaście CTestów: siedem PASS, pięć
+FAIL. Pozostają primary/mixed solve oraz trzy nowe borrowed-Pmat próby.
+Zebrano rzeczywisty pomiar pełnej kopii Pmat: wszystkie wpisy odpowiadają
+referencji (defect 0), fresh owned LU residual około 5.15e-16,
+live-versus-fresh solution defect około 8.43e-8. To dowód wewnętrznego
+pomiaru, nie zaakceptowanego modu; nie luzujemy progów/okna. Przyczyny
+trzech nieudanych fault/pattern fixtures wymagają dalszej diagnozy.
+
+GHA 38060063837 exact `e8317bd5ee5c12295ddf23211a43f9fedcd6111d`
+dotarło do pełnego API: 904 PASS, 105 FAIL, 3 ignored. CLI bramka nie
+uzyskała przez to dowodu. Wśród błędów są niekwalifikowane field fixtures,
+HTTP 204 oraz pending compute_fields; trzeba oddzielić fixture od błędu
+produkcji. Sprawdzona ścieżka CLI wysyła scalar/session/runtime przed
+fields, bez dowodu odwrócenia kolejności. Uwaga typed progress pozostaje
+pending; nie obchodzimy wymogu fizycznego source ani deklarujemy API zdrowym.
+
+Uwagi transportu 4204614978: C++/Rust implementacja w toku na disjoint
+plikach, wspólny marker typed_abi_v18 i route-owned layout niezależny od
+certification. Obejmuje także contour i CPU Poisson; GPU pozostaje jawnie
+poza nową kwalifikacją. Ten nieukończony WIP nie jest częścią commita A1.

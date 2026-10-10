@@ -87,6 +87,105 @@ def _native_mode_diagnostics(mode):
     })
 
 
+def _a1_fixture_mesh(geometry, *, shape="circle", radius=None, center=(0.0, 0.0)):
+    """Build a small resolved Tet4 ring fixture for the A1 geometry contract."""
+    period = float(geometry["lattice_period_m"])
+    thickness = float(geometry["film_size_m"][2])
+    radius = float(geometry["hole_radius_m"] if radius is None else radius)
+    half = 0.5 * period
+    if shape == "slab":
+        cross_section = [(-half, -half), (half, -half), (half, half), (-half, half)]
+        triangles = [(0, 1, 2), (0, 2, 3)]
+    else:
+        segments = 64
+        inner = []
+        outer = []
+        for index in range(segments):
+            angle = math.tau * index / segments
+            cosine, sine = math.cos(angle), math.sin(angle)
+            inner_y_scale = 0.8 if shape == "ellipse" else 1.0
+            inner.append((
+                center[0] + radius * cosine,
+                center[1] + inner_y_scale * radius * sine,
+            ))
+            outer_radius = min(
+                half / abs(cosine) if abs(cosine) > 1.0e-15 else math.inf,
+                half / abs(sine) if abs(sine) > 1.0e-15 else math.inf,
+            )
+            outer.append((outer_radius * cosine, outer_radius * sine))
+        cross_section = inner + outer
+        triangles = []
+        for index in range(segments):
+            following = (index + 1) % segments
+            triangles.extend((
+                (index, segments + index, segments + following),
+                (index, segments + following, following),
+            ))
+
+    cross_count = len(cross_section)
+    z_min, z_max = -0.5 * thickness, 0.5 * thickness
+    nodes = [[x, y, z_min] for x, y in cross_section]
+    nodes.extend([x, y, z_max] for x, y in cross_section)
+    tetrahedra = []
+    for triangle in triangles:
+        lower = sorted(triangle)
+        upper = [cross_count + index for index in lower]
+        tetrahedra.extend((
+            [lower[0], lower[1], lower[2], upper[2]],
+            [lower[0], lower[1], upper[1], upper[2]],
+            [lower[0], upper[0], upper[1], upper[2]],
+        ))
+    tetrahedra = [_orient_fixture_tet4(nodes, cell) for cell in tetrahedra]
+
+    periodic_node_pairs = []
+    tolerance = 1.0e-12 * max(period, thickness)
+    for layer in (0, 1):
+        layer_offset = layer * cross_count
+        for axis, pair_id in ((0, "x_faces"), (1, "y_faces")):
+            other_axis = 1 - axis
+            negative = [
+                index for index, point in enumerate(cross_section)
+                if abs(point[axis] + half) <= tolerance
+            ]
+            positive = [
+                index for index, point in enumerate(cross_section)
+                if abs(point[axis] - half) <= tolerance
+            ]
+            for left in negative:
+                matches = [
+                    right for right in positive
+                    if abs(cross_section[left][other_axis] - cross_section[right][other_axis]) <= tolerance
+                ]
+                if len(matches) != 1:
+                    raise AssertionError(f"fixture cannot pair {pair_id} boundary node {left}")
+                periodic_node_pairs.append({
+                    "pair_id": pair_id,
+                    "node_a": layer_offset + left,
+                    "node_b": layer_offset + matches[0],
+                })
+
+    return nodes, tetrahedra, periodic_node_pairs
+
+
+def _orient_fixture_tet4(nodes, cell):
+    """Orient a fixture Tet4 to the native positive signed-Jacobian rule."""
+    a, b, c, d = (nodes[index] for index in cell)
+    ab = [b[axis] - a[axis] for axis in range(3)]
+    ac = [c[axis] - a[axis] for axis in range(3)]
+    ad = [d[axis] - a[axis] for axis in range(3)]
+    determinant = (
+        ab[0] * (ac[1] * ad[2] - ac[2] * ad[1])
+        - ab[1] * (ac[0] * ad[2] - ac[2] * ad[0])
+        + ab[2] * (ac[0] * ad[1] - ac[1] * ad[0])
+    )
+    if determinant < 0.0:
+        cell = [cell[1], cell[0], cell[2], cell[3]]
+        determinant = -determinant
+    if not math.isfinite(determinant) or determinant <= 0.0:
+        raise AssertionError("A1 fixture contains a degenerate Tet4")
+    return cell
+
+
 def _native_metadata(case, mesh_id, airbox_m, requested_modes):
     config_path = REPO_ROOT / "tests/standard_problems/mumag/comsol_nonzero_k_dispersion/config.py"
     spec = importlib.util.spec_from_file_location("comsol_gate_fixture_config", config_path)
@@ -112,6 +211,8 @@ def _native_metadata(case, mesh_id, airbox_m, requested_modes):
         [0, 4, 5, 7],
         [0, 5, 1, 7],
     ]
+    if case == "a1":
+        nodes, tet4_connectivity, node_pairs = _a1_fixture_mesh(guide["geometry"])
     canonical_cells = {
         "types": ["tet4"] * len(tet4_connectivity),
         "offsets": list(range(0, 4 * len(tet4_connectivity) + 1, 4)),
@@ -140,7 +241,10 @@ def _native_metadata(case, mesh_id, airbox_m, requested_modes):
                 },
             },
         ],
-        "hmax": {"mesh-L1": 5e-9, "mesh-L2": 2.5e-9, "mesh-L3": 1.25e-9}.get(mesh_id, 5e-9), "fe_order": 1,
+        "hmax": (
+            guide["mesh"]["near_film_hmax_m"] if case == "a1"
+            else {"mesh-L1": 5e-9, "mesh-L2": 2.5e-9, "mesh-L3": 1.25e-9}.get(mesh_id, 5e-9)
+        ), "fe_order": 1,
         "material": {"name": "Permalloy", "saturation_magnetisation": 800000.0,
             "exchange_stiffness": 1.3e-11, "damping": 0.5,
             "uniaxial_anisotropy": None, "anisotropy_axis": None},
@@ -169,6 +273,111 @@ def _native_metadata(case, mesh_id, airbox_m, requested_modes):
     }
     return {"problem_meta": {"runtime_metadata": {"comsol_nonzero_k_dispersion": guide}},
             "execution_plan": {"backend_plan": plan}}
+
+
+def _replace_a1_fixture_mesh(metadata, *, shape="circle", radius=None, center=(0.0, 0.0)):
+    """Replace only resolved mesh evidence while keeping authored A1 claims fixed."""
+    guide = metadata["problem_meta"]["runtime_metadata"]["comsol_nonzero_k_dispersion"]
+    plan = metadata["execution_plan"]["backend_plan"]
+    nodes, tetrahedra, periodic_node_pairs = _a1_fixture_mesh(
+        guide["geometry"], shape=shape, radius=radius, center=center,
+    )
+    plan["hmax"] = guide["mesh"]["near_film_hmax_m"]
+    return _rewrite_a1_fixture_cells(
+        metadata, tetrahedra, nodes=nodes, periodic_node_pairs=periodic_node_pairs,
+    )
+
+
+def _rewrite_a1_fixture_cells(
+    metadata, tetrahedra, *, nodes=None, periodic_node_pairs=None, magnetic_cell_count=None,
+):
+    """Keep selectors, cell labels, markers, and nodal fields aligned."""
+    plan = metadata["execution_plan"]["backend_plan"]
+    plan_mesh = plan["mesh"]
+    if nodes is not None:
+        plan_mesh["nodes"] = nodes
+    if periodic_node_pairs is not None:
+        plan_mesh["periodic_node_pairs"] = periodic_node_pairs
+    if magnetic_cell_count is None:
+        magnetic_cell_count = len(tetrahedra)
+    if not 0 < magnetic_cell_count <= len(tetrahedra):
+        raise AssertionError("A1 fixture requires a nonempty magnetic Tet4 support")
+    air_cell_count = len(tetrahedra) - magnetic_cell_count
+    plan_mesh["cells"] = {
+        "types": ["tet4"] * len(tetrahedra),
+        "offsets": list(range(0, 4 * len(tetrahedra) + 1, 4)),
+        "nodes": [node for cell in tetrahedra for node in cell],
+        "global_ordinals": list(range(len(tetrahedra))),
+        "mesh_parts": ["magnetic"] * magnetic_cell_count + ["transition_air"] * air_cell_count,
+    }
+    plan_mesh["element_markers"] = [1] * len(tetrahedra)
+    plan["mesh_parts"] = [
+        {
+            "id": "magnetic_object",
+            "role": "magnetic_object",
+            "element_selector": {
+                "kind": "element_range",
+                "start": 0,
+                "count": magnetic_cell_count,
+            },
+        },
+    ]
+    if air_cell_count:
+        plan["mesh_parts"].append({
+            "id": "shared_air",
+            "role": "air",
+            "element_selector": {
+                "kind": "element_range",
+                "start": magnetic_cell_count,
+                "count": air_cell_count,
+            },
+        })
+    plan["equilibrium_magnetization"] = [
+        [1.0, 0.0, 0.0] for _ in plan_mesh["nodes"]
+    ]
+    return metadata
+
+
+def _append_a1_shared_air_tet(metadata):
+    """Add one air Tet4 sharing a top face without changing magnetic support."""
+    plan_mesh = metadata["execution_plan"]["backend_plan"]["mesh"]
+    cells = plan_mesh["cells"]
+    tetrahedra = [
+        cells["nodes"][cells["offsets"][index]:cells["offsets"][index + 1]]
+        for index in range(len(cells["types"]))
+    ]
+    magnetic_cell_count = len(tetrahedra)
+    nodes = copy.deepcopy(plan_mesh["nodes"])
+    top_z = max(point[2] for point in nodes)
+    face_patterns = ((0, 1, 3), (1, 2, 3), (2, 0, 3), (0, 2, 1))
+    face_incidence = {}
+    for cell in tetrahedra:
+        for pattern in face_patterns:
+            face = tuple(cell[index] for index in pattern)
+            face_incidence.setdefault(tuple(sorted(face)), []).append(face)
+    candidates = []
+    for incident_faces in face_incidence.values():
+        if len(incident_faces) == 1:
+            face = incident_faces[0]
+            if all(nodes[index][2] == top_z for index in face):
+                candidates.append(face)
+    if not candidates:
+        raise AssertionError("A1 fixture has no exposed top face for shared air support")
+    face = candidates[0]
+    new_node = len(nodes)
+    nodes.append([
+        math.fsum(nodes[index][0] for index in face) / 3.0,
+        math.fsum(nodes[index][1] for index in face) / 3.0,
+        top_z + 1.0e-6,
+    ])
+    air_tet = _orient_fixture_tet4(nodes, [*face, new_node])
+    tetrahedra.append(air_tet)
+    return _rewrite_a1_fixture_cells(
+        metadata,
+        tetrahedra,
+        nodes=nodes,
+        magnetic_cell_count=magnetic_cell_count,
+    )
 
 
 def _write_mode_fields(root, samples):
@@ -2304,6 +2513,241 @@ class ScientificGateTests(unittest.TestCase):
             "canonical fixture", reasons, require_uniform_slab=True,
         ))
         self.assertTrue(any("gyromagnetic_ratio" in reason for reason in reasons))
+
+    def test_a1_requires_canonical_realized_cylindrical_through_hole(self):
+        parameters = json.loads(PARAMETERS.read_text(encoding="utf-8"))
+        for include_shared_air in (False, True):
+            with self.subTest(shared_air=include_shared_air):
+                metadata = _native_metadata("a1", "mesh-L1", 2e-6, 24)
+                if include_shared_air:
+                    magnetic_count = len(metadata["execution_plan"]["backend_plan"]["mesh"]["cells"]["types"])
+                    _append_a1_shared_air_tet(metadata)
+                    plan = metadata["execution_plan"]["backend_plan"]
+                    self.assertEqual(plan["mesh_parts"][0]["element_selector"]["count"], magnetic_count)
+                    self.assertEqual(plan["mesh"]["cells"]["mesh_parts"][-1], "transition_air")
+                    self.assertGreater(
+                        max(point[2] for point in plan["mesh"]["nodes"]),
+                        max(point[2] for point in plan["mesh"]["nodes"][:-1]),
+                    )
+                reasons = []
+                self.assertTrue(gate._validate_benchmark_metadata(
+                    metadata, "a1", parameters, "canonical A1 fixture", reasons,
+                    require_uniform_slab=False,
+                ), reasons)
+                self.assertEqual(reasons, [])
+
+    def test_a1_rejects_malformed_air_node_coordinates(self):
+        parameters = json.loads(PARAMETERS.read_text(encoding="utf-8"))
+        metadata = _native_metadata("a1", "mesh-L1", 2e-6, 24)
+        _append_a1_shared_air_tet(metadata)
+        plan = metadata["execution_plan"]["backend_plan"]
+        mesh = plan["mesh"]
+        air_node = len(mesh["nodes"]) - 1
+        magnetic_nodes = {
+            node
+            for cell_index in range(plan["mesh_parts"][0]["element_selector"]["count"])
+            for node in mesh["cells"]["nodes"][4 * cell_index:4 * cell_index + 4]
+        }
+        self.assertNotIn(air_node, magnetic_nodes)
+        mesh["nodes"][air_node][0] = None
+        reasons = []
+        self.assertFalse(gate._validate_benchmark_metadata(
+            metadata, "a1", parameters, "malformed air-node A1 fixture", reasons,
+            require_uniform_slab=False,
+        ))
+        self.assertTrue(any(
+            f"A1 resolved mesh node {air_node} has invalid coordinates" in reason
+            for reason in reasons
+        ), reasons)
+
+    def test_a1_rejects_slab_wrong_radius_shape_location_and_magnetic_support(self):
+        parameters = json.loads(PARAMETERS.read_text(encoding="utf-8"))
+        canonical = _native_metadata("a1", "mesh-L1", 2e-6, 24)
+        radius = parameters["geometry"]["hole_radius_m"]
+        defects = (
+            ("full slab", {"shape": "slab"}, "no exposed cylindrical through-hole boundary"),
+            ("wrong radius", {"radius": 0.9 * radius}, "inside the canonical through-hole"),
+            ("wrong shape", {"shape": "ellipse"}, "inside the canonical through-hole"),
+            ("wrong location", {"center": (0.1 * radius, 0.0)}, "inside the canonical through-hole"),
+        )
+        for label, mesh_changes, expected_reason in defects:
+            with self.subTest(defect=label):
+                metadata = copy.deepcopy(canonical)
+                _replace_a1_fixture_mesh(metadata, **mesh_changes)
+                reasons = []
+                self.assertFalse(gate._validate_benchmark_metadata(
+                    metadata, "a1", parameters, f"{label} A1 fixture", reasons,
+                    require_uniform_slab=False,
+                ))
+                self.assertTrue(any(expected_reason in reason for reason in reasons), reasons)
+
+        with self.subTest(defect="contradictory magnetic support"):
+            metadata = copy.deepcopy(canonical)
+            plan = metadata["execution_plan"]["backend_plan"]
+            cell_count = len(plan["mesh"]["cells"]["types"])
+            plan["mesh_parts"] = [
+                {
+                    "id": "partial_magnetic_object",
+                    "role": "magnetic_object",
+                    "element_selector": {
+                        "kind": "element_range", "start": 0, "count": cell_count - 1,
+                    },
+                },
+                {
+                    "id": "misclassified_air",
+                    "role": "air",
+                    "element_selector": {
+                        "kind": "element_range", "start": cell_count - 1, "count": 1,
+                    },
+                },
+            ]
+            reasons = []
+            self.assertFalse(gate._validate_benchmark_metadata(
+                metadata, "a1", parameters, "wrong-support A1 fixture", reasons,
+                require_uniform_slab=False,
+            ))
+            self.assertTrue(any("contradict" in reason for reason in reasons), reasons)
+
+    def test_a1_rejects_inverted_duplicate_missing_and_disconnected_tetrahedra(self):
+        parameters = json.loads(PARAMETERS.read_text(encoding="utf-8"))
+        canonical = _native_metadata("a1", "mesh-L1", 2e-6, 24)
+
+        def cells_and_nodes(metadata):
+            mesh = metadata["execution_plan"]["backend_plan"]["mesh"]
+            table = mesh["cells"]
+            return [
+                table["nodes"][table["offsets"][index]:table["offsets"][index + 1]]
+                for index in range(len(table["types"]))
+            ], mesh["nodes"]
+
+        cases = (
+            ("inverted cell", "negative tetra orientation"),
+            ("duplicate cell", "duplicate Tet4 cells"),
+            ("missing cell", "exposed face inside the canonical support"),
+            ("disconnected interior cell", "disconnected"),
+        )
+        for defect, expected_reason in cases:
+            with self.subTest(defect=defect):
+                metadata = copy.deepcopy(canonical)
+                tetrahedra, nodes = cells_and_nodes(metadata)
+                if defect == "inverted cell":
+                    tetrahedra[0][0], tetrahedra[0][1] = tetrahedra[0][1], tetrahedra[0][0]
+                elif defect == "duplicate cell":
+                    tetrahedra.append(tetrahedra[0].copy())
+                elif defect == "missing cell":
+                    del tetrahedra[len(tetrahedra) // 2]
+                else:
+                    base = len(nodes)
+                    nodes = copy.deepcopy(nodes)
+                    nodes.extend((
+                        [70e-9, 5e-9, -1e-9],
+                        [75e-9, 5e-9, -1e-9],
+                        [70e-9, 10e-9, -1e-9],
+                        [70e-9, 5e-9, 1e-9],
+                    ))
+                    tetrahedra.append(_orient_fixture_tet4(
+                        nodes, [base, base + 1, base + 2, base + 3],
+                    ))
+                _rewrite_a1_fixture_cells(metadata, tetrahedra, nodes=nodes)
+                reasons = []
+                self.assertFalse(gate._validate_benchmark_metadata(
+                    metadata, "a1", parameters, f"{defect} A1 fixture", reasons,
+                    require_uniform_slab=False,
+                ))
+                self.assertTrue(any(expected_reason in reason for reason in reasons), reasons)
+
+    def test_validate_case_a1_rejects_invalid_tet4_geometry_after_metadata_hash_rebind(self):
+        parameters = json.loads(PARAMETERS.read_text(encoding="utf-8"))
+        with tempfile.TemporaryDirectory() as directory:
+            case_dir = _make_case(Path(directory), "a1")
+            metadata_path = case_dir / "metadata.json"
+            canonical = json.loads(metadata_path.read_text(encoding="utf-8"))
+
+            def cells_and_nodes(metadata):
+                mesh = metadata["execution_plan"]["backend_plan"]["mesh"]
+                table = mesh["cells"]
+                return [
+                    table["nodes"][table["offsets"][index]:table["offsets"][index + 1]]
+                    for index in range(len(table["types"]))
+                ], mesh["nodes"]
+
+            cases = (
+                ("inverted cell", "negative tetra orientation"),
+                ("duplicate cell", "duplicate Tet4 cells"),
+                ("missing cell", "exposed face inside the canonical support"),
+                ("disconnected interior cell", "disconnected"),
+            )
+            for defect, expected_reason in cases:
+                with self.subTest(defect=defect):
+                    metadata = copy.deepcopy(canonical)
+                    tetrahedra, nodes = cells_and_nodes(metadata)
+                    if defect == "inverted cell":
+                        tetrahedra[0][0], tetrahedra[0][1] = tetrahedra[0][1], tetrahedra[0][0]
+                    elif defect == "duplicate cell":
+                        tetrahedra.append(tetrahedra[0].copy())
+                    elif defect == "missing cell":
+                        del tetrahedra[len(tetrahedra) // 2]
+                    else:
+                        nodes = copy.deepcopy(nodes)
+                        base = len(nodes)
+                        nodes.extend((
+                            [70e-9, 5e-9, -1e-9],
+                            [75e-9, 5e-9, -1e-9],
+                            [70e-9, 10e-9, -1e-9],
+                            [70e-9, 5e-9, 1e-9],
+                        ))
+                        tetrahedra.append(_orient_fixture_tet4(
+                            nodes, [base, base + 1, base + 2, base + 3],
+                        ))
+                    _rewrite_a1_fixture_cells(metadata, tetrahedra, nodes=nodes)
+                    _write_json(metadata_path, metadata)
+                    _refresh_primary_artifact_binding(
+                        case_dir, "metadata.json", "metadata_sha256",
+                    )
+                    report = gate.validate_case(
+                        case_dir, "a1", parameters_path=PARAMETERS, kpath_path=KPATH,
+                    )
+                    self.assertEqual(
+                        report["artifact_bindings"]["metadata.json"]["sha256"],
+                        _sha256(metadata_path),
+                    )
+                    self.assertFalse(any(
+                        "scientific evidence binding does not match current metadata.json" in reason
+                        for reason in report["reasons"]
+                    ), report["reasons"])
+                    self.assertTrue(any(expected_reason in reason for reason in report["reasons"]), report["reasons"])
+
+    def test_validate_case_a1_rejects_unrepresentable_finite_air_mesh_scale_after_hash_rebind(self):
+        with tempfile.TemporaryDirectory() as directory:
+            case_dir = _make_case(Path(directory), "a1")
+            metadata_path = case_dir / "metadata.json"
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            _append_a1_shared_air_tet(metadata)
+            mesh = metadata["execution_plan"]["backend_plan"]["mesh"]
+            air_node = len(mesh["nodes"]) - 1
+            mesh["nodes"][air_node][0] = 1.0e200
+            self.assertTrue(math.isfinite(mesh["nodes"][air_node][0]))
+            _write_json(metadata_path, metadata)
+            _refresh_primary_artifact_binding(
+                case_dir, "metadata.json", "metadata_sha256",
+            )
+
+            report = gate.validate_case(
+                case_dir, "a1", parameters_path=PARAMETERS, kpath_path=KPATH,
+            )
+
+            self.assertEqual(
+                report["artifact_bindings"]["metadata.json"]["sha256"],
+                _sha256(metadata_path),
+            )
+            self.assertFalse(any(
+                "scientific evidence binding does not match current metadata.json" in reason
+                for reason in report["reasons"]
+            ), report["reasons"])
+            self.assertTrue(any(
+                "cannot represent native Tet4-volume epsilon" in reason
+                for reason in report["reasons"]
+            ), report["reasons"])
 
     def test_validate_case_selects_lowest_eight_by_seed_frequency_and_preserves_degeneracy(self):
         with tempfile.TemporaryDirectory() as directory:

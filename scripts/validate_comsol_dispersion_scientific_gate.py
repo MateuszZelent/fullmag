@@ -18,9 +18,11 @@ import csv
 import hashlib
 import json
 import math
+import sys
 from pathlib import Path, PurePosixPath
 from typing import Any, Mapping, Sequence
 
+from comsol_magnetic_support import magnetic_element_indices, tet4_cells
 from comsol_n0_field_certificate import measure_n0_field
 from comsol_tracking_replay import replay_tracking_fields
 from verify_fem_frequency_domain_eigen_artifacts import (
@@ -446,6 +448,607 @@ def _validate_resolved_backend_plan(
         reasons.append(f"{label} resolved backend plan has no finite mesh hmax")
         valid = False
     return valid
+
+
+def _a1_geometry_roundoff_tolerance(*values: float) -> float:
+    """Bound coordinate comparisons by floating-point representation error."""
+
+    scale = max((abs(float(value)) for value in values), default=0.0)
+    return 128.0 * math.ulp(scale if scale > 0.0 else 1.0)
+
+
+def _validate_a1_realized_geometry(
+    metadata: Mapping[str, Any],
+    parameters: Mapping[str, Any],
+    label: str,
+    reasons: list[str],
+) -> bool:
+    """Validate A1 geometry against the resolved conforming magnetic Tet4 complex.
+
+    The native benchmark metadata is necessary but insufficient: the magnetic
+    support is resolved from the backend mesh-part selectors, then the exposed
+    cylindrical wall and its volume are reconstructed from serialized node
+    coordinates and cell connectivity. Linear facets inscribe the analytic
+    circle. Their admissible volume deficit is derived from their measured
+    angular spacing, bounded by the authored near-film hmax. These structural
+    checks validate the serialized positive Tet4 complex and its canonical
+    boundary; they are not a general geometric self-intersection detector.
+    """
+
+    initial_reason_count = len(reasons)
+    benchmark = _metadata_benchmark_block(metadata)
+    parameter_geometry = parameters.get("geometry")
+    if benchmark is None:
+        reasons.append(f"{label} cannot verify A1 geometry without native benchmark metadata")
+        return False
+    if not isinstance(parameter_geometry, Mapping):
+        reasons.append("canonical parameters cannot provide the A1 geometry signature")
+        return False
+    geometry = benchmark.get("geometry")
+    mesh_contract = benchmark.get("mesh")
+    if not isinstance(geometry, Mapping):
+        reasons.append(f"{label} A1 geometry metadata is missing")
+        return False
+    if not isinstance(mesh_contract, Mapping):
+        reasons.append(f"{label} A1 benchmark mesh contract is missing")
+        return False
+
+    period_x = parameter_geometry.get("period_x_m")
+    period_y = parameter_geometry.get("period_y_m")
+    thickness = parameter_geometry.get("film_thickness_m")
+    hole_shape = parameter_geometry.get("hole_shape")
+    hole_radius = parameter_geometry.get("hole_radius_m")
+    canonical_volume = parameter_geometry.get("magnetic_volume_m3")
+    if not all(_finite_positive(value) for value in (period_x, period_y, thickness, hole_radius)):
+        reasons.append("canonical A1 geometry requires finite positive periods, thickness, and hole radius")
+        return False
+    if hole_shape != "circular_cylinder":
+        reasons.append("canonical A1 geometry.hole_shape must be 'circular_cylinder'")
+        return False
+    period_x, period_y, thickness, hole_radius = map(
+        float, (period_x, period_y, thickness, hole_radius)
+    )
+    if not _finite_positive(canonical_volume):
+        reasons.append("canonical parameters.geometry.magnetic_volume_m3 is missing or non-positive")
+        return False
+    canonical_volume = float(canonical_volume)
+    expected_volume = (
+        period_x * period_y - math.pi * hole_radius * hole_radius
+    ) * thickness
+    if _relative_error(canonical_volume, expected_volume) > 1.0e-12:
+        reasons.append("canonical A1 magnetic volume is inconsistent with its circular through-hole geometry")
+
+    center = geometry.get("film_center_m")
+    coordinate_scale = max(period_x, period_y, thickness, hole_radius)
+    coordinate_tolerance = _a1_geometry_roundoff_tolerance(coordinate_scale)
+    if (
+        not isinstance(center, list)
+        or len(center) != 3
+        or any(not _finite(value) for value in center)
+        or any(abs(float(value)) > coordinate_tolerance for value in center)
+    ):
+        reasons.append(f"{label} A1 film_center_m must be the canonical origin [0, 0, 0]")
+    if not _require_metadata_number(
+        geometry.get("hole_radius_m"),
+        hole_radius,
+        f"{label}.geometry.hole_radius_m",
+        reasons,
+    ):
+        pass
+    if geometry.get("air_in_hole") is not True:
+        reasons.append(f"{label}.geometry.air_in_hole must be true for A1")
+    if not _require_metadata_number(
+        geometry.get("magnetic_volume_m3"),
+        canonical_volume,
+        f"{label}.geometry.magnetic_volume_m3",
+        reasons,
+    ):
+        pass
+
+    interface_hmax = mesh_contract.get("near_film_hmax_m")
+    if not _finite_positive(interface_hmax):
+        reasons.append(f"{label}.mesh.near_film_hmax_m is missing or non-positive")
+        return False
+    interface_hmax = float(interface_hmax)
+    # The canonical A1 mesh requests 5 nm at a 50 nm hole boundary (R/10).
+    # Keep this geometry-derived resolution bound so a sparse polygon cannot
+    # impersonate the cylindrical CAD support.
+    if interface_hmax > hole_radius / 10.0 + coordinate_tolerance:
+        reasons.append(
+            f"{label}.mesh.near_film_hmax_m exceeds one tenth of the canonical A1 hole radius"
+        )
+
+    plan = _metadata_backend_plan(metadata)
+    if plan is None:
+        reasons.append(f"{label} A1 geometry lacks the resolved backend mesh")
+        return False
+    mesh = plan.get("mesh")
+    try:
+        cells = tet4_cells(mesh)
+        magnetic_elements = magnetic_element_indices(mesh, plan.get("mesh_parts"))
+    except (TypeError, ValueError, KeyError) as error:
+        reasons.append(f"{label} A1 resolved magnetic mesh support is invalid: {error}")
+        return False
+    if not isinstance(mesh, Mapping):
+        reasons.append(f"{label} A1 resolved mesh is not an object")
+        return False
+
+    nodes = mesh.get("nodes")
+    if not isinstance(nodes, list) or not nodes:
+        reasons.append(f"{label} A1 resolved mesh has no node coordinates")
+        return False
+    markers = mesh.get("element_markers")
+    if (
+        not isinstance(markers, list)
+        or len(markers) != len(cells)
+        or any(type(marker) is not int or marker < 0 for marker in markers)
+    ):
+        reasons.append(f"{label} A1 resolved mesh element_markers do not cover its volume cells")
+
+    mesh_cell_parts = _nested(mesh, "cells", "mesh_parts")
+    if isinstance(mesh_cell_parts, list) and mesh_cell_parts:
+        magnetic_set = set(magnetic_elements)
+        if len(mesh_cell_parts) != len(cells):
+            reasons.append(f"{label} A1 mesh.cells.mesh_parts do not cover its volume cells")
+        else:
+            for index, role in enumerate(mesh_cell_parts):
+                if not isinstance(role, str) or role not in {"magnetic", "transition_air", "far_air"}:
+                    reasons.append(f"{label} A1 mesh.cells.mesh_parts[{index}] has an unsupported role")
+                    break
+                if (index in magnetic_set) != (role == "magnetic"):
+                    reasons.append(
+                        f"{label} A1 mesh.cells.mesh_parts contradict the resolved magnetic support selectors"
+                    )
+                    break
+
+    # Validate the entire shared-domain mesh, including air-only nodes. The
+    # native degeneracy scale below uses this full coordinate set.
+    coordinates: list[tuple[float, float, float]] = []
+    for node_index, raw in enumerate(nodes):
+        if (
+            not isinstance(raw, list)
+            or len(raw) != 3
+            or any(not _finite(value) for value in raw)
+        ):
+            reasons.append(f"{label} A1 resolved mesh node {node_index} has invalid coordinates")
+            return False
+        coordinates.append(tuple(float(value) for value in raw))
+
+    cell_nodes: set[int] = set()
+    for element_index in magnetic_elements:
+        if not 0 <= element_index < len(cells):
+            reasons.append(f"{label} A1 magnetic selector references a cell outside the resolved mesh")
+            return False
+        cell = cells[element_index]
+        if len(cell) != 4 or len(set(cell)) != 4:
+            reasons.append(f"{label} A1 magnetic cell {element_index} is not a nondegenerate Tet4")
+            return False
+        for node_index in cell:
+            if not 0 <= node_index < len(nodes):
+                reasons.append(f"{label} A1 magnetic cell {element_index} references a missing node")
+                return False
+            cell_nodes.add(node_index)
+
+    if not magnetic_elements or not cell_nodes:
+        reasons.append(f"{label} A1 resolved mesh has no magnetic Tet4 support")
+        return False
+
+    # Canonical film bounds remain scoped to the resolved magnetic support;
+    # shared air padding must not expand the authored magnetic geometry.
+    bounds = (
+        (-0.5 * period_x, 0.5 * period_x),
+        (-0.5 * period_y, 0.5 * period_y),
+        (-0.5 * thickness, 0.5 * thickness),
+    )
+    for axis, (minimum, maximum) in enumerate(bounds):
+        actual_values = [coordinates[index][axis] for index in cell_nodes]
+        actual_minimum, actual_maximum = min(actual_values), max(actual_values)
+        if (
+            abs(actual_minimum - minimum) > coordinate_tolerance
+            or abs(actual_maximum - maximum) > coordinate_tolerance
+        ):
+            axis_name = "xyz"[axis]
+            reasons.append(
+                f"{label} A1 realized magnetic support does not span the canonical {axis_name} bounds"
+            )
+    coordinate_owner: dict[tuple[float, float, float], int] = {}
+    for node_index in cell_nodes:
+        point = coordinates[node_index]
+        prior = coordinate_owner.get(point)
+        if prior is not None:
+            reasons.append(
+                f"{label} A1 magnetic support has coincident mesh nodes {prior} and {node_index}"
+            )
+            return False
+        coordinate_owner[point] = node_index
+    radial_tolerance = _a1_geometry_roundoff_tolerance(coordinate_scale, hole_radius)
+    for node_index in cell_nodes:
+        x, y, _ = coordinates[node_index]
+        if math.hypot(x, y) < hole_radius - radial_tolerance:
+            reasons.append(
+                f"{label} A1 realized magnetic support contains a node inside the canonical through-hole"
+            )
+            break
+
+    def tet_signed_volume_m3(cell: Sequence[int]) -> float:
+        a, b, c, d = (coordinates[index] for index in cell)
+        ab = (b[0] - a[0], b[1] - a[1], b[2] - a[2])
+        ac = (c[0] - a[0], c[1] - a[1], c[2] - a[2])
+        ad = (d[0] - a[0], d[1] - a[1], d[2] - a[2])
+        determinant = (
+            ab[0] * (ac[1] * ad[2] - ac[2] * ad[1])
+            - ab[1] * (ac[0] * ad[2] - ac[2] * ad[0])
+            + ab[2] * (ac[0] * ad[1] - ac[1] * ad[0])
+        )
+        return determinant / 6.0
+
+    # Match the native mesh-scale epsilon using the full shared mesh, not only
+    # magnetic nodes. All entries are non-optional after the validation above.
+    mesh_extents = tuple(
+        max(point[axis] for point in coordinates) - min(point[axis] for point in coordinates)
+        for axis in range(3)
+    )
+    if any(not _finite(extent) for extent in mesh_extents):
+        reasons.append(
+            f"{label} A1 resolved full shared-mesh coordinate extent is non-finite"
+        )
+        return False
+    mesh_scale = max(mesh_extents)
+    if mesh_scale <= 0.0:
+        mesh_scale = 1.0
+    try:
+        mesh_scale_cubed = mesh_scale**3
+    except OverflowError:
+        reasons.append(
+            f"{label} A1 resolved full shared-mesh scale cannot represent native Tet4-volume epsilon"
+        )
+        return False
+    if not _finite(mesh_scale_cubed):
+        reasons.append(
+            f"{label} A1 resolved full shared-mesh scale cannot represent native Tet4-volume epsilon"
+        )
+        return False
+    mesh_volume_epsilon = max(mesh_scale_cubed * 1.0e-18, sys.float_info.min)
+
+    # Match FemCellGeometry evidence ordering: these four faces are outward
+    # oriented for a positive Tet4 determinant and shared faces must oppose.
+    face_patterns = ((0, 1, 3), (1, 2, 3), (2, 0, 3), (0, 2, 1))
+    cell_keys: set[tuple[int, int, int, int]] = set()
+    parents = {element_index: element_index for element_index in magnetic_elements}
+    ranks = {element_index: 0 for element_index in magnetic_elements}
+
+    def find_root(element_index: int) -> int:
+        root = element_index
+        while parents[root] != root:
+            root = parents[root]
+        while parents[element_index] != element_index:
+            parent = parents[element_index]
+            parents[element_index] = root
+            element_index = parent
+        return root
+
+    def join_components(left: int, right: int) -> None:
+        left_root, right_root = find_root(left), find_root(right)
+        if left_root == right_root:
+            return
+        if ranks[left_root] < ranks[right_root]:
+            left_root, right_root = right_root, left_root
+        parents[right_root] = left_root
+        if ranks[left_root] == ranks[right_root]:
+            ranks[left_root] += 1
+
+    # Each entry stores the first incident cell, its oriented-face parity,
+    # incidence count, and native-order face. This is O(number of cells), not
+    # an all-cell pair search.
+    face_incidence: dict[
+        tuple[int, int, int], tuple[int, int, int, tuple[int, int, int]]
+    ] = {}
+    signed_cell_volumes: list[float] = []
+    for element_index in magnetic_elements:
+        cell = cells[element_index]
+        cell_key = tuple(sorted(cell))
+        if cell_key in cell_keys:
+            reasons.append(f"{label} A1 magnetic support contains duplicate Tet4 cells")
+            return False
+        cell_keys.add(cell_key)
+        signed_volume = tet_signed_volume_m3(cell)
+        if not _finite(signed_volume) or abs(signed_volume) <= mesh_volume_epsilon:
+            reasons.append(
+                f"{label} A1 magnetic Tet4 {element_index} is degenerate under the native mesh-volume epsilon"
+            )
+            return False
+        if signed_volume < 0.0:
+            reasons.append(
+                f"{label} A1 magnetic Tet4 {element_index} has negative tetra orientation"
+            )
+            return False
+        signed_cell_volumes.append(signed_volume)
+
+        for pattern in face_patterns:
+            oriented_face = tuple(cell[index] for index in pattern)
+            face_key = tuple(sorted(oriented_face))
+            permutation = [face_key.index(node_index) for node_index in oriented_face]
+            inversions = sum(
+                permutation[left] > permutation[right]
+                for left in range(3)
+                for right in range(left + 1, 3)
+            )
+            orientation = -1 if inversions % 2 else 1
+            previous = face_incidence.get(face_key)
+            if previous is None:
+                face_incidence[face_key] = (
+                    element_index, orientation, 1, oriented_face,
+                )
+            elif previous[2] == 1:
+                if previous[1] == orientation:
+                    reasons.append(
+                        f"{label} A1 paired Tet4 face has inconsistent outward orientation"
+                    )
+                    return False
+                join_components(previous[0], element_index)
+                face_incidence[face_key] = (
+                    previous[0], previous[1], 2, previous[3],
+                )
+            else:
+                reasons.append(f"{label} A1 magnetic mesh has a non-manifold Tet4 face")
+                return False
+
+    if len({find_root(element_index) for element_index in magnetic_elements}) != 1:
+        reasons.append(f"{label} A1 resolved magnetic Tet4 support is disconnected")
+        return False
+
+    exposed_faces = [entry[3] for entry in face_incidence.values() if entry[2] == 1]
+    if not exposed_faces:
+        reasons.append(f"{label} A1 magnetic Tet4 support has no exposed boundary")
+        return False
+
+    realized_volume = math.fsum(signed_cell_volumes)
+    boundary_edge_incidence: dict[tuple[int, int], tuple[int, int]] = {}
+    boundary_volume_terms: list[float] = []
+    wall_faces: list[tuple[int, int, int]] = []
+    half_x, half_y, half_z = 0.5 * period_x, 0.5 * period_y, 0.5 * thickness
+    for face in exposed_faces:
+        points = [coordinates[index] for index in face]
+        radii = [math.hypot(point[0], point[1]) for point in points]
+        z_values = [point[2] for point in points]
+        is_hole_wall = (
+            max(z_values) - min(z_values) > coordinate_tolerance
+            and all(abs(radius - hole_radius) <= radial_tolerance for radius in radii)
+        )
+        on_film_top = all(abs(value - half_z) <= coordinate_tolerance for value in z_values)
+        on_film_bottom = all(abs(value + half_z) <= coordinate_tolerance for value in z_values)
+        on_outer_side = any(
+            all(abs(point[axis] - bound) <= coordinate_tolerance for point in points)
+            for axis, bound in (
+                (0, -half_x), (0, half_x), (1, -half_y), (1, half_y),
+            )
+        )
+        if is_hole_wall:
+            wall_faces.append(face)
+        elif on_film_top or on_film_bottom:
+            centroid_radius = math.hypot(
+                math.fsum(point[0] for point in points) / 3.0,
+                math.fsum(point[1] for point in points) / 3.0,
+            )
+            if centroid_radius < hole_radius - radial_tolerance:
+                reasons.append(
+                    f"{label} A1 exposed film face caps the canonical through-hole"
+                )
+                return False
+        elif on_outer_side:
+            pass
+        else:
+            reasons.append(
+                f"{label} A1 resolved magnetic mesh has an exposed face inside the canonical support"
+            )
+            return False
+
+        a, b, c = points
+        boundary_volume_terms.append(
+            (
+                a[0] * (b[1] * c[2] - b[2] * c[1])
+                - a[1] * (b[0] * c[2] - b[2] * c[0])
+                + a[2] * (b[0] * c[1] - b[1] * c[0])
+            )
+            / 6.0
+        )
+        for left, right in ((face[0], face[1]), (face[1], face[2]), (face[2], face[0])):
+            edge_key = tuple(sorted((left, right)))
+            direction = 1 if left < right else -1
+            count, orientation_sum = boundary_edge_incidence.get(edge_key, (0, 0))
+            boundary_edge_incidence[edge_key] = (count + 1, orientation_sum + direction)
+
+    if not wall_faces:
+        reasons.append(
+            f"{label} A1 realized mesh has no exposed cylindrical through-hole boundary at the canonical center and radius"
+        )
+        return False
+    if any(count != 2 or orientation_sum != 0 for count, orientation_sum in boundary_edge_incidence.values()):
+        reasons.append(f"{label} A1 exposed support boundary is not a closed oriented manifold")
+        return False
+    boundary_volume = math.fsum(boundary_volume_terms)
+    volume_relative_tolerance = 128.0 * math.ulp(1.0) * max(
+        1, len(signed_cell_volumes), len(boundary_volume_terms)
+    )
+    volume_tolerance = volume_relative_tolerance * max(
+        abs(realized_volume), abs(boundary_volume), abs(canonical_volume), 1.0e-300
+    )
+    if (
+        not _finite_positive(boundary_volume)
+        or abs(realized_volume - boundary_volume) > volume_tolerance
+    ):
+        # This consistency check follows the conforming face-complex checks; it
+        # is not, by itself, a test for arbitrary geometric self-intersections.
+        reasons.append(
+            f"{label} A1 signed Tet4 volume does not match its reconstructed oriented boundary volume"
+        )
+        return False
+
+    wall_nodes = {index for face in wall_faces for index in face}
+    wall_neighbors: dict[int, set[int]] = {index: set() for index in wall_nodes}
+    max_projected_edge = 0.0
+    max_wall_face_angle = 0.0
+    for face in wall_faces:
+        face_angles = sorted(
+            math.atan2(coordinates[index][1], coordinates[index][0]) % math.tau
+            for index in face
+        )
+        face_gaps = [
+            (face_angles[(index + 1) % len(face_angles)] - face_angles[index]) % math.tau
+            for index in range(len(face_angles))
+        ]
+        max_wall_face_angle = max(max_wall_face_angle, math.tau - max(face_gaps))
+        for left_position, left in enumerate(face):
+            for right in face[left_position + 1 :]:
+                wall_neighbors[left].add(right)
+                wall_neighbors[right].add(left)
+                left_point, right_point = coordinates[left], coordinates[right]
+                projected_length = math.hypot(
+                    left_point[0] - right_point[0], left_point[1] - right_point[1]
+                )
+                max_projected_edge = max(max_projected_edge, projected_length)
+    pending = [next(iter(wall_nodes))]
+    connected_wall_nodes: set[int] = set()
+    while pending:
+        current = pending.pop()
+        if current in connected_wall_nodes:
+            continue
+        connected_wall_nodes.add(current)
+        pending.extend(wall_neighbors[current] - connected_wall_nodes)
+    wall_z = [coordinates[index][2] for index in wall_nodes]
+    if connected_wall_nodes != wall_nodes:
+        reasons.append(f"{label} A1 cylindrical wall boundary is disconnected")
+    if (
+        abs(min(wall_z) + 0.5 * thickness) > coordinate_tolerance
+        or abs(max(wall_z) - 0.5 * thickness) > coordinate_tolerance
+    ):
+        reasons.append(f"{label} A1 cylindrical wall does not pass through the full film thickness")
+    if max_projected_edge > interface_hmax + coordinate_tolerance:
+        reasons.append(
+            f"{label} A1 cylindrical wall mesh edge exceeds the canonical near-film hmax"
+        )
+
+    ring_max_angle = 0.0
+    ring_edge_sets: list[set[tuple[int, int]]] = []
+    for target_z, ring_name in (
+        (-0.5 * thickness, "bottom"),
+        (0.5 * thickness, "top"),
+    ):
+        ring_edges: set[tuple[int, int]] = set()
+        for face in wall_faces:
+            on_plane = [
+                index
+                for index in face
+                if abs(coordinates[index][2] - target_z) <= coordinate_tolerance
+            ]
+            if len(on_plane) == 2:
+                ring_edges.add(tuple(sorted(on_plane)))
+        ring_nodes = {index for edge in ring_edges for index in edge}
+        adjacency: dict[int, set[int]] = {index: set() for index in ring_nodes}
+        for left, right in ring_edges:
+            adjacency[left].add(right)
+            adjacency[right].add(left)
+        if len(ring_nodes) < 8 or not ring_edges or any(len(neighbors) != 2 for neighbors in adjacency.values()):
+            reasons.append(f"{label} A1 {ring_name} hole boundary is not a closed, resolved ring")
+            continue
+        ring_pending = [next(iter(ring_nodes))]
+        ring_connected: set[int] = set()
+        while ring_pending:
+            current = ring_pending.pop()
+            if current in ring_connected:
+                continue
+            ring_connected.add(current)
+            ring_pending.extend(adjacency[current] - ring_connected)
+        if ring_connected != ring_nodes or len(ring_edges) != len(ring_nodes):
+            reasons.append(f"{label} A1 {ring_name} hole boundary is not one closed ring")
+            continue
+        ring_edge_sets.append(ring_edges)
+        ordered = sorted(
+            (
+                (math.atan2(coordinates[index][1], coordinates[index][0]) % math.tau, index)
+                for index in ring_nodes
+            )
+        )
+        angles = [entry[0] for entry in ordered]
+        index_order = [entry[1] for entry in ordered]
+        gaps = [
+            (angles[(index + 1) % len(angles)] - angles[index]) % math.tau
+            for index in range(len(angles))
+        ]
+        if any(gap <= coordinate_tolerance / hole_radius for gap in gaps):
+            reasons.append(f"{label} A1 {ring_name} hole boundary has duplicate angular vertices")
+            continue
+        ring_max_angle = max(ring_max_angle, max(gaps))
+        for index, left in enumerate(index_order):
+            right = index_order[(index + 1) % len(index_order)]
+            if tuple(sorted((left, right))) not in ring_edges:
+                reasons.append(f"{label} A1 {ring_name} ring connectivity does not follow its circular boundary")
+                break
+        polygon_area = 0.5 * abs(
+            math.fsum(
+                coordinates[index_order[index]][0]
+                * coordinates[index_order[(index + 1) % len(index_order)]][1]
+                - coordinates[index_order[(index + 1) % len(index_order)]][0]
+                * coordinates[index_order[index]][1]
+                for index in range(len(index_order))
+            )
+        )
+        chord_segment_area = 0.5 * hole_radius * hole_radius * math.fsum(
+            gap - math.sin(gap) for gap in gaps
+        )
+        polygon_roundoff = (
+            512.0 * math.ulp(1.0) * math.pi * hole_radius * hole_radius
+            + 2.0 * math.pi * hole_radius * radial_tolerance
+        )
+        if (
+            polygon_area <= 0.0
+            or abs(math.pi * hole_radius * hole_radius - polygon_area - chord_segment_area)
+            > polygon_roundoff
+        ):
+            reasons.append(f"{label} A1 {ring_name} ring does not realize a circular chord boundary")
+
+    if len(ring_edge_sets) == 2:
+        wall_edge_counts: dict[tuple[int, int], int] = {}
+        for face in wall_faces:
+            for left_position, left in enumerate(face):
+                for right in face[left_position + 1 :]:
+                    edge = tuple(sorted((left, right)))
+                    wall_edge_counts[edge] = wall_edge_counts.get(edge, 0) + 1
+        if any(count > 2 for count in wall_edge_counts.values()):
+            reasons.append(f"{label} A1 cylindrical wall surface has a non-manifold edge")
+        exposed_wall_edges = {edge for edge, count in wall_edge_counts.items() if count == 1}
+        if exposed_wall_edges != ring_edge_sets[0] | ring_edge_sets[1]:
+            reasons.append(
+                f"{label} A1 cylindrical wall has a gap, cap, or internal boundary before the opposite film face"
+            )
+
+    if ring_max_angle <= 0.0:
+        reasons.append(f"{label} A1 through-hole has no measurable full-circumference boundary")
+        return False
+    maximum_allowed_angle = 2.0 * math.asin(
+        min(1.0, interface_hmax / (2.0 * hole_radius))
+    )
+    maximum_wall_angle = max(ring_max_angle, max_wall_face_angle)
+    if maximum_wall_angle > maximum_allowed_angle + coordinate_tolerance / hole_radius:
+        reasons.append(
+            f"{label} A1 through-hole wall angular span exceeds the canonical near-film hmax"
+        )
+
+    sagitta = hole_radius * (1.0 - math.cos(0.5 * maximum_wall_angle))
+    maximum_chord_deficit = (
+        math.pi
+        * (hole_radius * hole_radius - (hole_radius - sagitta) ** 2)
+        * thickness
+    )
+    maximum_realized_volume = canonical_volume + maximum_chord_deficit
+    if (
+        realized_volume < canonical_volume - volume_tolerance
+        or realized_volume > maximum_realized_volume + volume_tolerance
+    ):
+        reasons.append(
+            f"{label} A1 realized magnetic Tet4 volume is inconsistent with the canonical circular support and measured chord error"
+        )
+    return len(reasons) == initial_reason_count
 
 
 def _require_metadata_number(
@@ -1003,6 +1606,10 @@ def _validate_benchmark_metadata(
             valid = False
     if case == "c0" and eigensolve.get("magnetostatic_bc") != "open":
         reasons.append(f"{label} C0 magnetostatic_bc is not open")
+        valid = False
+    if case == "a1" and not _validate_a1_realized_geometry(
+        metadata, parameters, label, reasons
+    ):
         valid = False
     return valid
 

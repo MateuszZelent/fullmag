@@ -282,3 +282,38 @@ node_id,x_m,y_m,z_m,psi_re_A,psi_im_A,dphi_re_A,dphi_im_A,Hdx_re_A_per_m,Hdx_im_
 - COMSOL [periodic RF models](https://www.comsol.com/blogs/how-to-numerically-simplify-your-periodic-rf-models) — pomocnicza ilustracja fazy source/destination; nie dowodzi dostępności Floquet w magnetostatyce AC/DC.
 
 Zweryfikowano tekst manuala, jednostki, stałe, ciągłość ścieżki i algebraiczny znak transformacji potencjału. Nie zweryfikowano GUI ani wykonania tego modelu w zainstalowanym COMSOL-u. Nazwy tagów rozwiązania i wbudowanego eigenvalue należy odczytać z rzeczywistego modelu. Te dane są przeznaczone do przyszłej bramki porównania; sam przepis nie zamyka bramki V4 ani pozostałych etapów implementacji.
+
+
+## 11. Bramka rzeczywistej geometrii A1 — SOURCE PASS, wykonanie pending
+
+Samo `case_id=a1` i promień w metadanych nie potwierdzają modelu antidot.
+`_validate_a1_realized_geometry` w `scripts/validate_comsol_dispersion_scientific_gate.py`
+rozwiązuje jawną selekcję magnetycznych Tet4 i sprawdza kanoniczny otwór
+cylindryczny o promieniu 50 nm oraz domenę z wersjonowanych parametrów.
+Pełne coordinates shared-domain są walidowane dla skali siatki, zaś granice
+i geometria magnetyczna używają wyłącznie magnetic support.
+
+Dowód wymaga dodatniej orientacji zgodnej z native epsilon, braku duplicate
+cells, spójnej incidence ścian i przeciwnych orientacji współdzielonych
+ścian, połączonego support i zamkniętej orientowanej granicy. Każda exposed
+ściana musi należeć do kanonicznego boxu/film caps lub ściany otworu. Wall
+musi być pełnej grubości i mieć właściwy promień/centrum. Odwróconych
+Tet4 nie maskujemy wartością bezwzględną objętości.
+
+Liniowe facets przybliżają okrąg cięciwami. Kontrola błędu objętości względem
+continuum wynika z mierzonego angular span wszystkich wall faces i
+kanonicznego near-film hmax; nie jest stałym procentem tolerancji ani
+budżetem na dodatkowy materiał. Signed boundary-volume equality jest
+kontrolą spójności, nie samodzielnym dowodem braku dowolnych przecięć.
+Zakres bramki to zadeklarowany conforming positive Tet4 complex, nie
+ogólny detektor self-intersections dowolnej siatki.
+
+Regresje helpera w `scripts/test_validate_comsol_dispersion_scientific_gate.py`
+obejmują slab i zły promień/kształt/położenie. Publiczne regresje `validate_case`
+obejmują odwrócone/duplicate/missing/disconnected komórki, prawdziwe
+magnetic+air coordinates, malformed air oraz extreme finite air coordinate. Po zmianie mesh evidence hash metadanych jest
+wiązany ponownie; test wymaga geometry rejection zamiast przypadkowego
+stale-hash failure. Nieprzedstawialna skala kończy się kontrolowanym
+wynikiem not_qualified. Niezależny SOURCE review przeszło; hosted wykonanie
+pozostaje NOT VERIFIED. Nie zamyka to porównania Fullmag–COMSOL,
+konwencji znaków, pól zespolonych ani pełnej kwalifikacji A1.
