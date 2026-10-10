@@ -788,6 +788,56 @@
         "source-swept-exact-ring-route-selection",
         "source-swept-exact-ring-route-report"
       ]
+    },
+    {
+      "id": "eq-r2-gilbert-energy-mass",
+      "symbols": [
+        "r2_gilbert_energy_mass",
+        "r2_gilbert_alpha",
+        "r2_gilbert_basis",
+        "r2_gilbert_frames",
+        "r2_gilbert_indices",
+        "r2_gilbert_qdot",
+        "r2_gilbert_energy",
+        "mass_operators",
+        "restoring_operators",
+        "Ms",
+        "gamma",
+        "mu0",
+        "q",
+        "domains",
+        "volume_measure",
+        "time"
+      ],
+      "sources": [
+        "source-r2-gilbert-energy-contract",
+        "source-floquet-neumann-invertibility"
+      ]
+    },
+    {
+      "id": "eq-r2-gilbert-energy-balance",
+      "symbols": [
+        "r2_gilbert_energy_mass",
+        "r2_gilbert_alpha",
+        "r2_gilbert_basis",
+        "r2_gilbert_frames",
+        "r2_gilbert_indices",
+        "r2_gilbert_qdot",
+        "r2_gilbert_energy",
+        "mass_operators",
+        "restoring_operators",
+        "Ms",
+        "gamma",
+        "mu0",
+        "q",
+        "domains",
+        "volume_measure",
+        "time"
+      ],
+      "sources": [
+        "source-r2-gilbert-energy-contract",
+        "source-floquet-neumann-invertibility"
+      ]
     }
   ],
   "symbols": [
@@ -1834,6 +1884,48 @@
       "latex": "$\\Omega_{\\mathrm{air}}$",
       "meaning": "Objętość powietrza w dokładnym airboxie",
       "si_unit": "$\\mathrm{m}^3$"
+    },
+    {
+      "id": "r2_gilbert_energy_mass",
+      "latex": "$R_\\alpha$",
+      "meaning": "Symmetric dissipative energy mass",
+      "si_unit": "$\\mathrm{J\\,s}$"
+    },
+    {
+      "id": "r2_gilbert_alpha",
+      "latex": "$\\alpha$",
+      "meaning": "Finite nonnegative local Gilbert damping",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "r2_gilbert_basis",
+      "latex": "$N_i$, $N_j$",
+      "meaning": "Scalar P1 basis functions at the quadrature point",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "r2_gilbert_frames",
+      "latex": "$\\mathbf e_{a,i}$, $\\mathbf e_{b,j}$",
+      "meaning": "Physical nodal tangent basis vectors",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "r2_gilbert_indices",
+      "latex": "$i$, $j$, $a$, $b$",
+      "meaning": "Node and tangent-component indices",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "r2_gilbert_qdot",
+      "latex": "$\\dot q$",
+      "meaning": "Time derivative of normalized tangent coordinates",
+      "si_unit": "$\\mathrm{s^{-1}}$"
+    },
+    {
+      "id": "r2_gilbert_energy",
+      "latex": "$E$",
+      "meaning": "Quadratic perturbation energy of the reduced conservative pencil",
+      "si_unit": "$\\mathrm{J}$"
     }
   ],
   "sources": [
@@ -3935,6 +4027,25 @@
       "path": "backends/fem/cpu/frequency_domain/production_cpu_driven_response.cpp",
       "symbol": "FrequencyDomainStatus solve_production_cpu_driven_response",
       "responsibility": "Supplied drive copied to RHS; physical RF conversion and parity remain unverified"
+    },
+    {
+      "id": "source-r2-gilbert-energy-contract",
+      "path": "docs/physics/0831-fem-dynamic-pencil-modal-response-and-krylov.md",
+      "symbol": "DOC-ANCHOR:r2-exact-gilbert-energy-mass",
+      "responsibility": "Proposed energy mass and energy-balance sign; not implemented or runtime qualified",
+      "evidence_status": "planned_contract"
+    },
+    {
+      "id": "source-r2-complex-qz-oracle",
+      "path": "scripts/test_eigensolve_complex_damping_oracle.py",
+      "symbol": "original_complex_qz_values",
+      "responsibility": "Independent complex QZ finite eigenvalues and reconstruction checks; native qualification not established"
+    },
+    {
+      "id": "source-r2-physical-sector-oracle",
+      "path": "scripts/test_eigensolve_complex_damping_oracle.py",
+      "symbol": "physical_doubled_spectrum",
+      "responsibility": "Projected original residual and physical subspace rank in the independent doubled-real oracle"
     }
   ],
   "public_api": {

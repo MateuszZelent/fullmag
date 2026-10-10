@@ -426,3 +426,23 @@ została naprawiona tylko przez aktualizację dokumentacji.
 P2 getter fixture jest na remote `b8675a329e34db1ea491a5b96aa9410cdca66e63`;
 hosted floquet-count-slepc [38080625714](https://github.com/MateuszZelent/fullmag/actions/runs/38080625714)
 trwa, oczekiwany pomiar pozostaje NOT VERIFIED.
+
+
+## P3 — prywatny kontrakt energy mass i niezależny oracle
+
+Przed kodem zapisano wymagany znak B_alpha=-G-R_alpha oraz bilans energii
+w nocie 0831, razem z osobnymi interpolacjami Ms/alpha i domyślnie
+wyłączonym prywatnym opt-in. Canonical source-map validator: PASS.
+
+Dodano siedem niezależnych testów algebry: original complex QZ kontra
+doubled-real physical sector, circular/elliptic/overdamped macrospin,
+complex Hermitian Hessian, physical degeneracy rank, frame covariance
+i energy-loss sign. Root oraz niezależny source/math review: PASS;
+AST: PASS. Testy nie importują adapterów Fullmaga, nie mierzą realnego
+demag i nie kwalifikują siatki/Floqueta ani native Include.
+
+Workflow eigensolve-damping-oracle wykonuje je wyłącznie w GHA
+z NumPy 2.2.6 i SciPy 1.15.3. Wykonanie pending. Prywatna realizacja
+energy mass jest przygotowywana w oddzielnym fragmencie; jej source
+review, hosted assembly i dopiero integracja exact-damping physical
+sector/original residual pozostają wymaganymi etapami P3.

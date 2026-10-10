@@ -1,0 +1,30 @@
+name: eigensolve-damping-oracle
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ['codex/**']
+    paths:
+      - 'scripts/test_eigensolve_complex_damping_oracle.py'
+      - '.github/workflows/eigensolve-damping-oracle.yml'
+  pull_request:
+    paths:
+      - 'scripts/test_eigensolve_complex_damping_oracle.py'
+      - '.github/workflows/eigensolve-damping-oracle.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  independent-algebra:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+      - name: Install pinned independent linear algebra libraries
+        run: python -m pip install numpy==2.2.6 scipy==1.15.3
+      - name: Check original complex QZ and doubled physical-sector algebra
+        run: python -B -m unittest discover -s scripts -p 'test_eigensolve_complex_damping_oracle.py' -v

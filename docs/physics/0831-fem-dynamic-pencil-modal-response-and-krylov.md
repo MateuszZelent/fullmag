@@ -5198,3 +5198,86 @@ fixtures. SOURCE nie jest dowodem odczytu ani kwalifikacji fizyki.
 | source-r2-local-frequency-mass-units | backends/fem/src/frequency_domain/operator_terms.cpp | FrequencyDomainStatus apply_tangent_frequency_mass_operator | Dimensionless local Gilbert frequency mass, distinct from energy and geometric mass |
 | source-r2-rf-payload-conversion-gap | crates/fullmag-runner/src/frequency_response.rs | build_native_production_cpu_payload | Direct tangent RF field projection does not establish required torque and weak-row conversion |
 | source-r2-rf-rhs-copy-gap | backends/fem/cpu/frequency_domain/production_cpu_driven_response.cpp | FrequencyDomainStatus solve_production_cpu_driven_response | Supplied drive copied to RHS; physical RF conversion and parity remain unverified |
+
+
+(r2-exact-gilbert-energy-mass)=
+## R2 P3 — wymagany Gilbert mass dla energy-Hessian owner
+
+Status: planned_contract; native exact damping nie jest jeszcze dopuszczone.
+Dla energy-Hessian rows w J, przy istniejącym B0 = -G, wymagany znak
+wkładu dyssypacyjnego jest ujemny:
+
+```{math}
+:label: eq-r2-gilbert-energy-mass
+(R_\alpha)_{ia,jb}=\int_{\Omega_m}\frac{\mu_0 M_s}{\gamma_0}
+\alpha N_i N_j\,\mathbf e_{a,i}\cdot\mathbf e_{b,j}\,\mathrm dV,
+\qquad B_\alpha=-G-R_\alpha.
+```
+
+Dla rzeczywistej, niezależnej od czasu symetrycznej K i układu po eliminacji
+constraints kontrola znaku opiera się na energii:
+
+```{math}
+:label: eq-r2-gilbert-energy-balance
+Kq=B_\alpha\dot q,\qquad E=\tfrac12q^{\mathsf T}Kq,\qquad
+\frac{\mathrm dE}{\mathrm dt}=-\dot q^{\mathsf T}R_\alpha\dot q\le0.
+```
+
+Wymagamy skew-adjoint G i dodatnio półokreślonego R_alpha. Znak przeciwny
+części symetrycznej B_alpha daje antytłumienie. Hermitian congruence tych
+samych fizycznych macierzy zachowuje tę własność w complex Floquet coordinates.
+
+| Field or symbol | Meaning | SI unit / allowed representation |
+|---|---|---|
+| $R_\alpha$ | Symmetric dissipative energy mass | $\mathrm{J\,s}$ |
+| $\alpha$ | Finite nonnegative local Gilbert damping | $1$ |
+| $N_i$, $N_j$ | Scalar P1 basis functions at the quadrature point | $1$ |
+| $\mathbf e_{a,i}$, $\mathbf e_{b,j}$ | Physical nodal tangent basis vectors | $1$ |
+| $i$, $j$, $a$, $b$ | Node and tangent-component indices | $1$ |
+| $\dot q$ | Time derivative of normalized tangent coordinates | $\mathrm{s^{-1}}$ |
+| $E$ | Quadratic perturbation energy of the reduced conservative pencil | $\mathrm{J}$ |
+
+Assembly interpoluje Ms i alpha osobno w tych samych punktach kwadratury,
+a następnie mnoży wartości. Interpolacja nodalnego produktu Ms*alpha jest
+inną dyskretyzacją. Wagi i współczynniki muszą być skończone: Ms i gamma0
+dodatnie, alpha nieujemne. Aktualny gamma0 tego właściciela jest skalarem;
+nie deklarujemy obsługi spatial gamma.
+
+Pierwsza zmiana to prywatny jawny opt-in energy mass, domyślnie wyłączony.
+Przekazanie alpha z descriptoru nie może zmienić produkcyjnego Ignore.
+Native Include pozostaje gated do kwalifikacji complex physical sector,
+oryginalnego residualu oraz circular/elliptic/overdamped macrospin oracle.
+Regresje assembly obejmują alpha=0, Rayleigh form, niejednorodne Ms/alpha,
+rotacje lokalnych ram, Hermitian phase reduction i nielegalne współczynniki.
+Powyższy kontrakt nie jest deklaracją wykonanych testów ani kwalifikacji.
+
+| Source ID | Path | Symbol | Responsibility |
+|---|---|---|---|
+| source-r2-gilbert-energy-contract | docs/physics/0831-fem-dynamic-pencil-modal-response-and-krylov.md | DOC-ANCHOR:r2-exact-gilbert-energy-mass | Proposed energy mass and energy-balance sign; not implemented or runtime qualified |
+
+
+### P3 — niezależny oracle oryginalnego complex pencil
+
+`scripts/test_eigensolve_complex_damping_oracle.py` jest osobną regresją
+algebry małych, regularnych pencil. Complex QZ działa na oryginalnym K/B;
+odrębne eig działa na podwojonym realnym rotated pencil. Rekonstrukcja
+fizycznego sektora sprawdza normę, residual oryginalnego równania i rangę
+całego zdegenerowanego projected subspace. Schur vectors z QZ nie są
+traktowane jako eigenvectors. Oracle porównuje pełne finite spectrum,
+w tym nieoscylacyjne mody; nie stosuje dodatniego frequency-window.
+
+Przypadki obejmują circular i elliptic macrospin, overdamping, complex
+Hermitian Hessian jako algebraiczny reprezentant nonzero-k, degenerację,
+rotację ram oraz znak utraty energii. Complex Hessian w tej małej fixture
+nie jest realizacją siatki, demag ani Floquet boundary problem; nie daje
+kwalifikacji dyspersji. Oracle nie importuje native adaptera i sam nie
+otwiera capability Include. Jego wykonanie i powiązanie z rzeczywistym
+assembly/SLEPc pozostają oddzielnymi dowodami.
+
+[Kontrakt complex QZ SciPy 1.15.3](https://docs.scipy.org/doc/scipy-1.15.3/reference/generated/scipy.linalg.qz.html)
+oraz [generalized eig](https://docs.scipy.org/doc/scipy-1.15.3/reference/generated/scipy.linalg.eig.html).
+
+| Source ID | Path | Symbol | Responsibility |
+|---|---|---|---|
+| source-r2-complex-qz-oracle | scripts/test_eigensolve_complex_damping_oracle.py | original_complex_qz_values | Independent complex QZ finite eigenvalues and reconstruction checks; native qualification not established |
+| source-r2-physical-sector-oracle | scripts/test_eigensolve_complex_damping_oracle.py | physical_doubled_spectrum | Projected original residual and physical subspace rank in the independent doubled-real oracle |
