@@ -196,6 +196,7 @@ def load_workflow(path: Path) -> dict:
 CONTRACT_SCOPES = frozenset(
     {
         "bootstrap",
+        "rust",
         "browser",
         "positive-mass",
         "native-modal",

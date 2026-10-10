@@ -2883,3 +2883,13 @@ Python114116561477 zakończył cały job failure na dotychczasowym meshing actua
 ### 2026-10-10 — hosted PASS fizycznej normy k
 
 GHA38019321647 exact57e61: Control114116561524 SUCCESS. Typecheck/lint oraz7779testsPASS13skip; EigenDispersionInspectorPanel3testsPASS(log1272), obejmujące signed±25e6/Gamma0/3Dnorm/offset i unknown k coverage. Browser114116561530 SUCCESS. Uwaga5475465669 implemented. To potwierdzenie poprawnego statusu metadanych i granicy ważności referencji, nie dowód rozwiązania native eigenproblem ani zgodności COMSOL. Poprawka widoczności helperów6259727595c4966aeca838e6353d654fe340f44e ma osobny GHA38019818326, którego Rust gate jest nadal obserwowany.
+
+
+### 2026-10-10 — wykonanie odroczonej publikacji i kompletność fixture periodycznej
+
+GHA38019818326 Rust114118112773 wykonał nowy krok deferred_physical_potential_tests. Actual reference-writer identity regression PASS, lecz oba shared-domain testy zatrzymały się w MeshTopology::from_ir: node pair x_faces nie miał deklaracji MeshPeriodicBoundaryPairIR. To niespójność fixture, nie podstawa do osłabienia walidacji. Dodano deklarację x_faces z translacją [1,0,0] zgodną z minimalnymi węzłami0→1, markerami1/2 i identycznym pair_id. BCPeriodic/Floquet, nonzero k oraz wszystkie selektory/porównania phi/H pozostają bez zmian. Kompilacja i wcześniejsze kroki przeszły; po korekcie wymagane ponowienie rzeczywistych regresji GHA. Uwaga4080421133 nadal pending CI.
+
+
+### 2026-10-10 — celowany zakres Rust i zachowanie kontraktu workflow
+
+Dodano manualny contract_scope=rust, aby ponowić regresje publikacji bez niezmienionych ciężkich zadań. SOURCE review wykrył konflikt wcześniejszego zagnieżdżonego guardu z istniejącym parserem required checks; zastąpiono go płaskim wykluczeniem rust w dotychczasowych koniunkcjach i uzupełniono CONTRACT_SCOPES. Guard Rust oraz domyślne push/PR pozostają niezmienione. Jawne scope-only jobs nadal uruchamiają się tylko dla swojego zakresu. Fixture x_faces SOURCE review PASS; rzeczywiste regresje wymagają GHA.

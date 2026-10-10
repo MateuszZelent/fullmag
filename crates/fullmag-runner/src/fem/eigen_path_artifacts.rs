@@ -4514,6 +4514,20 @@ mod deferred_physical_potential_tests {
 
     fn shared_periodic_plan() -> FemEigenPlanIR {
         let mut plan = crate::fem::eigen_tests::minimal_native_modal_plan();
+        // Bind the node pair to its declared lattice translation. The topology
+        // and Floquet phase builders validate this independently of selectors.
+        plan.mesh.periodic_boundary_pairs = vec![fullmag_ir::MeshPeriodicBoundaryPairIR {
+            pair_id: "x_faces".into(),
+            source_marker: None,
+            destination_marker: None,
+            marker_a: 1,
+            marker_b: 2,
+            translation: Some([1.0, 0.0, 0.0]),
+            tolerance: None,
+            axis_hint: None,
+            orientation: None,
+            pairing_policy: None,
+        }];
         plan.mesh.periodic_node_pairs = vec![fullmag_ir::MeshPeriodicNodePairIR {
             pair_id: "x_faces".into(),
             node_a: 0,
