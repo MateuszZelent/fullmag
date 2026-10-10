@@ -182,6 +182,13 @@ _IMMUTABLE_IMAGE_RE = re.compile(r'^sha256:[0-9a-f]{64}$')
 _MANAGED_BROWSER_MAX_NANO_CPUS = 4 * 10**9
 _MANAGED_BROWSER_MAX_MEMORY = 2 * 1024**3
 _MANAGED_BROWSER_MAX_PIDS = 128
+_MANAGED_BROWSER_BIND_TARGETS = {'/source', '/package', '/state'}
+_MANAGED_BROWSER_TMPFS_OPTIONS = frozenset({'rw', 'nosuid', 'nodev', 'size=256m'})
+_MANAGED_BROWSER_SYSTEM_MOUNT_FIELDS = {
+    '/etc/hosts': 'HostsPath',
+    '/etc/hostname': 'HostnamePath',
+    '/etc/resolv.conf': 'ResolvConfPath',
+}
 
 
 def _compose_labels(container):
@@ -198,37 +205,218 @@ def _nonempty_text(value):
     return isinstance(value, str) and bool(value)
 
 
-def _has_forbidden_mount(container):
+def _container_mount_target(value):
+    if (not isinstance(value, str) or not value.startswith('/') or '\\' in value
+            or '\x00' in value or value == '/' or value.endswith('/') or '//' in value):
+        return None
+    parts = value[1:].split('/')
+    if any(not part or part in ('.', '..') for part in parts):
+        return None
+    return value
+
+
+def _windows_ascii_lower(value):
+    return ''.join(chr(ord(character) + 32) if 'A' <= character <= 'Z' else character
+                   for character in value)
+
+
+def _host_path_parts(value):
+    """Return a strict lexical identity for an absolute Docker host path.
+
+    Docker Desktop reports either a Windows path or one of its documented
+    ``/run/desktop/mnt/host`` and ``/host_mnt`` drive aliases. Other aliases,
+    relative paths, dot traversal and repeated separators are rejected.
+    Backslashes are separators only in drive-qualified or UNC paths.
+    """
+    if isinstance(value, os.PathLike):
+        try:
+            value = os.fspath(value)
+        except TypeError:
+            return None
+    if not isinstance(value, str) or not value or '\x00' in value:
+        return None
+    windows_drive_path = re.match(r'^[A-Za-z]:[\\/]', value) is not None
+    windows_unc_path = value.startswith('\\\\')
+    if windows_drive_path or windows_unc_path:
+        raw = value.replace('\\', '/')
+    elif '\\' in value:
+        return None
+    else:
+        raw = value
+    alias = re.fullmatch(r'/(?:run/desktop/mnt/host|host_mnt)/([A-Za-z])(?:/(.*))?', raw)
+    if alias:
+        raw = alias.group(1).upper() + ':/' + (alias.group(2) or '')
+
+    drive = re.fullmatch(r'([A-Za-z]):/(.*)', raw)
+    if drive:
+        tail = drive.group(2)
+        parts = tail.split('/') if tail else []
+        if any(not part or part in ('.', '..') or part.endswith(('.', ' ')) for part in parts):
+            return None
+        if any(':' in part for part in parts):
+            return None
+        return ('windows', _windows_ascii_lower(drive.group(1)),
+                *(_windows_ascii_lower(part) for part in parts))
+
+    if raw.startswith('//'):
+        if raw.startswith('///'):
+            return None
+        parts = raw[2:].split('/')
+        if (len(parts) < 2 or any(not part or part in ('.', '..')
+                                  or part.endswith(('.', ' ')) for part in parts)):
+            return None
+        if any(':' in part for part in parts):
+            return None
+        return ('unc', _windows_ascii_lower(parts[0]), _windows_ascii_lower(parts[1]),
+                *(_windows_ascii_lower(part) for part in parts[2:]))
+
+    if raw.startswith('/'):
+        parts = raw[1:].split('/')
+        if any(not part or part in ('.', '..') for part in parts):
+            return None
+        return ('posix', *parts)
+    return None
+
+
+def _relative_host_path(root, value):
+    try:
+        root_value = os.fspath(root)
+    except TypeError:
+        return None
+    root_parts = _host_path_parts(root_value)
+    path_parts = _host_path_parts(value)
+    if (root_parts is None or path_parts is None or len(path_parts) < len(root_parts)
+            or path_parts[:len(root_parts)] != root_parts):
+        return None
+    return path_parts[len(root_parts):]
+
+
+def _managed_browser_guard_roots(layout):
+    """Resolve only already-declared host roots for the browser exemption.
+
+    The container coordinator sees ``/storage`` while Docker reports host or
+    Docker Desktop daemon paths. Bind that view back to its declared host root;
+    missing or inconsistent namespaces disable the exemption without breaking
+    unrelated container inspection.
+    """
+    if not isinstance(layout, dict):
+        return None, None
+    if layout.get('container_coordinator') is True:
+        storage_root = layout.get('host_storage_root')
+        daemon_root = layout.get('daemon_storage_root')
+        if (_host_path_parts(storage_root) is None
+                or _host_path_parts(daemon_root) != _host_path_parts(storage_root)):
+            return None, None
+        build_storage_root = layout.get('build_storage_root', storage_root)
+        if _host_path_parts(build_storage_root) is None:
+            return None, None
+        return storage_root, build_storage_root
+
+    storage_root = layout.get('storage_root')
+    build_storage_root = layout.get('build_storage_root')
+    if (_host_path_parts(storage_root) is None
+            or _host_path_parts(build_storage_root) is None):
+        return None, None
+    return storage_root, build_storage_root
+
+
+def _valid_managed_browser_tmpfs_options(value):
+    if not isinstance(value, str) or not value:
+        return False
+    parts = value.split(',')
+    return (all(parts) and len(parts) == len(set(parts))
+            and frozenset(parts) == _MANAGED_BROWSER_TMPFS_OPTIONS)
+
+
+def _has_invalid_managed_browser_mounts(container, project_id, storage_root, build_storage_root):
+    """Return true when mounts do not match the current launcher contract."""
     mounts = container.get('Mounts')
-    if not isinstance(mounts, list):
+    host = container.get('HostConfig')
+    if not isinstance(mounts, list) or not isinstance(host, dict):
         return True
+    by_target = {}
     for mount in mounts:
         if not isinstance(mount, dict):
             return True
-        source = mount.get('Source')
-        destination = mount.get('Destination')
-        if not isinstance(source, str) or not isinstance(destination, str):
+        target = _container_mount_target(mount.get('Destination'))
+        if target is None or target in by_target:
             return True
-        source_key = source.replace('\\', '/').lower()
-        destination_key = destination.replace('\\', '/').lower()
-        if (mount.get('Type') == 'device' or source_key == '/dev'
-                or source_key.startswith('/dev/') or destination_key == '/dev'
-                or destination_key.startswith('/dev/')
-                or 'docker.sock' in source_key or 'docker.sock' in destination_key):
+        by_target[target] = mount
+
+    allowed_targets = _MANAGED_BROWSER_BIND_TARGETS | {'/tmp'} | set(_MANAGED_BROWSER_SYSTEM_MOUNT_FIELDS)
+    if (not _MANAGED_BROWSER_BIND_TARGETS.issubset(by_target)
+            or not set(by_target).issubset(allowed_targets)):
+        return True
+
+    source_parts = _relative_host_path(storage_root, by_target['/source'].get('Source'))
+    package_parts = _relative_host_path(storage_root, by_target['/package'].get('Source'))
+    state_parts = _relative_host_path(build_storage_root, by_target['/state'].get('Source'))
+    if (source_parts is None or package_parts is None or state_parts is None
+            or len(source_parts) != 5 or source_parts[0] != 'runs'
+            or not re.fullmatch(r'[a-z0-9._-]{1,32}-[0-9a-f]{16}', source_parts[1])
+            or not re.fullmatch(r'[0-9a-f]{32}', source_parts[2])
+            or source_parts[3:] != ('source', 'tree')
+            or len(package_parts) != 7 or package_parts[0] != 'runs'
+            or package_parts[1] != source_parts[1]
+            or not re.fullmatch(r'[0-9a-f]{32}', package_parts[2])
+            or package_parts[3:] != ('artifacts', 'outputs', '.fullmag', 'local')
+            or state_parts != ('builds', source_parts[1], 'managed-browser-cpu',
+                               'runs', project_id, 'state')):
+        return True
+
+    for target in _MANAGED_BROWSER_BIND_TARGETS:
+        mount = by_target[target]
+        expected_rw = target == '/state'
+        if (mount.get('Type') != 'bind' or type(mount.get('RW')) is not bool
+                or mount.get('RW') is not expected_rw
+                or mount.get('Propagation') != 'rprivate'
+                or _host_path_parts(mount.get('Source')) is None):
+            return True
+
+    tmpfs = host.get('Tmpfs')
+    if (not isinstance(tmpfs, dict) or set(tmpfs) != {'/tmp'}
+            or not _valid_managed_browser_tmpfs_options(tmpfs.get('/tmp'))):
+        return True
+    # Docker may report a configured HostConfig.Tmpfs mount separately from
+    # the Mounts array. If it is listed there, require the same bounded view.
+    tmpfs_mount = by_target.get('/tmp')
+    if (tmpfs_mount is not None
+            and (tmpfs_mount.get('Type') != 'tmpfs'
+                 or tmpfs_mount.get('Source') != ''
+                 or type(tmpfs_mount.get('RW')) is not bool or tmpfs_mount.get('RW') is not True
+                 or tmpfs_mount.get('Propagation') != ''
+                 or tmpfs_mount.get('Mode') not in (None, '', 'rw,nosuid,nodev,size=256m'))):
+        return True
+
+    for target, field in _MANAGED_BROWSER_SYSTEM_MOUNT_FIELDS.items():
+        mount = by_target.get(target)
+        if mount is None:
+            continue
+        source = container.get(field)
+        if (_host_path_parts(source) is None
+                or mount.get('Type') != 'bind'
+                or _host_path_parts(mount.get('Source')) != _host_path_parts(source)
+                or type(mount.get('RW')) is not bool
+                or mount.get('Propagation') != 'rprivate'):
             return True
     return False
 
 
-_MANAGED_BROWSER_STATE_PREFIXES = (
-    'set -eu; mkdir /state/workspace;',
-    'set -eu; mkdir -p /state/workspace;',
-    # The current launcher also checks that the state mount is not a symlink
-    # before creating the private workspace.
+_MANAGED_BROWSER_COMMAND = (
+    # Keep this exact with run_managed_browser.py::compose_spec. Older and
+    # otherwise API-shaped commands are not emitted by the current launcher.
     'set -eu; [ ! -L /state/workspace ] || exit 2; '
-    'mkdir -p /state/workspace;',
-)
-_MANAGED_BROWSER_VOLATILE_COMMAND = (
-    'set -eu; mkdir -p /tmp/fullmag-state; exec /package/bin/fullmag-api'
+    'mkdir -p /state/workspace; '
+    'for path in /source/* /source/.[!.]*; do '
+    '[ -e "$path" ] || continue; name="${path##*/}"; '
+    '[ "$name" != ".fullmag" ] || exit 2; '
+    'target="/state/workspace/$name"; '
+    'if [ -L "$target" ]; then '
+    '[ "$(readlink "$target")" = "$path" ] || exit 2; '
+    'else [ ! -e "$target" ] || exit 2; ln -s "$path" "$target"; fi; done; '
+    '[ ! -L /state/workspace/.fullmag ] || exit 2; '
+    'mkdir -p /state/workspace/.fullmag; '
+    'cd /state/workspace; exec /package/bin/fullmag-api'
 )
 
 def _has_api_only_command(config):
@@ -241,19 +429,11 @@ def _has_api_only_command(config):
         return False
     if command[:2] != ['bash', '-c'] or not isinstance(command[2], str):
         return False
-    script = command[2]
-    if script == _MANAGED_BROWSER_VOLATILE_COMMAND:
-        return True
-    if not any(script.startswith(prefix) for prefix in _MANAGED_BROWSER_STATE_PREFIXES):
-        return False
-    if not script.endswith('exec /package/bin/fullmag-api'):
-        return False
-    return not any(token in script.lower() for token in (
-        'cargo', 'build_entrypoint', 'worker_entrypoint', '/dev/', 'docker.sock'))
+    return command[2] == _MANAGED_BROWSER_COMMAND
 
 
 
-def is_attested_managed_browser_container(container):
+def is_attested_managed_browser_container(container, *, storage_root=None, build_storage_root=None):
     """Return true only for the bounded retained managed-browser service.
 
     Compose's project label is the browser namespace.  Cross-checking it with
@@ -262,6 +442,9 @@ def is_attested_managed_browser_container(container):
     container from bypassing the heavy-build serialization guard.  Runtime
     limits and the API-only command are checked too: this is a bounded managed
     UI-service exemption, not proof that the API can never schedule CPU work.
+    Mount checks bind observed sources to the resolved storage namespace and
+    current launcher layout; they do not reverify the retained source/package
+    receipts or qualify the API workload.
     """
     if not isinstance(container, dict):
         return False
@@ -277,6 +460,8 @@ def is_attested_managed_browser_container(container):
     config = container.get('Config')
     host = container.get('HostConfig')
     if not isinstance(config, dict) or not isinstance(host, dict):
+        return False
+    if storage_root is None or build_storage_root is None:
         return False
     project = 'fullmag-browser-' + match.group(1)
     image = container.get('Image')
@@ -307,7 +492,23 @@ def is_attested_managed_browser_container(container):
             or host.get('Devices') not in (None, [])
             or host.get('DeviceCgroupRules') not in (None, [])):
         return False
-    if _has_forbidden_mount(container) or not _has_api_only_command(config):
+    if (_has_invalid_managed_browser_mounts(container, match.group(1), storage_root, build_storage_root)
+            or not _has_api_only_command(config)):
+        return False
+    project_root = _relative_host_path(build_storage_root, labels.get('com.docker.compose.project.working_dir'))
+    config_files = _relative_host_path(build_storage_root, labels.get('com.docker.compose.project.config_files'))
+    mounts = container.get('Mounts')
+    if not isinstance(mounts, list):
+        return False
+    source_mount = next((mount for mount in mounts
+                         if isinstance(mount, dict) and mount.get('Destination') == '/source'), None)
+    source_parts = (_relative_host_path(storage_root, source_mount.get('Source'))
+                    if source_mount is not None else None)
+    if (source_parts is None or len(source_parts) < 2
+            or project_root != ('builds', source_parts[1], 'managed-browser-cpu',
+                                'runs', match.group(1))
+            or config_files != ('builds', source_parts[1], 'managed-browser-cpu',
+                                'runs', match.group(1), 'compose.json')):
         return False
     return (
         labels.get('com.docker.compose.project') == project
@@ -320,7 +521,7 @@ def is_attested_managed_browser_container(container):
     )
 
 
-def is_blocking_fullmag_container(container):
+def is_blocking_fullmag_container(container, *, storage_root=None, build_storage_root=None):
     """Return true for an unknown/compute Fullmag container.
 
     The runner and BuildKit retain their existing exemptions.  Every other
@@ -336,7 +537,8 @@ def is_blocking_fullmag_container(container):
         return False
     if 'buildx_buildkit' in name or name == '/Fullmag_build_runner':
         return False
-    return not is_attested_managed_browser_container(container)
+    return not is_attested_managed_browser_container(
+        container, storage_root=storage_root, build_storage_root=build_storage_root)
 
 
 def profile_lane(profile):
@@ -978,7 +1180,11 @@ def execute_build(layout, *, owner, call=docker, sleep=time.sleep, timeout_secon
             return {'state': 'waiting_for_disk'}
         identifiers = call(['ps', '-q', '--no-trunc']).split()
         running = json.loads(call(['inspect', *identifiers])) if identifiers else []
-        if any(is_blocking_fullmag_container(item) for item in running):
+        browser_storage_root, browser_build_storage_root = _managed_browser_guard_roots(layout)
+        if any(is_blocking_fullmag_container(
+                item, storage_root=browser_storage_root,
+                build_storage_root=browser_build_storage_root)
+               for item in running):
             return {'state': 'waiting_for_existing_fullmag_container'}
         job = queue.claim('local-host', owner=owner, expected_job_id=expected_job_id)
         if job is None:
@@ -1017,7 +1223,9 @@ def execute_build(layout, *, owner, call=docker, sleep=time.sleep, timeout_secon
             identifiers = call(['ps', '-q', '--no-trunc']).split()
             running = json.loads(call(['inspect', *identifiers])) if identifiers else []
             for container in running:
-                if is_blocking_fullmag_container(container):
+                if is_blocking_fullmag_container(
+                        container, storage_root=browser_storage_root,
+                        build_storage_root=browser_build_storage_root):
                     raise ValueError('Existing Fullmag container must finish before queued build')
             run_root = validate_path(storage / 'runs' / job['worktree_id'] / job['job_id'], storage)
             run_root.mkdir(exist_ok=False)

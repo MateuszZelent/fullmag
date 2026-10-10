@@ -739,5 +739,7 @@ jobs:
         run: python -B scripts/test_local_runner_source_store.py -v
       - name: Run bounded Docker Engine protocol regressions
         run: python -B scripts/test_local_runner_unix_docker.py -v
+      - name: Run managed-browser container mount attestation regressions
+        run: python -B -m unittest discover -s scripts -p test_local_runner_managed_browser_guard.py
       - name: Run actual subprocess Docker log streaming regressions
         run: python -B scripts/test_local_runner_docker_logs.py -v
