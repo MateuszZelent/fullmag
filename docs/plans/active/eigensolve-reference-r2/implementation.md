@@ -628,3 +628,17 @@ poprzednie zielone źródłowe przypadki zachowują swój zakres dowodu.
 P0 admission na remote 3be9ed87496e24e2fc0582e1b10443715bc46bd5;
 hosted #38085900429 pending. P2 getter-only monitor contract zapisany
 w nocie przed implementacją; implementacja w toku, runtime NOT VERIFIED.
+
+
+## P10 — FMVP v3 fixture correction
+
+Jedyna failing API fixture używała stałego offsetu48 zamiast istniejącego
+dekodera FMVP. Poprawka testu odczytuje zmienny metadata extension przez
+kanoniczny decoder, sprawdza encoding v3 i dokładnie12 values; wszystkie
+magnetization/frame/topology/status/bundle assertions pozostają.
+Produkcja nie zmienia się. Root diff review i stdout-only Rust parse PASS.
+
+Dodano ręcznie uruchamiany focused GHA source gate: session ownership
+i dwa konkretne router publication/bundle cases. Nowy wynik wymagany.
+Zachowane1016PASS z poprzedniego exactsource pozostają scoped evidence;
+failing historyczny workflow nie jest przemianowany na PASS.

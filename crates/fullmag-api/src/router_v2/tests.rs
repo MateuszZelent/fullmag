@@ -38807,12 +38807,11 @@ async fn v2_older_runtime_m_frame_preserves_newer_selected_source_and_bundle() {
         .await
         .unwrap();
     assert_eq!(vector_response.status(), StatusCode::OK);
+    assert_eq!(vector_response.headers()["x-fullmag-encoding"], "FMVP;version=3");
     let bytes = body_bytes(vector_response).await;
     assert_eq!(&bytes[..4], b"FMVP");
-    let values: Vec<f64> = bytes[48..]
-        .chunks_exact(8)
-        .map(|chunk| f64::from_le_bytes(chunk.try_into().unwrap()))
-        .collect();
+    let values = decode_fmvp_payload_f64(&bytes);
+    assert_eq!(values.len(), 12);
     assert_eq!(
         values,
         vec![
