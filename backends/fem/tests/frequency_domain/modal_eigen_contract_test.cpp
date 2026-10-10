@@ -6384,7 +6384,9 @@ void modal_nonzero_k_floquet_shared_domain_nearest_reports_shifted_ksp_diagnosti
             },
             {
                 contains(fault_result.diagnostics_json,
-                         "\"unsupported_reason\":\"floquet_slepc_solve_failed\""),
+                         "\"stop_reason\":\"floquet_slepc_solve_failed\"") &&
+                    contains(fault_result.result_json,
+                             "\"stop_reason\":\"floquet_slepc_solve_failed\""),
                 "hard EPS failure reason is serialized",
             },
             {

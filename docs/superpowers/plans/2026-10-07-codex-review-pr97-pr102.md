@@ -2743,3 +2743,11 @@ Statyczny ReactDoctor0.9.12 na source254, base2d2: exit0, jedna nowa wskazówka 
 ### Fresh PCApply — nazwane niezmienione asercje i log ograniczony
 
 Jedną złożoną asercję zastępuje dwanaście osobno nazwanych, identycznych predykatów. Bounded kopie error512B/diagnostics12KiB/result2KiB i status powstają przed zwolnieniem C ABI. W razie błędu log zawiera wszystkie niespełnione warunki. Canonical unsafe jest ponownie odczytywane pod mutexem po result_destroy, zachowując pierwotną granicę teardown; wcześniejszy snapshot służy tylko diagnostyce. Pełny niezależny SOURCE review i diff-check PASS. Nie zmieniono produkcji, oczekiwań, progów, geometry ani policy; to poprawka obserwowalności, nie dowód naprawy failure38007694718. Nowy hosted compile/CTest wymagany.
+
+### 2026-10-10 — korekta regresji kwarantanny single-k po GHA 38010644268
+
+Hosted job 114089599622 zakończył się failure: 5/7 testów PASS. Artefakt 11653866723 zachowano w evidence/ci-38010644268-native-artifact. Nowa diagnostyka wskazuje jeden nieudany warunek w modal_eigen_live_pc_apply_fault_quarantine: oczekiwano pola unsupported_reason. Wszystkie pozostałe 11 warunków przechodzą: osiągnięcie wstrzyknięcia, błąd PCApply, brak ponownego PCApply i akcji residual, brak przyjęcia próbki oraz solve_error. Kwarantanna jest zachowana także po zniszczeniu wyniku.
+
+Fixture używa nearest_frequency, którego producent production_cpu_modal_eigen.cpp publikuje przyczynę w stop_reason zarówno w diagnostics, jak i result. unsupported_reason jest polem wewnętrznych subwindows trasy wielookienkowej. Asercję zmieniono na dokładny stop_reason=floquet_slepc_solve_failed w OBU dokumentach; pozostałe warunki bezpieczeństwa pozostają bez zmian. To korekta regresji, nie zmiana fizyki, solvera ani tolerancji. Wykonanie poprawionej regresji wymaga GitHub Actions; lokalnie nie kompilowano i nie uruchamiano testów. Osobny test provenance nadal kończy się hard failure w solverze i nie został zamknięty.
+
+Odrębne terminalne wyniki: Control Room 114089588885 nie przechodzi mounted DOM z powodu trigger.closest; Rust 114086215435 nie przechodzi testu histerezy, którego nazwa deklaruje algorithm, lecz fixture ustawia relax. Trwa analiza producentów rodzaju etapu. Statusów pending nie promowano do implemented.
