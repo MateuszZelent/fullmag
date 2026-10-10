@@ -389,7 +389,8 @@ std::string borrowed_pmat_copy_observation_json(
     append_bool("fresh_solver_package_configured", observation.fresh_solver_package_configured);
     append_bool("fresh_solver_package_overflow", observation.fresh_solver_package_overflow);
     append_bool("fresh_pc_type_configured", observation.fresh_pc_type_configured);
-    append_text("fresh_pc_type", observation.fresh_pc_type_configured, PCLU);
+    // PETSc configures PCLU in the solver; this formatter stays dependency-neutral.
+    append_text("fresh_pc_type", observation.fresh_pc_type_configured, "lu");
     append_bool("fresh_reorder_threshold_configured", observation.fresh_reorder_threshold_configured);
     append_number("fresh_reorder_threshold", observation.fresh_reorder_threshold_configured,
         observation.fresh_reorder_threshold);
