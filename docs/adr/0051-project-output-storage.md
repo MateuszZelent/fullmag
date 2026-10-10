@@ -39,3 +39,29 @@ Szczegółowy kontrakt, mapa źródeł i wymagane bramki:
 [project-output-storage](../specs/project-output-storage.md).
 Wersjonowane OpenAPI i klient muszą być wygenerowane z tych samych źródeł Rust.
 Stan runtime/bramki jest zapisywany w [planie zadania](../superpowers/plans/2026-10-04-project-output-storage.md).
+
+
+## Doprecyzowanie 10.10.2026 — integralność metadanych zakończonego runa
+
+Samo ponowne wyliczenie hash aktualnego `metadata.json` nie dowodzi, że jego
+zawartość pochodzi z finalizacji runa. Dla prywatnej ścieżki porównań
+managed runtime producent zapisuje wersjonowane poświadczenie wiążące
+surowe bajty metadanych i terminalnego manifestu z identity wykonania.
+Konsument wymaga zgodności obu hashy przed użyciem wyniku jako dowodu.
+Nie jest to podpis kryptograficzny: zaufany finalizer jest granicą dowodu,
+a podmiot mogący przepisać wszystkie pliki może przepisać również poświadczenie.
+
+Kontrakt i wersja: [poświadczenie metadanych](../specs/project-output-storage.md#poświadczenie-metadanych-zakończonego-runa).
+Producentem jest wspólny writer `fullmag-workspace-inspect::manifest`;
+konsumentem prywatny resolver `scripts/managed_runtime_artifact_root.py`.
+Nie zmienia to Python DSL, ProblemIR, publicznego OpenAPI, typów frontendowych
+ani CAS/StudyOutput z ADR0035. Zgodnościowy sidecar należy do tej prywatnej
+ścieżki i może zostać wycofany dopiero, gdy producent oraz konsument używają
+jednego równoważnego immutable manifestu artefaktów.
+
+Historia pozostaje czytelna; brak poświadczenia oznacza NOT VERIFIED dla
+tej bramki. Nie dopisujemy poświadczeń do zakończonych historycznych runów,
+nie usuwamy danych i nie rekwalifikujemy ich na podstawie obecnych bajtów.
+Rollback może wyłączyć nowe wydawanie dowodu, ale konsument nie może
+akceptować niepoświadczonych metadanych jako zweryfikowanych. Stan wdrożenia:
+SOURCE review korekt: PASS; GitHub Actions oraz runtime NOT VERIFIED.

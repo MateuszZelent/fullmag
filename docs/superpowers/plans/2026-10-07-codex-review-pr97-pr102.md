@@ -3284,3 +3284,58 @@ ukrywanie błędu odczytu, check-then-rename, brak zabezpieczenia podmiany
 pliku Windows i możliwość blokady FIFO. Pierwszy i ostatni problem mają
 poprawki źródłowe; writer gate/no-clobber i Windows pozostają w pracy.
 Nie promujemy uwagi 4207003038 na podstawie niezweryfikowanego WIP.
+
+
+### 2026-10-10 — pełny zakres brakującego mixed trackingu
+
+Niezależna analiza uwagi 4207786265 potwierdziła, że native transport
+obsługuje Prism6/Quad4, ale sam tracking i postprocessing nadal wymagają Tet4.
+Oprócz `MeshTopology::from_ir` dotyczy to `ConsistentP1TrackingMetric`,
+`SharedDomainSparseMass`, wiązania klas periodycznych, support równowagi,
+rekonstrukcji phi/H i diagnostyki basis transport. Usunięcie jednej blokady
+nie jest poprawką; rozcięcie Prism6 na Tet4 zmieniłoby bazę względem MFEM.
+
+Wymagany zakres: validated observation topology z zachowaniem ordinali,
+eksport rzeczywistej dodatniej scalar mass/quadrature MFEM dla Cartesian
+trackingu (bez zastępowania jej tangent mass), wersjonowany persisted metric
+i replay, mixed shape/gradient reconstruction oraz usunięcie zależności
+native admission od legacy Rust reference topology. Owner native quadrature:
+`poisson_airbox_shared_domain.cpp`, polityka
+`p1_geometry_aware_tet5_prism4_positive`. Wdrożenie pozostaje otwarte;
+przed nim wymagana jest nota naukowa i jej mapa implementacji.
+
+Bramki: affine prism przeciw tensor-product oracle, warped prism przeciw
+MFEM quadrature, magnetic/air support, Tet4+Prism6 i Tri3+Quad4, faza Blocha
+i node order, serial/pool parity, rzeczywisty publisher → tracking → pola
+magnetyczne i phi/H, odmowa inverted/malformed oraz zgodność historii Tet4.
+Nie stosujemy Euclidean/lumped/identity mass jako obejścia.
+
+Uwaga 4204614978 także pozostaje otwarta: typowane bufory q/phi są już
+w istniejącym ABI i jego Rust wrapperze, lecz adapter CPU nadal wkłada
+wektory oraz ich duplikaty do JSON. Pełna naprawa musi populować obecne
+bufory typowane i przestawić parser rzeczywistego native wyniku; samo
+usunięcie duplikatu albo limit JSON nie zamyka uwagi.
+
+
+### 2026-10-10 — poświadczenie metadanych, finalny SOURCE PASS
+
+Poprawka uwagi 4207003038 wiąże surowe bajty terminalnego manifestu
+i metadanych w prywatnym `.fullmag-run-artifacts.v1.json`. Producent
+nie dopisuje proof do historycznych terminalnych runów ani nie restampuje
+zmienionych bajtów. Konsument porównuje oba hashe i identity przed admission.
+
+Zamknięto cztery Required z niezależnego review: eligible build errors
+propagują przed completed, kernel writer gate obejmuje całą transakcję,
+pierwsza publikacja jest no-clobber, Windows sharing handle pozostaje
+otwarty przez końcową kontrolę, a Python bounded reader używa nonblocking
+open i sprawdza regularny typ przed odczytem. Rzeczywiste regresje obejmują
+subprocess contention/exit/retry, częściowy stamp, recovery po błędzie,
+Windows replacement oraz regular→FIFO z watchdogiem.
+
+Niezależny finalny SOURCE review: PASS. Rustfmt/AST/YAML/diff: PASS.
+Testy i buildy lokalnie nie były wykonywane. Hosted Ubuntu/Windows
+producer/reader oraz runtime pozostają NOT VERIFIED. Dedykowany job
+`terminal-artifact-attestation` zachowuje istniejące kontrole konsumentów.
+Poświadczenie jest dowodem integralności pod zaufanym finalizerem, nie
+podpisem ani kwalifikacją naukową. Gate serializuje współpracujących writerów;
+Windows ochrona rozpoczyna się po open, bez obietnicy pinning przed open.

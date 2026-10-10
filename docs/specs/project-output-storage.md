@@ -129,3 +129,53 @@ bez testów jednostkowych, lint, produkcyjna fixture przeglądarkowa (motywy, w�
 klawiatura, ścieżki, defaults i pojedyncze tworzenie po ACK), managed Rust source/codegen
 oraz bezpieczna próba runtime zapisu/sprzątania. Nie kwalifikuje to fizyki, GPU, natywnego
 FEM ani wydania HDF5. Kompilowanie testów jednostkowych pozostaje zabronione przez użytkownika.
+
+
+## Poświadczenie metadanych zakończonego runa
+
+Prywatny plik `.fullmag-run-artifacts.v1.json` używa schematu
+`fullmag.run_artifact_attestation.v1`. Wymaga dokładnie pól `schema`,
+`status`, `exit_code`, `run_id`, `session_id`, `source_sha256`,
+`metadata_relative_path`, `metadata_sha256`, `manifest_sha256`. Stała ścieżka
+metadanych to `artifacts/metadata.json`; hashe dotyczą surowych bajtów tego
+pliku oraz dokładnej serializacji `fullmag-run.json`, nie przepisanej struktury JSON.
+
+Wydanie dotyczy manifestu completed z integer exit_code równym zero,
+niepustymi run/session ID, źródłowym SHA-256 zapisanym jako 64 małe znaki hex
+i jednym zadeklarowanym wyjściem metadata o tej ścieżce. Niekompletne identity
+nie jest uzupełniane heurystycznie. Obecny producent CLI dostarcza te dane;
+API bez session_id/exit_code pozostaje poza tą bramką.
+
+Nowy run lub istniejący zapis running publikuje poświadczenie przed terminalnym
+manifestem. Błąd odczytu metadanych kwalifikowalnego runa musi przerwać
+finalizację przed publikacją completed. Retry identycznego zakończonego runa
+jest bez zapisu tylko przy zgodności istniejącego poświadczenia i aktualnych
+bajtów. Zmiana terminalnego manifestu albo metadanych nie upoważnia do
+ponownego poświadczenia. Historycznego terminalnego zapisu bez sidecara
+nie uzupełniamy wstecz. Częściowy zapis nie kwalifikuje ukończenia.
+
+Cała transakcja producenta wymaga systemowej blokady pliku
+`.fullmag-run-manifest.writer.lock`, obejmującej odczyt poprzedniego zapisu,
+wydanie poświadczenia i publikację manifestu. Plik blokady pozostaje w katalogu;
+nie jest kasowany, żeby różne procesy nie blokowały różnych inode. Śmierć
+procesu zwalnia blokadę systemową. Kolizja writerów nie jest potwierdzeniem
+sukcesu. Pierwszy zapis manifestu używa publikacji bez nadpisywania.
+Wymagane API `File::try_lock` jest dostępne od Rust 1.89; repo wybiera stable.
+Na Windows odczyt regularnego pliku musi uniemożliwić write/delete/replace
+przez cały czas bounded read i końcowej kontroli ścieżki. SOURCE review tych zabezpieczeń przeszło; ich wykonanie pozostaje
+NOT VERIFIED przed CI na tej platformie.
+
+Odczyty są ograniczone rozmiarem: metadane 16 MiB, poświadczenie 64 KiB;
+linki i reparse points są odrzucane. Konsument odrzuca duplikaty kluczy JSON,
+nieznane/brakujące pola i każdą niezgodność identity lub raw hash. Ten dowód
+nie jest autentykacją ani kwalifikacją solvera, fizyki czy CAS workera.
+
+Mapowanie: `crates/fullmag-workspace-inspect/src/manifest.rs::write_run_manifest`,
+`scripts/managed_runtime_artifact_root.py::resolve_runtime_artifact_root`
+oraz regresje w `scripts/test_managed_runtime_artifact_root.py`,
+`scripts/test_plot_signed_de_campaign.py`, `scripts/test_validate_serial_adaptive_probe.py`.
+Wymagana bramka Rust: `cargo test --locked -p fullmag-workspace-inspect --lib`
+wyłącznie w GitHub Actions na Ubuntu i Windows w jobie
+`terminal-artifact-attestation`. Kontrole konsumentów wykonuje workflow
+`dispersion-artifact-consumers`; POSIX FIFO ma osobną regresję z watchdogiem. Wdrożenie pozostaje NOT VERIFIED do
+rzeczywistego CI dla dokładnego commita; niezależne SOURCE review przeszło.

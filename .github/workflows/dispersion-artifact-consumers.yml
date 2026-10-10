@@ -5,6 +5,7 @@ on:
     paths:
       # Consumers import validators, receipts and analytic oracles across scripts.
       - 'scripts/**/*.py'
+      - 'crates/fullmag-workspace-inspect/**'
       - 'packages/fullmag-py/**'
       - '.github/workflows/dispersion-artifact-consumers.yml'
   push:
@@ -12,6 +13,7 @@ on:
     paths:
       # Consumers import validators, receipts and analytic oracles across scripts.
       - 'scripts/**/*.py'
+      - 'crates/fullmag-workspace-inspect/**'
       - 'packages/fullmag-py/**'
       - '.github/workflows/dispersion-artifact-consumers.yml'
 
@@ -66,3 +68,24 @@ jobs:
           scripts/test_comsol_modal_field_certificate.py
           scripts/test_run_comsol_dispersion_benchmark.py
           packages/fullmag-py/tests/test_gmsh_quality_units.py
+
+  terminal-artifact-attestation:
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: terminal-artifact-attestation
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+      - name: Verify terminal producer publication and platform file safety
+        run: cargo test --locked -p fullmag-workspace-inspect --lib
+      - name: Verify immutable artifact binding and bounded reader races
+        run: python -B scripts/test_managed_runtime_artifact_root.py -v

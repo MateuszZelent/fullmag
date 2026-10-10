@@ -24,7 +24,10 @@ from test_de_smoke_parallel_probe import (  # noqa: E402
 )
 from test_validate_parallel_execution_report import _adaptive_report  # noqa: E402
 from managed_runtime_artifact_root import (  # noqa: E402
+    ARTIFACT_ATTESTATION_FILE,
+    ARTIFACT_ATTESTATION_SCHEMA,
     CONTAINER_ROOT,
+    METADATA_RELATIVE_PATH,
     resolve_runtime_artifact_root,
 )
 from validate_serial_adaptive_probe import (  # noqa: E402
@@ -141,20 +144,37 @@ def _nest_managed_case(root: Path, *, mode: str, model_hash: str, job_id: str) -
     metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
 
     container_workspace = f"{CONTAINER_ROOT}/{workspace.name}"
-    (workspace / "fullmag-run.json").write_text(json.dumps({
+    run_manifest = {
         "schema": "fullmag.run_manifest.v1",
         "status": "completed",
         "exit_code": 0,
         "source": {"sha256": model_hash},
         "run_id": run_id,
         "session_id": session_id,
-        "outputs": [{"path": "artifacts/metadata.json", "kind": "metadata"}],
-    }), encoding="utf-8")
+        "outputs": [{"path": METADATA_RELATIVE_PATH, "kind": "metadata"}],
+    }
+    manifest_bytes = json.dumps(run_manifest).encode("utf-8")
+    metadata_bytes = metadata_path.read_bytes()
+    (workspace / "fullmag-run.json").write_bytes(manifest_bytes)
     (workspace / "output-storage.json").write_text(json.dumps({
         "schema": "fullmag.output_storage.resolved.v1",
         "state": "succeeded",
         "resolved": {"output_dir": container_workspace, "run_id": run_id},
     }), encoding="utf-8")
+    attestation = {
+        "schema": ARTIFACT_ATTESTATION_SCHEMA,
+        "status": "completed",
+        "exit_code": 0,
+        "run_id": run_id,
+        "session_id": session_id,
+        "source_sha256": model_hash,
+        "metadata_relative_path": METADATA_RELATIVE_PATH,
+        "metadata_sha256": hashlib.sha256(metadata_bytes).hexdigest(),
+        "manifest_sha256": hashlib.sha256(manifest_bytes).hexdigest(),
+    }
+    (workspace / ARTIFACT_ATTESTATION_FILE).write_bytes(
+        json.dumps(attestation, separators=(",", ":")).encode("utf-8")
+    )
     summary = {
         "status": "completed",
         "backend": "fem",
@@ -382,7 +402,7 @@ class SerialAdaptiveProbeTests(unittest.TestCase):
                     path.write_bytes(path.read_bytes() + b" ")
                 # Metadata also binds the managed output location; that earlier
                 # integrity gate rejects it before the numeric catalog is read.
-                rejection = ("runtime_output_binding differs" if relative == "metadata.json"
+                rejection = ("Producer artifact attestation" if relative == "metadata.json"
                              else "receipt-bound artifact failed")
                 with self.assertRaisesRegex(ValidationError, rejection):
                     validate_serial_adaptive_probe(serial, adaptive)

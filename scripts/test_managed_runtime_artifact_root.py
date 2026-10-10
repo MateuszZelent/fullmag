@@ -1,6 +1,10 @@
 """Interpreted integrity regressions for managed runtime artifact binding."""
 import hashlib
 import json
+import os
+import subprocess
+import sys
+import textwrap
 from pathlib import Path
 import tempfile
 import unittest
@@ -32,14 +36,31 @@ class RuntimeArtifactRootTests(unittest.TestCase):
                         "resolved": {"output_dir": container, "run_id": self.run_id}}
         self.metadata = {"source_hash": self.sha, "problem_meta": {"runtime_metadata": {"producer_run_id": self.run_id}},
                          "completion": {"converged": False}}
-        self.save()
+        self.save(issue_attestation=True)
 
-    def save(self, suffix=""):
+    def save(self, suffix="", *, issue_attestation=False):
         self.log = self.root / self.case / "runtime.log"
         self.log.write_text("[solver] progress\n" + json.dumps(self.summary, indent=2) + "\n" + suffix, encoding="utf-8")
-        (self.workspace / "fullmag-run.json").write_text(json.dumps(self.manifest), encoding="utf-8")
+        manifest_bytes = json.dumps(self.manifest).encode("utf-8")
+        metadata_bytes = json.dumps(self.metadata).encode("utf-8")
+        (self.workspace / "fullmag-run.json").write_bytes(manifest_bytes)
         (self.workspace / "output-storage.json").write_text(json.dumps(self.storage), encoding="utf-8")
-        (self.workspace / "artifacts/metadata.json").write_text(json.dumps(self.metadata), encoding="utf-8")
+        (self.workspace / "artifacts/metadata.json").write_bytes(metadata_bytes)
+        if issue_attestation:
+            attestation = {
+                "schema": resolver.ARTIFACT_ATTESTATION_SCHEMA,
+                "status": "completed",
+                "exit_code": 0,
+                "run_id": self.run_id,
+                "session_id": self.session_id,
+                "source_sha256": self.sha,
+                "metadata_relative_path": resolver.METADATA_RELATIVE_PATH,
+                "metadata_sha256": hashlib.sha256(metadata_bytes).hexdigest(),
+                "manifest_sha256": hashlib.sha256(manifest_bytes).hexdigest(),
+            }
+            (self.workspace / resolver.ARTIFACT_ATTESTATION_FILE).write_bytes(
+                json.dumps(attestation, separators=(",", ":")).encode("utf-8")
+            )
 
     def resolve(self):
         return resolver.resolve_runtime_artifact_root(self.root, self.case, self.sha)
@@ -49,8 +70,94 @@ class RuntimeArtifactRootTests(unittest.TestCase):
         self.assertEqual(artifact, self.workspace / "artifacts")
         self.assertEqual(binding["run_id"], self.run_id)
         self.assertEqual(binding["session_id"], self.session_id)
-        for key in ("runtime_log", "run_manifest", "output_storage", "metadata"):
+        for key in ("runtime_log", "run_manifest", "output_storage", "metadata", "producer_attestation"):
             self.assertEqual(binding[key + "_sha256"], hashlib.sha256(Path(binding[key]).read_bytes()).hexdigest())
+
+    def test_post_terminal_metadata_edit_with_same_identity_is_rejected(self):
+        self.metadata["completion"]["converged"] = True
+        self.save()
+        with self.assertRaisesRegex(resolver.RuntimeArtifactRootError, "Producer artifact attestation"):
+            self.resolve()
+
+    def test_post_terminal_manifest_edit_with_same_identity_is_rejected(self):
+        self.manifest["finished_at"] = "2026-10-10T12:00:00Z"
+        self.save()
+        with self.assertRaisesRegex(resolver.RuntimeArtifactRootError, "Producer artifact attestation"):
+            self.resolve()
+
+    def test_missing_duplicate_malformed_and_oversized_attestations_are_rejected(self):
+        path = self.workspace / resolver.ARTIFACT_ATTESTATION_FILE
+        original = path.read_bytes()
+        path.unlink()
+        with self.assertRaises(resolver.RuntimeArtifactRootError):
+            self.resolve()
+
+        path.write_bytes(b'{"schema":"wrong","schema":"duplicate"}')
+        with self.assertRaisesRegex(resolver.RuntimeArtifactRootError, "duplicate JSON keys"):
+            self.resolve()
+        path.write_bytes(b"{malformed")
+        with self.assertRaisesRegex(resolver.RuntimeArtifactRootError, "malformed"):
+            self.resolve()
+        path.write_bytes(original)
+        with patch.object(resolver, "MAX_ATTESTATION_BYTES", 8):
+            with self.assertRaises(resolver.RuntimeArtifactRootError):
+                self.resolve()
+
+    def test_wrong_attestation_binding_fields_are_rejected(self):
+        path = self.workspace / resolver.ARTIFACT_ATTESTATION_FILE
+        original = json.loads(path.read_bytes())
+        mutations = (
+            ("schema", "unknown"), ("run_id", "other-run"), ("session_id", "other-session"),
+            ("source_sha256", "b" * 64), ("metadata_relative_path", "other/metadata.json"),
+            ("metadata_sha256", "c" * 64), ("manifest_sha256", "d" * 64),
+            ("status", "running"), ("exit_code", False),
+        )
+        for key, value in mutations:
+            with self.subTest(key=key):
+                path.write_bytes(json.dumps({**original, key: value}).encode("utf-8"))
+                with self.assertRaisesRegex(resolver.RuntimeArtifactRootError, "Producer artifact attestation"):
+                    self.resolve()
+        path.write_bytes(json.dumps(original, separators=(",", ":")).encode("utf-8"))
+
+    def test_attestation_replacement_during_read_is_rejected(self):
+        path = self.workspace / resolver.ARTIFACT_ATTESTATION_FILE
+        real_lstat = Path.lstat
+        calls = {"count": 0}
+
+        class ChangedMetadata:
+            def __init__(self, original):
+                self.original = original
+
+            def __getattr__(self, name):
+                return getattr(self.original, name)
+
+            @property
+            def st_mtime_ns(self):
+                return self.original.st_mtime_ns + 1
+
+        def changed_lstat(candidate):
+            info = real_lstat(candidate)
+            if candidate == path:
+                calls["count"] += 1
+                if calls["count"] >= 4:
+                    return ChangedMetadata(info)
+            return info
+
+        with patch.object(Path, "lstat", changed_lstat):
+            with self.assertRaisesRegex(resolver.RuntimeArtifactRootError, "changed or exceeded"):
+                self.resolve()
+
+    def test_attestation_symlink_is_rejected(self):
+        path = self.workspace / resolver.ARTIFACT_ATTESTATION_FILE
+        external = self.root / "attestation-copy.json"
+        external.write_bytes(path.read_bytes())
+        path.unlink()
+        try:
+            path.symlink_to(external)
+        except OSError:
+            self.skipTest("Host cannot create symlinks")
+        with self.assertRaises(resolver.RuntimeArtifactRootError):
+            self.resolve()
 
     def test_paths_refuse_escape_traversal_noncanonical_and_wrong_artifact_parent(self):
         original = dict(self.summary)
@@ -211,6 +318,45 @@ class RuntimeArtifactRootTests(unittest.TestCase):
         with patch.object(Path, "lstat", marked):
             with self.assertRaises(resolver.RuntimeArtifactRootError):
                 self.resolve()
+
+
+class RuntimeArtifactReadRaceTests(unittest.TestCase):
+    @unittest.skipUnless(hasattr(os, "mkfifo") and hasattr(os, "O_NONBLOCK"), "POSIX FIFO required")
+    def test_regular_to_fifo_swap_fails_without_blocking_open(self):
+        # A subprocess watchdog keeps the regression bounded even if open blocks.
+        program = textwrap.dedent("""
+            import os
+            from pathlib import Path
+            import tempfile
+            from unittest.mock import patch
+            import managed_runtime_artifact_root as resolver
+            with tempfile.TemporaryDirectory() as root:
+                target = Path(root).resolve() / 'evidence.json'
+                target.write_bytes(b'{}')
+                real_open = os.open
+                swapped = False
+                def replace_before_open(path, flags, *args, **kwargs):
+                    global swapped
+                    if Path(path) == target and not swapped:
+                        swapped = True
+                        target.unlink()
+                        os.mkfifo(target)
+                    return real_open(path, flags, *args, **kwargs)
+                with patch.object(resolver.os, 'open', side_effect=replace_before_open):
+                    try:
+                        resolver._read(target, 1024)
+                    except resolver.RuntimeArtifactRootError as error:
+                        assert swapped
+                        assert 'bounded regular file' in str(error)
+                    else:
+                        raise AssertionError('FIFO substitution was accepted')
+                print('FIFO swap rejected before read')
+        """)
+        result = subprocess.run([sys.executable, '-B', '-c', program],
+                                cwd=str(Path(__file__).resolve().parent),
+                                capture_output=True, text=True, timeout=5)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('FIFO swap rejected before read', result.stdout)
 
 
 if __name__ == "__main__":

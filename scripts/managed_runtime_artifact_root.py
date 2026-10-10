@@ -9,7 +9,11 @@ import stat
 MAX_LOG_BYTES = 64 * 1024 * 1024
 MAX_RECEIPT_BYTES = 4 * 1024 * 1024
 MAX_METADATA_BYTES = 16 * 1024 * 1024
+MAX_ATTESTATION_BYTES = 64 * 1024
 CONTAINER_ROOT = "/workspace/benchmark-output"
+ARTIFACT_ATTESTATION_FILE = ".fullmag-run-artifacts.v1.json"
+ARTIFACT_ATTESTATION_SCHEMA = "fullmag.run_artifact_attestation.v1"
+METADATA_RELATIVE_PATH = "artifacts/metadata.json"
 _REPARSE = 0x400
 
 
@@ -40,9 +44,11 @@ def _read(path, limit):
     before = path.lstat()
     if not stat.S_ISREG(before.st_mode) or before.st_size > limit:
         raise RuntimeArtifactRootError("Runtime evidence is not a bounded regular file")
-    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
     with os.fdopen(descriptor, "rb") as stream:
         opened = os.fstat(stream.fileno())
+        if not stat.S_ISREG(opened.st_mode) or opened.st_size > limit:
+            raise RuntimeArtifactRootError("Opened runtime evidence is not a bounded regular file")
         if (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino):
             raise RuntimeArtifactRootError("Runtime evidence identity changed")
         data = stream.read(limit + 1)
@@ -58,6 +64,24 @@ def _object(data):
     value = json.loads(data.decode("utf-8"))
     if not isinstance(value, dict):
         raise RuntimeArtifactRootError("Runtime receipt must be a JSON object")
+    return value
+
+
+def _attestation_object(data):
+    def unique_object(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise RuntimeArtifactRootError("Producer artifact attestation has duplicate JSON keys")
+            result[key] = value
+        return result
+
+    try:
+        value = json.loads(data.decode("utf-8"), object_pairs_hook=unique_object)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise RuntimeArtifactRootError("Producer artifact attestation is malformed") from error
+    if not isinstance(value, dict):
+        raise RuntimeArtifactRootError("Producer artifact attestation must be a JSON object")
     return value
 
 
@@ -144,11 +168,29 @@ def resolve_runtime_artifact_root(output_root: Path, case: str, expected_model_s
                 or resolved.get("output_dir") != summary["workspace_dir"]):
             raise RuntimeArtifactRootError("Output storage identity or terminal state mismatch")
         outputs = manifest.get("outputs")
-        metadata_entries = [entry for entry in outputs if isinstance(entry, dict) and entry.get("path") == "artifacts/metadata.json"] if isinstance(outputs, list) else []
+        metadata_entries = [entry for entry in outputs if isinstance(entry, dict) and entry.get("path") == METADATA_RELATIVE_PATH] if isinstance(outputs, list) else []
         if len(metadata_entries) != 1 or metadata_entries[0].get("kind") != "metadata":
             raise RuntimeArtifactRootError("Run manifest does not uniquely bind artifact metadata")
         metadata_path = artifacts / "metadata.json"
         metadata_bytes = _read(metadata_path, MAX_METADATA_BYTES)
+        attestation_path = workspace / ARTIFACT_ATTESTATION_FILE
+        attestation_bytes = _read(attestation_path, MAX_ATTESTATION_BYTES)
+        attestation = _attestation_object(attestation_bytes)
+        expected_attestation = {
+            "schema": ARTIFACT_ATTESTATION_SCHEMA,
+            "status": "completed",
+            "exit_code": 0,
+            "run_id": run_id,
+            "session_id": session_id,
+            "source_sha256": source["sha256"],
+            "metadata_relative_path": METADATA_RELATIVE_PATH,
+            "metadata_sha256": hashlib.sha256(metadata_bytes).hexdigest(),
+            "manifest_sha256": hashlib.sha256(manifest_bytes).hexdigest(),
+        }
+        if (type(attestation.get("exit_code")) is not int
+                or set(attestation) != set(expected_attestation)
+                or attestation != expected_attestation):
+            raise RuntimeArtifactRootError("Producer artifact attestation does not match terminal run bytes and identity")
         metadata = _object(metadata_bytes)
         problem_meta = metadata.get("problem_meta")
         runtime_meta = problem_meta.get("runtime_metadata") if isinstance(problem_meta, dict) else None
@@ -158,7 +200,7 @@ def resolve_runtime_artifact_root(output_root: Path, case: str, expected_model_s
         binding = {"schema": "fullmag.managed-runtime-artifact-binding.v1", "run_id": run_id, "session_id": session_id,
                    "model_sha256": expected_model_sha256, "workspace_dir": str(workspace), "artifact_dir": str(artifacts),
                    "container_workspace_dir": summary["workspace_dir"], "container_artifact_dir": summary["artifact_dir"]}
-        for key, path, data in (("runtime_log", log_path, log), ("run_manifest", manifest_path, manifest_bytes), ("output_storage", storage_path, storage_bytes), ("metadata", metadata_path, metadata_bytes)):
+        for key, path, data in (("runtime_log", log_path, log), ("run_manifest", manifest_path, manifest_bytes), ("output_storage", storage_path, storage_bytes), ("metadata", metadata_path, metadata_bytes), ("producer_attestation", attestation_path, attestation_bytes)):
             binding[key] = str(path)
             binding[key + "_sha256"] = hashlib.sha256(data).hexdigest()
         return artifacts, binding

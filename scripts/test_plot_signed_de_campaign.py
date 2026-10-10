@@ -51,8 +51,24 @@ def _write_runtime_evidence(batch: Path, workspace: Path, run_id: str, session_i
         "schema": "fullmag.output_storage.resolved.v1", "state": "succeeded",
         "resolved": {"output_dir": container_workspace, "run_id": run_id},
     }
-    (workspace / "fullmag-run.json").write_text(json.dumps(manifest), encoding="utf-8")
+    manifest_bytes = json.dumps(manifest).encode("utf-8")
+    metadata_bytes = (workspace / "artifacts" / "metadata.json").read_bytes()
+    (workspace / "fullmag-run.json").write_bytes(manifest_bytes)
     (workspace / "output-storage.json").write_text(json.dumps(storage), encoding="utf-8")
+    attestation = {
+        "schema": runtime_artifacts.ARTIFACT_ATTESTATION_SCHEMA,
+        "status": "completed",
+        "exit_code": 0,
+        "run_id": run_id,
+        "session_id": session_id,
+        "source_sha256": MODEL_SHA,
+        "metadata_relative_path": runtime_artifacts.METADATA_RELATIVE_PATH,
+        "metadata_sha256": hashlib.sha256(metadata_bytes).hexdigest(),
+        "manifest_sha256": hashlib.sha256(manifest_bytes).hexdigest(),
+    }
+    (workspace / runtime_artifacts.ARTIFACT_ATTESTATION_FILE).write_bytes(
+        json.dumps(attestation, separators=(",", ":")).encode("utf-8")
+    )
 
 
 def _write_batch(tmp_path: Path) -> Path:
@@ -197,6 +213,28 @@ def test_load_campaign_rejects_stale_runtime_output_binding(tmp_path, monkeypatc
     _write_runtime_evidence(batch, current_workspace, run_id, session_id)
     monkeypatch.setattr(plotting, "validate_rows", lambda *args, **kwargs: {"status": "pass"})
     with pytest.raises(ValueError, match="runtime_output_binding differs"):
+        plotting.load_campaign(batch)
+
+
+def test_load_campaign_rejects_post_terminal_metadata_edit_with_same_identity(tmp_path, monkeypatch):
+    batch = _write_batch(tmp_path)
+    metadata_path = _artifact_dir(batch) / "metadata.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    metadata["post_run_edit"] = True
+    metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+    monkeypatch.setattr(plotting, "validate_rows", lambda *args, **kwargs: {"status": "pass"})
+    with pytest.raises(ValueError, match="Producer artifact attestation"):
+        plotting.load_campaign(batch)
+
+
+def test_load_campaign_rejects_post_terminal_manifest_edit_with_same_identity(tmp_path, monkeypatch):
+    batch = _write_batch(tmp_path)
+    manifest_path = _artifact_dir(batch).parent / "fullmag-run.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["finished_at"] = "2026-10-10T12:00:00Z"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    monkeypatch.setattr(plotting, "validate_rows", lambda *args, **kwargs: {"status": "pass"})
+    with pytest.raises(ValueError, match="Producer artifact attestation"):
         plotting.load_campaign(batch)
 
 
