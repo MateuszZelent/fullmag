@@ -26,11 +26,13 @@ from fem_equilibrium_field_replay import (  # noqa: E402
     certificate_sha256_from_exact_preimage,
     certified_field_content_sha256,
 )
+from fem_equilibrium_identity_replay import framed_digest  # noqa: E402
 from fem_linearization_identity_replay import IDENTITY_FIELDS  # noqa: E402
 from fem_producer_provenance_replay import (  # noqa: E402
     ProducerArtifactPaths,
     ProducerProvenanceReplayError,
     SOURCE_REPLAY_QUALIFIED,
+    _validate_material_preimages_from_exact_bytes,
     replay_producer_provenance,
 )
 import verify_fem_frequency_domain_eigen_artifacts as verifier  # noqa: E402
@@ -510,6 +512,195 @@ class ProducerProvenanceReplayTests(unittest.TestCase):
             }
         }
         return temp, routing_paths, manifest
+
+    def test_material_preimage_projection_matches_rust_zero_ku_rules(self) -> None:
+        cases = (
+            ("ku_absent", None, None, None, False),
+            ("zero_ku_spatial_ms", 0.0, [800000.0], [0.0, 0.0, 1.0], False),
+            ("zero_ku_zero_axis", 0.0, None, [0.0, 0.0, 0.0], False),
+            ("zero_ku_uniform_valid_axis", 0.0, None, [0.0, 0.0, 1.0], True),
+            ("nonzero_ku_reversed_axis", 12000.0, None, [0.0, 0.0, -1.0], True),
+        )
+        for name, ku, ms_field, axis, physical_v2 in cases:
+            with self.subTest(case=name):
+                material = _material()
+                material["uniaxial_anisotropy"] = ku
+                material["anisotropy_axis"] = axis
+                if ms_field is not None:
+                    material["ms_field"] = ms_field
+
+                raw_material = json.dumps(material, separators=(",", ":")).encode("utf-8")
+                raw_signature = "sha256:" + hashlib.sha256(raw_material).hexdigest()
+                physical = {
+                    "schema_version": (
+                        "EquilibriumMaterialSignaturePreimage.v2"
+                        if physical_v2
+                        else "EquilibriumMaterialSignaturePreimage.v1"
+                    ),
+                    "saturation_magnetisation_a_per_m": material["saturation_magnetisation"],
+                    "exchange_stiffness_j_per_m": material["exchange_stiffness"],
+                    "saturation_magnetisation_field_a_per_m": ms_field,
+                    "exchange_stiffness_field_j_per_m": None,
+                }
+                if physical_v2:
+                    physical.update(
+                        uniaxial_anisotropy_j_per_m3=0.0 if ku == 0.0 else ku,
+                        canonical_uniaxial_axis=[0.0, 0.0, 1.0],
+                    )
+                physical_raw = json.dumps(physical, separators=(",", ":")).encode("utf-8")
+                namespace = physical["schema_version"]
+                physical_signature = framed_digest(namespace, physical_raw)
+                identity = {
+                    "schema_version": "linearization_identity.v2",
+                    "equilibrium_material_preimage_json": physical_raw.decode("utf-8"),
+                    "equilibrium_material_signature": physical_signature,
+                    "material_signature": (
+                        physical_signature if ku is not None else raw_signature
+                    ),
+                    "material_identity_kind": (
+                        "canonical_equilibrium_material.v2"
+                        if ku is not None
+                        else "raw_material.v1"
+                    ),
+                    "producer_material_provenance_preimage_json": raw_material.decode("utf-8"),
+                    "producer_material_provenance_signature": raw_signature,
+                    "material_provenance_preimage_json": raw_material.decode("utf-8"),
+                    "material_provenance_signature": raw_signature,
+                }
+                result = _validate_material_preimages_from_exact_bytes(
+                    json.dumps(identity, separators=(",", ":")).encode("utf-8"),
+                    material,
+                    consumer_plan_material=material,
+                )
+                self.assertEqual(result["equilibrium_material_signature"], physical_signature)
+                self.assertEqual(result["producer_material_provenance_signature"], raw_signature)
+                self.assertEqual(result["material_provenance_signature"], raw_signature)
+
+    def test_consumer_material_preimage_must_match_current_plan(self) -> None:
+        material = _material()
+        raw_material = json.dumps(material, separators=(",", ":")).encode("utf-8")
+        raw_signature = "sha256:" + hashlib.sha256(raw_material).hexdigest()
+        physical = {
+            "schema_version": "EquilibriumMaterialSignaturePreimage.v1",
+            "saturation_magnetisation_a_per_m": material["saturation_magnetisation"],
+            "exchange_stiffness_j_per_m": material["exchange_stiffness"],
+            "saturation_magnetisation_field_a_per_m": None,
+            "exchange_stiffness_field_j_per_m": None,
+        }
+        physical_raw = json.dumps(physical, separators=(",", ":")).encode("utf-8")
+        physical_signature = framed_digest("EquilibriumMaterialSignaturePreimage.v1", physical_raw)
+        consumer_material = dict(material, name="different-consumer-plan")
+        consumer_raw = json.dumps(consumer_material, separators=(",", ":")).encode("utf-8")
+        identity = {
+            "schema_version": "linearization_identity.v2",
+            "equilibrium_material_preimage_json": physical_raw.decode("utf-8"),
+            "equilibrium_material_signature": physical_signature,
+            "material_signature": raw_signature,
+            "material_identity_kind": "raw_material.v1",
+            "producer_material_provenance_preimage_json": raw_material.decode("utf-8"),
+            "producer_material_provenance_signature": raw_signature,
+            "material_provenance_preimage_json": consumer_raw.decode("utf-8"),
+            "material_provenance_signature": "sha256:" + hashlib.sha256(consumer_raw).hexdigest(),
+        }
+        with self.assertRaisesRegex(
+            ProducerProvenanceReplayError,
+            "consumer raw material vs consumer plan.material",
+        ):
+            _validate_material_preimages_from_exact_bytes(
+                json.dumps(identity, separators=(",", ":")).encode("utf-8"),
+                material,
+                consumer_plan_material=material,
+            )
+
+    def test_canonical_material_reuse_allows_different_raw_provenance(self) -> None:
+        producer_material = _material()
+        producer_material.update(
+            uniaxial_anisotropy=12000.0,
+            anisotropy_axis=[0.0, 0.0, 1.0],
+        )
+        consumer_material = dict(producer_material, name="consumer")
+        producer_raw = json.dumps(producer_material, separators=(",", ":")).encode("utf-8")
+        consumer_raw = json.dumps(consumer_material, separators=(",", ":")).encode("utf-8")
+        producer_signature = "sha256:" + hashlib.sha256(producer_raw).hexdigest()
+        consumer_signature = "sha256:" + hashlib.sha256(consumer_raw).hexdigest()
+        physical = {
+            "schema_version": "EquilibriumMaterialSignaturePreimage.v2",
+            "saturation_magnetisation_a_per_m": producer_material["saturation_magnetisation"],
+            "exchange_stiffness_j_per_m": producer_material["exchange_stiffness"],
+            "saturation_magnetisation_field_a_per_m": None,
+            "exchange_stiffness_field_j_per_m": None,
+            "uniaxial_anisotropy_j_per_m3": 12000.0,
+            "canonical_uniaxial_axis": [0.0, 0.0, 1.0],
+        }
+        physical_raw = json.dumps(physical, separators=(",", ":")).encode("utf-8")
+        physical_signature = framed_digest("EquilibriumMaterialSignaturePreimage.v2", physical_raw)
+        identity = {
+            "schema_version": "linearization_identity.v2",
+            "equilibrium_material_preimage_json": physical_raw.decode("utf-8"),
+            "equilibrium_material_signature": physical_signature,
+            "material_signature": physical_signature,
+            "material_identity_kind": "canonical_equilibrium_material.v2",
+            "producer_material_provenance_preimage_json": producer_raw.decode("utf-8"),
+            "producer_material_provenance_signature": producer_signature,
+            "material_provenance_preimage_json": consumer_raw.decode("utf-8"),
+            "material_provenance_signature": consumer_signature,
+        }
+        result = _validate_material_preimages_from_exact_bytes(
+            json.dumps(identity, separators=(",", ":")).encode("utf-8"),
+            producer_material,
+            consumer_plan_material=consumer_material,
+        )
+        self.assertEqual(result["producer_material_provenance_signature"], producer_signature)
+        self.assertEqual(result["material_provenance_signature"], consumer_signature)
+        self.assertNotEqual(producer_signature, consumer_signature)
+
+    def test_canonical_material_reuse_rejects_physical_changes(self) -> None:
+        producer_material = _material()
+        producer_material.update(
+            uniaxial_anisotropy=12000.0,
+            anisotropy_axis=[0.0, 0.0, 1.0],
+        )
+        producer_raw = json.dumps(producer_material, separators=(",", ":")).encode("utf-8")
+        producer_signature = "sha256:" + hashlib.sha256(producer_raw).hexdigest()
+        physical = {
+            "schema_version": "EquilibriumMaterialSignaturePreimage.v2",
+            "saturation_magnetisation_a_per_m": producer_material["saturation_magnetisation"],
+            "exchange_stiffness_j_per_m": producer_material["exchange_stiffness"],
+            "saturation_magnetisation_field_a_per_m": None,
+            "exchange_stiffness_field_j_per_m": None,
+            "uniaxial_anisotropy_j_per_m3": 12000.0,
+            "canonical_uniaxial_axis": [0.0, 0.0, 1.0],
+        }
+        physical_raw = json.dumps(physical, separators=(",", ":")).encode("utf-8")
+        physical_signature = framed_digest("EquilibriumMaterialSignaturePreimage.v2", physical_raw)
+        for field, value in (
+            ("saturation_magnetisation", 700000.0),
+            ("exchange_stiffness", 1.4e-11),
+            ("uniaxial_anisotropy", 14000.0),
+        ):
+            with self.subTest(field=field):
+                consumer_material = dict(producer_material)
+                consumer_material[field] = value
+                consumer_raw = json.dumps(consumer_material, separators=(",", ":")).encode("utf-8")
+                identity = {
+                    "schema_version": "linearization_identity.v2",
+                    "equilibrium_material_preimage_json": physical_raw.decode("utf-8"),
+                    "equilibrium_material_signature": physical_signature,
+                    "material_signature": physical_signature,
+                    "material_identity_kind": "canonical_equilibrium_material.v2",
+                    "producer_material_provenance_preimage_json": producer_raw.decode("utf-8"),
+                    "producer_material_provenance_signature": producer_signature,
+                    "material_provenance_preimage_json": consumer_raw.decode("utf-8"),
+                    "material_provenance_signature": (
+                        "sha256:" + hashlib.sha256(consumer_raw).hexdigest()
+                    ),
+                }
+                with self.assertRaises(ProducerProvenanceReplayError):
+                    _validate_material_preimages_from_exact_bytes(
+                        json.dumps(identity, separators=(",", ":")).encode("utf-8"),
+                        producer_material,
+                        consumer_plan_material=consumer_material,
+                    )
 
     def test_valid_bundle_returns_source_context_only_after_all_bindings(self) -> None:
         temp, paths = self._bundle()

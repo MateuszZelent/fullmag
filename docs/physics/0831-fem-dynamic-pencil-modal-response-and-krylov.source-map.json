@@ -3654,6 +3654,60 @@
       "path": "scripts/validate_comsol_dispersion_scientific_gate.py",
       "symbol": "_canonical_path_rows",
       "responsibility": "Bind override CSV indices/vectors to repository Gamma-X-M-Gamma benchmark before scientific qualification."
+    },
+    {
+      "id": "source-comsol-primary-equilibrium-gate",
+      "path": "scripts/validate_comsol_dispersion_scientific_gate.py",
+      "symbol": "_validate_primary_equilibrium",
+      "responsibility": "Require accepted state for every selected primary mode; bind exact producer/consumer material preimages to the current plan and validate a declared v1 handoff against per-mode topology and mesh generation."
+    },
+    {
+      "id": "source-comsol-primary-equilibrium-reader",
+      "path": "scripts/comsol_equilibrium_artifacts.py",
+      "symbol": "read_sample_equilibrium",
+      "responsibility": "Validate accepted v7/v8 pairs, mode content hashes, current mesh/external-field/physics bindings and actual normalized magnetic m0; current MaterialIR identity is checked separately by the gate."
+    },
+    {
+      "id": "source-comsol-primary-equilibrium-regression",
+      "path": "scripts/test_validate_comsol_dispersion_scientific_gate.py",
+      "symbol": "test_primary_equilibrium_is_mandatory_for_c0_c1_a1",
+      "responsibility": "Exercise public validate_case for C0/C1/A1 and require accepted state even when KS is not applicable."
+    },
+    {
+      "id": "source-comsol-primary-equilibrium-negative-regression",
+      "path": "scripts/test_validate_comsol_dispersion_scientific_gate.py",
+      "symbol": "test_primary_equilibrium_rejects_stale_and_mismatched_bindings",
+      "responsibility": "Reject missing mode metadata, stale state hash, wrong source run/topology, material/physics mismatch, and an identity whose exact preimage hash was not updated."
+    },
+    {
+      "id": "source-comsol-primary-canonical-v8-v7-regression",
+      "path": "scripts/test_validate_comsol_dispersion_scientific_gate.py",
+      "symbol": "test_primary_canonical_v8_v7_reuse_binds_both_raw_material_plans",
+      "responsibility": "Public validate_case accepts distinct producer/consumer raw MaterialIR preimages when their canonical physical projection matches, while accepted state provenance is consumer-bound and producer raw provenance remains separately recorded in identity."
+    },
+    {
+      "id": "source-comsol-primary-canonical-material-regression",
+      "path": "scripts/test_validate_comsol_dispersion_scientific_gate.py",
+      "symbol": "test_primary_canonical_v8_v7_rejects_current_physical_material_changes",
+      "responsibility": "Reject self-consistent updated consumer preimages when Ms, A, Ku, ms_field or a_field changes the accepted producer physical material identity."
+    },
+    {
+      "id": "source-comsol-primary-ku0-preimage-regression",
+      "path": "scripts/test_validate_comsol_dispersion_scientific_gate.py",
+      "symbol": "test_primary_canonical_ku0_uses_physical_v1_preimage",
+      "responsibility": "Exercise the public canonical v8/v7 path with explicit Ku=0 and authored zero axis while preserving the Rust physical V1 preimage."
+    },
+    {
+      "id": "source-fem-producer-material-preimage",
+      "path": "scripts/fem_producer_provenance_replay.py",
+      "symbol": "_validate_material_preimages_from_exact_bytes",
+      "responsibility": "Replay exact producer/consumer raw material preimages and compare both physical projections to the accepted Rust material identity without requiring equal canonical-v2 raw provenance."
+    },
+    {
+      "id": "source-fem-producer-material-preimage-regression",
+      "path": "scripts/test_fem_producer_provenance_replay.py",
+      "symbol": "test_material_preimage_projection_matches_rust_zero_ku_rules",
+      "responsibility": "Cover Ku absent, zero-Ku spatial-Ms/zero-axis V1 projection, uniform-Ms valid-axis V2, canonical name-only raw reuse, and rejection of changed Ms/A/Ku."
     }
   ],
   "public_api": {

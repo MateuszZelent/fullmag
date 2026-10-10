@@ -928,6 +928,495 @@ def _modal_frequency_matches_spectrum(mode, sample, label, reasons):
     return valid
 
 
+def _validate_primary_equilibrium(
+    case_dir: Path,
+    case: str,
+    manifest: Mapping[str, Any],
+    metadata: Mapping[str, Any],
+    sample_map: Mapping[int, Mapping[str, Any]],
+    branches: Sequence[Mapping[str, Any]],
+    diagnostics: Mapping[str, Any],
+    reasons: list[str],
+) -> dict[str, Any]:
+    """Bind each selected primary mode to its accepted, content-bound state."""
+
+    local_reasons: list[str] = []
+    selections: dict[int, set[int]] = {}
+    for branch in branches:
+        points = branch.get("points")
+        if not isinstance(points, list):
+            local_reasons.append("selected branch has no point list")
+            continue
+        for point in points:
+            if not isinstance(point, Mapping):
+                local_reasons.append("selected branch contains a non-object point")
+                continue
+            sample_index = point.get("sample_index")
+            raw_mode_index = point.get("raw_mode_index")
+            if (
+                type(sample_index) is not int
+                or sample_index < 0
+                or type(raw_mode_index) is not int
+                or raw_mode_index < 0
+            ):
+                local_reasons.append("selected branch has an invalid sample/raw mode identity")
+                continue
+            if raw_mode_index in selections.setdefault(sample_index, set()):
+                local_reasons.append(
+                    f"sample {sample_index} raw mode {raw_mode_index} is selected more than once"
+                )
+            selections[sample_index].add(raw_mode_index)
+
+    expected_samples = set(sample_map)
+    if not expected_samples or set(selections) != expected_samples:
+        local_reasons.append("selected primary branches do not cover every spectrum sample")
+    if not any(selections.values()):
+        local_reasons.append("no primary mode was selected for equilibrium binding")
+
+    try:
+        from verify_fem_frequency_domain_eigen_artifacts import (
+            _declared_r4_sidecar_paths,
+            serde_json_compact_bytes,
+        )
+        from fem_linearization_identity_replay import (
+            replay_identity_preimage,
+            strict_json_object as strict_identity_json,
+        )
+        from fem_equilibrium_identity_replay import replay_equilibrium_identity_preimages
+        from fem_producer_provenance_replay import (
+            ProducerProvenanceReplayError,
+            _m0_content_digest,
+            _validate_material_preimages_from_exact_bytes,
+        )
+        from comsol_equilibrium_artifacts import (
+            read_sample_equilibrium,
+            sample_state_paths,
+        )
+    except (ImportError, ModuleNotFoundError) as error:
+        local_reasons.append(f"primary equilibrium validators are unavailable: {error}")
+        reasons.extend(f"primary equilibrium: {item}" for item in local_reasons)
+        return _new_check("fail", sample_count=0, selected_mode_count=0, validated_mode_count=0)
+
+    manifest_artifacts = manifest.get("artifacts")
+    if not isinstance(manifest_artifacts, dict):
+        local_reasons.append("manifest.artifacts is missing")
+        manifest_artifacts = {}
+    try:
+        identity_paths = _declared_r4_sidecar_paths(
+            case_dir,
+            manifest_artifacts,
+            "linearization_identity_v2_paths",
+            "linearization_identity.v2.json",
+        )
+        identity_preimage_paths = _declared_r4_sidecar_paths(
+            case_dir,
+            manifest_artifacts,
+            "linearization_identity_preimage_v1_paths",
+            "linearization_identity_preimage.v1.json",
+        )
+    except (SystemExit, OSError, ValueError, TypeError) as error:
+        local_reasons.append(f"linearization identity manifest binding is invalid: {error}")
+        identity_paths = None
+        identity_preimage_paths = None
+    if identity_paths is None or identity_preimage_paths is None:
+        local_reasons.append(
+            "primary material-plan binding requires declared linearization identity and exact-preimage sidecars"
+        )
+        identity_paths = identity_paths or {}
+        identity_preimage_paths = identity_preimage_paths or {}
+    if set(identity_paths) != expected_samples or set(identity_preimage_paths) != expected_samples:
+        local_reasons.append(
+            "linearization identity/preimage sidecars must cover every primary spectrum sample"
+        )
+    identity_hashes = manifest_artifacts.get("linearization_identity_sha256_by_sample")
+    if not isinstance(identity_hashes, Mapping):
+        local_reasons.append("manifest identity content hashes by sample are missing")
+        identity_hashes = {}
+
+    execution_plan = metadata.get("execution_plan")
+    plan = execution_plan.get("backend_plan") if isinstance(execution_plan, Mapping) else None
+    if not isinstance(plan, Mapping):
+        local_reasons.append("primary execution plan is missing its backend plan")
+        plan = {}
+    mesh = plan.get("mesh")
+    plan_material = plan.get("material")
+    if not isinstance(mesh, Mapping) or not isinstance(plan_material, Mapping):
+        local_reasons.append("primary execution plan is missing its mesh or material")
+        mesh = {}
+        plan_material = {}
+
+    per_sample_diagnostics: dict[int, Mapping[str, Any]] = {}
+    raw_sample_diagnostics = diagnostics.get("sample_solver_diagnostics")
+    if raw_sample_diagnostics is not None:
+        if not isinstance(raw_sample_diagnostics, list):
+            local_reasons.append("solver sample diagnostics are not an array")
+        else:
+            for entry in raw_sample_diagnostics:
+                if not isinstance(entry, Mapping):
+                    local_reasons.append("solver sample diagnostics contain a non-object entry")
+                    continue
+                index = entry.get("sample_index")
+                sample_diagnostics = entry.get("diagnostics")
+                if type(index) is not int or index < 0 or not isinstance(sample_diagnostics, Mapping):
+                    local_reasons.append("solver sample diagnostics lack a valid sample/object binding")
+                    continue
+                if index in per_sample_diagnostics:
+                    local_reasons.append(f"solver sample diagnostics duplicate sample {index}")
+                    continue
+                per_sample_diagnostics[index] = sample_diagnostics
+
+    root_handoff = diagnostics.get("relax_to_eigen_handoff")
+    root_handoff_digest = diagnostics.get("relax_to_eigen_handoff_sha256")
+    root_handoff_topology = diagnostics.get("relax_to_eigen_source_mesh_topology_sha256")
+    handoff_declared = (
+        root_handoff is not None
+        or root_handoff_digest is not None
+        or any(
+            isinstance(value, Mapping)
+            and (
+                value.get("relax_to_eigen_handoff") is not None
+                or value.get("relax_to_eigen_handoff_sha256") is not None
+            )
+            for value in per_sample_diagnostics.values()
+        )
+    )
+
+    validated_modes = 0
+    validated_samples = 0
+    source_stage_bindings: set[str] = set()
+    observed_state_schemas: set[tuple[str, str]] = set()
+    v1_handoff_samples: set[int] = set()
+    for sample_index in sorted(expected_samples & set(selections)):
+        expected_mode_indices = selections[sample_index]
+        sample = sample_map.get(sample_index)
+        if not isinstance(sample, Mapping):
+            local_reasons.append(f"sample {sample_index} is absent from the numeric spectrum")
+            continue
+        loaded_modes: dict[int, Mapping[str, Any]] = {}
+        for raw_mode_index in sorted(expected_mode_indices):
+            relative_mode_path = (
+                f"eigen/modes/sample_{sample_index:04d}/mode_{raw_mode_index:04d}.json"
+            )
+            mode_path = _safe_relative_path(
+                case_dir,
+                relative_mode_path,
+                f"primary mode metadata sample {sample_index} raw mode {raw_mode_index}",
+                local_reasons,
+            )
+            if mode_path is None:
+                continue
+            try:
+                mode = json.loads(mode_path.read_bytes())
+            except (OSError, UnicodeError, json.JSONDecodeError, TypeError) as error:
+                local_reasons.append(
+                    f"primary mode metadata sample {sample_index} raw mode {raw_mode_index} is invalid: {error}"
+                )
+                continue
+            if not isinstance(mode, Mapping):
+                local_reasons.append(
+                    f"primary mode metadata sample {sample_index} raw mode {raw_mode_index} is not an object"
+                )
+                continue
+            if type(mode.get("sample_index")) is not int or mode.get("sample_index") != sample_index or type(mode.get("raw_mode_index")) is not int or mode.get("raw_mode_index") != raw_mode_index:
+                local_reasons.append(
+                    f"primary mode metadata sample {sample_index} raw mode {raw_mode_index} has a mismatched identity"
+                )
+                continue
+            mode_vector = mode.get("k_vector")
+            spectrum_vector = sample.get("k_vector")
+            if (
+                not isinstance(mode_vector, list)
+                or not isinstance(spectrum_vector, list)
+                or len(mode_vector) != 3
+                or len(spectrum_vector) != 3
+                or any(not _finite(value) for value in mode_vector)
+                or any(not _finite(value) for value in spectrum_vector)
+                or any(float(left) != float(right) for left, right in zip(mode_vector, spectrum_vector))
+            ):
+                local_reasons.append(
+                    f"primary mode metadata sample {sample_index} raw mode {raw_mode_index} k-vector differs from the spectrum"
+                )
+            _modal_frequency_matches_spectrum(
+                mode,
+                sample,
+                f"primary equilibrium sample {sample_index} raw mode {raw_mode_index}",
+                local_reasons,
+            )
+            loaded_modes[raw_mode_index] = mode
+
+        if not loaded_modes:
+            continue
+        try:
+            state_paths = sample_state_paths(manifest, sample_index)
+            if len(state_paths) != 2:
+                raise ValueError("equilibrium reader did not resolve one equilibrium/state pair")
+            first_mode = loaded_modes[min(loaded_modes)]
+            state_binding = read_sample_equilibrium(
+                case_dir,
+                manifest,
+                metadata,
+                first_mode,
+                sample_index,
+            )
+            state_hashes = state_binding.get("file_hashes")
+            if not isinstance(state_hashes, list) or len(state_hashes) != 2:
+                raise ValueError("equilibrium reader did not return both content hashes")
+            state_objects: list[Mapping[str, Any]] = []
+            for position, relative in enumerate(state_paths):
+                state_path = _safe_relative_path(
+                    case_dir,
+                    relative,
+                    f"primary equilibrium state sample {sample_index}",
+                    local_reasons,
+                )
+                if state_path is None:
+                    raise ValueError("equilibrium state path is missing or unsafe")
+                state_bytes = state_path.read_bytes()
+                actual_hash = "sha256:" + hashlib.sha256(state_bytes).hexdigest()
+                if (
+                    not isinstance(state_hashes[position], Mapping)
+                    or state_hashes[position].get("path") != relative
+                    or state_hashes[position].get("sha256") != actual_hash
+                ):
+                    raise ValueError("equilibrium state changed after accepted-state validation")
+                state_value = json.loads(state_bytes)
+                if not isinstance(state_value, Mapping):
+                    raise ValueError("equilibrium state artifact is not an object")
+                state_objects.append(state_value)
+            equilibrium, linearization_state = state_objects
+        except (OSError, ValueError, TypeError, KeyError, SystemExit, ProducerProvenanceReplayError) as error:
+            local_reasons.append(
+                f"primary equilibrium sample {sample_index} accepted state failed validation: {error}"
+            )
+            continue
+
+        equilibrium_relative, state_relative = state_paths
+        identity_record = identity_paths.get(sample_index)
+        preimage_record = identity_preimage_paths.get(sample_index)
+        if identity_record is None or preimage_record is None:
+            local_reasons.append(f"sample {sample_index} is missing its declared identity pair")
+            continue
+        identity_relative, identity_path = identity_record
+        preimage_relative, preimage_path = preimage_record
+        try:
+            identity_bytes = identity_path.read_bytes()
+            preimage_bytes = preimage_path.read_bytes()
+            identity_digest = replay_identity_preimage(identity_bytes, preimage_bytes)
+            identity = strict_identity_json(identity_bytes, "primary linearization identity")
+            replay_equilibrium_identity_preimages(identity_bytes)
+        except (OSError, ValueError, TypeError, SystemExit) as error:
+            local_reasons.append(f"sample {sample_index} identity replay failed: {error}")
+            continue
+        if identity.get("sample_index") != sample_index:
+            local_reasons.append(f"sample {sample_index} identity sidecar names another sample")
+        if identity_hashes.get(str(sample_index)) != identity_digest:
+            local_reasons.append(f"sample {sample_index} identity digest differs from manifest")
+        if identity.get("equilibrium_artifact_path") != equilibrium_relative:
+            local_reasons.append(f"sample {sample_index} identity points to another equilibrium artifact")
+        if identity.get("linearization_state_path") != state_relative:
+            local_reasons.append(f"sample {sample_index} identity points to another linearization state")
+        if identity.get("equilibrium_artifact_schema") != equilibrium.get("schema_version"):
+            local_reasons.append(f"sample {sample_index} equilibrium schema differs from identity")
+        if identity.get("linearization_state_schema") != linearization_state.get("schema_version"):
+            local_reasons.append(f"sample {sample_index} linearization schema differs from identity")
+        if identity.get("equilibrium_artifact_sha256") != equilibrium.get("content_sha256"):
+            local_reasons.append(f"sample {sample_index} equilibrium content hash differs from identity")
+        if identity.get("linearization_state_sha256") != linearization_state.get("content_sha256"):
+            local_reasons.append(f"sample {sample_index} state content hash differs from identity")
+        if identity.get("node_count") != len(mesh.get("nodes", [])):
+            local_reasons.append(f"sample {sample_index} identity node_count differs from current mesh")
+        if identity.get("modal_mesh_topology_fingerprint_v3") != first_mode.get("source_mesh_topology_sha256"):
+            local_reasons.append(f"sample {sample_index} modal mesh fingerprint differs from current mesh")
+        try:
+            if identity.get("equilibrium_content_sha256") != _m0_content_digest(equilibrium.get("m0")):
+                local_reasons.append(f"sample {sample_index} equilibrium magnetization digest differs from identity")
+        except (TypeError, ValueError, OverflowError, ProducerProvenanceReplayError) as error:
+            local_reasons.append(f"sample {sample_index} equilibrium magnetization digest is invalid: {error}")
+        source_run_id = identity.get("source_run_id")
+        source_stage_id = identity.get("source_stage_id")
+        source_stage_kind = identity.get("source_stage_kind")
+        if identity.get("handoff_schema_version") not in {
+            "AcceptedFemRelaxStageHandoff.v2",
+            "AcceptedFemRelaxStageHandoff.v3",
+        }:
+            local_reasons.append(f"sample {sample_index} has an unsupported source handoff schema")
+        if not all(isinstance(value, str) and value.strip() for value in (
+            source_run_id, source_stage_id, source_stage_kind
+        )):
+            local_reasons.append(f"sample {sample_index} source run/stage identity is incomplete")
+        elif equilibrium.get("producer_run_id") != source_run_id:
+            local_reasons.append(
+                f"sample {sample_index} equilibrium producer run differs from accepted source owner"
+            )
+        if (
+            "producer_run_id" in linearization_state
+            and linearization_state.get("producer_run_id") != source_run_id
+        ):
+            local_reasons.append(
+                f"sample {sample_index} linearization producer run differs from accepted source owner"
+            )
+        declared_stage_ids = [
+            payload.get(key)
+            for payload in (equilibrium, linearization_state)
+            for key in ("producer_stage_id", "source_stage_id")
+            if key in payload
+        ]
+        if any(value != source_stage_id for value in declared_stage_ids):
+            local_reasons.append(
+                f"sample {sample_index} declared producer stage differs from accepted source owner"
+            )
+        source_stage_bindings.add(
+            "producer_stage_bound"
+            if declared_stage_ids
+            else "stage_id_content_bound_but_not_published_by_equilibrium_state"
+        )
+
+        consumer_canonical = plan_material.get("uniaxial_anisotropy") is not None
+        expected_kind = (
+            "canonical_equilibrium_material.v2"
+            if consumer_canonical
+            else "raw_material.v1"
+        )
+        if identity.get("material_identity_kind") != expected_kind:
+            local_reasons.append(f"sample {sample_index} material identity family differs from current plan")
+        if identity.get("material_provenance_scope") != "materialization_plan":
+            local_reasons.append(f"sample {sample_index} material provenance is not plan-scoped")
+        if identity.get("equilibrium_material_signature") != identity.get("material_signature") and consumer_canonical:
+            local_reasons.append(f"sample {sample_index} canonical physical material signatures differ")
+        if identity.get("material_signature") != equilibrium.get("material_signature"):
+            local_reasons.append(f"sample {sample_index} equilibrium material signature differs from identity")
+        if linearization_state.get("material_signature") != identity.get("material_signature"):
+            local_reasons.append(f"sample {sample_index} state material signature differs from identity")
+        if consumer_canonical:
+            for payload in (equilibrium, linearization_state):
+                if payload.get("material_provenance_signature") != identity.get("material_provenance_signature"):
+                    local_reasons.append(f"sample {sample_index} accepted state raw material provenance differs from its consumer identity")
+        elif (
+            identity.get("material_provenance_signature") != identity.get("material_signature")
+            or identity.get("producer_material_provenance_signature")
+            != identity.get("material_provenance_signature")
+        ):
+            local_reasons.append(f"sample {sample_index} legacy material signature is not the raw material digest")
+        try:
+            producer_material = strict_identity_json(
+                identity["producer_material_provenance_preimage_json"].encode("utf-8"),
+                "producer material identity preimage",
+            )
+            _validate_material_preimages_from_exact_bytes(
+                identity_bytes,
+                producer_material,
+                consumer_plan_material=plan_material,
+            )
+        except (KeyError, ValueError, TypeError, SystemExit, ProducerProvenanceReplayError) as error:
+            local_reasons.append(f"sample {sample_index} material preimage does not bind to current plan: {error}")
+
+        observed_state_schemas.add(
+            (str(equilibrium.get("schema_version")), str(linearization_state.get("schema_version")))
+        )
+
+        for raw_mode_index, mode in loaded_modes.items():
+            if mode.get("equilibrium_artifact_sha256") != state_binding.get("equilibrium_sha256"):
+                local_reasons.append(
+                    f"sample {sample_index} raw mode {raw_mode_index} is not bound to the accepted equilibrium"
+                )
+                continue
+            if mode.get("linearization_state_sha256") != state_binding.get("linearization_sha256"):
+                local_reasons.append(
+                    f"sample {sample_index} raw mode {raw_mode_index} is not bound to the accepted linearization"
+                )
+                continue
+            if mode.get("source_mesh_topology_sha256") != identity.get("modal_mesh_topology_fingerprint_v3"):
+                local_reasons.append(
+                    f"sample {sample_index} raw mode {raw_mode_index} is not bound to the identity mesh"
+                )
+                continue
+
+            sample_diagnostics = per_sample_diagnostics.get(sample_index, {})
+            handoff = sample_diagnostics.get("relax_to_eigen_handoff", root_handoff)
+            sample_handoff_digest = sample_diagnostics.get("relax_to_eigen_handoff_sha256")
+            declared_mode_handoff = mode.get("relax_to_eigen_handoff_sha256")
+            if not isinstance(handoff, Mapping):
+                if declared_mode_handoff is not None or sample_handoff_digest is not None or root_handoff_digest is not None:
+                    local_reasons.append(
+                        f"sample {sample_index} declares a relaxation handoff digest without its content object"
+                    )
+                elif handoff_declared:
+                    local_reasons.append(f"sample {sample_index} is missing its accepted relaxation handoff object")
+                continue
+            handoff_preimage = dict(handoff)
+            handoff_digest = handoff_preimage.pop("content_sha256", None)
+            if handoff.get("schema_version") != "AcceptedFemEigenEquilibriumHandoff.v1":
+                local_reasons.append(f"sample {sample_index} has an unsupported equilibrium handoff schema")
+                continue
+            recomputed_handoff_digest = "sha256:" + hashlib.sha256(
+                serde_json_compact_bytes(handoff_preimage)
+            ).hexdigest()
+            if handoff_digest != recomputed_handoff_digest:
+                local_reasons.append(f"sample {sample_index} equilibrium handoff content hash is invalid")
+                continue
+            for name in (
+                "stage_fem_mesh_generation_id",
+                "source_mesh_topology_sha256",
+                "equilibrium_artifact_sha256",
+                "linearization_state_sha256",
+            ):
+                value = handoff.get(name)
+                if not isinstance(value, str) or not value.strip():
+                    local_reasons.append(f"sample {sample_index} equilibrium handoff is missing {name}")
+            if identity.get("source_mesh_topology_sha256") != handoff.get("source_mesh_topology_sha256"):
+                local_reasons.append(f"sample {sample_index} identity source topology differs from accepted handoff")
+            mode_mesh_identity = mode.get("source_mesh_identity")
+            mode_generation_id = (
+                mode_mesh_identity.get("mesh_generation_id")
+                if isinstance(mode_mesh_identity, Mapping)
+                else None
+            )
+            if mode_generation_id != handoff.get("stage_fem_mesh_generation_id"):
+                local_reasons.append(f"sample {sample_index} handoff mesh generation differs from mode metadata")
+            if handoff.get("equilibrium_artifact_sha256") != state_binding.get("equilibrium_sha256"):
+                local_reasons.append(f"sample {sample_index} equilibrium handoff points to another equilibrium")
+            if handoff.get("linearization_state_sha256") != state_binding.get("linearization_sha256"):
+                local_reasons.append(f"sample {sample_index} equilibrium handoff points to another linearization")
+            if declared_mode_handoff != handoff_digest:
+                local_reasons.append(f"sample {sample_index} raw mode handoff hash differs from diagnostics")
+            if sample_handoff_digest is not None and sample_handoff_digest != handoff_digest:
+                local_reasons.append(f"sample {sample_index} solver handoff hash differs from its content")
+            if root_handoff_digest is not None and root_handoff_digest != handoff_digest:
+                local_reasons.append(f"sample {sample_index} root solver handoff hash differs from its content")
+            if (
+                mode.get("relax_to_eigen_source_mesh_topology_sha256")
+                != handoff.get("source_mesh_topology_sha256")
+            ):
+                local_reasons.append(f"sample {sample_index} handoff source topology differs from mode metadata")
+            if root_handoff_topology is not None and root_handoff_topology != handoff.get("source_mesh_topology_sha256"):
+                local_reasons.append(f"sample {sample_index} root handoff source topology differs from content")
+            v1_handoff_samples.add(sample_index)
+            validated_modes += 1
+        if not handoff_declared:
+            validated_modes += len(loaded_modes)
+        validated_samples += 1
+
+    if v1_handoff_samples and v1_handoff_samples != expected_samples:
+        local_reasons.append("content-bound equilibrium handoffs do not cover every primary sample")
+    if local_reasons:
+        reasons.extend(f"primary equilibrium: {item}" for item in local_reasons)
+    return _new_check(
+        "pass" if not local_reasons else "fail",
+        sample_count=validated_samples,
+        expected_sample_count=len(expected_samples),
+        selected_mode_count=sum(len(values) for values in selections.values()),
+        validated_mode_count=validated_modes,
+        state_schema_pairs=[list(value) for value in sorted(observed_state_schemas)],
+        source_stage_binding=(
+            "validated" if source_stage_bindings == {"producer_stage_bound"}
+            else "content_bound_but_not_published_by_equilibrium_state"
+            if source_stage_bindings
+            else "unavailable"
+        ),
+        handoff_v1_sample_count=len(v1_handoff_samples),
+        material_plan_binding="replayed_exact_identity_preimages",
+    )
+
 def _validate_exported_mode_fields(
     case_dir: Path,
     case: str,
@@ -2735,6 +3224,16 @@ def validate_case(
             require_uniform_slab=case == "c1",
         )
     field_check = _validate_exported_mode_fields(case_dir, case, selected_branches, sample_map, reasons)
+    primary_equilibrium_check = _validate_primary_equilibrium(
+        case_dir,
+        case,
+        manifest,
+        metadata,
+        sample_map,
+        selected_branches,
+        diagnostics,
+        reasons,
+    )
     evidence: dict[str, Any] | None = None
     evidence_path = case_dir / EVIDENCE_RELATIVE_PATH
     if evidence_path.is_file():
@@ -2812,6 +3311,7 @@ def validate_case(
         "artifact_binding": evidence_check,
         "numeric_source": source_check,
         "modal_field_phase": field_check,
+        "primary_equilibrium": primary_equilibrium_check,
         "finite_values": finite_check,
         "spectrum_samples": _new_check("pass" if len(sample_map) == (1 if case == "c0" else EXPECTED_PATH_SAMPLE_COUNT) else "fail", sample_count=len(sample_map)),
         "tracked_branches": branch_check,

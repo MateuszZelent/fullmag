@@ -165,36 +165,49 @@ def _write_mode_fields(root, samples):
     nodes = metadata["execution_plan"]["backend_plan"]["mesh"]["nodes"]
     from comsol_mesh_identity import mesh_topology_fingerprint_v3
     mesh_signature = mesh_topology_fingerprint_v3(metadata["execution_plan"]["backend_plan"]["mesh"])
+    control_samples = {0, 10, 20, 40, 50, 60}
     for sample in samples:
         index = sample["sample_index"]
-        if index not in (0, 10, 20, 40, 50, 60):
-            continue
         k = sample["k_vector"]
         for mode in sample["modes"][:8]:
             raw = mode["raw_mode_index"]
-            values = []
-            for node in nodes:
-                argument = sum(a * b for a, b in zip(k, node))
-                phase = complex(math.cos(argument), -math.sin(argument))
-                for value in (0j, phase, 1j * phase):
-                    values.extend((value.real, value.imag))
-            data = struct.pack(f"<{len(values)}d", *values)
-            relative = f"eigen/mode_fields/sample_{index:04}/mode_{raw:04}/vector.bin"
-            path = root / relative
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_bytes(data)
-            _write_json(root / f"eigen/modes/sample_{index:04}/mode_{raw:04}.json", {
-                "sample_index": index, "raw_mode_index": raw, "k_vector": k,
-                "frequency_real_hz": mode["frequency_real_hz"], "frequency_imag_hz": mode["frequency_imag_hz"],
+            mode_metadata = {
+                "sample_index": index,
+                "raw_mode_index": raw,
+                "k_vector": k,
+                "frequency_real_hz": mode["frequency_real_hz"],
+                "frequency_imag_hz": mode["frequency_imag_hz"],
                 "source_mesh_topology_sha256": mesh_signature,
-                "payload_encoding": "f64_interleaved_real_imag_xyz",
-                "binary_layout": "complex_f64_pairs_little_endian",
-                "component_basis": "global_xyz", "mode_field_sample_count": len(nodes),
-                "source_mesh_identity": {"indexing": "full_domain_node_order", "node_count": len(nodes)},
-                "compatibility_binary_payload_path": relative,
-                "payload_sha256": "sha256:" + hashlib.sha256(data).hexdigest(),
-            })
-
+                "source_mesh_identity": {
+                    "indexing": "full_domain_node_order",
+                    "node_count": len(nodes),
+                    "mesh_generation_id": "mesh-generation-primary",
+                },
+            }
+            if index in control_samples:
+                values = []
+                for node in nodes:
+                    argument = sum(a * b for a, b in zip(k, node))
+                    phase = complex(math.cos(argument), -math.sin(argument))
+                    for value in (0j, phase, 1j * phase):
+                        values.extend((value.real, value.imag))
+                data = struct.pack(f"<{len(values)}d", *values)
+                relative = f"eigen/mode_fields/sample_{index:04}/mode_{raw:04}/vector.bin"
+                path = root / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(data)
+                mode_metadata.update({
+                    "payload_encoding": "f64_interleaved_real_imag_xyz",
+                    "binary_layout": "complex_f64_pairs_little_endian",
+                    "component_basis": "global_xyz",
+                    "mode_field_sample_count": len(nodes),
+                    "compatibility_binary_payload_path": relative,
+                    "payload_sha256": "sha256:" + hashlib.sha256(data).hexdigest(),
+                })
+            _write_json(
+                root / f"eigen/modes/sample_{index:04}/mode_{raw:04}.json",
+                mode_metadata,
+            )
 
 def _attach_ks_equilibrium(root):
     """Synthetic accepted state for gate contracts; no native solve claim."""
@@ -236,6 +249,400 @@ def _attach_ks_equilibrium(root):
     _write_json(mode_path, mode)
 
 
+def _primary_equilibrium_material_preimage(material):
+    ku = material.get("uniaxial_anisotropy")
+    ms_field = material.get("ms_field")
+    axis = material.get("anisotropy_axis")
+    zero_axis = axis is not None and all(float(value) == 0.0 for value in axis)
+    physical_v2 = ku is not None and not (
+        float(ku) == 0.0 and (ms_field is not None or zero_axis)
+    )
+    preimage = {
+        "schema_version": (
+            "EquilibriumMaterialSignaturePreimage.v2"
+            if physical_v2
+            else "EquilibriumMaterialSignaturePreimage.v1"
+        ),
+        "saturation_magnetisation_a_per_m": material["saturation_magnetisation"],
+        "exchange_stiffness_j_per_m": material["exchange_stiffness"],
+        "saturation_magnetisation_field_a_per_m": ms_field,
+        "exchange_stiffness_field_j_per_m": material.get("a_field"),
+    }
+    if physical_v2:
+        raw_axis = axis if axis is not None else [0.0, 0.0, 1.0]
+        scale = max(abs(float(value)) for value in raw_axis)
+        if scale == 0.0:
+            raise ValueError("canonical fixture material axis must be non-zero")
+        scaled = [float(value) / scale for value in raw_axis]
+        norm = math.hypot(math.hypot(scaled[0], scaled[1]), scaled[2])
+        first = next(value for value in scaled if value != 0.0)
+        orientation = 1.0 if first > 0.0 else -1.0
+        canonical_axis = [
+            0.0 if orientation * value / norm == 0.0 else orientation * value / norm
+            for value in scaled
+        ]
+        preimage.update({
+            "uniaxial_anisotropy_j_per_m3": 0.0 if float(ku) == 0.0 else ku,
+            "canonical_uniaxial_axis": canonical_axis,
+        })
+    return preimage
+
+
+def _attach_primary_equilibria(root: Path, samples, *, producer_material=None) -> None:
+    """Attach accepted, content-bound synthetic states for the public gate path."""
+    from test_equilibrium_payload_validation import _fresh_artifact, _refresh_digest
+    from verify_fem_frequency_domain_eigen_artifacts import (
+        equilibrium_artifact_v8_digest,
+        linearization_state_v7_digest,
+        serde_json_compact_bytes,
+    )
+    from comsol_equilibrium_artifacts import physics_signature_from_plan
+    from comsol_mesh_identity import mesh_topology_fingerprint_v2, mesh_topology_fingerprint_v3
+    from fem_equilibrium_identity_replay import framed_digest
+    from fem_linearization_identity_replay import IDENTITY_FIELDS
+
+    metadata = json.loads((root / "metadata.json").read_text(encoding="utf-8"))
+    plan = metadata["execution_plan"]["backend_plan"]
+    consumer_material = plan["material"]
+    source_material = copy.deepcopy(
+        consumer_material if producer_material is None else producer_material
+    )
+    consumer_is_canonical = consumer_material.get("uniaxial_anisotropy") is not None
+    producer_is_canonical = source_material.get("uniaxial_anisotropy") is not None
+    canonical_state_family = consumer_is_canonical
+    producer_plan = copy.deepcopy(plan)
+    producer_plan["material"] = source_material
+    mesh = plan["mesh"]
+    mesh_signature = mesh_topology_fingerprint_v2(mesh)
+    modal_mesh_signature = mesh_topology_fingerprint_v3(mesh)
+    producer_material_json = json.dumps(source_material, separators=(",", ":"), ensure_ascii=False)
+    producer_material_bytes = producer_material_json.encode("utf-8")
+    producer_material_signature = "sha256:" + hashlib.sha256(producer_material_bytes).hexdigest()
+    consumer_material_json = json.dumps(consumer_material, separators=(",", ":"), ensure_ascii=False)
+    consumer_material_bytes = consumer_material_json.encode("utf-8")
+    consumer_material_signature = "sha256:" + hashlib.sha256(consumer_material_bytes).hexdigest()
+    material_preimage = _primary_equilibrium_material_preimage(source_material)
+    material_preimage_json = json.dumps(material_preimage, separators=(",", ":"), ensure_ascii=False)
+    material_signature = framed_digest(
+        material_preimage["schema_version"],
+        material_preimage_json.encode("utf-8"),
+    )
+    static_preimage = {
+        "schema_version": "EquilibriumStaticPhysicsSignaturePreimage.v1",
+        "enable_exchange": producer_plan["enable_exchange"],
+        "enable_demag": producer_plan["enable_demag"],
+        "external_field_a_per_m": producer_plan.get("external_field"),
+    }
+    static_preimage_json = json.dumps(static_preimage, separators=(",", ":"), ensure_ascii=False)
+    static_signature = framed_digest(
+        "EquilibriumStaticPhysicsSignaturePreimage.v1",
+        static_preimage_json.encode("utf-8"),
+    )
+    boundary_preimage = {
+        "schema_version": "EquilibriumBoundarySignaturePreimage.v1",
+        "exchange_bc": "neumann",
+        "demag_realization": producer_plan.get("demag_realization"),
+        "air_box_config": producer_plan.get("air_box_config"),
+        "periodic_node_pairs": mesh.get("periodic_node_pairs", []),
+        "periodic_boundary_pairs": mesh.get("periodic_boundary_pairs", []),
+    }
+    boundary_preimage_json = json.dumps(boundary_preimage, separators=(",", ":"), ensure_ascii=False)
+    boundary_signature = framed_digest(
+        "EquilibriumBoundarySignaturePreimage.v1",
+        boundary_preimage_json.encode("utf-8"),
+    )
+    source_run_id = "synthetic-source-run"
+    source_stage_id = "synthetic-source-stage"
+    source_stage_kind = "relaxation"
+    source_snapshot = "a" * 64
+    equilibrium_template = _fresh_artifact(root / "_synthetic_reference")
+    equilibrium_paths = []
+    state_paths = []
+    state_digests = {}
+    identity_paths = []
+    identity_preimage_paths = []
+    identity_hashes = {}
+
+    for sample in samples:
+        sample_index = sample["sample_index"]
+        folder = f"sample_{sample_index:04d}"
+        equilibrium_schema = (
+            "equilibrium_artifact.v8" if canonical_state_family else "equilibrium_artifact.v7"
+        )
+        state_schema = "LinearizationState.v7" if canonical_state_family else "LinearizationState.v6"
+        equilibrium_filename = (
+            "equilibrium_artifact.v8.json" if canonical_state_family else "equilibrium_artifact.v7.json"
+        )
+        state_filename = (
+            "linearization_state.v7.json" if canonical_state_family else "linearization_state.v6.json"
+        )
+        equilibrium_relative = f"eigen/metadata/{folder}/{equilibrium_filename}"
+        state_relative = f"eigen/metadata/{folder}/{state_filename}"
+        equilibrium = copy.deepcopy(equilibrium_template)
+        equilibrium.update({
+            "schema_version": equilibrium_schema,
+            "external_field_a_per_m": producer_plan["external_field"],
+            "m0": producer_plan["equilibrium_magnetization"],
+            "mesh_signature": mesh_signature,
+            "material_signature": material_signature if consumer_is_canonical else producer_material_signature,
+            "physics_signature": physics_signature_from_plan(producer_plan),
+            "boundary_signature": boundary_signature,
+            "static_demag_signature": static_signature,
+            "producer_run_id": source_run_id,
+        })
+        if consumer_is_canonical:
+            equilibrium.update({
+                "material_identity_kind": "canonical_equilibrium_material.v2",
+                "material_provenance_signature": consumer_material_signature,
+                "material_provenance_scope": "materialization_plan",
+            })
+            equilibrium_digest = equilibrium_artifact_v8_digest(equilibrium)
+            equilibrium["content_sha256"] = equilibrium_digest
+            equilibrium["equilibrium_id"] = (
+                "equilibrium_artifact.v8:" + equilibrium_digest.removeprefix("sha256:")
+            )
+        else:
+            equilibrium_digest = _refresh_digest(equilibrium)
+
+        linearization_state = {
+            key: equilibrium[key]
+            for key in (
+                "mesh_signature",
+                "material_signature",
+                "physics_signature",
+                "boundary_signature",
+                "static_demag_signature",
+            )
+        }
+        linearization_state.update({
+            "schema_version": state_schema,
+            "accepted_for_frequency_operator": True,
+            "source_equilibrium_id": equilibrium["equilibrium_id"],
+            "source_equilibrium_artifact": equilibrium_digest,
+            "m0": producer_plan["equilibrium_magnetization"],
+        })
+        if consumer_is_canonical:
+            linearization_state.update({
+                "material_identity_kind": "canonical_equilibrium_material.v2",
+                "material_provenance_signature": consumer_material_signature,
+                "material_provenance_scope": "materialization_plan",
+            })
+            state_digest = linearization_state_v7_digest(linearization_state)
+            linearization_state.update({
+                "content_sha256": state_digest,
+                "linearization_state_id": (
+                    "LinearizationState.v7:" + state_digest.removeprefix("sha256:")
+                ),
+            })
+        else:
+            state_digest = "sha256:" + hashlib.sha256(
+                serde_json_compact_bytes(linearization_state)
+            ).hexdigest()
+            linearization_state.update({
+                "content_sha256": state_digest,
+                "linearization_state_id": (
+                    "LinearizationState.v6:" + state_digest.removeprefix("sha256:")
+                ),
+            })
+        _write_json(root / equilibrium_relative, equilibrium)
+        _write_json(root / state_relative, linearization_state)
+        equilibrium_paths.append(equilibrium_relative)
+        state_paths.append(state_relative)
+        state_digests[sample_index] = (equilibrium_digest, state_digest)
+
+        magnetization = producer_plan["equilibrium_magnetization"]
+        m0_digest = hashlib.sha256()
+        m0_digest.update(b"RecomputedFemLinearizationCertificate.m0.v1\0")
+        m0_digest.update(struct.pack("<Q", len(magnetization)))
+        for vector in magnetization:
+            for value in vector:
+                m0_digest.update(struct.pack("<d", float(value)))
+        equilibrium_content_signature = "sha256:" + m0_digest.hexdigest()
+
+        producer_payload_version = 2 if producer_is_canonical else 1
+        identity = {key: "fixture" for key in sorted(IDENTITY_FIELDS)}
+        identity.update({
+            "schema_version": "linearization_identity.v2",
+            "sample_index": sample_index,
+            "equilibrium_artifact_schema": equilibrium_schema,
+            "linearization_state_schema": state_schema,
+            "accepted_fields_schema": f"CertifiedFemEquilibriumFields.v{producer_payload_version}",
+            "certified_fields_schema": f"CertifiedFemEquilibriumFields.v{producer_payload_version}",
+            "recomputed_certificate_schema": f"RecomputedFemLinearizationCertificate.v{producer_payload_version}",
+            "handoff_schema_version": "AcceptedFemRelaxStageHandoff.v3",
+            "handoff_content_sha256": "sha256:" + "b" * 64,
+            "source_run_id": source_run_id,
+            "source_stage_id": source_stage_id,
+            "source_stage_kind": source_stage_kind,
+            "producer_plan_snapshot_sha256": "sha256:" + "c" * 64,
+            "consumer_plan_snapshot_sha256": "sha256:" + "d" * 64,
+            "producer_build_identity": {"source_snapshot_sha256": source_snapshot},
+            "consumer_build_identity": {"source_snapshot_sha256": source_snapshot},
+            "producer_source_snapshot_sha256": source_snapshot,
+            "consumer_source_snapshot_sha256": source_snapshot,
+            "cross_build_policy": "same_source_snapshot",
+            "source_mesh_topology_sha256": modal_mesh_signature,
+            "modal_mesh_topology_fingerprint_v3": modal_mesh_signature,
+            "node_count": len(mesh["nodes"]),
+            "equilibrium_content_sha256": equilibrium_content_signature,
+            "equilibrium_artifact_path": equilibrium_relative,
+            "equilibrium_artifact_sha256": equilibrium_digest,
+            "linearization_state_path": state_relative,
+            "linearization_state_sha256": state_digest,
+            "equilibrium_material_signature": material_signature,
+            "equilibrium_material_preimage_json": material_preimage_json,
+            "equilibrium_static_physics_signature": static_signature,
+            "equilibrium_static_physics_preimage_json": static_preimage_json,
+            "equilibrium_boundary_signature": boundary_signature,
+            "equilibrium_boundary_preimage_json": boundary_preimage_json,
+            "material_signature": material_signature if consumer_is_canonical else consumer_material_signature,
+            "material_identity_kind": (
+                "canonical_equilibrium_material.v2" if consumer_is_canonical else "raw_material.v1"
+            ),
+            "material_provenance_signature": consumer_material_signature,
+            "material_provenance_scope": "materialization_plan",
+            "material_provenance_preimage_json": consumer_material_json,
+            "producer_material_provenance_signature": producer_material_signature,
+            "producer_material_provenance_preimage_json": producer_material_json,
+            "accepted_fields_content_sha256": "sha256:" + "e" * 64,
+            "accepted_fields_path": f"eigen/metadata/{folder}/accepted_fields.v{producer_payload_version}.json",
+            "certified_fields_content_sha256": "sha256:" + "f" * 64,
+            "certified_fields_path": f"eigen/metadata/{folder}/certified_fields.v{producer_payload_version}.json",
+            "recomputed_certificate_content_sha256": "sha256:" + "1" * 64,
+            "recomputed_certificate_path": f"eigen/metadata/{folder}/recomputed_certificate.v{producer_payload_version}.json",
+            "accepted_fields_bytes_sha256": "sha256:" + "2" * 64,
+            "certified_fields_bytes_sha256": "sha256:" + "3" * 64,
+            "recomputed_certificate_bytes_sha256": "sha256:" + "4" * 64,
+            "recomputed_certificate_preimage_json": "{}",
+            "recomputed_certificate_preimage_sha256": "sha256:" + "5" * 64,
+            "content_sha256": "",
+        })
+        identity_preimage_json = json.dumps(identity, separators=(",", ":"), ensure_ascii=False)
+        identity_preimage_bytes = identity_preimage_json.encode("utf-8")
+        identity_digest = "sha256:" + hashlib.sha256(
+            b"linearization_identity.v2\0"
+            + struct.pack("<Q", len(identity_preimage_bytes))
+            + identity_preimage_bytes
+        ).hexdigest()
+        identity["content_sha256"] = identity_digest
+        identity_relative = f"eigen/metadata/{folder}/linearization_identity.v2.json"
+        identity_preimage_relative = f"eigen/metadata/{folder}/linearization_identity_preimage.v1.json"
+        _write_json(root / identity_relative, identity)
+        _write_json(root / identity_preimage_relative, {
+            "schema_version": "linearization_identity_preimage.v1",
+            "identity_schema": "linearization_identity.v2",
+            "identity_preimage_json": identity_preimage_json,
+            "identity_preimage_sha256": "sha256:" + hashlib.sha256(identity_preimage_bytes).hexdigest(),
+            "identity_content_sha256": identity_digest,
+        })
+        identity_paths.append(identity_relative)
+        identity_preimage_paths.append(identity_preimage_relative)
+        identity_hashes[str(sample_index)] = identity_digest
+        for mode in sample["modes"]:
+            mode_relative = (
+                f"eigen/modes/sample_{sample_index:04d}/mode_{mode['raw_mode_index']:04d}.json"
+            )
+            mode_path = root / mode_relative
+            mode_metadata = json.loads(mode_path.read_text(encoding="utf-8"))
+            mode_metadata.update({
+                "equilibrium_artifact_sha256": equilibrium_digest,
+                "linearization_state_sha256": state_digest,
+                "source_mesh_topology_sha256": modal_mesh_signature,
+            })
+            _write_json(mode_path, mode_metadata)
+
+    first_equilibrium_digest, first_state_digest = state_digests[min(state_digests)]
+    handoff_preimage = {
+        "schema_version": "AcceptedFemEigenEquilibriumHandoff.v1",
+        "stage_fem_mesh_generation_id": "mesh-generation-primary",
+        "source_mesh_topology_sha256": modal_mesh_signature,
+        "equilibrium_artifact_sha256": first_equilibrium_digest,
+        "linearization_state_sha256": first_state_digest,
+    }
+    handoff_digest = "sha256:" + hashlib.sha256(
+        serde_json_compact_bytes(handoff_preimage)
+    ).hexdigest()
+    handoff = dict(handoff_preimage, content_sha256=handoff_digest)
+    for sample in samples:
+        sample_index = sample["sample_index"]
+        for mode in sample["modes"]:
+            mode_path = root / (
+                f"eigen/modes/sample_{sample_index:04d}/mode_{mode['raw_mode_index']:04d}.json"
+            )
+            mode_metadata = json.loads(mode_path.read_text(encoding="utf-8"))
+            mode_metadata.update({
+                "relax_to_eigen_handoff_sha256": handoff_digest,
+                "relax_to_eigen_source_mesh_topology_sha256": modal_mesh_signature,
+            })
+            _write_json(mode_path, mode_metadata)
+    diagnostics_path = root / "eigen/diagnostics/solver.v1.json"
+    solver_diagnostics = json.loads(diagnostics_path.read_text(encoding="utf-8"))
+    solver_diagnostics.update({
+        "relax_to_eigen_handoff": handoff,
+        "relax_to_eigen_handoff_sha256": handoff_digest,
+        "relax_to_eigen_source_mesh_topology_sha256": modal_mesh_signature,
+    })
+    _write_json(diagnostics_path, solver_diagnostics)
+    manifest_path = root / "frequency_domain/manifest.v1.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    artifacts = manifest.setdefault("artifacts", {})
+    for key in (
+        "equilibrium_artifact_v8_paths",
+        "linearization_state_v7_paths",
+        "equilibrium_artifact_v7_paths",
+        "linearization_state_v6_paths",
+    ):
+        artifacts.pop(key, None)
+    if canonical_state_family:
+        artifacts.update({
+            "equilibrium_artifact_v8_paths": equilibrium_paths,
+            "linearization_state_v7_paths": state_paths,
+        })
+    else:
+        artifacts.update({
+            "equilibrium_artifact_v7_paths": equilibrium_paths,
+            "linearization_state_v6_paths": state_paths,
+        })
+    artifacts.update({
+        "linearization_identity_v2_paths": identity_paths,
+        "linearization_identity_preimage_v1_paths": identity_preimage_paths,
+        "linearization_identity_sha256_by_sample": identity_hashes,
+    })
+    _write_json(manifest_path, manifest)
+
+def _rewrite_primary_identity(root: Path, sample_index: int, **changes) -> None:
+    identity_path = root / f"eigen/metadata/sample_{sample_index:04d}/linearization_identity.v2.json"
+    preimage_path = root / f"eigen/metadata/sample_{sample_index:04d}/linearization_identity_preimage.v1.json"
+    identity = json.loads(identity_path.read_text(encoding="utf-8"))
+    identity.update(changes)
+    preimage = dict(identity, content_sha256="")
+    raw = json.dumps(preimage, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    digest = "sha256:" + hashlib.sha256(
+        b"linearization_identity.v2\0" + struct.pack("<Q", len(raw)) + raw
+    ).hexdigest()
+    identity["content_sha256"] = digest
+    _write_json(identity_path, identity)
+    _write_json(preimage_path, {
+        "schema_version": "linearization_identity_preimage.v1",
+        "identity_schema": "linearization_identity.v2",
+        "identity_preimage_json": raw.decode("utf-8"),
+        "identity_preimage_sha256": "sha256:" + hashlib.sha256(raw).hexdigest(),
+        "identity_content_sha256": digest,
+    })
+    manifest_path = root / "frequency_domain/manifest.v1.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["artifacts"]["linearization_identity_sha256_by_sample"][str(sample_index)] = digest
+    _write_json(manifest_path, manifest)
+
+def _rewrite_primary_consumer_material(root: Path, sample_index: int, material) -> None:
+    raw = json.dumps(material, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    _rewrite_primary_identity(
+        root,
+        sample_index,
+        material_provenance_preimage_json=raw.decode("utf-8"),
+        material_provenance_signature="sha256:" + hashlib.sha256(raw).hexdigest(),
+    )
+
 def _rewrite_mode_field_with_z_sign_profile(root: Path, *, sample_index: int = 0, raw_mode_index: int = 0) -> None:
     """Rewrite one KS payload with a z+/z- envelope while preserving Bloch seams."""
     metadata = json.loads((root / "metadata.json").read_text(encoding="utf-8"))
@@ -274,6 +681,16 @@ def _canonical_path() -> list[dict[str, str]]:
     with KPATH.open(encoding="utf-8", newline="") as stream:
         return list(csv.DictReader(stream))
 
+
+def _canonical_test_material(name="Permalloy", *, ku=12000.0, axis=None):
+    return {
+        "name": name,
+        "saturation_magnetisation": 800000.0,
+        "exchange_stiffness": 1.3e-11,
+        "damping": 0.5,
+        "uniaxial_anisotropy": ku,
+        "anisotropy_axis": [0.0, 0.0, 1.0] if axis is None else axis,
+    }
 
 def _bundle_descriptor(case_dir: Path, root: str) -> dict[str, object]:
     relative_paths = {
@@ -384,7 +801,7 @@ def _evidence(
     }
 
 
-def _make_case(root: Path, case: str = "c1") -> Path:
+def _make_case(root: Path, case: str = "c1", *, primary_material=None, producer_material=None) -> Path:
     case_dir = root / case
     path_rows = _canonical_path()
     parameters = json.loads(PARAMETERS.read_text(encoding="utf-8"))
@@ -429,6 +846,11 @@ def _make_case(root: Path, case: str = "c1") -> Path:
         for mode in sample["modes"]:
             _native_mode_diagnostics(mode)
     _write_native_context(case_dir, case, "mesh-L1", 2e-6, 24, samples)
+    if primary_material is not None:
+        metadata_path = case_dir / "metadata.json"
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        metadata["execution_plan"]["backend_plan"]["material"] = copy.deepcopy(primary_material)
+        _write_json(metadata_path, metadata)
     _write_json(case_dir / "eigen/spectrum.v2.json", {
         "schema_version": "eigen_spectrum.v2",
         "sample_count": len(samples),
@@ -494,6 +916,8 @@ def _make_case(root: Path, case: str = "c1") -> Path:
             "dynamic_demag_operator_source": "numeric_modal_solver",
         },
     })
+    _write_mode_fields(case_dir, samples)
+    _attach_primary_equilibria(case_dir, samples, producer_material=producer_material)
     base_bindings = {
         "metadata_sha256": _sha256(case_dir / "metadata.json"),
         "solver_diagnostics_sha256": _sha256(case_dir / "eigen/diagnostics/solver.v1.json"),
@@ -525,7 +949,6 @@ def _make_case(root: Path, case: str = "c1") -> Path:
         convergence_runs[name] = _write_bundle(case_dir, f"validation/convergence/{name}", scaled_samples, scaled_branches, mesh_id=mesh_id, airbox_m=airbox, requested_modes=modes)
     evidence = _evidence(case_dir, case, base_bindings, ks_bv=ks_bv, ks_de=ks_de, convergence_runs=convergence_runs)
     _write_json(case_dir / gate.EVIDENCE_RELATIVE_PATH, evidence)
-    _write_mode_fields(case_dir, samples)
     return case_dir
 
 
@@ -972,6 +1395,201 @@ class ScientificGateTests(unittest.TestCase):
                         self.assertEqual(results[case]["checks"]["tracking_field_metric_replay"]["status"], "missing")
             self.assertEqual(gate.validate_requested_cases(results, ("c0", "c1", "a1"))["status"], "not_qualified")
 
+    def test_primary_equilibrium_is_mandatory_for_c0_c1_a1(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for case in ("c0", "c1", "a1"):
+                with self.subTest(case=case):
+                    report = gate.validate_case(
+                        _make_case(root, case),
+                        case,
+                        parameters_path=PARAMETERS,
+                        kpath_path=KPATH,
+                    )
+                    self.assertEqual(
+                        report["checks"]["primary_equilibrium"]["status"],
+                        "pass",
+                        report["checks"]["primary_equilibrium"],
+                    )
+                    if case in {"c0", "a1"}:
+                        self.assertEqual(report["checks"]["kalinikos_slab_n0"]["status"], "not_applicable")
+
+    def test_primary_equilibrium_rejects_stale_and_mismatched_bindings(self):
+        defects = (
+            "missing_mode",
+            "stale_state_hash",
+            "wrong_source_run",
+            "wrong_source_mesh",
+            "wrong_material",
+            "wrong_physics",
+            "identity_hash",
+        )
+        for defect in defects:
+            with self.subTest(defect=defect), tempfile.TemporaryDirectory() as directory:
+                case_dir = _make_case(Path(directory), "c0")
+                if defect == "missing_mode":
+                    (case_dir / "eigen/modes/sample_0000/mode_0000.json").unlink()
+                elif defect == "stale_state_hash":
+                    path = case_dir / "eigen/metadata/sample_0000/linearization_state.v6.json"
+                    state = json.loads(path.read_text(encoding="utf-8"))
+                    state["m0"][0][0] = 0.5
+                    _write_json(path, state)
+                elif defect == "wrong_source_run":
+                    _rewrite_primary_identity(case_dir, 0, source_run_id="different-source-run")
+                elif defect == "wrong_source_mesh":
+                    _rewrite_primary_identity(
+                        case_dir,
+                        0,
+                        source_mesh_topology_sha256="sha256:" + "9" * 64,
+                    )
+                elif defect == "wrong_material":
+                    path = case_dir / "metadata.json"
+                    metadata = json.loads(path.read_text(encoding="utf-8"))
+                    metadata["execution_plan"]["backend_plan"]["material"][
+                        "saturation_magnetisation"
+                    ] = 700000.0
+                    _write_json(path, metadata)
+                elif defect == "wrong_physics":
+                    path = case_dir / "metadata.json"
+                    metadata = json.loads(path.read_text(encoding="utf-8"))
+                    metadata["execution_plan"]["backend_plan"]["external_field"][0] += 100.0
+                    _write_json(path, metadata)
+                else:
+                    path = case_dir / "eigen/metadata/sample_0000/linearization_identity.v2.json"
+                    identity = json.loads(path.read_text(encoding="utf-8"))
+                    identity["source_stage_id"] = "unbound-stage-edit"
+                    _write_json(path, identity)
+
+                report = gate.validate_case(
+                    case_dir,
+                    "c0",
+                    parameters_path=PARAMETERS,
+                    kpath_path=KPATH,
+                )
+                self.assertEqual(
+                    report["checks"]["primary_equilibrium"]["status"],
+                    "fail",
+                    report["checks"]["primary_equilibrium"],
+                )
+    def test_primary_canonical_v8_v7_reuse_binds_both_raw_material_plans(self):
+        producer_material = _canonical_test_material("relaxation-source")
+        consumer_material = _canonical_test_material("current-consumer")
+        with tempfile.TemporaryDirectory() as directory:
+            case_dir = _make_case(
+                Path(directory),
+                "c0",
+                primary_material=consumer_material,
+                producer_material=producer_material,
+            )
+            report = gate.validate_case(
+                case_dir,
+                "c0",
+                parameters_path=PARAMETERS,
+                kpath_path=KPATH,
+            )
+            self.assertEqual(
+                report["checks"]["primary_equilibrium"]["status"],
+                "pass",
+                report["checks"]["primary_equilibrium"],
+            )
+            identity = json.loads(
+                (case_dir / "eigen/metadata/sample_0000/linearization_identity.v2.json")
+                .read_text(encoding="utf-8")
+            )
+            equilibrium = json.loads(
+                (case_dir / "eigen/metadata/sample_0000/equilibrium_artifact.v8.json")
+                .read_text(encoding="utf-8")
+            )
+            state = json.loads(
+                (case_dir / "eigen/metadata/sample_0000/linearization_state.v7.json")
+                .read_text(encoding="utf-8")
+            )
+            self.assertEqual(equilibrium["material_provenance_signature"],
+                             identity["material_provenance_signature"])
+            self.assertEqual(state["material_provenance_signature"],
+                             identity["material_provenance_signature"])
+            self.assertNotEqual(identity["producer_material_provenance_signature"],
+                                identity["material_provenance_signature"])
+            self.assertEqual(identity["material_signature"], equilibrium["material_signature"])
+
+    def test_primary_canonical_v8_v7_rejects_current_physical_material_changes(self):
+        changes = (
+            ("saturation_magnetisation", 700000.0),
+            ("exchange_stiffness", 1.4e-11),
+            ("uniaxial_anisotropy", 14000.0),
+            ("ms_field", "spatial"),
+            ("a_field", "spatial"),
+        )
+        for field, value in changes:
+            with self.subTest(field=field), tempfile.TemporaryDirectory() as directory:
+                consumer_material = _canonical_test_material()
+                producer_material = _canonical_test_material("relaxation-source")
+                case_dir = _make_case(
+                    Path(directory),
+                    "c0",
+                    primary_material=consumer_material,
+                    producer_material=producer_material,
+                )
+                changed_material = copy.deepcopy(consumer_material)
+                if value == "spatial":
+                    node_count = len(
+                        json.loads((case_dir / "metadata.json").read_text(encoding="utf-8"))
+                        ["execution_plan"]["backend_plan"]["mesh"]["nodes"]
+                    )
+                    field_value = (
+                        [800000.0] * node_count if field == "ms_field"
+                        else [1.3e-11] * node_count
+                    )
+                    changed_material[field] = field_value
+                else:
+                    changed_material[field] = value
+                metadata_path = case_dir / "metadata.json"
+                metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+                metadata["execution_plan"]["backend_plan"]["material"] = changed_material
+                _write_json(metadata_path, metadata)
+                _rewrite_primary_consumer_material(case_dir, 0, changed_material)
+
+                report = gate.validate_case(
+                    case_dir,
+                    "c0",
+                    parameters_path=PARAMETERS,
+                    kpath_path=KPATH,
+                )
+                self.assertEqual(
+                    report["checks"]["primary_equilibrium"]["status"],
+                    "fail",
+                    report["checks"]["primary_equilibrium"],
+                )
+
+    def test_primary_canonical_ku0_uses_physical_v1_preimage(self):
+        material = _canonical_test_material(ku=0.0, axis=[0.0, 0.0, 0.0])
+        with tempfile.TemporaryDirectory() as directory:
+            case_dir = _make_case(
+                Path(directory),
+                "c0",
+                primary_material=material,
+                producer_material=copy.deepcopy(material),
+            )
+            report = gate.validate_case(
+                case_dir,
+                "c0",
+                parameters_path=PARAMETERS,
+                kpath_path=KPATH,
+            )
+            self.assertEqual(
+                report["checks"]["primary_equilibrium"]["status"],
+                "pass",
+                report["checks"]["primary_equilibrium"],
+            )
+            identity = json.loads(
+                (case_dir / "eigen/metadata/sample_0000/linearization_identity.v2.json")
+                .read_text(encoding="utf-8")
+            )
+            physical = json.loads(identity["equilibrium_material_preimage_json"])
+            self.assertEqual(identity["material_identity_kind"],
+                             "canonical_equilibrium_material.v2")
+            self.assertEqual(physical["schema_version"],
+                             "EquilibriumMaterialSignaturePreimage.v1")
     def test_metric_replay_pass_cannot_qualify_unreplayed_assignment(self):
         # Unit coverage of the aggregate verdict only, not a field/solver proof.
         from unittest.mock import patch

@@ -703,8 +703,10 @@ the current materialization plan, with
 `material_provenance_scope=materialization_plan` and
 `material_identity_kind=canonical_equilibrium_material.v2`.
 This scope does not reconstruct the original authored relaxation material.
-A provided v8 artifact preserves its source raw provenance; the new state
-records the current plan's raw hash. Equivalent scaled/opposite axes may
+A provided v8 source artifact is checked against the accepted physical
+identity. The persisted v8 artifact and v7 state both carry the current
+materialization plan's raw hash; linearization_identity.v2 separately retains
+the exact producer and consumer raw preimages and signatures. Equivalent scaled/opposite axes may
 have different raw hashes, but must share the canonical signature. Legacy
 v7/v6 keeps its raw semantics and digest preimages; it cannot become a Ku
 source by relabeling. Filenames and manifest keys match the actual schemas.
@@ -4762,3 +4764,61 @@ kształtu payloadu nie dodaje surowego endpointu ani nowego transportu.
 Dla C1/A1 referencją jest wersjonowana tabela docs/guides/comsol-dispersion-benchmark/kpath.csv:61 indeksów0..60 ścieżki Γ–X–M–Γ, wektory w rad/m. Opcjonalny --kpath pozostaje wejściem do sprawdzenia, nie nową definicją benchmarku. Po parsowaniu każdy indeks i trzy składowe float64 muszą odpowiadać referencji dokładnie; inny zapis tego samego numeru/BOM jest dozwolony. Duplicate index, brak/przesunięcie indeksu, zmieniony wektor lub nieczytelna/uszkodzona referencja blokuje kwalifikację. Labels i dodatkowe kolumny prezentacyjne nie zastępują wektorów. C0 single-Γ nie potrzebuje path check.
 
 Dalsza walidacja spectrum/CSV/analityki używa wyłącznie oczekiwanych wektorów repozytoryjnych, również przy odrzuconym override. Raport ma osobny mandatory canonical_kpath check, odrębny od liczby zwróconych sample. Nie zmienia to równań, publicznego Python/ProblemIR ani backendów; gate ocenia artefakty FEM CPU/GPU, bez kwalifikacji FDM. Regresje mają odrzucić self-consistent all-Gamma override oraz duplicate/renumbered/changed-vector input i zachować semantycznie identyczną kopię. Niezależny SOURCE review PASS; hosted GHA37979402458/job113985786736:63 scientific-gate tests PASS, w tym trzy nowe regresje override/copy/mandatory check. Job Python później FAIL w odrębnym meshing ROI density. To dowód bramki wiązania benchmarku, nie dowód zgodności numerycznej FEM z COMSOL.
+
+Każda próbka i każdy primary mode wybrany przez śledzoną gałąź musi dodatkowo
+przejść primary_equilibrium, niezależnie od zastosowania kontroli
+Kalinikos–Slavin. not_applicable dla KS w C0 i A1 oznacza wyłącznie brak
+zastosowania jednorodnofilmowej formuły; nie zastępuje accepted equilibrium.
+Kontrola czyta rzeczywisty mode metadata i wywołuje
+scripts/comsol_equilibrium_artifacts.py::read_sample_equilibrium dla
+deklarowanego indeksu próbki i zaakceptowanego modu. Para plików pochodzi
+wyłącznie z manifestu; nie jest wybierana po nazwie ani kolejności katalogu.
+Czytnik weryfikuje akceptację, digesty plików, aktualny mesh, zewnętrzne pole,
+podpis fizyki planu i rzeczywisty znormalizowany magnetyczny m0. Bieżący
+MaterialIR jest sprawdzany osobno przez _validate_primary_equilibrium oraz
+dokładny replay preimage’ów; czytnik nie rozstrzyga producer/consumer raw
+material identity. Dotyczy to każdego raw mode wybranego przez primary branch
+na każdej próbce. Brak próbki, modu, pliku, poprawnej akceptacji lub zgodnego
+digestu blokuje bramkę.
+Replay preimage’ów identity obejmuje także boundary; kontrola nie zastępuje
+niezależnej walidacji operatora ani kwalifikacji fizycznej spectrum.
+Identity linearization_identity.v2 i jego dokładny preimage są rozwiązywane
+wyłącznie przez ścieżki zadeklarowane w manifest.artifacts. Gate odtwarza
+digest preimage, pięć podpisanych preimage’ów fizyki oraz producer i consumer
+raw MaterialIR. Consumer raw preimage musi odpowiadać bieżącemu planowi;
+fizyczne projekcje producer i consumer muszą odpowiadać zaakceptowanemu
+podpisowi materiału. Raw signature w utrwalonym equilibrium i state odpowiada
+material_provenance_signature, czyli hashowi bieżącego consumer planu.
+linearization_identity.v2 przechowuje osobno
+producer_material_provenance_signature i dokładny producer raw preimage. W rodzinie
+canonical v2 te raw provenance mogą się różnić, jeżeli fizyczna projekcja
+jest równa. Legacy raw v1 wymaga zgodności obu raw digestów. Projekcja
+odwzorowuje Rust: jawne Ku=0 z polem Ms albo authored zerową osią używa
+fizycznego preimage v1; jednorodne Ms z poprawną osią zachowuje v2. Rodzina
+identity nadal zależy od obecności opcji Ku, niezależnie od wybranego
+fizycznego preimage’u.
+Identity source_run_id jest porównywane z producer_run_id zaakceptowanego
+equilibrium oraz z producer_run_id stanu, jeśli stan go publikuje. Jawne
+producer_stage_id/source_stage_id w payloadzie muszą odpowiadać identity
+source_stage_id. Para v7/v6 nie publikuje stage ID, więc raport oznacza je jako
+content-bound, but not published by equilibrium state; gate nie wyprowadza
+stage owner z bieżącego runu eigen.
+
+Jeżeli solver diagnostics publikuje AcceptedFemEigenEquilibriumHandoff.v1,
+gate odtwarza jego content hash i porównuje digesty equilibrium/state, source
+topology oraz stage FEM mesh generation z per-mode metadata. Handoff v1 nie
+zawiera run/stage owner; te pola są sprawdzane wyłącznie tam, gdzie publikuje
+je identity lub accepted state. Brak jawnego stage ID w v7/v6 pozostaje
+ograniczeniem, a nie dowodem zgodności stage. Pełny producer artifact-hash
+replay i kwalifikacja operatora nadal należą do odrębnych bramek R4.
+| Source ID | Plik | Symbol | Zakres dowodu |
+| --- | --- | --- | --- |
+| source-comsol-primary-equilibrium-gate | scripts/validate_comsol_dispersion_scientific_gate.py | _validate_primary_equilibrium | Wymaga accepted equilibrium/linearization dla każdego primary sample i selected mode; exact producer/consumer preimage replay wiąże bieżący MaterialIR. |
+| source-comsol-primary-equilibrium-reader | scripts/comsol_equilibrium_artifacts.py | read_sample_equilibrium | Weryfikuje przyjęty artifact, per-mode content hashes, bieżący mesh/external-field/physics i znormalizowane magnetyczne m0; current MaterialIR replay wykonuje gate. |
+| source-comsol-primary-equilibrium-regression | scripts/test_validate_comsol_dispersion_scientific_gate.py | test_primary_equilibrium_is_mandatory_for_c0_c1_a1 | Przechodzi publiczną validate_case dla C0/C1/A1 oraz odrzuca brakujące lub niespójne wiązania bez zmiany stosowalności KS. |
+| source-comsol-primary-equilibrium-negative-regression | scripts/test_validate_comsol_dispersion_scientific_gate.py | test_primary_equilibrium_rejects_stale_and_mismatched_bindings | Odrzuca brak mode metadata, nieaktualny digest stanu, błędny source run/topology, materiał/fizykę oraz nieodtworzony identity preimage. |
+| source-fem-producer-material-preimage | scripts/fem_producer_provenance_replay.py | _validate_material_preimages_from_exact_bytes | Odtwarza dokładne raw preimage producer i consumer oraz porównuje ich fizyczną projekcję z zaakceptowanym podpisem Rust. |
+| source-fem-producer-material-preimage-regression | scripts/test_fem_producer_provenance_replay.py | test_material_preimage_projection_matches_rust_zero_ku_rules | Pokrywa brak Ku, fizyczną projekcję V1/V2 przy zerowym Ku oraz kanoniczne reuse z różnym raw provenance i zgodną fizyką. |
+| source-comsol-primary-canonical-v8-v7-regression | scripts/test_validate_comsol_dispersion_scientific_gate.py | test_primary_canonical_v8_v7_reuse_binds_both_raw_material_plans | Public validate_case dopuszcza różne producer/consumer raw preimage’y przy zgodnej fizycznej projekcji; accepted v8/v7 raw signature pozostaje consumer-bound. |
+| source-comsol-primary-canonical-material-regression | scripts/test_validate_comsol_dispersion_scientific_gate.py | test_primary_canonical_v8_v7_rejects_current_physical_material_changes | Odrzuca self-consistent consumer raw MaterialIR po zmianie Ms, A, Ku, ms_field lub a_field wobec zaakceptowanego producer physical signature. |
+| source-comsol-primary-ku0-preimage-regression | scripts/test_validate_comsol_dispersion_scientific_gate.py | test_primary_canonical_ku0_uses_physical_v1_preimage | Public canonical v8/v7 path zachowuje fizyczny EquilibriumMaterialSignaturePreimage.v1 dla jawnego Ku=0 z authored zerową osią. |

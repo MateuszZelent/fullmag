@@ -37,7 +37,9 @@ try:
     )
     from fem_equilibrium_field_replay import ValidationError
     from fem_equilibrium_identity_replay import (
+        EquilibriumIdentityReplayError,
         replay_equilibrium_identity_preimages,
+        replay_preimage_json,
     )
     from fem_linearization_identity_replay import (
         IDENTITY_FIELDS,
@@ -57,7 +59,9 @@ except ModuleNotFoundError:  # pragma: no cover - package import fallback
     )
     from scripts.fem_equilibrium_field_replay import ValidationError
     from scripts.fem_equilibrium_identity_replay import (
+        EquilibriumIdentityReplayError,
         replay_equilibrium_identity_preimages,
+        replay_preimage_json,
     )
     from scripts.fem_linearization_identity_replay import (
         IDENTITY_FIELDS,
@@ -457,19 +461,18 @@ def _validate_identity_source_bindings(
     if type(node_value) is not int or node_value <= 0 or node_value != node_count:
         _fail("linearization identity.node_count does not match source mesh/m0")
 
-    v2 = material.get("uniaxial_anisotropy") is not None
+    producer_v2 = material.get("uniaxial_anisotropy") is not None
+    consumer_material, _ = _identity_preimage_object(
+        identity.get("material_provenance_preimage_json"),
+        "linearization identity.material_provenance_preimage_json",
+    )
+    consumer_v2 = consumer_material.get("uniaxial_anisotropy") is not None
     expected_family = (
-        "equilibrium_artifact.v8",
-        "LinearizationState.v7",
-        "CertifiedFemEquilibriumFields.v2",
-        "RecomputedFemLinearizationCertificate.v2",
-        "canonical_equilibrium_material.v2",
-    ) if v2 else (
-        "equilibrium_artifact.v7",
-        "LinearizationState.v6",
-        "CertifiedFemEquilibriumFields.v1",
-        "RecomputedFemLinearizationCertificate.v1",
-        "raw_material.v1",
+        "equilibrium_artifact.v8" if consumer_v2 else "equilibrium_artifact.v7",
+        "LinearizationState.v7" if consumer_v2 else "LinearizationState.v6",
+        "CertifiedFemEquilibriumFields.v2" if producer_v2 else "CertifiedFemEquilibriumFields.v1",
+        "RecomputedFemLinearizationCertificate.v2" if producer_v2 else "RecomputedFemLinearizationCertificate.v1",
+        "canonical_equilibrium_material.v2" if consumer_v2 else "raw_material.v1",
     )
     for name, expected in zip(
         (
@@ -1063,6 +1066,132 @@ def _m0_content_digest(m0: list[list[float]]) -> str:
     return "sha256:" + digest.hexdigest()
 
 
+def _validate_material_preimages_from_exact_bytes(
+    identity_raw: bytes,
+    material: Mapping[str, Any],
+    *,
+    consumer_plan_material: Mapping[str, Any] | None = None,
+) -> Mapping[str, str]:
+    """Bind producer and consumer raw plans to one exact physical identity.
+
+    Rust keeps physical V2 for uniform-Ms explicit Ku=0 with a valid axis,
+    but projects Ku=0 to physical V1 when Ms is spatial or the authored axis
+    is zero. Artifact-family selection separately depends on Ku option presence.
+    """
+    try:
+        identity = strict_json_object(identity_raw, "linearization identity")
+        if identity.get("schema_version") != "linearization_identity.v2":
+            _fail("linearization identity has an unsupported schema")
+        physical_signature = replay_preimage_json(
+            identity.get("equilibrium_material_preimage_json"),
+            identity.get("equilibrium_material_signature"),
+            "equilibrium_material",
+        )
+        producer_signature = replay_preimage_json(
+            identity.get("producer_material_provenance_preimage_json"),
+            identity.get("producer_material_provenance_signature"),
+            "raw_material",
+        )
+        consumer_signature = replay_preimage_json(
+            identity.get("material_provenance_preimage_json"),
+            identity.get("material_provenance_signature"),
+            "raw_material",
+        )
+    except (IdentityReplayError, EquilibriumIdentityReplayError, ValueError, TypeError) as error:
+        raise ProducerProvenanceReplayError(
+            f"equilibrium identity material preimage replay failed: {error}"
+        ) from error
+
+    def preimage(key: str, label: str) -> Mapping[str, Any]:
+        value = identity.get(key)
+        if type(value) is not str:
+            _fail(f"identity.{key} must be a string")
+        try:
+            return strict_json_object(value.encode("utf-8"), label)
+        except IdentityReplayError as error:
+            raise ProducerProvenanceReplayError(str(error)) from error
+
+    physical = preimage("equilibrium_material_preimage_json", "equilibrium material preimage")
+    producer_material = preimage(
+        "producer_material_provenance_preimage_json", "producer raw material preimage"
+    )
+    consumer_material = preimage(
+        "material_provenance_preimage_json", "consumer raw material preimage"
+    )
+    _same_json(producer_material, material, "producer raw material vs producer plan.material")
+    if consumer_plan_material is not None:
+        _same_json(
+            consumer_material,
+            consumer_plan_material,
+            "consumer raw material vs consumer plan.material",
+        )
+
+    def expected_physical_preimage(plan_material: Mapping[str, Any], label: str) -> Mapping[str, Any]:
+        ku = plan_material.get("uniaxial_anisotropy")
+        ms_field = plan_material.get("ms_field")
+        axis = plan_material.get("anisotropy_axis")
+        zero_axis = axis is not None and all(
+            _finite_number(value, f"{label}.anisotropy_axis") == 0.0
+            for value in axis
+        )
+        physical_v2 = ku is not None and not (
+            _finite_number(ku, f"{label}.uniaxial_anisotropy") == 0.0
+            and (ms_field is not None or zero_axis)
+        )
+        expected = {
+            "schema_version": (
+                "EquilibriumMaterialSignaturePreimage.v2"
+                if physical_v2
+                else "EquilibriumMaterialSignaturePreimage.v1"
+            ),
+            "saturation_magnetisation_a_per_m": plan_material["saturation_magnetisation"],
+            "exchange_stiffness_j_per_m": plan_material["exchange_stiffness"],
+            "saturation_magnetisation_field_a_per_m": ms_field,
+            "exchange_stiffness_field_j_per_m": plan_material.get("a_field"),
+        }
+        if physical_v2:
+            expected.update(
+                {
+                    "uniaxial_anisotropy_j_per_m3": (
+                        0.0 if float(ku) == 0.0 else ku
+                    ),
+                    "canonical_uniaxial_axis": _canonical_axis(plan_material),
+                }
+            )
+        return expected
+
+    source_physical = expected_physical_preimage(material, "producer plan.material")
+    _same_json(physical, source_physical, "equilibrium material vs producer plan")
+    consumer_physical = expected_physical_preimage(
+        consumer_material, "consumer plan.material"
+    )
+    _same_json(
+        physical,
+        consumer_physical,
+        "consumer equilibrium material vs accepted producer material",
+    )
+    consumer_is_canonical = consumer_material.get("uniaxial_anisotropy") is not None
+    expected_kind = (
+        "canonical_equilibrium_material.v2"
+        if consumer_is_canonical
+        else "raw_material.v1"
+    )
+    if identity.get("material_identity_kind") != expected_kind:
+        _fail("linearization identity material identity family does not match consumer material")
+    if consumer_is_canonical:
+        if identity.get("material_signature") != physical_signature:
+            _fail("canonical consumer material signature differs from accepted physical identity")
+    elif (
+        identity.get("material_signature") != consumer_signature
+        or producer_signature != consumer_signature
+    ):
+        _fail("legacy material_signature must equal the producer and consumer raw material digest")
+    return {
+        "equilibrium_material_signature": physical_signature,
+        "producer_material_provenance_signature": producer_signature,
+        "material_provenance_signature": consumer_signature,
+    }
+
 def _validate_physical_preimages_from_exact_bytes(
     identity_raw: bytes,
     plan: Mapping[str, Any],
@@ -1085,28 +1214,11 @@ def _validate_physical_preimages_from_exact_bytes(
         except IdentityReplayError as error:
             raise ProducerProvenanceReplayError(str(error)) from error
 
-    physical = preimage("equilibrium_material_preimage_json", "equilibrium material preimage")
-    raw_material = preimage("producer_material_provenance_preimage_json", "producer raw material preimage")
-    static = preimage("equilibrium_static_physics_preimage_json", "equilibrium static physics preimage")
-    boundary = preimage("equilibrium_boundary_preimage_json", "equilibrium boundary preimage")
-    _same_json(raw_material, material, "producer raw material vs source plan.material")
-    expected_material = {
-        "schema_version": "EquilibriumMaterialSignaturePreimage.v2"
-        if material.get("uniaxial_anisotropy") is not None
-        else "EquilibriumMaterialSignaturePreimage.v1",
-        "saturation_magnetisation_a_per_m": material["saturation_magnetisation"],
-        "exchange_stiffness_j_per_m": material["exchange_stiffness"],
-        "saturation_magnetisation_field_a_per_m": material.get("ms_field"),
-        "exchange_stiffness_field_j_per_m": material.get("a_field"),
-    }
-    if material.get("uniaxial_anisotropy") is not None:
-        expected_material.update(
-            {
-                "uniaxial_anisotropy_j_per_m3": material["uniaxial_anisotropy"],
-                "canonical_uniaxial_axis": _canonical_axis(material),
-            }
-        )
-    _same_json(physical, expected_material, "equilibrium material vs source plan")
+    material_signatures = _validate_material_preimages_from_exact_bytes(identity_raw, material)
+    if any(signatures.get(key) != value for key, value in material_signatures.items()):
+        _fail("equilibrium identity material signatures changed during preimage replay")
+    static = preimage("equilibrium_static_physics_preimage_json", "static physics preimage")
+    boundary = preimage("equilibrium_boundary_preimage_json", "boundary preimage")
     _same_json(
         static,
         {
