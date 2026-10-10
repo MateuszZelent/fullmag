@@ -98,6 +98,16 @@ CONTRACT_PROFILES: dict[str, dict[str, Any]] = {
                 ],
             },
             {
+                "name": "fem_modal_eigen_mixed_dense_contract",
+                "source_suffix": "backends/fem/tests/frequency_domain/modal_eigen_contract_test.cpp",
+                "marker": "PASS: modal_shared_domain_floquet_mixed_dense_real_split_contract",
+                "compile_definitions": [
+                    "-DFULLMAG_HAS_MFEM_STACK=1",
+                    "-DFULLMAG_FEM_WITH_SLEPC=1",
+                    "-DFULLMAG_HAS_CUDA_RUNTIME=0",
+                ],
+            },
+            {
                 "name": "fem_floquet_modal_solver_contract",
                 "source_suffix": "backends/fem/tests/frequency_domain/floquet_modal_solver_test.cpp",
                 "marker": "PASS: fem_floquet_modal_solver_contract",

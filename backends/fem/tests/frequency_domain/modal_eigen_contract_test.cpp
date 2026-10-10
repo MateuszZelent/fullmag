@@ -2956,7 +2956,8 @@ void verify_native_count_fixture_composed_operator(
 FullmagFemModalEigenRequest make_floquet_contour_request(
     const FloquetContourSharedDomainFixture &fixture,
     const double *stiffness,
-    const double *gyrotropic)
+    const double *gyrotropic,
+    std::uint64_t tangent_dof_count = 0u)
 {
     FullmagFemModalEigenRequest request = base_request();
     request.target_kind = "frequency_window";
@@ -2967,8 +2968,11 @@ FullmagFemModalEigenRequest make_floquet_contour_request(
     request.eigensolver_family = 2;
     request.completeness_policy = 1;
     request.execution_target = FULLMAG_FEM_MODAL_EXECUTION_PRODUCTION_CPU;
-    request.mfem_operator_enabled = 1;
-    request.mfem_tangent_dof_count = 2u;
+    const bool has_dense_descriptor =
+        stiffness != nullptr && gyrotropic != nullptr;
+    request.mfem_operator_enabled = has_dense_descriptor ? 1 : 0;
+    request.mfem_tangent_dof_count =
+        has_dense_descriptor ? tangent_dof_count : 0u;
     request.mfem_stiffness_matrix_row_major = stiffness;
     request.mfem_gyrotropic_matrix_row_major = gyrotropic;
     request.operator_request.include_demag = 1;
@@ -3007,6 +3011,11 @@ void modal_shared_domain_provider_failure_status_is_consistent()
         fixture.descriptor.linearization_state_digest;
 
     CsrOwned magnetic_stiffness{};
+    // Keep a positive synthetic total A_qq in the minimal payload so the
+    // shared-domain sparse Floquet pencil has a spectrum. The descriptor
+    // advertises its supplied collinear static field but no Ku/anisotropy
+    // term; the production owner separately assembles geometric tangent mass
+    // from this mesh and its periodic classes.
     magnetic_stiffness.rows = 10u;
     magnetic_stiffness.columns = 10u;
     magnetic_stiffness.row_offsets.push_back(0u);
@@ -3035,8 +3044,18 @@ void modal_shared_domain_provider_failure_status_is_consistent()
     fixture.descriptor.uniaxial_anisotropy_field_count =
         unsupported_uniaxial_fields.size();
 
-    constexpr double stiffness[] = {1.0, 0.0, 0.0, 1.0};
-    constexpr double gyrotropic[] = {0.0, -1.0, 1.0, 0.0};
+    constexpr std::array<double, 16> stiffness{{
+        1.0, 0.0, 0.0, 0.0,
+        0.0, 1.0, 0.0, 0.0,
+        0.0, 0.0, 1.0, 0.0,
+        0.0, 0.0, 0.0, 1.0,
+    }};
+    constexpr std::array<double, 16> gyrotropic{{
+        0.0, -1.0, 0.0, 0.0,
+        1.0, 0.0, 0.0, 0.0,
+        0.0, 0.0, 0.0, -1.0,
+        0.0, 0.0, 1.0, 0.0,
+    }};
     FullmagFemModalEigenRequest sparse_provider_failure_request =
         make_floquet_contour_request(fixture, nullptr, nullptr);
     sparse_provider_failure_request.target_kind = "nearest_frequency";
@@ -3064,7 +3083,8 @@ void modal_shared_domain_provider_failure_status_is_consistent()
     fullmag_fem_frequency_domain_result_destroy(&result);
 
     FullmagFemModalEigenRequest dense_provider_failure_request =
-        make_floquet_contour_request(fixture, stiffness, gyrotropic);
+        make_floquet_contour_request(
+            fixture, stiffness.data(), gyrotropic.data(), 4u);
     dense_provider_failure_request.target_kind = "nearest_frequency";
     dense_provider_failure_request.target_frequency_hz = 0.16;
     dense_provider_failure_request.frequency_min_hz = 0.0;
@@ -3089,24 +3109,21 @@ void modal_shared_domain_provider_failure_status_is_consistent()
 #endif
 }
 
-void modal_floquet_shared_domain_original_descriptor_certification_is_fail_closed()
-{
 #if FULLMAG_HAS_MFEM_STACK && FULLMAG_FEM_WITH_SLEPC
-    FloquetContourSharedDomainFixture fixture{};
+void initialize_floquet_original_descriptor_fixture(
+    FloquetContourSharedDomainFixture &fixture,
+    CsrOwned &magnetic_stiffness)
+{
     fixture.initialize();
     fixture.descriptor.term_presence_mask =
         FULLMAG_FEM_MODAL_LINEARIZATION_TERM_FIELD;
     fixture.descriptor.field_term_digest =
         fixture.descriptor.linearization_state_digest;
-
-    constexpr double stiffness[] = {1.0, 0.0, 0.0, 1.0};
-    constexpr double gyrotropic[] = {0.0, -1.0, 1.0, 0.0};
     // Keep a positive synthetic total A_qq in the minimal payload so the
     // shared-domain sparse Floquet pencil has a spectrum. The descriptor
     // advertises its supplied collinear static field but no Ku/anisotropy
     // term; the production owner separately assembles geometric tangent mass
     // from this mesh and its periodic classes.
-    CsrOwned magnetic_stiffness{};
     magnetic_stiffness.rows = 10u;
     magnetic_stiffness.columns = 10u;
     magnetic_stiffness.row_offsets.push_back(0u);
@@ -3117,6 +3134,262 @@ void modal_floquet_shared_domain_original_descriptor_certification_is_fail_close
             static_cast<std::uint32_t>(magnetic_stiffness.values.size()));
     }
     fixture.payload.magnetic_a_qq_csr = magnetic_stiffness.view();
+}
+
+void modal_floquet_shared_domain_contour_original_k_certification(
+    FloquetContourSharedDomainFixture &fixture,
+    CsrOwned &magnetic_stiffness)
+{
+    // Rebind the view while its owning CSR buffer remains alive in the caller.
+    fixture.payload.magnetic_a_qq_csr = magnetic_stiffness.view();
+    constexpr std::array<double, 16> phase_rejection_stiffness{{
+        1.0, 0.0, 0.0, 0.0,
+        0.0, 1.0, 0.0, 0.0,
+        0.0, 0.0, 1.0, 0.0,
+        0.0, 0.0, 0.0, 1.0,
+    }};
+    constexpr std::array<double, 16> phase_rejection_gyrotropic{{
+        0.0, -1.0, 0.0, 0.0,
+        1.0, 0.0, 0.0, 0.0,
+        0.0, 0.0, 0.0, -1.0,
+        0.0, 0.0, 1.0, 0.0,
+    }};
+    static constexpr char kContourOperatorDiagnostics[] =
+        "{\"operator_family\":\"mfem_linearized_llg\","
+        "\"payload_kind\":\"bloch_floquet_tangent_operator\"}";
+    FullmagFemFrequencyDomainResult result{};
+    FullmagFemModalEigenRequest contour_phase_request =
+        make_floquet_contour_request(
+            fixture,
+            phase_rejection_stiffness.data(),
+            phase_rejection_gyrotropic.data(),
+            4u);
+    contour_phase_request.operator_request.operator_diagnostics_json =
+        kContourOperatorDiagnostics;
+    contour_phase_request.phase_convention =
+        FULLMAG_FEM_FREQUENCY_DOMAIN_PHASE_EXP_MINUS_I_OMEGA_T;
+    reset_progress_capture();
+    contour_phase_request.progress_callback = capture_progress;
+    result = fullmag_fem_modal_eigen_solve(&contour_phase_request);
+    check(result.status == FULLMAG_FEM_FD_VALIDATION_ERROR,
+          "Floquet contour must reject the unsupported negative-i omega phase convention");
+    check(contains(result.diagnostics_json,
+                   "contour_interval_phase_convention_unsupported"),
+          "Floquet contour phase rejection must expose a stable reason");
+    check(contains(result.result_json, "\"accepted_mode_count\":0"),
+          "Floquet contour phase rejection must publish no accepted modes");
+    check(g_progress_event_count == 0,
+          "Floquet contour phase rejection must publish no progress events");
+    fullmag_fem_frequency_domain_result_destroy(&result);
+
+    fd::PoissonAirboxSharedDomainAssemblyResult provider_assembly{};
+    fd::FloquetAirboxDynamicDemagKResult provider_result{};
+    check(fd::assemble_poisson_airbox_shared_domain_payload(
+              fixture.payload,
+              &provider_assembly,
+              fixture.native_pairs.data(),
+              fixture.native_pairs.size(),
+              &fixture.k_vector,
+              &provider_result) == fd::FrequencyDomainStatus::ok,
+          "Floquet contour regression provider assembly must succeed");
+    check(provider_result.reconstruction.q_count == 2u &&
+              provider_result.reconstruction.phi_count > 0u &&
+              provider_result.reconstruction.magnetic_stiffness_real_split_value_count == 16u,
+          "Floquet contour provider must bind the bounded original K dimension");
+
+    const std::vector<double> caller_stiffness =
+        complex_csr_to_real_split(provider_assembly.floquet_a_qq);
+    const std::vector<double> caller_gyrotropic =
+        complex_csr_to_real_split(provider_assembly.floquet_b_qq);
+    const std::vector<double> caller_tangent_mass =
+        complex_csr_to_real_split(
+            provider_assembly.floquet_positive_tangent_mass);
+    check(caller_stiffness.size() == 16u &&
+              caller_gyrotropic.size() == 16u &&
+              caller_tangent_mass.size() == 16u,
+          "Floquet contour regression caller K/G/M use owned 4-by-4 real-split buffers");
+    double caller_stiffness_max_abs = 0.0;
+    for (double value : caller_stiffness) {
+        check(std::isfinite(value),
+              "Floquet contour regression caller K has finite real-split values");
+        caller_stiffness_max_abs =
+            std::max(caller_stiffness_max_abs, std::abs(value));
+    }
+    check(std::isfinite(caller_stiffness_max_abs) &&
+              caller_stiffness_max_abs > 0.0,
+          "Floquet contour regression caller K has a finite nonzero physical scale");
+    std::vector<double> effective_stiffness = caller_stiffness;
+    for (std::size_t index = 0u; index < effective_stiffness.size(); ++index) {
+        effective_stiffness[index] += provider_result.real_split_row_major[index];
+    }
+    constexpr double contour_two_pi = 2.0 * 3.14159265358979323846;
+    const double contour_kittel_reference_hz =
+        fixture.payload.gamma0_m_per_a_s * fixture.h_eff[2] /
+        contour_two_pi;
+    const double contour_energy_upper_hz =
+        fixture.payload.gamma0_m_per_a_s *
+        (fixture.h_eff[2] +
+         fixture.payload.uniform_saturation_magnetisation_a_per_m) /
+        contour_two_pi;
+    const double contour_frequency_min_hz =
+        0.90 * contour_kittel_reference_hz;
+    const double contour_frequency_max_hz =
+        1.03 * contour_energy_upper_hz;
+    check(std::isfinite(contour_kittel_reference_hz) &&
+              std::isfinite(contour_energy_upper_hz) &&
+              contour_frequency_min_hz < contour_kittel_reference_hz &&
+              contour_kittel_reference_hz < contour_energy_upper_hz &&
+              contour_energy_upper_hz < contour_frequency_max_hz,
+          "Floquet contour regression uses the fixture's independent Kittel-to-energy frequency bracket");
+    fd::ContourIntervalSolverRequest contour_request{};
+    contour_request.frequency_min_hz = contour_frequency_min_hz;
+    contour_request.frequency_max_hz = contour_frequency_max_hz;
+    contour_request.requested_mode_count = 1;
+    contour_request.residual_tolerance = 1.0e-10;
+    contour_request.max_outer_iterations = 32;
+    contour_request.max_linear_iterations = 128;
+    contour_request.eigensolver_family = fd::kModalEigensolverFamilyContourInterval;
+    contour_request.completeness_policy = 1;
+    contour_request.contour_point_count = 16;
+    contour_request.tangent_dof_count = 4u;
+    contour_request.stiffness_matrix_row_major = effective_stiffness.data();
+    contour_request.gyrotropic_mass_matrix_row_major = caller_gyrotropic.data();
+    const fd::ContourIntervalSolveResult contour_result =
+        fd::solve_tiny_contour_interval(contour_request);
+    check(contour_result.ok && !contour_result.modes.empty(),
+          "Floquet contour regression must obtain a mode from the provider Schur pencil");
+
+    fd::FloquetPotentialReconstruction reconstruction = provider_result.reconstruction;
+    reconstruction.magnetic_stiffness_real_split = caller_stiffness.data();
+    reconstruction.magnetic_stiffness_real_split_value_count =
+        caller_stiffness.size();
+    fd::FloquetModalResidual accepted{};
+    check(fd::certify_floquet_realified_mode(
+              reconstruction,
+              caller_stiffness.data(),
+              caller_gyrotropic.data(),
+              contour_result.modes.front().mode_vector,
+              contour_result.modes.front().eigenvalue,
+              &accepted) == fd::FrequencyDomainStatus::ok &&
+              accepted.certified && !accepted.potential_real_split.empty(),
+          "the contour mode must pass against the original magnetic descriptor");
+    check(std::isfinite(accepted.magnetic_relative_residual) &&
+              accepted.magnetic_relative_residual <= 1.0e-8 &&
+              std::isfinite(accepted.potential_relative_residual) &&
+              accepted.potential_relative_residual <= 1.0e-8,
+          "the original magnetic and potential descriptor residuals meet the 1e-8 gate");
+
+    std::vector<double> perturbed_stiffness = caller_stiffness;
+    for (double &value : perturbed_stiffness) {
+        value *= 1.05;
+    }
+    fd::FloquetModalResidual rejected{};
+    const fd::FrequencyDomainStatus perturbed_status =
+        fd::certify_floquet_realified_mode(
+            reconstruction,
+            perturbed_stiffness.data(),
+            caller_gyrotropic.data(),
+            contour_result.modes.front().mode_vector,
+            contour_result.modes.front().eigenvalue,
+            &rejected);
+    check(perturbed_status != fd::FrequencyDomainStatus::ok || !rejected.certified,
+          "perturbing original K must reject the Floquet descriptor certificate");
+    check(rejected.potential_real_split.empty(),
+          "a rejected original-K certificate must publish no potential payload");
+
+    fd::ModalEigenRequest mismatched_request{};
+    mismatched_request.target_kind = "frequency_window";
+    mismatched_request.frequency_min_hz = 0.01;
+    mismatched_request.frequency_max_hz = 1.0;
+    mismatched_request.requested_mode_count = 1;
+    mismatched_request.residual_tolerance = 1.0e-10;
+    mismatched_request.max_outer_iterations = 32;
+    mismatched_request.max_linear_iterations = 128;
+    mismatched_request.eigensolver_family = fd::kModalEigensolverFamilyContourInterval;
+    mismatched_request.completeness_policy = 1;
+    mismatched_request.execution_target = fd::ModalExecutionTarget::production_cpu;
+    mismatched_request.mfem_operator_enabled = 1;
+    mismatched_request.mfem_tangent_dof_count = 4u;
+    mismatched_request.mfem_stiffness_matrix_row_major = caller_stiffness.data();
+    mismatched_request.mfem_gyrotropic_matrix_row_major = caller_gyrotropic.data();
+    mismatched_request.mfem_mass_matrix_row_major = caller_tangent_mass.data();
+    mismatched_request.dynamic_demag_k_tangent_matrix_row_major =
+        provider_result.real_split_row_major.data();
+    mismatched_request.dynamic_demag_k_tangent_matrix_value_count =
+        provider_result.real_split_row_major.size();
+    mismatched_request.operator_request.include_demag = 1;
+    mismatched_request.operator_request.demag_realization = "floquet_airbox";
+    mismatched_request.operator_request.spin_wave_bc_kind = "floquet";
+    mismatched_request.operator_request.k_vector_rad_m = fixture.k_vector.data();
+    mismatched_request.operator_request.k_vector_len = 3;
+    mismatched_request.floquet_periodic_pairs = fixture.native_pairs.data();
+    mismatched_request.floquet_periodic_pair_count = fixture.native_pairs.size();
+    mismatched_request.phase_convention =
+        fd::FrequencyDomainPhaseConvention::exp_i_omega_t;
+    fd::FloquetPotentialReconstruction mismatched_reconstruction = reconstruction;
+    mismatched_reconstruction.magnetic_stiffness_real_split =
+        perturbed_stiffness.data();
+    reset_progress_capture();
+    mismatched_request.progress_callback = capture_progress;
+    const fd::FrequencyDomainContractResult mismatched_result =
+        fd::production_cpu_modal_eigen_unavailable(
+            mismatched_request,
+            &mismatched_reconstruction);
+    check(mismatched_result.status == fd::FrequencyDomainStatus::solve_error,
+          "the contour adapter must fail when its original K certificate is perturbed");
+    check(contains(mismatched_result.result_json.c_str(), "\"accepted_mode_count\":0"),
+          "a failed original-K contour certificate must publish no accepted modes");
+    check(contains(mismatched_result.result_json.c_str(),
+                   "\"floquet_descriptor_certified\":false"),
+          "a failed original-K contour certificate must publish an explicit false marker");
+    check(!contains(mismatched_result.result_json.c_str(), "\"potential_vector_real\":"),
+          "a failed original-K contour certificate must publish no potential payload");
+    check(g_progress_event_count == 0,
+          "a failed original-K contour certificate must publish no progress events");
+
+    fd::FloquetPotentialReconstruction malformed = reconstruction;
+    malformed.magnetic_stiffness_real_split_value_count -= 1u;
+    fd::FloquetModalResidual malformed_result{};
+    check(fd::certify_floquet_realified_mode(
+              malformed,
+              caller_stiffness.data(),
+              caller_gyrotropic.data(),
+              contour_result.modes.front().mode_vector,
+              contour_result.modes.front().eigenvalue,
+              &malformed_result) == fd::FrequencyDomainStatus::validation_error &&
+              !malformed_result.certified && malformed_result.potential_real_split.empty(),
+          "a mismatched original-K bound must fail before publishing a potential");
+
+    fd::FloquetPotentialReconstruction malformed_adapter = reconstruction;
+    malformed_adapter.magnetic_stiffness_real_split_value_count -= 1u;
+    reset_progress_capture();
+    mismatched_request.progress_callback = capture_progress;
+    const fd::FrequencyDomainContractResult malformed_adapter_result =
+        fd::production_cpu_modal_eigen_unavailable(
+            mismatched_request,
+            &malformed_adapter);
+    check(malformed_adapter_result.status == fd::FrequencyDomainStatus::solve_error,
+          "the contour adapter must reject a mismatched original-K bound");
+    check(contains(malformed_adapter_result.result_json.c_str(),
+                   "\"accepted_mode_count\":0") &&
+              contains(malformed_adapter_result.result_json.c_str(),
+                       "\"floquet_descriptor_certified\":false"),
+          "a mismatched original-K bound must publish no accepted modes and an explicit false marker");
+    check(!contains(malformed_adapter_result.result_json.c_str(),
+                    "\"potential_vector_real\":"),
+          "a mismatched original-K bound must publish no potential payload");
+    check(g_progress_event_count == 0,
+          "a mismatched original-K bound must publish no progress events");
+}
+#endif
+
+void modal_floquet_shared_domain_original_descriptor_certification_is_fail_closed()
+{
+#if FULLMAG_HAS_MFEM_STACK && FULLMAG_FEM_WITH_SLEPC
+    FloquetContourSharedDomainFixture fixture{};
+    CsrOwned magnetic_stiffness{};
+    initialize_floquet_original_descriptor_fixture(
+        fixture, magnetic_stiffness);
 
     reset_progress_capture();
     FullmagFemModalEigenRequest request =
@@ -3133,10 +3406,6 @@ void modal_floquet_shared_domain_original_descriptor_certification_is_fail_close
         "\"payload_kind\":\"certified_shared_domain\","
         "\"operator_diagnostics\":{\"shared_domain_operator_provenance\":"
         "{\"scope\":\"nested-only\"}}}";
-    static constexpr char kContourOperatorDiagnostics[] =
-        "{\"operator_family\":\"mfem_linearized_llg\","
-        "\"payload_kind\":\"bloch_floquet_tangent_operator\"}";
-
     fd::ModalEigenRequest native_request{};
     native_request.abi_version = fd::kFrequencyDomainAbiVersion;
     native_request.struct_size = sizeof(native_request);
@@ -3355,25 +3624,37 @@ void modal_floquet_shared_domain_original_descriptor_certification_is_fail_close
           "shared-domain Floquet window progress must follow descriptor certification");
     fullmag_fem_frequency_domain_result_destroy(&result);
 
-    FullmagFemModalEigenRequest contour_phase_request =
-        make_floquet_contour_request(fixture, stiffness, gyrotropic);
-    contour_phase_request.operator_request.operator_diagnostics_json =
-        kContourOperatorDiagnostics;
-    contour_phase_request.phase_convention =
-        FULLMAG_FEM_FREQUENCY_DOMAIN_PHASE_EXP_MINUS_I_OMEGA_T;
-    reset_progress_capture();
-    contour_phase_request.progress_callback = capture_progress;
-    result = fullmag_fem_modal_eigen_solve(&contour_phase_request);
-    check(result.status == FULLMAG_FEM_FD_VALIDATION_ERROR,
-          "Floquet contour must reject the unsupported negative-i omega phase convention");
-    check(contains(result.diagnostics_json,
-                   "contour_interval_phase_convention_unsupported"),
-          "Floquet contour phase rejection must expose a stable reason");
-    check(contains(result.result_json, "\"accepted_mode_count\":0"),
-          "Floquet contour phase rejection must publish no accepted modes");
-    check(g_progress_event_count == 0,
-          "Floquet contour phase rejection must publish no progress events");
-    fullmag_fem_frequency_domain_result_destroy(&result);
+    modal_floquet_shared_domain_contour_original_k_certification(
+        fixture, magnetic_stiffness);
+#endif
+}
+
+void modal_shared_domain_floquet_mixed_dense_real_split_contract()
+{
+#if FULLMAG_HAS_MFEM_STACK && FULLMAG_FEM_WITH_SLEPC
+    FloquetContourSharedDomainFixture fixture{};
+    fixture.initialize();
+    fixture.descriptor.term_presence_mask =
+        FULLMAG_FEM_MODAL_LINEARIZATION_TERM_FIELD;
+    fixture.descriptor.field_term_digest =
+        fixture.descriptor.linearization_state_digest;
+
+    CsrOwned magnetic_stiffness{};
+    // Keep a positive synthetic total A_qq in the minimal payload so the
+    // shared-domain sparse Floquet pencil has a spectrum. The descriptor
+    // advertises its supplied collinear static field but no Ku/anisotropy
+    // term; the production owner separately assembles geometric tangent mass
+    // from this mesh and its periodic classes.
+    magnetic_stiffness.rows = 10u;
+    magnetic_stiffness.columns = 10u;
+    magnetic_stiffness.row_offsets.push_back(0u);
+    for (std::uint32_t row = 0u; row < 10u; ++row) {
+        magnetic_stiffness.column_indices.push_back(row);
+        magnetic_stiffness.values.push_back(1.0);
+        magnetic_stiffness.row_offsets.push_back(
+            static_cast<std::uint32_t>(magnetic_stiffness.values.size()));
+    }
+    fixture.payload.magnetic_a_qq_csr = magnetic_stiffness.view();
 
     fd::PoissonAirboxSharedDomainAssemblyResult provider_assembly{};
     fd::FloquetAirboxDynamicDemagKResult provider_result{};
@@ -3384,149 +3665,202 @@ void modal_floquet_shared_domain_original_descriptor_certification_is_fail_close
               fixture.native_pairs.size(),
               &fixture.k_vector,
               &provider_result) == fd::FrequencyDomainStatus::ok,
-          "Floquet contour regression provider assembly must succeed");
+          "mixed dense Floquet regression assembles its shared-domain provider");
     check(provider_result.reconstruction.q_count == 2u &&
-              provider_result.reconstruction.phi_count > 0u &&
-              provider_result.reconstruction.magnetic_stiffness_real_split_value_count == 16u,
-          "Floquet contour provider must bind the bounded original K dimension");
+              provider_result.real_split_row_major.size() == 16u,
+          "mixed dense Floquet regression derives the provider's 4-by-4 real-split dimension");
 
-    std::vector<double> effective_stiffness(16u, 0.0);
-    for (std::size_t index = 0u; index < effective_stiffness.size(); ++index) {
-        effective_stiffness[index] = provider_result.real_split_row_major[index];
+    const std::vector<double> caller_stiffness =
+        complex_csr_to_real_split(provider_assembly.floquet_a_qq);
+    const std::vector<double> caller_gyrotropic =
+        complex_csr_to_real_split(provider_assembly.floquet_b_qq);
+    const std::vector<double> caller_tangent_mass =
+        complex_csr_to_real_split(
+            provider_assembly.floquet_positive_tangent_mass);
+    check(caller_stiffness.size() == 16u &&
+              caller_gyrotropic.size() == 16u &&
+              caller_tangent_mass.size() == 16u,
+          "mixed dense Floquet regression supplies caller K/G/M with full 4-by-4 real-split storage");
+    double caller_stiffness_max_abs = 0.0;
+    for (double value : caller_stiffness) {
+        check(std::isfinite(value),
+              "mixed dense Floquet caller K contains only finite real-split values");
+        caller_stiffness_max_abs =
+            std::max(caller_stiffness_max_abs, std::abs(value));
     }
-    effective_stiffness[0] += stiffness[0];
-    effective_stiffness[5] += stiffness[1];
-    effective_stiffness[10] += stiffness[2];
-    effective_stiffness[15] += stiffness[3];
-    fd::ContourIntervalSolverRequest contour_request{};
-    contour_request.frequency_min_hz = 0.01;
-    contour_request.frequency_max_hz = 1.0;
-    contour_request.requested_mode_count = 1;
-    contour_request.residual_tolerance = 1.0e-10;
-    contour_request.max_outer_iterations = 32;
-    contour_request.max_linear_iterations = 128;
-    contour_request.eigensolver_family = fd::kModalEigensolverFamilyContourInterval;
-    contour_request.completeness_policy = 1;
-    contour_request.contour_point_count = 16;
-    contour_request.tangent_dof_count = 4u;
-    contour_request.stiffness_matrix_row_major = effective_stiffness.data();
-    contour_request.gyrotropic_mass_matrix_row_major = gyrotropic;
-    const fd::ContourIntervalSolveResult contour_result =
-        fd::solve_tiny_contour_interval(contour_request);
-    check(contour_result.ok && !contour_result.modes.empty(),
-          "Floquet contour regression must obtain a mode from the provider Schur pencil");
+    check(std::isfinite(caller_stiffness_max_abs) &&
+              caller_stiffness_max_abs > 0.0,
+          "mixed dense Floquet caller K has a finite nonzero physical scale");
 
-    fd::FloquetPotentialReconstruction reconstruction = provider_result.reconstruction;
-    reconstruction.magnetic_stiffness_real_split = stiffness;
-    fd::FloquetModalResidual accepted{};
-    check(fd::certify_floquet_realified_mode(
-              reconstruction,
-              stiffness,
-              gyrotropic,
-              contour_result.modes.front().mode_vector,
-              contour_result.modes.front().eigenvalue,
-              &accepted) == fd::FrequencyDomainStatus::ok &&
-              accepted.certified && !accepted.potential_real_split.empty(),
-          "the contour mode must pass against the original magnetic descriptor");
+    constexpr double two_pi = 2.0 * 3.14159265358979323846;
+    const double gamma0_m_per_a_s = fixture.payload.gamma0_m_per_a_s;
+    const double bias_field_a_per_m = fixture.h_eff[2];
+    const double saturation_a_per_m =
+        fixture.payload.uniform_saturation_magnetisation_a_per_m;
+    const double kittel_reference_frequency_hz =
+        gamma0_m_per_a_s * bias_field_a_per_m / two_pi;
+    const double energy_upper_frequency_hz =
+        gamma0_m_per_a_s * (bias_field_a_per_m + saturation_a_per_m) / two_pi;
+    const double frequency_min_hz = 0.90 * kittel_reference_frequency_hz;
+    const double frequency_max_hz = 1.03 * energy_upper_frequency_hz;
+    check(std::isfinite(kittel_reference_frequency_hz) &&
+              std::isfinite(energy_upper_frequency_hz) &&
+              std::isfinite(frequency_min_hz) &&
+              std::isfinite(frequency_max_hz) &&
+              kittel_reference_frequency_hz > 0.0 &&
+              frequency_min_hz < kittel_reference_frequency_hz &&
+              kittel_reference_frequency_hz < energy_upper_frequency_hz &&
+              energy_upper_frequency_hz < frequency_max_hz,
+          "mixed dense Floquet bracket follows the fixture Kittel and demag-energy bounds");
 
-    std::vector<double> perturbed_stiffness(stiffness, stiffness + 4u);
-    perturbed_stiffness[0] += 1.0;
-    fd::FloquetModalResidual rejected{};
-    const fd::FrequencyDomainStatus perturbed_status =
-        fd::certify_floquet_realified_mode(
-            reconstruction,
-            perturbed_stiffness.data(),
-            gyrotropic,
-            contour_result.modes.front().mode_vector,
-            contour_result.modes.front().eigenvalue,
-            &rejected);
-    check(perturbed_status != fd::FrequencyDomainStatus::ok || !rejected.certified,
-          "perturbing original K must reject the Floquet descriptor certificate");
-    check(rejected.potential_real_split.empty(),
-          "a rejected original-K certificate must publish no potential payload");
+    const auto make_mixed_request = [&](const double *stiffness) {
+        FullmagFemModalEigenRequest request = make_floquet_contour_request(
+            fixture, stiffness, caller_gyrotropic.data(), 4u);
+        request.target_frequency_hz = kittel_reference_frequency_hz;
+        request.frequency_min_hz = frequency_min_hz;
+        request.frequency_max_hz = frequency_max_hz;
+        request.eigensolver_family = 1;
+        request.completeness_policy = 0;
+        request.mfem_mass_matrix_row_major = caller_tangent_mass.data();
+        return request;
+    };
 
-    fd::ModalEigenRequest mismatched_request{};
-    mismatched_request.target_kind = "frequency_window";
-    mismatched_request.frequency_min_hz = 0.01;
-    mismatched_request.frequency_max_hz = 1.0;
-    mismatched_request.requested_mode_count = 1;
-    mismatched_request.residual_tolerance = 1.0e-10;
-    mismatched_request.max_outer_iterations = 32;
-    mismatched_request.max_linear_iterations = 128;
-    mismatched_request.eigensolver_family = fd::kModalEigensolverFamilyContourInterval;
-    mismatched_request.completeness_policy = 1;
-    mismatched_request.execution_target = fd::ModalExecutionTarget::production_cpu;
-    mismatched_request.mfem_operator_enabled = 1;
-    mismatched_request.mfem_tangent_dof_count = 2u;
-    mismatched_request.mfem_stiffness_matrix_row_major = stiffness;
-    mismatched_request.mfem_gyrotropic_matrix_row_major = gyrotropic;
-    mismatched_request.dynamic_demag_k_tangent_matrix_row_major =
-        provider_result.real_split_row_major.data();
-    mismatched_request.dynamic_demag_k_tangent_matrix_value_count =
-        provider_result.real_split_row_major.size();
-    mismatched_request.operator_request.include_demag = 1;
-    mismatched_request.operator_request.demag_realization = "floquet_airbox";
-    mismatched_request.operator_request.spin_wave_bc_kind = "floquet";
-    mismatched_request.operator_request.k_vector_rad_m = fixture.k_vector.data();
-    mismatched_request.operator_request.k_vector_len = 3;
-    mismatched_request.floquet_periodic_pairs = fixture.native_pairs.data();
-    mismatched_request.floquet_periodic_pair_count = fixture.native_pairs.size();
-    mismatched_request.phase_convention =
-        fd::FrequencyDomainPhaseConvention::exp_i_omega_t;
-    fd::FloquetPotentialReconstruction mismatched_reconstruction = reconstruction;
-    mismatched_reconstruction.magnetic_stiffness_real_split =
-        perturbed_stiffness.data();
+    FullmagFemModalEigenRequest payload_only_request =
+        make_floquet_contour_request(fixture, nullptr, nullptr);
+    payload_only_request.target_frequency_hz = kittel_reference_frequency_hz;
+    payload_only_request.frequency_min_hz = frequency_min_hz;
+    payload_only_request.frequency_max_hz = frequency_max_hz;
+    payload_only_request.eigensolver_family = 1;
+    payload_only_request.completeness_policy = 0;
+    FullmagFemFrequencyDomainResult payload_only_result =
+        fullmag_fem_modal_eigen_solve(&payload_only_request);
+    check(payload_only_result.status == FULLMAG_FEM_FD_OK &&
+              contains(payload_only_result.result_json,
+                       "\"floquet_descriptor_certified\":true"),
+          "payload-only shared-domain Floquet routing still certifies its provider-owned sparse descriptor");
+    fullmag_fem_frequency_domain_result_destroy(&payload_only_result);
+
+    FullmagFemModalEigenRequest mixed_request =
+        make_mixed_request(caller_stiffness.data());
+    FullmagFemFrequencyDomainResult mixed_result =
+        fullmag_fem_modal_eigen_solve(&mixed_request);
+    check(mixed_result.status == FULLMAG_FEM_FD_OK,
+          "mixed shared-domain Floquet request solves using caller K/G/M and provider K_demag");
+    check(contains(
+              mixed_result.diagnostics_json,
+              "\"deduplication_inner_product\":\"mfem_tangent_mass\"") &&
+              contains(
+                  mixed_result.diagnostics_json,
+                  "\"deduplication_mass_matrix\":\"provided_dense_row_major\""),
+          "mixed shared-domain Floquet solve and deduplication retain the caller's dense tangent mass");
+    check(contains(mixed_result.diagnostics_json,
+                   "\"dynamic_demag_k_operator\":{\"payload_kind\":\"dense_real_split_tangent_matrix\",\"value_count\":16") &&
+              contains(mixed_result.result_json,
+                       "\"floquet_descriptor_certified\":true") &&
+              contains(mixed_result.result_json,
+                       "\"potential_representation\":\"doubled_real_split_complex_coefficients\""),
+          "mixed shared-domain Floquet result certifies the full real-split original descriptor");
+    const double base_frequency_hz = extract_json_number(
+        mixed_result.result_json,
+        "\"frequency_hz\":",
+        "modal_shared_domain_floquet_mixed_dense_real_split_contract_base");
+    const double magnetic_relative_residual = extract_json_number(
+        mixed_result.result_json,
+        "\"magnetic_relative_residual\":",
+        "modal_shared_domain_floquet_mixed_dense_real_split_contract_magnetic_residual");
+    const double potential_relative_residual = extract_json_number(
+        mixed_result.result_json,
+        "\"potential_relative_residual\":",
+        "modal_shared_domain_floquet_mixed_dense_real_split_contract_potential_residual");
+    check(std::isfinite(base_frequency_hz) && base_frequency_hz > 0.0 &&
+              base_frequency_hz >= frequency_min_hz &&
+              base_frequency_hz <= frequency_max_hz &&
+              std::isfinite(magnetic_relative_residual) &&
+              std::isfinite(potential_relative_residual) &&
+              magnetic_relative_residual >= 0.0 &&
+              magnetic_relative_residual <= 1.0e-8 &&
+              potential_relative_residual >= 0.0 &&
+              potential_relative_residual <= 1.0e-8,
+          "mixed shared-domain Floquet output lies in the fixture energy bracket and meets both 1e-8 original-descriptor residual gates");
+    fullmag_fem_frequency_domain_result_destroy(&mixed_result);
+
+    // A dimensionless global scaling preserves the real-split basis and
+    // Hermitian structure while changing only the caller-owned physical K.
+    std::vector<double> perturbed_stiffness = caller_stiffness;
+    constexpr double caller_stiffness_scale = 1.05;
+    for (double &value : perturbed_stiffness) {
+        value *= caller_stiffness_scale;
+    }
+    FullmagFemModalEigenRequest perturbed_request =
+        make_mixed_request(perturbed_stiffness.data());
+    FullmagFemFrequencyDomainResult perturbed_result =
+        fullmag_fem_modal_eigen_solve(&perturbed_request);
+    check(perturbed_result.status == FULLMAG_FEM_FD_OK &&
+              contains(perturbed_result.result_json,
+                       "\"floquet_descriptor_certified\":true"),
+          "a caller-perturbed K still passes its own full descriptor residual certificate");
+    const double perturbed_frequency_hz = extract_json_number(
+        perturbed_result.result_json,
+        "\"frequency_hz\":",
+        "modal_shared_domain_floquet_mixed_dense_real_split_contract_perturbed");
+    const double perturbed_magnetic_relative_residual = extract_json_number(
+        perturbed_result.result_json,
+        "\"magnetic_relative_residual\":",
+        "modal_shared_domain_floquet_mixed_dense_real_split_contract_perturbed_magnetic_residual");
+    const double perturbed_potential_relative_residual = extract_json_number(
+        perturbed_result.result_json,
+        "\"potential_relative_residual\":",
+        "modal_shared_domain_floquet_mixed_dense_real_split_contract_perturbed_potential_residual");
+    check(std::isfinite(perturbed_frequency_hz) &&
+              perturbed_frequency_hz > 0.0 &&
+              perturbed_frequency_hz >= frequency_min_hz &&
+              perturbed_frequency_hz <= frequency_max_hz &&
+              std::isfinite(perturbed_magnetic_relative_residual) &&
+              perturbed_magnetic_relative_residual >= 0.0 &&
+              perturbed_magnetic_relative_residual <= 1.0e-8 &&
+              std::isfinite(perturbed_potential_relative_residual) &&
+              perturbed_potential_relative_residual >= 0.0 &&
+              perturbed_potential_relative_residual <= 1.0e-8 &&
+              std::abs(perturbed_frequency_hz - base_frequency_hz) /
+                      base_frequency_hz >
+                  1.0e-6,
+          "dimensionlessly perturbed caller K changes frequency while both models stay inside the independent bracket and residual gates");
+    fullmag_fem_frequency_domain_result_destroy(&perturbed_result);
+
+    const std::vector<double> legacy_stiffness{
+        1.0, 0.0,
+        0.0, 1.0,
+    };
+    const std::vector<double> legacy_gyrotropic{
+        0.0, -1.0,
+        1.0, 0.0,
+    };
+    const std::vector<double> legacy_mass{
+        1.0, 0.0,
+        0.0, 1.0,
+    };
+    FullmagFemModalEigenRequest legacy_dimension_request =
+        make_floquet_contour_request(
+            fixture,
+            legacy_stiffness.data(),
+            legacy_gyrotropic.data(),
+            2u);
+    legacy_dimension_request.eigensolver_family = 1;
+    legacy_dimension_request.completeness_policy = 0;
+    legacy_dimension_request.mfem_mass_matrix_row_major = legacy_mass.data();
     reset_progress_capture();
-    mismatched_request.progress_callback = capture_progress;
-    const fd::FrequencyDomainContractResult mismatched_result =
-        fd::production_cpu_modal_eigen_unavailable(
-            mismatched_request,
-            &mismatched_reconstruction);
-    check(mismatched_result.status == fd::FrequencyDomainStatus::solve_error,
-          "the contour adapter must fail when its original K certificate is perturbed");
-    check(contains(mismatched_result.result_json.c_str(), "\"accepted_mode_count\":0"),
-          "a failed original-K contour certificate must publish no accepted modes");
-    check(contains(mismatched_result.result_json.c_str(),
-                   "\"floquet_descriptor_certified\":false"),
-          "a failed original-K contour certificate must publish an explicit false marker");
-    check(!contains(mismatched_result.result_json.c_str(), "\"potential_vector_real\":"),
-          "a failed original-K contour certificate must publish no potential payload");
+    legacy_dimension_request.progress_callback = capture_progress;
+    FullmagFemFrequencyDomainResult legacy_dimension_result =
+        fullmag_fem_modal_eigen_solve(&legacy_dimension_request);
+    check(legacy_dimension_result.status == FULLMAG_FEM_FD_VALIDATION_ERROR &&
+              contains(legacy_dimension_result.diagnostics_json,
+                       "\"reason\":\"floquet_shared_domain_dense_real_split_dimension_mismatch\""),
+          "legacy q-dimensional dense K/G/M is rejected before provider demag attachment or reconstruction");
     check(g_progress_event_count == 0,
-          "a failed original-K contour certificate must publish no progress events");
-
-    fd::FloquetPotentialReconstruction malformed = reconstruction;
-    malformed.magnetic_stiffness_real_split_value_count -= 1u;
-    fd::FloquetModalResidual malformed_result{};
-    check(fd::certify_floquet_realified_mode(
-              malformed,
-              stiffness,
-              gyrotropic,
-              contour_result.modes.front().mode_vector,
-              contour_result.modes.front().eigenvalue,
-              &malformed_result) == fd::FrequencyDomainStatus::validation_error &&
-              !malformed_result.certified && malformed_result.potential_real_split.empty(),
-          "a mismatched original-K bound must fail before publishing a potential");
-
-    fd::FloquetPotentialReconstruction malformed_adapter = reconstruction;
-    malformed_adapter.magnetic_stiffness_real_split_value_count -= 1u;
-    reset_progress_capture();
-    mismatched_request.progress_callback = capture_progress;
-    const fd::FrequencyDomainContractResult malformed_adapter_result =
-        fd::production_cpu_modal_eigen_unavailable(
-            mismatched_request,
-            &malformed_adapter);
-    check(malformed_adapter_result.status == fd::FrequencyDomainStatus::solve_error,
-          "the contour adapter must reject a mismatched original-K bound");
-    check(contains(malformed_adapter_result.result_json.c_str(),
-                   "\"accepted_mode_count\":0") &&
-              contains(malformed_adapter_result.result_json.c_str(),
-                       "\"floquet_descriptor_certified\":false"),
-          "a mismatched original-K bound must publish no accepted modes and an explicit false marker");
-    check(!contains(malformed_adapter_result.result_json.c_str(),
-                    "\"potential_vector_real\":"),
-          "a mismatched original-K bound must publish no potential payload");
-    check(g_progress_event_count == 0,
-          "a mismatched original-K bound must publish no progress events");
+          "invalid legacy dense dimensions do not publish solve progress");
+    fullmag_fem_frequency_domain_result_destroy(&legacy_dimension_result);
+#else
+    std::printf("SKIP: modal_shared_domain_floquet_mixed_dense_real_split_requires_mfem_slepc\n");
 #endif
 }
 
@@ -6460,7 +6794,12 @@ void modal_nonzero_k_floquet_shared_domain_nearest_reports_shifted_ksp_diagnosti
     // legacy CSR empty and consumes the native FIELD/DEMAG owner.
     CsrOwned magnetic_stiffness{};
     if (!count_certificate_only) {
-        magnetic_stiffness.rows = 10u;
+        // Keep a positive synthetic total A_qq in the minimal payload so the
+    // shared-domain sparse Floquet pencil has a spectrum. The descriptor
+    // advertises its supplied collinear static field but no Ku/anisotropy
+    // term; the production owner separately assembles geometric tangent mass
+    // from this mesh and its periodic classes.
+    magnetic_stiffness.rows = 10u;
         magnetic_stiffness.columns = 10u;
         magnetic_stiffness.row_offsets.push_back(0u);
         for (std::uint32_t row = 0u; row < 10u; ++row) {
@@ -7630,11 +7969,34 @@ int main(int argc, char **argv)
 #if FULLMAG_HAS_MFEM_STACK && FULLMAG_FEM_WITH_SLEPC
             modal_gamma_cabi_route_preserves_authored_k();
             production_cpu_modal_eigen_direct_entry_validates_floquet_k();
+            modal_floquet_wavevector_validation_precedes_tiny_dispatch();
             std::printf("PASS: native_floquet_gamma_admission_cabi_contract\n");
             return 0;
 #else
             std::fprintf(stderr,
                          "FAIL: --floquet-gamma-admission requires MFEM and SLEPc\n");
+            return 3;
+#endif
+        }
+        if (argc == 2 &&
+            std::strcmp(
+                argv[1],
+                "--floquet-shared-domain-mixed-dense-real-split") == 0) {
+#if FULLMAG_HAS_MFEM_STACK && FULLMAG_FEM_WITH_SLEPC
+            FloquetContourSharedDomainFixture contour_fixture{};
+            CsrOwned contour_magnetic_stiffness{};
+            initialize_floquet_original_descriptor_fixture(
+                contour_fixture, contour_magnetic_stiffness);
+            modal_floquet_shared_domain_contour_original_k_certification(
+                contour_fixture, contour_magnetic_stiffness);
+            modal_shared_domain_floquet_mixed_dense_real_split_contract();
+            std::printf(
+                "PASS: modal_shared_domain_floquet_mixed_dense_real_split_contract\n");
+            return 0;
+#else
+            std::fprintf(
+                stderr,
+                "FAIL: --floquet-shared-domain-mixed-dense-real-split requires MFEM and SLEPc\n");
             return 3;
 #endif
         }
@@ -7713,6 +8075,7 @@ int main(int argc, char **argv)
     frequency_window_wide_auto_selects_contour_interval_solver();
     modal_frequency_window_production_payload_contour_accepts_multiple_modes();
     modal_floquet_shared_domain_original_descriptor_certification_is_fail_closed();
+    modal_shared_domain_floquet_mixed_dense_real_split_contract();
     modal_gamma_cabi_route_preserves_authored_k();
     production_cpu_modal_eigen_direct_entry_validates_floquet_k();
     modal_dynamic_demag_materialization_preserves_legacy_s_sign();

@@ -38,6 +38,11 @@
       "sources": ["source-rust-gamma-k-threshold", "source-rust-plan-gamma-k-threshold", "source-rust-gamma-k-classifier", "source-rust-gamma-k-test", "source-rust-native-gamma-k-threshold", "source-rust-native-empty-k-ffi", "source-native-floquet-k-classifier", "source-native-modal-k-route", "source-native-production-cpu-k-guard", "source-native-floquet-admission-test", "source-native-floquet-cabi-route-test", "source-native-floquet-direct-entry-test"]
     },
     {
+      "id": "eq-0600-floquet-mixed-dense-real-split-extent",
+      "symbols": ["q_complex", "n_real", "N_dense"],
+      "sources": ["source-native-floquet-mixed-dense-contract", "source-native-floquet-mixed-dense-test"]
+    },
+    {
       "id": "eq-0600-p00-reference",
       "symbols": ["P00", "k", "t"],
       "sources": ["source-p00"]
@@ -76,6 +81,9 @@
     {"id": "k_vector", "latex": "$\\mathbf{k}$", "meaning": "selected three-component Bloch/Floquet wavevector", "si_unit": "$\\mathrm{rad\\,m^{-1}}$"},
     {"id": "k_component", "latex": "$k_i$", "meaning": "wavevector component for $i \\in \\{x,y,z\\}$", "si_unit": "$\\mathrm{rad\\,m^{-1}}$"},
     {"id": "epsilon_gamma_component", "latex": "$\\varepsilon_{\\Gamma,\\mathrm{comp}}$", "meaning": "closed componentwise Gamma-admission threshold", "si_unit": "$\\mathrm{rad\\,m^{-1}}$"},
+    {"id": "q_complex", "latex": "$q_{\\mathbb{C}}$", "meaning": "number of complex reduced tangent degrees of freedom before real splitting", "si_unit": "$1$"},
+    {"id": "n_real", "latex": "$n_{\\mathbb{R}}$", "meaning": "number of scalar coordinates in the doubled real-split tangent basis", "si_unit": "$1$"},
+    {"id": "N_dense", "latex": "$N_{\\mathrm{dense}}$", "meaning": "scalar entry count of one square real-split $K$, $G$, $M$, or $K_{\\mathrm{demag}}$ matrix", "si_unit": "$1$"},
     {"id": "t", "latex": "$t$", "meaning": "film thickness", "si_unit": "$\\mathrm{m}$"},
     {
       "id": "M_toy",
@@ -306,6 +314,18 @@
       "path": "backends/fem/tests/frequency_domain/modal_eigen_contract_test.cpp",
       "symbol": "void production_cpu_modal_eigen_direct_entry_validates_floquet_k",
       "responsibility": "Regress direct production invalid/nonfinite Floquet k, empty raw-slice behavior, fixed fallback, and non-Floquet legacy routing."
+    },
+    {
+      "id": "source-native-floquet-mixed-dense-contract",
+      "path": "backends/fem/src/frequency_domain/modal_eigen_solver.cpp",
+      "symbol": "solve_modal_eigen_contract",
+      "responsibility": "Validate mixed shared-domain dense requests against the provider's full doubled real-split dimension while retaining caller K/G/M."
+    },
+    {
+      "id": "source-native-floquet-mixed-dense-test",
+      "path": "backends/fem/tests/frequency_domain/modal_eigen_contract_test.cpp",
+      "symbol": "void modal_shared_domain_floquet_mixed_dense_real_split_contract",
+      "responsibility": "Exercise caller-owned K/G/M, provider K_demag, full descriptor residuals, dimension rejection, and K sensitivity through the C ABI."
     }
   ],
   "public_api": {

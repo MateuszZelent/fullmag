@@ -1183,6 +1183,13 @@ if(FULLMAG_USE_MFEM_STACK AND FULLMAG_FEM_WITH_SLEPC)
         COMMAND fem_modal_eigen_contract --floquet-gamma-admission)
     set_tests_properties(fem_modal_eigen_gamma_admission_contract
         PROPERTIES TIMEOUT 120)
+    # Independently exercise caller-owned real-split descriptors and residual certification.
+    add_custom_target(fem_modal_eigen_mixed_dense_contract
+        DEPENDS fem_modal_eigen_contract)
+    add_test(NAME fem_modal_eigen_mixed_dense_contract
+        COMMAND fem_modal_eigen_contract --floquet-shared-domain-mixed-dense-real-split)
+    set_tests_properties(fem_modal_eigen_mixed_dense_contract
+        PROPERTIES TIMEOUT 120)
 
 endif()
 add_fem_source_facade_contract(

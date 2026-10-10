@@ -2323,6 +2323,45 @@ FrequencyDomainContractResult solve_modal_eigen_contract(
             shared_domain_operator_provenance_json(
                 provider_assembly,
                 "floquet_legacy_dynamic_demag_k_assembly");
+        const std::uint64_t q_dof_count =
+            provider_result.reconstruction.q_count;
+        const std::uint64_t max_value =
+            std::numeric_limits<std::uint64_t>::max();
+        const bool q_doubled_is_representable =
+            q_dof_count > 0u && q_dof_count <= max_value / 2u;
+        const std::uint64_t real_split_tangent_dof_count =
+            q_doubled_is_representable ? 2u * q_dof_count : 0u;
+        const bool dense_extent_is_representable =
+            real_split_tangent_dof_count > 0u &&
+            real_split_tangent_dof_count <=
+                max_value / real_split_tangent_dof_count;
+        const std::uint64_t dense_value_count =
+            dense_extent_is_representable
+                ? real_split_tangent_dof_count * real_split_tangent_dof_count
+                : 0u;
+        const bool dense_value_count_fits_size_t =
+            dense_extent_is_representable &&
+            dense_value_count <= static_cast<std::uint64_t>(
+                std::numeric_limits<std::size_t>::max());
+        if (!dense_value_count_fits_size_t ||
+            request.mfem_tangent_dof_count != real_split_tangent_dof_count ||
+            provider_result.diagnostics.q_dof_count != q_dof_count ||
+            provider_result.real_split_row_major.size() !=
+                static_cast<std::size_t>(dense_value_count)) {
+            FrequencyDomainContractResult result = validation_error_result(
+                "modal_eigen",
+                "native shared-domain Floquet dense descriptor must match the provider's full real-split tangent basis",
+                "floquet_shared_domain_dense_real_split_dimension_mismatch",
+                request.operator_request.operator_diagnostics_json);
+            append_shared_domain_operator_provenance(
+                result, assembled_operator_provenance);
+            set_modal_execution(
+                result,
+                request.execution_target,
+                request.spectral_transform_kind,
+                "production_cpu_floquet_airbox_dynamic_demag_k_dimension_validation");
+            return result;
+        }
         const auto &certificate = provider_result.diagnostics;
         if (!certificate.potential_solve_certified ||
             certificate.certified_rhs_count != certificate.q_dof_count) {

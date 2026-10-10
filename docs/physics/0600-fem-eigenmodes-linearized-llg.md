@@ -196,6 +196,34 @@ Sparse/matrix-free and assembled MFEM dynamic-demag-k operators are therefore
 source-visible but not promoted. Promotion still requires solver telemetry,
 residual checks, analytical controls, and managed convergence evidence.
 
+For a mixed shared-domain request with an explicit dense descriptor, the
+caller-supplied `K`, `G`, and `M` remain the authoritative physical matrices;
+the shared-domain provider supplies `K_demag(k)` and retains its scalar-
+potential reconstruction blocks for certification of the original coupled
+descriptor.
+If the provider reduces the magnetic tangent problem to $q_{\mathbb{C}}$
+complex degrees of freedom, the caller's dense descriptor uses the doubled
+real-split ordering $[\operatorname{Re}(q),\operatorname{Im}(q)]$ and the
+dimension below:
+
+```{math}
+:label: eq-0600-floquet-mixed-dense-real-split-extent
+n_{\mathbb{R}} = 2q_{\mathbb{C}},
+\qquad
+N_{\mathrm{dense}} = n_{\mathbb{R}}^2 = 4q_{\mathbb{C}}^2.
+```
+
+`K`, `G`, `M`, and `K_demag(k)` must use that same $n_{\mathbb{R}}$-dimensional
+basis and ordering; `K_demag(k)` also follows the declared phase and sign
+convention of the magnetic stiffness. Native admission validates the caller
+dimension against the provider's $2q_{\mathbb{C}}$ real-split basis and checks
+the provider matrix extent before it attaches `K_demag(k)` or enables potential
+reconstruction. A legacy dense descriptor whose declared dimension is only
+$q_{\mathbb{C}}$ is a validation error: the implementation does not pad or
+reinterpret it and does not replace caller `K`, `G`, or `M` with provider-owned
+`A_qq`, `B_qq`, or positive tangent mass. A request without an explicit dense
+descriptor retains the separate payload-only sparse shared-domain route.
+
 Validation for this bridge requires a zero-matrix equivalence check, a nonzero
 matrix frequency-shift check against the same dense block-real oracle, shape
 and finite-value rejection tests, and an explicit planner/runtime gate for
@@ -728,6 +756,9 @@ P_{00}(x)=1+\frac{\exp(-x)-1}{x}, \qquad x=|k|t,
 | $\mathbf{k}$ | selected three-component Bloch/Floquet wavevector | $\mathrm{rad\,m^{-1}}$ |
 | $k_i$ | wavevector component for $i \in \{x,y,z\}$ | $\mathrm{rad\,m^{-1}}$ |
 | $\varepsilon_{\Gamma,\mathrm{comp}}$ | closed componentwise Gamma-admission threshold | $\mathrm{rad\,m^{-1}}$ |
+| $q_{\mathbb{C}}$ | number of complex reduced tangent degrees of freedom before real splitting | $1$ |
+| $n_{\mathbb{R}}$ | number of scalar coordinates in the doubled real-split tangent basis | $1$ |
+| $N_{\mathrm{dense}}$ | scalar entry count of one square real-split $K$, $G$, $M$, or $K_{\mathrm{demag}}$ matrix | $1$ |
 | $t$ | film thickness | $\mathrm{m}$ |
 
 (assumptions-and-validity)=
@@ -811,6 +842,8 @@ ferromagnetic films*, J. Phys. C 19 (1986), DOI:10.1088/0022-3719/19/35/7013.
 | `backends/fem/tests/frequency_domain/floquet_modal_solver_test.cpp` | `void floquet_admission_uses_rust_gamma_threshold` | Regress the closed Gamma boundary and matching dense/sparse admissions. |
 | `backends/fem/tests/frequency_domain/modal_eigen_contract_test.cpp` | `void modal_gamma_cabi_route_preserves_authored_k` | Assert public C ABI Gamma routing and preservation of the requested wavevector in diagnostics. |
 | `backends/fem/tests/frequency_domain/modal_eigen_contract_test.cpp` | `void production_cpu_modal_eigen_direct_entry_validates_floquet_k` | Regress direct-entry validation, empty raw slices, fixed fallback, and legacy non-Floquet requests. |
+| `backends/fem/src/frequency_domain/modal_eigen_solver.cpp` | `solve_modal_eigen_contract` | Validate mixed shared-domain dense requests against the provider's full doubled real-split dimension while retaining caller `K/G/M`. |
+| `backends/fem/tests/frequency_domain/modal_eigen_contract_test.cpp` | `void modal_shared_domain_floquet_mixed_dense_real_split_contract` | Exercise caller-owned `K/G/M`, provider `K_demag`, full descriptor residuals, dimension rejection, and K sensitivity through the C ABI. |
 | `backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp` | `prepare_candidate_operator_diagnostic` | Prepare the bounded isolated Poisson workspace and attach its owner to the true-probe callback; hosted candidate measurements observed, full solve unqualified. |
 | `backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp` | `capture_candidate_shifted_lu_comparison` | Observe isolated current/NONE LU on the actual RHS with source-calibrated operator residual; hosted comparison observed, full production solve still fails. |
 | `backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp` | `capture_candidate_live_pc_observation` | Observe borrowed live PC on private RHS/vectors and isolated Schur action; source reviewed, hosted execution pending. |
