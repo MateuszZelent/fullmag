@@ -381,6 +381,31 @@ vectors; they are applied to every Cartesian component at that node.  Airbox
 degrees of freedom and vectors on a different mesh are not part of this
 metric.
 
+A `bias_field_sweep` with `KSamplingIR::Single([0,0,0])` also uses this
+tracker, with the ordered physical bias-field samples as its continuation
+axis.  Each field value is solved independently at Gamma; mode order and phase
+from the eigensolver do not identify a branch across field values.  The public
+IR planner currently requires the exact zero vector for this sweep.  The
+internal sample descriptor and published spectrum/mode/branch metadata retain
+the declared `k_vector`, while published samples also retain their declared
+`external_field_a_per_m` and sample identity.  This does not author or imply a
+k path.  Branch selection is applied after tracking the accepted samples, so
+a selected branch can refer to different raw mode indices at different field
+values.  Ordinary Gamma solves without a bias-field sweep do not acquire
+branch tracking from this rule.  An explicit dispersion request or eigen
+diagnostics that request tracking or overlaps uses the same physical-field
+tracking axis.
+
+The single-field publisher retains candidate vectors internally so the shared
+mass-metric tracker can compare all accepted modes.  These tracking candidates
+are not all public outputs: the requested mode/branch selector is applied
+after tracking, and only selected spectrum rows, requested diagnostic records,
+and requested field or potential artifacts are retained for publication.  On
+cancellation, pause, or failure, branch tracking and selection apply to the
+completed accepted prefix that the sweep merger already publishes; the
+interrupted terminal sample does not become a branch point.  This preserves
+the existing terminal-prefix contract and does not define a resume policy.
+
 For a reduced vector $v$, the internal mass-normalized representation is
 
 ```{math}
@@ -470,6 +495,13 @@ coverage includes rotated mass-weighted degenerate bases,
 split–degenerate–split crossings, unequal-rank rejection, and rejection of
 frames retained from different last samples in
 `crates/fullmag-runner/src/eigen/tracking.rs::tests`.
+The bias-field adapter is owned by
+`crates/fullmag-runner/src/fem/eigen_path.rs::track_bias_field_sweep_samples`,
+and the accepted-prefix publication boundary by
+`crates/fullmag-runner/src/fem/eigen_sweep.rs::execute_bias_field_sweep_with_publication`.
+Their source-level regression must exercise the native single-sample publisher,
+the shared artifact parser, tracking, branch selection, and final sweep writer;
+hosted verification remains pending until the required CI lane runs.
 
 ## Artifact contract
 
@@ -828,6 +860,10 @@ ferromagnetic films*, J. Phys. C 19 (1986), DOI:10.1088/0022-3719/19/35/7013.
 | `crates/fullmag-plan/src/fem.rs` | `fem_eigen_solver_policy_has_native_path` | Reject ignored controls on structurally selected reference families. |
 | `crates/fullmag-runner/src/fem/eigen_execution.rs` | `validate_modal_solver_policy_admission` | Gate controls before progress/handoff/artifacts while retaining no/all-null compatibility. |
 | `crates/fullmag-runner/src/fem/eigen_path.rs` | `execute_fem_eigen_path` | Execute k samples and publish postsolve comparisons. |
+| `crates/fullmag-plan/src/validate.rs` | `validate_eigen_outputs` | Admit branch selectors for a Gamma bias-field sweep while retaining ordinary single-Gamma rejection. |
+| `crates/fullmag-runner/src/fem/eigen_path.rs` | `track_bias_field_sweep_samples` | Track accepted publisher modes on the physical field axis and apply requested public selection. |
+| `crates/fullmag-runner/src/fem/eigen_sweep.rs` | `execute_bias_field_sweep_with_publication` | Preserve accepted-prefix publication while invoking field-axis tracking for explicit tracking consumers. |
+| `crates/fullmag-runner/src/fem/eigen_path.rs` | `bias_field_branch_selection_tracks_native_publisher_artifacts_before_publication` | Regress swapped raw/frequency order, selected mode/potential binaries, raw-index compatibility, and unknown-branch rejection; hosted test pending. |
 | `backends/fem/core/petsc_slepc_runtime.cpp` | `petsc_slepc_process_mutex` | Own one nonrecursive PETSc/SLEPc operation boundary for CPU/GPU, with unsafe retained-graph shutdown protection. |
 | `backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp` | `stop_native_floquet_eps` | Preserve negative EPS reasons and poll cancellation on the final successful iteration. |
 | `backends/fem/cpu/frequency_domain/floquet_k_classification.hpp` | `classify_components` | Apply the finite, componentwise Rust-compatible Gamma admission class without changing authored wavevector values. |

@@ -1,5 +1,6 @@
 use super::eigen_digest::is_sha256_digest;
 use super::eigen_output::{json_artifact, mode_metadata_path, published_artifact_sha256};
+use crate::dispatch::FemEngine;
 use crate::types::AuxiliaryArtifact;
 use crate::types::ExecutedRun;
 use crate::types::RunError;
@@ -8,11 +9,31 @@ use fullmag_engine::Vector3;
 use fullmag_engine::MU0;
 use fullmag_ir::EquilibriumSourceIR;
 use fullmag_ir::FemEigenPlanIR;
+use fullmag_ir::OutputIR;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 
 pub(super) fn bias_field_sweep_requested(plan: &FemEigenPlanIR) -> bool {
     !plan.bias_field_samples.is_empty()
+}
+
+pub(super) fn bias_field_branch_tracking_requested(outputs: &[OutputIR]) -> bool {
+    outputs.iter().any(|output| {
+        matches!(
+            output,
+            OutputIR::EigenMode { branches, .. } if !branches.is_empty()
+        ) || matches!(output, OutputIR::DispersionCurve { .. })
+            || matches!(
+                output,
+                OutputIR::EigenDiagnostics {
+                    include_tracking: true,
+                    ..
+                } | OutputIR::EigenDiagnostics {
+                    include_overlaps: true,
+                    ..
+                }
+            )
+    })
 }
 
 pub(super) fn validate_bias_field_samples(
@@ -320,12 +341,32 @@ pub(super) fn execute_bias_field_sweep_with_executor<F>(
 where
     F: FnMut(&FemEigenPlanIR, usize) -> Result<ExecutedRun, RunError>,
 {
+    execute_bias_field_sweep_with_publication(
+        plan,
+        &[],
+        FemEngine::CpuNative,
+        false,
+        execute_sample,
+    )
+}
+
+pub(super) fn execute_bias_field_sweep_with_publication<F>(
+    plan: &FemEigenPlanIR,
+    outputs: &[OutputIR],
+    engine: FemEngine,
+    track_publication: bool,
+    mut execute_sample: F,
+) -> Result<ExecutedRun, RunError>
+where
+    F: FnMut(&FemEigenPlanIR, usize) -> Result<ExecutedRun, RunError>,
+{
     validate_bias_field_sweep_oracle_contract(plan)?;
     let samples = validate_bias_field_samples(plan)?;
     let base_initial_magnetization = plan.equilibrium_magnetization.clone();
     let mut previous_accepted_magnetization: Option<Vec<Vector3>> = None;
 
     let mut runs = Vec::with_capacity(samples.len());
+    let mut sample_plans = Vec::with_capacity(samples.len());
     for (sample_position, sample) in samples.iter().enumerate() {
         let sample_plan = prepare_bias_field_sample_plan(
             plan,
@@ -337,6 +378,15 @@ where
             Ok(run) => run,
             Err(error) if runs.is_empty() => return Err(error),
             Err(error) => {
+                if track_publication {
+                    super::eigen_path::track_bias_field_sweep_samples(
+                        plan,
+                        &sample_plans,
+                        outputs,
+                        engine,
+                        &mut runs,
+                    )?;
+                }
                 return finalize_failed_bias_field_sweep(
                     runs,
                     samples.len(),
@@ -347,7 +397,17 @@ where
             }
         };
         if !bias_field_sample_is_complete(run.result.status) {
+            sample_plans.push(sample_plan);
             runs.push(run);
+            if track_publication {
+                super::eigen_path::track_bias_field_sweep_samples(
+                    plan,
+                    &sample_plans,
+                    outputs,
+                    engine,
+                    &mut runs,
+                )?;
+            }
             return merge_bias_field_sweep_runs(
                 runs,
                 samples.len(),
@@ -372,6 +432,15 @@ where
             if runs.is_empty() {
                 return Err(error);
             }
+            if track_publication {
+                super::eigen_path::track_bias_field_sweep_samples(
+                    plan,
+                    &sample_plans,
+                    outputs,
+                    engine,
+                    &mut runs,
+                )?;
+            }
             return finalize_failed_bias_field_sweep(
                 runs,
                 samples.len(),
@@ -381,7 +450,17 @@ where
             );
         }
         previous_accepted_magnetization = Some(run.result.final_magnetization.clone());
+        sample_plans.push(sample_plan);
         runs.push(run);
+    }
+    if track_publication {
+        super::eigen_path::track_bias_field_sweep_samples(
+            plan,
+            &sample_plans,
+            outputs,
+            engine,
+            &mut runs,
+        )?;
     }
     let first_sample = samples.first().ok_or_else(|| RunError {
         message: "bias-field sweep produced no declared samples".to_string(),
@@ -545,6 +624,28 @@ where
         plan, resolution,
     )?;
     execute_bias_field_sweep_with_executor(plan, executor)
+}
+
+pub(super) fn execute_bias_field_sweep_with_planned_publication<F>(
+    plan: &FemEigenPlanIR,
+    resolution: &fullmag_ir::FemEigenExecutionResolutionIR,
+    outputs: &[OutputIR],
+    engine: FemEngine,
+    executor: F,
+) -> Result<ExecutedRun, RunError>
+where
+    F: FnMut(&FemEigenPlanIR, usize) -> Result<ExecutedRun, RunError>,
+{
+    super::eigen_execution_resolution::validate_bias_field_sample_execution_resolutions(
+        plan, resolution,
+    )?;
+    execute_bias_field_sweep_with_publication(
+        plan,
+        outputs,
+        engine,
+        bias_field_branch_tracking_requested(outputs),
+        executor,
+    )
 }
 
 fn native_field_sweep_status(status: RunStatus) -> &'static str {
@@ -1015,8 +1116,11 @@ fn merge_bias_field_sweep_runs_with_terminal(
         .count();
 
     let mut spectrum_samples = Vec::new();
+    let mut spectrum_v3_samples = Vec::new();
+    let mut spectrum_v3_template = None;
     let mut branch_points = BTreeMap::<u64, Vec<serde_json::Value>>::new();
     let mut branch_templates = BTreeMap::<u64, serde_json::Value>::new();
+    let mut branch_payload_template = None;
     let mut summary_modes = Vec::new();
     let mut sample_solver_diagnostics = Vec::new();
     let mut summary_template = None;
@@ -1047,8 +1151,31 @@ fn merge_bias_field_sweep_runs_with_terminal(
                         }
                     }
                 }
+                "eigen/spectrum.v3.json" => {
+                    let spectrum = parse_sweep_artifact(artifact, "eigen/spectrum.v3.json")?;
+                    if spectrum_v3_template.is_none() {
+                        spectrum_v3_template = Some(spectrum.clone());
+                    }
+                    if include_completed_sample {
+                        if let Some(samples) = spectrum.get("samples").and_then(|v| v.as_array()) {
+                            spectrum_v3_samples.extend(samples.iter().cloned().map(|mut sample| {
+                                if let Some(object) = sample.as_object_mut() {
+                                    object.insert(
+                                        "status".to_string(),
+                                        serde_json::json!("complete"),
+                                    );
+                                    object.insert("stop_reason".to_string(), serde_json::Value::Null);
+                                }
+                                sample
+                            }));
+                        }
+                    }
+                }
                 "eigen/branches.v2.json" => {
                     let branches = parse_sweep_artifact(artifact, "eigen/branches.v2.json")?;
+                    if branch_payload_template.is_none() {
+                        branch_payload_template = Some(branches.clone());
+                    }
                     if include_completed_sample {
                         if let Some(entries) = branches.get("branches").and_then(|v| v.as_array()) {
                             for branch in entries {
@@ -1106,12 +1233,15 @@ fn merge_bias_field_sweep_runs_with_terminal(
                     }
                 }
                 "eigen/spectrum.json"
+                | "eigen/branches.json"
                 | "eigen/dispersion.csv"
                 | "eigen/dispersion/branch_table.csv" => {}
                 _ => {
                     if !include_completed_sample
                         && (artifact.relative_path.starts_with("eigen/modes/")
-                            || artifact.relative_path.starts_with("eigen/mode_fields"))
+                            || artifact.relative_path.starts_with("eigen/mode_fields")
+                            || (artifact.relative_path.starts_with("eigen/metadata/sample_")
+                                && artifact.relative_path.contains("_mode_")))
                     {
                         continue;
                     }
@@ -1124,6 +1254,12 @@ fn merge_bias_field_sweep_runs_with_terminal(
     }
 
     spectrum_samples.sort_by_key(|sample| {
+        sample
+            .get("sample_index")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0)
+    });
+    spectrum_v3_samples.sort_by_key(|sample| {
         sample
             .get("sample_index")
             .and_then(serde_json::Value::as_u64)
@@ -1170,6 +1306,20 @@ fn merge_bias_field_sweep_runs_with_terminal(
         "status": sweep_status_label,
         "complete": sweep_complete,
         "samples": spectrum_samples,
+    });
+    let spectrum_v3 = spectrum_v3_template.map(|mut value| {
+        let mode_count = spectrum_v3_samples
+            .iter()
+            .filter_map(|sample| sample.get("modes").and_then(|v| v.as_array()))
+            .map(Vec::len)
+            .max()
+            .unwrap_or(0);
+        value["sample_count"] = serde_json::json!(spectrum_v3_samples.len());
+        value["mode_count"] = serde_json::json!(mode_count);
+        value["status"] = serde_json::json!(sweep_status_label);
+        value["complete"] = serde_json::json!(sweep_complete);
+        value["samples"] = serde_json::Value::Array(spectrum_v3_samples);
+        value
     });
 
     let mut summary = summary_template.ok_or_else(|| RunError {
@@ -1231,6 +1381,9 @@ fn merge_bias_field_sweep_runs_with_terminal(
     }
 
     artifacts.push(json_artifact("eigen/spectrum.v2.json", &spectrum)?);
+    if let Some(spectrum_v3) = spectrum_v3.as_ref() {
+        artifacts.push(json_artifact("eigen/spectrum.v3.json", spectrum_v3)?);
+    }
     artifacts.push(json_artifact("eigen/spectrum.json", &summary)?);
     artifacts.push(json_artifact(
         "eigen/metadata/eigen_summary.json",
@@ -1240,20 +1393,108 @@ fn merge_bias_field_sweep_runs_with_terminal(
         "eigen/diagnostics/solver.v1.json",
         &diagnostics,
     )?);
+    if let Some(diagnostics_artifact) = artifacts
+        .iter_mut()
+        .find(|artifact| artifact.relative_path == "eigen/diagnostics.v2.json")
+    {
+        let mut value = parse_sweep_artifact(diagnostics_artifact, "eigen/diagnostics.v2.json")?;
+        let field_sweep = serde_json::json!({
+            "kind": "bias_field_sweep",
+            "source": "bias_field_samples",
+            "requested_sample_count": sample_count,
+            "completed_sample_count": completed_sample_count,
+            "status": artifact_status_label,
+            "run_status": sweep_status_label,
+            "stop_reason": sweep_stop_reason,
+            "complete": sweep_complete,
+            "independent_solves": true,
+            "equilibrium_policy": bias_field_equilibrium_policy_label(equilibrium_policy),
+            "continuation_seed": bias_field_continuation_seed_label(continuation_seed),
+            "continuation_seed_scope": "first_sample_bootstrap",
+        });
+        if let Some(object) = value.as_object_mut() {
+            object.insert("status".to_string(), serde_json::json!(sweep_status_label));
+            object.insert("complete".to_string(), serde_json::json!(sweep_complete));
+            object.insert("field_sweep".to_string(), field_sweep.clone());
+            if let Some(nested) = object
+                .get_mut("diagnostics")
+                .and_then(serde_json::Value::as_object_mut)
+            {
+                nested.insert("status".to_string(), serde_json::json!(sweep_status_label));
+                nested.insert("complete".to_string(), serde_json::json!(sweep_complete));
+                nested.insert("field_sweep".to_string(), field_sweep);
+            }
+        }
+        diagnostics_artifact.bytes = serde_json::to_vec_pretty(&value).map_err(|error| RunError {
+            message: format!("failed to serialize field-sweep eigen diagnostics: {error}"),
+        })?;
+    }
+    let tracking_score_source = branch_payload_template
+        .as_ref()
+        .and_then(|value| value.get("tracking_score_source"))
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!("seed_only"));
+    let modal_overlap_available = branch_payload_template
+        .as_ref()
+        .and_then(|value| value.get("modal_overlap_available"))
+        .cloned()
+        .unwrap_or(serde_json::Value::Bool(false));
+    let tracking_policy_availability = branch_payload_template
+        .as_ref()
+        .and_then(|value| value.get("tracking_policy_availability"))
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!("missing_or_mixed"));
+    let tracking_method = branch_payload_template
+        .as_ref()
+        .and_then(|value| value.get("tracking_method"))
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    let overlap_floor = branch_payload_template
+        .as_ref()
+        .and_then(|value| value.get("overlap_floor"))
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    let frequency_window_hz = branch_payload_template
+        .as_ref()
+        .and_then(|value| value.get("frequency_window_hz"))
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    let mut branch_diagnostics = branch_payload_template
+        .as_ref()
+        .and_then(|value| value.get("diagnostics"))
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!({}));
+    if let Some(object) = branch_diagnostics.as_object_mut() {
+        object.insert("status".to_string(), serde_json::json!(sweep_status_label));
+        object.insert("complete".to_string(), serde_json::json!(sweep_complete));
+        object.insert("tracking_score_source".to_string(), tracking_score_source.clone());
+        object.insert("modal_overlap_available".to_string(), modal_overlap_available.clone());
+    }
     let branches_payload = serde_json::json!({
         "schema_version": "eigen_branches.v2",
         "solver_model": summary["solver_kind"],
-        "tracking_score_source": "seed_only",
-        "modal_overlap_available": false,
-        "branches": branches,
-        "diagnostics": {
-            "tracking_score_source": "seed_only",
-            "modal_overlap_available": false,
-            "status": sweep_status_label,
-            "complete": sweep_complete,
-        },
+        "tracking_policy_availability": tracking_policy_availability,
+        "tracking_method": tracking_method,
+        "tracking_score_source": tracking_score_source,
+        "modal_overlap_available": modal_overlap_available,
+        "overlap_floor": overlap_floor,
+        "frequency_window_hz": frequency_window_hz,
+        "branches": branches.clone(),
+        "diagnostics": branch_diagnostics,
     });
     artifacts.push(json_artifact("eigen/branches.v2.json", &branches_payload)?);
+    artifacts.push(json_artifact(
+        "eigen/branches.json",
+        &serde_json::json!({
+            "schema_version": "2",
+            "tracking_policy_availability": branches_payload["tracking_policy_availability"],
+            "solver_model": branches_payload["solver_model"],
+            "tracking_method": branches_payload["tracking_method"],
+            "overlap_floor": branches_payload["overlap_floor"],
+            "frequency_window_hz": branches_payload["frequency_window_hz"],
+            "branches": branches,
+        }),
+    )?);
     let field_sweep = build_native_field_sweep_artifact(
         &spectrum,
         &branches_payload,
@@ -1343,8 +1584,11 @@ fn merge_bias_field_sweep_runs_with_terminal(
             } else {
                 ""
             };
+            let tracking_score_source = mode["tracking_score_source"]
+                .as_str()
+                .unwrap_or("seed");
             dispersion.push_str(&format!(
-                "{sample_index},{sample_id},{path_s:.16e},{kx:.16e},{ky:.16e},{kz:.16e},{label},{raw_mode_index},{mode_id},{},{:.16e},{:.16e},{},{},{},seed,{},{},{}\n",
+                "{sample_index},{sample_id},{path_s:.16e},{kx:.16e},{ky:.16e},{kz:.16e},{label},{raw_mode_index},{mode_id},{},{:.16e},{:.16e},{},{},{},{tracking_score_source},{},{},{}\n",
                 mode["branch_id"].as_u64().unwrap_or(raw_mode_index),
                 mode["frequency_hz"].as_f64().unwrap_or(0.0),
                 mode["angular_frequency_rad_per_s"].as_f64().unwrap_or(0.0),

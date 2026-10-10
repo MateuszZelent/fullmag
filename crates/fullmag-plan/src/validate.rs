@@ -949,12 +949,14 @@ fn canonical_sample_selector(
 pub(crate) fn validate_eigen_outputs(
     outputs: &[OutputIR],
     k_sampling: Option<&KSamplingIR>,
+    gamma_bias_field_sweep: bool,
     errors: &mut Vec<String>,
 ) {
     let mut seen = BTreeSet::new();
     let mut seen_eigen_modes = BTreeSet::new();
     let mut seen_eigen_branches = BTreeSet::new();
-    let branch_tracking_supported = matches!(k_sampling, Some(KSamplingIR::Path { .. }));
+    let branch_tracking_supported =
+        matches!(k_sampling, Some(KSamplingIR::Path { .. })) || gamma_bias_field_sweep;
     for output in outputs {
         match output {
             OutputIR::EigenSpectrum { quantity } => {
@@ -988,7 +990,7 @@ pub(crate) fn validate_eigen_outputs(
                 }
                 if !branches.is_empty() && !branch_tracking_supported {
                     errors.push(format!(
-                        "eigen mode output '{}' requests branches but branch tracking requires k_sampling=Path",
+                        "eigen mode output '{}' requests branches but branch tracking requires k_sampling=Path or a Gamma bias_field_sweep",
                         field
                     ));
                 }

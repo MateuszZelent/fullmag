@@ -731,6 +731,616 @@ pub(crate) mod test_support {
     ) -> Result<crate::eigen::SingleKSolveResult, RunError> {
         super::solve_k0_kittel_synthetic_demag_factor_single_k(plan, sample)
     }
+
+    fn bias_field_publication_test_sample(
+        point_plan: &FemEigenPlanIR,
+        sample_index: usize,
+        tracking_outputs: &[OutputIR],
+    ) -> Result<crate::types::ExecutedRun, RunError> {
+        let source_mesh = point_plan
+            .mesh
+            .mixed_topology_fingerprint_v3()
+            .map_err(|message| RunError { message })?;
+        let operator_identity = format!("sha256:{}", "1".repeat(64));
+        let phase_identity = format!("sha256:{}", "2".repeat(64));
+        let topology = MeshTopology::from_ir(&point_plan.mesh).map_err(|error| RunError {
+            message: error.to_string(),
+        })?;
+        let (_, scalar_class_count, _, _) =
+            crate::fem::eigen_shared_domain_geometry::modal_shared_domain_equivalence_classes(
+                &topology,
+            )?;
+        let scalar_class_count = usize::try_from(scalar_class_count).map_err(|_| RunError {
+            message: "test scalar class count exceeds host dimensions".to_string(),
+        })?;
+        let node_count = point_plan.mesh.nodes.len();
+        let authored_k_vector = match point_plan.k_sampling.as_ref() {
+            Some(fullmag_ir::KSamplingIR::Single { k_vector }) => *k_vector,
+            _ => {
+                return Err(RunError {
+                    message: "native publisher regression requires a single-k plan".to_string(),
+                });
+            }
+        };
+        let mut modes = Vec::new();
+        let mut artifacts = Vec::new();
+
+        for raw_mode_index in 0..2_u32 {
+            let follows_low_frequency_branch =
+                (sample_index == 0 && raw_mode_index == 0)
+                    || (sample_index == 1 && raw_mode_index == 1);
+            let scale = if sample_index == 0 { 1.0 } else { 1.25 };
+            let mut real = vec![[0.0; 3]; node_count];
+            let imag = vec![[0.0; 3]; node_count];
+            for vector in &mut real {
+                vector[if follows_low_frequency_branch { 1 } else { 2 }] = scale;
+            }
+            let frequency_real_hz = match (sample_index, raw_mode_index) {
+                (0, 0) => 1.0e9,
+                (0, 1) => 2.0e9,
+                (1, 0) => 3.0e9,
+                (1, 1) => 1.1e9,
+                _ => unreachable!("fixture contains exactly two samples and two modes"),
+            };
+            let phi_real = (0..scalar_class_count)
+                .map(|class| {
+                    1.0 + sample_index as f64 * 2.0
+                        + raw_mode_index as f64
+                        + class as f64 * 0.125
+                })
+                .collect::<Vec<_>>();
+            let phi_imag = vec![0.0; scalar_class_count];
+            let mode = serde_json::json!({
+                "index": raw_mode_index,
+                "frequency_hz": frequency_real_hz,
+                "frequency_real_hz": frequency_real_hz,
+                "frequency_imag_hz": 0.0,
+                "angular_frequency_rad_per_s": frequency_real_hz * std::f64::consts::TAU,
+                "eigenvalue_real": 0.0,
+                "eigenvalue_imag": frequency_real_hz,
+                "norm": 1.0,
+                "mass_norm": 1.0,
+                "max_amplitude": scale,
+                "residual_relative_l2": 0.0,
+                "residual_norm": 0.0,
+                "residual_linf": 0.0,
+                "tangent_leakage_mean_abs": 0.0,
+                "tangent_leakage_max_abs": 0.0,
+                "tangent_leakage_weighted_relative_l2": 0.0,
+                "dominant_polarization": if follows_low_frequency_branch { "y" } else { "z" },
+                "k_vector": authored_k_vector,
+                "external_field_a_per_m": point_plan.external_field,
+                "phasor_convention": "exp(+i*omega*t)",
+                "assembly_kind": "mfem_weak_form_shared_domain",
+                "source_mesh_topology_sha256": source_mesh,
+                "operator_input_signature_sha256": operator_identity,
+                "phase_constraint_sha256": phase_identity,
+                "phi_real": phi_real,
+                "phi_imag": phi_imag,
+                "real": real,
+                "imag": imag,
+                "amplitude": vec![scale; node_count],
+                "phase": vec![0.0; node_count],
+            });
+            modes.push(mode.clone());
+            artifacts.push(crate::types::AuxiliaryArtifact {
+                relative_path: format!("eigen/modes/mode_{raw_mode_index:04}.json"),
+                bytes: serde_json::to_vec(&mode).map_err(|error| RunError {
+                    message: format!("cannot serialize native test mode payload: {error}"),
+                })?,
+            });
+        }
+
+        let solver_diagnostics = serde_json::json!({
+            "solver_adapter": "bias_field_native_publisher_regression",
+            "execution_lane": "cpu",
+            "solve_succeeded": true,
+            "fields_available": true,
+            "spectrum_completeness": "complete",
+            "window_complete": true,
+        });
+        let summary = serde_json::json!({
+            "solver_kind": "bias_field_native_publisher_regression",
+            "relaxation_steps": 0,
+            "modes": modes,
+            "solver_diagnostics": solver_diagnostics,
+        });
+        let requested_modes =
+            crate::fem::eigen_output::requested_mode_indices_for_result(tracking_outputs, 2)?;
+        crate::fem::eigen_output::write_eigen_v2_bundle_with_outputs(
+            point_plan,
+            &summary,
+            &requested_modes,
+            &mut artifacts,
+            sample_index,
+            tracking_outputs,
+        )?;
+        artifacts.push(crate::types::AuxiliaryArtifact {
+            relative_path: "eigen/spectrum.json".to_string(),
+            bytes: serde_json::to_vec(&summary).map_err(|error| RunError {
+                message: format!("cannot serialize native test spectrum: {error}"),
+            })?,
+        });
+
+        Ok(crate::types::ExecutedRun {
+            result: crate::types::RunResult {
+                status: RunStatus::Completed,
+                steps: Vec::new(),
+                final_magnetization: point_plan.equilibrium_magnetization.clone(),
+                completion: Some(crate::relaxation::resolve_stage_completion(
+                    RunStatus::Completed,
+                    None,
+                    crate::relaxation::RelaxationCompletionMetrics::default(),
+                )),
+            },
+            initial_magnetization: point_plan.equilibrium_magnetization.clone(),
+            field_snapshots: Vec::new(),
+            field_snapshot_count: 0,
+            auxiliary_artifacts: artifacts,
+            provenance: crate::ExecutionProvenance {
+                execution_engine: "bias_field_native_publisher_regression".to_string(),
+                precision: "double".to_string(),
+                ..Default::default()
+            },
+        })
+    }
+
+    fn artifact_bytes<'a>(
+        run: &'a crate::types::ExecutedRun,
+        path: &str,
+    ) -> Option<&'a [u8]> {
+        run.auxiliary_artifacts
+            .iter()
+            .find(|artifact| artifact.relative_path == path)
+            .map(|artifact| artifact.bytes.as_slice())
+    }
+
+    fn expected_cartesian_mode_bytes(
+        node_count: usize,
+        component: usize,
+        scale: f64,
+    ) -> Vec<u8> {
+        let mut bytes = Vec::with_capacity(node_count * 6 * std::mem::size_of::<f64>());
+        for _ in 0..node_count {
+            for axis in 0..3 {
+                bytes.extend_from_slice(&(if axis == component { scale } else { 0.0 }).to_le_bytes());
+                bytes.extend_from_slice(&0.0_f64.to_le_bytes());
+            }
+        }
+        bytes
+    }
+
+    fn expected_bias_field_potential_bytes(
+        plan: &FemEigenPlanIR,
+        sample_index: usize,
+        raw_mode_index: usize,
+        scalar_class_count: usize,
+    ) -> Vec<crate::types::AuxiliaryArtifact> {
+        let topology = MeshTopology::from_ir(&plan.mesh).expect("test mesh is valid");
+        let (classes, _, _, _) =
+            crate::fem::eigen_shared_domain_geometry::modal_shared_domain_equivalence_classes(
+                &topology,
+            )
+            .expect("test periodic classes are valid");
+        let mut point_plan = plan.clone();
+        point_plan.external_field = Some(plan.bias_field_samples[sample_index].field_a_per_m);
+        point_plan.bias_field_samples.clear();
+        let phases = crate::fem::eigen_mass_metric::canonical_shared_domain_phases(
+            &topology,
+            &point_plan,
+        )
+        .expect("test Gamma phase map is valid");
+        let phi_real = (0..scalar_class_count)
+            .map(|class| {
+                1.0 + sample_index as f64 * 2.0
+                    + raw_mode_index as f64
+                    + class as f64 * 0.125
+            })
+            .map(|value| num_complex::Complex64::new(value, 0.0))
+            .collect::<Vec<_>>();
+        let source_mesh = plan
+            .mesh
+            .mixed_topology_fingerprint_v3()
+            .expect("test mesh identity is valid");
+        let provenance = serde_json::json!({
+            "source_mesh_topology_sha256": source_mesh,
+            "operator_input_signature_sha256": format!("sha256:{}", "1".repeat(64)),
+            "phase_constraint_sha256": format!("sha256:{}", "2".repeat(64)),
+        });
+        crate::fem::eigen_physical_potential::physical_potential_artifacts(
+            &topology,
+            &phi_real,
+            scalar_class_count,
+            &classes,
+            &phases,
+            sample_index,
+            raw_mode_index,
+            &provenance,
+        )
+        .expect("test physical potential artifacts are valid")
+    }
+
+    #[test]
+    fn bias_field_branch_selection_tracks_native_publisher_artifacts_before_publication() {
+        let mut plan = crate::fem::eigen_tests::minimal_native_modal_plan();
+        // This direct adapter fixture preserves a near-Gamma internal vector;
+        // public ProblemIR bias-field admission continues to require exact zero.
+        plan.k_sampling = Some(fullmag_ir::KSamplingIR::Single {
+            k_vector: [5.0e-13, 0.0, 0.0],
+        });
+        plan.mesh.facets = fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![
+            [0, 2, 3],
+            [1, 2, 3],
+        ]);
+        plan.mesh.boundary_markers = vec![1, 2];
+        plan.mesh.periodic_boundary_pairs.push(fullmag_ir::MeshPeriodicBoundaryPairIR {
+            pair_id: "test-periodic-x".to_string(),
+            source_marker: None,
+            destination_marker: None,
+            marker_a: 1,
+            marker_b: 2,
+            translation: Some([1.0, 0.0, 0.0]),
+            tolerance: Some(1e-12),
+            axis_hint: None,
+            orientation: None,
+            pairing_policy: None,
+        });
+        plan.mesh.periodic_node_pairs.push(fullmag_ir::MeshPeriodicNodePairIR {
+            pair_id: "test-periodic-x".to_string(),
+            node_a: 0,
+            node_b: 1,
+        });
+        plan.spin_wave_bc = fullmag_ir::SpinWaveBoundaryConditionIR::Legacy(
+            fullmag_ir::SpinWaveBoundaryKindIR::Periodic,
+        );
+        plan.count = 2;
+        plan.bias_field_samples = vec![
+            fullmag_ir::FemEigenBiasFieldSamplePlanIR {
+                sample_index: 0,
+                field_a_per_m: [100.0, 0.0, 0.0],
+                equilibrium_policy: fullmag_ir::BiasFieldSweepEquilibriumPolicyIR::Continuation,
+                continuation_seed: fullmag_ir::BiasFieldSweepContinuationSeedIR::InitialState,
+                execution: test_bias_field_execution_resolution(),
+            },
+            fullmag_ir::FemEigenBiasFieldSamplePlanIR {
+                sample_index: 1,
+                field_a_per_m: [200.0, 0.0, 0.0],
+                equilibrium_policy: fullmag_ir::BiasFieldSweepEquilibriumPolicyIR::Continuation,
+                continuation_seed: fullmag_ir::BiasFieldSweepContinuationSeedIR::InitialState,
+                execution: test_bias_field_execution_resolution(),
+            },
+        ];
+        let outputs = vec![OutputIR::EigenMode {
+            field: "mode".to_string(),
+            all_modes: false,
+            indices: Vec::new(),
+            branches: vec![0],
+            sample_selector: None,
+        }];
+        assert!(crate::fem::eigen_sweep::bias_field_branch_tracking_requested(
+            &outputs
+        ));
+        assert!(crate::fem::eigen_sweep::bias_field_branch_tracking_requested(&[
+            OutputIR::DispersionCurve {
+                name: "field sweep".to_string(),
+                include_branch_table: true,
+            }
+        ]));
+        assert!(crate::fem::eigen_sweep::bias_field_branch_tracking_requested(&[
+            OutputIR::EigenDiagnostics {
+                include_tracking: true,
+                include_residuals: false,
+                include_overlaps: false,
+                include_tangent_leakage: false,
+                include_orthogonality: false,
+            }
+        ]));
+        let tracking_outputs = eigen_path_tracking_outputs(&outputs, plan.count);
+        let merged = crate::fem::eigen_sweep::execute_bias_field_sweep_with_publication(
+            &plan,
+            &outputs,
+            FemEngine::CpuNative,
+            true,
+            |point_plan, sample_index| {
+                bias_field_publication_test_sample(point_plan, sample_index, &tracking_outputs)
+            },
+        )
+        .expect("native publisher samples should track and publish branch zero");
+
+        let spectrum: Value = serde_json::from_slice(
+            artifact_bytes(&merged, "eigen/spectrum.v2.json")
+                .expect("final spectrum artifact is published"),
+        )
+        .expect("final spectrum JSON is valid");
+        let samples = spectrum["samples"].as_array().expect("samples are published");
+        assert_eq!(samples.len(), 2);
+        assert_eq!(samples[0]["external_field_a_per_m"], serde_json::json!([100.0, 0.0, 0.0]));
+        assert_eq!(samples[0]["k_vector"], serde_json::json!([5.0e-13, 0.0, 0.0]));
+        assert_eq!(samples[1]["k_vector"], serde_json::json!([5.0e-13, 0.0, 0.0]));
+        assert_eq!(samples[1]["external_field_a_per_m"], serde_json::json!([200.0, 0.0, 0.0]));
+        assert_eq!(samples[0]["modes"].as_array().unwrap().len(), 1);
+        assert_eq!(samples[1]["modes"].as_array().unwrap().len(), 1);
+        assert_eq!(samples[0]["modes"][0]["branch_id"], 0);
+        assert_eq!(samples[0]["modes"][0]["raw_mode_index"], 0);
+        assert_eq!(samples[1]["modes"][0]["branch_id"], 0);
+        assert_eq!(samples[1]["modes"][0]["raw_mode_index"], 1);
+        assert_eq!(samples[0]["modes"][0]["mode_field_available"], true);
+        assert_eq!(samples[1]["modes"][0]["mode_field_available"], true);
+        assert_eq!(samples[0]["modes"][0]["k_vector"], serde_json::json!([5.0e-13, 0.0, 0.0]));
+        assert_eq!(samples[1]["modes"][0]["k_vector"], serde_json::json!([5.0e-13, 0.0, 0.0]));
+        let (_, scalar_class_count, _, _) = crate::fem::eigen_shared_domain_geometry::
+            modal_shared_domain_equivalence_classes(
+                &MeshTopology::from_ir(&plan.mesh).expect("test mesh is valid"),
+            )
+            .expect("test periodic classes are valid");
+        let scalar_class_count = usize::try_from(scalar_class_count).unwrap();
+
+        let branches: Value = serde_json::from_slice(
+            artifact_bytes(&merged, "eigen/branches.v2.json")
+                .expect("final branch artifact is published"),
+        )
+        .expect("final branch JSON is valid");
+        assert_eq!(branches["branches"].as_array().unwrap().len(), 1);
+        assert_eq!(branches["branches"][0]["branch_id"], 0);
+        assert_eq!(branches["branches"][0]["points"].as_array().unwrap().len(), 2);
+        assert_eq!(branches["branches"][0]["points"][0]["k_vector"], serde_json::json!([5.0e-13, 0.0, 0.0]));
+        assert_eq!(branches["branches"][0]["points"][1]["k_vector"], serde_json::json!([5.0e-13, 0.0, 0.0]));
+        let dispersion = std::str::from_utf8(
+            artifact_bytes(&merged, "eigen/dispersion.csv")
+                .expect("final dispersion table is published"),
+        )
+        .expect("final dispersion table is UTF-8");
+        assert!(dispersion.lines().any(|row| {
+            let columns = row.split(',').collect::<Vec<_>>();
+            columns.get(0) == Some(&"0")
+                && columns.get(7) == Some(&"0")
+                && columns.get(8) == Some(&"sample-0000/mode-0000")
+                && columns.get(9) == Some(&"0")
+        }));
+        assert!(dispersion.lines().any(|row| {
+            let columns = row.split(',').collect::<Vec<_>>();
+            columns.get(0) == Some(&"1")
+                && columns.get(7) == Some(&"1")
+                && columns.get(8) == Some(&"sample-0001/mode-0001")
+                && columns.get(9) == Some(&"0")
+        }));
+
+        for (sample_index, raw_mode_index, component, scale) in
+            [(0, 0, 1, 1.0), (1, 1, 1, 1.25)]
+        {
+            let vector_path = format!(
+                "eigen/mode_fields/sample_{sample_index:04}/mode_{raw_mode_index:04}/vector.bin"
+            );
+            assert_eq!(
+                artifact_bytes(&merged, &vector_path),
+                Some(expected_cartesian_mode_bytes(plan.mesh.nodes.len(), component, scale).as_slice())
+            );
+            let zarr_attrs_path = format!(
+                "eigen/mode_fields.zarr/sample_{sample_index:04}/mode_{raw_mode_index:04}/.zattrs"
+            );
+            let zarr_attrs: Value = serde_json::from_slice(
+                artifact_bytes(&merged, &zarr_attrs_path)
+                    .expect("selected Zarr mode metadata is published"),
+            )
+            .expect("selected Zarr mode metadata is valid JSON");
+            assert_eq!(zarr_attrs["sample_index"], sample_index);
+            assert_eq!(zarr_attrs["raw_mode_index"], raw_mode_index);
+            assert_eq!(zarr_attrs["branch_id"], 0);
+            let expected = expected_bias_field_potential_bytes(
+                &plan,
+                sample_index,
+                raw_mode_index,
+                scalar_class_count,
+            );
+            for expected_artifact in expected {
+                assert_eq!(
+                    artifact_bytes(&merged, &expected_artifact.relative_path),
+                    Some(expected_artifact.bytes.as_slice()),
+                    "selected branch potential artifact {} must retain the exact publisher-bound values",
+                    expected_artifact.relative_path
+                );
+            }
+        }
+        for (sample_index, raw_mode_index) in [(0, 1), (1, 0)] {
+            let prefix = format!(
+                "eigen/mode_fields/sample_{sample_index:04}/mode_{raw_mode_index:04}"
+            );
+            assert!(artifact_bytes(&merged, &format!("{prefix}/vector.bin")).is_none());
+            assert!(artifact_bytes(&merged, &format!("{prefix}/potential_full.bin")).is_none());
+            assert!(artifact_bytes(&merged, &format!("{prefix}/demag_element_full.bin")).is_none());
+            let zarr_prefix = format!(
+                "eigen/mode_fields.zarr/sample_{sample_index:04}/mode_{raw_mode_index:04}/"
+            );
+            assert!(!merged.auxiliary_artifacts.iter().any(|artifact| {
+                artifact.relative_path.starts_with(&zarr_prefix)
+            }));
+        }
+
+        let raw_outputs = vec![OutputIR::EigenMode {
+            field: "mode".to_string(),
+            all_modes: false,
+            indices: vec![1],
+            branches: Vec::new(),
+            sample_selector: None,
+        }];
+        assert!(!crate::fem::eigen_sweep::bias_field_branch_tracking_requested(
+            &raw_outputs
+        ));
+        let raw_mode_run = crate::fem::eigen_sweep::execute_bias_field_sweep_with_publication(
+            &plan,
+            &raw_outputs,
+            FemEngine::CpuNative,
+            false,
+            |point_plan, sample_index| {
+                bias_field_publication_test_sample(point_plan, sample_index, &raw_outputs)
+            },
+        )
+        .expect("raw mode-index selection should keep the sample-local publication path");
+        let raw_spectrum: Value = serde_json::from_slice(
+            artifact_bytes(&raw_mode_run, "eigen/spectrum.v2.json")
+                .expect("raw-index spectrum is published"),
+        )
+        .expect("raw-index spectrum JSON is valid");
+        for sample in raw_spectrum["samples"].as_array().unwrap() {
+            let raw_zero = sample["modes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|mode| mode["raw_mode_index"] == 0)
+                .expect("raw mode zero remains in the sample spectrum");
+            let raw_one = sample["modes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|mode| mode["raw_mode_index"] == 1)
+                .expect("raw mode one remains in the sample spectrum");
+            assert_eq!(raw_zero["branch_id"], 0);
+            assert_eq!(raw_one["branch_id"], 1);
+            assert_eq!(raw_zero["mode_field_available"], false);
+            assert_eq!(raw_one["mode_field_available"], true);
+        }
+
+        let tracking_diagnostic_outputs = vec![OutputIR::EigenDiagnostics {
+            include_tracking: true,
+            include_residuals: false,
+            include_overlaps: false,
+            include_tangent_leakage: false,
+            include_orthogonality: false,
+        }];
+        let diagnostics_run = crate::fem::eigen_sweep::execute_bias_field_sweep_with_publication(
+            &plan,
+            &tracking_diagnostic_outputs,
+            FemEngine::CpuNative,
+            true,
+            |point_plan, sample_index| {
+                let internal_outputs =
+                    eigen_path_tracking_outputs(&tracking_diagnostic_outputs, plan.count);
+                bias_field_publication_test_sample(
+                    point_plan,
+                    sample_index,
+                    &internal_outputs,
+                )
+            },
+        )
+        .expect("tracking diagnostics should use physical field-axis tracking");
+        let diagnostics: Value = serde_json::from_slice(
+            artifact_bytes(&diagnostics_run, "eigen/diagnostics.v2.json")
+                .expect("tracking diagnostics are published"),
+        )
+        .expect("tracking diagnostics JSON is valid");
+        assert_eq!(
+            diagnostics["samples"][0]["external_field_a_per_m"],
+            serde_json::json!([100.0, 0.0, 0.0])
+        );
+        assert_eq!(
+            diagnostics["samples"][1]["external_field_a_per_m"],
+            serde_json::json!([200.0, 0.0, 0.0])
+        );
+        let records = diagnostics["tracking"]["data"]["records"]
+            .as_array()
+            .expect("tracking records are available");
+        assert!(records.iter().any(|record| {
+            record["branch_id"] == 0
+                && record["sample_index"] == 0
+                && record["raw_mode_index"] == 0
+        }));
+        assert!(records.iter().any(|record| {
+            record["branch_id"] == 0
+                && record["sample_index"] == 1
+                && record["raw_mode_index"] == 1
+        }));
+        assert!(!diagnostics_run.auxiliary_artifacts.iter().any(|artifact| {
+            artifact.relative_path.starts_with("eigen/modes/")
+                || artifact.relative_path.starts_with("eigen/mode_fields/")
+                || artifact.relative_path.starts_with("eigen/mode_fields.zarr/")
+        }));
+
+        let paused_prefix = crate::fem::eigen_sweep::execute_bias_field_sweep_with_publication(
+            &plan,
+            &outputs,
+            FemEngine::CpuNative,
+            true,
+            |point_plan, sample_index| {
+                let tracking_outputs = eigen_path_tracking_outputs(&outputs, plan.count);
+                let mut run = bias_field_publication_test_sample(
+                    point_plan,
+                    sample_index,
+                    &tracking_outputs,
+                )?;
+                if sample_index == 1 {
+                    run.result.status = RunStatus::Paused;
+                    run.result.completion = Some(crate::relaxation::resolve_stage_completion(
+                        RunStatus::Paused,
+                        None,
+                        crate::relaxation::RelaxationCompletionMetrics::default(),
+                    ));
+                }
+                Ok(run)
+            },
+        )
+        .expect("paused sweep should publish only its accepted tracked prefix");
+        assert_eq!(paused_prefix.result.status, RunStatus::Paused);
+        let prefix_spectrum: Value = serde_json::from_slice(
+            artifact_bytes(&paused_prefix, "eigen/spectrum.v2.json")
+                .expect("paused-prefix spectrum is published"),
+        )
+        .expect("paused-prefix spectrum JSON is valid");
+        assert_eq!(prefix_spectrum["samples"].as_array().unwrap().len(), 1);
+        assert_eq!(prefix_spectrum["samples"][0]["modes"][0]["raw_mode_index"], 0);
+        let prefix_branches: Value = serde_json::from_slice(
+            artifact_bytes(&paused_prefix, "eigen/branches.v2.json")
+                .expect("paused-prefix branch table is published"),
+        )
+        .expect("paused-prefix branch table JSON is valid");
+        assert_eq!(prefix_branches["branches"].as_array().unwrap().len(), 1);
+        assert_eq!(prefix_branches["branches"][0]["points"].as_array().unwrap().len(), 1);
+        assert!(!paused_prefix.auxiliary_artifacts.iter().any(|artifact| {
+            artifact.relative_path.starts_with("eigen/modes/sample_0001/")
+                || artifact.relative_path.starts_with("eigen/mode_fields/sample_0001/")
+                || (artifact.relative_path.starts_with("eigen/metadata/sample_0001")
+                    && artifact.relative_path.contains("_mode_"))
+        }));
+
+        let unknown_branch_outputs = vec![OutputIR::EigenMode {
+            field: "mode".to_string(),
+            all_modes: false,
+            indices: Vec::new(),
+            branches: vec![99],
+            sample_selector: None,
+        }];
+        let unknown = crate::fem::eigen_sweep::execute_bias_field_sweep_with_publication(
+            &plan,
+            &unknown_branch_outputs,
+            FemEngine::CpuNative,
+            true,
+            |point_plan, sample_index| {
+                let unknown_tracking_outputs =
+                    eigen_path_tracking_outputs(&unknown_branch_outputs, plan.count);
+                bias_field_publication_test_sample(
+                    point_plan,
+                    sample_index,
+                    &unknown_tracking_outputs,
+                )
+            },
+        )
+        .expect_err("unknown tracked branch selection must fail closed");
+        assert!(unknown.message.contains("invalid bias-field eigen output selection"));
+    }
+
+    fn test_bias_field_execution_resolution(
+    ) -> fullmag_ir::FemEigenExecutionResolutionIR {
+        fullmag_ir::FemEigenExecutionResolutionIR {
+            requested_device: fullmag_ir::ExecutionDevice::Cpu,
+            resolved_device: fullmag_ir::ExecutionDevice::Cpu,
+            requested_precision: fullmag_ir::ExecutionPrecision::Double,
+            resolved_precision: fullmag_ir::ExecutionPrecision::Double,
+            requested_engine: fullmag_ir::FemEigenEngineIR::Auto,
+            resolved_engine: fullmag_ir::FemEigenEngineIR::K0PoissonAirboxCpuSchurSlepc,
+            fallback_used: false,
+            fallback_reason: None,
+            selection_reason: "bias_field_branch_test".to_string(),
+        }
+    }
 }
 
 /// Parse one completed process-worker payload through the same spectrum,
@@ -922,6 +1532,749 @@ pub(crate) fn parse_worker_single_k_result(
         },
         mode_artifacts,
     ))
+}
+
+/// Track the accepted bias-field sample prefix from the publisher's complete
+/// single-k artifacts, then bind selection and field artifacts to those real
+/// branch identities.  The KSampleDescriptor is an internal Gamma sample key;
+/// the published sweep axis remains the declared physical field vector.
+pub(super) fn track_bias_field_sweep_samples(
+    plan: &FemEigenPlanIR,
+    sample_plans: &[FemEigenPlanIR],
+    outputs: &[OutputIR],
+    engine: FemEngine,
+    runs: &mut [ExecutedRun],
+) -> Result<(), RunError> {
+    if sample_plans.len() != runs.len() {
+        return Err(RunError {
+            message: format!(
+                "bias-field tracking has {} sample plans for {} publisher runs",
+                sample_plans.len(),
+                runs.len()
+            ),
+        });
+    }
+    let completed_count = runs
+        .iter()
+        .take_while(|run| run.result.status == RunStatus::Completed)
+        .count();
+    if runs
+        .iter()
+        .skip(completed_count)
+        .any(|run| run.result.status == RunStatus::Completed)
+    {
+        return Err(RunError {
+            message: "bias-field tracking requires one completed sample prefix".to_string(),
+        });
+    }
+    if completed_count == 0 {
+        return Ok(());
+    }
+
+    let authored_k_vector = match plan.k_sampling.as_ref() {
+        Some(fullmag_ir::KSamplingIR::Single { k_vector }) => *k_vector,
+        _ => {
+            return Err(RunError {
+                message: "bias-field tracking requires the declared single-k sample".to_string(),
+            });
+        }
+    };
+    let tracking_topology = MeshTopology::from_ir(&plan.mesh).map_err(|error| RunError {
+        message: format!("bias-field tracking mesh topology: {error}"),
+    })?;
+    let tracking_reduction =
+        build_reduction_map(&tracking_topology, &plan.spin_wave_bc, plan.k_sampling.as_ref())?;
+    let tracking_metric = eigen_path_consistent_tracking_metric(&tracking_topology, &plan.mesh)?;
+    let tracking_outputs = eigen_path_tracking_outputs(outputs, plan.count);
+    let mut samples = Vec::with_capacity(completed_count);
+    let mut mode_artifacts = Vec::new();
+
+    for sample_index in 0..completed_count {
+        let declared_sample = plan
+            .bias_field_samples
+            .get(sample_index)
+            .ok_or_else(|| RunError {
+                message: format!("bias-field tracking has no declared sample {sample_index}"),
+            })?;
+        let point_plan = &sample_plans[sample_index];
+        if point_plan.external_field != Some(declared_sample.field_a_per_m) {
+            return Err(RunError {
+                message: format!(
+                    "bias-field sample {sample_index} publisher plan does not retain the declared field axis"
+                ),
+            });
+        }
+        let sample = KSampleDescriptor {
+            sample_index: declared_sample.sample_index as usize,
+            label: None,
+            segment_index: None,
+            path_s: 0.0,
+            t_in_segment: 0.0,
+            k_vector: authored_k_vector,
+        };
+        let (parsed, published_mode_artifacts) = parse_worker_single_k_result(
+            plan,
+            point_plan,
+            &tracking_outputs,
+            &sample,
+            engine,
+            &runs[sample_index].auxiliary_artifacts,
+            &tracking_topology,
+            &tracking_reduction,
+            &tracking_metric,
+        )?;
+        samples.push(parsed);
+        mode_artifacts.extend(published_mode_artifacts);
+    }
+
+    let solver_model = samples
+        .first()
+        .map(|sample| sample.solver_model)
+        .ok_or_else(|| RunError {
+            message: "bias-field tracking parsed no accepted publisher samples".to_string(),
+        })?;
+    if samples
+        .iter()
+        .any(|sample| sample.solver_model != solver_model)
+    {
+        return Err(RunError {
+            message: "bias-field samples resolved different eigen solver models".to_string(),
+        });
+    }
+    let mut path_result = crate::eigen::PathSolveResult {
+        gamma0_rad_s_per_a_m: plan.gyromagnetic_ratio,
+        samples,
+        branches: Vec::new(),
+        solver_model,
+        notes: Vec::new(),
+        include_demag: plan.operator.include_demag,
+        dispersion_validation: plan.dispersion_validation.clone(),
+        k0_kittel_validation: plan.k0_kittel_validation.clone(),
+        solver_policy: plan.solver_policy.clone(),
+        dispersion_analytic_reference: None,
+        k0_kittel_periodic_airbox_demag: None,
+    };
+    path_result.notes = path_result
+        .samples
+        .iter()
+        .flat_map(|sample| sample.solver_notes.iter().cloned())
+        .collect();
+    crate::eigen::track_branches(&mut path_result, plan.mode_tracking.as_ref());
+
+    let selection = select_eigen_outputs(&path_result, outputs).map_err(|error| RunError {
+        message: format!("invalid bias-field eigen output selection: {error}"),
+    })?;
+    let published_mode_ids = selection
+        .spectrum_mode_ids()
+        .union(selection.field_mode_ids())
+        .copied()
+        .collect::<BTreeSet<_>>();
+    let actual_mode_ids = path_result
+        .samples
+        .iter()
+        .flat_map(|sample| {
+            sample.modes.iter().map(|mode| {
+                SampleModeId::new(sample.sample.sample_index, mode.raw_mode_index)
+            })
+        })
+        .collect::<BTreeSet<_>>();
+    let sample_descriptors = path_result
+        .samples
+        .iter()
+        .map(|sample| sample.sample.clone())
+        .collect::<Vec<_>>();
+    materialize_selected_path_physical_potential_artifacts(
+        plan,
+        &sample_descriptors,
+        &actual_mode_ids,
+        selection.field_mode_ids(),
+        &mut mode_artifacts,
+    )?;
+    retain_selected_eigen_path_mode_artifacts(&mut mode_artifacts, selection.field_mode_ids());
+    validate_eigen_path_selected_mode_artifacts(&mode_artifacts, selection.field_mode_ids())?;
+    bind_eigen_path_tracked_mode_metadata(&mut mode_artifacts, &path_result)?;
+
+    let branches_payload = bias_field_sweep_branches_payload(
+        plan,
+        &path_result,
+        &selection,
+        &published_mode_ids,
+        authored_k_vector,
+    );
+    let legacy_branches_payload = serde_json::json!({
+        "schema_version": "2",
+        "tracking_policy_availability": branches_payload["tracking_policy_availability"],
+        "solver_model": path_result.solver_model.as_str(),
+        "tracking_method": branches_payload["tracking_method"],
+        "overlap_floor": branches_payload["overlap_floor"],
+        "frequency_window_hz": branches_payload["frequency_window_hz"],
+        "branches": branches_payload["branches"],
+    });
+    let diagnostics_payload = selection.diagnostics_request().map(|request| {
+        let samples = path_result
+            .samples
+            .iter()
+            .map(|sample| {
+                let modes = sample
+                    .modes
+                    .iter()
+                    .filter(|mode| {
+                        request.any_enabled()
+                            && selection
+                                .diagnostic_mode_ids()
+                                .contains(&SampleModeId::new(
+                                    sample.sample.sample_index,
+                                    mode.raw_mode_index,
+                                ))
+                    })
+                    .map(|mode| {
+                        EigenDiagnosticModeRecord::from_mode(
+                            sample.sample.sample_index,
+                            mode,
+                        )
+                    })
+                    .collect();
+                EigenDiagnosticSampleRecord {
+                    sample_index: sample.sample.sample_index,
+                    computed_mode_count: sample.modes.len(),
+                    modes,
+                    mass_orthogonality: canonical_mass_orthogonality_rows(
+                        sample.solver_diagnostics.as_ref(),
+                        sample.sample.sample_index,
+                    ),
+                }
+            })
+            .collect::<Vec<_>>();
+        let transport = eigen_path_diagnostics_transport_metadata(&path_result, Some(plan));
+        let mut diagnostics = build_eigen_diagnostics_v2(
+            path_result.solver_model.as_str(),
+            "bias_field_sweep_orchestrator",
+            &samples,
+            &path_result.branches,
+            request,
+            Some(plan.count as usize),
+            Some(&transport),
+        );
+        diagnostics["samples"] = Value::Array(
+            path_result
+                .samples
+                .iter()
+                .map(|sample| {
+                    serde_json::json!({
+                        "sample_index": sample.sample.sample_index,
+                        "sample_id": eigen_path_sample_id_for_index(
+                            plan,
+                            sample.sample.sample_index,
+                        ),
+                        "external_field_a_per_m": plan.bias_field_samples
+                            [sample.sample.sample_index]
+                            .field_a_per_m,
+                        "computed_mode_count": sample.modes.len(),
+                    })
+                })
+                .collect(),
+        );
+        for section in ["tracking", "overlaps", "residuals", "tangent_leakage", "orthogonality"] {
+            let Some(records) = diagnostics
+                .get_mut(section)
+                .and_then(|value| value.get_mut("data"))
+                .and_then(|value| value.get_mut("records"))
+                .and_then(Value::as_array_mut)
+            else {
+                continue;
+            };
+            for record in records {
+                let Some(sample_index) = record
+                    .get("sample_index")
+                    .and_then(Value::as_u64)
+                    .and_then(|value| usize::try_from(value).ok())
+                else {
+                    continue;
+                };
+                if let Some(declared_sample) = plan.bias_field_samples.get(sample_index) {
+                    record["sample_id"] = serde_json::json!(eigen_path_sample_id_for_index(
+                        plan,
+                        sample_index,
+                    ));
+                    record["external_field_a_per_m"] =
+                        serde_json::json!(declared_sample.field_a_per_m);
+                }
+            }
+        }
+        diagnostics
+    });
+
+    for sample_index in 0..completed_count {
+        let sample_result = &path_result.samples[sample_index];
+        let original_spectrum = bias_field_sweep_sample_modes(
+            &runs[sample_index],
+            "eigen/spectrum.v2.json",
+            sample_result.sample.sample_index,
+        )?;
+        let mut modes_v2 = Vec::new();
+        let mut modes_v3 = Vec::new();
+        for mode in &sample_result.modes {
+            let mode_id = SampleModeId::new(sample_result.sample.sample_index, mode.raw_mode_index);
+            if !published_mode_ids.contains(&mode_id) {
+                continue;
+            }
+            let original = original_spectrum
+                .iter()
+                .find(|candidate| bias_field_raw_mode_index(candidate) == Some(mode.raw_mode_index))
+                .ok_or_else(|| RunError {
+                    message: format!(
+                        "bias-field sample {} publisher spectrum is missing raw mode {}",
+                        sample_result.sample.sample_index, mode.raw_mode_index
+                    ),
+                })?;
+            let (mode_v2, mode_v3) = bias_field_tracked_mode_publications(
+                plan,
+                sample_result,
+                mode,
+                path_result.solver_model,
+                selection.contains_field_mode(
+                    sample_result.sample.sample_index,
+                    mode.raw_mode_index,
+                ),
+                original,
+                &path_result,
+            )?;
+            modes_v2.push(mode_v2);
+            modes_v3.push(mode_v3);
+        }
+        let declared_field = plan.bias_field_samples[sample_index].field_a_per_m;
+        replace_bias_field_sample_spectrum(
+            &mut runs[sample_index],
+            "eigen/spectrum.v2.json",
+            sample_result.sample.sample_index,
+            eigen_path_sample_id_for_index(plan, sample_result.sample.sample_index),
+            declared_field,
+            authored_k_vector,
+            &modes_v2,
+        )?;
+        replace_bias_field_sample_spectrum(
+            &mut runs[sample_index],
+            "eigen/spectrum.v3.json",
+            sample_result.sample.sample_index,
+            eigen_path_sample_id_for_index(plan, sample_result.sample.sample_index),
+            declared_field,
+            authored_k_vector,
+            &modes_v3,
+        )?;
+        for path in ["eigen/spectrum.json", "eigen/metadata/eigen_summary.json"] {
+            replace_bias_field_summary_modes(
+                &mut runs[sample_index],
+                path,
+                &modes_v3,
+                declared_field,
+            )?;
+        }
+        runs[sample_index].auxiliary_artifacts.retain(|artifact| {
+            artifact.relative_path != "eigen/branches.v2.json"
+                && artifact.relative_path != "eigen/branches.json"
+                && !artifact.relative_path.starts_with("eigen/modes/")
+                && !artifact.relative_path.starts_with("eigen/mode_fields/")
+                && !artifact.relative_path.starts_with("eigen/mode_fields.zarr/")
+        });
+    }
+
+    for artifact in mode_artifacts {
+        let sample_index = bias_field_artifact_sample_index(&artifact.relative_path)
+            .filter(|sample_index| *sample_index < completed_count)
+            .unwrap_or(0);
+        runs[sample_index].auxiliary_artifacts.push(artifact);
+    }
+    for run in runs.iter_mut().take(completed_count) {
+        deduplicate_auxiliary_artifacts_by_path(&mut run.auxiliary_artifacts)?;
+    }
+    if let Some(first_run) = runs.first_mut() {
+        first_run.auxiliary_artifacts.push(AuxiliaryArtifact {
+            relative_path: "eigen/branches.v2.json".to_string(),
+            bytes: serde_json::to_vec_pretty(&branches_payload).map_err(|error| RunError {
+                message: format!("failed to serialize tracked bias-field branches: {error}"),
+            })?,
+        });
+        first_run.auxiliary_artifacts.push(AuxiliaryArtifact {
+            relative_path: "eigen/branches.json".to_string(),
+            bytes: serde_json::to_vec_pretty(&legacy_branches_payload).map_err(|error| {
+                RunError {
+                    message: format!("failed to serialize legacy bias-field branches: {error}"),
+                }
+            })?,
+        });
+        if let Some(diagnostics) = diagnostics_payload {
+            first_run.auxiliary_artifacts.push(AuxiliaryArtifact {
+                relative_path: "eigen/diagnostics.v2.json".to_string(),
+                bytes: serde_json::to_vec_pretty(&diagnostics).map_err(|error| RunError {
+                    message: format!(
+                        "failed to serialize bias-field tracking diagnostics: {error}"
+                    ),
+                })?,
+            });
+        }
+    }
+    Ok(())
+}
+
+fn bias_field_sweep_sample_modes(
+    run: &ExecutedRun,
+    path: &str,
+    sample_index: usize,
+) -> Result<Vec<Value>, RunError> {
+    let artifact = run
+        .auxiliary_artifacts
+        .iter()
+        .find(|artifact| artifact.relative_path == path)
+        .ok_or_else(|| RunError {
+            message: format!("bias-field sample is missing {path}"),
+        })?;
+    let value: Value = serde_json::from_slice(&artifact.bytes).map_err(|error| RunError {
+        message: format!("cannot parse {path} from bias-field sample: {error}"),
+    })?;
+    let samples = value["samples"].as_array().ok_or_else(|| RunError {
+        message: format!("{path} has no samples array"),
+    })?;
+    let mut matching = samples.iter().filter(|sample| {
+        sample["sample_index"].as_u64() == Some(sample_index as u64)
+    });
+    let sample = matching.next().ok_or_else(|| RunError {
+        message: format!("{path} has no sample {sample_index}"),
+    })?;
+    if matching.next().is_some() {
+        return Err(RunError {
+            message: format!("{path} repeats sample {sample_index}"),
+        });
+    }
+    sample["modes"]
+        .as_array()
+        .cloned()
+        .ok_or_else(|| RunError {
+            message: format!("{path} sample {sample_index} has no modes array"),
+        })
+}
+
+fn bias_field_raw_mode_index(mode: &Value) -> Option<usize> {
+    mode.get("raw_mode_index")
+        .or_else(|| mode.get("index"))
+        .and_then(Value::as_u64)
+        .and_then(|index| usize::try_from(index).ok())
+}
+
+fn bias_field_tracked_mode_publications(
+    plan: &FemEigenPlanIR,
+    sample: &SingleKSolveResult,
+    mode: &SingleKModeResult,
+    solver_model: crate::eigen::EigenSolverModel,
+    field_selected: bool,
+    original_mode: &Value,
+    path_result: &crate::eigen::PathSolveResult,
+) -> Result<(Value, Value), RunError> {
+    let tracked = path_result
+        .branches
+        .iter()
+        .find_map(|branch| {
+            branch.points.iter().enumerate().find_map(|(point_index, point)| {
+                (point.sample_index == sample.sample.sample_index
+                    && point.raw_mode_index == mode.raw_mode_index)
+                    .then_some((branch, point_index, point))
+            })
+        })
+        .ok_or_else(|| RunError {
+            message: format!(
+                "bias-field tracker omitted sample {} raw mode {}",
+                sample.sample.sample_index, mode.raw_mode_index
+            ),
+        })?;
+    let field_id = original_mode
+        .get("mode_field_id")
+        .and_then(Value::as_str);
+    let field_resource_key = original_mode
+        .get("mode_field_resource_key")
+        .and_then(Value::as_str);
+    if field_selected && (field_id.is_none() || field_resource_key.is_none()) {
+        return Err(RunError {
+            message: format!(
+                "selected bias-field sample {} raw mode {} lacks a complete publisher field reference",
+                sample.sample.sample_index, mode.raw_mode_index
+            ),
+        });
+    }
+    let mut mode_v2 = eigen_path_mode_json(
+        plan,
+        &sample.sample,
+        mode,
+        solver_model,
+        sample.solver_diagnostics.as_ref(),
+    );
+    let mut mode_v3 = eigen_path_mode_v3_json(
+        plan,
+        &sample.sample,
+        mode,
+        solver_model,
+        sample.solver_diagnostics.as_ref(),
+    );
+    let tracking_score_source = eigen_path_branch_point_tracking_score_source(
+        path_result,
+        tracked.0,
+        tracked.1,
+    );
+    let modal_overlap_available = eigen_path_branch_point_modal_overlap_available(
+        path_result,
+        tracked.0,
+        tracked.1,
+    );
+    for publication in [&mut mode_v2, &mut mode_v3] {
+        publication["external_field_a_per_m"] = serde_json::json!(plan.bias_field_samples
+            [sample.sample.sample_index]
+            .field_a_per_m);
+        publication["k_vector"] = serde_json::json!(sample.sample.k_vector);
+        publication["branch_id"] = serde_json::json!(tracked.0.branch_id);
+        publication["mode_id"] = serde_json::json!(eigen_path_mode_id(
+            sample.sample.sample_index,
+            mode.raw_mode_index
+        ));
+        publication["tracking_confidence"] = serde_json::json!(tracked.2.tracking_confidence);
+        publication["overlap_prev"] = serde_json::json!(tracked.2.overlap_prev);
+        publication["tracking_edge"] = serde_json::to_value(&tracked.2.tracking_edge).map_err(
+            |error| RunError {
+                message: format!("cannot serialize bias-field tracking edge: {error}"),
+            },
+        )?;
+        publication["tracking_score_source"] = serde_json::json!(tracking_score_source);
+        publication["modal_overlap_available"] = serde_json::json!(modal_overlap_available);
+        publication["mode_field_available"] = serde_json::json!(field_selected);
+        if field_selected {
+            publication["mode_field_id"] = serde_json::json!(field_id);
+            publication["mode_field_resource_key"] = serde_json::json!(field_resource_key);
+        } else if let Some(object) = publication.as_object_mut() {
+            object.remove("mode_field_id");
+            object.remove("mode_field_resource_key");
+        }
+    }
+    Ok((mode_v2, mode_v3))
+}
+
+fn replace_bias_field_sample_spectrum(
+    run: &mut ExecutedRun,
+    path: &str,
+    sample_index: usize,
+    sample_id: String,
+    external_field_a_per_m: [f64; 3],
+    k_vector: [f64; 3],
+    modes: &[Value],
+) -> Result<(), RunError> {
+    let artifact = run
+        .auxiliary_artifacts
+        .iter_mut()
+        .find(|artifact| artifact.relative_path == path)
+        .ok_or_else(|| RunError {
+            message: format!("bias-field sample is missing {path}"),
+        })?;
+    let mut value: Value = serde_json::from_slice(&artifact.bytes).map_err(|error| RunError {
+        message: format!("cannot parse {path} from bias-field sample: {error}"),
+    })?;
+    let samples = value
+        .get_mut("samples")
+        .and_then(Value::as_array_mut)
+        .ok_or_else(|| RunError {
+            message: format!("{path} has no samples array"),
+        })?;
+    let mut matching = samples
+        .iter_mut()
+        .filter(|sample| sample["sample_index"].as_u64() == Some(sample_index as u64));
+    let sample = matching.next().ok_or_else(|| RunError {
+        message: format!("{path} has no sample {sample_index}"),
+    })?;
+    if matching.next().is_some() {
+        return Err(RunError {
+            message: format!("{path} repeats sample {sample_index}"),
+        });
+    }
+    sample["sample_id"] = serde_json::json!(sample_id);
+    sample["label"] = Value::Null;
+    sample["k_vector"] = serde_json::json!(k_vector);
+    sample["path_s"] = serde_json::json!(0.0);
+    sample["segment_index"] = Value::Null;
+    sample["t_in_segment"] = Value::Null;
+    sample["external_field_a_per_m"] = serde_json::json!(external_field_a_per_m);
+    sample["modes"] = Value::Array(modes.to_vec());
+    let sample_count = samples.len();
+    value["sample_count"] = serde_json::json!(sample_count);
+    value["mode_count"] = serde_json::json!(modes.len());
+    artifact.bytes = serde_json::to_vec_pretty(&value).map_err(|error| RunError {
+        message: format!("cannot serialize tracked {path}: {error}"),
+    })?;
+    Ok(())
+}
+
+fn replace_bias_field_summary_modes(
+    run: &mut ExecutedRun,
+    path: &str,
+    modes: &[Value],
+    external_field_a_per_m: [f64; 3],
+) -> Result<(), RunError> {
+    let artifact = run
+        .auxiliary_artifacts
+        .iter_mut()
+        .find(|artifact| artifact.relative_path == path)
+        .ok_or_else(|| RunError {
+            message: format!("bias-field sample is missing {path}"),
+        })?;
+    let mut value: Value = serde_json::from_slice(&artifact.bytes).map_err(|error| RunError {
+        message: format!("cannot parse {path} from bias-field sample: {error}"),
+    })?;
+    let object = value.as_object_mut().ok_or_else(|| RunError {
+        message: format!("{path} must be a JSON object"),
+    })?;
+    object.insert("modes".to_string(), Value::Array(modes.to_vec()));
+    object.insert("mode_count".to_string(), serde_json::json!(modes.len()));
+    object.insert(
+        "external_field_a_per_m".to_string(),
+        serde_json::json!(external_field_a_per_m),
+    );
+    artifact.bytes = serde_json::to_vec_pretty(&value).map_err(|error| RunError {
+        message: format!("cannot serialize tracked {path}: {error}"),
+    })?;
+    Ok(())
+}
+
+fn bias_field_artifact_sample_index(path: &str) -> Option<usize> {
+    path.split('/').find_map(|component| {
+        let suffix = component.strip_prefix("sample_")?;
+        let digits = suffix
+            .find(|character: char| !character.is_ascii_digit())
+            .unwrap_or(suffix.len());
+        (digits > 0).then(|| suffix[..digits].parse::<usize>().ok()).flatten()
+    })
+}
+
+fn bias_field_sweep_branches_payload(
+    plan: &FemEigenPlanIR,
+    result: &crate::eigen::PathSolveResult,
+    selection: &EigenOutputSelection,
+    published_mode_ids: &BTreeSet<SampleModeId>,
+    k_vector: [f64; 3],
+) -> Value {
+    let overlap_values = eigen_path_overlap_values(result, selection);
+    let min_overlap = overlap_values
+        .iter()
+        .copied()
+        .reduce(|left, right| left.min(right));
+    let median_overlap = median_f64(&overlap_values);
+    let (tracking_score_source, modal_overlap_available) =
+        eigen_path_tracking_score_summary(result);
+    let unavailable_reason = if modal_overlap_available {
+        Value::Null
+    } else if result.branches.iter().flat_map(|branch| &branch.points).any(|point| {
+        point.tracking_edge.as_ref().is_some_and(|edge| {
+            matches!(edge.transition, crate::eigen::types::TrackingTransition::NewBranch)
+        })
+    }) {
+        serde_json::json!("tracking_restart_without_predecessor")
+    } else if tracking_score_source == "frequency_score_fallback" {
+        serde_json::json!("mode_vectors_unavailable")
+    } else {
+        serde_json::json!("tracking_metric_or_edge_evidence_unavailable")
+    };
+    let gap_count = result
+        .branches
+        .iter()
+        .map(|branch| result.samples.len().saturating_sub(branch.points.len()))
+        .sum::<usize>();
+    let branches = result
+        .branches
+        .iter()
+        .filter_map(|branch| {
+            let points = branch
+                .points
+                .iter()
+                .enumerate()
+                .filter(|(_, point)| {
+                    published_mode_ids.contains(&SampleModeId::new(
+                        point.sample_index,
+                        point.raw_mode_index,
+                    ))
+                })
+                .map(|(point_index, point)| {
+                    let mode = eigen_path_mode_for_branch_point(result, point);
+                    let field_available =
+                        selection.contains_field_mode(point.sample_index, point.raw_mode_index);
+                    serde_json::json!({
+                        "sample_id": eigen_path_sample_id_for_index(plan, point.sample_index),
+                        "mode_id": eigen_path_mode_id(point.sample_index, point.raw_mode_index),
+                        "sample_index": point.sample_index,
+                        "external_field_a_per_m": plan.bias_field_samples[point.sample_index].field_a_per_m,
+                        "k_vector": k_vector,
+                        "raw_mode_index": point.raw_mode_index,
+                        "frequency_hz": point.frequency_real_hz,
+                        "frequency_real_hz": point.frequency_real_hz,
+                        "frequency_imag_hz": point.frequency_imag_hz,
+                        "angular_frequency_rad_per_s": mode
+                            .map(|mode| mode.angular_frequency_rad_per_s)
+                            .unwrap_or(point.frequency_real_hz * std::f64::consts::TAU),
+                        "tracking_confidence": point.tracking_confidence,
+                        "overlap_prev": point.overlap_prev,
+                        "tracking_edge": point.tracking_edge,
+                        "tracking_score_source": eigen_path_branch_point_tracking_score_source(
+                            result,
+                            branch,
+                            point_index,
+                        ),
+                        "modal_overlap_available": eigen_path_branch_point_modal_overlap_available(
+                            result,
+                            branch,
+                            point_index,
+                        ),
+                        "residual_norm": mode.and_then(|mode| mode.residual_norm),
+                        "residual_linf": mode.and_then(|mode| mode.residual_linf),
+                        "tangent_leakage_mean_abs": mode.and_then(|mode| mode.tangent_leakage_mean_abs),
+                        "tangent_leakage_max_abs": mode.and_then(|mode| mode.tangent_leakage_max_abs),
+                        "tangent_leakage_weighted_relative_l2": mode.and_then(|mode| mode.tangent_leakage_weighted_relative_l2),
+                        "mode_field_id": if field_available {
+                            Some(eigen_path_mode_field_id(point.sample_index, point.raw_mode_index))
+                        } else {
+                            None
+                        },
+                        "mode_field_available": field_available,
+                    })
+                })
+                .collect::<Vec<_>>();
+            (!points.is_empty()).then(|| {
+                serde_json::json!({
+                    "branch_id": branch.branch_id,
+                    "label": branch.label,
+                    "points": points,
+                })
+            })
+        })
+        .collect::<Vec<_>>();
+    let recorded_policy = crate::eigen::tracking::recorded_tracking_policy(result);
+    let policy_availability = if recorded_policy.is_some() {
+        "complete"
+    } else {
+        "missing_or_mixed"
+    };
+    serde_json::json!({
+        "schema_version": "eigen_branches.v2",
+        "tracking_policy_availability": policy_availability,
+        "tracking_method": recorded_policy.map(|policy| policy.method),
+        "tracking_score_source": tracking_score_source,
+        "modal_overlap_available": modal_overlap_available,
+        "overlap_floor": recorded_policy.map(|policy| policy.overlap_floor),
+        "frequency_window_hz": recorded_policy.and_then(|policy| policy.frequency_window_hz),
+        "branches": branches,
+        "diagnostics": {
+            "min_overlap": min_overlap,
+            "median_overlap": median_overlap,
+            "tracking_score_source": tracking_score_source,
+            "modal_overlap_available": modal_overlap_available,
+            "modal_overlap_unavailable_reason": unavailable_reason,
+            "gap_count": gap_count,
+            "ambiguous_assignment_count": Option::<u64>::None,
+            "ambiguous_assignment_count_available": false,
+            "ambiguous_assignment_count_unavailable_reason": "assignment_ambiguity_metric_not_computed",
+        },
+    })
 }
 
 /// Validate the minimum accepted-mode contract before a process result can

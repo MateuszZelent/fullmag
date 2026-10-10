@@ -69,8 +69,8 @@ use super::eigen_solve::{
     solve_real_symmetric_eigenpairs_sparse, sparse_lobpcg_candidate_count, SPARSE_EIGEN_THRESHOLD,
 };
 use super::eigen_sweep::{
-    bias_field_sweep_requested, execute_bias_field_sweep_with_executor,
-    execute_bias_field_sweep_with_planned_execution,
+    bias_field_branch_tracking_requested, bias_field_sweep_requested,
+    execute_bias_field_sweep_with_planned_publication, execute_bias_field_sweep_with_publication,
 };
 use crate::native_fem;
 use crate::types::AuxiliaryArtifact;
@@ -370,19 +370,37 @@ fn execute_bias_field_sweep_with_producer_identity(
     mut progress: Option<&mut FemEigenProgressCallback<'_>>,
     producer_identity: Option<&FemRelaxationProducerStageIdentity>,
 ) -> Result<ExecutedRun, RunError> {
-    execute_bias_field_sweep_with_executor(plan, |sample_plan, sample_position| {
-        execute_bias_field_sample_with_relaxation(
+    let track_publication = bias_field_branch_tracking_requested(outputs);
+    let sample_outputs = if track_publication {
+        super::eigen_path::eigen_path_tracking_outputs(outputs, plan.count)
+    } else {
+        outputs.to_vec()
+    };
+    let engine = if try_gpu {
+        FemEngine::NativeGpu
+    } else {
+        FemEngine::CpuNative
+    };
+    execute_bias_field_sweep_with_publication(
+        plan,
+        outputs,
+        engine,
+        track_publication,
+        |sample_plan, sample_position| {
+        let potential_publication = super::eigen_path::EigenPathPotentialPublication {
+            outputs: outputs.to_vec(),
+            sample_index: sample_position,
+            sample_label: None,
+        };
+        execute_bias_field_sample_with_potential_publication(
             sample_plan,
-            outputs,
-            if try_gpu {
-                FemEigenExecutionLane::Gpu
-            } else {
-                FemEigenExecutionLane::Cpu
-            },
+            &sample_outputs,
+            if try_gpu { FemEigenExecutionLane::Gpu } else { FemEigenExecutionLane::Cpu },
             progress.as_deref_mut(),
             sample_position,
             None,
             producer_identity,
+            Some(&potential_publication),
         )
     })
 }
@@ -412,18 +430,36 @@ fn execute_planned_bias_field_sweep_with_producer_identity(
     let resolution = execution.resolution().ok_or_else(|| RunError {
         message: "planned_fem_eigen_resolution_missing_at_execution".to_string(),
     })?;
-    execute_bias_field_sweep_with_planned_execution(
+    let track_publication = bias_field_branch_tracking_requested(outputs);
+    let sample_outputs = if track_publication {
+        super::eigen_path::eigen_path_tracking_outputs(outputs, plan.count)
+    } else {
+        outputs.to_vec()
+    };
+    let engine = match execution.lane() {
+        FemEigenExecutionLane::Cpu => FemEngine::CpuNative,
+        FemEigenExecutionLane::Gpu => FemEngine::NativeGpu,
+    };
+    execute_bias_field_sweep_with_planned_publication(
         plan,
         resolution,
+        outputs,
+        engine,
         |sample_plan, sample_position| {
-            execute_bias_field_sample_with_relaxation(
+            let potential_publication = super::eigen_path::EigenPathPotentialPublication {
+                outputs: outputs.to_vec(),
+                sample_index: sample_position,
+                sample_label: None,
+            };
+            execute_bias_field_sample_with_potential_publication(
                 sample_plan,
-                outputs,
+                &sample_outputs,
                 execution.lane(),
                 progress.as_deref_mut(),
                 sample_position,
                 Some(execution),
                 producer_identity,
+                Some(&potential_publication),
             )
         },
     )

@@ -11821,6 +11821,8 @@ fn fem_eigen_bias_field_sweep_plans_declared_samples_with_resolved_execution() {
         "continuation_seed": "previous_accepted_equilibrium"
     });
     let ir: ProblemIR = serde_json::from_value(encoded).expect("bias sweep IR deserializes");
+    let mut ir = ir;
+    set_eigen_mode_outputs(&mut ir, vec![eigen_mode_output(Vec::new(), vec![1])]);
 
     let planned = plan(&ir).expect("legal K0 bias sweep plans before CPU/GPU resolution");
     let value = serde_json::to_value(planned).expect("planned sweep serializes");
@@ -19397,14 +19399,14 @@ mod eigen_output_validation_tests {
             field: "mode".into(), all_modes: true, indices: vec![], branches: vec![], sample_selector: None,
         };
         let mut errors = Vec::new();
-        validate_eigen_outputs(&[output.clone()], None, &mut errors);
+        validate_eigen_outputs(&[output.clone()], None, false, &mut errors);
         assert!(errors.is_empty(), "{errors:?}");
-        validate_eigen_outputs(&[output.clone(), output.clone()], None, &mut errors);
+        validate_eigen_outputs(&[output.clone(), output.clone()], None, false, &mut errors);
         assert!(errors.iter().any(|error| error.contains("all modes more than once")));
         errors.clear();
         let mut conflicting = output;
         if let OutputIR::EigenMode { indices, .. } = &mut conflicting { indices.push(64); }
-        validate_eigen_outputs(&[conflicting], None, &mut errors);
+        validate_eigen_outputs(&[conflicting], None, false, &mut errors);
         assert!(errors.iter().any(|error| error.contains("all_modes cannot be combined")));
     }
 
@@ -19433,7 +19435,7 @@ mod eigen_output_validation_tests {
         let outputs = [mode_output(2, &[0]), mode_output(2, &[1])];
         let mut errors = Vec::new();
 
-        validate_eigen_outputs(&outputs, None, &mut errors);
+        validate_eigen_outputs(&outputs, None, false, &mut errors);
 
         assert!(
             errors.is_empty(),
@@ -19446,7 +19448,7 @@ mod eigen_output_validation_tests {
         let outputs = [mode_output(2, &[0, 1]), mode_output(2, &[1, 2])];
         let mut errors = Vec::new();
 
-        validate_eigen_outputs(&outputs, None, &mut errors);
+        validate_eigen_outputs(&outputs, None, false, &mut errors);
 
         assert!(
             errors.is_empty(),
@@ -19474,7 +19476,7 @@ mod eigen_output_validation_tests {
         ];
         let mut errors = Vec::new();
 
-        validate_eigen_outputs(&outputs, None, &mut errors);
+        validate_eigen_outputs(&outputs, None, false, &mut errors);
 
         assert!(
             errors
@@ -19501,7 +19503,7 @@ mod eigen_spectrum_quantity_validation_tests {
         let before = outputs.clone();
         let mut errors = Vec::new();
 
-        validate_eigen_outputs(&outputs, None, &mut errors);
+        validate_eigen_outputs(&outputs, None, false, &mut errors);
 
         assert!(errors.is_empty(), "{errors:?}");
         assert_eq!(outputs, before);
@@ -19514,7 +19516,7 @@ mod eigen_spectrum_quantity_validation_tests {
             let before = outputs.clone();
             let mut errors = Vec::new();
 
-            validate_eigen_outputs(&outputs, None, &mut errors);
+            validate_eigen_outputs(&outputs, None, false, &mut errors);
 
             assert!(
                 errors.iter().any(|error| {
@@ -19530,7 +19532,7 @@ mod eigen_spectrum_quantity_validation_tests {
         let before = mixed.clone();
         let mut errors = Vec::new();
 
-        validate_eigen_outputs(&mixed, None, &mut errors);
+        validate_eigen_outputs(&mixed, None, false, &mut errors);
 
         assert!(
             errors.iter().any(|error| {

@@ -118,6 +118,30 @@
       "responsibility": "Execute k samples and publish postsolve comparisons."
     },
     {
+      "id": "source-runner-bias-field-branch-adapter",
+      "path": "crates/fullmag-runner/src/fem/eigen_path.rs",
+      "symbol": "track_bias_field_sweep_samples",
+      "responsibility": "Parse accepted Gamma bias-field sample publisher artifacts, preserve the declared single-k vector in sample and branch metadata, track modes on the declared physical field axis for branch, dispersion, and tracking-diagnostic requests, and retain only selected public modes and fields."
+    },
+    {
+      "id": "source-runner-bias-field-prefix-publication",
+      "path": "crates/fullmag-runner/src/fem/eigen_sweep.rs",
+      "symbol": "execute_bias_field_sweep_with_publication",
+      "responsibility": "Apply tracking and output selection to the completed accepted prefix while retaining the sweep's existing terminal-sample and merge behavior."
+    },
+    {
+      "id": "source-plan-bias-field-branch-admission",
+      "path": "crates/fullmag-plan/src/validate.rs",
+      "symbol": "validate_eigen_outputs",
+      "responsibility": "Admit branch selectors for a Gamma bias-field sweep while continuing to reject ordinary single-Gamma branch selection."
+    },
+    {
+      "id": "source-bias-field-native-publisher-regression",
+      "path": "crates/fullmag-runner/src/fem/eigen_path.rs",
+      "symbol": "bias_field_branch_selection_tracks_native_publisher_artifacts_before_publication",
+      "responsibility": "Exercise swapped raw/frequency order through native sample publication, shared parsing, physical-metric branch tracking, selection, selected binary and Zarr artifacts with tracked metadata, no unselected payload leakage, authored Gamma-vector metadata, raw-index compatibility, and final publication; source test only, CI execution pending."
+    },
+    {
       "id": "source-tracking-frequency-cluster-policy",
       "path": "crates/fullmag-runner/src/eigen/tracking_subspace.rs",
       "symbol": "frequencies_are_degenerate",

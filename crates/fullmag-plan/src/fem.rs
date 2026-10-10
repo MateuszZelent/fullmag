@@ -5609,6 +5609,7 @@ pub(crate) fn plan_fem_eigen(
     validate_eigen_outputs(
         &problem.study.sampling().outputs,
         k_sampling.as_ref(),
+        bias_field_sweep.is_some() && eigen_policy_single_k0(k_sampling.as_ref()),
         &mut errors,
     );
     if problem.backend_policy.execution_precision != ExecutionPrecision::Double {
