@@ -5127,3 +5127,30 @@ signed damping; pozostałe rodziny wykresów nie zmieniają parsera w tej korekc
 | Source ID | Path | Symbol | Odpowiedzialność |
 |---|---|---|---|
 | source-r2-modal-frequency-decoder | apps/control-room/src/shared/domain/analysis/frequencyDomainChartModels.ts | readEigenSpectrumPayload | Strict modal frequency scalar admission przed fallbackiem Inspectora |
+
+
+## R2 P2 - odczyt konfiguracji live factor przed eksperymentem
+
+Kontrolowany pomiar z #38062145700 wykazal pelna zgodnosc jawnych wpisow
+Pmat, lecz rozne residuale live PC i fresh MAT_SHIFT_NONE. Nie dowodzi to
+przyczyny. Przed zmiana polityki live LU odczytujemy rzeczywista konfiguracje
+faktora w istniejacym, bezpiecznym callbacku, jeszcze przed hard EPS error.
+Pinned PETSc v3.24.6 udostepnia publiczne PCFactorGetShiftType i
+PCFactorGetShiftAmount; wczesniejsze stale unavailable nie opisuje mozliwosci
+tej wersji biblioteki. Uzywamy getterow tylko dla sprawdzonego PCLU.
+
+Pola rozrozniaja requested/configured od queried live configuration. Odczyt
+shift type i amount nie mierzy faktycznej perturbacji wpisow faktora: ten
+osobny dowod pozostaje unavailable. Getter failure ma jawny error code i
+null wartosci, bez przypisywania requested policy. Nie zmieniamy Pmat, RHS,
+operatora, targetu, tolerancji, factor workspace ani kryteriow przyjecia modu.
+Nie dodajemy zapytan po hard EPS error. Zasady cleanup/quarantine pozostaja.
+Weryfikacja: serializer null/observed cases oraz hosted native live-PC
+fixtures. SOURCE nie jest dowodem odczytu ani kwalifikacji fizyki.
+
+[Zrodlo PETSc v3.24.6 - factor.c](https://github.com/petsc/petsc/blob/v3.24.6/src/ksp/pc/impls/factor/factor.c).
+
+| Source ID | Path | Symbol | Responsibility |
+|---|---|---|---|
+| source-live-pmat-shift-query-r2 | backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp | PetscErrorCode prepare_candidate_owned_pmat_copy_and_lu | Query live PCLU shift configuration through pinned public getters before graph failure; never infer factor perturbation. |
+| source-live-pmat-json-plan | backends/fem/cpu/frequency_domain/production_cpu_modal_eigen.cpp | std::string live_pc_observation_json | Preserve optional measured configuration and explicit unavailable/error states. |

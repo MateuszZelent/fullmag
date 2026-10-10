@@ -2976,3 +2976,22 @@ whole-window completeness or physics. Truncation/error/cancellation remain
 failure/interruption paths. Historical v1 and contour certificates retain
 separate versions; missing/new count must not be reconstructed from a v1 label.
 No OpenAPI shape, DSL/IR or C ABI change in this scoped correction.
+
+
+### R2: prywatny odczyt konfiguracji faktora Floqueta
+
+`floquet_borrowed_pmat_copy.v1` zachowuje dotychczasowe fields i dodaje
+nullable `actual_factorization_shift_type`, raw enum i
+`actual_factorization_shift_amount` z odpowiadajacymi availability flags.
+Sa to wyniki publicznych getterow konfiguracji live PCLU, pobrane w
+bezpiecznym callbacku przed hard EPS error. `factor_shift_configuration_scope`
+wyraznie odroznia je od pomiaru faktycznej perturbacji faktora, ktory nadal
+ma `actual_factorization_perturbation_measured=false`.
+
+Niepowodzenie PC type query i kazdego factor getter ma niezalezny kod.
+Brak odczytu, nierozpoznany enum lub nonfinite amount zachowuje null
+wartosci i jawny unavailable/partial reason, bez zastapienia ich requested
+policy. Rozszerzenie nie zmienia operatora, kryteriow residualu ani
+admission wynikow. Historyczne artefakty bez nowych pol pozostaja historyczne
+i nie sa uzupelniane zgadywanymi wartosciami. Stan source/test/runtime
+tej zmiany jest rejestrowany w trackerze R2.

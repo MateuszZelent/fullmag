@@ -9,6 +9,7 @@
 #include <complex>
 #include <cstdint>
 #include <limits>
+#include <string>
 #include <vector>
 
 namespace fullmag::fem::frequency_domain {
@@ -176,6 +177,25 @@ struct FloquetShiftedKspFailureProbe {
             bool available = false;
             const char *status = "unavailable";
             const char *reason = "borrowed_pmat_copy_not_started";
+            bool live_shift_query_attempted = false;
+            const char *live_shift_query_status = "not_attempted";
+            const char *live_shift_query_reason = "live_factor_shift_query_not_started";
+            bool live_pc_type_query_error_code_available = false;
+            int live_pc_type_query_error_code = 0;
+            bool actual_factorization_shift_type_available = false;
+            const char *actual_factorization_shift_type = nullptr;
+            bool actual_factorization_shift_type_enum_value_available = false;
+            int actual_factorization_shift_type_enum_value = 0;
+            bool actual_factorization_shift_type_query_error_code_available = false;
+            int actual_factorization_shift_type_query_error_code = 0;
+            bool actual_factorization_shift_amount_available = false;
+            double actual_factorization_shift_amount =
+                std::numeric_limits<double>::quiet_NaN();
+            bool actual_factorization_shift_amount_query_error_code_available = false;
+            int actual_factorization_shift_amount_query_error_code = 0;
+            bool actual_factorization_shift_amount_nonfinite_available = false;
+            bool actual_factorization_shift_amount_nonfinite = false;
+            bool actual_factorization_perturbation_measured = false;
             const char *comparison_status = "unavailable";
             const char *comparison_reason = "comparison_not_started";
             bool row_restore_attempts_available = false;
@@ -399,6 +419,14 @@ struct FloquetShiftedKspFailureProbe {
         int last_error_code = 0;
     } candidate_operator_diagnostic{};
 };
+
+namespace detail {
+
+std::string serialize_borrowed_pmat_copy_observation_json(
+    const FloquetShiftedKspFailureProbe::CandidateOperatorDiagnostic::
+        BorrowedPmatCopyObservation &observation);
+
+} // namespace detail
 
 struct SLEPcModalEigenAdapterStatus {
     const char *solver_adapter = "slepc_modal_eigen";

@@ -1001,6 +1001,10 @@ add_custom_target(fem_modal_eigen_floquet_count_contract
     DEPENDS fem_modal_eigen_contract)
 add_test(NAME fem_modal_eigen_floquet_count_contract
     COMMAND $<TARGET_FILE:fem_modal_eigen_contract> --floquet-count-certificate)
+add_custom_target(fem_modal_eigen_live_shift_configuration_contract
+    DEPENDS fem_modal_eigen_contract)
+add_test(NAME fem_modal_eigen_live_shift_configuration_contract
+    COMMAND $<TARGET_FILE:fem_modal_eigen_contract> --floquet-live-shift-configuration)
 add_custom_target(fem_modal_eigen_phase_convention_contract
     DEPENDS fem_modal_eigen_contract)
 add_test(NAME fem_modal_eigen_phase_convention_contract

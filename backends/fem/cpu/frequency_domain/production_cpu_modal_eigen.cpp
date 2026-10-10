@@ -280,10 +280,10 @@ std::string borrowed_pmat_copy_observation_json(
     std::string json =
         "{\"schema_version\":\"floquet_borrowed_pmat_copy.v1\","
         "\"requested\":true,\"measurement_scope\":\"private_diagnostic_only_solver_acceptance_unchanged\","
+        "\"factor_shift_configuration_scope\":\"queried_live_PCLU_configuration_not_actual_factor_perturbation\","
         "\"matrix_copy_method\":\"MatDuplicate(MAT_COPY_VALUES)\","
         "\"full_entry_comparison_method\":\"all MatGetRow entries for sequential AIJ; MatEqual sampling is not full proof\","
         "\"same_private_rhs_source\":\"live_pc_rhs_snapshot\","
-        "\"actual_factorization_shift_type_available\":false,\"actual_factorization_shift_amount_available\":false,"
         "\"actual_reorder_threshold_available\":false,\"live_pc_modified\":false,\"live_factor_workspace_modified\":false,";
     const auto append_bool = [&json](const char *key, bool value) {
         json += "\"" + std::string(key) + "\":" + (value ? "true" : "false") + ",";
@@ -312,6 +312,32 @@ std::string borrowed_pmat_copy_observation_json(
     };
     append_text("status", true, observation.status);
     append_text("reason", true, observation.reason);
+    append_bool("live_shift_query_attempted", observation.live_shift_query_attempted);
+    append_text("live_shift_query_status", true, observation.live_shift_query_status);
+    append_text("live_shift_query_reason", true, observation.live_shift_query_reason);
+    append_integer("live_pc_type_query_error_code",
+        observation.live_pc_type_query_error_code_available,
+        observation.live_pc_type_query_error_code);
+    append_text("actual_factorization_shift_type",
+        observation.actual_factorization_shift_type_available,
+        observation.actual_factorization_shift_type);
+    append_integer("actual_factorization_shift_type_enum_value",
+        observation.actual_factorization_shift_type_enum_value_available,
+        observation.actual_factorization_shift_type_enum_value);
+    append_integer("actual_factorization_shift_type_query_error_code",
+        observation.actual_factorization_shift_type_query_error_code_available,
+        observation.actual_factorization_shift_type_query_error_code);
+    append_number("actual_factorization_shift_amount",
+        observation.actual_factorization_shift_amount_available,
+        observation.actual_factorization_shift_amount);
+    append_integer("actual_factorization_shift_amount_query_error_code",
+        observation.actual_factorization_shift_amount_query_error_code_available,
+        observation.actual_factorization_shift_amount_query_error_code);
+    append_optional_bool("actual_factorization_shift_amount_nonfinite",
+        observation.actual_factorization_shift_amount_nonfinite_available,
+        observation.actual_factorization_shift_amount_nonfinite);
+    append_bool("actual_factorization_perturbation_measured",
+        observation.actual_factorization_perturbation_measured);
     append_bool("matrix_copy_attempted", observation.matrix_copy_attempted);
     append_bool("matrix_copy_available", observation.matrix_copy_available);
     append_integer("matrix_copy_error_code", observation.matrix_copy_error_code_available,
@@ -4971,6 +4997,13 @@ FrequencyDomainContractResult solve_sparse_production_modal_window_payload(
 }
 
 } // namespace
+
+std::string detail::serialize_borrowed_pmat_copy_observation_json(
+    const FloquetShiftedKspFailureProbe::CandidateOperatorDiagnostic::
+        BorrowedPmatCopyObservation &observation)
+{
+    return borrowed_pmat_copy_observation_json(observation);
+}
 
 #ifndef FULLMAG_FEM_PETSC_VERSION
 #define FULLMAG_FEM_PETSC_VERSION ""

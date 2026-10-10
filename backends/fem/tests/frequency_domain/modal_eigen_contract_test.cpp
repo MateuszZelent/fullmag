@@ -10,6 +10,7 @@
 #include "frequency_domain/modal_eigen_solver.hpp"
 #include "frequency_domain/nonfinite_json_sanitizer.hpp"
 #include "frequency_domain/canonical_digest.hpp"
+#include "cpu/frequency_domain/slepc_modal_eigen.hpp"
 #include "context.hpp"
 #include "core/fem_mesh.hpp"
 #include "core/petsc_slepc_runtime.hpp"
@@ -249,6 +250,96 @@ void nonfinite_json_sanitizer_has_bounded_fail_closed_semantics()
 bool contains(const char *haystack, const char *needle)
 {
     return haystack != nullptr && std::strstr(haystack, needle) != nullptr;
+}
+
+void borrowed_pmat_copy_serializer_optional_shift_fields()
+{
+    using Observation = fd::FloquetShiftedKspFailureProbe::
+        CandidateOperatorDiagnostic::BorrowedPmatCopyObservation;
+
+    Observation observation{};
+    check(
+        fd::detail::serialize_borrowed_pmat_copy_observation_json(observation) ==
+            "null",
+        "unrequested borrowed-Pmat observation remains JSON null");
+
+    observation.requested = true;
+    const std::string unavailable =
+        fd::detail::serialize_borrowed_pmat_copy_observation_json(observation);
+    check(
+        contains(
+            unavailable.c_str(),
+            "\"actual_factorization_shift_type_available\":false,\"actual_factorization_shift_type\":null") &&
+            contains(
+                unavailable.c_str(),
+                "\"actual_factorization_shift_amount_available\":false,\"actual_factorization_shift_amount\":null") &&
+            contains(
+                unavailable.c_str(),
+                "\"actual_factorization_shift_type_query_error_code_available\":false,\"actual_factorization_shift_type_query_error_code\":null") &&
+            contains(
+                unavailable.c_str(),
+                "\"actual_factorization_shift_amount_query_error_code_available\":false,\"actual_factorization_shift_amount_query_error_code\":null") &&
+            contains(
+                unavailable.c_str(),
+                "\"actual_factorization_perturbation_measured\":false"),
+        "default shift observation serializes nullable values and does not claim perturbation measurement");
+
+    observation.live_shift_query_attempted = true;
+    observation.live_shift_query_status = "measured";
+    observation.live_shift_query_reason = "mock_live_pclu_configuration";
+    observation.actual_factorization_shift_type_available = true;
+    observation.actual_factorization_shift_type = "MAT_SHIFT_NONZERO";
+    observation.actual_factorization_shift_type_enum_value_available = true;
+    observation.actual_factorization_shift_type_enum_value = 1;
+    observation.actual_factorization_shift_type_query_error_code_available = true;
+    observation.actual_factorization_shift_type_query_error_code = 0;
+    observation.actual_factorization_shift_amount_available = true;
+    observation.actual_factorization_shift_amount = 0.125;
+    observation.actual_factorization_shift_amount_query_error_code_available = true;
+    observation.actual_factorization_shift_amount_query_error_code = 0;
+    observation.actual_factorization_shift_amount_nonfinite_available = true;
+    const std::string measured =
+        fd::detail::serialize_borrowed_pmat_copy_observation_json(observation);
+    check(
+        contains(measured.c_str(),
+                 "\"live_shift_query_status_available\":true,\"live_shift_query_status\":\"measured\"") &&
+            contains(measured.c_str(),
+                     "\"actual_factorization_shift_type_available\":true,\"actual_factorization_shift_type\":\"MAT_SHIFT_NONZERO\"") &&
+            contains(measured.c_str(),
+                     "\"actual_factorization_shift_type_enum_value_available\":true,\"actual_factorization_shift_type_enum_value\":1") &&
+            contains(measured.c_str(),
+                     "\"actual_factorization_shift_amount_available\":true,\"actual_factorization_shift_amount\":0.125") &&
+            contains(measured.c_str(),
+                     "\"actual_factorization_shift_amount_nonfinite_available\":true,\"actual_factorization_shift_amount_nonfinite\":false") &&
+            contains(measured.c_str(),
+                     "\"actual_factorization_perturbation_measured\":false"),
+        "observed mock serializes mapped configured shift values separately from factor perturbation");
+
+    observation.live_shift_query_status = "partial";
+    observation.live_shift_query_reason = "one_or_more_live_factor_shift_getters_failed";
+    observation.actual_factorization_shift_type_available = false;
+    observation.actual_factorization_shift_type = nullptr;
+    observation.actual_factorization_shift_type_enum_value_available = false;
+    observation.actual_factorization_shift_type_query_error_code = 101;
+    observation.actual_factorization_shift_amount_available = false;
+    observation.actual_factorization_shift_amount =
+        std::numeric_limits<double>::quiet_NaN();
+    observation.actual_factorization_shift_amount_query_error_code = 202;
+    observation.actual_factorization_shift_amount_nonfinite_available = false;
+    const std::string partial =
+        fd::detail::serialize_borrowed_pmat_copy_observation_json(observation);
+    check(
+        contains(partial.c_str(),
+                 "\"actual_factorization_shift_type_available\":false,\"actual_factorization_shift_type\":null") &&
+            contains(partial.c_str(),
+                     "\"actual_factorization_shift_type_query_error_code_available\":true,\"actual_factorization_shift_type_query_error_code\":101") &&
+            contains(partial.c_str(),
+                     "\"actual_factorization_shift_amount_available\":false,\"actual_factorization_shift_amount\":null") &&
+            contains(partial.c_str(),
+                     "\"actual_factorization_shift_amount_query_error_code_available\":true,\"actual_factorization_shift_amount_query_error_code\":202") &&
+            contains(partial.c_str(),
+                     "\"actual_factorization_perturbation_measured\":false"),
+        "partial mock preserves separate getter errors and nulls without fabricating shift values");
 }
 
 std::size_t count_occurrences(const char *haystack, const char *needle)
@@ -7893,7 +7984,17 @@ void modal_nonzero_k_floquet_shared_domain_nearest_reports_shifted_ksp_diagnosti
         contains(hard_ksp_nearest_result.diagnostics_json,
                  "\"fresh_shift_amount_configured_available\":true") &&
         contains(hard_ksp_nearest_result.diagnostics_json,
-                 "\"actual_factorization_shift_type_available\":false") &&
+                 "\"live_shift_query_status_available\":true,\"live_shift_query_status\":\"measured\"") &&
+        contains(hard_ksp_nearest_result.diagnostics_json,
+                 "\"actual_factorization_shift_type_available\":true") &&
+        contains(hard_ksp_nearest_result.diagnostics_json,
+                 "\"actual_factorization_shift_amount_available\":true") &&
+        contains(hard_ksp_nearest_result.diagnostics_json,
+                 "\"actual_factorization_shift_type_query_error_code_available\":true,\"actual_factorization_shift_type_query_error_code\":0") &&
+        contains(hard_ksp_nearest_result.diagnostics_json,
+                 "\"actual_factorization_shift_amount_query_error_code_available\":true,\"actual_factorization_shift_amount_query_error_code\":0") &&
+        contains(hard_ksp_nearest_result.diagnostics_json,
+                 "\"actual_factorization_perturbation_measured\":false") &&
         contains(hard_ksp_nearest_result.diagnostics_json,
                  "\"fresh_ksp_setup_available\":true") &&
         contains(hard_ksp_nearest_result.diagnostics_json,
@@ -7929,6 +8030,31 @@ void modal_nonzero_k_floquet_shared_domain_nearest_reports_shifted_ksp_diagnosti
         borrowed_pmat_full_json,
         "\"reference_nnz\":",
         "borrowed_pmat_reference_full_explicit_entry_count");
+    const double live_factor_shift_type_enum_value = extract_json_number(
+        borrowed_pmat_full_json,
+        "\"actual_factorization_shift_type_enum_value\":",
+        "borrowed_pmat_live_factor_shift_type_enum");
+    const double live_factor_shift_amount = extract_json_number(
+        borrowed_pmat_full_json,
+        "\"actual_factorization_shift_amount\":",
+        "borrowed_pmat_live_factor_shift_amount");
+    const bool live_factor_shift_type_is_mapped =
+        contains(borrowed_pmat_full_json,
+                 "\"actual_factorization_shift_type\":\"MAT_SHIFT_NONE\"") ||
+        contains(borrowed_pmat_full_json,
+                 "\"actual_factorization_shift_type\":\"MAT_SHIFT_NONZERO\"") ||
+        contains(borrowed_pmat_full_json,
+                 "\"actual_factorization_shift_type\":\"MAT_SHIFT_POSITIVE_DEFINITE\"") ||
+        contains(borrowed_pmat_full_json,
+                 "\"actual_factorization_shift_type\":\"MAT_SHIFT_INBLOCKS\"");
+    check(std::isfinite(live_factor_shift_type_enum_value) &&
+              live_factor_shift_type_enum_value >= 0.0 &&
+              live_factor_shift_type_enum_value <= 3.0 &&
+              live_factor_shift_type_enum_value ==
+                  std::floor(live_factor_shift_type_enum_value) &&
+              live_factor_shift_type_is_mapped &&
+              std::isfinite(live_factor_shift_amount),
+          "live PCLU configuration exposes its checked mapped shift enum and finite configured amount");
     check(std::isfinite(borrowed_pmat_rows) && borrowed_pmat_rows > 0.0 &&
               std::isfinite(borrowed_pmat_copy_nnz) && borrowed_pmat_copy_nnz > 0.0 &&
               std::isfinite(borrowed_pmat_reference_nnz) && borrowed_pmat_reference_nnz > 0.0 &&
@@ -8504,6 +8630,7 @@ void modal_poisson_airbox_tail_gpu_shift_invert_action_writes_artifact()
 
 int main(int argc, char **argv)
 {
+    borrowed_pmat_copy_serializer_optional_shift_fields();
     if (argc > 1) {
         if (argc == 2 && std::strcmp(argv[1], "--floquet-gamma-admission") == 0) {
 #if FULLMAG_HAS_MFEM_STACK && FULLMAG_FEM_WITH_SLEPC
@@ -8569,6 +8696,16 @@ int main(int argc, char **argv)
             generic_dense_window_refills_after_search_filtering();
             std::printf("PASS: generic_modal_mass_refill_contract\n");
             return 0;
+        }
+        if (argc == 2 && std::strcmp(argv[1], "--floquet-live-shift-configuration") == 0) {
+#if FULLMAG_HAS_MFEM_STACK && FULLMAG_FEM_WITH_SLEPC
+            modal_nonzero_k_floquet_shared_domain_nearest_reports_shifted_ksp_diagnostics();
+            std::printf("PASS: floquet_live_factor_shift_configuration_contract\n");
+            return 0;
+#else
+            std::fprintf(stderr, "FAIL: live factor configuration contract requires MFEM and SLEPc\n");
+            return 3;
+#endif
         }
         if (argc == 2 && std::strcmp(argv[1], "--floquet-count-certificate") == 0) {
             modal_nonzero_k_floquet_shared_domain_nearest_reports_shifted_ksp_diagnostics(true);

@@ -3905,6 +3905,12 @@
       "path": "apps/control-room/src/shared/domain/analysis/frequencyDomainChartModels.ts",
       "symbol": "readEigenSpectrumPayload",
       "responsibility": "Reject malformed modal frequency scalars instead of turning missing or boolean payloads into a zero-decay oscillator in the inspector fallback."
+    },
+    {
+      "id": "source-live-pmat-shift-query-r2",
+      "path": "backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp",
+      "symbol": "PetscErrorCode prepare_candidate_owned_pmat_copy_and_lu",
+      "responsibility": "Query live PCLU shift configuration through pinned PETSc public getters before hard EPS error; preserve null/error and never infer actual factor perturbation; execution NOT VERIFIED."
     }
   ],
   "public_api": {

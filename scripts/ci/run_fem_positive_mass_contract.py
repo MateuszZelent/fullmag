@@ -285,6 +285,19 @@ CONTRACT_PROFILES["floquet-count-slepc"] = {
     }],
 }
 
+# Count-only returns before the private live-PC fixture; keep an isolated
+# invocation that reaches its getter assertions without earlier modal cases.
+CONTRACT_PROFILES["floquet-count-slepc"]["tests"].append({
+    "name": "fem_modal_eigen_live_shift_configuration_contract",
+    "source_suffix": "backends/fem/tests/frequency_domain/modal_eigen_contract_test.cpp",
+    "marker": "PASS: floquet_live_factor_shift_configuration_contract",
+    "compile_definitions": ["-DFULLMAG_HAS_MFEM_STACK=1", "-DFULLMAG_FEM_WITH_SLEPC=1",
+                            "-DFULLMAG_HAS_CUDA_RUNTIME=0"],
+})
+CONTRACT_PROFILES["floquet-count-slepc"]["qualification_scope"] = (
+    "mfem_cpu_count_admission_and_private_live_factor_configuration_source_contract_only"
+)
+
 _ORCHESTRATION_DEADLINE: float | None = None
 
 
