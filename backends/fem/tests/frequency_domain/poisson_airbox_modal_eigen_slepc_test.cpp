@@ -6,7 +6,9 @@
 #include "cpu/frequency_domain/poisson_airbox_modal_eigen.hpp"
 #include "cpu/frequency_domain/poisson_airbox_schur_matshell.hpp"
 #include "frequency_domain/dense_poisson_airbox_eigen_oracle.hpp"
+#if defined(FULLMAG_POISSON_AIRBOX_MODAL_GPU_AVAILABLE)
 #include "frequency_domain/modal_gpu_krylov.hpp"
+#endif
 #include "frequency_domain/modal_eigen_solver.hpp"
 
 #include <algorithm>
@@ -32,6 +34,7 @@ static_assert(
 
 namespace fd = fullmag::fem::frequency_domain;
 
+#if defined(FULLMAG_POISSON_AIRBOX_MODAL_GPU_AVAILABLE)
 extern "C" int fullmag_fem_frequency_domain_apply_modal_shift_invert_gpu_action(
     const fd::PoissonAirboxEigenBlockProblem *problem,
     double sigma_real,
@@ -86,6 +89,8 @@ extern "C" int fullmag_fem_frequency_domain_apply_modal_poisson_airbox_gpu_shift
     unsigned long long diagnostics_json_len,
     char *error_message,
     unsigned long long error_message_len);
+
+#endif
 
 namespace {
 
@@ -684,6 +689,7 @@ void AppliesFullCoupledShiftInvertActionReference()
         "PA-G3 CPU reference diagnostics must explicitly claim the modal shift-invert action");
 }
 
+#if defined(FULLMAG_POISSON_AIRBOX_MODAL_GPU_AVAILABLE)
 void AppliesGpuFullCoupledShiftInvertActionAndMatchesCpuReference()
 {
     TinySparseFixture fixture = make_tiny_full_coupled_fixture();
@@ -1176,6 +1182,8 @@ void AppliesGpuShiftedFullCoupledDescriptorAndMatchesCpuReference()
         write_text(artifact_path, std::string(diagnostics_json) + "\n");
     }
 }
+
+#endif
 
 void ModalContractWritesShiftInvertActionArtifact()
 {
@@ -2707,6 +2715,7 @@ void ReturnsRequestedSharedDomainCpuSchurModes()
           "frequency-window Schur diagnostics must expose full-residual rejection counts per subwindow");
 }
 
+#if defined(FULLMAG_POISSON_AIRBOX_MODAL_GPU_AVAILABLE)
 void SolvesSharedDomainGpuValidationModalFixture()
 {
     TinySparseFixture fixture{};
@@ -2895,6 +2904,8 @@ void SolvesSharedDomainGpuArnoldiModalFixture()
           "GPU Arnoldi modal fixture must publish only modes inside the requested window");
 }
 
+#endif
+
 void CertifiesChargeFreeProbeWithoutDividingByCancelledSource()
 {
     const std::uint32_t offsets[] = {0, 2};
@@ -2935,9 +2946,11 @@ void CertifiesChargeFreeProbeWithoutDividingByCancelledSource()
 int main()
 {
     CertifiesChargeFreeProbeWithoutDividingByCancelledSource();
+#if defined(FULLMAG_POISSON_AIRBOX_MODAL_GPU_AVAILABLE)
     // Hosts without a CUDA driver may run the CPU/SLEPc contract explicitly;
     // GPU qualification remains a separate device-backed test lane.
     const bool skip_gpu_tests = std::getenv("FULLMAG_SKIP_GPU_TESTS") != nullptr;
+#endif
     if (std::getenv("FULLMAG_NEAREST_SEMANTICS_FOCUSED") != nullptr) {
         SolvesSharedDomainCpuSchurModalFixture();
         return 0;
@@ -2973,12 +2986,15 @@ int main()
     ConjugatedCandidateRequiresConjugatedEigenvalue();
     ResidualEvaluatorRejectsNonfiniteComputedMetrics();
     AppliesFullCoupledShiftInvertActionReference();
+#if defined(FULLMAG_POISSON_AIRBOX_MODAL_GPU_AVAILABLE)
     if (!skip_gpu_tests) {
         AppliesGpuFullCoupledShiftInvertActionAndMatchesCpuReference();
         SolvesGpuDensePoissonAirboxModalEigenAndMatchesCpuReference();
         AppliesGpuFullCoupledDescriptorAndMatchesCpuReference();
         AppliesGpuShiftedFullCoupledDescriptorAndMatchesCpuReference();
     }
+#endif
+
     ModalContractWritesShiftInvertActionArtifact();
     EmitsSlepcAdapterDiagnostics();
     AnalyticalReferenceDoesNotGateTheModalSolve();
@@ -3003,9 +3019,12 @@ int main()
     PureNeumannRequiresMeanZeroGaugeWithWeights();
     RejectsUnsupportedBoundaryGaugePairsBeforeSlepcSetup();
     RejectsInconsistentProvenanceBeforeSlepcSetup();
+#if defined(FULLMAG_POISSON_AIRBOX_MODAL_GPU_AVAILABLE)
     if (!skip_gpu_tests) {
         SolvesSharedDomainGpuValidationModalFixture();
         SolvesSharedDomainGpuArnoldiModalFixture();
     }
+#endif
+
     return 0;
 }

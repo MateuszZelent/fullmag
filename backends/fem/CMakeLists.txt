@@ -1023,6 +1023,11 @@ add_fem_source_facade_contract(
     tests/frequency_domain/poisson_airbox_schur_matshell_test.cpp
 )
 if(FULLMAG_USE_MFEM_STACK AND FULLMAG_ENABLE_CUDA AND FULLMAG_FEM_WITH_SLEPC)
+    # Match the condition that adds modal_petsc_slepc.cpp to fullmag_fem.
+    target_compile_definitions(
+        fem_poisson_airbox_modal_eigen_slepc_contract
+        PRIVATE FULLMAG_POISSON_AIRBOX_MODAL_GPU_AVAILABLE=1
+    )
     if(WIN32)
         fullmag_validate_windows_modal()
     else()
