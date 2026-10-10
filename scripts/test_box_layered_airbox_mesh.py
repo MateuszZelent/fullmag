@@ -1,4 +1,5 @@
 """Lightweight real-Gmsh regression for the exact-layer periodic film mesh."""
+import ast
 import math
 import sys
 from pathlib import Path
@@ -15,29 +16,35 @@ from fullmag.meshing._gmsh_swept import (
 def _realize_public_de_smoke_box(
     monkeypatch, tmp_path, *, universe_mesh_call, fixture_name,
 ):
+    source_path = Path(__file__).resolve().parents[1] / "examples/fem_de_smoke_numeric.py"
+    source = source_path.read_text(encoding="utf-8")
+    authored_mesh_call = (
+        'study.universe.mesh(maximum_element_size=100e-9,\n'
+        '                    maximum_element_growth_rate=AIR_GROWTH_RATE, grading="geometric")'
+    )
+    assert source.count(authored_mesh_call) == 1
+    call_start = source.index(authored_mesh_call)
+    line_start = source.rfind("\n", 0, call_start) + 1
+    call_indentation = source[line_start:call_start]
+    if call_indentation.strip():
+        raise AssertionError("authored universe mesh call must be the only statement on its line")
+    fixture_mesh_calls = (
+        'study.objects.mesh.defaults(maximum_element_size=10e-9, '
+        'periodic_pair_ids=["x_faces", "y_faces"])\n'
+        + call_indentation
+        + universe_mesh_call
+    )
+    fixture_source = source.replace(authored_mesh_call, fixture_mesh_calls, 1)
+    fixture_path = tmp_path / fixture_name
+    ast.parse(fixture_source, filename=str(fixture_path))
+
     import fullmag as fm
     from fullmag.meshing.asset_pipeline import realize_fem_domain_mesh_asset_from_components_with_report
 
     monkeypatch.setenv("FULLMAG_DE_SMOKE_THICKNESS_LAYERS", "6")
     fm.reset()
     try:
-        source_path = Path(__file__).resolve().parents[1] / "examples/fem_de_smoke_numeric.py"
-        source = source_path.read_text(encoding="utf-8")
-        authored_mesh_call = (
-            'study.universe.mesh(maximum_element_size=100e-9,\n'
-            '                    maximum_element_growth_rate=AIR_GROWTH_RATE, grading="geometric")'
-        )
-        assert source.count(authored_mesh_call) == 1
-        fixture_path = tmp_path / fixture_name
-        fixture_mesh_calls = (
-            'study.objects.mesh.defaults(maximum_element_size=10e-9, '
-            'periodic_pair_ids=["x_faces", "y_faces"])\n    '
-            + universe_mesh_call
-        )
-        fixture_path.write_text(
-            source.replace(authored_mesh_call, fixture_mesh_calls, 1),
-            encoding="utf-8",
-        )
+        fixture_path.write_text(fixture_source, encoding="utf-8")
         problem = fm.load_problem_from_script(
             fixture_path, lightweight_assets=True,
         ).stages[-1].problem
