@@ -104,6 +104,125 @@ class ContainerMainTests(unittest.TestCase):
             service.return_value.run.return_value = {'state': 'stopped'}
             self.assertEqual({'state': 'stopped'}, app.run())
 
+    def test_service_record_retries_transient_enoent_after_exists_race(self):
+        app = self.app()
+        app._worker_state = "running"
+        app._worker_thread = LiveThread()
+        state_path = app.paths.state_path
+        state_path.parent.mkdir(parents=True, exist_ok=True)
+        state_path.write_text(json.dumps({"state": "old"}), encoding="utf-8")
+        published = {
+            "schema": "fullmag.local-runner.service.v1",
+            "state": "running",
+            "instance_id": "replacement",
+        }
+        original_read_text = Path.read_text
+        read_calls = 0
+
+        def read_with_atomic_publish_race(path, *args, **kwargs):
+            nonlocal read_calls
+            if path != state_path:
+                return original_read_text(path, *args, **kwargs)
+            read_calls += 1
+            if read_calls == 1:
+                path.unlink()
+                raise FileNotFoundError(2, "No such file or directory", str(path))
+            return original_read_text(path, *args, **kwargs)
+
+        def publish_replacement(_delay):
+            from fullmag_storage import atomic_json
+
+            atomic_json(state_path, published)
+
+        with patch.object(Path, "read_text", new=read_with_atomic_publish_race), \
+                patch.object(container_main.time, "sleep", side_effect=publish_replacement) as sleep:
+            health = app._health_snapshot()
+
+        self.assertEqual(2, read_calls)
+        sleep.assert_called_once_with(0.01)
+        self.assertEqual(published, health["service_status"])
+        self.assertEqual("running", health["service_state"])
+        self.assertTrue(health["ok"])
+
+    def test_service_record_stays_unhealthy_after_bounded_enoent_retries(self):
+        app = self.app()
+        app._worker_state = "running"
+        app._worker_thread = LiveThread()
+        state_path = app.paths.state_path
+        state_path.parent.mkdir(parents=True, exist_ok=True)
+        state_path.write_text(json.dumps({"state": "old"}), encoding="utf-8")
+        original_read_text = Path.read_text
+        read_calls = 0
+
+        def read_missing_state(path, *args, **kwargs):
+            nonlocal read_calls
+            if path != state_path:
+                return original_read_text(path, *args, **kwargs)
+            read_calls += 1
+            raise FileNotFoundError(2, "No such file or directory", str(path))
+
+        with patch.object(Path, "read_text", new=read_missing_state), \
+                patch.object(container_main.time, "sleep") as sleep:
+            health = app._health_snapshot()
+
+        self.assertEqual(3, read_calls)
+        self.assertEqual(2, sleep.call_count)
+        self.assertFalse(health["ok"])
+        self.assertFalse(health["accepting_jobs"])
+        self.assertEqual("error", health["service_state"])
+        self.assertIn("FileNotFoundError", health["worker_error"])
+
+    def test_service_record_parse_error_is_not_retried_or_healthy(self):
+        app = self.app()
+        app._worker_state = "running"
+        app._worker_thread = LiveThread()
+        state_path = app.paths.state_path
+        state_path.parent.mkdir(parents=True, exist_ok=True)
+        state_path.write_text("{invalid json", encoding="utf-8")
+        original_read_text = Path.read_text
+        read_calls = 0
+
+        def count_state_read(path, *args, **kwargs):
+            nonlocal read_calls
+            if path == state_path:
+                read_calls += 1
+            return original_read_text(path, *args, **kwargs)
+
+        with patch.object(Path, "read_text", new=count_state_read), \
+                patch.object(container_main.time, "sleep") as sleep:
+            health = app._health_snapshot()
+
+        self.assertEqual(1, read_calls)
+        sleep.assert_not_called()
+        self.assertFalse(health["ok"])
+        self.assertIn("JSONDecodeError", health["worker_error"])
+
+    def test_service_record_io_error_is_not_retried_or_healthy(self):
+        app = self.app()
+        app._worker_state = "running"
+        app._worker_thread = LiveThread()
+        state_path = app.paths.state_path
+        state_path.parent.mkdir(parents=True, exist_ok=True)
+        state_path.write_text(json.dumps({"state": "old"}), encoding="utf-8")
+        original_read_text = Path.read_text
+        read_calls = 0
+
+        def deny_state_read(path, *args, **kwargs):
+            nonlocal read_calls
+            if path == state_path:
+                read_calls += 1
+                raise PermissionError("read denied")
+            return original_read_text(path, *args, **kwargs)
+
+        with patch.object(Path, "read_text", new=deny_state_read), \
+                patch.object(container_main.time, "sleep") as sleep:
+            health = app._health_snapshot()
+
+        self.assertEqual(1, read_calls)
+        sleep.assert_not_called()
+        self.assertFalse(health["ok"])
+        self.assertIn("PermissionError", health["worker_error"])
+
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)

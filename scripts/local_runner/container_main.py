@@ -37,6 +37,8 @@ from local_runner.observability import (
 
 
 _RETENTION_QUEUE_LIMIT = 1000
+_SERVICE_RECORD_READ_ATTEMPTS = 3
+_SERVICE_RECORD_RACE_RETRY_DELAY_SECONDS = 0.01
 _JOB_SUMMARY_FIELDS = (
     'sequence', 'job_id', 'owner', 'request_key', 'worktree_id',
     'source_digest', 'profile', 'operation', 'state', 'created_at',
@@ -166,13 +168,20 @@ class Application:
         self._worker_io_baselines = {}
 
     def _service_record(self):
-        if not self.paths.state_path.exists():
+        state_path = self.paths.state_path
+        if not state_path.exists():
             return {'state': self._worker_state}
-        try:
-            record = json.loads(self.paths.state_path.read_text(encoding='utf-8'))
-        except (OSError, ValueError) as error:
-            return {'state': 'error', 'last_error': f'{type(error).__name__}: {error}'}
-        return record if isinstance(record, dict) else {'state': 'error', 'last_error': 'Invalid worker state record'}
+        for attempt in range(_SERVICE_RECORD_READ_ATTEMPTS):
+            try:
+                record = json.loads(state_path.read_text(encoding='utf-8'))
+            except FileNotFoundError as error:
+                if attempt + 1 == _SERVICE_RECORD_READ_ATTEMPTS:
+                    return {'state': 'error', 'last_error': f'{type(error).__name__}: {error}'}
+                time.sleep(_SERVICE_RECORD_RACE_RETRY_DELAY_SECONDS)
+            except (OSError, ValueError) as error:
+                return {'state': 'error', 'last_error': f'{type(error).__name__}: {error}'}
+            else:
+                return record if isinstance(record, dict) else {'state': 'error', 'last_error': 'Invalid worker state record'}
 
     def _legacy_jobs(self, active=None):
         jobs = list(self.queue.active() if active is None else active)

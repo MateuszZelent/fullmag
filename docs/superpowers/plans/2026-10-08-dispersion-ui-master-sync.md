@@ -518,3 +518,36 @@ Dowód actual4→4: interior-4to4-actual-fixture-report.json SHA256
 cf036e26a3cec341b8727afb54d72fd7978d18d38c441ec23d07cb731c652f7b;
 connectivity SHA256 f91838d27d3e713ab8775ed7c16ba6d3daea9d949ac6c78a2d53a52e0ca35ccc.
 Root review i final source/test SHA zgodne z dowodami; brak zmian public API.
+
+
+## 2026-10-13 — ograniczone ponowienie odczytu statusu runnera
+
+Naprawiono czytnik `_service_record`: wyłącznie FileNotFoundError po dodatnim
+exists() prowadzi do najwyżej trzech odczytów z dwiema przerwami po10ms.
+Trwały ENOENT, błędny JSON, PermissionError i inne I/O nadal zwracają error;
+nie oznaczają zdrowego runnera. Nie zmieniono CAS validation, danych ani kolejki.
+Dokładna przyczyna chwilowego ENOENT na bind mount pozostaje nieustalona.
+Reprodukcja wykazuje błąd czytnika; nie dowodzi, że os.replace usuwa rekord.
+
+Testy interpretowane: moduł container_main33/33 PASS; szersze scripts/tests/
+local_runner91/91 PASS; resolver storage48 tests PASS/2skips.
+Szersze scripts/test_local_runner_*:341 tests,1FAIL/2skips; failure jest w
+RetentionPlanTests.test_execution_progress_is_measured_and_does_not_change_fingerprint.
+Nie osłabiamy fingerprint; trwa diagnoza różnicy metadata między odczytami.
+Nie wdrożono poprawki do działającego obrazu ani nie zgłoszono native buildu.
+
+Runner live image sha256:69422110f29c0897e9872ae9f6227e9c9fc34e6d640774268c8e012b81cf0814;
+API healthy/idle, bez active jobs i retention;5,38GB wolnego poniżej8GiB.
+Przed wymianą obrazu wykryto9 plików źródeł i2 pliki UI różne od checkoutu.
+Profile/cataloque/executor pozostają identyczne, ale pełna aktualizacja wymaga
+zachowania tych kontraktów i właściwych bramek; nie wykonano ślepego restartu.
+Zachowany snapshot29 plików kodu i diff w visualization runner-status-read-repair-20261013,
+bez lokalnej konfiguracji/tokenów/danych jobów.
+
+Propozycja SciPy Delaunay dwóch slabów dała krótsze krawędzie, lecz została
+odrzucona: raw516tet zawiera18 exact-zero simplexów. Osobny subset498tet
+zachowuje142nodes, exact slab volumes i90 wspólnych cap triangles, ale ma
+16 wolnych faset o dodatnim exact polu poza Box/cap. Cztery zero-simplexy
+łączą dwie różne triangulacje dokładnie współpłaszczyznowych pionowych quadów.
+Same sumy objętości nie dowodzą zgodnej triangulacji. Bez wdrożenia/tolerancji;
+badana jest wyłącznie konkretna geometryczna przyczyna gapów.
