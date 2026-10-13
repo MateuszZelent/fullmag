@@ -805,3 +805,29 @@ Artefakty w layered-cap-sliver-diagnostic-20261013:
 
 Walidacja noty/source-map PASS. Nowych buildów FEM i wyników dyspersji
 nie uruchomiono w tym checkpointcie; źródłowa implementacja jest następnym krokiem.
+
+## 2026-10-13 — helper zakresów PBC ze źródeł producenta
+
+Po checkpointcie7b382246d48560fe0946b4083dfe823b495e48db dodano
+_gmsh_layered_periodic.py::periodic_patch_z_bounds_from_gmsh oraz regresje.
+19 interpretowanych testów PASS, exit0. Root review wymagał odrzucania
+complex coordinates przed float cast oraz identycznego dzielenia przez SCALE
+co canonical extraction. Actual saved-provenance replay8 surfaces/136
+node observations PASS: cztery marker-keyed scopes dokładnie pokrywają x/y;
+coords/SCALE bitowo zgodne z SI NPZ. Jest to stub API zapisanych actual danych,
+nie rerun Gmsh ani production caller.
+
+Hash helpera c1f52c101849f49b39a63718282300711404d854d8205d9835c3679f1b6ba241;
+testu197406dc0faa3c7dc6165796ec2ff12b8bea4b468023442c8f4417b3337cef58.
+Artefakty gmsh-layered-periodic-scope-replay-* w zatwierdzonym folderze
+layered-cap-sliver-diagnostic-20261013. Doc/source-map validator PASS.
+
+Root dodatkowo zlokalizował6 komórek gamma<0.08: były identycznie słabe
+przed i po reconciliation. Istniejące cap/interior passes zmieniły24
+cell sets, zachowały pełną topology/PBC parity, ale gamma_min0.010499
+i SICNmin0.01186 pozostały bez poprawy. Nie deklarujemy usunięcia słabych
+elementów. Nowy helper nie zmienia source route ani jakości.
+
+Kolejka odczytana zdrowa i pusta, storage_free_bytes31126548480.
+CI dla cfbb: UI38409200904 SUCCESS, consumers38409199950 SUCCESS,
+regional38409200242 FAILURE. Pełny S00–S12 OPEN; Delaunay source w realizacji.

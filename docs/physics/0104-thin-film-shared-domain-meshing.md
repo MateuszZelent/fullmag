@@ -566,7 +566,7 @@ objętości i capy. Żaden próg rozmiaru lub jakości nie jest osłabiany.
 ## Zakresy powierzchni okresowych z provenance Gmsh
 
 Producent Gmsh może wystawić kilka par markerów dla jednego logical pair_id.
-Prywatny helper ma wyznaczać ich zakresy z przez jawny join specyfikacji
+Prywatny helper wyznacza ich zakresy z przez jawny join specyfikacji
 surface tags, master/slave i canonical marker records. Nie wolno wywodzić
 markerów z kolejności list ani zastępować authored translation/tolerance.
 Współrzędne powierzchni konwertuje się do SI tym samym zadanym współczynnikiem
@@ -580,8 +580,12 @@ cały przedział domeny. Brak powierzchni, niejednoznaczny join, nieprawidłowy
 scale lub niezgodność endpointów oznacza błąd. Helper nie koryguje geometrii
 tolerancją i nie wystawia certyfikatu końcowej topologii.
 
-Owner planowanej realizacji: prywatny
-`packages/fullmag-py/src/fullmag/meshing/_gmsh_layered_periodic.py`.
+Owner zaimplementowanej realizacji: prywatny
+`packages/fullmag-py/src/fullmag/meshing/_gmsh_layered_periodic.py::periodic_patch_z_bounds_from_gmsh`.
+Jawny parametr gmsh_units_per_m jest dzielnikiem współrzędnych, identycznym
+z konwersją producenta, a nie przybliżonym mnożnikiem odwrotności.
+Regresje19PASS; replay zapisanej provenance8 surfaces/136 observations PASS
+z bitową zgodnością SI. Produkcyjny caller nie jest jeszcze podłączony.
 FEM CPU/GPU korzystają ze wspólnego hostowego przygotowania; runtime obu
 tras pozostaje NOT VERIFIED. FDM CPU/GPU nie używają tych powierzchni.
 Publiczny Python/ProblemIR bez zmiany; wynik trafia do prywatnego argumentu
@@ -610,6 +614,7 @@ nie kwalifikuje operatora ani managed runtime.
 
 - P. Monk, *Finite Element Methods for Maxwell's Equations*, 2003.
 - Gmsh reference manual, transfinite and extrusion meshing.
+- [SciPy1.14.1 Delaunay reference](https://docs.scipy.org/doc/scipy-1.14.1/reference/generated/scipy.spatial.Delaunay.html): Qhull candidate semantics and omitted-node limitations without QJ.
 
 (thin-film-mesh-source-code-index)=
 ## Source-code index
@@ -622,6 +627,7 @@ nie kwalifikuje operatora ani managed runtime.
 | Quality | `packages/fullmag-py/src/fullmag/meshing/_gmsh_extraction.py` | `_extract_quality_metrics` | bieżące metryki Gmsh |
 | Cache predykatów | `packages/fullmag-py/src/fullmag/meshing/_layered_box_tetrahedralization.py` | `_cached_orient3d` | dokładny signed cache dla niezmiennych nodes; order/sign regression PASS |
 | Adapter cap → MeshData | `packages/fullmag-py/src/fullmag/meshing/_layered_box_mesh_data.py` | `build_layered_box_mesh_data` | prototyp;37 regresji, brak production routing/quality/certificate |
+| Zakresy PBC | `packages/fullmag-py/src/fullmag/meshing/_gmsh_layered_periodic.py` | `periodic_patch_z_bounds_from_gmsh` |19 source tests i saved-provenance replay PASS; production caller/runtime OPEN |
 | Zmienne przekroje | `packages/fullmag-py/src/fullmag/meshing/_layered_box_tetrahedralization.py` | `tetrahedralize_layered_box` | dokładny prototyp zgodnej topologii; brak production routing |
 | Ruch wewnętrzny 4→4 | `packages/fullmag-py/src/fullmag/meshing/_layered_box_tetrahedralization.py` | `_improve_interior_edges` | dokładne cavity/SAT, malejący profil krawędzi; brak production routing |
 | Regresja kernela | `packages/fullmag-py/tests/test_layered_box_tetrahedralization.py` | `LayeredBoxTetrahedralizationTests` | 15 PASS; synthetic source PBC, production quality/runtime OPEN |

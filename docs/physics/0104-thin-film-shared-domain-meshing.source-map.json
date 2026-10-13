@@ -293,6 +293,20 @@
       "symbol": "DOC-ANCHOR:thin-film-layered-periodic-surface-scopes",
       "responsibility": "Explicit Gmsh provenance join and exact scope endpoints without mutating canonical records.",
       "evidence_status": "planned_contract"
+    },
+    {
+      "id": "gmsh-layered-periodic-scopes",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_layered_periodic.py",
+      "symbol": "periodic_patch_z_bounds_from_gmsh",
+      "responsibility": "Derive exact-z marker scopes from explicit surface tags; preserve authored SI conversion and records; no production caller yet.",
+      "evidence_status": "source_regression_passed_runtime_not_verified"
+    },
+    {
+      "id": "gmsh-layered-periodic-scopes-regression",
+      "path": "packages/fullmag-py/tests/test_gmsh_layered_periodic.py",
+      "symbol": "test_derives_marker_keyed_ranges_from_explicit_surfaces_and_covers_axes",
+      "responsibility": "Marker/tag join, off-plane nodes, exact cover, invalid scale/provenance and unchanged records.",
+      "evidence_status": "python_passed"
     }
   ],
   "public_api": {
