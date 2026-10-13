@@ -180,6 +180,20 @@
       "symbol": "_recertify_scaled_periodic_mesh",
       "responsibility": "Revalidate periodic evidence for final SI nodes while preserving immutable MeshData.",
       "evidence_status": "implemented"
+    },
+    {
+      "id": "variable-section-kernel",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_layered_box_tetrahedralization.py",
+      "symbol": "tetrahedralize_layered_box",
+      "responsibility": "Exact-predicate conforming stellar insertion on existing box cap nodes; internal prototype without production routing or PBC/quality qualification.",
+      "evidence_status": "source_regression_passed_runtime_not_verified"
+    },
+    {
+      "id": "variable-section-regression",
+      "path": "packages/fullmag-py/tests/test_layered_box_tetrahedralization.py",
+      "symbol": "class LayeredBoxTetrahedralizationTests",
+      "responsibility": "Variable cap density, shared facets, exact slabs, original node preservation, SI coordinates, reorder/translation and invalid geometry checks.",
+      "evidence_status": "python_passed"
     }
   ],
   "public_api": {

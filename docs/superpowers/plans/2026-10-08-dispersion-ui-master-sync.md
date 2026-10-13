@@ -231,3 +231,40 @@ właścicielskie wymagania przestrzenne na magnetic przekrojach/slabach,
 zachować exact-z/PBC i zgodność interface-air. Nie wolno podmienić tego
 na globalne XY zagęszczenie, nowe ukryte z-planes ani osłabione progi.
 Zachowany ROI/artifact pozwala rozstrzygnąć poprawkę rzeczywistą siatką.
+
+
+## Zgodne zmienne przekroje i odmowa capture — 13.10.2026
+
+Pierwsza próba niezależnego Delaunay na dwóch slabach została odrzucona:
+coarse/fine/coarse z pięcioma punktami centralnymi dało po23 tetraedry,
+w tym po1 zerowym, i niezgodne triangulacje wspólnego capu. Nie zastosowano
+QJ, usuwania komórek ani osłabienia kontroli. Nowy kernel zaczyna od zgodnej
+siatki Freudenthal i przez wspólne stellar splity face/edge wstawia istniejące
+punkty. Dokładne predykaty binary64/Fraction zachowują wejściowe węzły,
+płaszczyzny i wszystkie interfejsy. Source review objął cały moduł i testy;
+poprawiono ciche obcięcie współrzędnych complex oraz fixture duplicate.
+Interpretowany pytest:6PASS/11subtests,1.14s. Dokumentacja source-map oraz
+38 lekkich kontroli dokumentacji PASS; workflow zawiera nową regresję.
+Nie uruchomiono Gmsh ani eigensolve tym kernelem. Jest to fundament naprawy,
+a nie zakończony regional-density gate. Wymagane dalej: właściwe capy z pól
+3D i owner scopes, lower/upper size validation, jakość, PBC, regiony i runtime.
+
+Runner zdrowy/idle, profil runtime-v2 dostępny,29709012992B wolnego.
+Źródłowy diff od poprzedniego runtime241 nie zmienia native FEM/Cargo.lock,
+a cache profilu runner-fem-cpu-slepc-runtime-v2-7139ca2622b6 istnieje.
+Zlecono raz `just runner-build commit fem-cpu-slepc-runtime-v2
+20c8faa4d27ae9cb3fd8589bbe86ea4a25028e11`. Klient zakończył się exit2 przed
+submit: `cannot safely clean linked capture stage: content object is writable`.
+Nie wykonano kompilacji ani ponownego submit. Właściciel błędu:
+source_store.py::_verify_object i source.py::_cleanup_capture_stage.
+
+Obiekt CAS689bc83234b95e245a3bbcdb8d66f2c857b4daacb8a57be834a002751cabf37e-100644:
+23B, SHA256 zgodny, Windows attributes32 bez ReadOnly,5hardlinks.
+Cztery odwołania to .dockerignore w source kapsułach tego worktree:
+f0b36bded62f43a4a6a57e33592d8d9e,78bd7f3ca7ab4fb49f49f3e1ca63e105,
+e6c5a1d7084e4afe93e9311f90627347,0b62f16a15904633b44a508b3a4655e4.
+Ograniczona próbka30plików starszej kapsuły f0b36... także nie ma ReadOnly.
+Nie zmieniono flag ani bajtów, nie usunięto cache, nie ominięto walidacji.
+Następny krok runtime musi rozwiązać niezgodność uszczelnienia obiektów CAS
+na granicy Windows/kontener i uzyskać nową zweryfikowaną kapsułę.
+Pełne S00–S12, nauka, COMSOL, serial/adaptive, S09/GPU i integracja OPEN.

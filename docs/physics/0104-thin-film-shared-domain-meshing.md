@@ -103,9 +103,10 @@ triangulacja jednej ściany źródłowej airboxu, ekstruzowana przez wszystkie
 warstwy, ignorowała te pola przed powstaniem body tags. Projekcja regionalnego
 minimum na tę ścianę rozszerzałaby jego zakres na powietrze i inne wysokości.
 
-Nowa trasa tworzy najpierw niesiatkowane objętości GEO w zadanych przedziałach
-z, następnie wiąże body/air tags, nakłada tę samą kompozycję upper/lower i
-uruchamia meshing3D. Nie nadaje nowego znaczenia `through_thickness_elements`:
+Bieżąca trasa tworzy podziały GEO w zadanych przedziałach z, wiąże body/air
+tags i nakłada kompozycję upper/lower przed meshing3D. Parametry ekstruzji
+jednocześnie definiują kopiowanie siatki capu; nie jest to niezależne
+siatkowanie wnętrza każdej objętości. Nie nadaje nowego znaczenia `through_thickness_elements`:
 wynik musi przejść istniejący exact count, wszystkie węzły magnetyczne muszą
 leżeć na dokładnie zadanych płaszczyznach, każda warstwa musi być niepusta,
 a żaden tetraedr magnetyczny nie może przecinać wewnętrznej płaszczyzny.
@@ -240,6 +241,53 @@ realizuje ograniczony box mixed-P1 lane. `_build_field_stack` realizuje obecne
 strefy tetrahedralne. Te symbole nie dowodzą jeszcze produkcyjności; wymagane są
 metryki i artifacts z 0105.
 
+(thin-film-variable-section-conforming-insertion)=
+### Zmienne przekroje — wewnętrzny kernel zgodnego wstawiania węzłów
+
+Wewnętrzny kernel naprawy otrzymuje istniejące węzły SI na zadanych
+płaszczyznach z i prostokątne granice XY. Każdy przekrój musi zawierać cztery
+narożniki. Początkowy zgodny podział prostokątnych slabów jest następnie
+zagęszczany przez wstawianie pozostałych punktów w porządku geometrii.
+Dla punktu wewnątrz fasety dzielona jest ta faseta oraz oba przyległe
+tetraedry; dla punktu na krawędzi dzielone są wszystkie tetraedry zawierające
+tę krawędź. Wspólny interfejs zmienia się w jednej operacji topologicznej,
+a nie jako dwa niezależne wyniki triangulacji. Punkty nie są dodawane ani
+przesuwane i żaden tetraedr nie może przekraczać zadanego slabu.
+
+Klasyfikacja położenia i orientacja mają używać dokładnych predykatów dla
+liczb zapisanych w float64. Nie wolno wykorzystać tolerancji do zakrycia
+szczeliny, usunąć zerowych komórek ani rozszerzyć zakresu regionalnego pola.
+Wymagane kontrole końcowe: użycie wszystkich węzłów, dodatnia orientacja,
+zgodność objętości, incydencja faset 1/2, zgodność shared caps i brak
+zewnętrznych faset we wnętrzu Boxa. Brak narożnika, duplikat, węzeł poza
+płaszczyznami lub granicami powoduje odmowę.
+
+To **zaimplementowany wewnętrzny prototyp, nie trasa produkcyjna**. Python DSL,
+ProblemIR i requested/resolved intent nie zmieniają się. FEM CPU/GPU nadal
+wymagają właściwego producenta mesha i osobnych dowodów runtime; FDM CPU/GPU
+nie dotyczą tej topologii. Sama zgodność topologii nie dowodzi jakości
+komórek, PBC, realizacji dolnych/górnych ograniczeń pól ani poprawności
+wyników eigensolve. Następne kroki muszą połączyć rzeczywiste przekroje
+Gmsh, owner scopes, magnetic-air markers i certyfikat periodyczny.
+
+Diagnostyka odrzuconej alternatywy: niezależne Delaunay na dwóch slabach
+przy różnej gęstości wspólnej płaszczyzny dało zerowe tetraedry oraz
+różne podziały capu. Nie zastosowano perturbacji QJ ani filtrowania komórek.
+Wynik uzasadnia zmianę algorytmu; nie jest dowodem nowego kernela.
+
+Owner: `packages/fullmag-py/src/fullmag/meshing/_layered_box_tetrahedralization.py::tetrahedralize_layered_box`.
+Regresje `LayeredBoxTetrahedralizationTests`: **6 PASS, 11 subtests PASS**
+w interpretowanym pytest. Obejmują coarse/fine/coarse z niepustym ROI,
+cztery płaszczyzny, inserty na brzegu i przekątnej, permutację, dokładną
+translację binarną oraz rzeczywiste dziesiętne współrzędne SI. Zespolone
+współrzędne są odrzucane, zamiast cichego usunięcia części urojonej.
+Dokładne centrowanie i wspólna dodatnia skala są wykonywane w arytmetyce
+wymiernej; nie zmieniają proporcji geometrycznych ani wejściowych węzłów.
+Każde wstawienie przegląda bieżącą topologię. Koszt dokładnej arytmetyki
+oraz pełnych przeglądów ogranicza prototyp do małych przypadków; nie jest
+to kwalifikowany algorytm wydajnościowy dla dużych meshy.
+Regional-density actual Gmsh i managed eigensolve pozostają **OPEN**.
+
 (thin-film-mesh-validation)=
 ## Validation
 
@@ -270,6 +318,8 @@ nie kwalifikuje operatora ani managed runtime.
 | Sweep | `packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py` | `generate_swept_box_mesh` | ograniczona mixed-P1 realizacja box |
 | Tetra fields | `packages/fullmag-py/src/fullmag/meshing/_size_field_plan.py` | `_build_field_stack` | strefy surface/edge/corner/air |
 | Quality | `packages/fullmag-py/src/fullmag/meshing/_gmsh_extraction.py` | `_extract_quality_metrics` | bieżące metryki Gmsh |
+| Zmienne przekroje | `packages/fullmag-py/src/fullmag/meshing/_layered_box_tetrahedralization.py` | `tetrahedralize_layered_box` | dokładny prototyp zgodnej topologii; brak production routing |
+| Regresja kernela | `packages/fullmag-py/tests/test_layered_box_tetrahedralization.py` | `LayeredBoxTetrahedralizationTests` | 6 PASS, 11 subtests; runtime/PBC/quality OPEN |
 
 
 (thin-film-periodic-tetrahedral-layer-realization)=
