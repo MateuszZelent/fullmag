@@ -3354,6 +3354,9 @@ void modal_floquet_wavevector_validation_precedes_tiny_dispatch()
     FullmagFemFrequencyDomainResult raw_vector_wins_result =
         fullmag_fem_modal_eigen_solve(&raw_vector_wins);
     if (raw_vector_wins_result.status != FULLMAG_FEM_FD_OK) {
+        const double *request_mass = raw_vector_wins.tiny_validation_mass_matrix_row_major;
+        std::fprintf(stderr, "raw-vector request mass=[%.17g,%.17g,%.17g,%.17g] expected=[0,-1,1,0]\n",
+            request_mass[0], request_mass[1], request_mass[2], request_mass[3]);
         std::fprintf(stderr, "raw-vector precedence status=%d error=%s diagnostics=%s result=%s\n",
             static_cast<int>(raw_vector_wins_result.status),
             raw_vector_wins_result.error_message != nullptr ? raw_vector_wins_result.error_message : "null",

@@ -1630,6 +1630,12 @@ FrequencyDomainContractResult solve_tiny_validation_modal_problem(
             "\"complete\":false,"
             "\"execution_lane\":\"validation\","
             "\"tiny_validation_solver\":true,"
+            "\"tiny_validation_gyrotropic_determinant\":" + format_double(det_g) +
+            ",\"tiny_validation_gyrotropic_matrix_row_major\":[" +
+            format_double(gyrotropic_mass[0]) + "," +
+            format_double(gyrotropic_mass[1]) + "," +
+            format_double(gyrotropic_mass[2]) + "," +
+            format_double(gyrotropic_mass[3]) + "],"
             "\"stop_reason\":null}";
         result.diagnostics_json = with_operator_diagnostics(
             result.diagnostics_json,
