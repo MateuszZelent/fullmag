@@ -238,9 +238,13 @@ class RetentionPlanTests(unittest.TestCase):
 
     def test_execution_progress_is_measured_and_does_not_change_fingerprint(self):
         execution = self.storage / 'execution'
-        (execution / 'nested').mkdir(parents=True)
+        nested = execution / 'nested'
+        nested.mkdir(parents=True)
         (execution / 'a.bin').write_bytes(b'abc')
-        (execution / 'nested' / 'b.bin').write_bytes(b'defgh')
+        (nested / 'b.bin').write_bytes(b'defgh')
+        # Windows may advance a directory mtime after a child write returns.
+        nested_info = nested.stat()
+        os.utime(nested, ns=(nested_info.st_atime_ns, 1_700_000_000_000_000_000))
         updates = []
 
         baseline = inspect_execution(execution)

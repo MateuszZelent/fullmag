@@ -551,3 +551,39 @@ zachowuje142nodes, exact slab volumes i90 wspólnych cap triangles, ale ma
 łączą dwie różne triangulacje dokładnie współpłaszczyznowych pionowych quadów.
 Same sumy objętości nie dowodzą zgodnej triangulacji. Bez wdrożenia/tolerancji;
 badana jest wyłącznie konkretna geometryczna przyczyna gapów.
+
+## 2026-10-13 — fingerprint retention i przygotowany obraz koordynatora
+
+Izolowana diagnoza wykazała zmianę wyłącznie st_mtime_ns katalogu nested
+po zapisaniu pliku potomnego na Windows 11/CPython 3.12.2. Mismatch
+odtworzono też bez progress callback (31/40); ustalenie mtime po zapisach
+dało 0/40 różnic. Dokładny mechanizm systemu plików pozostaje nieustalony.
+Fixture ustala mtime przed baseline; produkcyjny fingerprint i asercja
+równości bez zmian. Focused20/20 i moduł13/13 PASS. Dowody w visualization
+runner-retention-fingerprint-diagnostic-20261013.
+
+Przez just runner-coordinator-image przygotowano obraz
+sha256:3a81b67a35d3c5f6778b4079d7187b89f0baa6d9c36e7a609c1687bcfd898564
+ze źródeł 5f76503e201d8eab03bd5e2077030a242774e3e4 (exit0).
+Obraz nie został wdrożony. Działający koordynator pozostaje na69422110…;
+CAS ReadOnly nadal STOPPED2660/7721. To nie jest build FEM ani dowód
+wykonania nowej poprawki w runtime.
+
+Dokładna propozycja reconciliation2→2 usunęła jeden z czterech quad mismatch.
+Trzy pozostałe mają różne przeciwległe wierzchołki, więc prosty cone flip
+jest niedopuszczalny. Pozostało12 wolnych off-boundary facets; pełny validator
+oraz PBC nadal FAIL. Kandydat odrzucony, bez zmian produkcyjnej siatki.
+Zachowane142nodes, cap90/90 i exact slab volumes nie zastępują zgodności
+ścian. Raport: visualization delaunay-slab-proposal-20261013/
+exact-quad-2to2-reconciliation-report.md. Dalsza naprawa wymaga zgodnej
+triangulacji większych cavities lub bezpośredniej konstrukcji zgodnych
+interfejsów; samo usunięcie zerowych simplexów nie naprawia granic.
+
+Pełny cel S00–S12 pozostaje OPEN. Wymiana koordynatora wymaga domknięcia
+przeglądu różnic i bramek, a nowy FEM build również miejsca w storage.
+
+Ponowiony szerszy zestaw po poprawce fixture:341 tests/2skips,
+121,871s, exit1. Awaria fingerprintu nie powróciła; ujawniono odrębny
+ERROR w test_parallel_captures_share_verified_objects_and_keep_v1_identity.
+Publication lock znika po FileExistsError, przed _guard_path/lstat;
+trwa diagnoza wyścigu zwolnienia blokady. Nie wdrożono obrazu runnera.
