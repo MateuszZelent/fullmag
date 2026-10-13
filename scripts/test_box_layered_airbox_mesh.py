@@ -78,10 +78,10 @@ def test_public_de_model_shared_domain_realizes_six_layers(monkeypatch):
             mesh_workflow=meta["mesh_workflow"])
         assert report.build_mode == "single_geometry_geo_layered_box"
         status = next(s for s in report.operation_statuses if s.kind == "thin_film")
-        assert status.actual_method == "geo_layered_tetrahedral"
+        assert status.actual_method == "geo_layer_partitioned_tetrahedral"
         assert status.details["resolved_sweep_direction"] == "z"
         diagnostic = report.to_dict()["thin_film_diagnostics"][0]
-        assert diagnostic["actual_method"] == "geo_layered_tetrahedral"
+        assert diagnostic["actual_method"] == "geo_layer_partitioned_tetrahedral"
         assert not any("maximum element size" in w for w in diagnostic["warnings"])
         assert markers == [{"geometry_name": "film", "marker": 1}]
         body = np.asarray(mesh.elements)[np.asarray(mesh.element_markers) == 1]
@@ -353,6 +353,11 @@ def test_scoped_periodic_box_keeps_exact_layers_before_modal_probe(layers):
     volumes = np.abs(np.linalg.det(xyz[:, 1:] - xyz[:, :1])) / 6.0
     assert np.all(volumes > 0)
     assert volumes.sum() == pytest.approx(40e-9 * 40e-9 * 10e-9, rel=1e-12)
+    centroids_z = xyz[:, :, 2].mean(axis=1)
+    for lower, upper in zip(planes[:-1], planes[1:], strict=True):
+        assert np.count_nonzero((centroids_z > lower) & (centroids_z < upper)) > 0
+    assert mesh.periodic_mesh_certificate is not None
+    assert mesh.periodic_mesh_certificate["certificate_status"] == "accepted"
     assert field["_gmsh_status"] == "applied"
     for pair_id, axis in (("x_faces", 0), ("y_faces", 1)):
         required = set(np.flatnonzero(np.isclose(np.abs(nodes[:, axis]), 20e-9,

@@ -140,3 +140,23 @@ Dedicated CI job `exact-layer-mesh` wykonuje tę regresję oraz istniejące
 periodic/topology tests i quality-unit tests. AST i nota0104/source-map PASS.
 Nie kompilowano testów lokalnie. Świeże CI i managed runtime pozostają
 NOT VERIFIED do otrzymania rzeczywistych wyników.
+
+
+## Wyniki rzeczywistego Gmsh i korekta regresji — 13.10.2026
+
+Dla commita `749166ed8e4463c65b2f7620ed1c077652b5d28b` job
+`exact-layer-mesh` w CI38360281635: **37 PASS, 1 FAIL**.
+Nowe scoped 3/6-layer i quality SI checks przeszły. Jedyny błąd tego
+zestawu to historyczna nazwa `geo_layered_tetrahedral` w publicznym DE
+fixture; raport dla owner-scoped realizacji zgodnie z kodem zwraca
+`geo_layer_partitioned_tetrahedral`. Skorygowano dwie asercje nazwy;
+nie zmieniono kryteriów geometrycznych. Dodano bezpośrednie sprawdzenie
+zwróconego accepted periodic certificate i niepustych komórek każdej warstwy.
+Review źródeł nie znalazło blokującego błędu, wskazało te dwie luki testowe.
+
+Osobny CI38360281511 actual-Gmsh: **309 tests, 1 FAIL, 1 SKIP**.
+`test_direct_layered_box_region_floor_beats_eligible_upper_actual_density`
+dla thin_film_tetrahedral nie znalazł elementów wewnątrz lokalnego
+regionu (`region_lengths=[]`). Jest to otwarty problem realizacji
+zagęszczenia, nie błąd nazwy. Nie usunięto testu ani nie poluzowano
+kryteriów gęstości. Managed serial/adaptive runtime pozostaje NOT VERIFIED.
