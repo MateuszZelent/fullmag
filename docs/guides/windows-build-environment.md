@@ -160,10 +160,58 @@ Bieżący setup środowiska nie instaluje ani nie kwalifikuje WebView2, dlatego 
 `runtime: NOT VERIFIED`. Zobacz [Tauri Windows prerequisites](https://v2.tauri.app/start/prerequisites/)
 i [WebView2 Runtime](https://developer.microsoft.com/en-us/microsoft-edge/webview2/).
 
+### Ekran konfiguracji `.env`
+
+Planowany `fullmag.exe` ma zawierać ekran konfiguracji `.env` przed rozpoczęciem
+instalacji. Ekran pokazuje wyłącznie pola z wersjonowanego
+[`.env.example`](../../.env.example) oraz kontraktu manifestu wymagań; obecny
+template obejmuje parametry `RUST_LOG`, `POSTGRES_PASSWORD`,
+`MINIO_ROOT_USER`, `MINIO_ROOT_PASSWORD`, a także ścieżki
+`FULLMAG_PROJECT_STORAGE_ROOT` i opcjonalny `FULLMAG_WINDOWS_VOLATILE_ROOT`.
+Manifest [`windows_build_requirements.json`](../../windows_build_requirements.json)
+wiąże wybór storage z `FULLMAG_PROJECT_STORAGE_ROOT`, resolverem i profilami.
+Nowe pole wymaga najpierw zmiany wersjonowanego template/manifestu. GUI nie może
+zgadywać pól na podstawie zmiennych procesu ani kopiować konfiguracji z innego
+komputera.
+
+Instalator ustala checkout przez Git, a główny checkout przez pierwszy rekord
+`git worktree list --porcelain`; ekran czyta i zapisuje `.env` wyłącznie tam.
+Brak metadanych `.git`, brak rekordu głównego checkoutu albo próba użycia
+worktree-local `.env` blokuje instalację. Instalator nie wykonuje `git init` i nie
+tworzy alternatywnego źródła konfiguracji.
+
+Wybór `FULLMAG_PROJECT_STORAGE_ROOT` odbywa się w jawnym dialogu lokalnej ścieżki.
+Przed pokazaniem możliwości zapisu instalator sprawdza absolutną ścieżkę Windows,
+odrzuca ścieżki względne, drive-relative, UNC i sieciowe, a następnie uruchamia
+wspólny [`fullmag_storage.py`](../../scripts/fullmag_storage.py) dla wybranego
+profilu. Walidacja musi potwierdzić marker projektu, brak junction/reparse point
+na całej trasie oraz preflight resolvera. Istniejąca wartość z głównego `.env`
+nie może zostać po cichu zastąpiona; rozbieżność z wyborem operatora jest blokadą.
+`FULLMAG_WINDOWS_VOLATILE_ROOT` pozostaje opcjonalną, lokalną ścieżką zgodną z
+template i nie staje się drugim rootem storage.
+
+Przed zatwierdzeniem użytkownik otrzymuje podgląd różnic z zamaskowanymi
+sekretami. Podgląd, komunikaty i logi nie mogą zawierać wartości
+`POSTGRES_PASSWORD` ani `MINIO_ROOT_PASSWORD`. Anulowanie, odrzucenie walidacji
+lub błąd zapisu nie zmienia `.env`. Po zatwierdzeniu instalator wykonuje kopię
+zapasową, zapisuje nową treść przez plik tymczasowy i atomową podmianę, zachowując
+nieznane wpisy, komentarze i pozostałą kolejność konfiguracji. Niepowodzenie
+któregokolwiek kroku pozostawia poprzedni plik jako aktywny i nie uruchamia
+dalszej instalacji. Konfiguracja trafia do projektowego `.env`; GUI nie ustawia
+globalnego User/Machine environment ani globalnego `PATH`.
+
+Status tego ekranu to `NOT VERIFIED` i `planned`. Obecny
+[`setup_build_environment.ps1`](../../scripts/windows/setup_build_environment.ps1)
+pozostaje narzędziem check/install: czyta `.env` głównego checkoutu, a przy
+`-Install -StorageRoot` może dopisać brakującą linię storage. Nie jest edytorem
+GUI i nie dostarcza jeszcze kontraktu podglądu różnic, maskowania sekretów,
+kopii zapasowej ani atomowej transakcji opisanej powyżej.
+
 To jest plan integracji, nie gotowy instalator GUI. Nie ma jeszcze zatwierdzonego
 łańcucha Burn, kontraktu upgrade/rollback ani dowodu działania `fullmag.exe`.
-Przed implementacją trzeba zapisać ADR obejmujący wersję WiX, identyfikatory
-pakietów prerequisites, kolejność kontroli oraz własność MSI. Dokumentacja Burn:
+Kontrakt należy utrzymywać w [`ADR 0053`](../adr/0053-native-windows-fem-build-environment.md)
+i obejmuje wersję WiX, identyfikatory pakietów prerequisites, kolejność kontroli,
+ekran konfiguracji `.env` oraz własność MSI. Dokumentacja Burn:
 [WiX Burn](https://docs.firegiant.com/wix/tools/burn/).
 
 ## Ścieżka po setupie
