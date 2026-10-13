@@ -201,3 +201,10 @@ siatkę/ROI, report, inputs i plane counts przed zachowaną oryginalną
 asercją; workflow publikuje failure evidence. Jest to poprawka diagnostyki,
 nie realizacji regionalnego zagęszczenia. AST/YAML/diff PASS;
 nowa regresja helpera oraz actual capture wymagają świeżego CI.
+
+
+CI38363256813 nie utworzył żadnego joba: workflow używał runner.temp
+w job.env. GitHub context-availability dopuszcza runner dopiero w step.env,
+nie job.env. Przeniesiono env do kroku actual-Gmsh; upload path bez zmian.
+Źródło: https://docs.github.com/en/actions/reference/workflows-and-actions/contexts
+YAML i kontrola umiejscowienia env PASS; świeże CI wymagane.
