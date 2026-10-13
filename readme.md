@@ -327,8 +327,11 @@ Project coordination: **Mateusz Zelent, RPTU Kaiserslautern-Landau**.
 
 ## License
 
-The repository does not currently contain a root-level license file. Contact the project
-coordinator before reuse or redistribution.
+The Fullmag-owned source in this repository is licensed under the [Apache License, Version 2.0](LICENSE).
+See [NOTICE](NOTICE) for the existing project attribution. External solvers, vendored files,
+runtimes, containers, data, and other third-party components retain their own terms; see the
+[Fullmag licensing guide](docs/guides/fullmag-licensing.md) before redistribution. The
+third-party inventory for a complete release remains **NOT VERIFIED**.
 
 ## Funding
 
