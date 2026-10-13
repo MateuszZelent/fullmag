@@ -35,6 +35,14 @@ wykazały FAIL kontroli tożsamości bufora mimo jawnego reference capture.
 Kolejna poprawka usuwa zależność od capture tablic constexpr: bezstanowa
 factory otrzymuje jawne wskaźniki od wywołującego. Obie asercje tożsamości
 i wszystkie warunki walidacji pozostają bez zmian.
+CI38462235591 i38462228996/sourcee9196c38b przeszły wcześniejsze
+wavevector/factory assertions bez zgłoszenia ASAN; zatrzymały się na gated
+operator terms. Rzeczywista przyczyna: optional-payload consistency zwraca
+true dla nieobecnych danych, więc label-only dynamic_demag przechodził gate.
+Warunek admission wymaga teraz declared AND consistent dla dense;
+natywny shared-domain provider pozostaje odrębną ścieżką sparse.
+Istniejące asercje gated-terms pozostają niezmienione; nota0828 i jej mapa
+źródeł dokumentują korektę.
 Nowa poprawka pozostaje NOT VERIFIED do normalnego i ASAN CI;
 lokalny zakaz kompilacji testów zachowano. Aktywna kapsuła244 nie jest zmieniana.
 Build244 potwierdza stage native-build oraz działające procesy C++ MFEM/SLEPc;

@@ -856,3 +856,29 @@ spełnić kryterium. Pozostają niezależne wymagania zgodności częstotliwośc
 siatki, airboxu i operatora. Dobór 99% jest konwencją tego benchmarku; jego
 przydatność dla uzyskanych modów trzeba sprawdzić w kampanii, bez rozluźniania
 progu po obejrzeniu niezgodnego wyniku.
+
+## Admission etykietowanego demagu — korekta 2026-10-13
+
+<!-- DOC-ANCHOR:labelled-dynamic-demag-admission -->
+
+Deklaracja `operator_terms_included` zawierająca `dynamic_demag` nie dowodzi
+materializacji operatora. Dla adaptera dense non-k0 wymagane są jednocześnie
+zadeklarowane dane macierzy i pozytywna walidacja ich rozmiaru, skończoności
+oraz zgodności żądania. Helper spójności zwraca true także dla braku opcjonalnych
+danych; sam ten wynik nie może otwierać bramki demagu. Etykieta bez danych
+pozostaje odrzucona jako `production_cpu_modal_gated_operator_terms_present`.
+Żądanie `include_demag=true` bez danych zachowuje wcześniejszy, bardziej
+konkretny błąd `production_cpu_modal_dynamic_demag_k_operator_missing`.
+
+Natywny shared-domain provider stanowi odrębną ścieżkę: operuje na blokach
+CSR Poissona i sprzężenia, więc nie wymaga zastępczej macierzy dense.
+Jego niepusty internal owner podlega istniejącym bramkom payloadu, periodycznych
+par i walidacji sparse operatora. Ta korekta nie zmienia równań, jednostek SI,
+Python→IR, tolerancji, fazy Floqueta ani certyfikacji kompletności widma.
+
+Źródło: `production_cpu_modal_eigen.cpp::modal_request_gated_operator_term`.
+Regresja: `modal_eigen_contract_test.cpp::modal_nonzero_k_floquet_bloch_payload_rejects_gated_operator_terms`.
+Normalne CI38462235591 i ASAN38462228996 na e9196c38b wykazały błędne
+przepuszczenie label-only do dalszego adaptera. Po korekcie wymagane pozostają
+te same asercje rejection reason/term/status. Dowód runtime produkcyjnego
+FEM i pełna kwalifikacja naukowa pozostają NOT VERIFIED.

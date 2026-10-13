@@ -602,7 +602,12 @@ const char *modal_request_gated_operator_term(
         // A complete, finite k-dependent payload is the native provider's
         // proof that this term is materialized.  Keep the historical gate for
         // labelled-but-missing Rust/full2x2 terms.
-        if (!dynamic_demag_k_payload_is_consistent(request)) {
+        // Optional-payload consistency also accepts absence. A label alone
+        // must not be mistaken for materialized dense demag; the native
+        // shared-domain owner instead supplies its own sparse Poisson blocks.
+        if (request.floquet_shared_domain_operator == nullptr &&
+            (!dynamic_demag_k_payload_is_declared(request) ||
+             !dynamic_demag_k_payload_is_consistent(request))) {
             return "dynamic_demag";
         }
     }

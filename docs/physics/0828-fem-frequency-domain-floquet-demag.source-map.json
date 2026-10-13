@@ -676,6 +676,20 @@
       "symbol": "validate_rows",
       "responsibility": "Check absolute CSV residual finiteness only; no relative or scientific qualification.",
       "evidence_status": "source contract; runtime NOT VERIFIED"
+    },
+    {
+      "id": "source-labelled-dynamic-demag-admission",
+      "path": "backends/fem/cpu/frequency_domain/production_cpu_modal_eigen.cpp",
+      "symbol": "modal_request_gated_operator_term",
+      "responsibility": "Reject label-only dynamic demag unless declared consistent dense data or the native shared-domain provider owns the operator; retain earlier malformed/missing payload validation.",
+      "evidence_status": "source correction; native CI and managed runtime NOT VERIFIED"
+    },
+    {
+      "id": "source-labelled-dynamic-demag-regression",
+      "path": "backends/fem/tests/frequency_domain/modal_eigen_contract_test.cpp",
+      "symbol": "modal_nonzero_k_floquet_bloch_payload_rejects_gated_operator_terms",
+      "responsibility": "Require unavailable status and exact rejection reason/term for a Bloch payload labelled dynamic_demag without numeric data.",
+      "evidence_status": "CI regression RED before correction; post-correction NOT VERIFIED"
     }
   ],
   "public_api": {
