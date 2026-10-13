@@ -3353,6 +3353,13 @@ void modal_floquet_wavevector_validation_precedes_tiny_dispatch()
         std::numeric_limits<double>::quiet_NaN();
     FullmagFemFrequencyDomainResult raw_vector_wins_result =
         fullmag_fem_modal_eigen_solve(&raw_vector_wins);
+    if (raw_vector_wins_result.status != FULLMAG_FEM_FD_OK) {
+        std::fprintf(stderr, "raw-vector precedence status=%d error=%s diagnostics=%s result=%s\n",
+            static_cast<int>(raw_vector_wins_result.status),
+            raw_vector_wins_result.error_message != nullptr ? raw_vector_wins_result.error_message : "null",
+            raw_vector_wins_result.diagnostics_json != nullptr ? raw_vector_wins_result.diagnostics_json : "null",
+            raw_vector_wins_result.result_json != nullptr ? raw_vector_wins_result.result_json : "null");
+    }
     check(raw_vector_wins_result.status == FULLMAG_FEM_FD_OK,
           "a finite raw vector must take precedence over a nonfinite fixed-array fallback");
     check(contains(raw_vector_wins_result.diagnostics_json,
