@@ -25,6 +25,7 @@ import {
   BACKEND_INTERACTION_IDS,
   findInteractionSpec,
   interactionAvailabilityForDiscretization,
+  normalizeInteractionDiscretization,
   type InteractionDiscretization,
   type PhysicsInteractionId,
 } from "@/shared/domain/physics/interactions";

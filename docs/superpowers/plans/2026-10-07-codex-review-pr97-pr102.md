@@ -4228,3 +4228,11 @@ Scope CI `38481140323`: E0308 w existing both_ir_versions_reject_a_missing_anten
 PR #97 jest closed/merged, merge commit `911902d6d545d1471c77290eedef1a1b6937fb62`; PR #102 closed bez merge. Zamknięcie PR nie dowodzi zakończenia pozostałych napraw audytu. Lokalny checkout/index pozostają chronione; brak lokalnych testów, buildów, Node i zmian Cargo.lock.
 
 Niezależny prerequisite CI: uzupełnienie SceneDocument::default o pięć pustych kolekcji antenowych, zgodnie z pustymi serde defaults i istniejącą poprawką mastera. Zmiana obejmuje tylko konstruktor pustego dokumentu, bez modyfikacji danych authored ani mappingów. Atomic Windows/Linux gate ma kwalifikować nowy combined snapshot; do wyniku pozostaje PENDING.
+
+### 2026-10-14 — świeża kompletność rejestru i terminalny CI
+
+GitHub inventory PR97: 403 inline comments, z czego 398 Codex; każde Codex ID występuje w ledger, zero brakujących. PR102: zero inline comments. To kontrola ewidencji, nie dowód zakończenia napraw ani wszystkich wymaganych bramek. Evidence: live-comment-ledger-completeness-20261014.json i pr97-comment-inventory-20261014.tsv.
+
+Run38484105341 exact a329fca43a8a168daade43d784da95d4900d6d75: Windows i Linux przeszły wcześniejsze preflight/artefact path błędy, lecz obie kompilacje zatrzymały się na E0004 w fullmag-runner/src/lib.rs2605: Adaptive match nie obejmuje nowego BackendPlanIR::AntennaExternalLeadInspection. Logi pojedynczych jobów zachowane. Source fix admission/test w realizacji; atomic publication nadal pending_ci, nie qualified. Nie wykonano lokalnych testów i nie ponawiano unchanged runów.
+
+Frontend source prerequisite: wymagane request_scope_epoch uzupełnione w trzech fixture StageExecution. run_id jest w bieżącym DTO wymaganym stringiem; nieprawidłowe pozytywne fixture run_id:null zastąpiono/wycofano, zachowując negatywne sprawdzenie prawidłowego payloadu przy expectedRunId:null i dotychczasową macierz ready/stale/error. Brakujący import normalizeInteractionDiscretization w ribbonCommands uzupełniony. Konsumentów sprawdzono źródłowo; żadnego assertion suppression ani zmiany produkcyjnych scope filtrów. Weryfikacja GHA pending; pozostałe AST/buffer diagnostyki jeszcze nie naprawione.

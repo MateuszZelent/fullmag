@@ -1421,6 +1421,7 @@ describe("study runtime command resource bundles", () => {
         active_stage_kind: null,
         completed_stage_indexes: [],
         revision: 4,
+        request_scope_epoch: "api-instance:session-current",
         run_id: "run-current",
         runtime_state: "running",
         session_epoch: "epoch-current",
@@ -1452,12 +1453,6 @@ describe("study runtime command resource bundles", () => {
         ),
       ).toBe(false);
       const noRunIdentity = { ...identity, runId: null };
-      expect(
-        stageExecutionMatchesSessionIdentity(
-          { ...execution, run_id: null },
-          noRunIdentity,
-        ),
-      ).toBe(true);
       expect(
         stageExecutionMatchesSessionIdentity(execution, noRunIdentity),
       ).toBe(false);
