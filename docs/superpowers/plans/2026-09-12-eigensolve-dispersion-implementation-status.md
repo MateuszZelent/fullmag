@@ -10,7 +10,7 @@ Pełny cel **S00–S12 pozostaje OPEN**. Aktualny worktree:
 | Managed build243 | Terminalne succeeded/exit0, hashe 29 artefaktów sprawdzone; source181b4e7b4e8b749cc5de3af0c15b3317e468306b | Nie zastępuje buildu poprawki K0 |
 | DE z demagiem, signed ±2rad/µm | Natywne wyniki 9,722781146398083 i 9,722781258027445GHz; residuale poniżej9e-15; odchylenie od analityki około−0,0303% | Wyniki completed_unqualified: window_count niecertyfikowany, brak zbieżności i pełnego sweepa |
 | K0 window recovery | Ograniczona poprawka13d9d71f6f365768038dd27e73af037f28b64255; policy-only regression PASS w CI38454411467 | Dowód runtime nowego recovery pozostaje NOT VERIFIED |
-| Managed build244 | Job681ccf26c84742cf83880d97517ca4e4, source13d9d71f6, digestfb56ec30e8d70c3543fea6a45cf76b813a8be3052d9b788ec886dba4a22ee275, ostatni status running; worker_alive=true | Terminalny receipt i artefakty, potem canonical de-smoke-two i signed15 |
+| Managed build244 | Job681ccf26c84742cf83880d97517ca4e4, source13d9d71f6, digestfb56ec30e8d70c3543fea6a45cf76b813a8be3052d9b788ec886dba4a22ee275, native-build exit0,2211640ms; build-receipt state succeeded,29 artefaktów/340071153B; dependency/runtime attestations PASS; kolejka nadal running | Terminalny status kolejki i kontrola integralności artefaktów, potem canonical de-smoke-two i signed15 |
 | Storage i observer | Runner odczytał57771622400B wolnego; pojedynczy observer wznowiony po timeoutcie status request, bez ponowienia joba lub pilota | Obserwować ten sam job; nie uznawać timeoutu za zakończenie buildu |
 | Native CI | Source849fa8ddb: normal CI38464533642 4/4 PASS; ASAN CI38464528559 ABI PASS; lifetime, label-only demag i reference action skorygowane | Produkcyjny FEM/SLEPc runtime i pełny workflow są osobnymi bramkami; zielony ABI nie zamyka nauki |
 | Produkcyjne non-k0 count proof | Sparse retrieval emituje prawidłowe not_certified/methodnone; nie ma niezależnego count proof | Wymagana sprawdzona struktura pencilu i niezależne zliczanie, nie zmiana etykiety certyfikacji |
@@ -62,6 +62,12 @@ workflow oraz produkcyjny runtime/nauka są odrębnymi bramkami;
 lokalny zakaz kompilacji testów zachowano. Aktywna kapsuła244 nie jest zmieniana.
 Build244 potwierdza stage native-build oraz działające procesy C++ MFEM/SLEPc;
 status running nie jest już wyłącznie dowodem przygotowania źródeł.
+Nowszy pomiar: native-build zakończył się exit0 po2211640ms. Attestacja
+runtime wskazuje CPU dostępne, GPU niewbudowane; MFEM4.10/PETSc3.24.6/
+SLEPc3.24.3 i source13d9d71f6. Receipt ma29 artefaktów/340071153B.
+Koordynator nadal ma aktywny job244 i końcową kontrolę receiptu/source;
+nie wolno utożsamiać wewnętrznego receipt succeeded z terminalnym
+statusem kolejki ani z obliczonym widmem.
 
 Dalsze przyczynowe wymagania meshingu A1: prototyp seeded Box miał podwójne
 węzły punktów CAD. Ich ponowne użycie nie usuwa błędu PBC. Ponowne
