@@ -29,6 +29,8 @@ on:
       - 'apps/control-room/src/kernel/api/fieldQueryIdentity*'
       - 'apps/control-room/src/kernel/api/codecs/fdmRegionMembershipCodec*'
       - 'apps/control-room/src/kernel/persistence/ProjectDocumentController*'
+      - 'apps/control-room/src/modules/analysis-plots/components/sharedAnalysisImportBoundary.test.ts'
+      - 'apps/control-room/src/modules/inspector/panels/visualization-debug/VisualizationDebugPanel.performance.test.ts'
       - 'apps/control-room/scripts/typecheck-control-room.mjs'
       - 'apps/control-room/package.json'
       - 'pnpm-lock.yaml'
@@ -90,6 +92,8 @@ on:
       - 'apps/control-room/src/kernel/api/fieldQueryIdentity*'
       - 'apps/control-room/src/kernel/api/codecs/fdmRegionMembershipCodec*'
       - 'apps/control-room/src/kernel/persistence/ProjectDocumentController*'
+      - 'apps/control-room/src/modules/analysis-plots/components/sharedAnalysisImportBoundary.test.ts'
+      - 'apps/control-room/src/modules/inspector/panels/visualization-debug/VisualizationDebugPanel.performance.test.ts'
       - 'apps/control-room/scripts/typecheck-control-room.mjs'
       - 'apps/control-room/package.json'
       - 'pnpm-lock.yaml'
@@ -186,6 +190,8 @@ jobs:
           src/kernel/api/fieldQueryIdentity.test.ts
           src/kernel/api/codecs/fdmRegionMembershipCodec.test.ts
           src/kernel/persistence/ProjectDocumentController.test.ts
+          src/modules/analysis-plots/components/sharedAnalysisImportBoundary.test.ts
+          src/modules/inspector/panels/visualization-debug/VisualizationDebugPanel.performance.test.ts
           src/kernel/resources/studyRuntimeResources.provider.test.tsx
           src/kernel/resources/frequencyDomainResourceKeys.test.ts
           src/kernel/resources/analysisResultCatalogPagination.test.ts

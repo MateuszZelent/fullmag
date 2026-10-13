@@ -2,7 +2,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 
 import { describe, expect, it } from "vitest";
-import { createSourceFile, forEachChild, isCallExpression, isExportDeclaration, isImportDeclaration, isStringLiteral, ScriptKind, ScriptTarget, SyntaxKind } from "typescript";
+import ts from "@typescript/typescript6";
 
 const appSourceRoot = resolve(process.cwd(), "src");
 const sharedRoots = [
@@ -44,18 +44,18 @@ function sourceFiles(root: string): string[] {
 }
 
 function moduleImportSpecifiers(fileName: string, source: string): string[] {
-  const sourceFile = createSourceFile(fileName, source, ScriptTarget.Latest, true, fileName.endsWith(".tsx") ? ScriptKind.TSX : ScriptKind.TS);
+  const sourceFile = ts.createSourceFile(fileName, source, ts.ScriptTarget.Latest, true, fileName.endsWith(".tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
   const specifiers: string[] = [];
-  const visit = (node: import("typescript").Node) => {
-    const specifier = isImportDeclaration(node) || isExportDeclaration(node)
+  const visit = (node: ts.Node) => {
+    const specifier = ts.isImportDeclaration(node) || ts.isExportDeclaration(node)
       ? node.moduleSpecifier
-      : isCallExpression(node) && node.expression.kind === SyntaxKind.ImportKeyword
+      : ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword
         ? node.arguments[0]
         : undefined;
-    if (specifier && isStringLiteral(specifier) && pointsToModules(fileName, specifier.text)) {
+    if (specifier && ts.isStringLiteral(specifier) && pointsToModules(fileName, specifier.text)) {
       specifiers.push(specifier.text);
     }
-    forEachChild(node, visit);
+    ts.forEachChild(node, visit);
   };
   visit(sourceFile);
   return specifiers;
