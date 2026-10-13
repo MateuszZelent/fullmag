@@ -3,13 +3,13 @@
 
 **Pełny cel S00–S12 pozostaje OPEN.** Bieżące prace wykonuje worktree
 `dispersion-mode-ui-20261008`, branch `codex/dispersion-mode-ui-20261008`.
-Checkpoint bazowy bieżącej naprawy: `b101530745ddd0d69c73c0b2c183a851540b798e`, na remote.
+Checkpoint kodu bieżącej naprawy: `7a90a7d11f814bdc46869404712bace8c5f3c9fc`, na remote.
 Oryginalny worktree dyspersji zawiera odrębną niezakończoną pracę;
 jego dirty/staged plików nie zmieniono w tym przyroście.
 
 | Zakres | Potwierdzone obecnymi dowodami | Warunek zamknięcia / następny krok |
 |---|---|---|
-| Capture/storage | Poprawka prywatnego stagingu zachowuje ścisłą walidację rzeczywistych hardlinków CAS; lokalnie12 interpretowanych regresji PASS. CI38378068321 capture-contract:262PASS/181subtests | Nowe capture nadal blokuje utrata ReadOnly w istniejących obiektach CAS. Preview7721 poprawnych hash/size kandydatów; operator repair oczekuje autoryzacji. Nie zmieniono obiektów |
+| Capture/storage | Poprawka prywatnego stagingu zachowuje ścisłą walidację rzeczywistych hardlinków CAS; lokalnie12 interpretowanych regresji PASS. CI38378068321 capture-contract:262PASS/181subtests | Nowe capture nadal blokuje utrata ReadOnly w istniejących obiektach CAS. Użytkownik zatwierdził repair7721 obiektów. Przywracanie ReadOnly trwa, z ponowną kontrolą hash/size/identity/link_count pod blokadą CAS. Pełny wynik wymaga terminalnego receiptu; nie dodano implicit repair do capture |
 | Regionalna siatka | Aktualne CI38381498619 nadal FAIL: pusty ROI. Geometry-only sampling daje zmienne przekroje43/56/43 i ROI3/11/3; kernel404tet/142nodes po cap flips ma minimum det/max_edge³2.09e-4. Adapter MeshData14PASS, kernel10PASS/13subtests + cache1PASS;2 actual probes PASS | Pozostała jakość i rozmiary komórek, potem production routing owner fields/lower-upper/quality/markers/PBC/exact-z; prototyp i test topologii nie zamykają bramki |
 | Runtime i serial/adaptive | Istnieją historyczne managed wyniki oraz siedem wybranych punktów; selected-only nie jest pełnym oknem spektralnym | Świeży build dokładnych źródeł i przebieg, pełne diagnostics/residuale, signed sweep oraz pomierzony parytet serial/adaptive |
 | Spektrum i nauka | Źródłowe kontrakty i analityczne oracles; wcześniejsze wyniki nie zamykają kwalifikacji | Pełne okno/mod count, DE/BV, zbieżność siatki i airboxu, porównanie identycznego COMSOL A1 oraz wymagane GPU |
@@ -43,6 +43,51 @@ poprawy prototypu, a nie produkcyjnej jakości ani wydajności.
 Cache immutable geometry zachował identyczny output142/404 i skrócił kernel
 do4.216s w actual-Gmsh probe2PASS. Focused24PASS/13subtests + cache1PASS.
 CI38384634580 dla b101530:SUCCESS4/4; actualregional38384634688 nadal pustyROI.
+
+### Korekta audytu: jakość tetraedrów nie dowodzi regionalnego rozmiaru
+
+Aktualne CI dla dokładnego `7a90a7d`: dispersion/mode UI38386150639 SUCCESS,
+artifact consumers38386150732 SUCCESS, scoped fields38386150654 FAILURE.
+Odczyt logu:309 testów,1 failure/1 skip; nadal pusty ROI w
+`test_direct_layered_box_region_floor_beats_eligible_upper_actual_density`
+dla `thin_film_tetrahedral`. Nie osłabiono progu ani nie pominięto tej trasy.
+
+Audyt zapisanego mesh142/404 wykazał, że40 tetraedrów z centroidem w ROI
+ma maksymalną krawędź: p50=99.20nm, p95=129.26nm, max=144.57nm.
+Komórka209 zawiera krawędź95→140 od(-60,-40,0) do(+60,+40,10)nm,
+choć jej centroid(-9.12,-4.75,2.5)nm leży w ROI. Lokalny cap flip
+poprawiający Q² nie zapewnia poprawnego rozmiaru tetraedrów w objętości.
+Nie wykazano dotąd legalnej retriangulacji cavity wokół tej krawędzi.
+Oficjalne bramki SICN/gamma pozostają NOT VERIFIED.
+
+Fixture cap-sampling ma VIn=3nm i dz=10nm. To dowód działania pola na
+przekrojach i topologii, nie kwalifikacja rozmiaru3nm: każda komórka
+przez slab ma krawędź≥10nm. Kontrakt h_K^edge obejmuje wszystkie krawędzie
+3D, bez wyjątku „tylko XY”. Nie wolno zmieniać żądanej liczby warstw
+w celu zaliczenia testu. Osobny produkcyjny test floor-only8nm/upper3nm
+ma efektywny regionalny h_target=8nm; dz=10nm samo w sobie nie wyklucza
+jego planned p95≤10nm/max≤12nm. Przyczynę pustego ROI należy naprawić
+w rzeczywistej trasie i zmierzyć, zamiast przenosić wniosek z fixture3nm.
+
+Dalsze wymagane podpunkty:
+
+1. Naprawić produkcyjne owner-scoped sampling/routing, aby actual-density
+   test mierzył niepusty ROI z uwzględnieniem lower/upper.
+2. Opracować dokładną objętościową retriangulację zachowującą węzły,
+   capy, boundary, dodatnią orientację i objętość każdego slabu;
+   pomierzyć regionalne krawędzie oprócz lokalnego Q².
+3. Dopiero potem przejść pełne quality/size/PBC/exact-z gates i włączyć
+   adapter produkcyjny. Box smoke nie obejmuje otworu COMSOL A1/ring.
+4. Zakończyć autoryzowany operatorowy repair CAS terminalnym receiptem,
+   sprawdzić budżet miejsca i wykonać świeży managed runtime dokładnego SHA.
+
+Provenance danych audytu (artefakty diagnostyczne poza repo):
+
+- actual-gmsh-142nodes-404tets.npz SHA256: `009e7c6c10d720c402167f4ade0c0cd7cd27eda2f557411b6e2957c6309d4716`.
+- optimized-baseline-connectivity.npy SHA256: `c51a934cd519476540e38063caa99ba9c986cbbf1b61717e4cfc3e37b31bceb1`.
+
+Metryki dotyczą zapisanego outputu b101530; cache7a90 zachował identyczną
+connectivity. Nie są dowodem zbieżności ani poprawności eigensolve.
 
 Następny krok: ocena/naprawa pozostałej jakości i regional size
 bez zmiany węzłów, następnie produkcyjna integracja owner-scoped przekrojów,
