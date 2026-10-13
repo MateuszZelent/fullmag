@@ -501,18 +501,29 @@ class SourceContentStore:
             with self._publication_lock(object_path):
                 if not os.path.lexists(object_path):
                     return False
-                object_metadata = self._verify_object(
-                    object_path,
-                    digest=digest,
-                    mode=mode,
-                    size=size,
-                )
+                # A failed publication can leave a private copied stage file.
+                # An unrelated bad CAS object must not prevent cleaning that copy.
+                object_metadata = _regular_file(object_path, "content object")
                 stage_metadata = _regular_file(stage_path, "capture-stage file")
                 if not _same_file(object_path, stage_path):
                     return False
                 if _identity(stage_metadata) != _identity(object_metadata):
                     raise SourceContentStoreError(
                         f"capture-stage hard link identity mismatch: {stage_path}"
+                    )
+                verified_metadata = self._verify_object(
+                    object_path,
+                    digest=digest,
+                    mode=mode,
+                    size=size,
+                )
+                current_stage = _regular_file(stage_path, "capture-stage file")
+                if (
+                    _identity(current_stage) != _identity(verified_metadata)
+                    or not _same_file(object_path, stage_path)
+                ):
+                    raise SourceContentStoreError(
+                        f"capture-stage hard link changed during verification: {stage_path}"
                     )
 
                 if os.name == "nt":

@@ -268,3 +268,33 @@ Nie zmieniono flag ani bajtów, nie usunięto cache, nie ominięto walidacji.
 Następny krok runtime musi rozwiązać niezgodność uszczelnienia obiektów CAS
 na granicy Windows/kontener i uzyskać nową zweryfikowaną kapsułę.
 Pełne S00–S12, nauka, COMSOL, serial/adaptive, S09/GPU i integracja OPEN.
+
+
+## Sprzątanie prywatnego stagingu capture — 13.10.2026
+
+Naprawiono kolejność `SourceContentStore.unlink_stage_link`: najpierw
+kontrola typu i tożsamości pliku oraz rozróżnienie prywatnej kopii od
+hardlinka CAS, potem pełna weryfikacja obiektu dla rzeczywistego hardlinka.
+Po weryfikacji ponownie sprawdzana jest tożsamość stagingu. Błędny albo
+writable obiekt CAS nadal jest odrzucany; nie jest automatycznie naprawiany.
+Niepowiązany z nim plik prywatnego stagingu może zostać posprzątany przez
+istniejący caller zamiast pozostawić całą paczkę po nieudanym capture.
+
+Regresje: dwa przypadki RED przed poprawką, te same przypadki GREEN po
+poprawce; cały interpretowany unittest source-store:12PASS,26.090s.
+Nie kompilowano lokalnych testów jednostkowych. AST obu plików i YAML
+workflow PASS; suite dodano do capture-contract w GitHub Actions.
+Przegląd obejmuje zachowanie ochrony uszkodzonych hardlinków i zachowanie
+bajtów CAS. To poprawka źródłowa, nie dowód powodzenia managed buildu.
+
+Na HEAD10ac5e50c87769eb3a803263a1743a33d78be2d9 CI38368910997
+SUCCESS4/4; exact-layer:44PASS/11subtests. CI38368910913 SUCCESS.
+Scoped-mesh CI38368910881 pozostaje FAILURE:309tests,1FAIL,1SKIP;
+regionalny ROI nadal pusty, bo prototyp nie jest podłączony do produkcji.
+
+Osobny preview operatora wykazał7721 poprawnych hash/size obiektów CAS
+bez ReadOnly oraz98 uszczelnionych. Przywrócenie flag dla dokładnej listy
+wymaga odpowiedzi na przedstawioną propozycję; nie wykonano tej mutacji.
+Ta poprawka stagingu nie usuwa blokady integralności przy nowym capture.
+Pełne S00–S12, regionalne owner fields/PBC, fresh runtime, serial/adaptive,
+zbieżność, COMSOL, S09/GPU, GUI i integracja nadal OPEN.

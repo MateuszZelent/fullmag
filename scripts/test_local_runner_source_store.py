@@ -247,6 +247,56 @@ class LocalRunnerSourceStoreTests(unittest.TestCase):
             with self.assertRaisesRegex(SourceError, "content object digest or size mismatch"):
                 capture_source(repo, output, content_store=store)
             self.assertEqual(tuple(output.iterdir()), ())
+            self.assertEqual(tuple(root.glob(".capsule-two.capture-*")), ())
+            self.assertEqual(object_file.read_bytes(), b"corrupt existing object\n")
+
+    def test_writable_existing_object_does_not_block_private_stage_cleanup(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="fullmag-source-store-test-") as raw:
+            root = Path(raw)
+            repo = _repository(root)
+            store = root / "storage" / "cache" / "source-content-v1"
+            _, manifest = _capture(repo, root, "capsule-one", store=store)
+            entry = next(item for item in manifest["files"] if item["path"] == "deleted.txt")
+            object_file = _object_path(store, entry)
+            original = object_file.read_bytes()
+            object_file.chmod(0o666)
+            try:
+                output = root / "capsule-two"
+                output.mkdir()
+                with self.assertRaisesRegex(SourceError, "content object is writable"):
+                    capture_source(repo, output, content_store=store)
+                self.assertEqual(tuple(output.iterdir()), ())
+                self.assertEqual(tuple(root.glob(".capsule-two.capture-*")), ())
+                self.assertEqual(object_file.read_bytes(), original)
+                self.assertFalse(source_store._is_readonly(object_file, object_file.stat()))
+            finally:
+                object_file.chmod(0o444)
+
+    def test_bad_linked_object_is_still_protected_from_cleanup(self) -> None:
+        for corruption in ("writable", "digest"):
+            with self.subTest(corruption=corruption):
+                with tempfile.TemporaryDirectory(prefix="fullmag-source-store-test-") as raw:
+                    root = Path(raw)
+                    stage = root / "stage.txt"
+                    content = b"private stage source\n"
+                    stage.write_bytes(content)
+                    digest = hashlib.sha256(content).hexdigest()
+                    store = source_store.SourceContentStore(root / "store")
+                    store.link_file(stage, stage, digest=digest, mode="100644", size=len(content))
+                    object_file = store._object_path(digest, "100644")
+                    object_file.chmod(0o666)
+                    if corruption == "digest":
+                        object_file.write_bytes(b"corrupt shared source\n")
+                        object_file.chmod(0o444)
+                    before = object_file.read_bytes()
+                    message = "writable" if corruption == "writable" else "digest or size mismatch"
+                    try:
+                        with self.assertRaisesRegex(source_store.SourceContentStoreError, message):
+                            store.unlink_stage_link(stage, digest=digest, mode="100644", size=len(content))
+                        self.assertTrue(os.path.samefile(stage, object_file))
+                        self.assertEqual(object_file.read_bytes(), before)
+                    finally:
+                        object_file.chmod(0o444)
 
     def test_reparse_object_and_store_overlap_are_rejected(self) -> None:
         with tempfile.TemporaryDirectory(prefix="fullmag-source-store-test-") as raw:
