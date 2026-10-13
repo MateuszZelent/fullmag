@@ -614,6 +614,94 @@ void SubwindowTerminationFormatterPreservesMeasuredNullableEpsFields()
         "cancellation must preserve successfully queried EPS termination");
 }
 
+void WindowSearchBudgetPlanSeparatesPhysicalCountFromRetrievalBudgets()
+{
+    fd::PoissonAirboxWindowSearchBudgetPlan plan{};
+    check(!fd::resolve_poisson_airbox_window_search_budget_plan(0u, &plan),
+          "zero physical mode count must fail closed");
+    check(plan.base_initial_budget == 0u &&
+              plan.base_limit_budget == 0u &&
+              plan.refinement_initial_budget == 0u &&
+              plan.refinement_limit_budget == 0u,
+          "a failed budget plan must leave a zeroed result");
+
+    check(fd::resolve_poisson_airbox_window_search_budget_plan(1u, &plan),
+          "physical P=1 must resolve local retrieval budgets");
+    check(plan.base_initial_budget == 2u &&
+              plan.refinement_initial_budget == 4u &&
+              plan.base_limit_budget == 8u &&
+              plan.refinement_limit_budget == 16u,
+          "P=1 must keep physical count separate from base/refinement guard budgets");
+
+    check(fd::resolve_poisson_airbox_window_search_budget_plan(8u, &plan),
+          "physical P=8 must resolve its existing production ceilings");
+    check(plan.base_initial_budget == 2u &&
+              plan.refinement_initial_budget == 4u &&
+              plan.base_limit_budget == 8u &&
+              plan.refinement_limit_budget == 16u,
+          "P=8 ceilings must preserve the bounded two-doubling retry allowance");
+
+    check(fd::resolve_poisson_airbox_window_search_budget_plan(9u, &plan),
+          "physical P=9 must resolve larger existing ceilings");
+    check(plan.base_limit_budget == 9u &&
+              plan.refinement_limit_budget == 18u,
+          "ceilings must preserve larger physical request limits");
+
+    const std::uint32_t maximum_mode_count =
+        std::numeric_limits<std::uint32_t>::max() / 4u;
+    check(fd::resolve_poisson_airbox_window_search_budget_plan(
+              maximum_mode_count, &plan),
+          "the existing uint32 four-times bound must remain valid");
+    check(plan.base_limit_budget == maximum_mode_count &&
+              plan.refinement_limit_budget == maximum_mode_count,
+          "large request ceilings must clamp without uint32 overflow");
+    check(!fd::resolve_poisson_airbox_window_search_budget_plan(
+              maximum_mode_count + 1u, &plan),
+          "counts above the existing uint32 four-times bound must fail closed");
+    check(plan.base_initial_budget == 0u &&
+              plan.refinement_initial_budget == 0u &&
+              plan.base_limit_budget == 0u &&
+              plan.refinement_limit_budget == 0u,
+          "an overflowing physical request must not retain a partial budget");
+}
+
+void WindowSearchBudgetAllowsP1BaseIterationRetryWithinCeilings()
+{
+    fd::PoissonAirboxWindowSearchBudgetPlan plan{};
+    check(fd::resolve_poisson_airbox_window_search_budget_plan(1u, &plan),
+          "physical P=1 must provide a retryable base search budget");
+
+    constexpr int kIterationLimitReason = -71;
+    fd::PoissonAirboxWindowIterationRetryEligibilityInput input{};
+    input.solve_status = fd::FrequencyDomainStatus::solve_error;
+    input.eps_reason_available = true;
+    input.slepc_converged_reason_code = kIterationLimitReason;
+    input.observed_ritz_processing_clean = true;
+    input.current_requested_mode_count = plan.base_initial_budget;
+    input.next_requested_mode_count = 4u;
+    input.maximum_requested_mode_count = plan.base_limit_budget;
+    input.current_nev = 4u * input.current_requested_mode_count;
+    input.next_nev = 4u * input.next_requested_mode_count;
+    input.maximum_nev = 4u * plan.base_limit_budget;
+    check(fd::poisson_airbox_window_iteration_limit_retry_eligible(
+              input, kIterationLimitReason),
+          "P=1 base budget must permit a bounded EPS iteration-limit retry");
+
+    auto rejected = input;
+    rejected.next_requested_mode_count =
+        plan.base_limit_budget + 1u;
+    rejected.next_nev = 4u * rejected.next_requested_mode_count;
+    check(!fd::poisson_airbox_window_iteration_limit_retry_eligible(
+              rejected, kIterationLimitReason),
+          "base retry growth must stop at the helper's search-budget ceiling");
+
+    rejected = input;
+    rejected.maximum_nev = rejected.next_nev - 1u;
+    check(!fd::poisson_airbox_window_iteration_limit_retry_eligible(
+              rejected, kIterationLimitReason),
+          "base retry growth must remain inside the split-dimension NEV ceiling");
+}
+
 void WindowIterationLimitRecoveryEligibilityPreservesFailureBoundaries()
 {
     constexpr int kIterationLimitReason = -71;
@@ -1138,6 +1226,8 @@ int main(int argc, char **argv)
 {
     if (argc == 2 && argv[1] != nullptr &&
         std::strcmp(argv[1], "--iteration-retry-policy-only") == 0) {
+        WindowSearchBudgetPlanSeparatesPhysicalCountFromRetrievalBudgets();
+        WindowSearchBudgetAllowsP1BaseIterationRetryWithinCeilings();
         (WindowIterationLimitRecoveryEligibilityPreservesFailureBoundaries)();
         return 0;
     }
@@ -1155,6 +1245,8 @@ int main(int argc, char **argv)
     ModalKrylovTuningRejectsMalformedValuesAndInvalidDefaults();
     ModalKspProgressUsesLinearResidualSemanticsAndValidJson();
     SubwindowTerminationFormatterPreservesMeasuredNullableEpsFields();
+    WindowSearchBudgetPlanSeparatesPhysicalCountFromRetrievalBudgets();
+    WindowSearchBudgetAllowsP1BaseIterationRetryWithinCeilings();
     (WindowIterationLimitRecoveryEligibilityPreservesFailureBoundaries)();
     EpsDimensionsFormatterPreservesSignedQueriesAndBoundsBuffers();
     CertifiesSchurMatShellAgainstFullCoupledSparseReference();

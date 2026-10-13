@@ -2174,3 +2174,37 @@ Poprawiony kontrakt wymaga wykonania CI; status pełnej kwalifikacji NOT VERIFIE
 
 | Reference action | FEM CPU | backends/fem/cpu/frequency_domain/poisson_airbox_modal_eigen.cpp + apply_poisson_airbox_modal_shift_invert_action_cpu_reference | Bounded complex algebraic action with gauge augmentation. | Native ABI normal/ASAN CI38464533642/38464528559 PASS at849fa8ddb | Not production EPS or count proof |
 | Reference action ABI regression | FEM CPU | backends/fem/tests/frequency_domain/modal_eigen_contract_test.cpp + void modal_poisson_airbox_tail_shift_invert_action_writes_artifact | Verify artifact, adapter, residual and nonzero output without requiring SLEPc. | Same ABI CI PASS | Scoped algebraic oracle evidence |
+
+## Budżet wyszukiwania guardów a liczba modów — korekta 2026-10-13
+
+Dla częstotliwościowego okna liczba modów żądana przez użytkownika jest
+oddzielna od lokalnego budżetu retrieval. Real-split J-equivalence i guardy
+obu krawędzi wymagają większej przestrzeni niż jeden dodatni mod fizyczny.
+Lokalny budżet startuje od2 jednostek dla base i4 dla refinement; każda
+jednostka zachowuje istniejący przelicznik4 Ritz pairs i bounded NCV.
+Limit budżetu pozostawia dwa istniejące bezpieczne podwojenia retry, także
+gdy użytkownik żąda tylko jednego modu: floor8 dla base i16 dla refinement,
+lub większy istniejący limit wynikający z żądanej liczby modów. Wszystko
+podlega dotychczasowej granicy unsigned32/4 i rzeczywistemu split dimension.
+
+Nie zmienia to liczby publikowanych modów, wymagań residual/coverage ani
+tolerancji EPS/KSP. Częściowe Ritz pairs po nieudanym EPS nie stają się
+dowodem pokrycia. Niezależny count proof pozostaje oddzielną bramką.
+
+Dowód przyczynowy: runtime244 count1/EPS1e-10 miał48/50 completed windows.
+Base8 i9 wyczerpały EPSITS2000 przyNEV4/NCV16, retry_count0, ponieważ
+limit search budget był równy fizycznemu count1. W poprzednim count4 trial
+wszystkie50 podokien z większym budget przeszły, ale poprawnie odmówiono
+publikacji4 modów po odzyskaniu jednego klastra. Proponowana korekta
+usunie to przypadkowe sprzężenie; kwalifikacja pozostaje NOT VERIFIED
+do native regression CI i nowego managed runtime.
+
+| Zakres | Lane | Ścieżka i symbol | Odpowiedzialność | Dowód | Granica |
+|---|---|---|---|---|---|
+| Window search budgets | FEM CPU | backends/fem/cpu/frequency_domain/poisson_airbox_schur_matshell.cpp + resolve_poisson_airbox_window_search_budget_plan | Separate physical mode count from bounded guard retrieval. | Interpreted context regression and24 gamma-consumer regressions PASS; native CI pending | Managed runtime and independent count NOT VERIFIED |
+| Window budget regression | FEM CPU | backends/fem/tests/frequency_domain/poisson_airbox_schur_matshell_test.cpp + void WindowSearchBudgetPlanSeparatesPhysicalCountFromRetrievalBudgets | Guard floors, larger ceilings and overflow fail-closed. | Existing iteration-retry-policy-only CI target includes the regression; pending run | No local C++ test compilation |
+
+Historyczne pole certyfikatu `refined_requested_mode_count` nadal oznacza
+efektywny lokalny budżet wyszukiwania refinement. Fizyczny count pozostaje
+w globalnym `requested_mode_count`; nie wolno interpretować tych dwóch
+pól jako identycznych wymagań liczby opublikowanych modów.

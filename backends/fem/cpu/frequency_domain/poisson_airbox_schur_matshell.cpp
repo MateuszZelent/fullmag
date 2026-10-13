@@ -3768,6 +3768,58 @@ bool format_poisson_airbox_eps_dimensions_json(
     return true;
 }
 
+bool resolve_poisson_airbox_window_search_budget_plan(
+    std::uint32_t physical_requested_mode_count,
+    PoissonAirboxWindowSearchBudgetPlan *out_plan) noexcept
+{
+    if (out_plan == nullptr) {
+        return false;
+    }
+    *out_plan = {};
+
+    constexpr std::uint32_t maximum_mode_count =
+        std::numeric_limits<std::uint32_t>::max() / 4u;
+    if (physical_requested_mode_count == 0u ||
+        physical_requested_mode_count > maximum_mode_count) {
+        return false;
+    }
+
+    std::uint32_t retry_growth_factor = 1u;
+    for (std::uint32_t retry = 0u;
+         retry < kMaximumWindowIterationLimitRetries;
+         ++retry) {
+        if (retry_growth_factor >
+            std::numeric_limits<std::uint32_t>::max() / 2u) {
+            return false;
+        }
+        retry_growth_factor *= 2u;
+    }
+    // Keep every count within the existing four-times NEV arithmetic bound.
+    if (retry_growth_factor > maximum_mode_count / 4u) {
+        return false;
+    }
+
+    const std::uint32_t bounded_refinement_physical_count =
+        std::min<std::uint32_t>(
+            maximum_mode_count,
+            2u * physical_requested_mode_count);
+    const std::uint32_t base_retry_limit = 2u * retry_growth_factor;
+    const std::uint32_t refinement_retry_limit = 4u * retry_growth_factor;
+    const std::uint32_t base_limit_budget =
+        std::max(physical_requested_mode_count, base_retry_limit);
+    const std::uint32_t refinement_limit_budget =
+        std::max(bounded_refinement_physical_count, refinement_retry_limit);
+
+    if (base_limit_budget < 2u || refinement_limit_budget < 4u) {
+        return false;
+    }
+    out_plan->base_initial_budget = 2u;
+    out_plan->base_limit_budget = base_limit_budget;
+    out_plan->refinement_initial_budget = 4u;
+    out_plan->refinement_limit_budget = refinement_limit_budget;
+    return true;
+}
+
 bool poisson_airbox_window_iteration_limit_retry_eligible(
     const PoissonAirboxWindowIterationRetryEligibilityInput &input,
     int eps_diverged_its_reason_code) noexcept
@@ -3989,9 +4041,13 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
         const auto resolved_ncv = [split_dimension](std::uint64_t nev) {
             return bounded_krylov_dimensions(split_dimension, nev, true).ncv;
         };
+        PoissonAirboxWindowSearchBudgetPlan window_search_budget_plan{};
         if (problem.requested_mode_count >
                 std::numeric_limits<std::uint32_t>::max() / 4u ||
-            maximum_nev == 0u) {
+            maximum_nev == 0u ||
+            !resolve_poisson_airbox_window_search_budget_plan(
+                problem.requested_mode_count,
+                &window_search_budget_plan)) {
             return fail_production_schur(
                 problem,
                 out_result,
@@ -3999,32 +4055,22 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
                 "production shared-domain K0 Schur frequency window cannot form a guarded nev",
                 "poisson_airbox_eigen_invalid_requested_mode_count");
         }
-        const std::uint32_t refined_requested_mode_count =
-            std::min<std::uint32_t>(
-                std::numeric_limits<std::uint32_t>::max() / 4u,
-                problem.requested_mode_count <=
-                        std::numeric_limits<std::uint32_t>::max() / 2u
-                    ? 2u * problem.requested_mode_count
-                    : std::numeric_limits<std::uint32_t>::max() / 4u);
-        // A frequency window is assembled from many local shifts.  Asking
-        // every shift for the complete global mode count is needlessly
-        // expensive on the production Schur MatShell (each extra Ritz pair
-        // drives more GMRES/Poisson applications).  Start with a bounded
-        // local request and grow it only when the local accepted set fills
-        // the request.  The final certificate records the effective request;
-        // a saturated local solve is never silently treated as complete.
-        const std::uint32_t base_window_requested_mode_count =
-            std::min<std::uint32_t>(problem.requested_mode_count, 2u);
-        const std::uint32_t refinement_window_requested_mode_count =
-            std::min<std::uint32_t>(refined_requested_mode_count, 4u);
+        // Local retrieval budgets are independent of the original physical
+        // requested_mode_count. The latter remains in problem for global
+        // selection and certification; per-shift searches use this plan and
+        // may grow only to its retry and coverage ceilings.
+        const std::uint32_t base_initial_search_budget =
+            window_search_budget_plan.base_initial_budget;
+        const std::uint32_t refinement_initial_search_budget =
+            window_search_budget_plan.refinement_initial_budget;
         std::uint64_t requested_nev =
-            resolved_nev(base_window_requested_mode_count);
+            resolved_nev(base_initial_search_budget);
         std::uint64_t refined_nev =
-            resolved_nev(refinement_window_requested_mode_count);
+            resolved_nev(refinement_initial_search_budget);
         std::array<std::uint32_t, pass_count>
-            pass_effective_requested_mode_count{
-                base_window_requested_mode_count,
-                refinement_window_requested_mode_count};
+            pass_effective_search_budget{
+                base_initial_search_budget,
+                refinement_initial_search_budget};
         std::array<std::uint32_t, pass_count> pass_planned_subwindow_count{
             base_subwindow_count,
             refinement_subwindow_count};
@@ -4117,17 +4163,17 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
              ++pass_index) {
             const std::uint32_t subwindow_count =
                 pass_planned_subwindow_count[pass_index];
-            const std::uint32_t pass_initial_requested_mode_count =
+            const std::uint32_t pass_initial_search_budget =
                 pass_index == 0u
-                    ? base_window_requested_mode_count
+                    ? base_initial_search_budget
                     : std::min<std::uint32_t>(
-                          refined_requested_mode_count,
+                          window_search_budget_plan.refinement_limit_budget,
                           std::max<std::uint32_t>(
-                              refinement_window_requested_mode_count,
-                              pass_effective_requested_mode_count[0] + 1u));
-            pass_effective_requested_mode_count[pass_index] = std::max(
-                pass_effective_requested_mode_count[pass_index],
-                pass_initial_requested_mode_count);
+                              refinement_initial_search_budget,
+                              pass_effective_search_budget[0] + 1u));
+            pass_effective_search_budget[pass_index] = std::max(
+                pass_effective_search_budget[pass_index],
+                pass_initial_search_budget);
             for (std::uint32_t subwindow_index = 0;
                  subwindow_index < subwindow_count;
                  ++subwindow_index) {
@@ -4146,12 +4192,12 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
                     : problem.frequency_min_hz +
                         (static_cast<double>(subwindow_index) - 0.5) *
                             refinement_spacing;
-                const std::uint32_t maximum_subwindow_requested_mode_count =
+                const std::uint32_t maximum_subwindow_search_budget =
                     pass_index == 0u
-                        ? problem.requested_mode_count
-                        : refined_requested_mode_count;
-                std::uint32_t subwindow_requested_mode_count =
-                    pass_initial_requested_mode_count;
+                        ? window_search_budget_plan.base_limit_budget
+                        : window_search_budget_plan.refinement_limit_budget;
+                std::uint32_t subwindow_search_budget =
+                    pass_initial_search_budget;
                 const double local_half_width_hz = pass_index == 0u
                     ? 0.5 * base_spacing
                     : refinement_spacing;
@@ -4252,7 +4298,7 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
                 bool final_local_coverage_certified = false;
                 for (;;) {
                     shifted_problem.requested_mode_count =
-                        subwindow_requested_mode_count;
+                        subwindow_search_budget;
                     const auto attempt_started_at = std::chrono::steady_clock::now();
                     shifted_problem.progress_subwindow_elapsed_seconds =
                         std::chrono::duration<double>(attempt_started_at - subwindow_started_at)
@@ -4329,13 +4375,13 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
                             std::abs(local_frequency_max_hz),
                             required_local_coverage_radius_hz}));
                     const std::uint64_t attempted_nev =
-                        resolved_nev(subwindow_requested_mode_count);
+                        resolved_nev(subwindow_search_budget);
                     const bool accepted_result_truncated_at_requested_count =
                         shifted_status == FrequencyDomainStatus::ok &&
                         (attempted_result.accepted_modes.size() >=
-                             subwindow_requested_mode_count ||
+                             subwindow_search_budget ||
                          attempted_result.full_residual_accepted_count >=
-                             subwindow_requested_mode_count);
+                             subwindow_search_budget);
                     const bool raw_ritz_result_truncated_at_requested_count =
                         shifted_status == FrequencyDomainStatus::ok &&
                         attempted_result.converged_eigenpair_count >=
@@ -4356,8 +4402,8 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
                         (accepted_result_truncated_at_requested_count ||
                          raw_ritz_result_truncated_at_requested_count);
                     const bool request_limit_reached =
-                        subwindow_requested_mode_count >=
-                            maximum_subwindow_requested_mode_count;
+                        subwindow_search_budget >=
+                            maximum_subwindow_search_budget;
                     const bool nev_limit_reached =
                         attempted_nev >= maximum_nev;
                     const bool selected_frequency_range_available =
@@ -4435,14 +4481,14 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
                          rejection_stage_count > 0u) &&
                         !request_limit_reached &&
                         !nev_limit_reached;
-                    const std::uint32_t next_requested_mode_count =
+                    const std::uint32_t next_search_budget =
                         std::min<std::uint32_t>(
-                            maximum_subwindow_requested_mode_count,
+                            maximum_subwindow_search_budget,
                             std::max<std::uint32_t>(
-                                subwindow_requested_mode_count + 1u,
-                                subwindow_requested_mode_count * 2u));
+                                subwindow_search_budget + 1u,
+                                subwindow_search_budget * 2u));
                     const std::uint64_t next_nev =
-                        resolved_nev(next_requested_mode_count);
+                        resolved_nev(next_search_budget);
                     PoissonAirboxWindowIterationRetryEligibilityInput
                         iteration_retry_input{};
                     iteration_retry_input.solve_status = shifted_status;
@@ -4478,11 +4524,11 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
                     iteration_retry_input.iteration_limit_retry_count =
                         iteration_limit_retry_count;
                     iteration_retry_input.current_requested_mode_count =
-                        subwindow_requested_mode_count;
+                        subwindow_search_budget;
                     iteration_retry_input.next_requested_mode_count =
-                        next_requested_mode_count;
+                        next_search_budget;
                     iteration_retry_input.maximum_requested_mode_count =
-                        maximum_subwindow_requested_mode_count;
+                        maximum_subwindow_search_budget;
                     iteration_retry_input.current_nev = attempted_nev;
                     iteration_retry_input.next_nev = next_nev;
                     iteration_retry_input.maximum_nev = maximum_nev;
@@ -4507,29 +4553,29 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
                         summary.elapsed_seconds = attempt_elapsed_seconds;
                         ++iteration_limit_retry_count;
                         ++subwindow_retry_count;
-                        subwindow_requested_mode_count =
-                            next_requested_mode_count;
-                        pass_effective_requested_mode_count[pass_index] =
+                        subwindow_search_budget =
+                            next_search_budget;
+                        pass_effective_search_budget[pass_index] =
                             std::max(
-                                pass_effective_requested_mode_count[pass_index],
-                                subwindow_requested_mode_count);
+                                pass_effective_search_budget[pass_index],
+                                subwindow_search_budget);
                         continue;
                     }
                     if (!local_request_saturated) {
                         break;
                     }
-                    if (next_requested_mode_count <= subwindow_requested_mode_count) {
+                    if (next_search_budget <= subwindow_search_budget) {
                         break;
                     }
                     if (next_nev <= attempted_nev) {
                         final_nev_limit_reached = true;
                         break;
                     }
-                    subwindow_requested_mode_count = next_requested_mode_count;
-                    pass_effective_requested_mode_count[pass_index] =
+                    subwindow_search_budget = next_search_budget;
+                    pass_effective_search_budget[pass_index] =
                         std::max(
-                            pass_effective_requested_mode_count[pass_index],
-                            subwindow_requested_mode_count);
+                            pass_effective_search_budget[pass_index],
+                            subwindow_search_budget);
                     ++subwindow_retry_count;
                 }
                 if (window_operator_context.invalidated) {
@@ -4650,9 +4696,9 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
                             : "production K0 EPSSolve failed and its graph was quarantined",
                         failure_stop_reason);
                 }
-                pass_effective_requested_mode_count[pass_index] = std::max(
-                    pass_effective_requested_mode_count[pass_index],
-                    subwindow_requested_mode_count);
+                pass_effective_search_budget[pass_index] = std::max(
+                    pass_effective_search_budget[pass_index],
+                    subwindow_search_budget);
                 PoissonAirboxModalEigenResult &shifted_result =
                     *shifted_result_storage;
                 const bool subwindow_coverage_uncertified =
@@ -4733,7 +4779,7 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
                     }
                 }
                 const std::uint64_t resolved_subwindow_nev =
-                    resolved_nev(subwindow_requested_mode_count);
+                    resolved_nev(subwindow_search_budget);
                 const std::uint64_t resolved_subwindow_ncv =
                     resolved_ncv(resolved_subwindow_nev);
                 char subwindow_exact_dimension_json[32]{};
@@ -4898,7 +4944,7 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
                              final_nev_limit_reached)
                         ? "true"
                         : "false",
-                    subwindow_requested_mode_count,
+                    subwindow_search_budget,
                     subwindow_retry_count,
                     subwindow_elapsed_seconds,
                     static_cast<unsigned long long>(shifted_result.q_dof_count),
@@ -5045,8 +5091,8 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
                 }
             }
         }
-        requested_nev = resolved_nev(pass_effective_requested_mode_count[0]);
-        refined_nev = resolved_nev(pass_effective_requested_mode_count[1]);
+        requested_nev = resolved_nev(pass_effective_search_budget[0]);
+        refined_nev = resolved_nev(pass_effective_search_budget[1]);
         const bool refined_nev_increased = refined_nev > requested_nev;
         out_result->window_empty_subwindow_count = window_empty_subwindow_count;
         finalize_subwindow_json();
@@ -5111,7 +5157,7 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
                 problem.requested_mode_count,
                 static_cast<unsigned long long>(requested_nev),
                 static_cast<unsigned long long>(resolved_ncv(requested_nev)),
-                pass_effective_requested_mode_count[1],
+                pass_effective_search_budget[1],
                 static_cast<unsigned long long>(refined_nev),
                 static_cast<unsigned long long>(resolved_ncv(refined_nev)),
                 pass_state(0u),
@@ -5458,7 +5504,7 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
                 problem.requested_mode_count,
                 static_cast<unsigned long long>(requested_nev),
                 static_cast<unsigned long long>(resolved_ncv(requested_nev)),
-                pass_effective_requested_mode_count[1],
+                pass_effective_search_budget[1],
                 static_cast<unsigned long long>(refined_nev),
                 static_cast<unsigned long long>(resolved_ncv(refined_nev)),
                 discovered_mode_count,
@@ -5794,7 +5840,7 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
             problem.requested_mode_count,
             static_cast<unsigned long long>(requested_nev),
             static_cast<unsigned long long>(resolved_ncv(requested_nev)),
-            pass_effective_requested_mode_count[1],
+            pass_effective_search_budget[1],
             static_cast<unsigned long long>(refined_nev),
             static_cast<unsigned long long>(resolved_ncv(refined_nev)),
             discovered_mode_count,

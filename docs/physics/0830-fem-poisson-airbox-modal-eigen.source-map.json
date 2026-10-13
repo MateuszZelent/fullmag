@@ -1509,6 +1509,20 @@
       "symbol": "void modal_poisson_airbox_tail_shift_invert_action_writes_artifact",
       "responsibility": "Require reference artifact, correct adapter and finite small residual with nonzero output independently of SLEPc availability.",
       "evidence_status": "scoped native ABI normal/ASAN CI38464533642/38464528559 PASS at849fa8ddb; production runtime/science NOT VERIFIED"
+    },
+    {
+      "id": "source-k0-window-search-budget-plan",
+      "path": "backends/fem/cpu/frequency_domain/poisson_airbox_schur_matshell.cpp",
+      "symbol": "resolve_poisson_airbox_window_search_budget_plan",
+      "responsibility": "Resolve bounded local guard-retrieval starts and retry ceilings independently of the original physical mode count; retain uint32 arithmetic and operator dimension limits.",
+      "evidence_status": "source implementation; native CI and new managed runtime NOT VERIFIED"
+    },
+    {
+      "id": "source-k0-window-search-budget-regression",
+      "path": "backends/fem/tests/frequency_domain/poisson_airbox_schur_matshell_test.cpp",
+      "symbol": "void WindowSearchBudgetPlanSeparatesPhysicalCountFromRetrievalBudgets",
+      "responsibility": "Freeze P1 guard floors, larger physical count ceilings and overflow fail-closed behavior in the existing CI policy-only target.",
+      "evidence_status": "source regression; compilation only in GitHub Actions pending"
     }
   ],
   "public_api": {

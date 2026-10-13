@@ -9,8 +9,8 @@ Pełny cel **S00–S12 pozostaje OPEN**. Aktualny worktree:
 |---|---|---|
 | Managed build243 | Terminalne succeeded/exit0, hashe 29 artefaktów sprawdzone; source181b4e7b4e8b749cc5de3af0c15b3317e468306b | Nie zastępuje buildu poprawki K0 |
 | DE z demagiem, signed ±2rad/µm | Natywne wyniki 9,722781146398083 i 9,722781258027445GHz; residuale poniżej9e-15; odchylenie od analityki około−0,0303% | Wyniki completed_unqualified: window_count niecertyfikowany, brak zbieżności i pełnego sweepa |
-| K0 window recovery | Ograniczona poprawka13d9d71f6f365768038dd27e73af037f28b64255; policy-only regression PASS w CI38454411467 | Dowód runtime nowego recovery pozostaje NOT VERIFIED |
-| Managed build244 | Job681ccf26c84742cf83880d97517ca4e4, source13d9d71f6, digestfb56ec30e8d70c3543fea6a45cf76b813a8be3052d9b788ec886dba4a22ee275, native-build exit0,2211640ms; build-receipt state succeeded,29 artefaktów/340071153B; dependency/runtime attestations PASS; kolejka nadal running | Terminalny status kolejki i kontrola integralności artefaktów, potem canonical de-smoke-two i signed15 |
+| K0 window recovery | Runtime244 faktycznie wykonał retry NEV/NCV16/64→32/128; pilot75155b64978746fdb0d49121152bb988 FAILED49/50 podokien, EPSITS2000 | Retry nie rozwiązał failure; kontrolowany EPS1e-10 trial na tym samym buildzie, physical residual1e-8 bez zmian |
+| Managed build244 | Job681ccf26c84742cf83880d97517ca4e4, source13d9d71f6, digestfb56ec30e8d70c3543fea6a45cf76b813a8be3052d9b788ec886dba4a22ee275, native-build exit0,2211640ms; build-receipt state succeeded,29 artefaktów/340071153B; dependency/runtime attestations PASS; kolejka succeeded/exit0, terminalny receipt potwierdzony | Build wykonany; obowiązują osobne runtime/science/UI gates i signed15 |
 | Storage i observer | Runner odczytał57771622400B wolnego; pojedynczy observer wznowiony po timeoutcie status request, bez ponowienia joba lub pilota | Obserwować ten sam job; nie uznawać timeoutu za zakończenie buildu |
 | Native CI | Source849fa8ddb: normal CI38464533642 4/4 PASS; ASAN CI38464528559 ABI PASS; lifetime, label-only demag i reference action skorygowane | Produkcyjny FEM/SLEPc runtime i pełny workflow są osobnymi bramkami; zielony ABI nie zamyka nauki |
 | Produkcyjne non-k0 count proof | Sparse retrieval emituje prawidłowe not_certified/methodnone; nie ma niezależnego count proof | Wymagana sprawdzona struktura pencilu i niezależne zliczanie, nie zmiana etykiety certyfikacji |
@@ -88,6 +88,46 @@ MUMPS/SuperLU_DIST/MKL_PARDISO/PaStiX. Nie wykonano jeszcze faktoryzacji
 inercyjnej; dostępność symbolu nie jest count proof. Wymagane pozostają
 wykonany backend probe, Hermitian/gauge/SPD gates oraz zgodność count
 z krotnościami odzyskanych modów. Nie używać preconditionera jako licznika.
+
+## Runtime244 — retry wykonany, K0 nadal nie ukończyło okna
+
+Managed job244 jest terminalnie succeeded/exit0. Canonical de-smoke-two
+pilot75155b64978746fdb0d49121152bb988 zakończył się exit1 po flat_relax3
+krokach i K0 frequency_window8.5–12GHz. Drugi wektor+2rad/µm nie został
+osiągnięty. Kontener runtime potwierdzony jako usunięty przez driver.
+
+Wadliwe refinement8 przy shift9.3203125GHz ma EPSreason−1/2000iterations.
+Retry history dowodzi NEV/NCV16/64→32/128; kolejna próba nadal nie odzyskała
+górnej spectral guard. Physical full-residual rejected0,10 refinements
+succeeded, brak unsafe lifetime/quarantine. Nie opublikowano kandydata
+około9.299249697GHz jako ukończonego wyniku okna.
+
+Następny kontrolowany eksperyment korzysta z existing driver allowlist:
+EPS1e-10, jawny GMRES, expectedpolicybounded_quadruple_nev_window_v2.
+Build/model/okno i physical residual1e-8 pozostają bez zmian. Dry-run
+exit0, jeden runtime proces/container potwierdzony live; wynik oczekiwany.
+EPS1e-10 trialfdcd07cb1ffd40729f65401eb5614b2a:50/50podokien PASS,
+nieudana certyfikacja wymogu4 modów po odzyskaniu1 klastra(rank1).
+Źródło COUNT4 to jawna konfiguracja samplingtwo/five, nie wewnętrzny NEV.
+Pilot count1K0 run8dd21b7847194d9ab4db75a06b2efb86:48/50, base8/9
+EPSITS2000 przyNEV4/NCV16 i retry0, ponieważ limit lokalnego budżetu
+był równy fizycznemu count1. Refinement34/34 zakończony.
+
+Implementacja sourcehelper resolve_poisson_airbox_window_search_budget_plan
+oddziela budżety retrieval od publikowanego count:
+initialbase2/refinement4, minima limitów8/16 dla dwóch istniejących retry.
+EPS/KSP/residual/coverage i physicalrequestedcount bez zmian; note0830
+zapisana przed implementacją. Pure regresje P1/P8/P9/overflow i bounded retry podłączono do istniejącego
+CIpolicy-only target. Interpreted contextcheck i24gamma-consumer tests
+PASS, nota/source-mapvalidatorPASS. Skompilowane CI i nowy managedruntime
+pozostają NOT VERIFIED.
+
+A1air-first diagnosticv1 zachował gotowy cap, objętości i manifold/PBC,
+ale rootreview wykrył brak setAsBackgroundMesh: polegradingu utworzone,
+nieaktywne. Cap80annulus/78disk nie dowodzi resolution5nm. Wersjav2
+musi faktycznie zainstalować pole i zmierzyć regionalne krawędzie.
+V1pozostaje zamrożona jako dowódtopologii, nie COMSOLmatching.
+Pełna kwalifikacja S00–S12 nadal OPEN.
 
 ## Historyczny checkpoint — build243 w trakcie kompilacji, 2026-10-13
 

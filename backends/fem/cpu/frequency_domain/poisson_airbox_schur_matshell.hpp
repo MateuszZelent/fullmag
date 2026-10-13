@@ -140,6 +140,19 @@ bool format_poisson_airbox_eps_dimensions_json(
     char *destination,
     std::size_t destination_size) noexcept;
 
+struct PoissonAirboxWindowSearchBudgetPlan {
+    std::uint32_t base_initial_budget = 0u;
+    std::uint32_t base_limit_budget = 0u;
+    std::uint32_t refinement_initial_budget = 0u;
+    std::uint32_t refinement_limit_budget = 0u;
+};
+
+// Resolves local per-shift retrieval budgets while keeping the enclosing
+// physical requested_mode_count independent and unchanged.
+bool resolve_poisson_airbox_window_search_budget_plan(
+    std::uint32_t physical_requested_mode_count,
+    PoissonAirboxWindowSearchBudgetPlan *out_plan) noexcept;
+
 struct PoissonAirboxWindowIterationRetryEligibilityInput {
     FrequencyDomainStatus solve_status = FrequencyDomainStatus::unavailable;
     bool eps_reason_available = false;
