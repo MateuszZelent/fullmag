@@ -1,0 +1,349 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "schema_version": "fullmag.windows-build-requirements.v1",
+  "generated_for": "Fullmag native Windows build environment",
+  "platform": {
+    "os": "windows",
+    "architecture": "x86_64",
+    "wsl_fallback": false,
+    "note": "The native setup script must be run from Windows PowerShell. FEM runtime proof still uses the repository's explicit Docker Desktop or native FEM route."
+  },
+  "storage": {
+    "env_key": "FULLMAG_PROJECT_STORAGE_ROOT",
+    "resolver": "scripts/fullmag_storage.py",
+    "setup_profile": "windows-setup",
+    "build_profiles": {
+      "native": "windows-native-fdm-cpu",
+      "fem_cpu": "windows-native-fem-cpu",
+      "fem_gpu": "windows-native-fem-gpu"
+    },
+    "require_argument_when_missing": true,
+    "preserve_existing_dotenv": true,
+    "reject_unc_paths": true,
+    "portable_tool_root": "{build_root}\\tools",
+    "portable_provider_root": "{build_root}\\fem-dependencies"
+  },
+  "lanes": {
+    "native": {
+      "description": "Rust/Python/Control Room/FDM CPU on Windows/MSVC",
+      "required": [
+        "git",
+        "msvc_x64",
+        "windows_sdk",
+        "rust_msvc",
+        "cmake",
+        "python",
+        "uv",
+        "node",
+        "pnpm",
+        "just"
+      ]
+    },
+    "fem_cpu": {
+      "description": "Native FEM CPU provider bootstrap on Windows/MSVC",
+      "required": [
+        "git",
+        "msvc_x64",
+        "windows_sdk",
+        "rust_msvc",
+        "cmake",
+        "python",
+        "uv",
+        "node",
+        "pnpm",
+        "just",
+        "ninja",
+        "clang_cl",
+        "msmpi_runtime",
+        "msmpi_sdk",
+        "mfem",
+        "hypre",
+        "libceed"
+      ]
+    },
+    "fem_gpu": {
+      "description": "Native FEM GPU provider bootstrap with CUDA",
+      "required": [
+        "git",
+        "msvc_x64",
+        "windows_sdk",
+        "rust_msvc",
+        "cmake",
+        "python",
+        "uv",
+        "node",
+        "pnpm",
+        "just",
+        "ninja",
+        "clang_cl",
+        "msmpi_runtime",
+        "msmpi_sdk",
+        "mfem",
+        "hypre",
+        "libceed",
+        "cuda"
+      ]
+    }
+  },
+  "tools": {
+    "git": {
+      "kind": "system",
+      "command": "git.exe",
+      "minimum": "2.40.0",
+      "install": {
+        "method": "winget",
+        "id": "Git.Git",
+        "source": "winget",
+        "official_url": "https://git-scm.com/download/win"
+      }
+    },
+    "msvc_x64": {
+      "kind": "system",
+      "installer": "visual_studio_build_tools",
+      "workload": "Microsoft.VisualStudio.Workload.VCTools",
+      "components": [
+        "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
+        "Microsoft.VisualStudio.Component.Windows10SDK.19041"
+      ],
+      "validation": [
+        "VC\\Auxiliary\\Build\\vcvars64.bat",
+        "x64 cl.exe and link.exe"
+      ],
+      "install": {
+        "method": "winget",
+        "id": "Microsoft.VisualStudio.2022.BuildTools",
+        "source": "winget",
+        "official_url": "https://visualstudio.microsoft.com/downloads/",
+        "override": "--quiet --wait --norestart --add Microsoft.VisualStudio.Workload.VCTools --add Microsoft.VisualStudio.Component.VC.Tools.x86.x64 --add Microsoft.VisualStudio.Component.Windows10SDK.19041 --includeRecommended"
+      }
+    },
+    "windows_sdk": {
+      "kind": "system_component",
+      "provider": "visual_studio_build_tools",
+      "validation": "Windows Kits\\10\\bin\\<version>\\x64\\rc.exe",
+      "official_url": "https://learn.microsoft.com/en-us/windows/uwp/packaging/packaging-uwp-apps"
+    },
+    "rust_msvc": {
+      "kind": "project_managed_toolchain",
+      "commands": ["rustup.exe", "cargo.exe", "rustc.exe"],
+      "toolchain": "stable-x86_64-pc-windows-msvc",
+      "target": "x86_64-pc-windows-msvc",
+      "components": ["rustfmt", "clippy"],
+      "install": {
+        "method": "winget_rustup",
+        "id": "Rustlang.Rustup",
+        "source": "winget",
+        "package_id": "Rustlang.Rustup",
+        "official_url": "https://rust-lang.org/tools/install/"
+      }
+    },
+    "cmake": {
+      "kind": "system",
+      "command": "cmake.exe",
+      "minimum": "3.25.0",
+      "install": {
+        "method": "winget",
+        "id": "Kitware.CMake",
+        "source": "winget",
+        "official_url": "https://cmake.org/download/"
+      }
+    },
+    "ninja": {
+      "kind": "project_managed_provider_tool",
+      "version": "1.13.2",
+      "provider_path": "{build_root}\\fem-dependencies\\tools\\ninja-1.13.2\\ninja.exe",
+      "url": "https://github.com/ninja-build/ninja/releases/download/v1.13.2/ninja-win.zip",
+      "sha256": "07fc8261b42b20e71d1720b39068c2e14ffcee6396b76fb7a795fb460b78dc65",
+      "official_url": "https://github.com/ninja-build/ninja/releases"
+    },
+    "clang_cl": {
+      "kind": "project_managed_provider_tool",
+      "version": "23.1.3",
+      "provider_path": "{build_root}\\fem-dependencies\\tools\\llvm-23.1.3\\bin\\clang-cl.exe",
+      "purpose": "C99-compatible libCEED Windows compilation",
+      "official_url": "https://github.com/llvm/llvm-project/releases/tag/llvmorg-23.1.3",
+      "verification": "Prefer the provider bootstrap's signed/SHA-256 checked archive; Visual Studio clang-cl is a diagnostic fallback only."
+    },
+    "msmpi_runtime": {
+      "kind": "system_runtime",
+      "minimum": "10.1.1",
+      "commands": ["mpiexec.exe"],
+      "validation": "Microsoft MPI runtime DLL and x64 mpiexec.exe",
+      "install": {
+        "method": "winget_or_official_installer",
+        "id": "Microsoft.MPI",
+        "official_url": "https://learn.microsoft.com/en-us/message-passing-interface/microsoft-mpi"
+      }
+    },
+    "msmpi_sdk": {
+      "kind": "project_managed_provider_tool",
+      "version": "10.1.1",
+      "provider_path": "{build_root}\\fem-dependencies\\tools\\msmpi-10.1.1",
+      "official_url": "https://github.com/microsoft/Microsoft-MPI/releases/tag/v10.1.1",
+      "note": "The provider bootstrap extracts the SDK into project storage; it must not install a second global SDK."
+    },
+    "mfem": {
+      "kind": "project_managed_provider",
+      "version": "v4.9",
+      "commit": "d9d6526cc1749980a2ba1da16e2c1ca1e07d82ec",
+      "url": "https://github.com/mfem/mfem.git",
+      "official_url": "https://github.com/mfem/mfem/releases/tag/v4.9"
+    },
+    "hypre": {
+      "kind": "project_managed_provider",
+      "version": "v3.1.0",
+      "commit": "9dc9e18aed6a945a95f966e57daacfb1c269f6ec",
+      "url": "https://github.com/hypre-space/hypre.git",
+      "official_url": "https://github.com/hypre-space/hypre/releases/tag/v3.1.0"
+    },
+    "libceed": {
+      "kind": "project_managed_provider",
+      "version": "v0.12.0",
+      "commit": "4018a20a98d451fac24765d3ddb936861647ce8d",
+      "url": "https://github.com/CEED/libCEED.git",
+      "official_url": "https://github.com/CEED/libCEED/releases/tag/v0.12.0",
+      "requires": ["clang_cl", "cmake", "ninja"]
+    },
+    "cuda": {
+      "kind": "system",
+      "command": "nvcc.exe",
+      "minimum": "13.3.0",
+      "environment": "CUDA_PATH or CUDACXX",
+      "install": {
+        "method": "winget_or_official_installer",
+        "id": "Nvidia.CUDA",
+        "source": "winget",
+        "official_url": "https://developer.nvidia.com/cuda-downloads"
+      },
+      "runtime_note": "A compiler check does not prove GPU execution; nvidia-smi and a managed FEM GPU receipt remain separate gates."
+    },
+    "python": {
+      "kind": "system",
+      "command": "python.exe",
+      "minimum": "3.12.0",
+      "install": {
+        "method": "winget",
+        "id": "Python.Python.3.12",
+        "source": "winget",
+        "official_url": "https://www.python.org/downloads/windows/"
+      }
+    },
+    "uv": {
+      "kind": "project_managed_tool",
+      "minimum": "0.13.0",
+      "version": "0.13.0",
+      "install": {
+        "method": "python_pip_project_prefix",
+        "package": "uv==0.13.0",
+        "index": "https://pypi.org/simple",
+        "official_url": "https://docs.astral.sh/uv/getting-started/installation/"
+      },
+      "storage_path": "{cache_root}\\tools\\uv"
+    },
+    "node": {
+      "kind": "system",
+      "command": "node.exe",
+      "minimum": "24.18.0",
+      "maximum_exclusive": "25.0.0",
+      "pinned_reference": {
+        "version": "24.18.0",
+        "url": "https://nodejs.org/download/release/v24.18.0/node-v24.18.0-x64.msi",
+        "sha256": "e30cd4ca15529583afe0efc978f1ae3ab3a93c2400c222d0752d17900552ebb3"
+      },
+      "install": {
+        "method": "winget_or_official_msi",
+        "id": "OpenJS.NodeJS.LTS",
+        "source": "winget",
+        "official_url": "https://nodejs.org/download/release/v24.18.0/"
+      }
+    },
+    "pnpm": {
+      "kind": "project_managed_tool",
+      "version": "10.8.1",
+      "home": "{cache_root}\\corepack",
+      "official_url": "https://pnpm.io/installation",
+      "install": {
+        "method": "corepack",
+        "command": "corepack install --global pnpm@10.8.1"
+      }
+    },
+    "just": {
+      "kind": "project_managed_tool",
+      "version": "1.51.0",
+      "command": "just.exe",
+      "storage_path": "{cache_root}\\tools\\bin\\just.exe",
+      "install": {
+        "method": "official_pinned_zip",
+        "url": "https://github.com/casey/just/releases/download/1.51.0/just-1.51.0-x86_64-pc-windows-msvc.zip",
+        "sha256": "09d1138b6845e73f04bff5e26be3f57663bddca25e36fe6241d28a5aa310b64e",
+        "official_url": "https://github.com/casey/just/releases"
+      },
+      "official_url": "https://github.com/casey/just"
+    },
+    "wix": {
+      "kind": "optional_future_burn_tool",
+      "command": "wix.exe",
+      "required_when": "-WithWix",
+      "purpose": "Future fullmag.exe WiX Burn bootstrapper authoring; this does not validate the existing WiX 3 MSI script.",
+      "current_msi_tools": ["candle.exe", "light.exe"],
+      "install": {
+        "method": "winget",
+        "id": "WiXToolset.WiX",
+        "source": "winget",
+        "official_url": "https://docs.firegiant.com/wix/using-wix/"
+      }
+    }
+  },
+  "desktop_runtime": {
+    "webview2": {
+      "kind": "runtime_prerequisite",
+      "required_for": "installed fullmag-ui.exe Tauri desktop GUI",
+      "bootstrapper_note": "The public fullmag.exe Burn bootstrapper is not the WebView2 client; it checks the prerequisite before launching the installed UI.",
+      "validation": "Microsoft Edge WebView2 Evergreen Runtime is installed",
+      "install": "future_fullmag_exe_burn_prerequisite",
+      "status_in_setup": "NOT VERIFIED",
+      "official_url": "https://developer.microsoft.com/en-us/microsoft-edge/webview2/"
+    }
+  },
+  "provider_bootstrap": {
+    "script": "scripts/windows/native_fem_dependencies.ps1",
+    "prepare_command": "just windows-build fem gpu",
+    "prepare_policy": "Run only through the managed Windows build recipe after the compiler/tooling check; this setup command never invokes a provider build directly.",
+    "required_for": ["ninja", "clang_cl", "msmpi_sdk", "mfem", "hypre", "libceed"],
+    "source_policy": "official upstream Git refs plus SHA-256-checked archives",
+    "cuda_architecture_required": true,
+    "receipt_contract": {
+      "schema": "fullmag.windows.fem-providers.v1",
+      "root_must_match_selected_profile": true,
+      "cpu": {
+        "cuda": false,
+        "cuda_architectures": "empty"
+      },
+      "gpu": {
+        "cuda": true,
+        "cuda_architectures": "nonempty numeric list separated by semicolons",
+        "pattern": "^\\d+(;\\d+)*$"
+      }
+    },
+    "do_not_claim": [
+      "A successful setup check is not a FEM build.",
+      "Provider presence is not a managed runtime receipt.",
+      "nvcc presence is not GPU execution or physics qualification."
+    ]
+  },
+  "sources": {
+    "visual_studio": "https://learn.microsoft.com/en-us/cpp/build/building-on-the-command-line",
+    "visual_studio_components": "https://learn.microsoft.com/en-us/visualstudio/install/workload-and-component-ids",
+    "winget": "https://learn.microsoft.com/en-us/windows/package-manager/winget/install",
+    "rust": "https://rust-lang.org/tools/install/",
+    "cuda": "https://docs.nvidia.com/cuda/cuda-installation-guide-microsoft-windows/",
+    "node": "https://nodejs.org/download/release/v24.18.0/",
+    "cmake": "https://cmake.org/download/",
+    "just": "https://github.com/casey/just/releases",
+    "uv": "https://docs.astral.sh/uv/getting-started/installation/",
+    "wix": "https://docs.firegiant.com/wix/using-wix/",
+    "wix_burn": "https://docs.firegiant.com/wix/tools/burn/",
+    "tauri_windows": "https://v2.tauri.app/start/prerequisites/",
+    "webview2": "https://developer.microsoft.com/en-us/microsoft-edge/webview2/"
+  }
+}
