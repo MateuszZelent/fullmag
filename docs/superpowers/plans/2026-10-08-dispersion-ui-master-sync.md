@@ -748,3 +748,29 @@ Exact validator FAIL exterior face away from box boundary;28 free
 verticalfaces. PBC triangle mismatch x6/6,y6/6 pomimo nodecoveragePASS.
 Nie uruchomiono napraw ani nie włączono tego odrzuconego wariantu.
 Pełny S00–S12 pozostaje OPEN.
+
+## 2026-10-13 — zachowanie markerów PBC dla wielu slabów
+
+Private adapter przyjmuje periodic_patch_z_bounds po pełnym kluczu
+(pair_id,marker_a,marker_b). Same-ID rekordy zachowują wszystkie markery,
+jedną globalną mapę węzłów i spójną translation/direction/tolerance.
+Exact scopes wymagają istniejących planes, pełnego z-cover bez overlap/gap;
+singleton może pominąć zakres albo jawnie podać dokładnie cały z-domain.
+Odmowy duplicatefullrow, niepełnych/extra keys, offplane, boolean/nonfinite
+i niespójnych translacji pozostają fail-closed. Facet classification
+daje dokładnie jeden markerpatch per whole face. Validator sprawdza
+każdy patch, globalne node coverage, triangle unions i corner commutation.
+Expected full-side union pochodzi z geometrycznych faset niezależnie
+od role; regresja obu odpowiadających faset przestawionych na exterior
+wykazuje odmowę zamiast pozornego PASS. Public MeshData/IR format bez zmian.
+
+TDD red: unexpectedkeyword periodic_patch_z_bounds; green pełny moduł
+37PASS,10.52s,exit0, interpreted pytest -p no:cacheprovider.
+Root all-line review wskazało singletonexplicit i role-independentunion;
+obie poprawki mają regresje. AST/physics-doc/diff gates odpowiednio
+sprawdzane przed commitem. Źródło adapter SHA82c066c240efa2c0b2a1784ef0a7618b9bc117f704dd0566f9ac61130354a460;
+testSHA78bb184021c6e9832ff1f3db5d24fcc965bee42c41857f8c839dfed18d5122c7.
+Nie aktywowano produkcyjnego generatora ani certyfikatu jakości.
+Actual producer→adapter replay wymaga explicit marker↔surface provenance;
+nie zgadujemy go z numeracji markerów ani kolejności wierszy.
+Pełny S00–S12 pozostaje OPEN.

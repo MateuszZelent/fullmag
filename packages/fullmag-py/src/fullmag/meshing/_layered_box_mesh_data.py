@@ -76,17 +76,85 @@ def _pair_id(value: object, name: str) -> str:
     return value.strip()
 
 
+def _normalize_periodic_patch_z_bounds(
+    value: object,
+    *,
+    planes: NDArray[np.float64],
+) -> dict[tuple[str, int, int], tuple[float, float]]:
+    if value is None:
+        return {}
+    if not isinstance(value, Mapping):
+        raise TypeError("periodic_patch_z_bounds must be a mapping")
+
+    plane_index = {float(plane): index for index, plane in enumerate(planes)}
+    normalized: dict[tuple[str, int, int], tuple[float, float]] = {}
+    for raw_key, raw_bounds in value.items():
+        if not isinstance(raw_key, tuple) or len(raw_key) != 3:
+            raise TypeError(
+                "periodic_patch_z_bounds keys must be (pair_id, marker_a, marker_b) tuples"
+            )
+        key = (
+            _pair_id(raw_key[0], "periodic_patch_z_bounds pair_id"),
+            _positive_integer(raw_key[1], "periodic_patch_z_bounds marker_a"),
+            _positive_integer(raw_key[2], "periodic_patch_z_bounds marker_b"),
+        )
+        if key[1] == key[2]:
+            raise ValueError("periodic_patch_z_bounds must use distinct side markers")
+        if key in normalized:
+            raise ValueError(f"ambiguous periodic patch z scope key {key!r}")
+
+        if (
+            not isinstance(raw_bounds, (tuple, list, np.ndarray))
+            or isinstance(raw_bounds, (str, bytes))
+            or np.iscomplexobj(raw_bounds)
+        ):
+            raise TypeError(
+                "periodic_patch_z_bounds values must contain two finite real z bounds"
+            )
+        try:
+            raw = np.asarray(raw_bounds, dtype=object)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise TypeError(
+                "periodic_patch_z_bounds values must contain two finite real z bounds"
+            ) from exc
+        if raw.shape != (2,):
+            raise ValueError(
+                "periodic_patch_z_bounds values must contain two finite real z bounds"
+            )
+        z_low = _finite_real(raw[0], f"periodic_patch_z_bounds[{key!r}][0]")
+        z_high = _finite_real(raw[1], f"periodic_patch_z_bounds[{key!r}][1]")
+        if z_low >= z_high:
+            raise ValueError(
+                f"periodic patch z scope {key!r} must be strictly increasing"
+            )
+        if z_low not in plane_index or z_high not in plane_index:
+            raise ValueError(
+                f"periodic patch z scope {key!r} endpoints must be exact layer planes"
+            )
+        normalized[key] = (z_low, z_high)
+    return normalized
+
+
 def _normalize_boundary_pairs(
     value: object,
     *,
     bounds_xy: tuple[float, float, float, float],
+    planes: NDArray[np.float64],
     outer_boundary_marker: int,
+    periodic_patch_z_bounds: object,
 ) -> tuple[list[dict[str, object]], dict[str, dict[str, object]]]:
     entries = _sequence_of_mappings(value, "periodic_boundary_pairs")
+    explicit_scopes = _normalize_periodic_patch_z_bounds(
+        periodic_patch_z_bounds,
+        planes=planes,
+    )
     normalized: list[dict[str, object]] = []
     by_id: dict[str, dict[str, object]] = {}
+    groups: dict[str, list[dict[str, object]]] = {}
+    seen_marker_rows: set[tuple[str, int, int]] = set()
+    required_scope_keys: set[tuple[str, int, int]] = set()
     used_markers: set[int] = {_INTERFACE_MARKER, outer_boundary_marker}
-    used_axes: set[int] = set()
+    axis_owner: dict[int, str] = {}
     axis_limits = {
         0: (bounds_xy[0], bounds_xy[1]),
         1: (bounds_xy[2], bounds_xy[3]),
@@ -101,13 +169,14 @@ def _normalize_boundary_pairs(
             required={"pair_id", "marker_a", "marker_b", "translation", "tolerance_m"},
         )
         pair_id = _pair_id(entry["pair_id"], f"{name}.pair_id")
-        if pair_id in by_id:
-            raise ValueError(f"duplicate periodic pair_id {pair_id!r}")
-
         marker_a = _positive_integer(entry["marker_a"], f"{name}.marker_a")
         marker_b = _positive_integer(entry["marker_b"], f"{name}.marker_b")
         if marker_a == marker_b:
             raise ValueError(f"{name} must use distinct side markers")
+        marker_row = (pair_id, marker_a, marker_b)
+        if marker_row in seen_marker_rows:
+            raise ValueError(f"duplicate periodic pair_id scope {marker_row!r}")
+        seen_marker_rows.add(marker_row)
         if marker_a in used_markers or marker_b in used_markers:
             raise ValueError(
                 f"{name} markers must be distinct from interface marker 10, "
@@ -136,9 +205,11 @@ def _normalize_boundary_pairs(
             hinted_axis = 0 if raw_axis_hint == "x" else 1
             if hinted_axis != axis:
                 raise ValueError(f"{name}.axis_hint does not match its translation")
-        if axis in used_axes:
+
+        previous_pair_id = axis_owner.get(axis)
+        if previous_pair_id is not None and previous_pair_id != pair_id:
             raise ValueError(f"only one periodic pair per axis is supported ({axis_name})")
-        used_axes.add(axis)
+        axis_owner[axis] = pair_id
 
         low, high = axis_limits[axis]
         width = high - low
@@ -163,10 +234,88 @@ def _normalize_boundary_pairs(
             "_side_a": side_a,
             "_side_b": side_b,
         }
-        by_id[pair_id] = pair
+        logical_pair = by_id.get(pair_id)
+        if logical_pair is None:
+            by_id[pair_id] = pair
+        elif (
+            tuple(logical_pair["translation"]) != translation
+            or float(logical_pair["tolerance_m"]) != tolerance
+            or int(logical_pair["_axis"]) != axis
+            or str(logical_pair["_side_a"]) != side_a
+            or str(logical_pair["_side_b"]) != side_b
+        ):
+            raise ValueError(
+                f"periodic pair_id {pair_id!r} has inconsistent translation, "
+                "direction, or tolerance across marker patches"
+            )
         normalized.append(pair)
+        groups.setdefault(pair_id, []).append(pair)
 
-    normalized.sort(key=lambda pair: str(pair["pair_id"]))
+    domain_low = float(planes[0])
+    domain_high = float(planes[-1])
+    for pair_id, rows in groups.items():
+        if len(rows) == 1:
+            row = rows[0]
+            key = (pair_id, int(row["marker_a"]), int(row["marker_b"]))
+            explicit_scope = explicit_scopes.get(key)
+            if explicit_scope is None:
+                row["_z_low"] = domain_low
+                row["_z_high"] = domain_high
+                continue
+            if explicit_scope != (domain_low, domain_high):
+                raise ValueError(
+                    f"single periodic patch z scope for {pair_id!r} must cover "
+                "the full exact z domain"
+                )
+            required_scope_keys.add(key)
+            row["_z_low"], row["_z_high"] = explicit_scope
+            continue
+
+        group_keys = {
+            (pair_id, int(row["marker_a"]), int(row["marker_b"]))
+            for row in rows
+        }
+        missing = group_keys - set(explicit_scopes)
+        if missing:
+            raise ValueError(
+                f"missing z scope for periodic pair_id {pair_id!r}: {sorted(missing)!r}"
+            )
+        required_scope_keys.update(group_keys)
+        for row in rows:
+            key = (pair_id, int(row["marker_a"]), int(row["marker_b"]))
+            row["_z_low"], row["_z_high"] = explicit_scopes[key]
+
+        ordered_rows = sorted(
+            rows,
+            key=lambda row: (float(row["_z_low"]), float(row["_z_high"])),
+        )
+        cursor = domain_low
+        for row in ordered_rows:
+            z_low = float(row["_z_low"])
+            z_high = float(row["_z_high"])
+            if z_low > cursor:
+                raise ValueError(f"periodic patch z scopes for {pair_id!r} contain a gap")
+            if z_low < cursor:
+                raise ValueError(f"periodic patch z scopes for {pair_id!r} overlap")
+            cursor = z_high
+        if cursor < domain_high:
+            raise ValueError(f"periodic patch z scopes for {pair_id!r} contain a gap")
+        if cursor > domain_high:
+            raise ValueError(f"periodic patch z scopes for {pair_id!r} overlap")
+
+    unexpected = set(explicit_scopes) - required_scope_keys
+    if unexpected:
+        raise ValueError(
+            f"unexpected periodic patch z scope keys: {sorted(unexpected)!r}"
+        )
+
+    normalized.sort(
+        key=lambda pair: (
+            str(pair["pair_id"]),
+            int(pair["marker_a"]),
+            int(pair["marker_b"]),
+        )
+    )
     return normalized, by_id
 
 
@@ -347,8 +496,19 @@ def _validate_periodic_topology(
             raise ValueError("periodic_node_pairs require periodic_boundary_pairs")
         return
 
-    boundary_by_id = {str(pair["pair_id"]): pair for pair in boundary_pairs}
-    for pair_id, pair in boundary_by_id.items():
+    pairs_by_id: dict[str, list[dict[str, object]]] = {}
+    for pair in boundary_pairs:
+        pairs_by_id.setdefault(str(pair["pair_id"]), []).append(pair)
+
+    def face_is_on_side(face: tuple[int, int, int], axis: int, side: str) -> bool:
+        if axis == 0:
+            coordinate = bounds_xy[0] if side == "min" else bounds_xy[1]
+        else:
+            coordinate = bounds_xy[2] if side == "min" else bounds_xy[3]
+        return bool(np.all(nodes[np.asarray(face, dtype=np.int64), axis] == coordinate))
+
+    for pair_id, patches in pairs_by_id.items():
+        pair = patches[0]
         axis = int(pair["_axis"])
         side_a = str(pair["_side_a"])
         side_b = str(pair["_side_b"])
@@ -372,30 +532,109 @@ def _validate_periodic_topology(
                     f"periodic node translation for {pair_id!r} exceeds tolerance_m"
                 )
 
-        marker_a = int(pair["marker_a"])
-        marker_b = int(pair["marker_b"])
-        side_a_facets = [
-            face for face, role, marker in facets if role == "periodic_seam" and marker == marker_a
-        ]
-        side_b_facets = [
-            face for face, role, marker in facets if role == "periodic_seam" and marker == marker_b
-        ]
-        if not side_a_facets or not side_b_facets:
-            raise ValueError(f"periodic facet pair {pair_id!r} has an empty side")
-        mapped_triangles: set[tuple[int, int, int]] = set()
-        for face in side_a_facets:
-            if any(node not in mapping for node in face):
-                raise ValueError(f"periodic facet pair {pair_id!r} has an unmapped side-A node")
-            mapped_triangles.add(tuple(sorted(mapping[node] for node in face)))
-        destination_triangles = {tuple(sorted(face)) for face in side_b_facets}
-        if (
-            len(mapped_triangles) != len(side_a_facets)
-            or len(destination_triangles) != len(side_b_facets)
-            or mapped_triangles != destination_triangles
-        ):
-            raise ValueError(f"periodic facet pair {pair_id!r} has mismatched complete triangle sets")
+        source_union: list[tuple[int, int, int]] = []
+        destination_union: list[tuple[int, int, int]] = []
+        source_union_nodes: set[int] = set()
+        destination_union_nodes: set[int] = set()
+        for patch in patches:
+            marker_a = int(patch["marker_a"])
+            marker_b = int(patch["marker_b"])
+            z_low = float(patch["_z_low"])
+            z_high = float(patch["_z_high"])
+            side_a_facets = [
+                face
+                for face, role, marker in facets
+                if role == "periodic_seam" and marker == marker_a
+            ]
+            side_b_facets = [
+                face
+                for face, role, marker in facets
+                if role == "periodic_seam" and marker == marker_b
+            ]
+            if not side_a_facets or not side_b_facets:
+                raise ValueError(f"periodic facet patch {pair_id!r} has an empty side")
 
-    pair_ids = sorted(boundary_by_id)
+            for label, patch_facets, side in (
+                ("side-A", side_a_facets, side_a),
+                ("side-B", side_b_facets, side_b),
+            ):
+                patch_nodes: set[int] = set()
+                for face in patch_facets:
+                    if not face_is_on_side(face, axis, side):
+                        raise ValueError(
+                            f"periodic facet patch {pair_id!r} contains a facet on the wrong side"
+                        )
+                    z_values = nodes[np.asarray(face, dtype=np.int64), 2]
+                    if float(np.min(z_values)) < z_low or float(np.max(z_values)) > z_high:
+                        raise ValueError(
+                            f"periodic facet patch {pair_id!r} extends outside its exact z scope"
+                        )
+                    patch_nodes.update(face)
+                side_nodes = side_a_nodes if side == side_a else side_b_nodes
+                expected_patch_nodes = {
+                    node
+                    for node in side_nodes
+                    if z_low <= float(nodes[node, 2]) <= z_high
+                }
+                if patch_nodes != expected_patch_nodes:
+                    raise ValueError(
+                        f"periodic facet patch {pair_id!r} does not cover every scoped {label} node"
+                    )
+
+            mapped_triangles: set[tuple[int, int, int]] = set()
+            for face in side_a_facets:
+                if any(node not in mapping for node in face):
+                    raise ValueError(
+                        f"periodic facet patch {pair_id!r} has an unmapped side-A node"
+                    )
+                mapped_triangles.add(tuple(sorted(mapping[node] for node in face)))
+            destination_triangles = {
+                tuple(sorted(face)) for face in side_b_facets
+            }
+            if (
+                len(mapped_triangles) != len(side_a_facets)
+                or len(destination_triangles) != len(side_b_facets)
+                or mapped_triangles != destination_triangles
+            ):
+                raise ValueError(
+                    f"periodic facet patch {pair_id!r} has mismatched complete triangle sets"
+                )
+            source_union.extend(side_a_facets)
+            destination_union.extend(side_b_facets)
+            source_union_nodes.update(node for face in side_a_facets for node in face)
+            destination_union_nodes.update(node for face in side_b_facets for node in face)
+
+        if source_union_nodes != side_a_nodes or destination_union_nodes != side_b_nodes:
+            raise ValueError(
+                f"periodic facet patches for {pair_id!r} do not cover all side nodes"
+            )
+
+        def side_facets(side: str) -> list[tuple[int, int, int]]:
+            return [
+                face
+                for face, _role, _marker in facets
+                if face_is_on_side(face, axis, side)
+            ]
+
+        source_keys = [tuple(sorted(face)) for face in source_union]
+        destination_keys = [tuple(sorted(face)) for face in destination_union]
+        expected_source = {
+            tuple(sorted(face)) for face in side_facets(side_a)
+        }
+        expected_destination = {
+            tuple(sorted(face)) for face in side_facets(side_b)
+        }
+        if (
+            len(source_keys) != len(set(source_keys))
+            or len(destination_keys) != len(set(destination_keys))
+            or set(source_keys) != expected_source
+            or set(destination_keys) != expected_destination
+        ):
+            raise ValueError(
+                f"periodic facet patches for {pair_id!r} do not form the complete side unions"
+            )
+
+    pair_ids = sorted(pairs_by_id)
     for left_index, left_id in enumerate(pair_ids):
         for right_id in pair_ids[left_index + 1 :]:
             left_map = node_maps[left_id]
@@ -416,6 +655,9 @@ def build_layered_box_mesh_data(
     outer_boundary_marker: int,
     periodic_boundary_pairs: tuple[dict[str, object], ...] | list[dict[str, object]] = (),
     periodic_node_pairs: tuple[dict[str, object], ...] | list[dict[str, object]] = (),
+    periodic_patch_z_bounds: Mapping[
+        tuple[str, int, int], tuple[float, float]
+    ] | None = None,
 ) -> MeshData:
     """Return canonical tet4/tri3 ``MeshData`` for a layered rectangular box.
 
@@ -423,8 +665,10 @@ def build_layered_box_mesh_data(
     exact SI nodes and planes, preserves node order, uses every node, and proves
     positive cells plus exact slab coverage. This adapter assigns magnetic
     marker 1 and air marker 0 from whole-slab containment, then derives all
-    exterior and magnetic-air facets from tetrahedron incidence. It does not
-    create periodic certificates, quality reports, or realization evidence.
+    exterior and magnetic-air facets from tetrahedron incidence. Repeated rows
+    for one periodic pair require exact z ranges in periodic_patch_z_bounds; a
+    single full-side row may omit them. It does not create periodic certificates,
+    quality reports, or realization evidence.
     """
     cells = tetrahedralize_layered_box(nodes, layer_planes, bounds_xy)
     coordinates = np.asarray(nodes, dtype=np.float64)
@@ -444,7 +688,9 @@ def build_layered_box_mesh_data(
     boundary_pairs, pair_by_id = _normalize_boundary_pairs(
         periodic_boundary_pairs,
         bounds_xy=normalized_bounds,
+        planes=planes,
         outer_boundary_marker=outer_marker,
+        periodic_patch_z_bounds=periodic_patch_z_bounds,
     )
     node_pairs, node_maps = _normalize_node_pairs(
         periodic_node_pairs,
@@ -452,11 +698,11 @@ def build_layered_box_mesh_data(
         node_count=len(coordinates),
     )
 
-    side_markers: dict[tuple[int, str], int] = {}
+    side_patches: dict[tuple[int, str], list[dict[str, object]]] = {}
     for pair in boundary_pairs:
         axis = int(pair["_axis"])
-        side_markers[(axis, str(pair["_side_a"]))] = int(pair["marker_a"])
-        side_markers[(axis, str(pair["_side_b"]))] = int(pair["marker_b"])
+        side_patches.setdefault((axis, str(pair["_side_a"])), []).append(pair)
+        side_patches.setdefault((axis, str(pair["_side_b"])), []).append(pair)
 
     incidence: dict[
         tuple[int, int, int], list[tuple[int, tuple[int, int, int]]]
@@ -486,9 +732,26 @@ def build_layered_box_mesh_data(
 
         face = owners[0][1]
         axis, side = _box_side(face, coordinates, normalized_bounds, z_bounds)
-        marker = side_markers.get((axis, side), outer_marker)
-        role = "periodic_seam" if (axis, side) in side_markers else "exterior"
-        derived.append((face, role, marker))
+        matching_patches = side_patches.get((axis, side), [])
+        if not matching_patches:
+            derived.append((face, "exterior", outer_marker))
+            continue
+
+        face_z = coordinates[np.asarray(face, dtype=np.int64), 2]
+        z_low = float(np.min(face_z))
+        z_high = float(np.max(face_z))
+        scoped_matches = [
+            pair
+            for pair in matching_patches
+            if float(pair["_z_low"]) <= z_low and z_high <= float(pair["_z_high"])
+        ]
+        if len(scoped_matches) != 1:
+            raise ValueError(
+                f"periodic exterior facet on {axis=}, {side=} does not match exactly one z patch"
+            )
+        pair = scoped_matches[0]
+        marker = int(pair["marker_a"] if side == pair["_side_a"] else pair["marker_b"])
+        derived.append((face, "periodic_seam", marker))
 
     _validate_periodic_topology(
         nodes=coordinates,

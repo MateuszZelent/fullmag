@@ -242,14 +242,14 @@
       "id": "variable-cap-mesh-data",
       "path": "packages/fullmag-py/src/fullmag/meshing/_layered_box_mesh_data.py",
       "symbol": "build_layered_box_mesh_data",
-      "responsibility": "Internal typed adapter with exact slab markers, incidence-derived oriented facets and complete axis-periodic node/facet coverage; no production certificate or quality claim.",
+      "responsibility": "Internal typed adapter with exact slab markers, explicit per-marker z scopes sharing logical periodic IDs, oriented facets and per-patch plus full-side periodic coverage; no production certificate or quality claim.",
       "evidence_status": "source_regression_passed_runtime_not_verified"
     },
     {
       "id": "variable-cap-mesh-data-regression",
       "path": "packages/fullmag-py/tests/test_layered_box_mesh_data.py",
       "symbol": "test_builds_exact_region_and_interface_mesh_data",
-      "responsibility": "Region volumes, interface orientation, complete periodic facets, x/y commutation and invalid input checks.",
+      "responsibility": "Region volumes, canonical air marker, interface orientation, per-slab periodic scope coverage, full-side unions, x/y commutation and invalid input checks.",
       "evidence_status": "python_passed"
     },
     {

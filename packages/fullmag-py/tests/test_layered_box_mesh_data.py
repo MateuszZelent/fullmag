@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 
 from fullmag.meshing._gmsh_extraction import _semantic_marker_from_name
+from fullmag.meshing import _layered_box_mesh_data as _layered_box_adapter
 from fullmag.meshing._layered_box_mesh_data import build_layered_box_mesh_data
 
 
@@ -84,6 +85,32 @@ def _periodic_inputs(
         }
     ]
     return boundary_pairs, node_pairs
+
+
+def _scoped_periodic_inputs(
+    nodes: np.ndarray,
+    axis: int,
+    *,
+    marker_start: int,
+    tolerance: float = 0.0,
+) -> tuple[
+    list[dict[str, object]],
+    list[dict[str, object]],
+    dict[tuple[str, int, int], tuple[float, float]],
+]:
+    base_pairs, node_pairs = _periodic_inputs(nodes, axis, tolerance=tolerance)
+    base = base_pairs[0]
+    pair_id = str(base["pair_id"])
+    boundary_pairs: list[dict[str, object]] = []
+    patch_z_bounds: dict[tuple[str, int, int], tuple[float, float]] = {}
+    for slab, (z_low, z_high) in enumerate(zip(_PLANES[:-1], _PLANES[1:], strict=True)):
+        pair = dict(base)
+        pair["marker_a"] = marker_start + 2 * slab
+        pair["marker_b"] = marker_start + 2 * slab + 1
+        boundary_pairs.append(pair)
+        key = (pair_id, int(pair["marker_a"]), int(pair["marker_b"]))
+        patch_z_bounds[key] = (float(z_low), float(z_high))
+    return boundary_pairs, node_pairs, patch_z_bounds
 
 
 def _triangle_areas_and_normals(mesh, face_ordinals: np.ndarray) -> tuple[float, list[np.ndarray]]:
@@ -415,4 +442,438 @@ def test_adapter_rejects_boolean_magnetic_bound() -> None:
             _BOUNDS,
             magnetic_z_bounds=(False, _SCALE),
             outer_boundary_marker=90,
+        )
+
+
+def test_periodic_patch_scopes_preserve_four_marker_pairs_per_axis() -> None:
+    nodes = _layered_nodes(periodic_axis=(0, 1))
+    x_pairs, x_nodes, x_scopes = _scoped_periodic_inputs(nodes, 0, marker_start=101)
+    y_pairs, y_nodes, y_scopes = _scoped_periodic_inputs(nodes, 1, marker_start=201)
+    boundary_pairs = x_pairs + y_pairs
+    node_pairs = x_nodes + y_nodes
+    patch_z_bounds = {**x_scopes, **y_scopes}
+
+    mesh = build_layered_box_mesh_data(
+        nodes,
+        _PLANES,
+        _BOUNDS,
+        magnetic_z_bounds=(-_SCALE, _SCALE),
+        outer_boundary_marker=90,
+        periodic_boundary_pairs=boundary_pairs,
+        periodic_node_pairs=node_pairs,
+        periodic_patch_z_bounds=patch_z_bounds,
+    )
+
+    assert mesh.periodic_boundary_pairs == boundary_pairs
+    assert len(mesh.periodic_boundary_pairs) == 8
+    assert len(mesh.periodic_node_pairs) == len(node_pairs)
+    assert len(
+        {
+            (str(pair["pair_id"]), int(pair["node_a"]), int(pair["node_b"]))
+            for pair in mesh.periodic_node_pairs
+        }
+    ) == len(mesh.periodic_node_pairs)
+    assert set(mesh.boundary_markers[mesh.facet_roles == "periodic_seam"].tolist()) == {
+        marker
+        for pair in boundary_pairs
+        for marker in (int(pair["marker_a"]), int(pair["marker_b"]))
+    }
+    assert np.all(mesh.boundary_markers[mesh.facet_roles == "exterior"] == 90)
+    assert np.all(mesh.boundary_markers[mesh.facet_roles == "material_interface"] == 10)
+
+    for rows, scopes in ((x_pairs, x_scopes), (y_pairs, y_scopes)):
+        pair_id = str(rows[0]["pair_id"])
+        mapping = {
+            int(pair["node_a"]): int(pair["node_b"])
+            for pair in mesh.periodic_node_pairs
+            if pair["pair_id"] == pair_id
+        }
+        for pair in rows:
+            key = (pair_id, int(pair["marker_a"]), int(pair["marker_b"]))
+            z_low, z_high = scopes[key]
+            source_faces = [
+                mesh.facet_node_ids(index)
+                for index in range(mesh.n_boundary_faces)
+                if mesh.facet_roles[index] == "periodic_seam"
+                and mesh.boundary_markers[index] == pair["marker_a"]
+            ]
+            destination_faces = [
+                mesh.facet_node_ids(index)
+                for index in range(mesh.n_boundary_faces)
+                if mesh.facet_roles[index] == "periodic_seam"
+                and mesh.boundary_markers[index] == pair["marker_b"]
+            ]
+            assert source_faces and destination_faces
+            for face in (*source_faces, *destination_faces):
+                face_z = mesh.nodes[np.asarray(face, dtype=np.int64), 2]
+                assert float(face_z.min()) == z_low
+                assert float(face_z.max()) == z_high
+            mapped = {
+                tuple(sorted(mapping[int(node)] for node in face))
+                for face in source_faces
+            }
+            destination = {
+                tuple(sorted(int(node) for node in face))
+                for face in destination_faces
+            }
+            assert mapped == destination
+
+
+@pytest.mark.parametrize("missing_or_extra", ("missing", "extra", "ambiguous"))
+def test_periodic_patch_scopes_reject_missing_or_extra_keys(missing_or_extra: str) -> None:
+    nodes = _layered_nodes(periodic_axis=0)
+    boundary_pairs, node_pairs, patch_z_bounds = _scoped_periodic_inputs(
+        nodes, 0, marker_start=101
+    )
+    if missing_or_extra == "missing":
+        patch_z_bounds.pop(next(iter(patch_z_bounds)))
+        expected = "missing z scope"
+    elif missing_or_extra == "extra":
+        patch_z_bounds[("periodic-0", 901, 902)] = (float(_PLANES[0]), float(_PLANES[1]))
+        expected = "unexpected periodic patch z scope"
+    else:
+        key = next(iter(patch_z_bounds))
+        patch_z_bounds[(f" {key[0]} ", key[1], key[2])] = patch_z_bounds[key]
+        expected = "ambiguous periodic patch z scope key"
+
+    with pytest.raises(ValueError, match=expected):
+        build_layered_box_mesh_data(
+            nodes,
+            _PLANES,
+            _BOUNDS,
+            magnetic_z_bounds=(-_SCALE, _SCALE),
+            outer_boundary_marker=90,
+            periodic_boundary_pairs=boundary_pairs,
+            periodic_node_pairs=node_pairs,
+            periodic_patch_z_bounds=patch_z_bounds,
+        )
+
+
+@pytest.mark.parametrize(
+    ("invalid_scope", "message"),
+    (
+        ((float(_PLANES[0]), float(_PLANES[1]) + _SCALE / 1024.0), "exact layer plane"),
+        ((float(_PLANES[1]), float(_PLANES[0])), "increasing"),
+        ((float(_PLANES[0]), float(_PLANES[0])), "increasing"),
+        ((float("nan"), float(_PLANES[1])), "finite"),
+        ((float(_PLANES[0]), float("inf")), "finite"),
+        ((False, float(_PLANES[1])), "real number"),
+        ((float(_PLANES[0]), float(_PLANES[1]), float(_PLANES[2])), "two finite real z bounds"),
+    ),
+)
+def test_periodic_patch_scopes_reject_invalid_bounds(
+    invalid_scope: object,
+    message: str,
+) -> None:
+    nodes = _layered_nodes(periodic_axis=0)
+    boundary_pairs, node_pairs, patch_z_bounds = _scoped_periodic_inputs(
+        nodes, 0, marker_start=101
+    )
+    patch_z_bounds[next(iter(patch_z_bounds))] = invalid_scope  # type: ignore[assignment]
+
+    error_type = TypeError if message == "real number" else ValueError
+    with pytest.raises(error_type, match=message):
+        build_layered_box_mesh_data(
+            nodes,
+            _PLANES,
+            _BOUNDS,
+            magnetic_z_bounds=(-_SCALE, _SCALE),
+            outer_boundary_marker=90,
+            periodic_boundary_pairs=boundary_pairs,
+            periodic_node_pairs=node_pairs,
+            periodic_patch_z_bounds=patch_z_bounds,
+        )
+
+
+@pytest.mark.parametrize("partition_error", ("gap", "overlap"))
+def test_periodic_patch_scopes_must_partition_the_exact_z_domain(partition_error: str) -> None:
+    nodes = _layered_nodes(periodic_axis=0)
+    boundary_pairs, node_pairs, patch_z_bounds = _scoped_periodic_inputs(
+        nodes, 0, marker_start=101
+    )
+    if partition_error == "gap":
+        boundary_pairs = [boundary_pairs[index] for index in (0, 2, 3)]
+        patch_z_bounds = {
+            key: value
+            for key, value in patch_z_bounds.items()
+            if key != ("periodic-0", 103, 104)
+        }
+        expected = "gap"
+    else:
+        patch_z_bounds[("periodic-0", 101, 102)] = (
+            float(_PLANES[0]),
+            float(_PLANES[2]),
+        )
+        patch_z_bounds[("periodic-0", 103, 104)] = (
+            float(_PLANES[1]),
+            float(_PLANES[2]),
+        )
+        expected = "overlap"
+
+    with pytest.raises(ValueError, match=expected):
+        build_layered_box_mesh_data(
+            nodes,
+            _PLANES,
+            _BOUNDS,
+            magnetic_z_bounds=(-_SCALE, _SCALE),
+            outer_boundary_marker=90,
+            periodic_boundary_pairs=boundary_pairs,
+            periodic_node_pairs=node_pairs,
+            periodic_patch_z_bounds=patch_z_bounds,
+        )
+
+
+@pytest.mark.parametrize("inconsistency", ("translation", "tolerance"))
+def test_periodic_patch_rows_require_one_logical_translation_and_tolerance(
+    inconsistency: str,
+) -> None:
+    nodes = _layered_nodes(periodic_axis=0)
+    boundary_pairs, node_pairs, patch_z_bounds = _scoped_periodic_inputs(
+        nodes, 0, marker_start=101
+    )
+    if inconsistency == "translation":
+        boundary_pairs[1]["translation"] = [-4.0 * _SCALE, 0.0, 0.0]
+    else:
+        boundary_pairs[1]["tolerance_m"] = 1.0e-15
+
+    with pytest.raises(ValueError, match="inconsistent.*translation|direction|tolerance"):
+        build_layered_box_mesh_data(
+            nodes,
+            _PLANES,
+            _BOUNDS,
+            magnetic_z_bounds=(-_SCALE, _SCALE),
+            outer_boundary_marker=90,
+            periodic_boundary_pairs=boundary_pairs,
+            periodic_node_pairs=node_pairs,
+            periodic_patch_z_bounds=patch_z_bounds,
+        )
+
+
+def test_periodic_patch_rows_reject_a_second_pair_id_for_the_same_axis() -> None:
+    nodes = _layered_nodes(periodic_axis=0)
+    boundary_pairs, node_pairs = _periodic_inputs(nodes, 0)
+    second = dict(boundary_pairs[0])
+    second["pair_id"] = "another-x-pair"
+    second["marker_a"] = 41
+    second["marker_b"] = 42
+
+    with pytest.raises(ValueError, match="only one periodic pair per axis"):
+        build_layered_box_mesh_data(
+            nodes,
+            _PLANES,
+            _BOUNDS,
+            magnetic_z_bounds=(-_SCALE, _SCALE),
+            outer_boundary_marker=90,
+            periodic_boundary_pairs=boundary_pairs + [second],
+            periodic_node_pairs=node_pairs,
+        )
+
+
+def test_periodic_patch_triangle_bijection_is_checked_per_scope() -> None:
+    delta = _SCALE / 1024.0
+    nodes = _layered_nodes(periodic_axis=0, middle_offsets=(0.0, delta))
+    boundary_pairs, node_pairs, patch_z_bounds = _scoped_periodic_inputs(
+        nodes, 0, marker_start=101, tolerance=delta
+    )
+    source_by_y = {
+        float(nodes[int(pair["node_a"]), 1]): index
+        for index, pair in enumerate(node_pairs)
+        if nodes[int(pair["node_a"]), 2] == 0.0
+    }
+    assert 0.0 in source_by_y and delta in source_by_y
+    first = source_by_y[0.0]
+    second = source_by_y[delta]
+    node_pairs[first]["node_b"], node_pairs[second]["node_b"] = (
+        node_pairs[second]["node_b"],
+        node_pairs[first]["node_b"],
+    )
+
+    with pytest.raises(ValueError, match="mismatched complete triangle sets"):
+        build_layered_box_mesh_data(
+            nodes,
+            _PLANES,
+            _BOUNDS,
+            magnetic_z_bounds=(-_SCALE, _SCALE),
+            outer_boundary_marker=90,
+            periodic_boundary_pairs=boundary_pairs,
+            periodic_node_pairs=node_pairs,
+            periodic_patch_z_bounds=patch_z_bounds,
+        )
+
+
+def test_single_periodic_patch_accepts_explicit_full_domain_scope() -> None:
+    nodes = _layered_nodes(periodic_axis=0)
+    boundary_pairs, node_pairs = _periodic_inputs(nodes, 0)
+    pair = boundary_pairs[0]
+    key = (str(pair["pair_id"]), int(pair["marker_a"]), int(pair["marker_b"]))
+
+    mesh = build_layered_box_mesh_data(
+        nodes,
+        _PLANES,
+        _BOUNDS,
+        magnetic_z_bounds=(-_SCALE, _SCALE),
+        outer_boundary_marker=90,
+        periodic_boundary_pairs=boundary_pairs,
+        periodic_node_pairs=node_pairs,
+        periodic_patch_z_bounds={key: (float(_PLANES[0]), float(_PLANES[-1]))},
+    )
+
+    assert mesh.periodic_boundary_pairs == boundary_pairs
+    assert set(mesh.boundary_markers[mesh.facet_roles == "periodic_seam"].tolist()) == {
+        int(pair["marker_a"]),
+        int(pair["marker_b"]),
+    }
+
+
+def test_single_periodic_patch_rejects_explicit_partial_scope() -> None:
+    nodes = _layered_nodes(periodic_axis=0)
+    boundary_pairs, node_pairs = _periodic_inputs(nodes, 0)
+    pair = boundary_pairs[0]
+    key = (str(pair["pair_id"]), int(pair["marker_a"]), int(pair["marker_b"]))
+
+    with pytest.raises(ValueError, match="full exact z domain"):
+        build_layered_box_mesh_data(
+            nodes,
+            _PLANES,
+            _BOUNDS,
+            magnetic_z_bounds=(-_SCALE, _SCALE),
+            outer_boundary_marker=90,
+            periodic_boundary_pairs=boundary_pairs,
+            periodic_node_pairs=node_pairs,
+            periodic_patch_z_bounds={key: (float(_PLANES[0]), float(_PLANES[1]))},
+        )
+
+
+def test_mixed_split_and_single_periodic_pair_scopes() -> None:
+    nodes = _layered_nodes(periodic_axis=(0, 1))
+    x_pairs, x_nodes, x_scopes = _scoped_periodic_inputs(nodes, 0, marker_start=101)
+    y_pairs, y_nodes = _periodic_inputs(nodes, 1)
+    y_pair = y_pairs[0]
+    y_key = (str(y_pair["pair_id"]), int(y_pair["marker_a"]), int(y_pair["marker_b"]))
+    scopes = {
+        **x_scopes,
+        y_key: (float(_PLANES[0]), float(_PLANES[-1])),
+    }
+
+    mesh = build_layered_box_mesh_data(
+        nodes,
+        _PLANES,
+        _BOUNDS,
+        magnetic_z_bounds=(-_SCALE, _SCALE),
+        outer_boundary_marker=90,
+        periodic_boundary_pairs=x_pairs + y_pairs,
+        periodic_node_pairs=x_nodes + y_nodes,
+        periodic_patch_z_bounds=scopes,
+    )
+
+    assert len(mesh.periodic_boundary_pairs) == 5
+    assert set(mesh.boundary_markers[mesh.facet_roles == "periodic_seam"].tolist()) == {
+        marker
+        for pair in x_pairs + y_pairs
+        for marker in (int(pair["marker_a"]), int(pair["marker_b"]))
+    }
+
+
+def test_periodic_patch_validator_rejects_unmarked_side_facets() -> None:
+    nodes = _layered_nodes(periodic_axis=0)
+    boundary_pairs, node_pairs, patch_z_bounds = _scoped_periodic_inputs(
+        nodes, 0, marker_start=101
+    )
+    mesh = build_layered_box_mesh_data(
+        nodes,
+        _PLANES,
+        _BOUNDS,
+        magnetic_z_bounds=(-_SCALE, _SCALE),
+        outer_boundary_marker=90,
+        periodic_boundary_pairs=boundary_pairs,
+        periodic_node_pairs=node_pairs,
+        periodic_patch_z_bounds=patch_z_bounds,
+    )
+    normalized_pairs, pair_by_id = _layered_box_adapter._normalize_boundary_pairs(
+        boundary_pairs,
+        bounds_xy=_BOUNDS,
+        planes=_PLANES,
+        outer_boundary_marker=90,
+        periodic_patch_z_bounds=patch_z_bounds,
+    )
+    normalized_nodes, node_maps = _layered_box_adapter._normalize_node_pairs(
+        node_pairs,
+        pair_by_id=pair_by_id,
+        node_count=len(nodes),
+    )
+    facets = [
+        (
+            tuple(int(node) for node in mesh.facet_node_ids(index)),
+            str(mesh.facet_roles[index]),
+            int(mesh.boundary_markers[index]),
+        )
+        for index in range(mesh.n_boundary_faces)
+    ]
+
+    pair = normalized_pairs[0]
+    marker_a = int(pair["marker_a"])
+    marker_b = int(pair["marker_b"])
+    mapping = node_maps[str(pair["pair_id"])]
+    source_faces = [
+        face
+        for face, role, marker in facets
+        if role == "periodic_seam" and marker == marker_a
+    ]
+    destination_keys = {
+        tuple(sorted(face))
+        for face, role, marker in facets
+        if role == "periodic_seam" and marker == marker_b
+    }
+    source_use_count: dict[int, int] = {}
+    for face in source_faces:
+        for node in face:
+            source_use_count[node] = source_use_count.get(node, 0) + 1
+    source_face = next(
+        face
+        for face in source_faces
+        if all(source_use_count[node] > 1 for node in face)
+        and tuple(sorted(mapping[node] for node in face)) in destination_keys
+    )
+    destination_key = tuple(sorted(mapping[node] for node in source_face))
+    assert destination_key in destination_keys
+
+    mutated_facets: list[tuple[tuple[int, int, int], str, int]] = []
+    for face, role, marker in facets:
+        if (
+            role == "periodic_seam"
+            and (
+                (marker == marker_a and tuple(sorted(face)) == tuple(sorted(source_face)))
+                or (marker == marker_b and tuple(sorted(face)) == destination_key)
+            )
+        ):
+            mutated_facets.append((face, "exterior", 90))
+        else:
+            mutated_facets.append((face, role, marker))
+
+    with pytest.raises(ValueError, match="complete side unions"):
+        _layered_box_adapter._validate_periodic_topology(
+            nodes=mesh.nodes,
+            facets=mutated_facets,
+            bounds_xy=_BOUNDS,
+            boundary_pairs=normalized_pairs,
+            node_maps=node_maps,
+            node_pairs=normalized_nodes,
+        )
+
+
+def test_periodic_patch_scope_mapping_must_be_a_mapping() -> None:
+    nodes = _layered_nodes(periodic_axis=0)
+    boundary_pairs, node_pairs, _patch_z_bounds = _scoped_periodic_inputs(
+        nodes, 0, marker_start=101
+    )
+    with pytest.raises(TypeError, match="mapping"):
+        build_layered_box_mesh_data(
+            nodes,
+            _PLANES,
+            _BOUNDS,
+            magnetic_z_bounds=(-_SCALE, _SCALE),
+            outer_boundary_marker=90,
+            periodic_boundary_pairs=boundary_pairs,
+            periodic_node_pairs=node_pairs,
+            periodic_patch_z_bounds=[],
         )

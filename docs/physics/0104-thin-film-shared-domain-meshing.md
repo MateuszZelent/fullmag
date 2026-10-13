@@ -331,7 +331,7 @@ Translacja ma odpowiadać szerokości Boxa; wejściowe tolerancje SI nie są
 rozszerzane. Samo równe liczenie węzłów nie jest dowodem zgodności. Adapter
 nie może wytwarzać zaakceptowanego certyfikatu periodycznego, raportu jakości
 ani realization proof bez odrębnego producenta i sprawdzonych bramek.
-Adapter ma15 interpretowanych regresji PASS: objętości regionów, orientacja
+Adapter ma37 interpretowanych regresji PASS: objętości regionów, orientacja
 interfejsów, kompletne pary węzłów/faset, jednoczesne x/y i odmowy błędnych
 wejść. Nie wymyśla podziału air na near/far: cell_mesh_parts pozostaje puste.
 Routing produkcyjny, jakość, pełne owner fields i Floquet nadal OPEN.
@@ -342,15 +342,31 @@ wykazuje x15 par węzłów/16 par trójkątów oraz y21/24, bez brakujących
 faset;3 mapowania wspólnych naroży komutują. Pełny source surface mesh
 ma181 węzłów i56 par;20 par dotyczy węzłów poza layer planes.
 Nie jest to ta sama topologia powierzchniowa co cap-generated volume.
-Nie wolno zgubić różnicy w provenance. Adapter odrzuca obecnie cztery
-oryginalne rekordy side-patch: dwa slaby mają ten sam pair_id na osi,
-a prototyp dopuszcza jeden rekord na oś. Kontrola faset tej konkretnej
+Nie wolno zgubić różnicy w provenance. Wcześniejszy adapter odrzucał cztery
+oryginalne rekordy side-patch: dwa slaby mają ten sam pair_id na osi.
+Korekta prywatnego adaptera zachowuje te rekordy przy jawnych scope. Kontrola faset tej konkretnej
 próbki nie zastępuje naprawy kontraktu, certyfikatu ani quality gate.
 Diagnostyka tej samej141/400 próbki daje medianę wszystkich sześciu
 krawędzi58.36nm w box ROI i63.22nm w cylinder ROI; odpowiednie hK p95
 wynoszą129.32nm oraz125.12nm. Dodatnie exact orientacje i seam parity
 nie spełniają regionalnego wymagania rozmiaru. Wariant nie jest gotowy
 do włączenia do produkcyjnej trasy regionalnej.
+
+Docelowa korekta prywatnego adaptera zachowuje wszystkie rekordy
+`(pair_id, marker_a, marker_b)` producenta. Powtarzany logical pair_id
+na tej samej osi jest legalny tylko przy identycznej translacji, kierunku
+i tolerancji; mapa node pairs pozostaje wspólna dla logical pair_id.
+Prywatna jawna mapa z-intervals po pełnym kluczu rekordu określa zakres
+side-patch na istniejących exact planes. Nie wolno go odgadywać z numerów
+markerów. Wielorekordowa oś wymaga zakresów bez luk, nakładania i braków;
+pojedyncza para pełnego boku może używać całego z-domain. Każda faseta
+seam musi należeć do dokładnie jednego zakresu i zachować jego marker.
+Walidacja obejmuje każdy patch oraz pełną sumę obu boków, bez nadpisania
+rekordów słownikiem pair_id. Corner commutation dotyczy logical node maps.
+Zewnętrzny MeshData/IR nie otrzymuje nowego formatu boundary-pair records.
+Kontrakt zaimplementowano w prywatnym adapterze:37 interpretowanych
+regresji PASS. Production producer musi jeszcze przekazać jawny scope;
+nie jest to dowód jakości, managed runtime ani Floquet operatora.
 
 (thin-film-cap-quality-retriangulation)=
 ### Naprawa jakości przez zgodne zmiany przekątnych capów
@@ -509,7 +525,7 @@ nie kwalifikuje operatora ani managed runtime.
 | Tetra fields | `packages/fullmag-py/src/fullmag/meshing/_size_field_plan.py` | `_build_field_stack` | strefy surface/edge/corner/air |
 | Quality | `packages/fullmag-py/src/fullmag/meshing/_gmsh_extraction.py` | `_extract_quality_metrics` | bieżące metryki Gmsh |
 | Cache predykatów | `packages/fullmag-py/src/fullmag/meshing/_layered_box_tetrahedralization.py` | `_cached_orient3d` | dokładny signed cache dla niezmiennych nodes; order/sign regression PASS |
-| Adapter cap → MeshData | `packages/fullmag-py/src/fullmag/meshing/_layered_box_mesh_data.py` | `build_layered_box_mesh_data` | prototyp;15 regresji, brak production routing/quality/certificate |
+| Adapter cap → MeshData | `packages/fullmag-py/src/fullmag/meshing/_layered_box_mesh_data.py` | `build_layered_box_mesh_data` | prototyp;37 regresji, brak production routing/quality/certificate |
 | Zmienne przekroje | `packages/fullmag-py/src/fullmag/meshing/_layered_box_tetrahedralization.py` | `tetrahedralize_layered_box` | dokładny prototyp zgodnej topologii; brak production routing |
 | Ruch wewnętrzny 4→4 | `packages/fullmag-py/src/fullmag/meshing/_layered_box_tetrahedralization.py` | `_improve_interior_edges` | dokładne cavity/SAT, malejący profil krawędzi; brak production routing |
 | Regresja kernela | `packages/fullmag-py/tests/test_layered_box_tetrahedralization.py` | `LayeredBoxTetrahedralizationTests` | 15 PASS; synthetic source PBC, production quality/runtime OPEN |
