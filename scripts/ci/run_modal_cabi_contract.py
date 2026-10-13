@@ -39,7 +39,7 @@ def main() -> int:
             ["cmake", "-S", str(source / "native"), "-B", str(build), *flags],
             ["cmake", "--build", str(build), "--target", *targets, "--parallel", "2"],
             ["ctest", "--test-dir", str(build / "backends" / "fem"),
-             "-R", "^(fem_modal_eigen_contract|fem_mode_kinematics_contract|fem_floquet_modal_solver_contract|fem_poisson_airbox_schur_matshell_contract)$", "--output-on-failure", "--no-tests=error"],
+             "-R", "^(fem_modal_eigen_contract|fem_mode_kinematics_contract|fem_floquet_modal_solver_contract|fem_poisson_airbox_window_retry_policy_contract)$", "--output-on-failure", "--no-tests=error"],
         ]
         for index, command in enumerate(commands):
             log = root / f"step-{index}.log"

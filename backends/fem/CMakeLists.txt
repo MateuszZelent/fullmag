@@ -1017,6 +1017,11 @@ add_fem_source_facade_contract(
     fem_poisson_airbox_schur_matshell_contract
     tests/frequency_domain/poisson_airbox_schur_matshell_test.cpp
 )
+add_test(
+    NAME fem_poisson_airbox_window_retry_policy_contract
+    COMMAND fem_poisson_airbox_schur_matshell_contract
+        --iteration-retry-policy-only
+)
 if(FULLMAG_USE_MFEM_STACK AND FULLMAG_ENABLE_CUDA AND FULLMAG_FEM_WITH_SLEPC)
     if(WIN32)
         fullmag_validate_windows_modal()

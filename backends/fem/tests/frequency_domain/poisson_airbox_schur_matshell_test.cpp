@@ -1134,8 +1134,20 @@ void ModalKrylovTuningRejectsMalformedValuesAndInvalidDefaults()
 
 } // namespace
 
-int main()
+int main(int argc, char **argv)
 {
+    if (argc == 2 && argv[1] != nullptr &&
+        std::strcmp(argv[1], "--iteration-retry-policy-only") == 0) {
+        (WindowIterationLimitRecoveryEligibilityPreservesFailureBoundaries)();
+        return 0;
+    }
+    if (argc != 1) {
+        std::fprintf(
+            stderr,
+            "usage: fem_poisson_airbox_schur_matshell_contract "
+            "[--iteration-retry-policy-only]\n");
+        return 2;
+    }
     ModalKrylovTuningPreservesDefaultsAndK0IgnoresAliases();
     ModalKrylovTuningAcceptsLegacyAliasesOnlyWhenEnabled();
     ModalKrylovTuningAcceptsCommonOverridesAndMatchingAliases();

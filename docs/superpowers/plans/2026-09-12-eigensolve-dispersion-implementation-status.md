@@ -8725,3 +8725,15 @@ umieszczono na nowym diagnostycznym wykresie.
 Szczegółowe dowody lokalne: katalog `layered-cap-sliver-diagnostic-20261013`
 w task visualizations, raport `build243-de-signed-pair-report-20261013.md`,
 JSON pair, K0 failure i `seeded-film-cap-stage-probe-20261013.json`.
+
+### Kontrola CI poprawki recovery (commit 13d9d71f6)
+
+GitHub Actions run `38453589293` skompilował cztery cele, w tym helper i test
+Schur. Cały native contract pozostaje FAIL: pełny Schur wymaga SLEPc,
+wyłączonego w profilu dependency-free, oraz istniejący modal contract
+`modal_shift_invert_validation_reports_slepc_adapter_configuration` zgłasza
+brak `shift_omega_rad_s` w JSON validation. Pierwsza korekta wydziela jawny
+policy-only test rzeczywistego predykatu, zachowując pełny test Schur.
+Drugi błąd wymaga diagnozy producenta/kontraktu; nie usuwamy asercji ani
+nie przedstawiamy całego CI jako PASS. Build runtime commita 13d9d71f6
+pozostaje osobnym dowodem i nie zawiera późniejszej korekty harnessu CI.
