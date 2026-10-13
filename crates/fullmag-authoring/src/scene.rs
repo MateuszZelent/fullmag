@@ -1708,7 +1708,13 @@ mod spin_authoring_tests {
             serde_json::json!({"parallel_execution": null}),
         ).expect("explicit null restores the canonical policy");
         assert_eq!(scene.parallel_execution, fullmag_ir::ParallelExecutionPolicyIR::default());
+        let adaptive: super::SceneStudyState = serde_json::from_value(
+            serde_json::json!({"parallel_execution": {"mode": "adaptive", "max_workers": 2}}),
+        ).expect("object policy preserves requested adaptive execution");
+        assert_eq!(adaptive.parallel_execution.mode, fullmag_ir::ParallelExecutionModeIR::Adaptive);
+        assert_eq!(adaptive.parallel_execution.max_workers, Some(2));
         for value in [serde_json::json!(false), serde_json::json!([]),
+                      serde_json::json!(["adaptive", 90.0, 80.0, 1073741824_u64, null, 1]),
                       serde_json::json!({"unknown": 1})] {
             assert!(serde_json::from_value::<super::SceneStudyState>(
                 serde_json::json!({"parallel_execution": value}),

@@ -32,7 +32,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          fetch-depth: 32
+          fetch-depth: 0
       - uses: pnpm/action-setup@v6
         with:
           version: 10.8.1
@@ -91,6 +91,11 @@ jobs:
           pnpm --dir "${{ steps.frontend-workspace.outputs.workspace }}/apps/control-room" check:api-hygiene
       - name: Lint
         run: pnpm --dir "${{ steps.frontend-workspace.outputs.workspace }}/apps/control-room" lint
+      - name: Verify Doctor comparison history
+        run: |
+          git cat-file -e 1195663c67943cb57f6716bdd73639d9fe917e4f^{commit}
+          git merge-base --is-ancestor 1195663c67943cb57f6716bdd73639d9fe917e4f HEAD
+          git diff --name-only 1195663c67943cb57f6716bdd73639d9fe917e4f...HEAD -- apps/control-room
       - name: Review changed React sources with pinned Doctor
         run: >-
           node "${{ steps.frontend-workspace.outputs.workspace }}/node_modules/react-doctor/bin/react-doctor.js"

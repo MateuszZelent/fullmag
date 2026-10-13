@@ -48,3 +48,29 @@ frontend dev może przeładować zmienione źródła. Nowe HUD/authoring wymagaj
 oddzielnego dowodu runtime przed kwalifikacją produktu.
 
 S00–S12 i szersza integracja solvera do mastera pozostają otwarte.
+
+
+## Korekta po terminalnym CI — 13.10.2026
+
+CI `37845860140` dla `c8a8dd5e4749d180f5cf3f2e46e5bdaa8a466de2`
+zakończyło się FAILURE. Capture-contract PASS; native scene: 79 PASS / 1 FAIL;
+frontend nie wykonał regresji po awarii Doctor. Poprzednia informacja
+„CI oczekuje” opisuje checkpoint historyczny, nie aktualny wynik.
+
+Naprawy tego przyrostu:
+
+1. Scene parallel_execution przyjmuje wyłącznie obiekt lub null. Serde
+   dopuszczało reprezentację sekwencyjną struktury, w tym pustą tablicę z
+   defaultami. Deserializer odrzuca ten niekanoniczny kształt; null nadal
+   przywraca serial, a obiekt adaptive zachowuje intencję. Regresja obejmuje
+   pustą i pełną tablicę, nieznane pole i legalny adaptive.
+2. Frontend checkout pobiera pełną historię. Doctor działa w checkoutcie
+   źródeł (binarium pochodzi z managed workspace), ale fetch-depth 32 nie
+   gwarantowało obecności bazowego commita po merge. Osobna kontrola
+   cat-file/ancestor kończy CI błędem przed Doctor przy braku właściwej bazy.
+   Zakres i bazowy commit pozostają niezmienione; nie wyłączono reguł.
+
+Diff check i parser rustfmt PASS. Testów jednostkowych lokalnie nie
+kompilowano. Wykonanie regresji i Doctor wymaga świeżego GitHub Actions;
+wynik nie jest jeszcze potwierdzony. Nie zmieniono solvera, progów residualu
+ani istniejących danych. Pełne S00–S12 i kwalifikacja naukowa pozostają OPEN.

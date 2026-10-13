@@ -83,6 +83,14 @@ pub fn deserialize_parallel_execution_policy<'de, D>(
 where
     D: Deserializer<'de>,
 {
-    Option::<ParallelExecutionPolicyIR>::deserialize(deserializer)
-        .map(|policy| policy.unwrap_or_default())
+    let value = serde_json::Value::deserialize(deserializer)?;
+    match value {
+        serde_json::Value::Null => Ok(ParallelExecutionPolicyIR::default()),
+        serde_json::Value::Object(_) => {
+            serde_json::from_value(value).map_err(serde::de::Error::custom)
+        }
+        _ => Err(serde::de::Error::custom(
+            "parallel_execution must be an object or null",
+        )),
+    }
 }
