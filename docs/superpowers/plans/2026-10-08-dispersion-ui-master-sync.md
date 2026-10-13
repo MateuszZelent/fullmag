@@ -341,3 +341,18 @@ bezpośrednio tych metryk z SICN/gamma lub mixedcertp05 i nie zmieniono
 progów. Recepta diagnosticCI używa pytest-s, aby zachować actualmetrics
 w logu także przy zielonej kontroli topologii. Naprawa jakości jest teraz
 jawnym warunkiem poprzedzającym runtime tej nowej ścieżki.
+
+
+## Wewnętrzny adapter MeshData — 13.10.2026
+
+build_layered_box_mesh_data używa kernela i istniejącego CSR MeshData.
+Regiony magnetic1/air2 z exact slab containment, interface10 z normals
+magnetic→air, exterior z outward incidence. Pełne x/y bijections, translation
+boxwidth, triangle-set equality oraz x/y commutation są walidowane.
+Nie tworzy certificate/quality/realization ani sztucznych near/far_air części.
+Review poprawił U1→U4 topology string arrays, odrzucenieboolbounds i usunął
+nieuzasadnione przypisanie wszystkich aircells dofar_air.14 interpretowanych
+regresji PASS,1.40s; AST/YAML/scientificmap/diff PASS. Nie budowano unit tests.
+To prototypowa realizacja kontraktu, nie productionrouting; stwierdzone
+actualGmsh slivery nadal wymagają naprawy przed FEM. Source-map i istniejący
+exact-layer CI obejmują adapter. Pełne S00–S12 nadalOPEN.

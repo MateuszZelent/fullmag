@@ -309,7 +309,7 @@ utożsamiać ich z bramką certyfikatu mixed-topology. Wzorzec naprawy
 ma generować2D na geometrycznych capach, a exact slab volume realizować
 kernelem. Nie wolno podmienić tej ścieżki na niekontrolowane generate(3).
 
-Projektowany adapter wewnętrzny ma przekazać wynik kernela do istniejącego
+Wewnętrzny adapter prototypowy przekazuje wynik kernela do istniejącego
 kanonicznego `MeshData`, bez nowego formatu publicznego. Magnetic bounds
 muszą być dwoma istniejącymi płaszczyznami; klasyfikacja markerów magnetic=1
 oraz air=2 opiera się na pełnym zawieraniu slabu, nie tolerowanym centroidzie.
@@ -323,8 +323,10 @@ Translacja ma odpowiadać szerokości Boxa; wejściowe tolerancje SI nie są
 rozszerzane. Samo równe liczenie węzłów nie jest dowodem zgodności. Adapter
 nie może wytwarzać zaakceptowanego certyfikatu periodycznego, raportu jakości
 ani realization proof bez odrębnego producenta i sprawdzonych bramek.
-To kontrakt przed implementacją adaptera; routing produkcyjny, jakość,
-rzeczywiste owner fields i Floquet pozostają niezweryfikowane.
+Adapter ma14 interpretowanych regresji PASS: objętości regionów, orientacja
+interfejsów, kompletne pary węzłów/faset, jednoczesne x/y i odmowy błędnych
+wejść. Nie wymyśla podziału air na near/far: cell_mesh_parts pozostaje puste.
+Routing produkcyjny, jakość, pełne owner fields i Floquet nadal OPEN.
 
 (thin-film-mesh-validation)=
 ## Validation
@@ -356,6 +358,7 @@ nie kwalifikuje operatora ani managed runtime.
 | Sweep | `packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py` | `generate_swept_box_mesh` | ograniczona mixed-P1 realizacja box |
 | Tetra fields | `packages/fullmag-py/src/fullmag/meshing/_size_field_plan.py` | `_build_field_stack` | strefy surface/edge/corner/air |
 | Quality | `packages/fullmag-py/src/fullmag/meshing/_gmsh_extraction.py` | `_extract_quality_metrics` | bieżące metryki Gmsh |
+| Adapter cap → MeshData | `packages/fullmag-py/src/fullmag/meshing/_layered_box_mesh_data.py` | `build_layered_box_mesh_data` | prototyp;14 regresji, brak production routing/quality/certificate |
 | Zmienne przekroje | `packages/fullmag-py/src/fullmag/meshing/_layered_box_tetrahedralization.py` | `tetrahedralize_layered_box` | dokładny prototyp zgodnej topologii; brak production routing |
 | Regresja kernela | `packages/fullmag-py/tests/test_layered_box_tetrahedralization.py` | `LayeredBoxTetrahedralizationTests` | 7 PASS, 13 subtests; runtime/PBC/quality OPEN |
 | Actual cap sampling | `packages/fullmag-py/tests/test_layered_cap_field_sampling.py` | `TestLayeredCapFieldSampling` | porównanie mesh/geometry extrusion i rzeczywiste nodes→kernel; produkcja i quality OPEN |
