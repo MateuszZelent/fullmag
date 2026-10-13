@@ -569,6 +569,14 @@ class ContainerClientTests(unittest.TestCase):
         self.assertEqual(8765, reconfigured["port"])
         self.assertEqual(list(container_client.SLEPC_MODAL_PROFILES), reconfigured["allowed_profiles"])
 
+    def test_deployed_runtime_profiles_are_readable_but_unknown_profiles_rejected(self):
+        profiles = [*container_client.SLEPC_MODAL_PROFILES,
+                    "fem-cpu-slepc-runtime-v1", "fem-cpu-slepc-runtime-v2"]
+        self.assertTrue(container_client._known_profile_list(profiles))
+        self.assertFalse(container_client._known_profile_list([*profiles, "untrusted-profile"]))
+        self.assertFalse(container_client._known_profile_list([*profiles, profiles[-1]]))
+        self.assertFalse(container_client._known_profile_list(profiles[1:]))
+
     def test_known_profile_list_accepts_tuples_and_profile_lists(self):
         self.assertTrue(container_client._known_profile_list(list(container_client.ALLOWED_PROFILES)))
         self.assertTrue(container_client._known_profile_list(tuple(container_client.ALLOWED_PROFILES)))

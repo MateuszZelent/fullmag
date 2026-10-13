@@ -62,11 +62,17 @@ ALLOWED_PROFILES = (
 CPU_CONTRACT_PROFILES = (*ALLOWED_PROFILES, "fem-cpu-current-contracts-v1")
 CURRENT_CONTRACT_PROFILES = (*CPU_CONTRACT_PROFILES, "fem-gpu-current-contracts-v1")
 SLEPC_MODAL_PROFILES = (*CURRENT_CONTRACT_PROFILES, "fem-cpu-slepc-modal-v1")
+# These deployed coordinator profiles may coexist with the local catalogue.
+# Recognizing their configuration does not enable submitting or configuring them
+# through this client's build catalogue.
+DEPLOYED_RUNTIME_PROFILES = (*SLEPC_MODAL_PROFILES,
+                             "fem-cpu-slepc-runtime-v1", "fem-cpu-slepc-runtime-v2")
 _PROFILE_LISTS = (
     ALLOWED_PROFILES,
     CPU_CONTRACT_PROFILES,
     CURRENT_CONTRACT_PROFILES,
     SLEPC_MODAL_PROFILES,
+    DEPLOYED_RUNTIME_PROFILES,
 )
 
 
@@ -76,7 +82,7 @@ def _known_profile_list(value: object) -> bool:
     val_list = list(value)
     if any(val_list == list(profiles) for profiles in _PROFILE_LISTS):
         return True
-    if len(set(val_list)) == len(val_list) and all(isinstance(p, str) and p in SLEPC_MODAL_PROFILES for p in val_list):
+    if len(set(val_list)) == len(val_list) and all(isinstance(p, str) and p in DEPLOYED_RUNTIME_PROFILES for p in val_list):
         if val_list[:len(ALLOWED_PROFILES)] == list(ALLOWED_PROFILES):
             return True
     return False
