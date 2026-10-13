@@ -377,7 +377,6 @@ export const fieldMapCommands: CommandContribution[] = Object.entries(
           status: "failed",
         };
       }
-      const monitorId = input.monitorId;
       let revision: number;
       if (id === "planar-monitor.delete") {
         const visualization = await context.api.visualization.state(requestOptions);
@@ -458,7 +457,6 @@ export const fieldMapCommands: CommandContribution[] = Object.entries(
             status: "completed",
           };
         }
-        const newName = input.newName;
         const response = await runAuthoringMutationWithHistory(
           { ...context, sessionScopeKey },
           "Rename planar monitor",
