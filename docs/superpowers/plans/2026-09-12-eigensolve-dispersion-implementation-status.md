@@ -3,19 +3,24 @@
 
 **Pełny cel S00–S12 pozostaje OPEN.** Bieżące prace wykonuje worktree
 `dispersion-mode-ui-20261008`, branch `codex/dispersion-mode-ui-20261008`.
-Ostatni opublikowany checkpoint przed bieżącą korektą: `0bb23d0dc97c8112025a4a3df99ea559b855a1b5`.
+Ostatni opublikowany checkpoint przed bieżącą implementacją: `cfbb55616d28953f28ae7159250234e9be5328b4`.
 Ruch 4→4 zapisano w75c778f4; czytnik runnera w5f76503e, fixture retention w961aa64e.
 Naprawa wyścigu zwolnienia publication lock CAS przechodzi347 regresji źródłowych
 (2 skips). Koordynator podmieniono zarządzaną receptą na obraz d376e87b…;
 health i hashe dwóch zmienionych modułów potwierdzono w działającym kontenerze.
 Repair CAS zakończył się exit0, succeeded7721/7721. Końcowa kontrola
 trzech receiptów i bieżących atrybutów7721 obiektów PASS. Nie zmieniono
-bytes ani nie usunięto danych. Surface-PBC actual Gmsh PASS nie dowodzi jeszcze
-periodycznej topologii objętościowej.
-Kandydat retriangulacji498tet ma pełny exact topology PASS; kontrakt PBC
-wymaga kanonicznych map Gmsh i pozostaje NOT VERIFIED.
-Bieżący przyrost dodaje zatwierdzony przez użytkownika dokładny ruch 4→4;
-nie zamyka regionalnej bramki siatki ani kwalifikacji produkcyjnej.
+bytes ani nie usunięto danych. Sam historyczny Surface-PBC actual Gmsh PASS
+nie dowodził periodycznej topologii objętościowej.
+Historyczny nieperiodyczny kandydat498tet nie dowodził PBC. Aktualny
+kandydat na rzeczywistych mapach Gmsh141nodes/496tet przeszedł pełny exact
+validator oraz parity x/y po7 flipach wewnętrznych i6 granicznych; naroża12/12.
+Adapter multi-slab ma37PASS i actual replay141/400 zachowuje4 rekordy markerów
+oraz36 map węzłów. Żaden z tych dowodów nie zamyka produkcyjnego routingu.
+Gmsh quality dla496: ROI median edge11,3646nm, SICNmin0,38704;
+global gamma min0,010499 nadal wymaga naprawy/jawnej bramki jakości.
+Bieżący przyrost przenosi dokładne uzgadnianie Delaunay i zakresy markerów
+PBC do prywatnych źródeł; produkcyjna aktywacja i regionalna bramka OPEN.
 Oryginalny worktree dyspersji zawiera odrębną niezakończoną pracę;
 jego dirty/staged plików nie zmieniono w tym przyroście.
 

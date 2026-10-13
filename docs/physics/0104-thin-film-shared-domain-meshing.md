@@ -274,7 +274,7 @@ komórek, PBC, realizacji dolnych/górnych ograniczeń pól ani poprawności
 wyników eigensolve. Następne kroki muszą połączyć rzeczywiste przekroje
 Gmsh, owner scopes, magnetic-air markers i certyfikat periodyczny.
 
-Diagnostyka odrzuconej alternatywy: niezależne Delaunay na dwóch slabach
+Historyczna diagnostyka surowej alternatywy (przed exact reconciliation): niezależne Delaunay na dwóch slabach
 przy różnej gęstości wspólnej płaszczyzny dało zerowe tetraedry oraz
 różne podziały capu. Nie zastosowano perturbacji QJ ani filtrowania komórek.
 Wynik uzasadnia zmianę algorytmu; nie jest dowodem nowego kernela.
@@ -493,6 +493,102 @@ Globalne minimum Q² pozostało 4,36014e−8; globalne p95 $h_K$ pozostało
 pozostała 62,017 nm. Wynik nie zalicza regionalnych bramek rozmiaru ani
 czasu produkcyjnego. Objective tego kroku nie jest regionalnym size solverem.
 Dane diagnostyczne nie zastępują świeżego managed runtime i dowodu PBC.
+
+(thin-film-exact-slab-delaunay-reconciliation)=
+## Kandydat Delaunay i dokładne uzgadnianie warstw
+
+Dotychczasowy seed Freudenthala po insercji zmiennych przekrojów może
+zachować długie krawędzie przecinające ROI. Alternatywny prywatny kernel
+ma generować kandydatów osobno dla każdej pary sąsiednich exact-z capów
+przez SciPy/Qhull Delaunay, a następnie uzgadniać ich topologię dokładnymi
+predykatami istniejącego kernela. Jest to realizacja hostowego przygotowania
+siatki FEM CPU/GPU, nie nowy operator FEM ani dowód wykonania GPU.
+FDM CPU/GPU: nie dotyczy. Publiczny Python DSL, ProblemIR, żądana liczba
+warstw, węzły SI oraz tolerancja translacji PBC pozostają niezmienione.
+
+Qhull proponuje connectivity; nie rozstrzyga ważności siatki. Orientację
+każdego kandydata sprawdza się dokładnie dla reprezentowanych binary64
+współrzędnych. Zerowe tetraedry odrzuca się; ujemne orientuje dodatnio.
+Nie używa się jitteru QJ, snappingu, nowych punktów ani zmiany exact planes.
+Wynik musi użyć wszystkich węzłów wejściowych. Brak pokrycia domeny,
+niezgodne capy lub nieobsługiwana cavity oznaczają błąd, a nie częściowy mesh.
+
+Niezgodne przekątne pionowych ścian można uzgadniać wyłącznie na dokładnie
+koplanarnym, ściśle wypukłym czworokącie. Ruch 2→2 wymaga wspólnego apexu,
+dodatnich orientacji nowych komórek, niezmienionej objętości cavity, zgodnego
+jej brzegu poza wymienianą przekątną, braku duplikatów i braku przecinania
+zewnętrznych tetraedrów według exact SAT. Przypadek bez wspólnego apexu
+jest odrzucany. Na ścianie wewnętrznej oba pokrycia muszą mieć identyczną
+triangulację po ruchu; na granicy okresowej stronę i przekątną wybiera się
+wspólnie przez kanoniczną mapę węzłów Gmsh. Nie wolno wyprowadzać par
+okresowych z numeracji węzłów, kolejności powierzchni lub hardkodowanych
+markerów. Końcowy validator wymaga zachowania objętości każdego slabu,
+pełnej incydencji ścian i zgodności capów; dodatkowa kontrola PBC wymaga
+pełnej bijekcji węzłów i trójkątów oraz komutacji wspólnych narożników.
+
+**Stan przed implementacją tej alternatywy:** artefakt rzeczywistego Gmsh
+141 węzłów / 496 dodatnich Tet4 wymagał siedmiu flipów wewnętrznych i sześciu
+flipów granicznych. Po uzgodnieniu pełny exact validator oraz mapy trójkątów
+x/y przeszły; komutacja narożników 12/12. Dowód dotyczy zapisanej geometrii,
+nie generalnego kernela, regionalnej jakości, produkcyjnego routingu ani
+managed runtime. Mierzenie SICN/gamma, krawędzi regionalnych, poprawnych
+markerów i certyfikatu końcowego mesha pozostaje wymagane przed aktywacją.
+
+Pomiar jakości Gmsh 4.15.2 wykonano dla tego samego zestawu 141 węzłów,
+z jawnie importowaną końcową connectivity i osobnym dyskretnym modelem.
+Kanały minSICN/gamma/volume są wyrównane do tagów nowych tetraedrów;
+objętości Gmsh porównano z dodatnimi objętościami z węzłów SI (rtol 1e-12,
+atol 0). Nie wykorzystano metadanych starego mesha.
+
+| Metryka | Seed 400 | Uzgodnione 496 |
+|---|---:|---:|
+| Cylindryczny ROI: liczba komórek | 28 | 36 |
+| ROI: mediana wszystkich sześciu krawędzi [nm] | 63,2153 | 11,3646 |
+| ROI: p95 maksymalnej krawędzi komórki [nm] | 125,1164 | 18,5025 |
+| ROI: SICN minimum / p5 | 0,01815 / 0,02009 | 0,38704 / 0,43692 |
+| ROI: gamma minimum | 0,001674 | 0,31113 |
+| Globalnie: SICN minimum / p5 | 0,008573 / 0,01996 | 0,01186 / 0,23060 |
+| Globalnie: gamma minimum | 0,0002885 | 0,010499 |
+
+ROI ma promień 15 nm i bezwzględne z centroidu co najwyżej 4 nm.
+To pomiar diagnostyczny, nie bramka publicznego target3nm: dz wynosi10nm.
+Globalne gamma minimum pozostaje poniżej bieżącego ostrzegawczego targetu
+0,08; poprawa ROI nie kwalifikuje całej siatki. Connectivity SHA256:
+`5b5335797f9dff9834ccf69c71e79407b445b2033703ad817ada7f68e52f66f9`.
+
+Owner planowanej realizacji: prywatny moduł
+`packages/fullmag-py/src/fullmag/meshing/_layered_box_delaunay.py`;
+nie jest jeszcze aktywnym routingiem. Regresje muszą obejmować odrzucone
+mapy PBC/cavities, permutacje numeracji, wszystkie węzły oraz dokładne
+objętości i capy. Żaden próg rozmiaru lub jakości nie jest osłabiany.
+
+(thin-film-layered-periodic-surface-scopes)=
+## Zakresy powierzchni okresowych z provenance Gmsh
+
+Producent Gmsh może wystawić kilka par markerów dla jednego logical pair_id.
+Prywatny helper ma wyznaczać ich zakresy z przez jawny join specyfikacji
+surface tags, master/slave i canonical marker records. Nie wolno wywodzić
+markerów z kolejności list ani zastępować authored translation/tolerance.
+Współrzędne powierzchni konwertuje się do SI tym samym zadanym współczynnikiem
+co węzły mesha; źródłowych specyfikacji nie modyfikuje się.
+
+Pełne powierzchnie boczne mogą zawierać węzły między plane capami. Nie jest
+to błąd provenance. Wymagane są jednak identyczne minimum/maksimum z dla
+master/slave i oba endpointy na zadanych exact planes. Każda para markerów
+ma jeden jawny zakres, a ich unia dla danej osi ma bez luk i overlap pokrywać
+cały przedział domeny. Brak powierzchni, niejednoznaczny join, nieprawidłowy
+scale lub niezgodność endpointów oznacza błąd. Helper nie koryguje geometrii
+tolerancją i nie wystawia certyfikatu końcowej topologii.
+
+Owner planowanej realizacji: prywatny
+`packages/fullmag-py/src/fullmag/meshing/_gmsh_layered_periodic.py`.
+FEM CPU/GPU korzystają ze wspólnego hostowego przygotowania; runtime obu
+tras pozostaje NOT VERIFIED. FDM CPU/GPU nie używają tych powierzchni.
+Publiczny Python/ProblemIR bez zmiany; wynik trafia do prywatnego argumentu
+periodic_patch_z_bounds adaptera MeshData. Wymagane regresje obejmują
+odwróconą kolejność list, off-plane węzły, brak tagów, różne endpointy,
+luki/overlap i zachowanie wejściowych rekordów. Replay rzeczywistych
+zapisanych powierzchni jest odrębnym dowodem od synthetic regression.
 
 (thin-film-mesh-validation)=
 ## Validation

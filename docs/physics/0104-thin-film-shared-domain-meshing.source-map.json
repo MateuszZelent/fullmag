@@ -279,6 +279,20 @@
       "symbol": "test_interior_edge_4to4_preserves_exact_cavity_and_decreases_profile",
       "responsibility": "Legal exact replacement, preserved boundary/caps/volume and nondecreasing local quality with a shorter global edge profile.",
       "evidence_status": "python_passed"
+    },
+    {
+      "id": "exact-slab-delaunay-contract",
+      "path": "docs/physics/0104-thin-film-shared-domain-meshing.md",
+      "symbol": "DOC-ANCHOR:thin-film-exact-slab-delaunay-reconciliation",
+      "responsibility": "Exact candidate/reconciliation contract and measured diagnostic quality; production activation remains unverified.",
+      "evidence_status": "planned_contract"
+    },
+    {
+      "id": "layered-periodic-surface-scope-contract",
+      "path": "docs/physics/0104-thin-film-shared-domain-meshing.md",
+      "symbol": "DOC-ANCHOR:thin-film-layered-periodic-surface-scopes",
+      "responsibility": "Explicit Gmsh provenance join and exact scope endpoints without mutating canonical records.",
+      "evidence_status": "planned_contract"
     }
   ],
   "public_api": {

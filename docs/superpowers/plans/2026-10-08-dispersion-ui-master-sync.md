@@ -774,3 +774,34 @@ Nie aktywowano produkcyjnego generatora ani certyfikatu jakości.
 Actual producer→adapter replay wymaga explicit marker↔surface provenance;
 nie zgadujemy go z numeracji markerów ani kolejności wierszy.
 Pełny S00–S12 pozostaje OPEN.
+
+## 2026-10-13 — rzeczywista topologia PBC i jakość kandydata496
+
+Baseline przed implementacją: cfbb55616d28953f28ae7159250234e9be5328b4.
+Exact reconciliation na tych samych141 nodes zachowało496 dodatnich tetów:
+7 internal flips i6 external paired flips; full kernel validator PASS,
+canonical x/y triangle parity PASS, corner commutation12/12.
+Actual replay adaptera multi-slab141/400 PASS zachowuje4 boundary records,
+36 cap node pairs i63 pełne tablice powierzchni bez zmiany. Oba probe
+używają zapisanej provenance Gmsh, nie inferują markerów z kolejności.
+
+Root Gmsh4.15.2 quality probe porównał nowe connectivity496 i seed400
+na identycznych141nodes. Volume channel aligned PASS z dodatnim signed
+volume SI (rtol1e-12,atol0), suma1.92e-22m3. ROI r15nm/|zcentroid|<=4nm:
+median all6edges63.2153→11.3646nm, maxedgep95125.1164→18.5025nm;
+SICNmin0.01815→0.38704,gammamin0.001674→0.31113. Global gamma min
+0.010499 pozostaje poniżej ostrzegawczego targetu0.08. Nie zaliczamy
+size3nm przy dz10nm ani production mesh/runtime/science.
+
+Zapisano przed source edits kontrakty w0104: exact-slab-delaunay-reconciliation
+i layered-periodic-surface-scopes. Wdrażanie odbywa się w odrębnych prywatnych
+modułach; aktualny route nadal nie został przełączony. Pełny S00–S12 OPEN.
+
+Artefakty w layered-cap-sliver-diagnostic-20261013:
+- `actual-periodic-positive496-exact-reconciliation-results.json` SHA256 `bb61bf60fdb2754fc9a896bb889259a87592a2bc1e8242d31916bea1bb835946`.
+- `actual-periodic-cap-scoped-meshdata-adapter-results.json` SHA256 `3db19fd0bb07ca16cf6b498a6a5cd7717463978cd378715be356821f5a0a57bd`.
+- `actual-periodic-reconciled-quality.py` SHA256 `fe80fc7376fae48f44e080fb381fdfee85fc99f36c2237f53e4b925d4f4cf4c6`.
+- `actual-periodic-reconciled-quality-results.json` SHA256 `5826b275ebaa68aac55063523cfbc50ffa57cd580206ed42a7ace676775527f2`.
+
+Walidacja noty/source-map PASS. Nowych buildów FEM i wyników dyspersji
+nie uruchomiono w tym checkpointcie; źródłowa implementacja jest następnym krokiem.
