@@ -2563,8 +2563,9 @@ struct ValidatedParallelExecution {
 
 /// Resolve the requested process policy once at every top-level execution
 /// boundary.  Adaptive admission is a FEM eigen-k capability; accepting it
-/// for FDM, time integration, FEM frequency response, or an unrelated FEM
-/// stage would silently execute serial work while claiming the request.
+/// for FDM, time integration, FEM frequency response, an unrelated FEM stage,
+/// or standalone antenna inspection would silently execute serial work while
+/// claiming the request.
 /// FEM relaxation remains legal as a prerequisite stage and resolves to one
 /// serial work item.  FEM eigen Single likewise remains serial, while Path
 /// is the independent-k process-pool realization.
@@ -2603,6 +2604,11 @@ fn validate_parallel_execution_workflow(
     let (resolved_mode, resolved_reason) = match policy.mode {
         fullmag_ir::ParallelExecutionModeIR::Serial => ("serial", "requested_serial"),
         fullmag_ir::ParallelExecutionModeIR::Adaptive => match &plan.backend_plan {
+            BackendPlanIR::AntennaExternalLeadInspection(_) => {
+                return Err(RunError {
+                    message: "parallel_execution adaptive is unsupported for standalone antenna external-lead inspection; use serial inspection".into(),
+                });
+            }
             BackendPlanIR::Fem(fem) if fem.relaxation.is_some() => {
                 ("serial", "fem_relax_prerequisite")
             }
@@ -6329,6 +6335,162 @@ mod tests {
                 "missing nonmagnetic contract: {field}"
             );
         }
+    }
+
+    fn structural_antenna_inspection_plan() -> fullmag_ir::ExecutionPlanIR {
+        let problem = ProblemIR::bootstrap_example();
+        let mut plan = fullmag_plan::plan(&problem).expect("bootstrap execution plan");
+        let solver = fullmag_ir::ChargeSolverPolicyIR {
+            engine: "structural_test".into(),
+            linear: fullmag_ir::LinearTransportSolverPolicyIR {
+                relative_tolerance: 0.0,
+                absolute_tolerance: 0.0,
+                max_iterations: 0,
+            },
+            physical_residual_version: "structural_test".into(),
+            operator_version: "structural_test".into(),
+        };
+        let field_target = fullmag_ir::FieldTargetIR::Global {};
+        plan.backend_plan = fullmag_ir::BackendPlanIR::AntennaExternalLeadInspection(
+            fullmag_ir::AntennaExternalLeadInspectionBackendPlanIR {
+                input: fullmag_ir::ResolvedAntennaExternalLeadCurrentInputIR {
+                    schema_version: "antenna_external_lead_current_input.v1".into(),
+                    field_scope: "structural_test".into(),
+                    stage: fullmag_ir::AntennaFieldSolveStageIR {
+                        id: "structural-stage".into(),
+                        source_object_id: "structural-source".into(),
+                        current_transport_id: "structural-transport".into(),
+                        port_mode_ids: Vec::new(),
+                        conservative_current_view_ref: None,
+                        model: fullmag_ir::AntennaFieldModelIR::QuasistaticConductionBiotSavart3d,
+                        oersted_realization:
+                            fullmag_ir::AntennaOerstedRealizationIR::DirectTetraQuadrature,
+                        conductor_mesh_policy: "structural_test".into(),
+                        field_sampling_domain: field_target.clone(),
+                        target_refs: Vec::new(),
+                        solver_policy: "structural_test".into(),
+                        outputs: Vec::new(),
+                    },
+                    port: fullmag_ir::AntennaPortModeIR {
+                        schema_version: "structural_test".into(),
+                        id: "structural-port".into(),
+                        source_object_id: "structural-source".into(),
+                        current_transport_id: "structural-transport".into(),
+                        branches: Vec::new(),
+                        normalization_current_a: 1.0,
+                    },
+                    authored_definition: fullmag_ir::ChargeTransportDefinitionIR {
+                        domain: Vec::new(),
+                        materials: Vec::new(),
+                        boundaries: Vec::new(),
+                        gauge: fullmag_ir::ChargePotentialGaugeIR::ZeroMean,
+                        solver: solver.clone(),
+                        conservative_current_view: None,
+                        conservative_current_source: None,
+                        external_lead_preparation: None,
+                        structured_current_closure: None,
+                    },
+                    original_device_mesh: fullmag_ir::MeshIR::default(),
+                    device_object_segments: Vec::new(),
+                    selected_drive: fullmag_ir::CurrentSourceDriveIR {
+                        id: "structural-drive".into(),
+                        port_mode_ref: "structural-port".into(),
+                        outer_terminal_currents_a: std::collections::BTreeMap::new(),
+                    },
+                    combined_mesh: fullmag_ir::MeshIR::default(),
+                    combined_stable_vertex_ids: Vec::new(),
+                    device_stable_vertex_ids: Vec::new(),
+                    lead_stable_vertex_ids: Vec::new(),
+                    conductivity_spm_per_element: Vec::new(),
+                    device_element_count: 0,
+                    combined_runtime_ordinal_policy: "structural_test".into(),
+                    interfaces: Vec::new(),
+                    outer_terminals: Vec::new(),
+                    boundary_roles: Vec::new(),
+                    observations: Vec::new(),
+                    electrical_component_ids_per_vertex: Vec::new(),
+                    solver,
+                    direct_field_policy: fullmag_ir::AntennaDirectFieldInputPolicyIR {
+                        policy_version: "structural_test".into(),
+                        base_quadrature_order: 0,
+                        maximum_subdivision_depth: 0,
+                        absolute_tolerance_apm: 0.0,
+                        relative_tolerance: 0.0,
+                        maximum_source_target_pairs: 0,
+                        source_target_pairs: 0,
+                        relative_scale_floor_apm: 0.0,
+                    },
+                    field_sampling: fullmag_ir::AntennaFieldSamplingPlanIR {
+                        domain: field_target,
+                        carrier_kind: "structural_test".into(),
+                        location: "structural_test".into(),
+                        topology_digest: "structural_test".into(),
+                        positions_xyz_m: Vec::new(),
+                        cells: fullmag_ir::FemConnectivityIR::empty(),
+                    },
+                    pins: fullmag_ir::AntennaCurrentInputPinsIR {
+                        schema_version: "structural_test".into(),
+                        authored_source_sha256: "structural_test".into(),
+                        device_mesh_ownership_sha256: "structural_test".into(),
+                        selected_control_sha256: "structural_test".into(),
+                        combined_mesh_material_sha256: "structural_test".into(),
+                        solver_sampling_sha256: "structural_test".into(),
+                        materialized_input_sha256: "structural_test".into(),
+                    },
+                },
+                requested_execution: fullmag_ir::RequestedTransportExecutionIR {
+                    discretization: fullmag_ir::BackendTarget::Fem,
+                    device: fullmag_ir::ExecutionDevice::Cpu,
+                    precision: fullmag_ir::ExecutionPrecision::Double,
+                    execution_mode: fullmag_ir::ExecutionMode::Strict,
+                },
+                output_id: "structural-output".into(),
+            },
+        );
+        plan
+    }
+
+    #[test]
+    fn adaptive_parallel_rejects_standalone_antenna_inspection_but_serial_remains_supported() {
+        let mut problem = ProblemIR::bootstrap_example();
+        problem.backend_policy.requested_backend = fullmag_ir::BackendTarget::Fem;
+        problem.problem_meta.runtime_metadata.insert(
+            "runtime_selection".into(),
+            serde_json::json!({
+                "device": "cpu",
+                "parallel_execution": {
+                    "mode": "adaptive",
+                    "max_cpu_percent": 90.0,
+                    "max_memory_percent": 80.0,
+                    "memory_reserve_bytes": 1_073_741_824u64,
+                    "max_workers": 2,
+                    "threads_per_worker": 1
+                }
+            }),
+        );
+        let plan = structural_antenna_inspection_plan();
+
+        let error = match validate_parallel_execution_workflow(&problem, &plan) {
+            Err(error) => error,
+            Ok(_) => panic!("standalone antenna inspection must reject adaptive admission"),
+        };
+        assert!(
+            error
+                .message
+                .contains("standalone antenna external-lead inspection")
+        );
+        assert!(error.message.contains("use serial inspection"));
+
+        let mut serial_problem = problem;
+        let runtime_selection = serial_problem
+            .problem_meta
+            .runtime_metadata
+            .get_mut("runtime_selection")
+            .expect("runtime selection metadata");
+        runtime_selection["parallel_execution"]["mode"] = serde_json::json!("serial");
+        let serial = validate_parallel_execution_workflow(&serial_problem, &plan)
+            .expect("serial antenna inspection admission remains supported");
+        assert_eq!(serial.resolved_mode, "serial");
     }
 
     #[test]

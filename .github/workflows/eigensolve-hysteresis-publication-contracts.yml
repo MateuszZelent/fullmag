@@ -7,6 +7,7 @@ on:
       - 'crates/fullmag-runner/src/autosave_zarr.rs'
       - 'crates/fullmag-runner/src/hysteresis.rs'
       - 'crates/fullmag-authoring/src/scene.rs'
+      - 'crates/fullmag-runner/src/lib.rs'
       - 'crates/fullmag-ir/tests/ir_tests.rs'
       - 'scripts/fullmag_storage.py'
       - '.github/workflows/eigensolve-hysteresis-publication-contracts.yml'
@@ -15,6 +16,7 @@ on:
       - 'crates/fullmag-runner/src/autosave_zarr.rs'
       - 'crates/fullmag-runner/src/hysteresis.rs'
       - 'crates/fullmag-authoring/src/scene.rs'
+      - 'crates/fullmag-runner/src/lib.rs'
       - 'crates/fullmag-ir/tests/ir_tests.rs'
       - 'scripts/fullmag_storage.py'
       - '.github/workflows/eigensolve-hysteresis-publication-contracts.yml'
@@ -66,6 +68,12 @@ jobs:
           grep -F 'autosave_zarr::tests::atomic_json_failure_preserves_target_and_removes_only_its_temporary ... ok' "$RUNNER_TEMP/atomic-json-writer.log"
           python -B scripts/fullmag_storage.py run --profile '${{ matrix.profile }}' -- cargo test --locked -p fullmag-runner --lib hysteresis::tests::progress_artifact_writer_replaces_complete_json_and_preserves_it_on_failure -- --nocapture | tee "$RUNNER_TEMP/hysteresis-atomic-progress.log"
           grep -F 'hysteresis::tests::progress_artifact_writer_replaces_complete_json_and_preserves_it_on_failure ... ok' "$RUNNER_TEMP/hysteresis-atomic-progress.log"
+      - name: Verify standalone inspection parallel admission
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -B scripts/fullmag_storage.py run --profile '${{ matrix.profile }}' -- cargo test --locked -p fullmag-runner --lib adaptive_parallel_rejects_standalone_antenna_inspection_but_serial_remains_supported -- --nocapture | tee "$RUNNER_TEMP/antenna-adaptive-admission.log"
+          grep -F 'adaptive_parallel_rejects_standalone_antenna_inspection_but_serial_remains_supported ... ok' "$RUNNER_TEMP/antenna-adaptive-admission.log"
       - name: Verify complete runner compatibility
         if: runner.os == 'Linux'
         shell: bash
@@ -78,5 +86,6 @@ jobs:
           path: |
             ${{ runner.temp }}/atomic-json-writer.log
             ${{ runner.temp }}/hysteresis-atomic-progress.log
+            ${{ runner.temp }}/antenna-adaptive-admission.log
             ${{ env.FULLMAG_BUILD_ROOT }}/build-status.json
           if-no-files-found: error
