@@ -289,15 +289,32 @@ def _write_density_failure_capture(
 
     def statistics(lengths: list[float]) -> dict[str, object]:
         values = np.asarray(lengths, dtype=np.float64)
-        return {
+        finite_values = values[np.isfinite(values)]
+        summary: dict[str, object] = {
             "count": int(values.size),
-            "finite_count": int(np.isfinite(values).sum()),
-            "min_m": float(values.min()),
-            "p05_m": float(np.quantile(values, 0.05)),
-            "median_m": float(np.median(values)),
-            "p95_m": float(np.quantile(values, 0.95)),
-            "max_m": float(values.max()),
+            "finite_count": int(finite_values.size),
         }
+        if finite_values.size == 0:
+            summary.update(
+                {
+                    "min_m": None,
+                    "p05_m": None,
+                    "median_m": None,
+                    "p95_m": None,
+                    "max_m": None,
+                }
+            )
+        else:
+            summary.update(
+                {
+                    "min_m": float(finite_values.min()),
+                    "p05_m": float(np.quantile(finite_values, 0.05)),
+                    "median_m": float(np.median(finite_values)),
+                    "p95_m": float(np.quantile(finite_values, 0.95)),
+                    "max_m": float(finite_values.max()),
+                }
+            )
+        return summary
 
     evidence = dict(evidence_context)
     evidence.update(
@@ -12217,6 +12234,51 @@ class RegionMeshPolicyTests(unittest.TestCase):
             self.assertEqual(evidence["mesh_payload"]["element_count"], 1)
             self.assertEqual(evidence["report"]["build_mode"], "conformal_occ")
 
+            empty_roi_mesh = SimpleNamespace(
+                nodes=nodes,
+                elements=elements,
+                element_markers=element_markers,
+            )
+            empty_region_lengths, empty_bulk_lengths = _tet_edge_lengths_by_cylinder_scope(
+                empty_roi_mesh,
+                1,
+                radius=0.1e-9,
+                half_height=0.1e-9,
+            )
+            self.assertFalse(empty_region_lengths)
+            self.assertTrue(empty_bulk_lengths)
+
+            empty_roi_dir = Path(tmp_dir) / "empty-roi-density-failure"
+            _write_density_failure_capture(
+                empty_roi_dir,
+                test_id="empty-roi-density-capture-regression",
+                nodes=nodes,
+                elements=elements,
+                element_markers=element_markers,
+                magnetic_marker=1,
+                cylinder_radius=0.1e-9,
+                cylinder_half_height=0.1e-9,
+                region_edge_lengths=empty_region_lengths,
+                bulk_edge_lengths=empty_bulk_lengths,
+                evidence_context={"report": {"build_mode": "conformal_occ"}},
+            )
+            empty_evidence_path = empty_roi_dir / "failure-evidence.json"
+            empty_evidence = json.loads(
+                empty_evidence_path.read_text(encoding="utf-8")
+            )
+            self.assertEqual(empty_evidence["selection"]["roi_element_count"], 0)
+            region_statistics = empty_evidence["region_edge_statistics"]
+            self.assertEqual(region_statistics["count"], 0)
+            self.assertEqual(region_statistics["finite_count"], 0)
+            for statistic in ("min_m", "p05_m", "median_m", "p95_m", "max_m"):
+                self.assertIsNone(region_statistics[statistic])
+            self.assertEqual(empty_evidence["bulk_edge_statistics"]["count"], 6)
+            with np.load(empty_roi_dir / "mesh-and-roi.npz") as captured_mesh:
+                self.assertEqual(
+                    captured_mesh["selected_roi_element_indices"].size,
+                    0,
+                )
+
     def test_scoped_layer_plane_report_waits_for_postmesh_proof(self) -> None:
         geometry = fm.Box(120e-9, 80e-9, 20e-9, name="thin_box")
         airbox = AirboxOptions(
@@ -12569,11 +12631,106 @@ class RegionMeshPolicyTests(unittest.TestCase):
                     radius=15e-9,
                     half_height=4e-9,
                 )
-                self.assertTrue(region_lengths)
-                self.assertTrue(bulk_lengths)
-                self.assertGreaterEqual(float(np.median(region_lengths)), 4e-9)
-                self.assertLessEqual(float(np.median(region_lengths)), 12e-9)
-                self.assertGreaterEqual(float(np.median(bulk_lengths)), 10e-9)
+                region_median = (
+                    float(np.median(region_lengths)) if region_lengths else None
+                )
+                bulk_median = (
+                    float(np.median(bulk_lengths)) if bulk_lengths else None
+                )
+                density_failure = (
+                    region_median is None
+                    or bulk_median is None
+                    or not np.isfinite(region_median)
+                    or not np.isfinite(bulk_median)
+                    or region_median < 4e-9
+                    or region_median > 12e-9
+                    or bulk_median < 10e-9
+                )
+                capture_error: Exception | None = None
+                artifact_root = os.environ.get(
+                    "FULLMAG_MESH_FAILURE_ARTIFACT_ROOT"
+                )
+                if (
+                    strategy == "thin_film_tetrahedral"
+                    and artifact_root
+                    and density_failure
+                ):
+                    try:
+                        import importlib.metadata
+
+                        _write_density_failure_capture(
+                            Path(artifact_root)
+                            / "direct-layered-box-region-density"
+                            / strategy,
+                            test_id=self.id(),
+                            nodes=np.asarray(mesh.nodes),
+                            elements=np.asarray(mesh.elements),
+                            element_markers=np.asarray(mesh.element_markers),
+                            magnetic_marker=1,
+                            cylinder_radius=15e-9,
+                            cylinder_half_height=4e-9,
+                            region_edge_lengths=region_lengths,
+                            bulk_edge_lengths=bulk_lengths,
+                            evidence_context={
+                                "inputs": {
+                                    "geometry": {
+                                        "kind": "box",
+                                        "name": "thin_box",
+                                        "size_m": [120e-9, 80e-9, 20e-9],
+                                    },
+                                    "core_shape": core_shape,
+                                    "object_regions": object_regions,
+                                    "per_object_recipes": {
+                                        name: recipe.to_ir()
+                                        for name, recipe in recipes.items()
+                                    },
+                                    "fem_hints": {"order": 1, "hmax_m": 20e-9},
+                                    "study_universe": study_universe,
+                                    "mesh_workflow": mesh_workflow,
+                                    "resolved_gmsh_threads": (
+                                        _resolve_gmsh_thread_count()
+                                    ),
+                                },
+                                "dependencies": {
+                                    name: importlib.metadata.version(name)
+                                    for name in (
+                                        "gmsh",
+                                        "numpy",
+                                        "scipy",
+                                        "trimesh",
+                                    )
+                                },
+                                "report": report.to_dict(),
+                                "exact_layer_planes_m": [
+                                    float(plane) for plane in layer_planes
+                                ],
+                                "exact_layer_plane_node_counts": [
+                                    int(count) for count in plane_incidence
+                                ],
+                                "exact_layer_plane_tolerance_m": plane_tolerance,
+                                "thresholds": {
+                                    "region_median_min_m": 4e-9,
+                                    "region_median_max_m": 12e-9,
+                                    "bulk_median_min_m": 10e-9,
+                                },
+                            },
+                        )
+                    except Exception as artifact_error:
+                        capture_error = artifact_error
+
+                try:
+                    self.assertTrue(region_lengths)
+                    self.assertTrue(bulk_lengths)
+                    self.assertGreaterEqual(float(np.median(region_lengths)), 4e-9)
+                    self.assertLessEqual(float(np.median(region_lengths)), 12e-9)
+                    self.assertGreaterEqual(float(np.median(bulk_lengths)), 10e-9)
+                except AssertionError as density_error:
+                    if capture_error is not None:
+                        density_error.add_note(
+                            "could not preserve density failure artifacts: "
+                            f"{capture_error}"
+                        )
+                    raise
                 self.assertGreater(
                     np.count_nonzero(np.asarray(mesh.element_markers) == 0),
                     0,

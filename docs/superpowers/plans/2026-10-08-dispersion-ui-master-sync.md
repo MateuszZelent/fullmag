@@ -160,3 +160,44 @@ dla thin_film_tetrahedral nie znalazł elementów wewnątrz lokalnego
 regionu (`region_lengths=[]`). Jest to otwarty problem realizacji
 zagęszczenia, nie błąd nazwy. Nie usunięto testu ani nie poluzowano
 kryteriów gęstości. Managed serial/adaptive runtime pozostaje NOT VERIFIED.
+
+
+## Potwierdzone CI i następna bramka — 13.10.2026
+
+Commit `335c09de2a3e4088a0ad806041166fb5f7034e60`, CI38361400702:
+**4/4 jobs SUCCESS** (frontend, native-resource-contracts,
+capture-contract, exact-layer-mesh). Real-Gmsh exact-layer suite:
+**38 PASS w 8.85 s**. Asercje obejmują zwrócony accepted certificate,
+niepuste slaby, scoped 3/6-layer, PBC oraz quality SI. Nie jest to
+runtime tego commita ani pełna regional-density kwalifikacja.
+
+Oddzielne CI38360281511 pozostaje FAILURE: interior cylinder nie ma
+wybranych ROI tetra centroidów. Przekrój źródłowy scoped sweepu leży
+poza z-supportem regionu, a meshed extrusion kopiuje XY topologię.
+To hipoteza przyczyny oparta na źródłach; następna diagnoza musi
+zachować actual mesh i liczniki ROI/per-plane, także gdy ROI jest pusty.
+Naprawa nie może rozciągać lokalnego pola przez cały airbox ani
+osłabiać exact-layer/density gates.
+
+Runner ponownie sprawdzony: zdrowy, accepting, idle, brak aktywnych
+jobów, profil runtime-v2 dostępny. Wolne9302654976 B (~8.66 GiB)
+przekracza jedynie próg przyjęcia; poprzedni pełny build potrzebował
+około27 GB. Nowego buildu nie uruchomiono przed zapewnieniem
+headroomu. Pytanie operatora o30–40GB pozostaje pending.
+Pełne S00–S12: OPEN; signed DE/BV, serial/adaptive parity,
+COMSOL, mesh/airbox/mode-count convergence, S09/GPU, accepted UI,
+review i integracja pozostają odrębnymi bramkami.
+
+
+Reguły sprzątania etapów zapisano na żądanie użytkownika w AGENTS.md,
+commit `2d96418cc85f68d15eb5c47d966f57edf081d455`. Utworzono lokalny
+skill `fullmag-build-stage-cleanup`; quick_validate PASS. Nie zmieniono
+wdrożonej retencji: policy=preview, runtime_retention_enabled=false.
+Read-only retention-plan zakończył się timeoutem; nie wykonano usuwania.
+
+Diagnostyka regional density zachowuje pusty ROI jako count=0 i null
+statystyki, bez błędu min(empty). Actual-Gmsh fixture zapisuje pełną
+siatkę/ROI, report, inputs i plane counts przed zachowaną oryginalną
+asercją; workflow publikuje failure evidence. Jest to poprawka diagnostyki,
+nie realizacji regionalnego zagęszczenia. AST/YAML/diff PASS;
+nowa regresja helpera oraz actual capture wymagają świeżego CI.
