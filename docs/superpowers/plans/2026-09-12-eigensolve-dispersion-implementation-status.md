@@ -1,26 +1,49 @@
 <!-- current-eigensolve-status-begin -->
 ## Bieżący checkpoint — 2026-10-13
 
-Pełny cel S00–S12 pozostaje OPEN. Source HEAD:
-`e73dbfc7b6eab500c5f0ffe47551d8969b4c66fb`; bieżąca poprawka capów,
-exact caches/rankingu i congruent-prism generatora jest lokalnym WIP.
-Worktree: `dispersion-mode-ui-20261008`, branch `codex/dispersion-mode-ui-20261008`.
+Pełny cel S00–S12 pozostaje OPEN. Opublikowany checkpoint implementacji:
+`181b4e7b4e8b749cc5de3af0c15b3317e468306b` (`Build exact compatible-cap
+prisms for scoped layered boxes`). Worktree: `dispersion-mode-ui-20261008`,
+branch `codex/dispersion-mode-ui-20261008`; po publikacji checkout był czysty.
+Dokumentacyjny checkpoint nie zmienia tożsamości aktywnego buildu.
 
 | Bramka | Potwierdzony stan | Następny krok |
 |---|---|---|
-| Exact-z geometria | Parametryczne constant-z caps; pełne cztery physical DE/PBC PASS | Szersza regresja meshingu |
-| Congruent/compatible-cap generator | 21 lekkich regresji PASS; wszystkie cztery physical cases PASS | Checkpoint i fresh managed runtime |
-| Duże scoped Box | Nowy generator: DE6/h5-3/h5-6/public DSL-3 PASS w69,16s | Runtime solvera i bramki naukowe |
-| Lokalne3→3/MILP | Prosty3→3 odrzucony; MILP poza repo tylko eksperyment | Nie wdrażać bez boundary/volume/SAT/fullplane proof |
-| Managed FEM | Build242 CANCELLED/143 na starszych źródłach | Po source gates commit/push i świeży runtime-v2 |
-| Dyspersja/nauka/GUI/integracja | Brak nowych wyników; wcześniejsze dowody pozostają historyczne | Pełny signed sweep, convergence/COMSOL, adaptive parity, browser i review/merge |
+| Exact-z geometria | Parametryczne constant-z caps; wszystkie cztery physical DE/PBC PASS | Jakość i zbieżność siatki oraz ring/antidot A1 |
+| Congruent/compatible-cap generator | 21 lekkich regresji PASS; wszystkie cztery physical cases PASS w 69,16 s; broad meshing 309 tests OK/skipped1 | Wykonanie solvera na nowej siatce |
+| Publikacja i CI | Commit 181b4e7b jest na remote; scoped-mesh-fields 38434846060, artifact-consumers 38434846068 i dispersion/mode UI 38434846141: SUCCESS | Te bramki źródłowe nie zastępują runtime, browser/WebGL ani nauki |
+| Managed FEM | Build #243 `d622e1b693e74b2b9d49bd1fe4941adf`: running dla dokładnego 181b4e7b; Docker potwierdza uruchomiony kontener od 17:21:09 UTC; brak terminalnego wyniku i logu kompilacji | Terminalne succeeded/exit0, receipt i hashe wymaganych artefaktów przed pilotem |
+| Storage | Odczyt runnera 13.10 o 17:22:56 UTC: 32 504 946 688 bajtów wolnego (30,27 GiB), powyżej progu 8 GiB; worker żywy, bez błędu | Monitorować budżet podczas buildu; brak automatycznej zgody na usuwanie danych |
+| S09 / 2.5D | Bounded P1 assembler i dense real-split oracle mają wywołania testowe; typed Waveguide2p5d pozostaje fail-closed | Produkcyjny owner MFEM 2D, invariance admission oraz Python/IR/planner/runner i runtime proof |
+| Dyspersja/nauka/GUI/integracja | Brak nowych wyników solvera dla tego checkpointu; wcześniejsze dowody pozostają historyczne | Pełny signed sweep i okno/pasma, convergence/COMSOL, adaptive parity, browser i review/merge |
 
-Stan źródeł i siatki nie jest kwalifikacją eigensolve. Wyniki każdej nowej
-physical regresji zapisuje `compatible-cap-physical-regressions-20261013.json`.
-Pozostała tabela i checkpointy zachowują cały plan oraz wcześniejsze
-dowody; nie należy traktować poniższego stanu2026-10-07 jako aktualnego.
+Build #243 ma source digest
+`43efae6474118166faffa47c9237bc8e5fac83563266733338ab08249ed3a814`
+i capture `3c2af89f7cf4494ea391bbff19799123`. Wykonawca
+`execute_build` sprawdza kapsułę przez `verify_source` przed utworzeniem
+katalogu wykonania. Kontener `685c1baa4ac0b0ed77627eb54a0d52b5c524f3b9a7ccf178b331ff1e3702760d`
+ma Docker State running, StartedAt 2026-10-13T17:21:09.854483815Z, bez
+Error/OOMKilled. Jest to dowód uruchomienia workera; jego pusty log oraz
+status running i heartbeat nie dowodzą rozpoczęcia kompilacji.
+Nie restartować ani nie składać duplikatu po timeoutcie obserwatora.
 
-## Bieżący stan — 2026-10-13
+Po udanym buildzie: publiczny mały DE z demagiem dla Γ i niezerowego k,
+kontrola pełnych diagnostyk/residuali, następnie signed sweep oraz pozostałe
+bramki planu. Wybrane pojedyncze mody nie zastępują kwalifikacji pełnego
+okna częstotliwości i liczby pasm. Analityka pozostaje odniesieniem postsolve.
+
+S09: `assemble_floquet_waveguide_cross_section_blocks` i
+`build_floquet_waveguide_demag_k_real_split` są oracle testowym, a nie
+produkcyjnym providerem. `StudyIRV04::checked_execution_representation_availability`
+odrzuca Waveguide2p5d; nie wolno usuwać odmowy bez spójnego admission,
+operatora MFEM i wykonanej trasy. Nie zmieniono tego kontraktu w tym kroku.
+
+Stan źródeł, siatki i CI nie jest kwalifikacją eigensolve. Dowody fizycznych
+regresji siatki zapisuje `compatible-cap-physical-regressions-20261013.json`.
+Dalsze sekcje zachowują historyczne checkpointy; ich oznaczenia WIP i build242
+nie opisują opublikowanego 181b4e7b ani aktywnego buildu243.
+
+## Historyczny checkpoint — 2026-10-13, przed publikacją 181b4e7b
 
 **Pełny cel S00–S12 pozostaje OPEN.** Bieżące prace wykonuje worktree
 `dispersion-mode-ui-20261008`, branch `codex/dispersion-mode-ui-20261008`.
