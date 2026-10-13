@@ -3,14 +3,14 @@
 
 **Pełny cel S00–S12 pozostaje OPEN.** Bieżące prace wykonuje worktree
 `dispersion-mode-ui-20261008`, branch `codex/dispersion-mode-ui-20261008`.
-Checkpoint kodu: `70f930ed0aa29bbf7ed6ff68b2c450c498aba626`, na remote.
+Checkpoint kodu: `d39c549c860453269d533c5897e0447e43392996`, na remote.
 Oryginalny worktree dyspersji zawiera odrębną niezakończoną pracę;
 jego dirty/staged plików nie zmieniono w tym przyroście.
 
 | Zakres | Potwierdzone obecnymi dowodami | Warunek zamknięcia / następny krok |
 |---|---|---|
 | Capture/storage | Poprawka prywatnego stagingu zachowuje ścisłą walidację rzeczywistych hardlinków CAS; lokalnie12 interpretowanych regresji PASS. CI38378068321 capture-contract:262PASS/181subtests | Nowe capture nadal blokuje utrata ReadOnly w istniejących obiektach CAS. Preview7721 poprawnych hash/size kandydatów; operator repair oczekuje autoryzacji. Nie zmieniono obiektów |
-| Regionalna siatka | Actual-Gmsh CI38368910881:309tests,1FAIL,1SKIP. ROI jest pusty; przekroje kopiują identyczne XY. Nowy exact-predicate kernel zachowuje węzły i zgodne capy, source CI38368910997 exact-layer:44PASS/11subtests | Produkcyjna integracja rzeczywistych przekrojów owner-scoped, lower/upper size, quality, region markers, PBC i exact-z. Prototyp nie zastępuje tej bramki |
+| Regionalna siatka | Aktualne CI38381498619 nadal FAIL: pusty ROI. Geometry-only sampling daje zmienne przekroje43/56/43 i ROI3/11/3; kernel404tet/142nodes ma slivery około1e-14. Adapter MeshData14PASS, exact-layer CI59PASS/13subtests i2 actual probes PASS | Naprawa jakości bez zmiany węzłów, potem production routing owner fields/lower-upper/quality/markers/PBC/exact-z; prototyp i test topologii nie zamykają bramki |
 | Runtime i serial/adaptive | Istnieją historyczne managed wyniki oraz siedem wybranych punktów; selected-only nie jest pełnym oknem spektralnym | Świeży build dokładnych źródeł i przebieg, pełne diagnostics/residuale, signed sweep oraz pomierzony parytet serial/adaptive |
 | Spektrum i nauka | Źródłowe kontrakty i analityczne oracles; wcześniejsze wyniki nie zamykają kwalifikacji | Pełne okno/mod count, DE/BV, zbieżność siatki i airboxu, porównanie identycznego COMSOL A1 oraz wymagane GPU |
 | S09 / 2.5D | Wcześniejsze źródła frame/UV/world, bindings i regresje zachowane | Provider/operator, world equivalence, invariance/equilibrium, typed routing i owner MFEM, z wykonanym runtime proof |
@@ -22,13 +22,28 @@ CI38378068321 zakończone SUCCESS4/4. Kolejny checkpoint kodu
 faset x/y,7PASS/13subtests. CI38379025215 dla tego dokładnegoSHA
 zakończone SUCCESS4/4. Są to źródłowe/regresyjne bramki, nie science proof.
 
-Następny wykonywalny krok siatki: actual-Gmsh test generowania przekrojów
-po geometrycznych extrusion, przed generate(3), z istniejącymi polami
-ograniczonymi do owner volumes. Musi wykazać rzeczywisty niepusty ROI i
-różnicę gęstości bez globalnego zagęszczenia, dodawania ukrytych płaszczyzn
-lub osłabienia progów. Następnie wymagany jest adapter kanonicznego MeshData:
-fasety z incidence tetów kernela, znaczniki regionów i bijektywne PBC.
-Nie można przejąć trójkątów Gmsh bez dowodu zgodności z nowymi tetraedrami.
+Actual-Gmsh diagnoza wykazała niezależne przekroje po geometrycznym extrusion:
+43/56/43 węzłów i ROI3/11/3, zamiast kopiowanych43/43/43 oraz ROI3/3/3.
+Kernel używa wszystkich142 węzłów i404 tetraedrów, zachowuje exact-z,
+objętość oraz90 wspólnych faset. Jednak minimum det/max_edge³ wynosi
+około1.22e-14: topologia PASS nie oznacza przydatności numerycznej dla FEM.
+Adapter do kanonicznego MeshData ma14 regresji PASS, ale nie jest włączony
+do produkcyjnego routingu i nie wystawia nieuzasadnionego certyfikatu jakości.
+
+CI38381498647 dla dokładnego d39c549c:SUCCESS4/4; exact-layer59PASS/13subtests
+oraz2 actual-Gmsh probes PASS. CI38381498617 artifact-consumers:SUCCESS.
+CI38381498619 scoped-mesh-fields:FAILURE; odczyt logu potwierdza nadal pusty
+ROI (`AssertionError: [] is not true`). Żadnego progu nie osłabiono.
+
+Zaimplementowano cap-edge flips z exact per-slab volume i shared-cap checks.
+Kernel+adapter24PASS/13subtests; actualGmsh2PASS: minimum det/max_edge³
+2.088095e-4, kernel15.08s, wszystkie142nodes/404tets zachowane. To dowód
+poprawy prototypu, a nie produkcyjnej jakości ani wydajności.
+
+Następny krok: ocena/naprawa pozostałej jakości i kosztu retriangulacji
+bez zmiany węzłów, następnie produkcyjna integracja owner-scoped przekrojów,
+lower/upper size, region markers, pełnej PBC i exact-z. Bramka actual regional
+density oraz świeży managed FEM runtime pozostają wymagane.
 
 Szczegółowe dowody i checkpointy z13.10 znajdują się w
 [planie bieżącego worktree](2026-10-08-dispersion-ui-master-sync.md).

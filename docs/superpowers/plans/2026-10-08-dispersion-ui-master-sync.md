@@ -356,3 +356,27 @@ regresji PASS,1.40s; AST/YAML/scientificmap/diff PASS. Nie budowano unit tests.
 To prototypowa realizacja kontraktu, nie productionrouting; stwierdzone
 actualGmsh slivery nadal wymagają naprawy przed FEM. Source-map i istniejący
 exact-layer CI obejmują adapter. Pełne S00–S12 nadalOPEN.
+
+## Zgodne polepszanie capów — 13.10.2026
+
+Po actual diagnostyce dwóch sliverów około1e-14 zaimplementowano dokładne
+cap-edge flips: strictly convex quad, common apex w każdym slabie,
+jednoczesna zmiana shared cap, niezmienione nodes/cavity boundary i sumdet
+osobno per slab. Wybór to strict lexicographic increase sorted exact Q²;
+cache canonical tet keys, geometry-sorted traversal, restart po zmianie,
+bez arbitralnego iteration limit lub jakościowego success threshold.
+
+TDD: dwie regresje RED przed implementacją. Kernel+adapter24PASS/13subtests
+w5.96s; dodatkowo odmowa częściowego flipu przy niezgodnych apexes.
+Root przejrzał cały diff. Actual Gmsh2PASS w19.29s: kernel15.08s,
+142nodes/404tets,90shared middlefaces,40ROIcentroids, wszystkie nodes użyte,
+volume relative error4.90e-16, minimum det/max_edge³2.088095e-4
+(wcześniej1.2177e-14), min per-vertex determinant/product norms4.440676e-4.
+Dokładny cavity proof i log: visualization layered-cap-sliver-diagnostic-20261013.
+
+Ta poprawka usuwa skrajne slivery w badanym prototypie. Pozostała jakość,
+lower/upper regional size i produkcyjny routing nadal OPEN. Dla większej
+siatki koszt wielokrotnych exact rescans wymaga poprawy przed zastosowaniem
+produkcyjnym. Wskaźniki nie zastępują SICN/gamma ani polityki0105.
+Świeży managed capture nadal oczekuje autoryzowanej naprawy ReadOnly CAS;
+żadnych obiektów CAS, wyników ani cache nie zmieniono.

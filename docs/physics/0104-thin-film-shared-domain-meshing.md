@@ -47,6 +47,10 @@ h_{\mathrm{target}}(\mathbf x)=
 | $\mathcal U$ | eligible upper targets | $\mathrm m$ |
 | $\mathcal L$ | eligible lower bounds | $\mathrm m$ |
 | $h_\mathrm{target}$ | resolved target size | $\mathrm m$ |
+| $T$ | tetrahedron in the retriangulation cavity | $1$ |
+| $Q_T$ | squared determinant/max-edge-cubed quality indicator | $1$ |
+| $D_T$ | positive tetrahedron orientation determinant | $\mathrm{m}^3$ |
+| $L_T$ | longest tetrahedron edge | $\mathrm{m}$ |
 
 (thin-film-mesh-assumptions-and-validity)=
 ## Assumptions and validity
@@ -328,6 +332,57 @@ interfejsów, kompletne pary węzłów/faset, jednoczesne x/y i odmowy błędnyc
 wejść. Nie wymyśla podziału air na near/far: cell_mesh_parts pozostaje puste.
 Routing produkcyjny, jakość, pełne owner fields i Floquet nadal OPEN.
 
+(thin-film-cap-quality-retriangulation)=
+### Naprawa jakości przez zgodne zmiany przekątnych capów
+
+Zaimplementowana realizacja wewnętrznego kernela może zmienić przekątną dwóch
+sąsiednich trójkątów jednego capu tylko dla ściśle wypukłego czworokąta.
+W każdym przyległym slabie oba tetraedry muszą mieć ten sam przeciwległy
+wierzchołek. Dla interfejsu wewnętrznego operacja obejmuje jednocześnie oba
+slaby; dla zewnętrznego capu jeden slab. Nie zmienia współrzędnych ani zbioru
+węzłów, nie dodaje płaszczyzn i nie naprawia danych przez tolerancję.
+
+Kandydat musi mieć dokładnie tę samą objętość cavity oraz identyczną granicę
+poza retriangulowanym capem. Wymagane są dodatnie dokładne orientacje,
+zachowanie wszystkich wierzchołków cavity i brak duplikatów komórek.
+Wewnętrzny cap musi pozostać współdzielony przez oba slaby.
+
+Do wyboru korzystnej zmiany służy bezwymiarowy wskaźnik geometrii:
+
+```{math}
+:label: eq-thin-film-cap-flip-quality
+Q_T = \frac{D_T^2}{L_T^6}.
+```
+
+Symbole i jednostki definiuje kanoniczna tabela „Symbols and SI units”.
+
+Współrzędne mogą być wycentrowane i izotropowo przeskalowane bez zmiany
+$Q_T$. Kwadraty długości i wyznaczniki mają być porównywane dokładną
+arytmetyką wymierną dla reprezentowanych float64. Posortowany rosnąco wektor
+$Q_T$ nowej cavity musi być leksykograficznie większy od starego. Liczba
+komórek pozostaje stała; ścisły wzrost wyklucza cykle. Kolejność kandydatów
+ma wynikać z geometrii, a nie kolejności wejściowych node IDs.
+
+Nie jest to próg akceptacji ani zamiennik SICN/gamma z istniejącej polityki
+jakości. Niewspierane cavities pozostają niezmienione; brak legalnej poprawy
+nie daje zgody na routing do FEM. Status: **wewnętrzny prototyp; produkcyjna jakość i runtime OPEN**.
+Kernel oraz adapter mają24 regresje PASS/13subtests, w tym wspólny cap,
+niezmienione węzły/objętość, pełne fasety x/y i odmowę częściowej naprawy
+przy różnych apexach po drugiej stronie interfejsu. Actual-Gmsh probe:
+2PASS/19.29s;142 węzły,404 tetraedry,90 middle cap faces,40 ROI centroidów,
+minimum det/max_edge³2.088095e-4, minimum per-vertex det/product-edge-norms
+4.440676e-4, relative volume error4.90e-16. Żaden próg produkcyjny nie został
+zastosowany ani osłabiony. Te metryki nie są SICN/gamma.
+
+Kernel kosztował15.08s wobec około0.64s przed optymalizacją dla tego samego
+małego przypadku. Exact rescans/restarts pozostają prototypem; potrzebna
+jest kontrola kosztu na większych siatkach, poprawa pozostałych komórek oraz
+właściwa bramka jakości i lower/upper fields przed production routing.
+Wymagany pozostaje późniejszy managed runtime, a nie tylko probe Python.
+Owner: `_layered_box_tetrahedralization.py::tetrahedralize_layered_box`.
+FEM CPU/GPU konsumują tę samą geometrię, ale wymagają oddzielnego runtime
+proof; FDM CPU/GPU nie dotyczą tej realizacji.
+
 (thin-film-mesh-validation)=
 ## Validation
 
@@ -360,7 +415,7 @@ nie kwalifikuje operatora ani managed runtime.
 | Quality | `packages/fullmag-py/src/fullmag/meshing/_gmsh_extraction.py` | `_extract_quality_metrics` | bieżące metryki Gmsh |
 | Adapter cap → MeshData | `packages/fullmag-py/src/fullmag/meshing/_layered_box_mesh_data.py` | `build_layered_box_mesh_data` | prototyp;14 regresji, brak production routing/quality/certificate |
 | Zmienne przekroje | `packages/fullmag-py/src/fullmag/meshing/_layered_box_tetrahedralization.py` | `tetrahedralize_layered_box` | dokładny prototyp zgodnej topologii; brak production routing |
-| Regresja kernela | `packages/fullmag-py/tests/test_layered_box_tetrahedralization.py` | `LayeredBoxTetrahedralizationTests` | 7 PASS, 13 subtests; runtime/PBC/quality OPEN |
+| Regresja kernela | `packages/fullmag-py/tests/test_layered_box_tetrahedralization.py` | `LayeredBoxTetrahedralizationTests` | 10 PASS, 13 subtests; kompletne source PBC, production quality/runtime OPEN |
 | Actual cap sampling | `packages/fullmag-py/tests/test_layered_cap_field_sampling.py` | `TestLayeredCapFieldSampling` | porównanie mesh/geometry extrusion i rzeczywiste nodes→kernel; produkcja i quality OPEN |
 
 

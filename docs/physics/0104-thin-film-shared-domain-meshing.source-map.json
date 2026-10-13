@@ -50,6 +50,18 @@
         "policy-adr",
         "scoped-lower-composition-owner"
       ]
+    },
+    {
+      "id": "eq-thin-film-cap-flip-quality",
+      "symbols": [
+        "cap_tetrahedron",
+        "cap_quality",
+        "cap_determinant",
+        "cap_longest_edge"
+      ],
+      "sources": [
+        "variable-section-kernel"
+      ]
     }
   ],
   "symbols": [
@@ -94,6 +106,30 @@
       "latex": "h_\\mathrm{target}",
       "meaning": "resolved target size",
       "si_unit": "\\mathrm m"
+    },
+    {
+      "id": "cap_tetrahedron",
+      "latex": "T",
+      "meaning": "tetrahedron in the retriangulation cavity",
+      "si_unit": "1"
+    },
+    {
+      "id": "cap_quality",
+      "latex": "Q_T",
+      "meaning": "squared determinant/max-edge-cubed quality indicator",
+      "si_unit": "1"
+    },
+    {
+      "id": "cap_determinant",
+      "latex": "D_T",
+      "meaning": "positive tetrahedron orientation determinant",
+      "si_unit": "\\mathrm{m}^3"
+    },
+    {
+      "id": "cap_longest_edge",
+      "latex": "L_T",
+      "meaning": "longest tetrahedron edge",
+      "si_unit": "\\mathrm{m}"
     }
   ],
   "sources": [

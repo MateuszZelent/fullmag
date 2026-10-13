@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+from fractions import Fraction
 import itertools
 import math
 import unittest
 
 import numpy as np
 
+from fullmag.meshing import _layered_box_tetrahedralization as _kernel
 from fullmag.meshing._layered_box_tetrahedralization import (
     tetrahedralize_layered_box,
 )
@@ -76,6 +78,117 @@ def _geometry_connectivity(
         tuple(sorted(tuple(int(value) for value in integer_coordinates[index]) for index in cell))
         for cell in cells
     )
+
+
+def _near_collinear_periodic_input() -> tuple[np.ndarray, np.ndarray, tuple[float, ...]]:
+    nodes, planes, bounds = _layered_input(_PLANES, ())
+    extras = np.asarray(
+        [
+            (-0.5 * _SCALE, -2.0 * _SCALE + 2.0**-24 * _SCALE, 0.0),
+            (-2.0 * _SCALE, 0.0, 0.0),
+            (2.0 * _SCALE, 0.0, 0.0),
+            (0.0, -2.0 * _SCALE, 0.0),
+            (0.0, 2.0 * _SCALE, 0.0),
+        ],
+        dtype=np.float64,
+    )
+    return np.vstack((nodes, extras)), planes, bounds
+
+
+def _pre_flip_cells(
+    nodes: np.ndarray, planes: np.ndarray, bounds: tuple[float, ...]
+) -> np.ndarray:
+    points, _, original_indices, plane_values, normalized_bounds = (
+        _kernel._validate_and_prepare(nodes, np.asarray(planes), bounds)
+    )
+    cells = _kernel._seed_freudenthal(points, plane_values, normalized_bounds)
+    plane_index_by_z = {z: index for index, z in enumerate(plane_values)}
+    xmin, xmax, ymin, ymax = normalized_bounds
+    corner_points = {
+        (x, y, z)
+        for z in plane_values
+        for x, y in ((xmin, ymin), (xmax, ymin), (xmax, ymax), (xmin, ymax))
+    }
+    for point_id, point in enumerate(points):
+        if point not in corner_points:
+            cells = _kernel._insert_cap_node(
+                cells,
+                points,
+                point_id,
+                plane_index_by_z[point[2]],
+                plane_values,
+            )
+    return np.asarray(
+        [[original_indices[index] for index in cell] for cell in cells],
+        dtype=np.int32,
+    )
+
+
+def _exact_quality_vector(nodes: np.ndarray, cells: np.ndarray) -> tuple[Fraction, ...]:
+    exact_nodes = [
+        tuple(Fraction.from_float(float(value)) for value in row) for row in nodes
+    ]
+
+    def determinant(a, b, c):
+        return (
+            a[0] * (b[1] * c[2] - b[2] * c[1])
+            - a[1] * (b[0] * c[2] - b[2] * c[0])
+            + a[2] * (b[0] * c[1] - b[1] * c[0])
+        )
+
+    values = []
+    for cell in cells:
+        a, b, c, d = (exact_nodes[int(index)] for index in cell)
+        vectors = [
+            tuple(right[axis] - left[axis] for axis in range(3))
+            for left, right in ((a, b), (a, c), (a, d))
+        ]
+        det = determinant(*vectors)
+        edge_lengths_squared = [
+            sum((left[axis] - right[axis]) ** 2 for axis in range(3))
+            for left, right in itertools.combinations((a, b, c, d), 2)
+        ]
+        max_edge_squared = max(edge_lengths_squared)
+        values.append(det**2 / max_edge_squared**3)
+    return tuple(sorted(values))
+
+
+def _cap_triangle_geometry(
+    nodes: np.ndarray, cells: np.ndarray, z_value: float
+) -> set[tuple[tuple[float, float], ...]]:
+    counts, _ = _face_incidence(nodes, cells, _PLANES)
+    return {
+        tuple(sorted(tuple(float(value) for value in nodes[index, :2]) for index in face))
+        for face in counts
+        if np.all(nodes[np.asarray(face, dtype=np.int64), 2] == z_value)
+    }
+
+
+def _assert_periodic_side_facets(
+    test: unittest.TestCase,
+    nodes: np.ndarray,
+    cells: np.ndarray,
+    bounds: tuple[float, ...],
+) -> None:
+    counts, _ = _face_incidence(nodes, cells, _PLANES)
+    for axis, sides in ((0, (bounds[0], bounds[1])), (1, (bounds[2], bounds[3]))):
+        other_axes = [dimension for dimension in range(3) if dimension != axis]
+        paired_facets = []
+        for coordinate in sides:
+            facets = {
+                tuple(
+                    sorted(
+                        tuple(float(nodes[index, dimension]) for dimension in other_axes)
+                        for index in face
+                    )
+                )
+                for face, incidence in counts.items()
+                if incidence == 1
+                and all(nodes[index, axis] == coordinate for index in face)
+            }
+            test.assertTrue(facets)
+            paired_facets.append(facets)
+        test.assertEqual(paired_facets[0], paired_facets[1])
 
 
 class LayeredBoxTetrahedralizationTests(unittest.TestCase):
@@ -284,6 +397,72 @@ class LayeredBoxTetrahedralizationTests(unittest.TestCase):
         cells = tetrahedralize_layered_box(nodes, planes, bounds)
         np.testing.assert_array_equal(nodes, original)
         self._assert_mesh_contract(nodes, planes, bounds, cells)
+
+    def test_near_collinear_cap_flip_improves_quality_and_preserves_periodicity(self) -> None:
+        nodes, planes, bounds = _near_collinear_periodic_input()
+        original_nodes = nodes.copy()
+        before_flip = _pre_flip_cells(nodes, planes, bounds)
+
+        cells = tetrahedralize_layered_box(nodes, planes, bounds)
+
+        self.assertGreater(
+            _exact_quality_vector(nodes, cells),
+            _exact_quality_vector(nodes, before_flip),
+        )
+        np.testing.assert_array_equal(nodes, original_nodes)
+        self._assert_mesh_contract(nodes, planes, bounds, cells)
+        _assert_periodic_side_facets(self, nodes, cells, bounds)
+
+    def test_internal_cap_flip_is_shared_by_both_adjacent_slabs(self) -> None:
+        nodes, planes, bounds = _near_collinear_periodic_input()
+        before_flip = _pre_flip_cells(nodes, planes, bounds)
+        cells = tetrahedralize_layered_box(nodes, planes, bounds)
+
+        self.assertNotEqual(
+            _cap_triangle_geometry(nodes, before_flip, float(planes[1])),
+            _cap_triangle_geometry(nodes, cells, float(planes[1])),
+        )
+        counts, slabs = _face_incidence(nodes, cells, planes)
+        internal_faces = [
+            face
+            for face in counts
+            if np.all(nodes[np.asarray(face, dtype=np.int64), 2] == planes[1])
+        ]
+        self.assertTrue(internal_faces)
+        for face in internal_faces:
+            self.assertEqual(counts[face], 2)
+            self.assertEqual(sorted(slabs[face]), [0, 1])
+
+    def test_cap_flip_skips_partial_shared_cavity_with_different_lower_apices(self) -> None:
+        points = [
+            (Fraction(0), Fraction(0), Fraction(0)),
+            (Fraction(2), Fraction(0), Fraction(0)),
+            (Fraction(1, 4), Fraction(1, 8), Fraction(0)),
+            (Fraction(7, 4), Fraction(-1), Fraction(0)),
+            (Fraction(0), Fraction(0), Fraction(-1)),
+            (Fraction(2), Fraction(0), Fraction(-1)),
+            (Fraction(0), Fraction(0), Fraction(1)),
+        ]
+        upper_cells = [
+            _kernel._positive_cell((0, 1, 2, 6), points),
+            _kernel._positive_cell((0, 1, 3, 6), points),
+        ]
+        cells = [
+            _kernel._positive_cell((0, 1, 2, 4), points),
+            _kernel._positive_cell((0, 1, 3, 5), points),
+            *upper_cells,
+        ]
+
+        upper_only_flip = _kernel._improve_cap_edges(
+            upper_cells, points, (Fraction(0), Fraction(1))
+        )
+        self.assertNotEqual(upper_only_flip, upper_cells)
+
+        improved = _kernel._improve_cap_edges(
+            cells, points, (Fraction(-1), Fraction(0), Fraction(1))
+        )
+
+        self.assertEqual(improved, cells)
 
     def test_invalid_geometry_fails_closed(self) -> None:
         nodes, planes, bounds = _coarse_fine_coarse_input()
