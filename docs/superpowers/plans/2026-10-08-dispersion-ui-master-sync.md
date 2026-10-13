@@ -402,3 +402,36 @@ przed17.779s/po4.418s. Root actual-Gmsh2PASS/8.58s: kernel4.216s,
 Cachememory niezmierzone; brak large-mesh/runtime/sciencequalification.
 Dalsza naprawa musi spełnić jakościowe i regional lower/upper gates,
 zachować Box/ring distinction i potem umożliwić właściwy managed sweep.
+
+
+## 2026-10-13 — falsyfikacja prostych poprawek pól na powierzchniach
+
+Źródła funkcjonalne: checkpoint7b5b6a419 (zmiana względem7a90 dotyczyła tylko
+planu). Gmsh4.15.2; dokładny interpretowany produkcyjny test
+`RegionMeshPolicyTests.test_direct_layered_box_region_floor_beats_eligible_upper_actual_density`.
+Nie zmieniano repo, requestu, progów, warstw ani źródłowych asercji w probe.
+
+Baseline thin-film:135 węzłów,108 magnetycznych Tet4, z-planes[-10,0,10]nm,
+node counts[15,15,15], zero komórek przekraczających wewnętrzny cap.
+ROI ma0 tetraedrów/0 krawędzi. Bulk median33.70nm/max49.16nm.
+Free-tetrahedral subtest ma24 Tet4 w ROI i przechodzi istniejącą asercję
+median4–12nm (11.23nm baseline;11.54nm w kolejnej realizacji).
+
+Dwa niezależne runtime monkeypatch eksperymenty nie naprawiły thin-film:
+
+1. IncludeBoundary/IncludeEmbedded na obu właściwych Constant owner masks,
+   VolumesList[4,5], VIn1/VOut0: te same135/108, ROI0, exit1 przy
+   `assertTrue(region_lengths)`.
+2. Jawne jednorazowe generate(2) po instalacji wszystkich24 pól i przed
+   istniejącym generate(3): te same planes/counts/ROI0, exit1 w tej samej asercji.
+
+Nie wdrażamy tych sfalsyfikowanych poprawek. Kolejna hipoteza do sprawdzenia:
+jawna coverage pól upper/lower na powierzchniach dokładnych body owner volumes,
+łącznie ze wspólnym capem (deduped getBoundary oddzielnie dla każdej objętości).
+Jeśli to nie zmienia rzeczywistego mesha, należy zbadać lineage/ograniczenia
+meshingu po geometrycznym extrusion. Zarejestrowane pole i poprawny h_target8nm
+nie dowodzą wykonania regionalnej gęstości. Production gate pozostaje FAIL.
+
+Dowody operatorowe: visualization layered-cap-sliver-diagnostic-20261013,
+scoped-mesh-field-boundary-probe.py oraz baseline/patched/surface.log.
+Nie traktujemy probe jako managed runtime ani jako naukowej walidacji eigensolve.

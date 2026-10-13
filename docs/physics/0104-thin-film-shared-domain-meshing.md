@@ -400,6 +400,48 @@ Owner: `_layered_box_tetrahedralization.py::tetrahedralize_layered_box`.
 FEM CPU/GPU konsumują tę samą geometrię, ale wymagają oddzielnego runtime
 proof; FDM CPU/GPU nie dotyczą tej realizacji.
 
+(thin-film-interior-size-retriangulation)=
+### Kontrakt objętościowej redukcji długich krawędzi
+
+**Status: projektowany krok wewnętrznego kernela, bez kwalifikacji produkcyjnej.**
+Cap-quality pass nie dowodzi regionalnego rozmiaru komórek. Kolejny krok
+może zastąpić gwiazdę wewnętrznej krawędzi o walencji cztery innymi czterema
+tetraedrami tylko w pojedynczym slabie. Pozostawia wszystkie współrzędne
+oraz ten sam zestaw sześciu wierzchołków cavity. Wymaga dokładnie zamkniętej,
+wypukłej cavity, identycznych trójkątów jej granicy i capów, dodatnich
+orientacji, równej objętości slabu oraz braku nakładania nowych komórek.
+Rozdzielenie każdej pary tetraedrów ma być sprawdzone przez dokładny test
+osi separujących: normalne ścian obu komórek i iloczyny wektorowe ich
+krawędzi, z pominięciem osi zerowych. Kontakt na granicy jest dopuszczalny.
+Nowa przekątna nie może istnieć poza cavity; aktualne incidences i duplikaty
+pozostają warunkami zależnymi od topologii, nie stałym wynikiem cache.
+
+Kryterium wyboru nie używa arbitralnego progu: usuwana krawędź znika z całej
+siatki, a każda nowo dodana krawędź jest od niej ściśle krótsza, porównując
+kwadraty długości exact. Minimum lokalnego bezwymiarowego Q_T z równania
+`eq-thin-film-cap-flip-quality` nie może maleć. Globalny zbiór unikalnych
+krawędzi, posortowany malejąco według długości, maleje leksykograficznie:
+wszystkie długości większe lub równe usuwanej pozostają bez nowych wpisów,
+a jeden wpis znika. Skończony zbiór par niezmiennych węzłów wyklucza cykle.
+To nie dowodzi spadku regionalnego p95 ani maksimum, kiedy inne długie
+krawędzie pozostają. Nie zastępuje bramek h_K^edge, SICN/gamma i lower/upper.
+
+Kolejność kandydatów wyznacza geometria. Najpierw kończy się cap-quality
+pass, potem objętościowy size pass; nie wolno naprzemiennie uruchamiać
+odmiennych objectives bez dowodu wspólnej monotoniczności. Końcowy pełny
+validator nadal sprawdza exact-z, objętości, cap coverage i granicę Box.
+Krawędzie o innej walencji oraz niewypukłe lub zdegenerowane cavities
+wymagają osobnej metody i dowodu; ten krok nie obsługuje constrained ring.
+Publiczny Python→IR nie ulega zmianie. Owner jest ten sam wewnętrzny
+`tetrahedralize_layered_box`; FEM CPU/GPU wymagają późniejszej produkcyjnej
+integracji i osobnych dowodów runtime, FDM CPU/GPU nie dotyczą tej metody.
+
+Wymagane dowody implementacji: legalny syntetyczny ruch, odmowy cavity
+niewypukłej/degenerate/między slabami i istniejącej przekątnej, invariance
+po permutacji węzłów, zachowanie wszystkich dotychczasowych inwariantów
+oraz pomiar globalnego profilu krawędzi i regionalnego rozmiaru actual mesha.
+Sama redukcja pojedynczej krawędzi nie zamyka bramki produkcyjnej.
+
 (thin-film-mesh-validation)=
 ## Validation
 
