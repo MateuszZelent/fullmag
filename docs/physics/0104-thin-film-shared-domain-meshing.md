@@ -379,6 +379,23 @@ małego przypadku. Exact rescans/restarts pozostają prototypem; potrzebna
 jest kontrola kosztu na większych siatkach, poprawa pozostałych komórek oraz
 właściwa bramka jakości i lower/upper fields przed production routing.
 Wymagany pozostaje późniejszy managed runtime, a nie tylko probe Python.
+
+Redukcja kosztu zachowuje identyczną kolejność zaakceptowanych zmian
+i końcową connectivity. Cache może obejmować tylko wyniki zależne od
+niezmiennych węzłów: orientację uporządkowanej komórki, wypukłość danego
+czworokąta i rangi geometrii. Nie wolno zapamiętywać jako stałej odmowy
+zależnej od aktualnych ownerów, istnienia faset/przekątnych lub duplikatów.
+Przejście z porównań współrzędnych na ich porządkowe rangi musi zachować
+pierwotny porządek; oczekiwany dowód to identyczny wynik zapisanej
+142-node fixture oraz dotychczasowe inwarianty. Zapisana fixture142/404 dała identyczną tablicę połączeń (`np.array_equal`).
+W pojedynczej parze pomiarów NPZ koszt zmalał z17.779s do4.418s; ponowny
+actual-Gmsh probe2PASS/8.58s zmierzył kernel4.216s przy tych samych metrykach
+jakości i coverage. Focused24PASS/13subtests oraz odrębna regresja cache1PASS
+potwierdzają zachowanie signed/zero orientations; cache nie utożsamia
+permutacji o przeciwnym znaku. To pomiar małej fixture, nie kwalifikacja
+dużych siatek. Zużycia pamięci cache nie zmierzono; cache jest lokalny dla
+jednego wywołania i rośnie z liczbą unikalnych odwiedzanych krotek.
+
 Owner: `_layered_box_tetrahedralization.py::tetrahedralize_layered_box`.
 FEM CPU/GPU konsumują tę samą geometrię, ale wymagają oddzielnego runtime
 proof; FDM CPU/GPU nie dotyczą tej realizacji.
@@ -413,6 +430,7 @@ nie kwalifikuje operatora ani managed runtime.
 | Sweep | `packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py` | `generate_swept_box_mesh` | ograniczona mixed-P1 realizacja box |
 | Tetra fields | `packages/fullmag-py/src/fullmag/meshing/_size_field_plan.py` | `_build_field_stack` | strefy surface/edge/corner/air |
 | Quality | `packages/fullmag-py/src/fullmag/meshing/_gmsh_extraction.py` | `_extract_quality_metrics` | bieżące metryki Gmsh |
+| Cache predykatów | `packages/fullmag-py/src/fullmag/meshing/_layered_box_tetrahedralization.py` | `_cached_orient3d` | dokładny signed cache dla niezmiennych nodes; order/sign regression PASS |
 | Adapter cap → MeshData | `packages/fullmag-py/src/fullmag/meshing/_layered_box_mesh_data.py` | `build_layered_box_mesh_data` | prototyp;14 regresji, brak production routing/quality/certificate |
 | Zmienne przekroje | `packages/fullmag-py/src/fullmag/meshing/_layered_box_tetrahedralization.py` | `tetrahedralize_layered_box` | dokładny prototyp zgodnej topologii; brak production routing |
 | Regresja kernela | `packages/fullmag-py/tests/test_layered_box_tetrahedralization.py` | `LayeredBoxTetrahedralizationTests` | 10 PASS, 13 subtests; kompletne source PBC, production quality/runtime OPEN |

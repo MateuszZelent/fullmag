@@ -3,14 +3,14 @@
 
 **Pełny cel S00–S12 pozostaje OPEN.** Bieżące prace wykonuje worktree
 `dispersion-mode-ui-20261008`, branch `codex/dispersion-mode-ui-20261008`.
-Checkpoint kodu: `d39c549c860453269d533c5897e0447e43392996`, na remote.
+Checkpoint bazowy bieżącej naprawy: `b101530745ddd0d69c73c0b2c183a851540b798e`, na remote.
 Oryginalny worktree dyspersji zawiera odrębną niezakończoną pracę;
 jego dirty/staged plików nie zmieniono w tym przyroście.
 
 | Zakres | Potwierdzone obecnymi dowodami | Warunek zamknięcia / następny krok |
 |---|---|---|
 | Capture/storage | Poprawka prywatnego stagingu zachowuje ścisłą walidację rzeczywistych hardlinków CAS; lokalnie12 interpretowanych regresji PASS. CI38378068321 capture-contract:262PASS/181subtests | Nowe capture nadal blokuje utrata ReadOnly w istniejących obiektach CAS. Preview7721 poprawnych hash/size kandydatów; operator repair oczekuje autoryzacji. Nie zmieniono obiektów |
-| Regionalna siatka | Aktualne CI38381498619 nadal FAIL: pusty ROI. Geometry-only sampling daje zmienne przekroje43/56/43 i ROI3/11/3; kernel404tet/142nodes ma slivery około1e-14. Adapter MeshData14PASS, exact-layer CI59PASS/13subtests i2 actual probes PASS | Naprawa jakości bez zmiany węzłów, potem production routing owner fields/lower-upper/quality/markers/PBC/exact-z; prototyp i test topologii nie zamykają bramki |
+| Regionalna siatka | Aktualne CI38381498619 nadal FAIL: pusty ROI. Geometry-only sampling daje zmienne przekroje43/56/43 i ROI3/11/3; kernel404tet/142nodes po cap flips ma minimum det/max_edge³2.09e-4. Adapter MeshData14PASS, kernel10PASS/13subtests + cache1PASS;2 actual probes PASS | Pozostała jakość i rozmiary komórek, potem production routing owner fields/lower-upper/quality/markers/PBC/exact-z; prototyp i test topologii nie zamykają bramki |
 | Runtime i serial/adaptive | Istnieją historyczne managed wyniki oraz siedem wybranych punktów; selected-only nie jest pełnym oknem spektralnym | Świeży build dokładnych źródeł i przebieg, pełne diagnostics/residuale, signed sweep oraz pomierzony parytet serial/adaptive |
 | Spektrum i nauka | Źródłowe kontrakty i analityczne oracles; wcześniejsze wyniki nie zamykają kwalifikacji | Pełne okno/mod count, DE/BV, zbieżność siatki i airboxu, porównanie identycznego COMSOL A1 oraz wymagane GPU |
 | S09 / 2.5D | Wcześniejsze źródła frame/UV/world, bindings i regresje zachowane | Provider/operator, world equivalence, invariance/equilibrium, typed routing i owner MFEM, z wykonanym runtime proof |
@@ -40,7 +40,11 @@ Kernel+adapter24PASS/13subtests; actualGmsh2PASS: minimum det/max_edge³
 2.088095e-4, kernel15.08s, wszystkie142nodes/404tets zachowane. To dowód
 poprawy prototypu, a nie produkcyjnej jakości ani wydajności.
 
-Następny krok: ocena/naprawa pozostałej jakości i kosztu retriangulacji
+Cache immutable geometry zachował identyczny output142/404 i skrócił kernel
+do4.216s w actual-Gmsh probe2PASS. Focused24PASS/13subtests + cache1PASS.
+CI38384634580 dla b101530:SUCCESS4/4; actualregional38384634688 nadal pustyROI.
+
+Następny krok: ocena/naprawa pozostałej jakości i regional size
 bez zmiany węzłów, następnie produkcyjna integracja owner-scoped przekrojów,
 lower/upper size, region markers, pełnej PBC i exact-z. Bramka actual regional
 density oraz świeży managed FEM runtime pozostają wymagane.

@@ -251,6 +251,20 @@
       "symbol": "test_builds_exact_region_and_interface_mesh_data",
       "responsibility": "Region volumes, interface orientation, complete periodic facets, x/y commutation and invalid input checks.",
       "evidence_status": "python_passed"
+    },
+    {
+      "id": "cap-signed-geometry-cache",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_layered_box_tetrahedralization.py",
+      "symbol": "_cached_orient3d",
+      "responsibility": "Cache exact signed determinants by ordered cell only within immutable geometry; retain topology-dependent checks.",
+      "evidence_status": "python_passed_production_not_verified"
+    },
+    {
+      "id": "cap-signed-geometry-cache-regression",
+      "path": "packages/fullmag-py/tests/test_layered_box_tetrahedralization.py",
+      "symbol": "test_cached_orientation_keeps_ordered_sign_and_zero",
+      "responsibility": "Verify positive, negative and zero determinants remain distinct and repeated evaluations reuse the exact result.",
+      "evidence_status": "python_passed"
     }
   ],
   "public_api": {

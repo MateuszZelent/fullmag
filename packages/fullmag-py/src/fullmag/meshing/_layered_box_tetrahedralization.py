@@ -14,9 +14,12 @@ the current topology; together with
 arbitrary-precision rational arithmetic this is a correctness prototype, not a
 large-mesh algorithm (quadratic in node count when the cell count grows
 linearly, and potentially worse for high-valence edge splits). The cap-quality
-pass caches exact Q² by canonical cell key, but restarts its deterministic cap
-edge scan after each accepted flip; its worst-case cost scales with accepted
-flips times cap topology. No large-mesh performance qualification is claimed.
+pass caches exact Q² by canonical cell key, signed determinants by ordered
+cell key, and convexity by geometry-ordered quad. It precomputes geometry ranks
+and builds all plane cap maps in one cell pass, but restarts its deterministic
+cap-edge scan after each accepted flip; its worst-case cost still scales with
+accepted flips times cap topology. No large-mesh performance qualification is
+claimed.
 """
 from __future__ import annotations
 
@@ -54,8 +57,29 @@ def _orient3d(points: Sequence[_Point3], cell: _Cell) -> _Exact:
     )
 
 
-def _positive_cell(cell: _Cell, points: Sequence[_Point3]) -> _Cell:
-    determinant = _orient3d(points, cell)
+def _cached_orient3d(
+    points: Sequence[_Point3],
+    cell: _Cell,
+    determinant_cache: dict[_Cell, _Exact],
+) -> _Exact:
+    """Reuse an exact signed determinant for the same ordered cell."""
+    determinant = determinant_cache.get(cell)
+    if determinant is None:
+        determinant = _orient3d(points, cell)
+        determinant_cache[cell] = determinant
+    return determinant
+
+
+def _positive_cell(
+    cell: _Cell,
+    points: Sequence[_Point3],
+    determinant_cache: dict[_Cell, _Exact] | None = None,
+) -> _Cell:
+    determinant = (
+        _orient3d(points, cell)
+        if determinant_cache is None
+        else _cached_orient3d(points, cell, determinant_cache)
+    )
     if determinant == 0:
         raise ValueError("tetrahedralization would create a degenerate tetrahedron")
     if determinant < 0:
@@ -85,6 +109,25 @@ def _cap_face_cells(
             face = tuple(sorted(cell[index] for index in range(4) if index != omitted))
             if all(points[index][2] == z for index in face):
                 result.setdefault(face, []).append(cell_index)
+    return result
+
+
+def _cap_faces_by_plane(
+    cells: Sequence[_Cell],
+    node_plane_indices: Sequence[int | None],
+    plane_count: int,
+) -> list[dict[_Face, list[int]]]:
+    """Build each requested plane's cap-face map in one deterministic cell scan."""
+    result: list[dict[_Face, list[int]]] = [{} for _ in range(plane_count)]
+    for cell_index, cell in enumerate(cells):
+        for omitted in range(4):
+            face = tuple(sorted(cell[index] for index in range(4) if index != omitted))
+            plane_index = node_plane_indices[face[0]]
+            if plane_index is None or any(
+                node_plane_indices[vertex] != plane_index for vertex in face[1:]
+            ):
+                continue
+            result[plane_index].setdefault(face, []).append(cell_index)
     return result
 
 
@@ -368,8 +411,16 @@ def _cavity_face_counts(cells: Sequence[_Cell]) -> dict[_Face, int] | None:
     return counts
 
 
-def _tetrahedron_quality_q2(points: Sequence[_Point3], cell: _Cell) -> _Exact:
-    determinant = _orient3d(points, cell)
+def _tetrahedron_quality_q2(
+    points: Sequence[_Point3],
+    cell: _Cell,
+    determinant_cache: dict[_Cell, _Exact] | None = None,
+) -> _Exact:
+    determinant = (
+        _orient3d(points, cell)
+        if determinant_cache is None
+        else _cached_orient3d(points, cell, determinant_cache)
+    )
     if determinant <= 0:
         raise ValueError("cap flip cavity contains a nonpositive tetrahedron")
     max_edge_squared = max(
@@ -390,6 +441,10 @@ def _cap_edge_flip_candidate(
     cap_edges: set[_Edge],
     quality_cache: dict[_Cell, _Exact],
     cell_indices_by_key: dict[_Cell, int],
+    plane_index_by_z: dict[_Exact, int],
+    geometry_rank: Sequence[int],
+    convexity_cache: dict[tuple[int, int, int, int], bool],
+    determinant_cache: dict[_Cell, _Exact],
 ) -> tuple[tuple[int, ...], tuple[_Cell, ...]] | None:
     """Return a legal strictly improving cavity replacement, if one exists."""
     if first_face not in cap_faces or second_face not in cap_faces:
@@ -403,23 +458,28 @@ def _cap_edge_flip_candidate(
     shared = set(first_face).intersection(second_face)
     if len(shared) != 2:
         return None
-    edge = tuple(sorted(shared, key=lambda vertex: points[vertex]))
+    edge = tuple(sorted(shared, key=geometry_rank.__getitem__))
     opposite_vertices = set(first_face).union(second_face).difference(shared)
     if len(opposite_vertices) != 2:
         return None
     first_opposite, second_opposite = sorted(
-        opposite_vertices, key=lambda vertex: points[vertex]
+        opposite_vertices, key=geometry_rank.__getitem__
     )
     new_diagonal = tuple(sorted((first_opposite, second_opposite)))
     if new_diagonal in cap_edges:
         return None
 
-    a, b = points[edge[0]], points[edge[1]]
-    c, d = points[first_opposite], points[second_opposite]
-    if not (
-        _orient2d(a, b, c) * _orient2d(a, b, d) < 0
-        and _orient2d(c, d, a) * _orient2d(c, d, b) < 0
-    ):
+    quad_key = (edge[0], edge[1], first_opposite, second_opposite)
+    strictly_convex = convexity_cache.get(quad_key)
+    if strictly_convex is None:
+        a, b = points[edge[0]], points[edge[1]]
+        c, d = points[first_opposite], points[second_opposite]
+        strictly_convex = (
+            _orient2d(a, b, c) * _orient2d(a, b, d) < 0
+            and _orient2d(c, d, a) * _orient2d(c, d, b) < 0
+        )
+        convexity_cache[quad_key] = strictly_convex
+    if not strictly_convex:
         return None
 
     adjacent_slabs = (
@@ -429,8 +489,6 @@ def _cap_edge_flip_candidate(
         if plane_index == len(plane_values) - 1
         else [plane_index - 1, plane_index]
     )
-    plane_index_by_z = {z_value: index for index, z_value in enumerate(plane_values)}
-
     def owners(face: _Face) -> dict[int, tuple[int, int]] | None:
         by_slab: dict[int, tuple[int, int]] = {}
         for cell_index in cap_faces[face]:
@@ -481,10 +539,14 @@ def _cap_edge_flip_candidate(
             apex = first_owners[slab][1]
             slab_cells = (
                 _positive_cell(
-                    (edge[0], first_opposite, second_opposite, apex), points
+                    (edge[0], first_opposite, second_opposite, apex),
+                    points,
+                    determinant_cache,
                 ),
                 _positive_cell(
-                    (edge[1], first_opposite, second_opposite, apex), points
+                    (edge[1], first_opposite, second_opposite, apex),
+                    points,
+                    determinant_cache,
                 ),
             )
             new_cavity_by_slab[slab] = slab_cells
@@ -497,13 +559,18 @@ def _cap_edge_flip_candidate(
     new_nodes = {vertex for cell in new_cavity for vertex in cell}
     if new_nodes != old_nodes:
         return None
-    if any(_orient3d(points, cell) <= 0 for cell in new_cavity):
+    if any(
+        _cached_orient3d(points, cell, determinant_cache) <= 0
+        for cell in new_cavity
+    ):
         return None
 
     def cached_quality(cell: _Cell) -> _Exact:
         key = tuple(sorted(cell))
         if key not in quality_cache:
-            quality_cache[key] = _tetrahedron_quality_q2(points, cell)
+            quality_cache[key] = _tetrahedron_quality_q2(
+                points, cell, determinant_cache
+            )
         return quality_cache[key]
 
     try:
@@ -520,10 +587,18 @@ def _cap_edge_flip_candidate(
             cells[second_owners[slab][0]],
         )
         old_volume6 = sum(
-            (_orient3d(points, cell) for cell in old_slab_cells), Fraction(0)
+            (
+                _cached_orient3d(points, cell, determinant_cache)
+                for cell in old_slab_cells
+            ),
+            Fraction(0),
         )
         new_volume6 = sum(
-            (_orient3d(points, cell) for cell in new_cavity_by_slab[slab]), Fraction(0)
+            (
+                _cached_orient3d(points, cell, determinant_cache)
+                for cell in new_cavity_by_slab[slab]
+            ),
+            Fraction(0),
         )
         if old_volume6 != new_volume6:
             return None
@@ -565,6 +640,16 @@ def _improve_cap_edges(
     """Apply deterministic, exact-quality-improving cap-edge flips to closure."""
     improved = list(cells)
     quality_cache: dict[_Cell, _Exact] = {}
+    determinant_cache: dict[_Cell, _Exact] = {}
+    convexity_cache: dict[tuple[int, int, int, int], bool] = {}
+    geometry_order = sorted(range(len(points)), key=points.__getitem__)
+    geometry_rank = [0] * len(points)
+    for rank, vertex in enumerate(geometry_order):
+        geometry_rank[vertex] = rank
+    plane_index_by_z = {z_value: index for index, z_value in enumerate(plane_values)}
+    node_plane_indices = tuple(
+        plane_index_by_z.get(point[2]) for point in points
+    )
     # The exact sorted Q² vector is a strict potential over finitely many fixed-node,
     # fixed-cell-count topologies, so no heuristic iteration cap is needed.
     while True:
@@ -572,8 +657,10 @@ def _improve_cap_edges(
         cell_indices_by_key = {
             tuple(sorted(cell)): index for index, cell in enumerate(improved)
         }
-        for plane_index, z_value in enumerate(plane_values):
-            cap_faces = _cap_face_cells(improved, points, z_value)
+        cap_faces_by_plane = _cap_faces_by_plane(
+            improved, node_plane_indices, len(plane_values)
+        )
+        for plane_index, cap_faces in enumerate(cap_faces_by_plane):
             edge_faces: dict[_Edge, list[_Face]] = {}
             for face in cap_faces:
                 for first, second in combinations(face, 2):
@@ -581,7 +668,7 @@ def _improve_cap_edges(
 
             ordered_edges = sorted(
                 edge_faces,
-                key=lambda edge: tuple(sorted((points[edge[0]], points[edge[1]]))),
+                key=lambda edge: tuple(sorted(geometry_rank[vertex] for vertex in edge)),
             )
             cap_edges = set(edge_faces)
             for edge in ordered_edges:
@@ -590,7 +677,7 @@ def _improve_cap_edges(
                     continue
                 first_face, second_face = sorted(
                     adjacent_faces,
-                    key=lambda face: tuple(sorted(points[vertex] for vertex in face)),
+                    key=lambda face: tuple(sorted(geometry_rank[vertex] for vertex in face)),
                 )
                 candidate = _cap_edge_flip_candidate(
                     improved,
@@ -603,6 +690,10 @@ def _improve_cap_edges(
                     cap_edges,
                     quality_cache,
                     cell_indices_by_key,
+                    plane_index_by_z,
+                    geometry_rank,
+                    convexity_cache,
+                    determinant_cache,
                 )
                 if candidate is None:
                     continue

@@ -4,6 +4,7 @@ from fractions import Fraction
 import itertools
 import math
 import unittest
+from unittest.mock import patch
 
 import numpy as np
 
@@ -432,6 +433,24 @@ class LayeredBoxTetrahedralizationTests(unittest.TestCase):
         for face in internal_faces:
             self.assertEqual(counts[face], 2)
             self.assertEqual(sorted(slabs[face]), [0, 1])
+
+    def test_cached_orientation_keeps_ordered_sign_and_zero(self) -> None:
+        points = [
+            tuple(Fraction(value) for value in row)
+            for row in ((0, 0, 0), (1, 0, 0), (0, 1, 0), (0, 0, 1))
+        ]
+        positive = (0, 1, 2, 3)
+        negative = (1, 0, 2, 3)
+        degenerate = (0, 1, 2, 2)
+        cache = {}
+        with patch.object(_kernel, "_orient3d", wraps=_kernel._orient3d) as orient:
+            for _ in range(2):
+                self.assertEqual(_kernel._cached_orient3d(points, positive, cache), 1)
+                self.assertEqual(_kernel._cached_orient3d(points, negative, cache), -1)
+                self.assertEqual(_kernel._cached_orient3d(points, degenerate, cache), 0)
+            self.assertEqual(orient.call_count, 3)
+            self.assertEqual(_kernel._positive_cell(negative, points, cache), positive)
+            self.assertEqual(orient.call_count, 3)
 
     def test_cap_flip_skips_partial_shared_cavity_with_different_lower_apices(self) -> None:
         points = [

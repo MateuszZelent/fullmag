@@ -380,3 +380,25 @@ siatki koszt wielokrotnych exact rescans wymaga poprawy przed zastosowaniem
 produkcyjnym. Wskaźniki nie zastępują SICN/gamma ani polityki0105.
 Świeży managed capture nadal oczekuje autoryzowanej naprawy ReadOnly CAS;
 żadnych obiektów CAS, wyników ani cache nie zmieniono.
+
+## Koszt exact cap flips — 13.10.2026
+
+Baseline b101530745ddd0d69c73c0b2c183a851540b798e ma CI38384634580
+SUCCESS4/4 i artifact-consumers38384634591 SUCCESS. Scoped-mesh-fields
+38384634688 nadal FAILURE:309tests,1FAIL,1SKIP; log potwierdza pustyROI.
+Production routing nie zostało podmienione na prototyp.
+
+Profil real142node/404tet ujawnił36958candidatechecks,121544orient3d,
+622capscans. Nowy cache przechowuje signed determinants według orderedtet,
+strictconvex według niezmiennegoquad, geometryrank i capmap wszystkich
+planes w jednym przebiegu. Ownerzy/istnienieprzekątnych/duplicate guards
+są nadal sprawdzane na aktualnej topologii; ścisłe predykaty i porządek
+zaakceptowanych zmian pozostają identyczne.
+
+Focused24PASS/13subtests (3.13s), odrębna signedcache regression1PASS(0.97s).
+ActualNPZ output dokładnie identyczny z zapisanym baseline; jeden pomiar
+przed17.779s/po4.418s. Root actual-Gmsh2PASS/8.58s: kernel4.216s,
+142nodes/404tets,90sharedfaces,40ROIcentroids i niezmienione metryki jakości.
+Cachememory niezmierzone; brak large-mesh/runtime/sciencequalification.
+Dalsza naprawa musi spełnić jakościowe i regional lower/upper gates,
+zachować Box/ring distinction i potem umożliwić właściwy managed sweep.
