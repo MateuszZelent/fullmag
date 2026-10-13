@@ -882,3 +882,11 @@ Normalne CI38462235591 i ASAN38462228996 na e9196c38b wykazały błędne
 przepuszczenie label-only do dalszego adaptera. Po korekcie wymagane pozostają
 te same asercje rejection reason/term/status. Dowód runtime produkcyjnego
 FEM i pełna kwalifikacja naukowa pozostają NOT VERIFIED.
+
+### Indeks źródeł korekty 2026-10-13
+
+| Zakres | Lane | Ścieżka i deklaracja symbolu | Odpowiedzialność | Weryfikacja | Granica dowodu |
+|---|---|---|---|---|---|
+
+| Demag admission | FEM CPU | backends/fem/cpu/frequency_domain/production_cpu_modal_eigen.cpp + const char *modal_request_gated_operator_term | Reject label-only dense demag; retain native shared-domain provider. | Native ABI normal/ASAN CI38464533642/38464528559 PASS at849fa8ddb | Scoped ABI proof; production scientific qualification NOT VERIFIED |
+| Demag admission regression | FEM CPU | backends/fem/tests/frequency_domain/modal_eigen_contract_test.cpp + void modal_nonzero_k_floquet_bloch_payload_rejects_gated_operator_terms | Assert exact status/reason/term for missing numeric demag. | Same ABI CI PASS | Not production spectrum proof |

@@ -12,7 +12,7 @@ Pełny cel **S00–S12 pozostaje OPEN**. Aktualny worktree:
 | K0 window recovery | Ograniczona poprawka13d9d71f6f365768038dd27e73af037f28b64255; policy-only regression PASS w CI38454411467 | Dowód runtime nowego recovery pozostaje NOT VERIFIED |
 | Managed build244 | Job681ccf26c84742cf83880d97517ca4e4, source13d9d71f6, digestfb56ec30e8d70c3543fea6a45cf76b813a8be3052d9b788ec886dba4a22ee275, ostatni status running; worker_alive=true | Terminalny receipt i artefakty, potem canonical de-smoke-two i signed15 |
 | Storage i observer | Runner odczytał57771622400B wolnego; pojedynczy observer wznowiony po timeoutcie status request, bez ponowienia joba lub pilota | Obserwować ten sam job; nie uznawać timeoutu za zakończenie buildu |
-| Native CI | Po poprawce angular-shift527e93dd9 test przechodzi wcześniejszą asercję. Run38456654430/sourcef146f962: retry policy, kinematics i Floquet PASS; modal C ABI FAIL | Tiny fixture dochodzi za walidację k i zgłasza singular gyrotropic matrix; potrzebny pomiar macierzy na granicy, nie osłabienie raw/fallback asercji |
+| Native CI | Source849fa8ddb: normal CI38464533642 4/4 PASS; ASAN CI38464528559 ABI PASS; lifetime, label-only demag i reference action skorygowane | Produkcyjny FEM/SLEPc runtime i pełny workflow są osobnymi bramkami; zielony ABI nie zamyka nauki |
 | Produkcyjne non-k0 count proof | Sparse retrieval emituje prawidłowe not_certified/methodnone; nie ma niezależnego count proof | Wymagana sprawdzona struktura pencilu i niezależne zliczanie, nie zmiana etykiety certyfikacji |
 | COMSOL A1 i pozostały plan | Scoped Box dokładny; ring/A1, pełne okno/pasma, serial/adaptive parity, convergence, S09 provider, interactions/GPU, GUI/WebGL i review/master/cleanup pozostają OPEN | Każda bramka wymaga dowodu odpowiadającego jej rzeczywistemu zakresowi |
 
@@ -55,7 +55,10 @@ reference, nie EPS. Usunięto nieaktualne dependency oczekiwanie testu;
 artefakt i status OK są teraz sprawdzane w obu konfiguracjach, dodatkowo
 adapter reference, finite residual<=1e-10 i finite nonzero output norm.
 Nota0830/mapa zachowują granicę reference vs production runtime.
-Poprawiona bramka oczekuje na CI;
+Native ABI CI38464533642 (4/4 kontrakty) i38464528559 (ASAN ABI)
+na849fa8ddbd9f4311b25dd80fc9cebc1e8d8a9dcc PASS. To potwierdza
+fixture lifetime, demag admission i referencyjną akcję; pozostałe joby
+workflow oraz produkcyjny runtime/nauka są odrębnymi bramkami;
 lokalny zakaz kompilacji testów zachowano. Aktywna kapsuła244 nie jest zmieniana.
 Build244 potwierdza stage native-build oraz działające procesy C++ MFEM/SLEPc;
 status running nie jest już wyłącznie dowodem przygotowania źródeł.
@@ -65,6 +68,14 @@ węzły punktów CAD. Ich ponowne użycie nie usuwa błędu PBC. Ponowne
 setPeriodic1D zmienia78 węzłów capu, a późniejsze generate3 zmienia1853
 współrzędnych i tagi capu. Samo exact-z i3708 trójkątów nie dowodzi
 zachowania interfejsu. Nie podłączono tej niezgodnej trasy do produkcji.
+
+Alternatywa A1/PBC prefreeze wszystkich capów też zatrzymała się przed
+lift: generate2 utworzył3710/3708/3706/3708 trójkątów na czterech capach.
+Exact-Z i unikalność20 punktów CAD PASS; wszystkie8 surface oraz10 curve
+map PBC mają pełne bijective coverage. Exact-XY/connectivity między capami
+FAIL. Probe nie doszedł do subdivision/air generate3 ani quality. Nie
+rozluźniono tolerancji i nie podłączono tej trasy do produkcji. Potrzebna
+jedna kanoniczna triangulacja interfejsu, zachowana przez generację air.
 
 Runtime243 ma API MatGetInertia i kandydat SeqSBAIJ, ale nie zawiera
 MUMPS/SuperLU_DIST/MKL_PARDISO/PaStiX. Nie wykonano jeszcze faktoryzacji

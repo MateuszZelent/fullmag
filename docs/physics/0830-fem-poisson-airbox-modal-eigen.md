@@ -2166,3 +2166,11 @@ Python→IR i parametry solvera produkcyjnego pozostają niezmienione.
 CI38463988116/source44f9276ca potwierdziło dojście do tego nieaktualnego
 oczekiwania po wcześniejszych regresjach pamięci i demag admission.
 Poprawiony kontrakt wymaga wykonania CI; status pełnej kwalifikacji NOT VERIFIED.
+
+### Indeks źródeł korekty 2026-10-13
+
+| Zakres | Lane | Ścieżka i deklaracja symbolu | Odpowiedzialność | Weryfikacja | Granica dowodu |
+|---|---|---|---|---|---|
+
+| Reference action | FEM CPU | backends/fem/cpu/frequency_domain/poisson_airbox_modal_eigen.cpp + apply_poisson_airbox_modal_shift_invert_action_cpu_reference | Bounded complex algebraic action with gauge augmentation. | Native ABI normal/ASAN CI38464533642/38464528559 PASS at849fa8ddb | Not production EPS or count proof |
+| Reference action ABI regression | FEM CPU | backends/fem/tests/frequency_domain/modal_eigen_contract_test.cpp + void modal_poisson_airbox_tail_shift_invert_action_writes_artifact | Verify artifact, adapter, residual and nonzero output without requiring SLEPc. | Same ABI CI PASS | Scoped algebraic oracle evidence |

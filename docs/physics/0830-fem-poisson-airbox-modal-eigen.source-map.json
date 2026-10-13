@@ -1501,14 +1501,14 @@
       "path": "backends/fem/cpu/frequency_domain/poisson_airbox_modal_eigen.cpp",
       "symbol": "apply_poisson_airbox_modal_shift_invert_action_cpu_reference",
       "responsibility": "Bounded dense complex full-coupled algebraic action (A-sigma B)^-1 Bv; no EPS/PETSc/SLEPc dependency and no production spectrum qualification.",
-      "evidence_status": "source visible; ABI CI pending"
+      "evidence_status": "scoped native ABI normal/ASAN CI38464533642/38464528559 PASS at849fa8ddb; production runtime/science NOT VERIFIED"
     },
     {
       "id": "source-reference-modal-action-abi-test",
       "path": "backends/fem/tests/frequency_domain/modal_eigen_contract_test.cpp",
-      "symbol": "modal_poisson_airbox_tail_shift_invert_action_writes_artifact",
+      "symbol": "void modal_poisson_airbox_tail_shift_invert_action_writes_artifact",
       "responsibility": "Require reference artifact, correct adapter and finite small residual with nonzero output independently of SLEPc availability.",
-      "evidence_status": "post-correction CI NOT VERIFIED"
+      "evidence_status": "scoped native ABI normal/ASAN CI38464533642/38464528559 PASS at849fa8ddb; production runtime/science NOT VERIFIED"
     }
   ],
   "public_api": {
