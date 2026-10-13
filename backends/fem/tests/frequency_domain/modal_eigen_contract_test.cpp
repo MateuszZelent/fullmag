@@ -3351,6 +3351,13 @@ void modal_floquet_wavevector_validation_precedes_tiny_dispatch()
     raw_vector_wins.has_floquet_k_vector = 1;
     raw_vector_wins.floquet_k_vector_rad_per_m[0] =
         std::numeric_limits<double>::quiet_NaN();
+    const double *mass_before_solve = raw_vector_wins.tiny_validation_mass_matrix_row_major;
+    std::fprintf(stderr, "raw-vector mass before solve ptr=%p owner=%p values=[%.17g,%.17g,%.17g,%.17g]\n",
+        static_cast<const void *>(mass_before_solve),
+        static_cast<const void *>(gyrotropic_mass_row_major),
+        mass_before_solve[0], mass_before_solve[1], mass_before_solve[2], mass_before_solve[3]);
+    check(mass_before_solve == gyrotropic_mass_row_major,
+          "tiny request factory must retain the owning gyrotropic matrix buffer");
     FullmagFemFrequencyDomainResult raw_vector_wins_result =
         fullmag_fem_modal_eigen_solve(&raw_vector_wins);
     if (raw_vector_wins_result.status != FULLMAG_FEM_FD_OK) {

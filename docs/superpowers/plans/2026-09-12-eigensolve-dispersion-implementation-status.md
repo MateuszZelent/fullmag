@@ -19,8 +19,26 @@ Pełny cel **S00–S12 pozostaje OPEN**. Aktualny worktree:
 Nowy pomiar diagnostyczny zapisuje wyznacznik i cztery skopiowane wartości
 małej macierzy wyłącznie przy istniejącym błędzie singular validation.
 Nie zmienia tolerancji, solve, klasyfikacji wyniku ani asercji testu.
-Kompilacja/test pozostają NOT VERIFIED do kolejnego GitHub Actions;
+CI38458199444/source47ca80c66 skompilowało kod; test C ABI nadal FAIL.
+Odczyt testu po solve oraz skopiowana macierz w solverze pokazują identyczne
+cztery nieprawidłowe wartości rzędu6,9e-310, det=0. Przyczyna nie jest jeszcze
+rozstrzygnięta. Dodano pomiar przed solve i sprawdzenie tożsamości bufora
+oraz opt-in AddressSanitizer w istniejącym bootstrap workflow; domyślna
+bramka czterech kontraktów jest zachowana. ASAN działa wyłącznie w GitHub
+Actions i zapisuje tryb/opcje w receipt. Nowe wykonanie pozostaje NOT VERIFIED;
 lokalny zakaz kompilacji testów zachowano. Aktywna kapsuła244 nie jest zmieniana.
+
+Dalsze przyczynowe wymagania meshingu A1: prototyp seeded Box miał podwójne
+węzły punktów CAD. Ich ponowne użycie nie usuwa błędu PBC. Ponowne
+setPeriodic1D zmienia78 węzłów capu, a późniejsze generate3 zmienia1853
+współrzędnych i tagi capu. Samo exact-z i3708 trójkątów nie dowodzi
+zachowania interfejsu. Nie podłączono tej niezgodnej trasy do produkcji.
+
+Runtime243 ma API MatGetInertia i kandydat SeqSBAIJ, ale nie zawiera
+MUMPS/SuperLU_DIST/MKL_PARDISO/PaStiX. Nie wykonano jeszcze faktoryzacji
+inercyjnej; dostępność symbolu nie jest count proof. Wymagane pozostają
+wykonany backend probe, Hermitian/gauge/SPD gates oraz zgodność count
+z krotnościami odzyskanych modów. Nie używać preconditionera jako licznika.
 
 ## Historyczny checkpoint — build243 w trakcie kompilacji, 2026-10-13
 

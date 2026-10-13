@@ -5,10 +5,18 @@ on:
     branches: [master, main]
   pull_request:
   workflow_dispatch:
+    inputs:
+      modal_address_sanitizer:
+        description: Run the modal C ABI contract with AddressSanitizer
+        required: false
+        type: boolean
+        default: false
 
 jobs:
   native-modal-cabi-contract:
     runs-on: ubuntu-latest
+    env:
+      FULLMAG_MODAL_ADDRESS_SANITIZER: ${{ inputs.modal_address_sanitizer && '1' || '0' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
