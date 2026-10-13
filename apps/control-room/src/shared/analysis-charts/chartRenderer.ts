@@ -19,6 +19,8 @@ import {
 } from "./fullmagChartTokens";
 import type { ChartScientificTrust } from "./chartScientificTrust";
 
+const MAX_TOTAL_INTERACTIVE_LINE_POINTS = 5_000;
+
 export type ChartRenderStatus =
   | "loading"
   | "ready"
@@ -31,6 +33,7 @@ export type ChartRenderStatus =
 
 export interface ChartRenderPoint {
   branchId?: string | null;
+  breakBefore?: boolean;
   itemId?: string | null;
   rowIndex: number;
   sampleId?: string | null;
@@ -60,6 +63,8 @@ export interface ChartRenderSeries {
   kind: "line" | "scatter";
   label: string;
   points: readonly ChartRenderPoint[];
+  /** Whether points may be used as semantic selection targets; defaults to true. */
+  selectable?: boolean;
   unit: string;
   yAxis: number;
 }
@@ -115,14 +120,31 @@ export type ChartResultExportContext = Pick<
 
 export type ChartRendererEventName = "click" | "dblclick" | "dataZoom" | "legendselectchanged";
 
+interface ChartRendererDispatchAction {
+  type: string;
+  start?: number;
+  end?: number;
+  startValue?: number;
+  endValue?: number;
+}
+
+interface ChartRendererDispatchOptions {
+  flush?: boolean;
+  silent?: boolean;
+}
+
 export interface ChartRendererInstance {
-  dispatchAction?(action: { type: string; start?: number; end?: number; startValue?: number; endValue?: number }): void;
+  dispatchAction?(action: ChartRendererDispatchAction, options?: ChartRendererDispatchOptions): void;
   dispose(): void;
   getDataURL(options?: { pixelRatio?: number; type?: string }): string;
+  getOption?(): unknown;
   off?(name: ChartRendererEventName, listener: (event: unknown) => void): void;
   on?(name: ChartRendererEventName, listener: (event: unknown) => void): void;
   resize(): void;
-  setOption(option: EChartsOption, notMerge?: boolean): void;
+  setOption(
+    option: EChartsOption,
+    options?: boolean | { notMerge?: boolean; replaceMerge?: string | string[] },
+  ): void;
 }
 
 export interface ChartRendererEngine {
@@ -156,14 +178,16 @@ export function createChartRendererOwner(
     ChartRendererEventName,
     (event: unknown) => void,
   ][];
+  const boundEntries: [ChartRendererEventName, (event: unknown) => void][] = [];
   return {
     dispose() {
       if (disposed) return;
       disposed = true;
       if (chart) {
-        for (const [name, listener] of entries) chart.off?.(name, listener);
+        for (const [name, listener] of boundEntries) chart.off?.(name, listener);
         chart.dispose();
       }
+      boundEntries.length = 0;
       chart = null;
     },
     exportPng() {
@@ -173,27 +197,118 @@ export function createChartRendererOwner(
     },
     fitView() {
       if (!disposed && chart) {
-        chart.dispatchAction?.({ type: "dataZoom", start: 0, end: 100 });
+        chart.dispatchAction?.({ type: "dataZoom", start: 0, end: 100 }, { silent: true });
       }
     },
     setRange(fromValue, toValue) {
       if (!disposed && chart) {
-        chart.dispatchAction?.({ type: "dataZoom", startValue: fromValue, endValue: toValue });
+        chart.dispatchAction?.(
+          { type: "dataZoom", startValue: fromValue, endValue: toValue },
+          { silent: true },
+        );
       }
     },
     mount(element) {
       if (disposed || chart) return;
       chart = engine.init(element);
-      for (const [name, listener] of entries) chart.on?.(name, listener);
+      for (const [name, listener] of entries) {
+        const boundListener = name === "dataZoom"
+          ? (event: unknown) => listener(normalizeDataZoomEvent(chart, event))
+          : listener;
+        boundEntries.push([name, boundListener]);
+        chart.on?.(name, boundListener);
+      }
     },
     resize() {
       if (!disposed) chart?.resize();
     },
     update(model, tokens) {
       if (!disposed && chart)
-        chart.setOption(chartRenderModelToEChartsOption(model, tokens), false);
+        chart.setOption(chartRenderModelToEChartsOption(model, tokens), {
+          notMerge: false,
+          replaceMerge: ["series"],
+        });
     },
   };
+}
+
+type DataZoomRecord = Record<string, unknown>;
+
+function asDataZoomRecord(value: unknown): DataZoomRecord | null {
+  return value && typeof value === "object" ? value as DataZoomRecord : null;
+}
+
+function finiteDataZoomNumber(value: unknown): number | null {
+  if (typeof value !== "number" && typeof value !== "string") return null;
+  if (typeof value === "string" && value.trim() === "") return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+function dataZoomOptions(chart: ChartRendererInstance | null): DataZoomRecord[] {
+  if (!chart?.getOption) return [];
+  const option = asDataZoomRecord(chart.getOption());
+  if (!option) return [];
+  const dataZoom = option.dataZoom;
+  const entries = Array.isArray(dataZoom) ? dataZoom : dataZoom ? [dataZoom] : [];
+  return entries.map(asDataZoomRecord).filter((entry): entry is DataZoomRecord => entry !== null);
+}
+
+function dataZoomOptionForEvent(
+  options: readonly DataZoomRecord[],
+  event: DataZoomRecord,
+): DataZoomRecord | null {
+  const eventId = event.dataZoomId;
+  const dataZoomIndex = finiteDataZoomNumber(event.dataZoomIndex);
+  const index = dataZoomIndex !== null && Number.isInteger(dataZoomIndex) && dataZoomIndex >= 0
+    ? dataZoomIndex
+    : null;
+
+  if (eventId !== undefined && eventId !== null) {
+    const byId = options.find((option) => option.id === eventId) ?? null;
+    if (!byId) return null;
+    if (index !== null && options[index] !== byId) return null;
+    return byId;
+  }
+  if (index !== null) return options[index] ?? null;
+  return options.length === 1 ? options[0] ?? null : null;
+}
+
+function normalizeDataZoomEntry(
+  entry: unknown,
+  options: readonly DataZoomRecord[],
+): unknown {
+  const record = asDataZoomRecord(entry);
+  if (!record) return entry;
+
+  // Keep value-based actions authoritative; only percentage-only user actions
+  // need the calculated values exposed by ECharts' public option snapshot.
+  const explicitStartValue = finiteDataZoomNumber(record.startValue);
+  const explicitEndValue = finiteDataZoomNumber(record.endValue);
+  if (explicitStartValue !== null && explicitEndValue !== null) return entry;
+  if ("startValue" in record || "endValue" in record) return entry;
+
+  const option = dataZoomOptionForEvent(options, record);
+  if (!option) return entry;
+  const startValue = finiteDataZoomNumber(option.startValue);
+  const endValue = finiteDataZoomNumber(option.endValue);
+  if (startValue === null || endValue === null) return entry;
+
+  return { ...record, startValue, endValue };
+}
+
+function normalizeDataZoomEvent(chart: ChartRendererInstance | null, event: unknown): unknown {
+  const record = asDataZoomRecord(event);
+  if (!record) return event;
+  const options = dataZoomOptions(chart);
+  const batch = record.batch;
+  if (Array.isArray(batch)) {
+    return {
+      ...record,
+      batch: batch.map((entry) => normalizeDataZoomEntry(entry, options)),
+    };
+  }
+  return normalizeDataZoomEntry(record, options);
 }
 
 // ===== Scale computation =====
@@ -282,6 +397,15 @@ export function chartRenderModelToEChartsOption(
   // Compute Y-axis count from series
   const yAxisCount = chartYAxisCount(model.series);
   const yAxes = model.yAxes.length > 0 ? model.yAxes : [{ label: "", unit: "" }];
+  const selectableLinePointCount = model.series.reduce(
+    (count, series) =>
+      count + (series.kind === "line" && series.selectable !== false
+        ? series.points.length
+        : 0),
+    0,
+  );
+  const linePointTargetsWithinBudget =
+    selectableLinePointCount <= MAX_TOTAL_INTERACTIVE_LINE_POINTS;
 
   // Auto-scale axes
   const xScale = computeXScale(model);
@@ -306,6 +430,7 @@ export function chartRenderModelToEChartsOption(
 
     dataZoom: [
       {
+        id: "fullmag-x-window",
         filterMode: "none",
         type: "inside",
         zoomOnMouseWheel: "ctrl",
@@ -327,27 +452,49 @@ export function chartRenderModelToEChartsOption(
 
     series: model.series.map((series, visibleIndex) => {
       const color = chartSeriesColor(series, visibleIndex, palette);
+      const linePointHitTargets =
+        series.kind === "line" &&
+        series.selectable !== false &&
+        linePointTargetsWithinBudget;
       return {
         // NOTE: No `sampling` property — data is already server-decimated.
         connectNulls: false,
-        data: series.points.map((point) => [point.x, point.y, point.rowIndex]),
+        data: series.points.flatMap((point) => [
+          ...(series.kind === "line" && point.breakBefore
+            ? [[point.x, null, null]]
+            : []),
+          [point.x, point.y, point.rowIndex],
+        ]),
         emphasis: {
+          itemStyle: linePointHitTargets && color ? { color } : undefined,
           lineStyle: { color, width: 3 },
           scale: false,
         },
-        itemStyle: color ? { color } : undefined,
+        // `showSymbol: false` removes LineView's per-datum event targets. Keep
+        // bounded lines point-selectable with transparent (but hit-testable)
+        // fills; opacity zero is culled by ZRender and cannot receive clicks.
+        itemStyle: linePointHitTargets
+          ? { color: "transparent" }
+          : color
+            ? { color }
+            : undefined,
         lineStyle: { color, width: 1.5 },
+        id: series.id,
         name: seriesDisplayName(series, yScales),
         progressive: 0,
-        showSymbol: series.kind === "scatter",
-        symbol: series.kind === "scatter" ? "circle" : "none",
-        symbolSize: 4,
+        // Selectable line points share one chart-wide 5,000-point budget.
+        // Transparent circles provide dataIndex click targets without visible markers.
+        silent: series.selectable === false,
+        showSymbol: series.kind === "scatter" || linePointHitTargets,
+        symbol: "circle",
+        symbolSize: series.kind === "line" ? 2 : 4,
         type: series.kind,
         yAxisIndex: series.yAxis,
       };
     }),
 
     tooltip: {
+      className: "fm-chart-tooltip",
       backgroundColor: bgSurface,
       borderColor: borderStrong,
       borderWidth: 1,

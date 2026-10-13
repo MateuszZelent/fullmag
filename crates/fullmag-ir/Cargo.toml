@@ -6,6 +6,7 @@ publish.workspace = true
 
 [dependencies]
 fullmag-quantities = { path = "../fullmag-quantities" }
+num-bigint = "=0.4.6"
 serde.workspace = true
 serde_json.workspace = true
 serde_path_to_error = "0.1"

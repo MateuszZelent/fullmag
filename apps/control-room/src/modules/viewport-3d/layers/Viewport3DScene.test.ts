@@ -34,6 +34,16 @@ function invokeFrameCallback(
 }
 
 describe("Viewport3DScene scale helpers", () => {
+  it("releases the scene-owned gesture on effect cleanup without disposing the replayable ref", () => {
+    const source = readFileSync(new URL("./Viewport3DScene.tsx", import.meta.url), "utf8");
+    const start = source.indexOf("const cameraGestureRef = useMemo");
+    const cleanup = source.slice(start, source.indexOf("const [moveGestureActive", start));
+    expect(cleanup).toContain("useEffect(() => () => {");
+    expect(cleanup).toContain("cancelViewport3DCameraGesture(cameraGestureRef, epoch)");
+    expect(cleanup).toContain("onCameraInteractionEnd?.(epoch)");
+    expect(cleanup).not.toContain("disposeViewport3DCameraGesture(");
+  });
+
   it("treats native multilayer grids as realized object geometry", () => {
     expect(
       resolveViewport3DRealizedFdmObjectIds({

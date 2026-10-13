@@ -173,12 +173,72 @@ class FrequencyResponseSolverPolicy:
         return policy
 
 
+# The native FEM modal planner bounds both counters by i32::MAX.
+_MAX_FEM_EIGEN_SOLVER_ITERATIONS = (1 << 31) - 1
+
+
+@dataclass(frozen=True, slots=True)
+class FemEigenSolverPolicy:
+    """Optional native PETSc/SLEPc controls for FEM modal eigensolves."""
+
+    residual_tolerance: float | None = None
+    max_outer_iterations: int | None = None
+    max_linear_iterations: int | None = None
+
+    def __post_init__(self) -> None:
+        if self.residual_tolerance is not None:
+            if isinstance(self.residual_tolerance, bool):
+                raise TypeError("residual_tolerance must be a real number")
+            tolerance = float(self.residual_tolerance)
+            if not math.isfinite(tolerance) or tolerance <= 0.0:
+                raise ValueError("residual_tolerance must be finite and positive")
+            object.__setattr__(self, "residual_tolerance", tolerance)
+        if self.max_outer_iterations is not None:
+            object.__setattr__(
+                self,
+                "max_outer_iterations",
+                _positive_fem_eigen_solver_iterations(
+                    self.max_outer_iterations, "max_outer_iterations"
+                ),
+            )
+        if self.max_linear_iterations is not None:
+            object.__setattr__(
+                self,
+                "max_linear_iterations",
+                _positive_fem_eigen_solver_iterations(
+                    self.max_linear_iterations, "max_linear_iterations"
+                ),
+            )
+
+    def to_ir(self) -> dict[str, object]:
+        policy: dict[str, object] = {}
+        if self.residual_tolerance is not None:
+            policy["residual_tolerance"] = self.residual_tolerance
+        if self.max_outer_iterations is not None:
+            policy["max_outer_iterations"] = self.max_outer_iterations
+        if self.max_linear_iterations is not None:
+            policy["max_linear_iterations"] = self.max_linear_iterations
+        return policy
+
+
 def _positive_int(value: object, field_name: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int):
         raise TypeError(f"{field_name} must be an integer")
     if value <= 0:
         raise ValueError(f"{field_name} must be positive")
     return value
+
+
+def _positive_fem_eigen_solver_iterations(value: object, field_name: str) -> int:
+    iterations = _positive_int(value, field_name)
+    if iterations > _MAX_FEM_EIGEN_SOLVER_ITERATIONS:
+        raise ValueError(
+            f"{field_name} must fit the native signed iteration limit "
+            f"(<= {_MAX_FEM_EIGEN_SOLVER_ITERATIONS})"
+        )
+    return iterations
+
+
 SUPPORTED_FIELD_ORIENTATION_PRESETS = {
     "oop_positive",
     "oop_negative",
@@ -617,6 +677,21 @@ def _serialize_spin_wave_bc(value: SpinWaveBoundarySpec) -> str | dict[str, obje
 
 
 @dataclass(frozen=True, slots=True)
+class AntennaFieldSolve:
+    """Standalone charge/antenna stage family without magnetic dynamics."""
+
+    @property
+    def outputs(self) -> tuple[TimeOutputSpec, ...]:
+        return ()
+
+    def to_ir(self) -> dict[str, object]:
+        return {
+            "kind": "antenna_field_solve",
+            "sampling": {"outputs": []},
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class TimeEvolution:
     dynamics: LLG
     outputs: Sequence[TimeOutputSpec]
@@ -1034,6 +1109,7 @@ class Eigenmodes:
     damping_policy: str = "ignore"
     spin_wave_bc: SpinWaveBoundarySpec = "free"
     magnetostatic_bc: str = "open"
+    solver_policy: FemEigenSolverPolicy | None = None
     dynamics: LLG = field(default_factory=LLG)
 
     def __post_init__(self) -> None:
@@ -1086,6 +1162,11 @@ class Eigenmodes:
             supported = ", ".join(sorted(SUPPORTED_MAGNETOSTATIC_BCS))
             raise ValueError(f"magnetostatic_bc must be one of: {supported}")
         object.__setattr__(self, "magnetostatic_bc", magnetostatic_bc)
+        if self.solver_policy is not None and not isinstance(
+            self.solver_policy,
+            FemEigenSolverPolicy,
+        ):
+            raise TypeError("solver_policy must be FemEigenSolverPolicy")
         if magnetostatic_bc == "periodic_airbox_k0":
             if not self.include_demag:
                 raise ValueError("periodic_airbox_k0 requires include_demag=True")
@@ -1160,6 +1241,8 @@ class Eigenmodes:
             payload["mode_tracking"] = self.mode_tracking.to_ir()
         if self.bias_field_sweep is not None:
             payload["bias_field_sweep"] = self.bias_field_sweep.to_ir()
+        if self.solver_policy is not None:
+            payload["solver_policy"] = self.solver_policy.to_ir()
         return payload
 
 

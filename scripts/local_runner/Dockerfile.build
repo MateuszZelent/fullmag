@@ -2,6 +2,93 @@
 ARG TOOLCHAIN_IMAGE
 FROM ${TOOLCHAIN_IMAGE}
 USER root
+# Optional complete CPU modal stack for the ABI-separated runtime-v2 profile.
+# Keep the existing CUDA-enabled installation for the historical/GPU profiles.
+ARG CPU_MFEM_ONLY=0
+RUN if [ "$CPU_MFEM_ONLY" = "1" ]; then \
+      mkdir -p /tmp/fullmag-runner-hypre-src && \
+      git -C /tmp/fullmag-runner-hypre-src init && \
+      git -C /tmp/fullmag-runner-hypre-src remote add origin https://github.com/hypre-space/hypre.git && \
+      git -C /tmp/fullmag-runner-hypre-src fetch --depth 1 origin 9dc9e18aed6a945a95f966e57daacfb1c269f6ec && \
+      git -C /tmp/fullmag-runner-hypre-src checkout --detach FETCH_HEAD && \
+      cmake -S /tmp/fullmag-runner-hypre-src/src -B /tmp/fullmag-runner-hypre-build \
+        -G "Unix Makefiles" -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_INSTALL_PREFIX=/opt/fullmag-mfem-cpu -DBUILD_SHARED_LIBS=ON \
+        -DHYPRE_ENABLE_MPI=ON -DHYPRE_ENABLE_OPENMP=ON -DHYPRE_ENABLE_CUDA=OFF \
+        -DHYPRE_BUILD_TESTS=OFF -DHYPRE_BUILD_EXAMPLES=OFF && \
+      cmake --build /tmp/fullmag-runner-hypre-build -j2 && \
+      cmake --install /tmp/fullmag-runner-hypre-build && \
+      rm -rf /tmp/fullmag-runner-hypre-src /tmp/fullmag-runner-hypre-build; \
+    elif [ "$CPU_MFEM_ONLY" != "0" ]; then exit 2; fi
+# CPU PETSc needs development BLAS/LAPACK and the MPI Fortran wrapper.
+RUN if [ "$CPU_MFEM_ONLY" = "1" ]; then \
+      apt-get update && apt-get install -y --no-install-recommends \
+        gfortran libblas-dev liblapack-dev && \
+      rm -rf /var/lib/apt/lists/*; \
+    elif [ "$CPU_MFEM_ONLY" != "0" ]; then exit 2; fi
+RUN if [ "$CPU_MFEM_ONLY" = "1" ]; then \
+      git init /tmp/fullmag-runner-ceed-src && \
+      git -C /tmp/fullmag-runner-ceed-src remote add origin https://github.com/CEED/libCEED.git && \
+      git -C /tmp/fullmag-runner-ceed-src fetch --depth 1 origin 4018a20a98d451fac24765d3ddb936861647ce8d && \
+      git -C /tmp/fullmag-runner-ceed-src checkout --detach FETCH_HEAD && \
+      test "$(git -C /tmp/fullmag-runner-ceed-src rev-parse HEAD)" = "4018a20a98d451fac24765d3ddb936861647ce8d" && \
+      make -C /tmp/fullmag-runner-ceed-src CUDA_DIR= ROCM_DIR= SYCL_DIR= MAGMA_DIR= -j2 && \
+      make -C /tmp/fullmag-runner-ceed-src CUDA_DIR= ROCM_DIR= SYCL_DIR= MAGMA_DIR= \
+        install prefix=/opt/fullmag-mfem-cpu && \
+      rm -rf /tmp/fullmag-runner-ceed-src; \
+    elif [ "$CPU_MFEM_ONLY" != "0" ]; then exit 2; fi
+RUN if [ "$CPU_MFEM_ONLY" = "1" ]; then \
+      git init /tmp/fullmag-runner-petsc-src && \
+      git -C /tmp/fullmag-runner-petsc-src remote add origin https://gitlab.com/petsc/petsc.git && \
+      git -C /tmp/fullmag-runner-petsc-src fetch --depth 1 origin 1467453aedb62826efc970ceafc4bd6dab8229ab && \
+      git -C /tmp/fullmag-runner-petsc-src checkout --detach FETCH_HEAD && \
+      test "$(git -C /tmp/fullmag-runner-petsc-src rev-parse HEAD)" = "1467453aedb62826efc970ceafc4bd6dab8229ab" && \
+      cd /tmp/fullmag-runner-petsc-src && \
+      PETSC_DIR=/tmp/fullmag-runner-petsc-src PETSC_ARCH=arch-linux-cpu \
+      python3 ./configure PETSC_ARCH=arch-linux-cpu --prefix=/opt/fullmag-mfem-cpu \
+        --with-cc=mpicc --with-cxx=mpicxx --with-fc=mpifort \
+        COPTFLAGS=-O3 CXXOPTFLAGS=-O3 FOPTFLAGS=-O3 \
+        --with-debugging=0 --with-shared-libraries=1 \
+        --with-scalar-type=real --with-precision=double \
+        --with-cuda=0 --with-hip=0 --with-sycl=0 --with-opencl=0 \
+        --with-hypre=1 --with-hypre-dir=/opt/fullmag-mfem-cpu && \
+      make PETSC_DIR=/tmp/fullmag-runner-petsc-src PETSC_ARCH=arch-linux-cpu -j2 all && \
+      make PETSC_DIR=/tmp/fullmag-runner-petsc-src PETSC_ARCH=arch-linux-cpu install && \
+      cd / && rm -rf /tmp/fullmag-runner-petsc-src; \
+    elif [ "$CPU_MFEM_ONLY" != "0" ]; then exit 2; fi
+RUN if [ "$CPU_MFEM_ONLY" = "1" ]; then \
+      git init /tmp/fullmag-runner-slepc-src && \
+      git -C /tmp/fullmag-runner-slepc-src remote add origin https://gitlab.com/slepc/slepc.git && \
+      git -C /tmp/fullmag-runner-slepc-src fetch --depth 1 origin 4c754d7d3ae067837670828a304512798334fb3a && \
+      git -C /tmp/fullmag-runner-slepc-src checkout --detach FETCH_HEAD && \
+      test "$(git -C /tmp/fullmag-runner-slepc-src rev-parse HEAD)" = "4c754d7d3ae067837670828a304512798334fb3a" && \
+      cd /tmp/fullmag-runner-slepc-src && unset PETSC_ARCH && \
+      SLEPC_DIR=/tmp/fullmag-runner-slepc-src PETSC_DIR=/opt/fullmag-mfem-cpu \
+        python3 ./configure --prefix=/opt/fullmag-mfem-cpu && \
+      make SLEPC_DIR=/tmp/fullmag-runner-slepc-src PETSC_DIR=/opt/fullmag-mfem-cpu -j2 all && \
+      make SLEPC_DIR=/tmp/fullmag-runner-slepc-src PETSC_DIR=/opt/fullmag-mfem-cpu install && \
+      cd / && rm -rf /tmp/fullmag-runner-slepc-src; \
+    elif [ "$CPU_MFEM_ONLY" != "0" ]; then exit 2; fi
+RUN if [ "$CPU_MFEM_ONLY" = "1" ]; then \
+      mkdir -p /tmp/fullmag-runner-mfem-src && \
+      git -C /tmp/fullmag-runner-mfem-src init && \
+      git -C /tmp/fullmag-runner-mfem-src remote add origin https://github.com/mfem/mfem.git && \
+      git -C /tmp/fullmag-runner-mfem-src fetch --depth 1 origin d964264cdb9a13e94a201b6c236c7721e0c8765f && \
+      git -C /tmp/fullmag-runner-mfem-src checkout --detach FETCH_HEAD && \
+      test "$(git -C /tmp/fullmag-runner-mfem-src rev-parse HEAD)" = "d964264cdb9a13e94a201b6c236c7721e0c8765f" && \
+      cmake -S /tmp/fullmag-runner-mfem-src -B /tmp/fullmag-runner-mfem-build -G "Unix Makefiles" \
+        -DCMAKE_CXX_STANDARD=17 \
+        -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/opt/fullmag-mfem-cpu \
+        -DCMAKE_PREFIX_PATH=/opt/fullmag-mfem-cpu -DBUILD_SHARED_LIBS=ON \
+        -DCMAKE_POSITION_INDEPENDENT_CODE=ON -DMFEM_USE_MPI=YES \
+        -DMFEM_USE_OPENMP=YES -DMFEM_USE_METIS=NO -DMFEM_USE_CUDA=NO \
+        -DMFEM_USE_CEED=YES -DCEED_DIR=/opt/fullmag-mfem-cpu \
+        -DHYPRE_DIR=/opt/fullmag-mfem-cpu \
+        -DMFEM_ENABLE_TESTING=OFF && \
+      cmake --build /tmp/fullmag-runner-mfem-build --target mfem -j2 && \
+      cmake --install /tmp/fullmag-runner-mfem-build && \
+      rm -rf /tmp/fullmag-runner-mfem-src /tmp/fullmag-runner-mfem-build /tmp/fullmag-runner-hypre-src; \
+    elif [ "$CPU_MFEM_ONLY" != "0" ]; then exit 2; fi
 RUN mkdir -p /opt/fullmag-runner-tools/bin && \
     cp -a /root/.cargo/bin/. /opt/fullmag-runner-tools/bin/ && \
     chmod -R a+rX /opt/fullmag-runner-tools

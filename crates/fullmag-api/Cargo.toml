@@ -87,7 +87,7 @@ futures-core = "0.3"
 crc32fast = "1"
 fullmag-build-info.workspace = true
 serde.workspace = true
-serde_json.workspace = true
+serde_json = { workspace = true, features = ["raw_value"] }
 sha2 = "0.10"
 tokio.workspace = true
 tracing.workspace = true
@@ -95,6 +95,7 @@ tracing-subscriber.workspace = true
 tower-http = { version = "0.6", features = ["cors", "fs"] }
 fullmag-authoring = { path = "../fullmag-authoring" }
 fullmag-application = { path = "../fullmag-application" }
+fullmag-antenna-artifacts = { path = "../fullmag-antenna-artifacts" }
 fullmag-ir = { path = "../fullmag-ir" }
 fullmag-plan = { path = "../fullmag-plan" }
 fullmag-quantities = { path = "../fullmag-quantities" }

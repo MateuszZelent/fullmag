@@ -56,6 +56,7 @@ const MODE_FIELD_META_SUFFIX = ANALYSIS_FREQUENCY_DOMAIN_EIGEN_MODE_FIELD_META_P
  * request.
  */
 export interface ModeFieldComplexBinaryIdentity {
+  readonly artifactGenerationId: string;
   readonly artifactRevision: string;
   readonly binaryEncoding: string;
   readonly fieldId: string;
@@ -77,6 +78,7 @@ export function modeFieldComplexBinaryResourceKey(
     "data:frequency-domain:mode-field:complex",
     identity.runId,
     identity.stageId,
+    identity.artifactGenerationId,
     identity.artifactRevision,
     identity.sampleId,
     identity.modeId,

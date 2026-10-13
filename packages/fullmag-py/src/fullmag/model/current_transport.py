@@ -2,8 +2,14 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+import copy
 import math
-from typing import Protocol, Sequence
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Protocol, Sequence
+
+if TYPE_CHECKING:
+    from fullmag.meshing._antenna_external_lead_preparation import PreparedAntennaExternalLeadSource
+    from fullmag.meshing._gmsh_types import MeshData
 
 from fullmag._validation import (
     as_vector3,
@@ -45,6 +51,7 @@ _FEM_CHARGE_OPERATOR_VERSION = "fem_charge_conforming_h1_p1.transparent.v1"
 _FEM_M2_OPERATOR_VERSION = "fem_charge_spin_conforming_h1_p1.reciprocal_m2.v1"
 _FEM_CLOSED_GEOMETRY_OPERATOR_VERSION = "fem_closed_current_geometry.v1"
 _FEM_EXTERNAL_LEAD_OPERATOR_VERSION = "fem_closed_current_extension.v1"
+_CURRENT_SOURCE_MAX_ITEMS = 4 * (1 << 20)
 
 _TIME_ENVELOPE_TYPES = (
     ConstantEnvelope,
@@ -299,6 +306,21 @@ def _boundary_base(kind: str, id: str, surfaces: Sequence[SurfaceRef]) -> dict[s
 
 
 @dataclass(frozen=True, slots=True)
+class EquipotentialCurrentTerminal:
+    id: str
+    surfaces: tuple[SurfaceRef, ...]
+
+    def __init__(self, id: str, surfaces: Sequence[SurfaceRef]) -> None:
+        object.__setattr__(self, "id", require_non_empty(id, "id"))
+        normalized = tuple(surfaces)
+        _boundary_base("equipotential_current_terminal", id, normalized)
+        object.__setattr__(self, "surfaces", normalized)
+
+    def to_ir(self) -> dict[str, object]:
+        return _boundary_base("equipotential_current_terminal", self.id, self.surfaces)
+
+
+@dataclass(frozen=True, slots=True)
 class VoltageElectrode:
     id: str
     surfaces: tuple[SurfaceRef, ...]
@@ -366,8 +388,8 @@ class ChargePotentialGauge:
 
     def __post_init__(self) -> None:
         normalized = require_non_empty(self.kind, "gauge").lower()
-        if normalized not in {"dirichlet_reference", "zero_mean"}:
-            raise ValueError("gauge must be 'dirichlet_reference' or 'zero_mean'")
+        if normalized not in {"dirichlet_reference", "zero_mean", "terminal_reference"}:
+            raise ValueError("gauge must be 'dirichlet_reference', 'zero_mean', or 'terminal_reference'")
         object.__setattr__(self, "kind", normalized)
 
     def to_ir(self) -> str:
@@ -938,6 +960,442 @@ class ConservativeCurrentView:
         }
 
 
+def _source_text(value: str, field: str) -> str:
+    if not isinstance(value, str) or not value.strip() or "\x00" in value or len(value.encode("utf-8")) > 4096:
+        raise ValueError(f"{field} must be nonempty UTF-8 without NUL, at most 4096 bytes")
+    return value
+
+
+def _source_ids(value: Sequence[int], field: str) -> tuple[int, ...]:
+    ids = _stable_vertex_id_list(value, field)
+    if len(ids) > _CURRENT_SOURCE_MAX_ITEMS or any(i > (1 << 64) - 1 for i in ids):
+        raise ValueError(f"{field} exceeds bounded u64 identity")
+    return ids
+
+
+def _source_face(value: Sequence[int], field: str) -> tuple[int, int, int]:
+    ids = _source_ids(value, field)
+    if len(ids) != 3:
+        raise ValueError(f"{field} must contain three vertex IDs")
+    return tuple(sorted(ids))  # type: ignore[return-value]
+
+
+def _source_freeze(value: object) -> object:
+    if isinstance(value, Mapping):
+        return MappingProxyType({k: _source_freeze(v) for k, v in value.items()})
+    if isinstance(value, (list, tuple)):
+        return tuple(_source_freeze(v) for v in value)
+    if value is None or isinstance(value, (str, bool, int)):
+        return value
+    if isinstance(value, float) and math.isfinite(value):
+        return value
+    raise ValueError("lead_mesh snapshot must contain finite JSON values")
+
+
+def _source_thaw(value: object) -> object:
+    if isinstance(value, Mapping):
+        return {k: _source_thaw(v) for k, v in value.items()}
+    if isinstance(value, tuple):
+        return [_source_thaw(v) for v in value]
+    return copy.deepcopy(value)
+
+
+@dataclass(frozen=True, slots=True)
+class CurrentSourceInterfacePair:
+    id: str
+    device_face_vertex_ids: tuple[int, int, int]
+    lead_face_vertex_ids: tuple[int, int, int]
+    vertex_pairs: tuple[tuple[int, int], ...]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "id", _source_text(self.id, "interface.id"))
+        device = _source_face(self.device_face_vertex_ids, "device_face_vertex_ids")
+        lead = _source_face(self.lead_face_vertex_ids, "lead_face_vertex_ids")
+        pairs = tuple(tuple(p) for p in self.vertex_pairs)
+        if len(pairs) != 3 or any(len(p) != 2 for p in pairs):
+            raise ValueError("vertex_pairs must contain three explicit vertex pairs")
+        _source_ids([p[0] for p in pairs], "vertex_pairs.device")
+        _source_ids([p[1] for p in pairs], "vertex_pairs.lead")
+        if set(p[0] for p in pairs) != set(device) or set(p[1] for p in pairs) != set(lead):
+            raise ValueError("vertex_pairs must be a bijection of the two faces")
+        object.__setattr__(self, "device_face_vertex_ids", device)
+        object.__setattr__(self, "lead_face_vertex_ids", lead)
+        object.__setattr__(self, "vertex_pairs", pairs)
+
+    def to_ir(self) -> dict[str, object]:
+        return {"id": self.id, "device_face_vertex_ids": list(self.device_face_vertex_ids),
+                "lead_face_vertex_ids": list(self.lead_face_vertex_ids),
+                "vertex_pairs": [list(p) for p in self.vertex_pairs]}
+
+
+@dataclass(frozen=True, slots=True)
+class CurrentSourceOuterTerminal:
+    id: str
+    boundary_face_vertex_ids: tuple[tuple[int, int, int], ...]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "id", _source_text(self.id, "outer_terminal.id"))
+        faces = tuple(_source_face(f, "boundary_face_vertex_ids") for f in self.boundary_face_vertex_ids)
+        if not faces or len(faces) > _CURRENT_SOURCE_MAX_ITEMS or len(set(faces)) != len(faces):
+            raise ValueError("outer terminal requires nonempty unique bounded faces")
+        object.__setattr__(self, "boundary_face_vertex_ids", faces)
+
+    def to_ir(self) -> dict[str, object]:
+        return {"id": self.id, "boundary_face_vertex_ids": [list(f) for f in self.boundary_face_vertex_ids]}
+
+
+@dataclass(frozen=True, slots=True)
+class CurrentSourceTerminalObservation:
+    id: str
+    object_id: str
+    interface_pair_ids: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "id", _source_text(self.id, "observation.id"))
+        object.__setattr__(self, "object_id", _source_text(self.object_id, "observation.object_id"))
+        ids = tuple(_source_text(i, "interface_pair_ids") for i in self.interface_pair_ids)
+        if not ids or len(ids) > _CURRENT_SOURCE_MAX_ITEMS or len(set(ids)) != len(ids):
+            raise ValueError("observation requires nonempty unique bounded interface_pair_ids")
+        object.__setattr__(self, "interface_pair_ids", ids)
+
+    def to_ir(self) -> dict[str, object]:
+        return {"id": self.id, "object_id": self.object_id, "interface_pair_ids": list(self.interface_pair_ids)}
+
+
+@dataclass(frozen=True, slots=True)
+class CurrentSourceDrive:
+    id: str
+    port_mode_ref: str
+    outer_terminal_currents_a: Mapping[str, float]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "id", _source_text(self.id, "drive.id"))
+        object.__setattr__(self, "port_mode_ref", _source_text(self.port_mode_ref, "drive.port_mode_ref"))
+        if not isinstance(self.outer_terminal_currents_a, Mapping) or not self.outer_terminal_currents_a:
+            raise ValueError("outer_terminal_currents_a must be a nonempty mapping")
+        currents = {}
+        for key, value in self.outer_terminal_currents_a.items():
+            _source_text(key, "outer_terminal_currents_a key")
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+                raise ValueError("outer_terminal_currents_a must contain finite signed currents")
+            currents[key] = float(value)
+        object.__setattr__(self, "outer_terminal_currents_a", MappingProxyType(currents))
+
+    def to_ir(self) -> dict[str, object]:
+        return {"id": self.id, "port_mode_ref": self.port_mode_ref,
+                "outer_terminal_currents_a": dict(self.outer_terminal_currents_a)}
+
+    def __deepcopy__(self, memo: dict) -> CurrentSourceDrive:
+        return self  # Every retained member is immutable.
+
+
+def _source_mesh(mesh: object) -> dict[str, object]:
+    value = copy.deepcopy(_lead_mesh_to_ir(_source_thaw(mesh) if isinstance(mesh, Mapping) else mesh))
+    required = {"mesh_name", "nodes", "cells", "element_markers", "facets", "boundary_markers"}
+    if not required <= value.keys():
+        raise ValueError("lead_mesh must contain complete MeshIR nodes/cells/facets/markers/name")
+    if value.keys() - required - {"periodic_boundary_pairs", "periodic_node_pairs", "per_domain_quality"}:
+        raise ValueError("lead_mesh contains unknown source MeshIR fields")
+    if any(value.get(field, []) != [] for field in ("periodic_boundary_pairs", "periodic_node_pairs")):
+        raise ValueError("current source lead_mesh does not support periodic relations")
+    _source_text(value["mesh_name"], "lead_mesh.mesh_name")
+    nodes, cells = value["nodes"], value["cells"]
+    if cells.keys() - {"types", "offsets", "nodes", "global_ordinals", "mesh_parts"}:
+        raise ValueError("lead_mesh.cells contains unknown fields")
+    if len(cells["types"]) > 1 << 20 or len(nodes) > 4 * len(cells["types"]):
+        raise ValueError("lead_mesh exceeds bounded tetrahedral support")
+    for xyz in nodes:
+        if not isinstance(xyz, (list, tuple)) or len(xyz) != 3 or any(
+            isinstance(x, bool) or not isinstance(x, (int, float)) or not math.isfinite(x) for x in xyz
+        ):
+            raise ValueError("lead_mesh.nodes must contain finite xyz")
+    offsets, connectivity = cells["offsets"], cells["nodes"]
+    if any(isinstance(i, bool) or not isinstance(i, int) for i in offsets + connectivity):
+        raise ValueError("lead_mesh CSR indices must be integers")
+    if offsets != list(range(0, len(connectivity) + 1, 4)) or any(i < 0 or i >= len(nodes) for i in connectivity):
+        raise ValueError("lead_mesh tet4 CSR offsets or vertex indices are invalid")
+    for start in offsets[:-1]:
+        indices = connectivity[start:start + 4]
+        if len(set(indices)) != 4:
+            raise ValueError("lead_mesh tet4 has repeated vertices")
+        points = [nodes[i] for i in indices]
+        vectors = [[points[i][j] - points[0][j] for j in range(3)] for i in (1, 2, 3)]
+        scale = max(abs(x) for v in vectors for x in v)
+        if not math.isfinite(scale) or scale == 0:
+            raise ValueError("lead_mesh tet4 is singular")
+        a, b, c = [[x / scale for x in v] for v in vectors]
+        determinant = math.fsum((a[0]*(b[1]*c[2]-b[2]*c[1]), -a[1]*(b[0]*c[2]-b[2]*c[0]), a[2]*(b[0]*c[1]-b[1]*c[0])))
+        if not math.isfinite(determinant) or determinant <= 0:
+            raise ValueError("lead_mesh tet4 is singular or inverted")
+    facets = value["facets"]
+    if not isinstance(facets, Mapping) or not all(isinstance(facets.get(k), list) for k in ("types", "roles", "offsets", "nodes")):
+        raise ValueError("lead_mesh.facets must contain Tri3 CSR and roles")
+    if facets.keys() - {"types", "roles", "offsets", "nodes", "global_ordinals"}:
+        raise ValueError("lead_mesh.facets contains unknown fields")
+    count = len(facets["types"])
+    if count > 4 * len(cells["types"]) or len(facets["roles"]) != count or any(isinstance(i, bool) or not isinstance(i, int) for i in facets["offsets"]) or facets["offsets"] != list(range(0, 3 * count + 1, 3)):
+        raise ValueError("lead_mesh facet CSR cardinality is invalid")
+    if any(t != "tri3" for t in facets["types"]) or any(r != "exterior" for r in facets["roles"]):
+        raise ValueError("current source lead_mesh requires exterior tri3 facets only")
+    if len(facets["nodes"]) != 3 * count or any(isinstance(i, bool) or not isinstance(i, int) or not 0 <= i < len(nodes) for i in facets["nodes"]):
+        raise ValueError("lead_mesh facet connectivity is invalid")
+    for field, expected in (("element_markers", len(cells["types"])), ("boundary_markers", count)):
+        markers = value[field]
+        if not isinstance(markers, list) or len(markers) != expected or any(isinstance(i, bool) or not isinstance(i, int) or not 0 < i <= (1 << 31) - 1 for i in markers):
+            raise ValueError(f"lead_mesh.{field} requires one positive native int32 marker per entity")
+    for block, fields in ((cells, ("global_ordinals", "mesh_parts")), (facets, ("global_ordinals",))):
+        for field in fields:
+            if field in block and (not isinstance(block[field], list) or len(block[field]) not in (0, len(block["types"]))):
+                raise ValueError(f"lead_mesh.{field} cardinality is invalid")
+        ordinals = block.get("global_ordinals", [])
+        if any(isinstance(i, bool) or not isinstance(i, int) or not 0 <= i < 1 << 64 for i in ordinals) or len(set(ordinals)) != len(ordinals):
+            raise ValueError("lead_mesh global_ordinals must be unique u64")
+    if any(part not in {"magnetic", "transition_air", "far_air"} for part in cells.get("mesh_parts", [])):
+        raise ValueError("lead_mesh contains unknown mesh_parts")
+    quality = value.get("per_domain_quality", {})
+    metrics = {"n_elements", "sicn_min", "sicn_max", "sicn_mean", "sicn_p5", "gamma_min", "gamma_mean",
+               "volume_min", "volume_max", "volume_mean", "volume_std", "avg_quality"}
+    if not isinstance(quality, Mapping):
+        raise ValueError("lead_mesh.per_domain_quality must be a mapping")
+    for marker, report in quality.items():
+        if not isinstance(marker, str) or not marker.isascii() or not marker.isdecimal() or not 0 <= int(marker) < 1 << 32:
+            raise ValueError("lead_mesh quality marker must be a u32 string")
+        if not isinstance(report, Mapping) or not metrics <= report.keys() or report.keys() - metrics - {"sicn_histogram", "gamma_histogram"}:
+            raise ValueError("lead_mesh quality report has unknown or missing fields")
+        for name in metrics - {"n_elements"}:
+            number = report[name]
+            if isinstance(number, bool) or not isinstance(number, (int, float)) or not math.isfinite(number):
+                raise ValueError("lead_mesh quality metrics must be finite numbers")
+        counts = [report["n_elements"]]
+        for name in ("sicn_histogram", "gamma_histogram"):
+            histogram = report.get(name, [])
+            if not isinstance(histogram, list):
+                raise ValueError("lead_mesh quality histogram must be a list")
+            counts.extend(histogram)
+        if any(isinstance(n, bool) or not isinstance(n, int) or not 0 <= n < 1 << 32 for n in counts):
+            raise ValueError("lead_mesh quality counts must be u32")
+    return value
+
+
+@dataclass(frozen=True, slots=True)
+class TerminalLeadExtension:
+    """Explicit straight extension of a mesh-marked terminal cap, in SI."""
+
+    id: str
+    observation_id: str
+    object_id: str
+    boundary_markers: tuple[int, ...]
+    length_m: float
+    outward_direction_xyz: tuple[float, float, float]
+    conductivity_spm: float
+    layers: int = 2
+
+    def __post_init__(self) -> None:
+        for name in ("id", "observation_id", "object_id"):
+            object.__setattr__(self, name, _source_text(getattr(self, name), name))
+        markers = tuple(self.boundary_markers)
+        if not markers or len(markers) > _CURRENT_SOURCE_MAX_ITEMS or any(
+            type(value) is not int or not 0 < value < 1 << 31 for value in markers
+        ) or len(set(markers)) != len(markers):
+            raise ValueError("boundary_markers must be unique positive native int32 markers")
+        object.__setattr__(self, "boundary_markers", markers)
+        for name in ("length_m", "conductivity_spm"):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
+                raise ValueError(f"{name} must be finite and positive")
+            object.__setattr__(self, name, float(value))
+        direction = tuple(self.outward_direction_xyz)
+        if len(direction) != 3 or any(
+            isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value)
+            for value in direction
+        ) or abs(math.hypot(*direction) - 1.0) > 1e-12:
+            raise ValueError("outward_direction_xyz must be an explicit finite unit vector")
+        object.__setattr__(self, "outward_direction_xyz", tuple(float(v) for v in direction))
+        if type(self.layers) is not int or not 2 <= self.layers <= 1 << 20:
+            raise ValueError("layers must be an exact integer between 2 and the bounded cell budget")
+
+    def to_ir(self) -> dict[str, object]:
+        return {
+            "id": self.id, "observation_id": self.observation_id, "object_id": self.object_id,
+            "boundary_markers": list(self.boundary_markers), "length_m": self.length_m,
+            "outward_direction_xyz": list(self.outward_direction_xyz),
+            "conductivity_spm": self.conductivity_spm, "layers": self.layers,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class ExternalLeadPreparation:
+    """Authored straight-stub intent; preparation requires the actual device mesh."""
+
+    revision: str
+    extensions: tuple[TerminalLeadExtension, ...]
+    drives: tuple[CurrentSourceDrive, ...]
+    schema_version: str = "antenna_external_lead_preparation.v1"
+
+    def __post_init__(self) -> None:
+        if self.schema_version != "antenna_external_lead_preparation.v1":
+            raise ValueError("unsupported external lead preparation schema_version")
+        object.__setattr__(self, "revision", _source_text(self.revision, "preparation.revision"))
+        extensions, drives = tuple(self.extensions), tuple(self.drives)
+        if not 2 <= len(extensions) <= 128 or not all(isinstance(e, TerminalLeadExtension) for e in extensions):
+            raise ValueError("extensions require two or more bounded typed electrodes")
+        for name in ("id", "observation_id"):
+            if len({getattr(e, name) for e in extensions}) != len(extensions):
+                raise ValueError(f"extension {name} values must be unique")
+        marker_count = sum(len(e.boundary_markers) for e in extensions)
+        if marker_count > _CURRENT_SOURCE_MAX_ITEMS:
+            raise ValueError("extension markers must be disjoint and bounded")
+        markers = {marker for e in extensions for marker in e.boundary_markers}
+        if len(markers) != marker_count:
+            raise ValueError("extension markers must be disjoint and bounded")
+        if not drives or len(drives) > _CURRENT_SOURCE_MAX_ITEMS or not all(isinstance(d, CurrentSourceDrive) for d in drives):
+            raise ValueError("drives require bounded explicit CurrentSourceDrive values")
+        if len(drives) * len(extensions) > _CURRENT_SOURCE_MAX_ITEMS:
+            raise ValueError("aggregate drive controls exceed the source item budget")
+        for name in ("id", "port_mode_ref"):
+            if len({getattr(d, name) for d in drives}) != len(drives):
+                raise ValueError(f"drive {name} values must be unique")
+        terminals = {e.id for e in extensions}
+        if any(set(d.outer_terminal_currents_a) != terminals for d in drives):
+            raise ValueError("each drive must cover exactly all outer terminal IDs")
+        object.__setattr__(self, "extensions", extensions)
+        object.__setattr__(self, "drives", drives)
+
+    def to_ir(self) -> dict[str, object]:
+        return {
+            "schema_version": self.schema_version, "kind": "isolated_branch_straight_stubs",
+            "revision": self.revision, "extensions": [e.to_ir() for e in self.extensions],
+            "drives": [d.to_ir() for d in self.drives],
+        }
+
+    def prepare(self, *, device_mesh: MeshData) -> PreparedAntennaExternalLeadSource:
+        from fullmag.meshing._antenna_external_lead_preparation import prepare_antenna_external_lead_source
+
+        return prepare_antenna_external_lead_source(
+            device_mesh=device_mesh, extensions=self.extensions, drives=self.drives, revision=self.revision,
+        )
+
+    def __deepcopy__(self, memo: dict) -> ExternalLeadPreparation:
+        return self
+
+
+@dataclass(frozen=True, slots=True)
+class ExternalLeadCurrentSource:
+    """Expert post-mesh current-driven input, not an accepted field or runtime qualification."""
+    revision: str
+    device_stable_vertex_ids: tuple[int, ...]
+    lead_mesh: Mapping[str, object]
+    lead_stable_vertex_ids: tuple[int, ...]
+    lead_conductivity_spm_per_element: tuple[float, ...]
+    interface_pairs: tuple[CurrentSourceInterfacePair, ...]
+    outer_terminals: tuple[CurrentSourceOuterTerminal, ...]
+    terminal_observations: tuple[CurrentSourceTerminalObservation, ...]
+    drives: tuple[CurrentSourceDrive, ...]
+    schema_version: str = "conservative_current_source.v1"
+
+    def __post_init__(self) -> None:
+        if self.schema_version != "conservative_current_source.v1":
+            raise ValueError("unsupported conservative current source schema_version")
+        object.__setattr__(self, "revision", _source_text(self.revision, "source.revision"))
+        device = _source_ids(self.device_stable_vertex_ids, "device_stable_vertex_ids")
+        lead = _source_ids(self.lead_stable_vertex_ids, "lead_stable_vertex_ids")
+        device_set, lead_set = set(device), set(lead)
+        mesh = _source_mesh(self.lead_mesh)
+        if device_set & lead_set or len(lead) != len(mesh["nodes"]):
+            raise ValueError("device/lead stable IDs must be disjoint and match lead NV")
+        if any(isinstance(s, bool) or not isinstance(s, (int, float)) for s in self.lead_conductivity_spm_per_element):
+            raise ValueError("lead conductivity must contain finite positive numbers")
+        sigma = tuple(require_positive(s, "lead_conductivity_spm_per_element") for s in self.lead_conductivity_spm_per_element)
+        if len(sigma) != len(mesh["cells"]["types"]):
+            raise ValueError("lead conductivity count must match lead NE")
+        groups = (("interface_pairs", CurrentSourceInterfacePair, 1), ("outer_terminals", CurrentSourceOuterTerminal, 2),
+                  ("terminal_observations", CurrentSourceTerminalObservation, 1), ("drives", CurrentSourceDrive, 1))
+        for name, cls, minimum in groups:
+            values = tuple(getattr(self, name))
+            if not minimum <= len(values) <= _CURRENT_SOURCE_MAX_ITEMS or not all(isinstance(v, cls) for v in values):
+                raise ValueError(f"{name} requires bounded typed values")
+            if len({v.id for v in values}) != len(values):
+                raise ValueError(f"{name} IDs must be unique")
+            object.__setattr__(self, name, values)
+        for name, count in (
+            ("outer terminal faces", sum(len(t.boundary_face_vertex_ids) for t in self.outer_terminals)),
+            ("observation pair references", sum(len(o.interface_pair_ids) for o in self.terminal_observations)),
+            ("drive current entries", sum(len(d.outer_terminal_currents_a) for d in self.drives)),
+        ):
+            if count > _CURRENT_SOURCE_MAX_ITEMS:
+                raise ValueError(f"aggregate {name} exceeds bounded current source support")
+        incidence = {}
+        cells = mesh["cells"]
+        for start in cells["offsets"][:-1]:
+            tet = [lead[i] for i in cells["nodes"][start:start + 4]]
+            for omitted in range(4):
+                face = tuple(sorted(tet[:omitted] + tet[omitted + 1:]))
+                incidence[face] = incidence.get(face, 0) + 1
+        if any(count > 2 for count in incidence.values()):
+            raise ValueError("lead mesh has nonmanifold face incidence")
+        exterior = {f for f, count in incidence.items() if count == 1}
+        facets = mesh["facets"]
+        actual_facets = []
+        for ordinal, start in enumerate(facets["offsets"][:-1]):
+            face = tuple(sorted(lead[i] for i in facets["nodes"][start:start + 3]))
+            if len(set(face)) != 3 or face not in incidence:
+                raise ValueError("lead mesh facet is not an actual tetrahedral face")
+            if facets["roles"][ordinal] == "exterior":
+                actual_facets.append(face)
+            elif incidence[face] != 2:
+                raise ValueError("lead mesh non-exterior facet has no internal incidence")
+        if len(set(actual_facets)) != len(actual_facets) or set(actual_facets) != exterior:
+            raise ValueError("lead mesh exterior facets must cover exactly the actual boundary")
+        device_faces, lead_faces = set(), set()
+        for pair in self.interface_pairs:
+            if not set(pair.device_face_vertex_ids) <= device_set or pair.lead_face_vertex_ids not in exterior:
+                raise ValueError("interface face membership or actual lead exterior ownership is invalid")
+            if pair.device_face_vertex_ids in device_faces or pair.lead_face_vertex_ids in lead_faces:
+                raise ValueError("interface face ownership must be unique")
+            device_faces.add(pair.device_face_vertex_ids)
+            lead_faces.add(pair.lead_face_vertex_ids)
+        occupied = {i for f in lead_faces for i in f}
+        for terminal in self.outer_terminals:
+            faces = set(terminal.boundary_face_vertex_ids)
+            vertices = {i for f in faces for i in f}
+            if not faces <= exterior or vertices & occupied:
+                raise ValueError("outer terminal exterior faces must have disjoint electrode/trace DOF")
+            occupied.update(vertices)
+        pair_map = {p.id: p for p in self.interface_pairs}
+        covered, observed_vertices = set(), set()
+        for observation in self.terminal_observations:
+            ids = set(observation.interface_pair_ids)
+            if not ids <= pair_map.keys() or ids & covered:
+                raise ValueError("observations must partition all interface_pair_ids")
+            vertices = {i for p in ids for i in pair_map[p].device_face_vertex_ids}
+            if vertices & observed_vertices:
+                raise ValueError("observations cannot share device reaction DOF")
+            covered.update(ids)
+            observed_vertices.update(vertices)
+        if covered != pair_map.keys():
+            raise ValueError("observations must partition all interface_pair_ids")
+        if len({d.port_mode_ref for d in self.drives}) != len(self.drives):
+            raise ValueError("drive port_mode_ref must be unique")
+        terminals = {t.id for t in self.outer_terminals}
+        if any(set(d.outer_terminal_currents_a) != terminals for d in self.drives):
+            raise ValueError("each drive must cover exactly all outer terminal IDs")
+        object.__setattr__(self, "device_stable_vertex_ids", device)
+        object.__setattr__(self, "lead_stable_vertex_ids", lead)
+        object.__setattr__(self, "lead_conductivity_spm_per_element", sigma)
+        object.__setattr__(self, "lead_mesh", _source_freeze(mesh))
+
+    def to_ir(self) -> dict[str, object]:
+        return {"schema_version": self.schema_version, "kind": "external_lead_current", "revision": self.revision,
+                "device_stable_vertex_ids": list(self.device_stable_vertex_ids), "lead_mesh": _source_thaw(self.lead_mesh),
+                "lead_stable_vertex_ids": list(self.lead_stable_vertex_ids),
+                "lead_conductivity_spm_per_element": list(self.lead_conductivity_spm_per_element),
+                **{name: [v.to_ir() for v in getattr(self, name)] for name in
+                   ("interface_pairs", "outer_terminals", "terminal_observations", "drives")}}
+
+    def __deepcopy__(self, memo: dict) -> ExternalLeadCurrentSource:
+        return self  # The mesh, controls and authored maps are immutable snapshots.
+
+
 @dataclass(frozen=True, slots=True)
 class CurrentTransport:
     """Charge-current transport module for torque and device-level workflows.
@@ -964,6 +1422,8 @@ class CurrentTransport:
     time_envelope: TimeEnvelope | None = None
     conservative_current_view: ConservativeCurrentView | None = None
     structured_current_closure: StructuredCurrentClosure | None = None
+    conservative_current_source: ExternalLeadCurrentSource | None = None
+    external_lead_preparation: ExternalLeadPreparation | None = None
 
     def __init__(
         self,
@@ -982,6 +1442,8 @@ class CurrentTransport:
         time_envelope: TimeEnvelope | None = None,
         conservative_current_view: ConservativeCurrentView | None = None,
         structured_current_closure: StructuredCurrentClosure | None = None,
+        conservative_current_source: ExternalLeadCurrentSource | None = None,
+        external_lead_preparation: ExternalLeadPreparation | None = None,
     ) -> None:
         raw_model = require_non_empty(model, "model").lower()
         resolved_magnetoresistive_model = raw_model == "magnetoresistive_poisson"
@@ -1018,10 +1480,14 @@ class CurrentTransport:
                 "time_envelope must be one of the canonical TimeEnvelope values"
             )
         object.__setattr__(self, "time_envelope", time_envelope)
-        if conservative_current_view is not None and structured_current_closure is not None:
+        if sum(v is not None for v in (conservative_current_view, structured_current_closure, conservative_current_source, external_lead_preparation)) > 1:
             raise ValueError(
-                "conservative_current_view and structured_current_closure are mutually exclusive"
+                "conservative_current_view, structured_current_closure, conservative_current_source and external_lead_preparation are mutually exclusive"
             )
+        if external_lead_preparation is not None and not isinstance(external_lead_preparation, ExternalLeadPreparation):
+            raise TypeError("external_lead_preparation must be ExternalLeadPreparation")
+        if conservative_current_source is not None and not isinstance(conservative_current_source, ExternalLeadCurrentSource):
+            raise TypeError("conservative_current_source must be ExternalLeadCurrentSource")
         if conservative_current_view is not None and not isinstance(
             conservative_current_view, ConservativeCurrentView
         ):
@@ -1042,6 +1508,34 @@ class CurrentTransport:
                 "bidirectional current transport requires model='ohmic_poisson'"
             )
         object.__setattr__(self, "coupling", normalized_coupling)
+        terminal_boundaries = tuple(
+            item for item in normalized_boundaries if isinstance(item, EquipotentialCurrentTerminal)
+        )
+        if terminal_boundaries:
+            if normalized_model != "ohmic_poisson" or normalized_coupling != "one_way":
+                raise ValueError("equipotential current terminals require one-way ohmic_poisson")
+            if gauge is None or gauge.kind != "terminal_reference":
+                raise ValueError("equipotential current terminals require gauge='terminal_reference'")
+            if any(isinstance(item, (VoltageElectrode, NormalCurrentElectrode)) for item in normalized_boundaries):
+                raise ValueError("equipotential current terminals cannot mix with voltage or current-density electrodes")
+        elif conservative_current_source is None and external_lead_preparation is None and gauge is not None and gauge.kind == "terminal_reference":
+            raise ValueError("gauge='terminal_reference' requires equipotential current terminals")
+        if conservative_current_source is not None or external_lead_preparation is not None:
+            source_field = "conservative_current_source" if conservative_current_source is not None else "external_lead_preparation"
+            if normalized_model != "ohmic_poisson" or normalized_coupling != "one_way":
+                raise ValueError(f"{source_field} requires complete one-way ohmic_poisson")
+            if normalized_boundaries:
+                raise ValueError(f"{source_field} requires empty boundaries")
+            if time_envelope is not None:
+                raise ValueError(f"{source_field} is static precompute; time_envelope belongs to the downstream antenna drive")
+            if gauge is None or gauge.kind != "terminal_reference":
+                raise ValueError(f"{source_field} requires gauge='terminal_reference'")
+            if solver is None or solver.engine != "cg" or solver.operator_version != _FEM_CHARGE_OPERATOR_VERSION:
+                raise ValueError(f"{source_field} requires the FEM H1 charge operator and cg")
+        if external_lead_preparation is not None:
+            domain_objects = {region.object_id for region in normalized_domain}
+            if any(extension.object_id not in domain_objects for extension in external_lead_preparation.extensions):
+                raise ValueError("external_lead_preparation extensions must belong to the charge domain")
         if conservative_current_view is not None and (
             normalized_model != "ohmic_poisson" or normalized_coupling != "one_way"
         ):
@@ -1085,6 +1579,8 @@ class CurrentTransport:
         )
         object.__setattr__(self, "conservative_current_view", conservative_current_view)
         object.__setattr__(self, "structured_current_closure", structured_current_closure)
+        object.__setattr__(self, "conservative_current_source", conservative_current_source)
+        object.__setattr__(self, "external_lead_preparation", external_lead_preparation)
 
         if normalized_model == "prescribed_density":
             if current_density is None:
@@ -1098,7 +1594,7 @@ class CurrentTransport:
         elif (
             not normalized_domain
             or not normalized_materials
-            or not normalized_boundaries
+            or (not normalized_boundaries and conservative_current_source is None and external_lead_preparation is None)
             or gauge is None
             or solver is None
         ):
@@ -1157,7 +1653,7 @@ class CurrentTransport:
             ir["domain"] = [region.to_ir() for region in self.domain]
         if self.materials:
             ir["materials"] = [assignment.to_ir() for assignment in self.materials]
-        if self.boundaries:
+        if self.boundaries or self.conservative_current_source is not None or self.external_lead_preparation is not None:
             ir["boundaries"] = [boundary.to_ir() for boundary in self.boundaries]
         if self.gauge is not None:
             ir["gauge"] = self.gauge.to_ir()
@@ -1169,10 +1665,21 @@ class CurrentTransport:
             ir["conservative_current_view"] = self.conservative_current_view.to_ir()
         if self.structured_current_closure is not None:
             ir["structured_current_closure"] = self.structured_current_closure.to_ir()
+        if self.conservative_current_source is not None:
+            ir["conservative_current_source"] = self.conservative_current_source.to_ir()
+        if self.external_lead_preparation is not None:
+            ir["external_lead_preparation"] = self.external_lead_preparation.to_ir()
         return ir
 
 
 __all__ = [
+    "ExternalLeadPreparation",
+    "TerminalLeadExtension",
+    "ExternalLeadCurrentSource",
+    "CurrentSourceInterfacePair",
+    "CurrentSourceOuterTerminal",
+    "CurrentSourceTerminalObservation",
+    "CurrentSourceDrive",
     "CURRENT_TRANSPORT_COUPLINGS",
     "CURRENT_TRANSPORT_MODELS",
     "CONSERVATIVE_CURRENT_BOUNDARY_ROLES",
@@ -1185,6 +1692,7 @@ __all__ = [
     "ChargeTransportMaterial",
     "ChargeTransportMaterialAssignment",
     "CurrentTransport",
+    "EquipotentialCurrentTerminal",
     "ConservativeCurrentBoundaryFace",
     "ConservativeCurrentClosedGeometry",
     "ConservativeCurrentExternalLead",

@@ -10,6 +10,10 @@ use anyhow::{anyhow, Result};
 type LivePublishSink =
     Arc<dyn Fn(&str, &CurrentLiveSnapshotPayload) -> Result<()> + Send + Sync + 'static>;
 
+#[path = "terminal_publication.rs"]
+mod terminal_publication;
+use terminal_publication::TerminalPublication;
+
 use crate::communication_policy::{
     LIVE_PUBLISH_FAST_INTERVAL, LIVE_PUBLISH_MIN_INTERVAL, LIVE_SCALAR_TELEMETRY_INTERVAL,
 };
@@ -486,7 +490,7 @@ impl LocalLiveWorkspace {
         Ok(())
     }
 
-    fn current_artifact_dir(&self) -> Result<PathBuf> {
+    pub(crate) fn current_artifact_dir(&self) -> Result<PathBuf> {
         let path = self
             .state
             .lock()
@@ -521,9 +525,45 @@ impl LocalLiveWorkspace {
         self.publisher.request_publish();
     }
 
+    /// Wait for this immutable terminal snapshot, not for a momentarily idle queue.
+    pub fn publish_terminal_and_wait(&self, timeout: std::time::Duration) -> Result<()> {
+        if !self.publisher.terminal.enabled() {
+            return Ok(());
+        }
+        let state = self.state.lock().map_err(|_| anyhow!("terminal workspace lock poisoned"))?;
+        let mut preview = state.preview_fields.clone();
+        for field in state.pending_preview_fields.to_vec() {
+            if preview.get(&field.quantity).is_none_or(|current| {
+                !preview_field_source_precedence(&field)
+                    .cmp(&preview_field_source_precedence(current))
+                    .is_lt()
+            }) {
+                preview.insert(field);
+            }
+        }
+        let mut snapshot = state.build_publish_payload(true, Some(preview.to_vec()), state.clear_preview_cache);
+        // The serial worker drains the canonical replacement transaction first.
+        // Replaying its generation can make the API skip terminal metadata.
+        snapshot.replace_latest_fields = false;
+        snapshot.field_generation = None;
+        snapshot.latest_fields = Some(state.latest_fields.clone());
+        drop(state);
+        self.publisher.terminal.publish_and_wait(snapshot, timeout, &self.publisher.wake_tx)
+    }
+
     pub fn push_log(&self, level: &str, message: impl Into<String>) {
         if let Ok(mut state) = self.state.lock() {
             push_engine_log(&mut state.engine_log, level, message);
+        }
+        self.publish_snapshot();
+    }
+
+    pub fn push_command_log(&self, command_id: &str, level: &str, message: impl Into<String>) {
+        if let Ok(mut state) = self.state.lock() {
+            push_engine_log(&mut state.engine_log, level, message);
+            if let Some(entry) = state.engine_log.last_mut() {
+                entry.command_id = Some(command_id.to_string());
+            }
         }
         self.publish_snapshot();
     }
@@ -798,6 +838,9 @@ impl LocalLiveWorkspace {
 fn scalar_candidate_from_workspace_state(
     state: &LocalLiveWorkspaceState,
 ) -> Option<(ScalarSequenceKey, CurrentLiveScalarRow, bool)> {
+    if !state.live_state.latest_step.is_physical_observation() {
+        return None;
+    }
     let finished = state.live_state.latest_step.finished
         || state.live_state.status == "completed"
         || state.run.status == "completed"
@@ -816,7 +859,9 @@ fn scalar_candidate_from_workspace_state(
     state
         .latest_scalar_row
         .clone()
-        .filter(|row| row.step == state.live_state.latest_step.step)
+        .filter(|row| {
+            row.step == state.live_state.latest_step.step && row.is_physical_observation()
+        })
         .map(|row| {
             (
                 ScalarSequenceKey {
@@ -1470,6 +1515,7 @@ pub(crate) struct CurrentLivePublisher {
     last_request_at: Arc<Mutex<Option<Instant>>>,
     state_source: Arc<Mutex<Option<Arc<Mutex<LocalLiveWorkspaceState>>>>>,
     wake_tx: mpsc::SyncSender<()>,
+    terminal: Arc<TerminalPublication>,
 }
 
 #[derive(Debug, Default)]
@@ -1509,6 +1555,9 @@ impl PendingScalarRows {
         finished: bool,
         gate: &mut LiveTelemetryPublishGate,
     ) {
+        if row.validate_record_kind().is_err() || row.kind.is_solver_progress() {
+            return;
+        }
         {
             let cursor = self.latest_by_sequence.entry(sequence.clone()).or_default();
             let same_step = cursor.latest_seen_step == Some(row.step);
@@ -1652,6 +1701,7 @@ impl CurrentLivePublisher {
             last_request_at: Arc::new(Mutex::new(None)),
             state_source: Arc::new(Mutex::new(None)),
             wake_tx,
+            terminal: Arc::new(TerminalPublication::new(false)),
         }
     }
 
@@ -1702,6 +1752,8 @@ impl CurrentLivePublisher {
         let worker_last_request_at = Arc::clone(&last_request_at);
         let worker_state_source = Arc::clone(&state_source);
         let worker_session_id = session_id.to_string();
+        let terminal = Arc::new(TerminalPublication::new(true));
+        let worker_terminal = Arc::clone(&terminal);
         let thread_name = format!("fullmag-live-publisher-{session_id}");
         std::thread::Builder::new()
             .name(thread_name)
@@ -1725,6 +1777,7 @@ impl CurrentLivePublisher {
                     delta_sink,
                     full_sink,
                     wake_rx,
+                    worker_terminal,
                 )
             })
             .expect("current live publisher thread should spawn");
@@ -1742,6 +1795,7 @@ impl CurrentLivePublisher {
             last_request_at,
             state_source,
             wake_tx,
+            terminal,
         }
     }
 
@@ -2376,6 +2430,61 @@ mod tests {
         assert!(!super::should_ingest_preview_fields_from_update(
             true, &terminal
         ));
+    }
+
+    #[test]
+    fn nonphysical_and_contradictory_updates_cannot_ingest_preview_fields() {
+        let mut state = workspace_with_domain_mesh().snapshot();
+        let accepted = preview_field("H_eff", 1, 1.0);
+        replace_cached_preview_fields(&mut state, vec![accepted]);
+        let accepted_values = state.preview_fields.to_vec()[0].vector_field_values.clone();
+
+        let cases = [
+            (
+                fullmag_quantities::StepDataKind::LegacyUnclassified,
+                None,
+            ),
+            (
+                fullmag_quantities::StepDataKind::SolverProgress,
+                Some(fullmag_quantities::SolverProgress::FemEigen {
+                    metrics: HashMap::from([("progress_fraction".into(), 0.5)]),
+                }),
+            ),
+            (
+                fullmag_quantities::StepDataKind::PhysicalObservation,
+                Some(fullmag_quantities::SolverProgress::FemEigen {
+                    metrics: HashMap::from([("progress_fraction".into(), 0.5)]),
+                }),
+            ),
+        ];
+
+        for (kind, solver_progress) in cases {
+            let mut incoming = preview_field("H_demag", 2, 2.0);
+            incoming.spatial_kind = "grid".to_string();
+            incoming.quantity_domain = "full_domain".to_string();
+            incoming.preview_grid = [1, 1, 1];
+            incoming.original_grid = [1, 1, 1];
+            incoming.vector_field_values = vec![0.0, 0.0, 2.0];
+            let mut update = preview_update(incoming.clone());
+            update.stats.kind = kind.clone();
+            update.stats.solver_progress = solver_progress;
+            update.cached_preview_fields = Some(vec![incoming]);
+            update.grid = [1, 1, 1];
+
+            assert!(!super::should_ingest_preview_fields_from_update(
+                false, &update
+            ));
+            ingest_preview_fields_from_update(&mut state, &mut update);
+
+            assert!(state.latest_fields.0.get("H_demag").is_none());
+            assert!(state.pending_preview_fields.is_empty());
+            assert_eq!(
+                state.preview_fields.to_vec()[0].vector_field_values,
+                accepted_values
+            );
+            assert!(update.preview_field.is_none());
+            assert!(update.cached_preview_fields.is_none());
+        }
     }
 
     #[test]
@@ -3274,6 +3383,35 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![1.0e-12, 1.1e-12],
         );
+    }
+
+    #[test]
+    fn scalar_candidate_uses_kind_and_preserves_legal_progress_object_ids() {
+        let mut state = workspace_with_domain_mesh().snapshot();
+        state.live_state.latest_step.step = 1;
+        state.latest_scalar_row = Some(scalar_row(1));
+        assert!(scalar_candidate_from_workspace_state(&state).is_some());
+        state.live_state.latest_step.kind = fullmag_quantities::StepDataKind::SolverProgress;
+        state.live_state.latest_step.solver_progress = Some(
+            fullmag_quantities::SolverProgress::FemEigen {
+                metrics: HashMap::from([("percent".into(), 25.0)]),
+            },
+        );
+        assert!(scalar_candidate_from_workspace_state(&state).is_none());
+        state.live_state.latest_step.kind = fullmag_quantities::StepDataKind::PhysicalObservation;
+        state.live_state.latest_step.solver_progress = None;
+        state
+            .latest_scalar_row
+            .as_mut()
+            .unwrap()
+            .per_object_scalars
+            .insert("fem_eigen_progress".into(), HashMap::from([("measured".into(), 2.0)]));
+        state
+            .live_state
+            .latest_step
+            .per_object_scalars
+            .insert("fem_eigen_progress".into(), HashMap::from([("measured".into(), 2.0)]));
+        assert!(scalar_candidate_from_workspace_state(&state).is_some());
     }
 
     #[test]
@@ -4703,6 +4841,8 @@ mod tests {
 
     fn scalar_row(step: u64) -> CurrentLiveScalarRow {
         CurrentLiveScalarRow {
+            kind: fullmag_quantities::StepDataKind::PhysicalObservation,
+            solver_progress: None,
             step,
             time: step as f64,
             solver_dt: 1.0,
@@ -5251,10 +5391,13 @@ fn current_live_publisher_loop(
     delta_sink: LivePublishSink,
     full_sink: LivePublishSink,
     wake_rx: mpsc::Receiver<()>,
+    terminal: Arc<TerminalPublication>,
 ) {
     const LIVENESS_HEARTBEAT_INTERVAL: std::time::Duration = std::time::Duration::from_secs(10);
+    let configured_publish_interval = configured_live_publish_interval();
     let mut last_publish_at: Option<Instant> = None;
     let mut successful_publish_window = SuccessfulPublishWindow::default();
+    let mut has_published = false;
     let mut slow_publish_count: u64 = 0;
     loop {
         match wake_rx.recv_timeout(LIVENESS_HEARTBEAT_INTERVAL) {
@@ -5270,6 +5413,9 @@ fn current_live_publisher_loop(
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
         }
+        publish_requested_terminal(&terminal, &session_id, enable_api_fallback,
+            &delta_sink, &full_sink, &diagnostics, &mut successful_publish_window,
+            &pending_scalar_rows, &state_source, &payload, &scalar_gate, &mut has_published);
         if owner_session_lost(&session_id, enable_api_fallback) {
             return;
         }
@@ -5277,20 +5423,28 @@ fn current_live_publisher_loop(
             std::thread::sleep(coalesce_delay);
         }
         while pending.swap(false, Ordering::AcqRel) {
+            publish_requested_terminal(&terminal, &session_id, enable_api_fallback,
+                &delta_sink, &full_sink, &diagnostics, &mut successful_publish_window,
+                &pending_scalar_rows, &state_source, &payload, &scalar_gate, &mut has_published);
             if owner_session_lost(&session_id, enable_api_fallback) {
                 return;
             }
-            let min_interval = if fast_mode.load(Ordering::Acquire) {
-                LIVE_PUBLISH_FAST_INTERVAL
-            } else {
-                LIVE_PUBLISH_MIN_INTERVAL
-            };
+            let min_interval = configured_publish_interval.unwrap_or_else(|| {
+                if fast_mode.load(Ordering::Acquire) {
+                    LIVE_PUBLISH_FAST_INTERVAL
+                } else {
+                    LIVE_PUBLISH_MIN_INTERVAL
+                }
+            });
             if let Some(last_publish_at) = last_publish_at {
                 let elapsed = last_publish_at.elapsed();
                 if elapsed < min_interval {
                     std::thread::sleep(min_interval - elapsed);
                 }
             }
+            // A failed delta may already have accepted its session frame.
+            // After any attempt, an empty API must not be resurrected.
+            has_published = true;
             let scalar_publish_error =
                 publish_pending_scalar_rows(&session_id, &pending_scalar_rows, &delta_sink).err();
             if scalar_publish_error.is_some() {
@@ -5378,6 +5532,7 @@ fn current_live_publisher_loop(
                 }
             }
             if publish_result.succeeded() {
+                has_published = true;
                 if let Ok(mut slot) = payload.lock() {
                     acknowledge_terminal_field_publish(&mut slot, &snapshot);
                 }
@@ -5483,6 +5638,120 @@ fn current_live_publisher_loop(
             eprintln!("fullmag final live scalar sync warning: {error:#}");
         }
     }
+}
+
+/// Allow large interactive runs to trade update frequency for solver throughput.
+/// The default communication policy remains unchanged; an explicit positive
+/// millisecond value is required to opt in to a slower UI publication cadence.
+fn configured_live_publish_interval() -> Option<std::time::Duration> {
+    let value = std::env::var("FULLMAG_LIVE_PUBLISH_INTERVAL_MS").ok()?;
+    let millis = value.trim().parse::<u64>().ok()?;
+    (millis > 0).then(|| std::time::Duration::from_millis(millis))
+}
+
+fn publish_requested_terminal(
+    terminal: &TerminalPublication,
+    session_id: &str,
+    verify_api_owner: bool,
+    delta_sink: &LivePublishSink,
+    full_sink: &LivePublishSink,
+    diagnostics: &Arc<Mutex<fullmag_runner::LivePublisherDiagnostics>>,
+    successful_publish_window: &mut SuccessfulPublishWindow,
+    pending_scalar_rows: &Arc<Mutex<PendingScalarRows>>,
+    state_source: &Arc<Mutex<Option<Arc<Mutex<LocalLiveWorkspaceState>>>>>,
+    payload: &Arc<Mutex<CurrentLiveSnapshotPayload>>,
+    scalar_gate: &Arc<Mutex<LiveTelemetryPublishGate>>,
+    has_published: &mut bool,
+) {
+    terminal.process(session_id, |identity| {
+        terminal_workspace_owner(state_source, identity)?;
+        Ok(())
+    }, |identity, snapshot| {
+        // Preserve queued scalar history and the existing generation-aware
+        // field replacement before acknowledging the immutable terminal state.
+        build_pending_payload_from_workspace(state_source, payload, scalar_gate, diagnostics);
+        let queued = payload.lock().map_err(|_| anyhow!("terminal pending payload lock poisoned"))?.clone();
+        terminal_payload_owner(&queued, identity)?;
+        let owner = if verify_api_owner {
+            match crate::control_room::capture_terminal_snapshot_owner(session_id, &identity.run_id)? {
+                Some(owner) => Some(owner),
+                None if !*has_published => {
+                    let empty = crate::control_room::TerminalSnapshotOwner {
+                        session_id: session_id.into(), run_id: identity.run_id.clone(),
+                        session_epoch: None, request_scope_epoch: None, require_empty: true,
+                    };
+                    let mut bootstrap = queued.clone();
+                    // Admit ownership before ordered scalar history; inserting
+                    // the latest row first would discard earlier queued rows.
+                    bootstrap.latest_scalar_row = None;
+                    crate::control_room::sync_current_live_terminal_snapshot(session_id, &bootstrap, &empty)?;
+                    *has_published = true;
+                    Some(crate::control_room::capture_terminal_snapshot_owner(session_id, &identity.run_id)?
+                        .ok_or_else(|| anyhow!("terminal bootstrap owner disappeared"))?)
+                }
+                None => return Err(anyhow!("previously published terminal owner disappeared")),
+            }
+        } else { None };
+        let guarded: LivePublishSink = if let Some(owner) = owner.as_ref() {
+            let owner = owner.clone();
+            Arc::new(move |session, snapshot| crate::control_room::sync_current_live_terminal_snapshot(session, snapshot, &owner))
+        } else { Arc::clone(full_sink) };
+        let scalar_sink = if verify_api_owner { &guarded } else { delta_sink };
+        publish_pending_scalar_rows(session_id, pending_scalar_rows, scalar_sink)?;
+        guarded(session_id, &queued)?;
+        *has_published = true;
+        {
+            let mut slot = payload.lock().map_err(|_| anyhow!("terminal pending payload lock poisoned"))?;
+            acknowledge_terminal_field_publish(&mut slot, &queued);
+        }
+        terminal_workspace_owner(state_source, identity)?;
+        // Both paths are full snapshots: a successful session-frame alone
+        // must never acknowledge terminal publication.
+        let mut primary = |owner: &str, payload: &CurrentLiveSnapshotPayload| guarded(owner, payload);
+        let mut fallback = |owner: &str, payload: &CurrentLiveSnapshotPayload| guarded(owner, payload);
+        let result = publish_final_snapshot_with_diagnostics(session_id, snapshot, diagnostics,
+            successful_publish_window, false, &mut primary, &mut fallback);
+        if !result.primary.succeeded() {
+            return Err(result.primary.delta_error.unwrap_or_else(|| anyhow!("terminal snapshot publication failed")));
+        }
+        if let Some(error) = result.authoritative_error {
+            return Err(error);
+        }
+        if let Some(expected) = owner {
+            let actual = crate::control_room::capture_terminal_snapshot_owner(session_id, &identity.run_id)?;
+            if actual.as_ref() != Some(&expected) {
+                return Err(anyhow!("terminal publication owner changed before ACK"));
+            }
+        }
+        Ok(())
+    });
+}
+
+fn terminal_payload_owner(
+    snapshot: &CurrentLiveSnapshotPayload,
+    identity: &terminal_publication::PublicationIdentity,
+) -> Result<()> {
+    let session = snapshot.session.as_ref().ok_or_else(|| anyhow!("terminal queued session absent"))?;
+    let run = snapshot.run.as_ref().ok_or_else(|| anyhow!("terminal queued run absent"))?;
+    if session.session_id != identity.session_id || session.run_id != identity.run_id
+        || run.session_id != identity.session_id || run.run_id != identity.run_id {
+        return Err(anyhow!("terminal queued payload owner changed"));
+    }
+    Ok(())
+}
+
+fn terminal_workspace_owner(
+    state_source: &Arc<Mutex<Option<Arc<Mutex<LocalLiveWorkspaceState>>>>>,
+    identity: &terminal_publication::PublicationIdentity,
+) -> Result<()> {
+    let source = state_source.lock().map_err(|_| anyhow!("terminal state source lock poisoned"))?
+        .clone().ok_or_else(|| anyhow!("terminal state source absent"))?;
+    let state = source.lock().map_err(|_| anyhow!("terminal workspace lock poisoned"))?;
+    if state.session.session_id != identity.session_id || state.session.run_id != identity.run_id
+        || state.run.session_id != identity.session_id || state.run.run_id != identity.run_id {
+        return Err(anyhow!("terminal local workspace owner changed"));
+    }
+    Ok(())
 }
 
 fn owner_session_lost(session_id: &str, enabled: bool) -> bool {
@@ -5623,6 +5892,8 @@ pub(crate) fn bootstrap_live_state(status: &str) -> LiveStateManifest {
         runtime_status: Some(fullmag_runner::RuntimeStatus::from_status_code(status)),
         updated_at_unix_ms: unix_time_millis().unwrap_or(0),
         latest_step: LiveStepView {
+            kind: fullmag_quantities::StepDataKind::PhysicalObservation,
+            solver_progress: None,
             step: 0,
             time: 0.0,
             dt: 0.0,
@@ -5674,6 +5945,8 @@ fn scalar_row_from_stats_with_active_runtime(
     active_runtime_s: f64,
 ) -> CurrentLiveScalarRow {
     CurrentLiveScalarRow {
+        kind: stats.kind.clone(),
+        solver_progress: stats.solver_progress.clone(),
         step: stats.step,
         time: stats.time,
         solver_dt: stats.dt,
@@ -5724,6 +5997,11 @@ fn set_latest_scalar_row(
     update: &fullmag_runner::StepUpdate,
     force: bool,
 ) {
+    // A solver progress record has no measured physical scalar row, even
+    // when a terminal/forced publication is requested.
+    if update.stats.validate_record_kind().is_err() || update.stats.kind.is_solver_progress() {
+        return;
+    }
     // Skip scalar row accumulation if charts are disabled (benchmark mode)
     if feature_flags().disable_charts {
         return;
@@ -6094,7 +6372,8 @@ fn should_ingest_preview_fields_from_update(
     preview_3d_disabled: bool,
     update: &fullmag_runner::StepUpdate,
 ) -> bool {
-    !preview_3d_disabled || terminal_authoritative_field_update(update)
+    update.stats.is_physical_observation()
+        && (!preview_3d_disabled || terminal_authoritative_field_update(update))
 }
 
 fn mesh_build_stage_status(

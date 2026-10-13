@@ -1,0 +1,2317 @@
+{
+  "schema": "fullmag.air-matrix231-static-gate-diagnostic.v1",
+  "observed_at_utc": "2026-10-04T21:28:07.828008+00:00",
+  "verifier_sha256": "15562209340fdda23df823587bb123a694e31e5194292067dd9968d463995f36",
+  "verifier_exit_code": 1,
+  "failed_gate": "all static field differences within comparison bounds, verifier line 123",
+  "tolerance_relaxed": false,
+  "operator_or_runtime_changed": false,
+  "cases": [
+    {
+      "root": "C:\\git\\fullmag\\storage\\runs\\eigensolve-dispersion-plan-20260-c5dfad6d7f548079\\3e3b5a6123934d8b8f63cfbf02ccad55\\comsol-dispersion\\45128809bd124fa1a3a2cb6128162e37",
+      "k_rad_per_um": 10,
+      "requested_growth": "1.3",
+      "actual_growth": 1.3,
+      "frequency_hz": 11205285324.366156,
+      "relative_residual_l2": 1.5681851037025842e-11,
+      "certification_tolerance": 1e-08,
+      "selection_scope": "frequency_window",
+      "nodes": 6138,
+      "tetrahedra": 30012,
+      "magnetic_nodes": 396,
+      "magnetic_tetrahedra": 1476,
+      "body_volume_m3": 1.6000000000000008e-23,
+      "body_z_planes_m": [
+        -5e-09,
+        -1.666666666666667e-09,
+        1.6666666666666665e-09,
+        4.999999999999999e-09
+      ],
+      "all_z_planes_m": [
+        -2.005e-06,
+        -1.9766347520413493e-06,
+        -1.8766347520413494e-06,
+        -1.7766347520413495e-06,
+        -1.6766347520413496e-06,
+        -1.5766347520413497e-06,
+        -1.4766347520413499e-06,
+        -1.37663475204135e-06,
+        -1.27663475204135e-06,
+        -1.1766347520413502e-06,
+        -1.0766347520413503e-06,
+        -9.766347520413502e-07,
+        -8.766347520413502e-07,
+        -7.766347520413502e-07,
+        -6.766347520413502e-07,
+        -5.766347520413502e-07,
+        -4.7663475204135017e-07,
+        -3.766347520413502e-07,
+        -2.870267323395001e-07,
+        -2.180974864150001e-07,
+        -1.6507498955000007e-07,
+        -1.2428845350000004e-07,
+        -9.291419500000003e-08,
+        -6.878015000000001e-08,
+        -5.0215500000000004e-08,
+        -3.5935000000000004e-08,
+        -2.4950000000000005e-08,
+        -1.6500000000000002e-08,
+        -1e-08,
+        -5e-09,
+        -1.666666666666667e-09,
+        1.6666666666666665e-09,
+        4.999999999999999e-09,
+        9.999999999999999e-09,
+        1.6500000000000002e-08,
+        2.4950000000000005e-08,
+        3.5935000000000004e-08,
+        5.0215500000000004e-08,
+        6.878015000000001e-08,
+        9.291419500000003e-08,
+        1.2428845350000004e-07,
+        1.6507498955000007e-07,
+        2.180974864150001e-07,
+        2.870267323395001e-07,
+        3.766347520413502e-07,
+        4.7663475204135017e-07,
+        5.766347520413502e-07,
+        6.766347520413502e-07,
+        7.766347520413502e-07,
+        8.766347520413502e-07,
+        9.766347520413502e-07,
+        1.0766347520413503e-06,
+        1.1766347520413502e-06,
+        1.27663475204135e-06,
+        1.37663475204135e-06,
+        1.4766347520413499e-06,
+        1.5766347520413497e-06,
+        1.6766347520413496e-06,
+        1.7766347520413495e-06,
+        1.8766347520413494e-06,
+        1.9766347520413493e-06,
+        2.005e-06
+      ],
+      "body_coordinate_digest": "4c06592d1a93b2db96e484c0010d3e57ab73229cc7e3b71a5636129f8e419b3e",
+      "body_tetra_digest": "201ab3550f89cdaf2e2ff61699f11eaa7505e882aeb78a5f7bb8ae777aa851f1",
+      "parameters": {
+        "film_thickness_m": 1e-08,
+        "exchange_stiffness_j_per_m": 1.3e-11,
+        "saturation_magnetisation_a_per_m": 800000.0,
+        "gamma0_rad_s_per_a_m": 221100.0,
+        "bias_field_a_per_m": 79577.47154594767
+      },
+      "model_controls_except_air_growth": {
+        "air_padding_each_side_m": 2e-06,
+        "analytic_comparison": "postsolve_only",
+        "cell_period_m": 4e-08,
+        "dispersion_geometry": "damon_eshbach",
+        "eigen_solver_max_outer_iterations": 2000,
+        "eigen_solver_rtol": 1e-08,
+        "exchange_stiffness_j_per_m": 1.3e-11,
+        "external_induction_t": 0.1,
+        "film_thickness_m": 1e-08,
+        "frequency_window_hz": [
+          8500000000.0,
+          16000000000.0
+        ],
+        "gamma0_m_per_a_s": 221100.0,
+        "k_vectors_rad_per_m": [
+          [
+            0.0,
+            10000000.0,
+            0.0
+          ]
+        ],
+        "kx_rad_per_m": [
+          0.0
+        ],
+        "ky_rad_per_m": [
+          10000000.0
+        ],
+        "magnetic_element_size_m": 5e-09,
+        "mesh_level": "L2",
+        "modal_target": "frequency_window",
+        "mu0_t_m_a": 1.2566370614359173e-06,
+        "orientation": "M0=x,k=y,normal=z",
+        "outer_boundary_kind": "poisson_dirichlet",
+        "outer_boundary_potential_a": 0.0,
+        "qualification": "NOT VERIFIED",
+        "requested_mode_count": 1,
+        "sampling": "k10",
+        "saturation_magnetization_a_per_m": 800000.0,
+        "schema": "fullmag.de-smoke.v1",
+        "selection_scope": "frequency_window",
+        "target_frequency_hz": null,
+        "through_thickness_elements": 3,
+        "window_complete": null
+      },
+      "spectrum_completeness": null,
+      "window_complete": null,
+      "uniform_profile_overlap_squared_consistent_mass": 0.9999711562076958,
+      "actual_linearization_state_bound": true,
+      "equilibrium_schema": "equilibrium_artifact.v7",
+      "linearization_schema": "LinearizationState.v6",
+      "duration_seconds": 85.07698822021484,
+      "row_preflight": {
+        "schema": "fullmag.de-smoke-row-preflight.v2",
+        "status": "pass",
+        "qualification": "NOT VERIFIED",
+        "sampling": "k10",
+        "selection_scope": "frequency_window",
+        "mode_rows": 1,
+        "sample_count": 1,
+        "max_absolute_residual_norm": null,
+        "max_relative_residual_l2": 1.568186666958425e-11,
+        "residual_scope": "full_projected_weak_form_and_periodic_seams",
+        "full_descriptor_certified": true,
+        "gamma_demag_operator_probe": null,
+        "dynamic_demag_operator_probes": [
+          {
+            "sample_index": 0,
+            "status": "passed",
+            "subwindow_count": 3,
+            "subwindows": [
+              {
+                "hermitian_relative_defect": 5.877029738763795e-16,
+                "directions": {
+                  "global_y": {
+                    "q_l2_norm": 18.110770276274835,
+                    "potential_relative_residual": 1.6592384667657875e-13,
+                    "energy_form_relative_defect": 4.188175674711274e-15
+                  },
+                  "global_z": {
+                    "q_l2_norm": 18.110770276274835,
+                    "potential_relative_residual": 1.3599113905851928e-14,
+                    "energy_form_relative_defect": 3.3060362062237e-15
+                  }
+                },
+                "subwindow_index": 0
+              },
+              {
+                "hermitian_relative_defect": 5.877029738763795e-16,
+                "directions": {
+                  "global_y": {
+                    "q_l2_norm": 18.110770276274835,
+                    "potential_relative_residual": 1.6592384667657875e-13,
+                    "energy_form_relative_defect": 4.188175674711274e-15
+                  },
+                  "global_z": {
+                    "q_l2_norm": 18.110770276274835,
+                    "potential_relative_residual": 1.3599113905851928e-14,
+                    "energy_form_relative_defect": 3.3060362062237e-15
+                  }
+                },
+                "subwindow_index": 1
+              },
+              {
+                "hermitian_relative_defect": 5.877029738763795e-16,
+                "directions": {
+                  "global_y": {
+                    "q_l2_norm": 18.110770276274835,
+                    "potential_relative_residual": 1.6592384667657875e-13,
+                    "energy_form_relative_defect": 4.188175674711274e-15
+                  },
+                  "global_z": {
+                    "q_l2_norm": 18.110770276274835,
+                    "potential_relative_residual": 1.3599113905851928e-14,
+                    "energy_form_relative_defect": 3.3060362062237e-15
+                  }
+                },
+                "subwindow_index": 2
+              }
+            ]
+          }
+        ],
+        "pending_requirements": [
+          "numeric-source attestation",
+          "T4 Gamma operator probe and finite-box Nz comparison",
+          "complex fields, Bloch phase and mesh identity",
+          "explicit n0 branch identification and analytical comparison",
+          "mesh, airbox and mode-count convergence"
+        ]
+      },
+      "ksp_report": {
+        "status": "pass",
+        "qualification": "NOT VERIFIED",
+        "sampling": "k10",
+        "requested_type": "fgmres",
+        "requested_rtol": 1e-09,
+        "configured_rtol": 1e-09,
+        "configured_atol": 1e-50,
+        "sample_count": 1,
+        "by_sample": {
+          "0": {
+            "sample_index": 0,
+            "k_vector_rad_m": [
+              0.0,
+              10000000.0,
+              0.0
+            ],
+            "breakdown_tolerance": null,
+            "subwindow_count": 3,
+            "subwindows": [
+              {
+                "index": 0,
+                "ksp_type": "fgmres",
+                "ksp_rtol": 1e-09,
+                "ksp_atol": 1e-50,
+                "pc_side": 1,
+                "norm_type": 2,
+                "eps_converged_reason": 1,
+                "ksp_converged_reason": 2,
+                "true_residual_criterion": {
+                  "solve_count": 61,
+                  "measured_count": 61,
+                  "violation_count": 0,
+                  "unavailable_count": 0,
+                  "maximum_tolerance_ratio": 0.9939307450529472
+                },
+                "last_tolerance_ratio": 0.22349248029449442
+              },
+              {
+                "index": 1,
+                "ksp_type": "fgmres",
+                "ksp_rtol": 1e-09,
+                "ksp_atol": 1e-50,
+                "pc_side": 1,
+                "norm_type": 2,
+                "eps_converged_reason": 1,
+                "ksp_converged_reason": 2,
+                "true_residual_criterion": {
+                  "solve_count": 46,
+                  "measured_count": 46,
+                  "violation_count": 0,
+                  "unavailable_count": 0,
+                  "maximum_tolerance_ratio": 0.9834110322981706
+                },
+                "last_tolerance_ratio": 0.14724885904738516
+              },
+              {
+                "index": 2,
+                "ksp_type": "fgmres",
+                "ksp_rtol": 1e-09,
+                "ksp_atol": 1e-50,
+                "pc_side": 1,
+                "norm_type": 2,
+                "eps_converged_reason": 1,
+                "ksp_converged_reason": 2,
+                "true_residual_criterion": {
+                  "solve_count": 47,
+                  "measured_count": 47,
+                  "violation_count": 0,
+                  "unavailable_count": 0,
+                  "maximum_tolerance_ratio": 0.9745524494166247
+                },
+                "last_tolerance_ratio": 0.41304051601211655
+              }
+            ]
+          }
+        }
+      },
+      "mode_identity": {
+        "source_mesh_topology_sha256": "sha256:bb8b079d74b8794b100a387c696b6a56c25de26556d6a3c7a1563f3daae8d207",
+        "equilibrium_artifact_sha256": "sha256:18092955749dc402da1db7960d713412afdbaeadb9f9590bb91769c0c9dd0569",
+        "linearization_state_sha256": "sha256:a49b0977cc8a4ddfd4e87dedee951b0cd668e4754b6af313039b7d3b5c49b489",
+        "operator_input_signature_sha256": "sha256:4627d9e5386d0dd175016623cbb018cb3d3097f11c6bcfbac3abc86959ffe4b4",
+        "phase_constraint_sha256": "sha256:9b0543faceae19290ef772ffb66eedb41b44b535275518d7b254856b8342c222"
+      },
+      "input_sha256": {
+        "run_result": "6c1f73a17955cfee65807284e0dc33fe1d66066e9bff66d2e16c8c329c395d77",
+        "de-smoke-k10\\eigen\\branches.v2.json": "830f70b41ff3b67be48635fb428fd7abf6947d6da3764e3913b395063456e91f",
+        "de-smoke-k10\\eigen\\diagnostics\\solver.v1.json": "afac6d23d3ad1c10b921436848fcb3cc11eb5508f1231af6e3d0e45a4f5461fc",
+        "de-smoke-k10\\eigen\\dispersion.csv": "fdacc68099862af6e0566fa2820f85733a83a88362348b8220f168fe01e58a95",
+        "de-smoke-k10\\eigen\\metadata\\eigen_summary.json": "71b98dd2c07ec502a46feeca280d6f94ef0329f18df7800a908ca913c887b449",
+        "de-smoke-k10\\eigen\\spectrum.v2.json": "37d532514525dbf016b63b4cfc1681b1d3a49fdf7e777ba72cc8b3d9b717559b",
+        "de-smoke-k10\\frequency_domain\\manifest.v1.json": "db9ff7e59177ee8971257499589b927bd34cdd8f080d0e52afae231dda99b176",
+        "de-smoke-k10\\metadata.json": "6779870b8e81ba8b8c96f64f3d5229f3db84b59f526d3588451a809f47fcfbea",
+        "de-smoke-k10\\eigen\\modes\\sample_0000\\mode_0000.json": "ae93ad31b517eff2acaa4eec536dc17e62c90d88e6aeb31a4b64453ee075911b",
+        "de-smoke-k10\\eigen\\metadata\\linearization_state.v6.json": "a9b176a9bdc1b2e62afa7aa6d62853336ff92e622178d1d40df68bc61640285b",
+        "de-smoke-k10\\eigen\\metadata\\equilibrium_artifact.v7.json": "1b9ed660395b7c9bc7b4b192eabaee378f4c67adc3e5612e27c3569fa58cadd5",
+        "mode_metadata": "ae93ad31b517eff2acaa4eec536dc17e62c90d88e6aeb31a4b64453ee075911b",
+        "mode_binary": "8f71e4e08b9840b562a58ef23cdec54cf4b8cbf203e4a8c3b9b6a5e132f15b6a",
+        "mesh_cache": "42bca81c238056a2ab1d8729c9f2b82ff18539e6a12e5f07d4093fb9e63748c3"
+      },
+      "profile_record": {
+        "run_path": "C:\\git\\fullmag\\storage\\runs\\eigensolve-dispersion-plan-20260-c5dfad6d7f548079\\3e3b5a6123934d8b8f63cfbf02ccad55\\comsol-dispersion\\45128809bd124fa1a3a2cb6128162e37",
+        "pilot": "de-smoke-k10",
+        "geometry": "damon_eshbach",
+        "k_rad_per_m": 10000000.0,
+        "frequency_hz": 11205285324.366156,
+        "parameters": {
+          "film_thickness_m": 1e-08,
+          "exchange_stiffness_j_per_m": 1.3e-11,
+          "saturation_magnetisation_a_per_m": 800000.0,
+          "gamma0_rad_s_per_a_m": 221100.0,
+          "bias_field_a_per_m": 79577.47154594767
+        },
+        "artifact_sha256": {
+          "de-smoke-k10\\eigen\\branches.v2.json": "830f70b41ff3b67be48635fb428fd7abf6947d6da3764e3913b395063456e91f",
+          "de-smoke-k10\\eigen\\diagnostics\\solver.v1.json": "afac6d23d3ad1c10b921436848fcb3cc11eb5508f1231af6e3d0e45a4f5461fc",
+          "de-smoke-k10\\eigen\\dispersion.csv": "fdacc68099862af6e0566fa2820f85733a83a88362348b8220f168fe01e58a95",
+          "de-smoke-k10\\eigen\\metadata\\eigen_summary.json": "71b98dd2c07ec502a46feeca280d6f94ef0329f18df7800a908ca913c887b449",
+          "de-smoke-k10\\eigen\\spectrum.v2.json": "37d532514525dbf016b63b4cfc1681b1d3a49fdf7e777ba72cc8b3d9b717559b",
+          "de-smoke-k10\\frequency_domain\\manifest.v1.json": "db9ff7e59177ee8971257499589b927bd34cdd8f080d0e52afae231dda99b176",
+          "de-smoke-k10\\metadata.json": "6779870b8e81ba8b8c96f64f3d5229f3db84b59f526d3588451a809f47fcfbea",
+          "de-smoke-k10\\eigen\\modes\\sample_0000\\mode_0000.json": "ae93ad31b517eff2acaa4eec536dc17e62c90d88e6aeb31a4b64453ee075911b",
+          "de-smoke-k10\\eigen\\metadata\\linearization_state.v6.json": "a9b176a9bdc1b2e62afa7aa6d62853336ff92e622178d1d40df68bc61640285b",
+          "de-smoke-k10\\eigen\\metadata\\equilibrium_artifact.v7.json": "1b9ed660395b7c9bc7b4b192eabaee378f4c67adc3e5612e27c3569fa58cadd5"
+        }
+      }
+    },
+    {
+      "root": "C:\\git\\fullmag\\storage\\runs\\eigensolve-dispersion-plan-20260-c5dfad6d7f548079\\3e3b5a6123934d8b8f63cfbf02ccad55\\comsol-dispersion\\2f0824f630ea4803be4cac56d7a50bf5",
+      "k_rad_per_um": 10,
+      "requested_growth": "1.15",
+      "actual_growth": 1.15,
+      "frequency_hz": 11216153904.660969,
+      "relative_residual_l2": 2.3120960612771428e-11,
+      "certification_tolerance": 1e-08,
+      "selection_scope": "frequency_window",
+      "nodes": 7524,
+      "tetrahedra": 36900,
+      "magnetic_nodes": 396,
+      "magnetic_tetrahedra": 1476,
+      "body_volume_m3": 1.6000000000000008e-23,
+      "body_z_planes_m": [
+        -5e-09,
+        -1.666666666666667e-09,
+        1.6666666666666665e-09,
+        4.999999999999999e-09
+      ],
+      "all_z_planes_m": [
+        -2.005e-06,
+        -1.9931581900723726e-06,
+        -1.8931581900723727e-06,
+        -1.7931581900723728e-06,
+        -1.693158190072373e-06,
+        -1.593158190072373e-06,
+        -1.4931581900723732e-06,
+        -1.3931581900723733e-06,
+        -1.2931581900723734e-06,
+        -1.1931581900723735e-06,
+        -1.0931581900723736e-06,
+        -9.931581900723737e-07,
+        -8.931581900723738e-07,
+        -7.931581900723738e-07,
+        -6.931581900723738e-07,
+        -5.990506000629338e-07,
+        -5.172179130982033e-07,
+        -4.460590548680029e-07,
+        -3.841817868417417e-07,
+        -3.3037546681890583e-07,
+        -2.8358736245122247e-07,
+        -2.429020543054109e-07,
+        -2.0752352548296598e-07,
+        -1.7675958737649218e-07,
+        -1.5000833684912364e-07,
+        -1.2674637986880316e-07,
+        -1.0651859119026364e-07,
+        -8.892920973066405e-08,
+        -7.363409541796874e-08,
+        -6.033399601562499e-08,
+        -4.876869218749999e-08,
+        -3.871190624999999e-08,
+        -2.9966874999999996e-08,
+        -2.23625e-08,
+        -1.575e-08,
+        -1e-08,
+        -5e-09,
+        -1.666666666666667e-09,
+        1.6666666666666665e-09,
+        4.999999999999999e-09,
+        9.999999999999999e-09,
+        1.575e-08,
+        2.23625e-08,
+        2.9966874999999996e-08,
+        3.871190624999999e-08,
+        4.876869218749999e-08,
+        6.033399601562499e-08,
+        7.363409541796874e-08,
+        8.892920973066405e-08,
+        1.0651859119026364e-07,
+        1.2674637986880316e-07,
+        1.5000833684912364e-07,
+        1.7675958737649218e-07,
+        2.0752352548296598e-07,
+        2.429020543054109e-07,
+        2.8358736245122247e-07,
+        3.3037546681890583e-07,
+        3.841817868417417e-07,
+        4.460590548680029e-07,
+        5.172179130982033e-07,
+        5.990506000629338e-07,
+        6.931581900723738e-07,
+        7.931581900723738e-07,
+        8.931581900723738e-07,
+        9.931581900723737e-07,
+        1.0931581900723736e-06,
+        1.1931581900723735e-06,
+        1.2931581900723734e-06,
+        1.3931581900723733e-06,
+        1.4931581900723732e-06,
+        1.593158190072373e-06,
+        1.693158190072373e-06,
+        1.7931581900723728e-06,
+        1.8931581900723727e-06,
+        1.9931581900723726e-06,
+        2.005e-06
+      ],
+      "body_coordinate_digest": "4c06592d1a93b2db96e484c0010d3e57ab73229cc7e3b71a5636129f8e419b3e",
+      "body_tetra_digest": "201ab3550f89cdaf2e2ff61699f11eaa7505e882aeb78a5f7bb8ae777aa851f1",
+      "parameters": {
+        "film_thickness_m": 1e-08,
+        "exchange_stiffness_j_per_m": 1.3e-11,
+        "saturation_magnetisation_a_per_m": 800000.0,
+        "gamma0_rad_s_per_a_m": 221100.0,
+        "bias_field_a_per_m": 79577.47154594767
+      },
+      "model_controls_except_air_growth": {
+        "air_padding_each_side_m": 2e-06,
+        "analytic_comparison": "postsolve_only",
+        "cell_period_m": 4e-08,
+        "dispersion_geometry": "damon_eshbach",
+        "eigen_solver_max_outer_iterations": 2000,
+        "eigen_solver_rtol": 1e-08,
+        "exchange_stiffness_j_per_m": 1.3e-11,
+        "external_induction_t": 0.1,
+        "film_thickness_m": 1e-08,
+        "frequency_window_hz": [
+          8500000000.0,
+          16000000000.0
+        ],
+        "gamma0_m_per_a_s": 221100.0,
+        "k_vectors_rad_per_m": [
+          [
+            0.0,
+            10000000.0,
+            0.0
+          ]
+        ],
+        "kx_rad_per_m": [
+          0.0
+        ],
+        "ky_rad_per_m": [
+          10000000.0
+        ],
+        "magnetic_element_size_m": 5e-09,
+        "mesh_level": "L2",
+        "modal_target": "frequency_window",
+        "mu0_t_m_a": 1.2566370614359173e-06,
+        "orientation": "M0=x,k=y,normal=z",
+        "outer_boundary_kind": "poisson_dirichlet",
+        "outer_boundary_potential_a": 0.0,
+        "qualification": "NOT VERIFIED",
+        "requested_mode_count": 1,
+        "sampling": "k10",
+        "saturation_magnetization_a_per_m": 800000.0,
+        "schema": "fullmag.de-smoke.v1",
+        "selection_scope": "frequency_window",
+        "target_frequency_hz": null,
+        "through_thickness_elements": 3,
+        "window_complete": null
+      },
+      "spectrum_completeness": null,
+      "window_complete": null,
+      "uniform_profile_overlap_squared_consistent_mass": 0.9999711692065298,
+      "actual_linearization_state_bound": true,
+      "equilibrium_schema": "equilibrium_artifact.v7",
+      "linearization_schema": "LinearizationState.v6",
+      "duration_seconds": 86.91352987289429,
+      "row_preflight": {
+        "schema": "fullmag.de-smoke-row-preflight.v2",
+        "status": "pass",
+        "qualification": "NOT VERIFIED",
+        "sampling": "k10",
+        "selection_scope": "frequency_window",
+        "mode_rows": 1,
+        "sample_count": 1,
+        "max_absolute_residual_norm": null,
+        "max_relative_residual_l2": 2.3120960612771428e-11,
+        "residual_scope": "full_projected_weak_form_and_periodic_seams",
+        "full_descriptor_certified": true,
+        "gamma_demag_operator_probe": null,
+        "dynamic_demag_operator_probes": [
+          {
+            "sample_index": 0,
+            "status": "passed",
+            "subwindow_count": 3,
+            "subwindows": [
+              {
+                "hermitian_relative_defect": 3.898915459100337e-15,
+                "directions": {
+                  "global_y": {
+                    "q_l2_norm": 18.110770276274835,
+                    "potential_relative_residual": 1.41290918502661e-13,
+                    "energy_form_relative_defect": 4.290263094823137e-15
+                  },
+                  "global_z": {
+                    "q_l2_norm": 18.110770276274835,
+                    "potential_relative_residual": 1.0868791857819458e-14,
+                    "energy_form_relative_defect": 1.2711890651327814e-16
+                  }
+                },
+                "subwindow_index": 0
+              },
+              {
+                "hermitian_relative_defect": 3.898915459100337e-15,
+                "directions": {
+                  "global_y": {
+                    "q_l2_norm": 18.110770276274835,
+                    "potential_relative_residual": 1.41290918502661e-13,
+                    "energy_form_relative_defect": 4.290263094823137e-15
+                  },
+                  "global_z": {
+                    "q_l2_norm": 18.110770276274835,
+                    "potential_relative_residual": 1.0868791857819458e-14,
+                    "energy_form_relative_defect": 1.2711890651327814e-16
+                  }
+                },
+                "subwindow_index": 1
+              },
+              {
+                "hermitian_relative_defect": 3.898915459100337e-15,
+                "directions": {
+                  "global_y": {
+                    "q_l2_norm": 18.110770276274835,
+                    "potential_relative_residual": 1.41290918502661e-13,
+                    "energy_form_relative_defect": 4.290263094823137e-15
+                  },
+                  "global_z": {
+                    "q_l2_norm": 18.110770276274835,
+                    "potential_relative_residual": 1.0868791857819458e-14,
+                    "energy_form_relative_defect": 1.2711890651327814e-16
+                  }
+                },
+                "subwindow_index": 2
+              }
+            ]
+          }
+        ],
+        "pending_requirements": [
+          "numeric-source attestation",
+          "T4 Gamma operator probe and finite-box Nz comparison",
+          "complex fields, Bloch phase and mesh identity",
+          "explicit n0 branch identification and analytical comparison",
+          "mesh, airbox and mode-count convergence"
+        ]
+      },
+      "ksp_report": {
+        "status": "pass",
+        "qualification": "NOT VERIFIED",
+        "sampling": "k10",
+        "requested_type": "fgmres",
+        "requested_rtol": 1e-09,
+        "configured_rtol": 1e-09,
+        "configured_atol": 1e-50,
+        "sample_count": 1,
+        "by_sample": {
+          "0": {
+            "sample_index": 0,
+            "k_vector_rad_m": [
+              0.0,
+              10000000.0,
+              0.0
+            ],
+            "breakdown_tolerance": null,
+            "subwindow_count": 3,
+            "subwindows": [
+              {
+                "index": 0,
+                "ksp_type": "fgmres",
+                "ksp_rtol": 1e-09,
+                "ksp_atol": 1e-50,
+                "pc_side": 1,
+                "norm_type": 2,
+                "eps_converged_reason": 1,
+                "ksp_converged_reason": 2,
+                "true_residual_criterion": {
+                  "solve_count": 58,
+                  "measured_count": 58,
+                  "violation_count": 0,
+                  "unavailable_count": 0,
+                  "maximum_tolerance_ratio": 0.9732439522991487
+                },
+                "last_tolerance_ratio": 0.7939838333081698
+              },
+              {
+                "index": 1,
+                "ksp_type": "fgmres",
+                "ksp_rtol": 1e-09,
+                "ksp_atol": 1e-50,
+                "pc_side": 1,
+                "norm_type": 2,
+                "eps_converged_reason": 1,
+                "ksp_converged_reason": 2,
+                "true_residual_criterion": {
+                  "solve_count": 60,
+                  "measured_count": 60,
+                  "violation_count": 0,
+                  "unavailable_count": 0,
+                  "maximum_tolerance_ratio": 0.9871987843478833
+                },
+                "last_tolerance_ratio": 0.885357270269554
+              },
+              {
+                "index": 2,
+                "ksp_type": "fgmres",
+                "ksp_rtol": 1e-09,
+                "ksp_atol": 1e-50,
+                "pc_side": 1,
+                "norm_type": 2,
+                "eps_converged_reason": 1,
+                "ksp_converged_reason": 2,
+                "true_residual_criterion": {
+                  "solve_count": 47,
+                  "measured_count": 47,
+                  "violation_count": 0,
+                  "unavailable_count": 0,
+                  "maximum_tolerance_ratio": 0.9821209280233386
+                },
+                "last_tolerance_ratio": 0.38969675238943513
+              }
+            ]
+          }
+        }
+      },
+      "mode_identity": {
+        "source_mesh_topology_sha256": "sha256:47abebc9a9012f6c2d128b86c2ce959cafc690c88ce0d9a6a764139468529192",
+        "equilibrium_artifact_sha256": "sha256:3552f94f5d475498c3b1056f736d7b388291271798588a043963267606434ee6",
+        "linearization_state_sha256": "sha256:5a901ecfa2f2b1994e1e0f7308315bbe7e7fac81d0ee50445e94d6b1c6d83d7c",
+        "operator_input_signature_sha256": "sha256:44bbeb5597bbd97889d1929ef841225656e31e17bcec8cc34e4cb28dc95b10f9",
+        "phase_constraint_sha256": "sha256:dbabea6becc2c7777b317712d11976a4576ab5d7c4c04c999e86c3b9e3238991"
+      },
+      "input_sha256": {
+        "run_result": "41abaa969598fb653ef8fffabaf6210cc60278ad278a0e6d883063bfc22d933f",
+        "de-smoke-k10\\eigen\\branches.v2.json": "5279b9e2180d33da93f67b5f2a0abf6d4f1c7dc2f992b3cd703d7f57ae3c8a48",
+        "de-smoke-k10\\eigen\\diagnostics\\solver.v1.json": "002171650ca594f9b7c3c682fc21e85851e2e2eb51aeacc3d562d47772350d24",
+        "de-smoke-k10\\eigen\\dispersion.csv": "2569852646bd4c724fcbf72010194f2f9c4af7aae7eeec2bf564a3d9da53486e",
+        "de-smoke-k10\\eigen\\metadata\\eigen_summary.json": "4af1eee6694698d177015f1bad9c00d0285394325e4a4a9368246c3898f82dc5",
+        "de-smoke-k10\\eigen\\spectrum.v2.json": "e9f117a49478221c4ff55a7c9f37d95a90ccb84ab66d41baeb04dd342b89fb03",
+        "de-smoke-k10\\frequency_domain\\manifest.v1.json": "4af0edd935334651a71365d0ef846a40e56de48e7ba5272f18947ca577dcd606",
+        "de-smoke-k10\\metadata.json": "77acb2dc86ebcd28d708ee91c14436b1b2b24fe20c0df627924eb4fca17822e9",
+        "de-smoke-k10\\eigen\\modes\\sample_0000\\mode_0000.json": "647f3b4748093d9dcc10a7fa80b935be7e2dcd369cede0e3992fc8455f53947d",
+        "de-smoke-k10\\eigen\\metadata\\linearization_state.v6.json": "6fa3da3e02d3cf7feef9920ac64bf1c395a0092be567652c9cab210a95cda7df",
+        "de-smoke-k10\\eigen\\metadata\\equilibrium_artifact.v7.json": "439b6d1b3a14eb614d184b0f46598c318fa5e5173cb4d6c14cc38c62af601075",
+        "mode_metadata": "647f3b4748093d9dcc10a7fa80b935be7e2dcd369cede0e3992fc8455f53947d",
+        "mode_binary": "fc02248a44198522b526fef4f513a813a21238e1c7f9ebdf58120e2717c67132",
+        "mesh_cache": "9c59f78ef61a34df550ce4015d1b5e0248c7900dd564090a9e85ba9854e2ef65"
+      },
+      "profile_record": {
+        "run_path": "C:\\git\\fullmag\\storage\\runs\\eigensolve-dispersion-plan-20260-c5dfad6d7f548079\\3e3b5a6123934d8b8f63cfbf02ccad55\\comsol-dispersion\\2f0824f630ea4803be4cac56d7a50bf5",
+        "pilot": "de-smoke-k10",
+        "geometry": "damon_eshbach",
+        "k_rad_per_m": 10000000.0,
+        "frequency_hz": 11216153904.660969,
+        "parameters": {
+          "film_thickness_m": 1e-08,
+          "exchange_stiffness_j_per_m": 1.3e-11,
+          "saturation_magnetisation_a_per_m": 800000.0,
+          "gamma0_rad_s_per_a_m": 221100.0,
+          "bias_field_a_per_m": 79577.47154594767
+        },
+        "artifact_sha256": {
+          "de-smoke-k10\\eigen\\branches.v2.json": "5279b9e2180d33da93f67b5f2a0abf6d4f1c7dc2f992b3cd703d7f57ae3c8a48",
+          "de-smoke-k10\\eigen\\diagnostics\\solver.v1.json": "002171650ca594f9b7c3c682fc21e85851e2e2eb51aeacc3d562d47772350d24",
+          "de-smoke-k10\\eigen\\dispersion.csv": "2569852646bd4c724fcbf72010194f2f9c4af7aae7eeec2bf564a3d9da53486e",
+          "de-smoke-k10\\eigen\\metadata\\eigen_summary.json": "4af1eee6694698d177015f1bad9c00d0285394325e4a4a9368246c3898f82dc5",
+          "de-smoke-k10\\eigen\\spectrum.v2.json": "e9f117a49478221c4ff55a7c9f37d95a90ccb84ab66d41baeb04dd342b89fb03",
+          "de-smoke-k10\\frequency_domain\\manifest.v1.json": "4af0edd935334651a71365d0ef846a40e56de48e7ba5272f18947ca577dcd606",
+          "de-smoke-k10\\metadata.json": "77acb2dc86ebcd28d708ee91c14436b1b2b24fe20c0df627924eb4fca17822e9",
+          "de-smoke-k10\\eigen\\modes\\sample_0000\\mode_0000.json": "647f3b4748093d9dcc10a7fa80b935be7e2dcd369cede0e3992fc8455f53947d",
+          "de-smoke-k10\\eigen\\metadata\\linearization_state.v6.json": "6fa3da3e02d3cf7feef9920ac64bf1c395a0092be567652c9cab210a95cda7df",
+          "de-smoke-k10\\eigen\\metadata\\equilibrium_artifact.v7.json": "439b6d1b3a14eb614d184b0f46598c318fa5e5173cb4d6c14cc38c62af601075"
+        }
+      }
+    },
+    {
+      "root": "C:\\git\\fullmag\\storage\\runs\\eigensolve-dispersion-plan-20260-c5dfad6d7f548079\\3e3b5a6123934d8b8f63cfbf02ccad55\\comsol-dispersion\\683536d55bf94cf1b7e65b67c7e1e57d",
+      "k_rad_per_um": 10,
+      "requested_growth": "1.075",
+      "actual_growth": 1.075,
+      "frequency_hz": 11219934614.914722,
+      "relative_residual_l2": 1.5713884242106194e-11,
+      "certification_tolerance": 1e-08,
+      "selection_scope": "frequency_window",
+      "nodes": 10098,
+      "tetrahedra": 49692,
+      "magnetic_nodes": 396,
+      "magnetic_tetrahedra": 1476,
+      "body_volume_m3": 1.6000000000000008e-23,
+      "body_z_planes_m": [
+        -5e-09,
+        -1.666666666666667e-09,
+        1.6666666666666665e-09,
+        4.999999999999999e-09
+      ],
+      "all_z_planes_m": [
+        -2.005e-06,
+        -1.9284915772985436e-06,
+        -1.8284915772985437e-06,
+        -1.7284915772985438e-06,
+        -1.628491577298544e-06,
+        -1.528491577298544e-06,
+        -1.4284915772985442e-06,
+        -1.328491577298544e-06,
+        -1.231503792835855e-06,
+        -1.141282597986842e-06,
+        -1.057355905104039e-06,
+        -9.792845628874781e-07,
+        -9.066600584999796e-07,
+        -8.39102379999981e-07,
+        -7.762580279069591e-07,
+        -7.177981654948457e-07,
+        -6.634168981347402e-07,
+        -6.128296726834793e-07,
+        -5.657717885427714e-07,
+        -5.21997012597927e-07,
+        -4.812762907887693e-07,
+        -4.433965495709482e-07,
+        -4.081595809962309e-07,
+        -3.7538100557788924e-07,
+        -3.448893075143156e-07,
+        -3.1652493722261915e-07,
+        -2.9013947648615735e-07,
+        -2.655948618475882e-07,
+        -2.42762662183803e-07,
+        -2.2152340668260742e-07,
+        -2.017659597047511e-07,
+        -1.8338693926023358e-07,
+        -1.6629017605603125e-07,
+        -1.5038621028468023e-07,
+        -1.3559182352063278e-07,
+        -1.2182960327500723e-07,
+        -1.090275379302393e-07,
+        -9.711863993510633e-08,
+        -8.604059528847103e-08,
+        -7.573543747764746e-08,
+        -6.614924416525345e-08,
+        -5.7231855037445066e-08,
+        -4.8936609337158203e-08,
+        -4.1220101708984375e-08,
+        -3.4041955078125e-08,
+        -2.7364609375000003e-08,
+        -2.1153125e-08,
+        -1.5375e-08,
+        -1e-08,
+        -5e-09,
+        -1.666666666666667e-09,
+        1.6666666666666665e-09,
+        4.999999999999999e-09,
+        9.999999999999999e-09,
+        1.5374999999999997e-08,
+        2.1153125e-08,
+        2.7364609375000003e-08,
+        3.4041955078125e-08,
+        4.1220101708984375e-08,
+        4.8936609337158203e-08,
+        5.7231855037445066e-08,
+        6.614924416525345e-08,
+        7.573543747764746e-08,
+        8.604059528847103e-08,
+        9.711863993510633e-08,
+        1.090275379302393e-07,
+        1.2182960327500723e-07,
+        1.3559182352063278e-07,
+        1.5038621028468023e-07,
+        1.6629017605603125e-07,
+        1.8338693926023358e-07,
+        2.017659597047511e-07,
+        2.2152340668260742e-07,
+        2.42762662183803e-07,
+        2.655948618475882e-07,
+        2.9013947648615735e-07,
+        3.1652493722261915e-07,
+        3.448893075143156e-07,
+        3.7538100557788924e-07,
+        4.081595809962309e-07,
+        4.433965495709482e-07,
+        4.812762907887693e-07,
+        5.21997012597927e-07,
+        5.657717885427714e-07,
+        6.128296726834793e-07,
+        6.634168981347402e-07,
+        7.177981654948457e-07,
+        7.762580279069591e-07,
+        8.39102379999981e-07,
+        9.066600584999796e-07,
+        9.792845628874781e-07,
+        1.057355905104039e-06,
+        1.141282597986842e-06,
+        1.231503792835855e-06,
+        1.328491577298544e-06,
+        1.4284915772985442e-06,
+        1.528491577298544e-06,
+        1.628491577298544e-06,
+        1.7284915772985438e-06,
+        1.8284915772985437e-06,
+        1.9284915772985436e-06,
+        2.005e-06
+      ],
+      "body_coordinate_digest": "4c06592d1a93b2db96e484c0010d3e57ab73229cc7e3b71a5636129f8e419b3e",
+      "body_tetra_digest": "201ab3550f89cdaf2e2ff61699f11eaa7505e882aeb78a5f7bb8ae777aa851f1",
+      "parameters": {
+        "film_thickness_m": 1e-08,
+        "exchange_stiffness_j_per_m": 1.3e-11,
+        "saturation_magnetisation_a_per_m": 800000.0,
+        "gamma0_rad_s_per_a_m": 221100.0,
+        "bias_field_a_per_m": 79577.47154594767
+      },
+      "model_controls_except_air_growth": {
+        "air_padding_each_side_m": 2e-06,
+        "analytic_comparison": "postsolve_only",
+        "cell_period_m": 4e-08,
+        "dispersion_geometry": "damon_eshbach",
+        "eigen_solver_max_outer_iterations": 2000,
+        "eigen_solver_rtol": 1e-08,
+        "exchange_stiffness_j_per_m": 1.3e-11,
+        "external_induction_t": 0.1,
+        "film_thickness_m": 1e-08,
+        "frequency_window_hz": [
+          8500000000.0,
+          16000000000.0
+        ],
+        "gamma0_m_per_a_s": 221100.0,
+        "k_vectors_rad_per_m": [
+          [
+            0.0,
+            10000000.0,
+            0.0
+          ]
+        ],
+        "kx_rad_per_m": [
+          0.0
+        ],
+        "ky_rad_per_m": [
+          10000000.0
+        ],
+        "magnetic_element_size_m": 5e-09,
+        "mesh_level": "L2",
+        "modal_target": "frequency_window",
+        "mu0_t_m_a": 1.2566370614359173e-06,
+        "orientation": "M0=x,k=y,normal=z",
+        "outer_boundary_kind": "poisson_dirichlet",
+        "outer_boundary_potential_a": 0.0,
+        "qualification": "NOT VERIFIED",
+        "requested_mode_count": 1,
+        "sampling": "k10",
+        "saturation_magnetization_a_per_m": 800000.0,
+        "schema": "fullmag.de-smoke.v1",
+        "selection_scope": "frequency_window",
+        "target_frequency_hz": null,
+        "through_thickness_elements": 3,
+        "window_complete": null
+      },
+      "spectrum_completeness": null,
+      "window_complete": null,
+      "uniform_profile_overlap_squared_consistent_mass": 0.9999711737711322,
+      "actual_linearization_state_bound": true,
+      "equilibrium_schema": "equilibrium_artifact.v7",
+      "linearization_schema": "LinearizationState.v6",
+      "duration_seconds": 113.95661425590515,
+      "row_preflight": {
+        "schema": "fullmag.de-smoke-row-preflight.v2",
+        "status": "pass",
+        "qualification": "NOT VERIFIED",
+        "sampling": "k10",
+        "selection_scope": "frequency_window",
+        "mode_rows": 1,
+        "sample_count": 1,
+        "max_absolute_residual_norm": null,
+        "max_relative_residual_l2": 1.5713884242106194e-11,
+        "residual_scope": "full_projected_weak_form_and_periodic_seams",
+        "full_descriptor_certified": true,
+        "gamma_demag_operator_probe": null,
+        "dynamic_demag_operator_probes": [
+          {
+            "sample_index": 0,
+            "status": "passed",
+            "subwindow_count": 3,
+            "subwindows": [
+              {
+                "hermitian_relative_defect": 1.6630921449729533e-15,
+                "directions": {
+                  "global_y": {
+                    "q_l2_norm": 18.110770276274835,
+                    "potential_relative_residual": 1.397571281717373e-13,
+                    "energy_form_relative_defect": 3.741684504741023e-15
+                  },
+                  "global_z": {
+                    "q_l2_norm": 18.110770276274835,
+                    "potential_relative_residual": 1.0461726382940011e-14,
+                    "energy_form_relative_defect": 1.2710605536275237e-16
+                  }
+                },
+                "subwindow_index": 0
+              },
+              {
+                "hermitian_relative_defect": 1.6630921449729533e-15,
+                "directions": {
+                  "global_y": {
+                    "q_l2_norm": 18.110770276274835,
+                    "potential_relative_residual": 1.397571281717373e-13,
+                    "energy_form_relative_defect": 3.741684504741023e-15
+                  },
+                  "global_z": {
+                    "q_l2_norm": 18.110770276274835,
+                    "potential_relative_residual": 1.0461726382940011e-14,
+                    "energy_form_relative_defect": 1.2710605536275237e-16
+                  }
+                },
+                "subwindow_index": 1
+              },
+              {
+                "hermitian_relative_defect": 1.6630921449729533e-15,
+                "directions": {
+                  "global_y": {
+                    "q_l2_norm": 18.110770276274835,
+                    "potential_relative_residual": 1.397571281717373e-13,
+                    "energy_form_relative_defect": 3.741684504741023e-15
+                  },
+                  "global_z": {
+                    "q_l2_norm": 18.110770276274835,
+                    "potential_relative_residual": 1.0461726382940011e-14,
+                    "energy_form_relative_defect": 1.2710605536275237e-16
+                  }
+                },
+                "subwindow_index": 2
+              }
+            ]
+          }
+        ],
+        "pending_requirements": [
+          "numeric-source attestation",
+          "T4 Gamma operator probe and finite-box Nz comparison",
+          "complex fields, Bloch phase and mesh identity",
+          "explicit n0 branch identification and analytical comparison",
+          "mesh, airbox and mode-count convergence"
+        ]
+      },
+      "ksp_report": {
+        "status": "pass",
+        "qualification": "NOT VERIFIED",
+        "sampling": "k10",
+        "requested_type": "fgmres",
+        "requested_rtol": 1e-09,
+        "configured_rtol": 1e-09,
+        "configured_atol": 1e-50,
+        "sample_count": 1,
+        "by_sample": {
+          "0": {
+            "sample_index": 0,
+            "k_vector_rad_m": [
+              0.0,
+              10000000.0,
+              0.0
+            ],
+            "breakdown_tolerance": null,
+            "subwindow_count": 3,
+            "subwindows": [
+              {
+                "index": 0,
+                "ksp_type": "fgmres",
+                "ksp_rtol": 1e-09,
+                "ksp_atol": 1e-50,
+                "pc_side": 1,
+                "norm_type": 2,
+                "eps_converged_reason": 1,
+                "ksp_converged_reason": 2,
+                "true_residual_criterion": {
+                  "solve_count": 61,
+                  "measured_count": 61,
+                  "violation_count": 0,
+                  "unavailable_count": 0,
+                  "maximum_tolerance_ratio": 0.9806008213941081
+                },
+                "last_tolerance_ratio": 0.8820794935252608
+              },
+              {
+                "index": 1,
+                "ksp_type": "fgmres",
+                "ksp_rtol": 1e-09,
+                "ksp_atol": 1e-50,
+                "pc_side": 1,
+                "norm_type": 2,
+                "eps_converged_reason": 1,
+                "ksp_converged_reason": 2,
+                "true_residual_criterion": {
+                  "solve_count": 46,
+                  "measured_count": 46,
+                  "violation_count": 0,
+                  "unavailable_count": 0,
+                  "maximum_tolerance_ratio": 0.97888420559422
+                },
+                "last_tolerance_ratio": 0.95643074273183
+              },
+              {
+                "index": 2,
+                "ksp_type": "fgmres",
+                "ksp_rtol": 1e-09,
+                "ksp_atol": 1e-50,
+                "pc_side": 1,
+                "norm_type": 2,
+                "eps_converged_reason": 1,
+                "ksp_converged_reason": 2,
+                "true_residual_criterion": {
+                  "solve_count": 47,
+                  "measured_count": 47,
+                  "violation_count": 0,
+                  "unavailable_count": 0,
+                  "maximum_tolerance_ratio": 0.9916328826630028
+                },
+                "last_tolerance_ratio": 0.9749920966880178
+              }
+            ]
+          }
+        }
+      },
+      "mode_identity": {
+        "source_mesh_topology_sha256": "sha256:228582ae2356b804cdcbf7aa4855228133344bab872838182d216ac8cf53266c",
+        "equilibrium_artifact_sha256": "sha256:bb021bdc18daafb55a237a3f1190c083397c421ec3dc4813df8c215ae3cdcf58",
+        "linearization_state_sha256": "sha256:62d19841f98c28210f32e2a2603624751ed5ceca7b1189b7cb7d2f066b6797c0",
+        "operator_input_signature_sha256": "sha256:c81bda6370cd8f216d750e84e83b4b0cb51d809d83a5b734eaf029f29079d49b",
+        "phase_constraint_sha256": "sha256:82f63bc6f41d0512c85f27bbf0acac86571ea5aa1de7004f41d5a7286692dbfc"
+      },
+      "input_sha256": {
+        "run_result": "2ced689da0179e4bb80727deb222c5874c0ea935b6cac730ef56e9dd2e0e38e8",
+        "de-smoke-k10\\eigen\\branches.v2.json": "64f7b6d1a819b1e984a658de5db6e00a9a73e1523c46b43b0c85bdd563408564",
+        "de-smoke-k10\\eigen\\diagnostics\\solver.v1.json": "71c1ee35c5fa43a2ad80e5b9ba302c370f4ac1729369064f1a3e43efd8c7fd97",
+        "de-smoke-k10\\eigen\\dispersion.csv": "3212aa84abf5e9db585d0222ff6979d24aadf4d0083e8c1fa4a36587c06f8a27",
+        "de-smoke-k10\\eigen\\metadata\\eigen_summary.json": "1d42d3b9d8f732feb9cf935911fbdc905b97626713d305ef91895e7b390a442d",
+        "de-smoke-k10\\eigen\\spectrum.v2.json": "3f2283748241ac6e5a5bedeb6bb45ea91a2d61a9dfc2053f8ce5a8ed570ffd33",
+        "de-smoke-k10\\frequency_domain\\manifest.v1.json": "fb665c064880e0ed0a3fa8b7302ac6dc0498038d5fee890186a7f1995f6dc07a",
+        "de-smoke-k10\\metadata.json": "f58a5f8b8c7d02f4c5a92a380d848d3aff2ed74ec17b8f782e8dd7bb09fff0aa",
+        "de-smoke-k10\\eigen\\modes\\sample_0000\\mode_0000.json": "ecad318478a58fb6b7fe96da84e7f1da9b40364959684be2d4724d7705663e3c",
+        "de-smoke-k10\\eigen\\metadata\\linearization_state.v6.json": "27eb659c85c27f2fb80aab3164b82c7992e28bc8862dfd8fd866460cbaee84c7",
+        "de-smoke-k10\\eigen\\metadata\\equilibrium_artifact.v7.json": "86fc067a51b99899e52cc037900f64e37904cacbdf28dc24f2f0b0d6332086df",
+        "mode_metadata": "ecad318478a58fb6b7fe96da84e7f1da9b40364959684be2d4724d7705663e3c",
+        "mode_binary": "0ca9ab66bbb53f1672fb657ea69e5aa56a4d5a2677c6ba6458c7bac91cc283aa",
+        "mesh_cache": "19c9e3617ef5833f519a755e0f64cd7ecefb4b6a95fa4ec6059b75ef5e405604"
+      },
+      "profile_record": {
+        "run_path": "C:\\git\\fullmag\\storage\\runs\\eigensolve-dispersion-plan-20260-c5dfad6d7f548079\\3e3b5a6123934d8b8f63cfbf02ccad55\\comsol-dispersion\\683536d55bf94cf1b7e65b67c7e1e57d",
+        "pilot": "de-smoke-k10",
+        "geometry": "damon_eshbach",
+        "k_rad_per_m": 10000000.0,
+        "frequency_hz": 11219934614.914722,
+        "parameters": {
+          "film_thickness_m": 1e-08,
+          "exchange_stiffness_j_per_m": 1.3e-11,
+          "saturation_magnetisation_a_per_m": 800000.0,
+          "gamma0_rad_s_per_a_m": 221100.0,
+          "bias_field_a_per_m": 79577.47154594767
+        },
+        "artifact_sha256": {
+          "de-smoke-k10\\eigen\\branches.v2.json": "64f7b6d1a819b1e984a658de5db6e00a9a73e1523c46b43b0c85bdd563408564",
+          "de-smoke-k10\\eigen\\diagnostics\\solver.v1.json": "71c1ee35c5fa43a2ad80e5b9ba302c370f4ac1729369064f1a3e43efd8c7fd97",
+          "de-smoke-k10\\eigen\\dispersion.csv": "3212aa84abf5e9db585d0222ff6979d24aadf4d0083e8c1fa4a36587c06f8a27",
+          "de-smoke-k10\\eigen\\metadata\\eigen_summary.json": "1d42d3b9d8f732feb9cf935911fbdc905b97626713d305ef91895e7b390a442d",
+          "de-smoke-k10\\eigen\\spectrum.v2.json": "3f2283748241ac6e5a5bedeb6bb45ea91a2d61a9dfc2053f8ce5a8ed570ffd33",
+          "de-smoke-k10\\frequency_domain\\manifest.v1.json": "fb665c064880e0ed0a3fa8b7302ac6dc0498038d5fee890186a7f1995f6dc07a",
+          "de-smoke-k10\\metadata.json": "f58a5f8b8c7d02f4c5a92a380d848d3aff2ed74ec17b8f782e8dd7bb09fff0aa",
+          "de-smoke-k10\\eigen\\modes\\sample_0000\\mode_0000.json": "ecad318478a58fb6b7fe96da84e7f1da9b40364959684be2d4724d7705663e3c",
+          "de-smoke-k10\\eigen\\metadata\\linearization_state.v6.json": "27eb659c85c27f2fb80aab3164b82c7992e28bc8862dfd8fd866460cbaee84c7",
+          "de-smoke-k10\\eigen\\metadata\\equilibrium_artifact.v7.json": "86fc067a51b99899e52cc037900f64e37904cacbdf28dc24f2f0b0d6332086df"
+        }
+      }
+    },
+    {
+      "root": "C:\\git\\fullmag\\storage\\runs\\eigensolve-dispersion-plan-20260-c5dfad6d7f548079\\3e3b5a6123934d8b8f63cfbf02ccad55\\comsol-dispersion\\5b30d3edc5234aedaa46b946fc837fa1",
+      "k_rad_per_um": 25,
+      "requested_growth": "1.3",
+      "actual_growth": 1.3,
+      "frequency_hz": 13557589546.006004,
+      "relative_residual_l2": 1.6512488505169263e-11,
+      "certification_tolerance": 1e-08,
+      "selection_scope": "frequency_window",
+      "nodes": 6138,
+      "tetrahedra": 30012,
+      "magnetic_nodes": 396,
+      "magnetic_tetrahedra": 1476,
+      "body_volume_m3": 1.6000000000000008e-23,
+      "body_z_planes_m": [
+        -5e-09,
+        -1.666666666666667e-09,
+        1.6666666666666665e-09,
+        4.999999999999999e-09
+      ],
+      "all_z_planes_m": [
+        -2.005e-06,
+        -1.9766347520413493e-06,
+        -1.8766347520413494e-06,
+        -1.7766347520413495e-06,
+        -1.6766347520413496e-06,
+        -1.5766347520413497e-06,
+        -1.4766347520413499e-06,
+        -1.37663475204135e-06,
+        -1.27663475204135e-06,
+        -1.1766347520413502e-06,
+        -1.0766347520413503e-06,
+        -9.766347520413502e-07,
+        -8.766347520413502e-07,
+        -7.766347520413502e-07,
+        -6.766347520413502e-07,
+        -5.766347520413502e-07,
+        -4.7663475204135017e-07,
+        -3.766347520413502e-07,
+        -2.870267323395001e-07,
+        -2.180974864150001e-07,
+        -1.6507498955000007e-07,
+        -1.2428845350000004e-07,
+        -9.291419500000003e-08,
+        -6.878015000000001e-08,
+        -5.0215500000000004e-08,
+        -3.5935000000000004e-08,
+        -2.4950000000000005e-08,
+        -1.6500000000000002e-08,
+        -1e-08,
+        -5e-09,
+        -1.666666666666667e-09,
+        1.6666666666666665e-09,
+        4.999999999999999e-09,
+        9.999999999999999e-09,
+        1.6500000000000002e-08,
+        2.4950000000000005e-08,
+        3.5935000000000004e-08,
+        5.0215500000000004e-08,
+        6.878015000000001e-08,
+        9.291419500000003e-08,
+        1.2428845350000004e-07,
+        1.6507498955000007e-07,
+        2.180974864150001e-07,
+        2.870267323395001e-07,
+        3.766347520413502e-07,
+        4.7663475204135017e-07,
+        5.766347520413502e-07,
+        6.766347520413502e-07,
+        7.766347520413502e-07,
+        8.766347520413502e-07,
+        9.766347520413502e-07,
+        1.0766347520413503e-06,
+        1.1766347520413502e-06,
+        1.27663475204135e-06,
+        1.37663475204135e-06,
+        1.4766347520413499e-06,
+        1.5766347520413497e-06,
+        1.6766347520413496e-06,
+        1.7766347520413495e-06,
+        1.8766347520413494e-06,
+        1.9766347520413493e-06,
+        2.005e-06
+      ],
+      "body_coordinate_digest": "4c06592d1a93b2db96e484c0010d3e57ab73229cc7e3b71a5636129f8e419b3e",
+      "body_tetra_digest": "201ab3550f89cdaf2e2ff61699f11eaa7505e882aeb78a5f7bb8ae777aa851f1",
+      "parameters": {
+        "film_thickness_m": 1e-08,
+        "exchange_stiffness_j_per_m": 1.3e-11,
+        "saturation_magnetisation_a_per_m": 800000.0,
+        "gamma0_rad_s_per_a_m": 221100.0,
+        "bias_field_a_per_m": 79577.47154594767
+      },
+      "model_controls_except_air_growth": {
+        "air_padding_each_side_m": 2e-06,
+        "analytic_comparison": "postsolve_only",
+        "cell_period_m": 4e-08,
+        "dispersion_geometry": "damon_eshbach",
+        "eigen_solver_max_outer_iterations": 2000,
+        "eigen_solver_rtol": 1e-08,
+        "exchange_stiffness_j_per_m": 1.3e-11,
+        "external_induction_t": 0.1,
+        "film_thickness_m": 1e-08,
+        "frequency_window_hz": [
+          8500000000.0,
+          16000000000.0
+        ],
+        "gamma0_m_per_a_s": 221100.0,
+        "k_vectors_rad_per_m": [
+          [
+            0.0,
+            25000000.0,
+            0.0
+          ]
+        ],
+        "kx_rad_per_m": [
+          0.0
+        ],
+        "ky_rad_per_m": [
+          25000000.0
+        ],
+        "magnetic_element_size_m": 5e-09,
+        "mesh_level": "L2",
+        "modal_target": "frequency_window",
+        "mu0_t_m_a": 1.2566370614359173e-06,
+        "orientation": "M0=x,k=y,normal=z",
+        "outer_boundary_kind": "poisson_dirichlet",
+        "outer_boundary_potential_a": 0.0,
+        "qualification": "NOT VERIFIED",
+        "requested_mode_count": 1,
+        "sampling": "k25",
+        "saturation_magnetization_a_per_m": 800000.0,
+        "schema": "fullmag.de-smoke.v1",
+        "selection_scope": "frequency_window",
+        "target_frequency_hz": null,
+        "through_thickness_elements": 3,
+        "window_complete": null
+      },
+      "spectrum_completeness": null,
+      "window_complete": null,
+      "uniform_profile_overlap_squared_consistent_mass": 0.9998474979364644,
+      "actual_linearization_state_bound": true,
+      "equilibrium_schema": "equilibrium_artifact.v7",
+      "linearization_schema": "LinearizationState.v6",
+      "duration_seconds": 95.87990474700928,
+      "row_preflight": {
+        "schema": "fullmag.de-smoke-row-preflight.v2",
+        "status": "pass",
+        "qualification": "NOT VERIFIED",
+        "sampling": "k25",
+        "selection_scope": "frequency_window",
+        "mode_rows": 1,
+        "sample_count": 1,
+        "max_absolute_residual_norm": null,
+        "max_relative_residual_l2": 1.6512578958925935e-11,
+        "residual_scope": "full_projected_weak_form_and_periodic_seams",
+        "full_descriptor_certified": true,
+        "gamma_demag_operator_probe": null,
+        "dynamic_demag_operator_probes": [
+          {
+            "sample_index": 0,
+            "status": "passed",
+            "subwindow_count": 3,
+            "subwindows": [
+              {
+                "hermitian_relative_defect": 7.786526230079285e-16,
+                "directions": {
+                  "global_y": {
+                    "q_l2_norm": 18.110770276274835,
+                    "potential_relative_residual": 4.813163728337906e-14,
+                    "energy_form_relative_defect": 1.1304339266457891e-14
+                  },
+                  "global_z": {
+                    "q_l2_norm": 18.110770276274835,
+                    "potential_relative_residual": 6.589318011088714e-15,
+                    "energy_form_relative_defect": 0
+                  }
+                },
+                "subwindow_index": 0
+              },
+              {
+                "hermitian_relative_defect": 7.786526230079285e-16,
+                "directions": {
+                  "global_y": {
+                    "q_l2_norm": 18.110770276274835,
+                    "potential_relative_residual": 4.813163728337906e-14,
+                    "energy_form_relative_defect": 1.1304339266457891e-14
+                  },
+                  "global_z": {
+                    "q_l2_norm": 18.110770276274835,
+                    "potential_relative_residual": 6.589318011088714e-15,
+                    "energy_form_relative_defect": 0
+                  }
+                },
+                "subwindow_index": 1
+              },
+              {
+                "hermitian_relative_defect": 7.786526230079285e-16,
+                "directions": {
+                  "global_y": {
+                    "q_l2_norm": 18.110770276274835,
+                    "potential_relative_residual": 4.813163728337906e-14,
+                    "energy_form_relative_defect": 1.1304339266457891e-14
+                  },
+                  "global_z": {
+                    "q_l2_norm": 18.110770276274835,
+                    "potential_relative_residual": 6.589318011088714e-15,
+                    "energy_form_relative_defect": 0
+                  }
+                },
+                "subwindow_index": 2
+              }
+            ]
+          }
+        ],
+        "pending_requirements": [
+          "numeric-source attestation",
+          "T4 Gamma operator probe and finite-box Nz comparison",
+          "complex fields, Bloch phase and mesh identity",
+          "explicit n0 branch identification and analytical comparison",
+          "mesh, airbox and mode-count convergence"
+        ]
+      },
+      "ksp_report": {
+        "status": "pass",
+        "qualification": "NOT VERIFIED",
+        "sampling": "k25",
+        "requested_type": "fgmres",
+        "requested_rtol": 1e-09,
+        "configured_rtol": 1e-09,
+        "configured_atol": 1e-50,
+        "sample_count": 1,
+        "by_sample": {
+          "0": {
+            "sample_index": 0,
+            "k_vector_rad_m": [
+              0.0,
+              25000000.0,
+              0.0
+            ],
+            "breakdown_tolerance": null,
+            "subwindow_count": 3,
+            "subwindows": [
+              {
+                "index": 0,
+                "ksp_type": "fgmres",
+                "ksp_rtol": 1e-09,
+                "ksp_atol": 1e-50,
+                "pc_side": 1,
+                "norm_type": 2,
+                "eps_converged_reason": 1,
+                "ksp_converged_reason": 2,
+                "true_residual_criterion": {
+                  "solve_count": 61,
+                  "measured_count": 61,
+                  "violation_count": 0,
+                  "unavailable_count": 0,
+                  "maximum_tolerance_ratio": 0.9990603751418218
+                },
+                "last_tolerance_ratio": 0.41570654183513256
+              },
+              {
+                "index": 1,
+                "ksp_type": "fgmres",
+                "ksp_rtol": 1e-09,
+                "ksp_atol": 1e-50,
+                "pc_side": 1,
+                "norm_type": 2,
+                "eps_converged_reason": 1,
+                "ksp_converged_reason": 2,
+                "true_residual_criterion": {
+                  "solve_count": 61,
+                  "measured_count": 61,
+                  "violation_count": 0,
+                  "unavailable_count": 0,
+                  "maximum_tolerance_ratio": 0.9985035436124755
+                },
+                "last_tolerance_ratio": 0.7028774312318772
+              },
+              {
+                "index": 2,
+                "ksp_type": "fgmres",
+                "ksp_rtol": 1e-09,
+                "ksp_atol": 1e-50,
+                "pc_side": 1,
+                "norm_type": 2,
+                "eps_converged_reason": 1,
+                "ksp_converged_reason": 2,
+                "true_residual_criterion": {
+                  "solve_count": 47,
+                  "measured_count": 47,
+                  "violation_count": 0,
+                  "unavailable_count": 0,
+                  "maximum_tolerance_ratio": 0.9440274999603343
+                },
+                "last_tolerance_ratio": 0.7729137439443138
+              }
+            ]
+          }
+        }
+      },
+      "mode_identity": {
+        "source_mesh_topology_sha256": "sha256:bb8b079d74b8794b100a387c696b6a56c25de26556d6a3c7a1563f3daae8d207",
+        "equilibrium_artifact_sha256": "sha256:6dae08ae327386fcc539766fc61eaf647da5e7741417fc77e6781cfb92c4e505",
+        "linearization_state_sha256": "sha256:daf9768bd479c6313af82a4501183570e550693821d00830a75a623795554848",
+        "operator_input_signature_sha256": "sha256:f0c12589510bcb5307ac5e959759a28d5cb71d20792cb42e7b0a6c9134f8b006",
+        "phase_constraint_sha256": "sha256:1727fe9ef7227d9be51a826a192af2916c93595832d5ac1e3c1cf429bdbe462b"
+      },
+      "input_sha256": {
+        "run_result": "8948b49a9ccc054ce3a59d5a425b48fe50c28d0e6027542edbb838bf80eaf71c",
+        "de-smoke-k25\\eigen\\branches.v2.json": "b694bc8d5288acc3b793b6d2f4b6a9bb34e0de2d8979ed6b38e1532bdf025c0b",
+        "de-smoke-k25\\eigen\\diagnostics\\solver.v1.json": "615cc512a6683bed6dcec234dc81aaeb48c88d6908ffaedc3ab3501caadb4eec",
+        "de-smoke-k25\\eigen\\dispersion.csv": "a48cf606de6b9a804afacde3e2996c7fdf12dd69a4203bfcfe1a257534ab5997",
+        "de-smoke-k25\\eigen\\metadata\\eigen_summary.json": "633063ad6c8b5a8806844ab49aedb20956f34cc4957cc90ec98f35a94eebfb15",
+        "de-smoke-k25\\eigen\\spectrum.v2.json": "784d4355e458e5199e1f19f1f1481ef28db742db9eedf6f535d065341b04baa8",
+        "de-smoke-k25\\frequency_domain\\manifest.v1.json": "8fc0fd888ddbf842816968283054cbadbaa3b1760bcc303e433b41de26a22be8",
+        "de-smoke-k25\\metadata.json": "622d2a7c14908ee3f6fd455a3730e68a1f7c3888a6e7fb979d00469d110cbf04",
+        "de-smoke-k25\\eigen\\modes\\sample_0000\\mode_0000.json": "bc972a9fd71572c65f8d987976d3491e15aa38a4f2de96fb76b6aea6adf63ba2",
+        "de-smoke-k25\\eigen\\metadata\\linearization_state.v6.json": "2e160538b83d9c4dac3e97c0b09c806e64836a1a772a34ada6b1153d76b51be3",
+        "de-smoke-k25\\eigen\\metadata\\equilibrium_artifact.v7.json": "719e44c896bbc440faee202e0c32c47b5c603f8eb01dbc8598425bac32911d61",
+        "mode_metadata": "bc972a9fd71572c65f8d987976d3491e15aa38a4f2de96fb76b6aea6adf63ba2",
+        "mode_binary": "51fad17b52ae1e3a5554eef42c71921b312888bd6e9552e219eeab7150f186a0",
+        "mesh_cache": "37a313d99071967625c794306d5d782728832dc31fea046a60bca6e780f2f3a8"
+      },
+      "profile_record": {
+        "run_path": "C:\\git\\fullmag\\storage\\runs\\eigensolve-dispersion-plan-20260-c5dfad6d7f548079\\3e3b5a6123934d8b8f63cfbf02ccad55\\comsol-dispersion\\5b30d3edc5234aedaa46b946fc837fa1",
+        "pilot": "de-smoke-k25",
+        "geometry": "damon_eshbach",
+        "k_rad_per_m": 25000000.0,
+        "frequency_hz": 13557589546.006004,
+        "parameters": {
+          "film_thickness_m": 1e-08,
+          "exchange_stiffness_j_per_m": 1.3e-11,
+          "saturation_magnetisation_a_per_m": 800000.0,
+          "gamma0_rad_s_per_a_m": 221100.0,
+          "bias_field_a_per_m": 79577.47154594767
+        },
+        "artifact_sha256": {
+          "de-smoke-k25\\eigen\\branches.v2.json": "b694bc8d5288acc3b793b6d2f4b6a9bb34e0de2d8979ed6b38e1532bdf025c0b",
+          "de-smoke-k25\\eigen\\diagnostics\\solver.v1.json": "615cc512a6683bed6dcec234dc81aaeb48c88d6908ffaedc3ab3501caadb4eec",
+          "de-smoke-k25\\eigen\\dispersion.csv": "a48cf606de6b9a804afacde3e2996c7fdf12dd69a4203bfcfe1a257534ab5997",
+          "de-smoke-k25\\eigen\\metadata\\eigen_summary.json": "633063ad6c8b5a8806844ab49aedb20956f34cc4957cc90ec98f35a94eebfb15",
+          "de-smoke-k25\\eigen\\spectrum.v2.json": "784d4355e458e5199e1f19f1f1481ef28db742db9eedf6f535d065341b04baa8",
+          "de-smoke-k25\\frequency_domain\\manifest.v1.json": "8fc0fd888ddbf842816968283054cbadbaa3b1760bcc303e433b41de26a22be8",
+          "de-smoke-k25\\metadata.json": "622d2a7c14908ee3f6fd455a3730e68a1f7c3888a6e7fb979d00469d110cbf04",
+          "de-smoke-k25\\eigen\\modes\\sample_0000\\mode_0000.json": "bc972a9fd71572c65f8d987976d3491e15aa38a4f2de96fb76b6aea6adf63ba2",
+          "de-smoke-k25\\eigen\\metadata\\linearization_state.v6.json": "2e160538b83d9c4dac3e97c0b09c806e64836a1a772a34ada6b1153d76b51be3",
+          "de-smoke-k25\\eigen\\metadata\\equilibrium_artifact.v7.json": "719e44c896bbc440faee202e0c32c47b5c603f8eb01dbc8598425bac32911d61"
+        }
+      }
+    },
+    {
+      "root": "C:\\git\\fullmag\\storage\\runs\\eigensolve-dispersion-plan-20260-c5dfad6d7f548079\\3e3b5a6123934d8b8f63cfbf02ccad55\\comsol-dispersion\\ff04ba0fba7942c093cfc60799cb3a2c",
+      "k_rad_per_um": 25,
+      "requested_growth": "1.15",
+      "actual_growth": 1.15,
+      "frequency_hz": 13581679730.277756,
+      "relative_residual_l2": 2.4732875680093902e-11,
+      "certification_tolerance": 1e-08,
+      "selection_scope": "frequency_window",
+      "nodes": 7524,
+      "tetrahedra": 36900,
+      "magnetic_nodes": 396,
+      "magnetic_tetrahedra": 1476,
+      "body_volume_m3": 1.6000000000000008e-23,
+      "body_z_planes_m": [
+        -5e-09,
+        -1.666666666666667e-09,
+        1.6666666666666665e-09,
+        4.999999999999999e-09
+      ],
+      "all_z_planes_m": [
+        -2.005e-06,
+        -1.9931581900723726e-06,
+        -1.8931581900723727e-06,
+        -1.7931581900723728e-06,
+        -1.693158190072373e-06,
+        -1.593158190072373e-06,
+        -1.4931581900723732e-06,
+        -1.3931581900723733e-06,
+        -1.2931581900723734e-06,
+        -1.1931581900723735e-06,
+        -1.0931581900723736e-06,
+        -9.931581900723737e-07,
+        -8.931581900723738e-07,
+        -7.931581900723738e-07,
+        -6.931581900723738e-07,
+        -5.990506000629338e-07,
+        -5.172179130982033e-07,
+        -4.460590548680029e-07,
+        -3.841817868417417e-07,
+        -3.3037546681890583e-07,
+        -2.8358736245122247e-07,
+        -2.429020543054109e-07,
+        -2.0752352548296598e-07,
+        -1.7675958737649218e-07,
+        -1.5000833684912364e-07,
+        -1.2674637986880316e-07,
+        -1.0651859119026364e-07,
+        -8.892920973066405e-08,
+        -7.363409541796874e-08,
+        -6.033399601562499e-08,
+        -4.876869218749999e-08,
+        -3.871190624999999e-08,
+        -2.9966874999999996e-08,
+        -2.23625e-08,
+        -1.575e-08,
+        -1e-08,
+        -5e-09,
+        -1.666666666666667e-09,
+        1.6666666666666665e-09,
+        4.999999999999999e-09,
+        9.999999999999999e-09,
+        1.575e-08,
+        2.23625e-08,
+        2.9966874999999996e-08,
+        3.871190624999999e-08,
+        4.876869218749999e-08,
+        6.033399601562499e-08,
+        7.363409541796874e-08,
+        8.892920973066405e-08,
+        1.0651859119026364e-07,
+        1.2674637986880316e-07,
+        1.5000833684912364e-07,
+        1.7675958737649218e-07,
+        2.0752352548296598e-07,
+        2.429020543054109e-07,
+        2.8358736245122247e-07,
+        3.3037546681890583e-07,
+        3.841817868417417e-07,
+        4.460590548680029e-07,
+        5.172179130982033e-07,
+        5.990506000629338e-07,
+        6.931581900723738e-07,
+        7.931581900723738e-07,
+        8.931581900723738e-07,
+        9.931581900723737e-07,
+        1.0931581900723736e-06,
+        1.1931581900723735e-06,
+        1.2931581900723734e-06,
+        1.3931581900723733e-06,
+        1.4931581900723732e-06,
+        1.593158190072373e-06,
+        1.693158190072373e-06,
+        1.7931581900723728e-06,
+        1.8931581900723727e-06,
+        1.9931581900723726e-06,
+        2.005e-06
+      ],
+      "body_coordinate_digest": "4c06592d1a93b2db96e484c0010d3e57ab73229cc7e3b71a5636129f8e419b3e",
+      "body_tetra_digest": "201ab3550f89cdaf2e2ff61699f11eaa7505e882aeb78a5f7bb8ae777aa851f1",
+      "parameters": {
+        "film_thickness_m": 1e-08,
+        "exchange_stiffness_j_per_m": 1.3e-11,
+        "saturation_magnetisation_a_per_m": 800000.0,
+        "gamma0_rad_s_per_a_m": 221100.0,
+        "bias_field_a_per_m": 79577.47154594767
+      },
+      "model_controls_except_air_growth": {
+        "air_padding_each_side_m": 2e-06,
+        "analytic_comparison": "postsolve_only",
+        "cell_period_m": 4e-08,
+        "dispersion_geometry": "damon_eshbach",
+        "eigen_solver_max_outer_iterations": 2000,
+        "eigen_solver_rtol": 1e-08,
+        "exchange_stiffness_j_per_m": 1.3e-11,
+        "external_induction_t": 0.1,
+        "film_thickness_m": 1e-08,
+        "frequency_window_hz": [
+          8500000000.0,
+          16000000000.0
+        ],
+        "gamma0_m_per_a_s": 221100.0,
+        "k_vectors_rad_per_m": [
+          [
+            0.0,
+            25000000.0,
+            0.0
+          ]
+        ],
+        "kx_rad_per_m": [
+          0.0
+        ],
+        "ky_rad_per_m": [
+          25000000.0
+        ],
+        "magnetic_element_size_m": 5e-09,
+        "mesh_level": "L2",
+        "modal_target": "frequency_window",
+        "mu0_t_m_a": 1.2566370614359173e-06,
+        "orientation": "M0=x,k=y,normal=z",
+        "outer_boundary_kind": "poisson_dirichlet",
+        "outer_boundary_potential_a": 0.0,
+        "qualification": "NOT VERIFIED",
+        "requested_mode_count": 1,
+        "sampling": "k25",
+        "saturation_magnetization_a_per_m": 800000.0,
+        "schema": "fullmag.de-smoke.v1",
+        "selection_scope": "frequency_window",
+        "target_frequency_hz": null,
+        "through_thickness_elements": 3,
+        "window_complete": null
+      },
+      "spectrum_completeness": null,
+      "window_complete": null,
+      "uniform_profile_overlap_squared_consistent_mass": 0.9998476491581628,
+      "actual_linearization_state_bound": true,
+      "equilibrium_schema": "equilibrium_artifact.v7",
+      "linearization_schema": "LinearizationState.v6",
+      "duration_seconds": 108.71011257171631,
+      "row_preflight": {
+        "schema": "fullmag.de-smoke-row-preflight.v2",
+        "status": "pass",
+        "qualification": "NOT VERIFIED",
+        "sampling": "k25",
+        "selection_scope": "frequency_window",
+        "mode_rows": 1,
+        "sample_count": 1,
+        "max_absolute_residual_norm": null,
+        "max_relative_residual_l2": 2.4732875680093902e-11,
+        "residual_scope": "full_projected_weak_form_and_periodic_seams",
+        "full_descriptor_certified": true,
+        "gamma_demag_operator_probe": null,
+        "dynamic_demag_operator_probes": [
+          {
+            "sample_index": 0,
+            "status": "passed",
+            "subwindow_count": 3,
+            "subwindows": [
+              {
+                "hermitian_relative_defect": 1.132783930072735e-15,
+                "directions": {
+                  "global_y": {
+                    "q_l2_norm": 18.110770276274835,
+                    "potential_relative_residual": 3.0402182207622605e-14,
+                    "energy_form_relative_defect": 9.157824157093887e-16
+                  },
+                  "global_z": {
+                    "q_l2_norm": 18.110770276274835,
+                    "potential_relative_residual": 5.319246198326956e-15,
+                    "energy_form_relative_defect": 1.4365214364068844e-16
+                  }
+                },
+                "subwindow_index": 0
+              },
+              {
+                "hermitian_relative_defect": 1.132783930072735e-15,
+                "directions": {
+                  "global_y": {
+                    "q_l2_norm": 18.110770276274835,
+                    "potential_relative_residual": 3.0402182207622605e-14,
+                    "energy_form_relative_defect": 9.157824157093887e-16
+                  },
+                  "global_z": {
+                    "q_l2_norm": 18.110770276274835,
+                    "potential_relative_residual": 5.319246198326956e-15,
+                    "energy_form_relative_defect": 1.4365214364068844e-16
+                  }
+                },
+                "subwindow_index": 1
+              },
+              {
+                "hermitian_relative_defect": 1.132783930072735e-15,
+                "directions": {
+                  "global_y": {
+                    "q_l2_norm": 18.110770276274835,
+                    "potential_relative_residual": 3.0402182207622605e-14,
+                    "energy_form_relative_defect": 9.157824157093887e-16
+                  },
+                  "global_z": {
+                    "q_l2_norm": 18.110770276274835,
+                    "potential_relative_residual": 5.319246198326956e-15,
+                    "energy_form_relative_defect": 1.4365214364068844e-16
+                  }
+                },
+                "subwindow_index": 2
+              }
+            ]
+          }
+        ],
+        "pending_requirements": [
+          "numeric-source attestation",
+          "T4 Gamma operator probe and finite-box Nz comparison",
+          "complex fields, Bloch phase and mesh identity",
+          "explicit n0 branch identification and analytical comparison",
+          "mesh, airbox and mode-count convergence"
+        ]
+      },
+      "ksp_report": {
+        "status": "pass",
+        "qualification": "NOT VERIFIED",
+        "sampling": "k25",
+        "requested_type": "fgmres",
+        "requested_rtol": 1e-09,
+        "configured_rtol": 1e-09,
+        "configured_atol": 1e-50,
+        "sample_count": 1,
+        "by_sample": {
+          "0": {
+            "sample_index": 0,
+            "k_vector_rad_m": [
+              0.0,
+              25000000.0,
+              0.0
+            ],
+            "breakdown_tolerance": null,
+            "subwindow_count": 3,
+            "subwindows": [
+              {
+                "index": 0,
+                "ksp_type": "fgmres",
+                "ksp_rtol": 1e-09,
+                "ksp_atol": 1e-50,
+                "pc_side": 1,
+                "norm_type": 2,
+                "eps_converged_reason": 1,
+                "ksp_converged_reason": 2,
+                "true_residual_criterion": {
+                  "solve_count": 61,
+                  "measured_count": 61,
+                  "violation_count": 0,
+                  "unavailable_count": 0,
+                  "maximum_tolerance_ratio": 0.9799894998591676
+                },
+                "last_tolerance_ratio": 0.555471194167827
+              },
+              {
+                "index": 1,
+                "ksp_type": "fgmres",
+                "ksp_rtol": 1e-09,
+                "ksp_atol": 1e-50,
+                "pc_side": 1,
+                "norm_type": 2,
+                "eps_converged_reason": 1,
+                "ksp_converged_reason": 2,
+                "true_residual_criterion": {
+                  "solve_count": 61,
+                  "measured_count": 61,
+                  "violation_count": 0,
+                  "unavailable_count": 0,
+                  "maximum_tolerance_ratio": 0.9910042096762867
+                },
+                "last_tolerance_ratio": 0.6581103763423656
+              },
+              {
+                "index": 2,
+                "ksp_type": "fgmres",
+                "ksp_rtol": 1e-09,
+                "ksp_atol": 1e-50,
+                "pc_side": 1,
+                "norm_type": 2,
+                "eps_converged_reason": 1,
+                "ksp_converged_reason": 2,
+                "true_residual_criterion": {
+                  "solve_count": 47,
+                  "measured_count": 47,
+                  "violation_count": 0,
+                  "unavailable_count": 0,
+                  "maximum_tolerance_ratio": 0.9994121864210397
+                },
+                "last_tolerance_ratio": 0.9888955407164114
+              }
+            ]
+          }
+        }
+      },
+      "mode_identity": {
+        "source_mesh_topology_sha256": "sha256:47abebc9a9012f6c2d128b86c2ce959cafc690c88ce0d9a6a764139468529192",
+        "equilibrium_artifact_sha256": "sha256:3e18db577f8442f0f4644a9799567baaaa1bc11b40a2ffe715d1069038129db9",
+        "linearization_state_sha256": "sha256:a7417853e5f51bc36016108814c2279820da3a8ae2ccc01f9e7fd4210adbdfb6",
+        "operator_input_signature_sha256": "sha256:87a2131c9bb51316de8d2779c64250ee7209c82d2d4e9f6f86346af540ca997d",
+        "phase_constraint_sha256": "sha256:c20f4afb2582530d28c9859becc26b581d1df6db802e512e1c9dcc58e08ab81e"
+      },
+      "input_sha256": {
+        "run_result": "1c4673a95b81e5eabaefa3fab8ce376fd23543d0c7f230d2f3801959db092e13",
+        "de-smoke-k25\\eigen\\branches.v2.json": "5b76405b763d483fdafb90e402c79a779cc266360a041074da3ad57455a49be1",
+        "de-smoke-k25\\eigen\\diagnostics\\solver.v1.json": "eabb34f175c3c5813c10f67bf3ee158d87dc0c88270163c857827520ca6775f5",
+        "de-smoke-k25\\eigen\\dispersion.csv": "f1cd3b2c41f8ba4f34eb500d45feb6fac09a76a39a41b07947aa6bb13b212f64",
+        "de-smoke-k25\\eigen\\metadata\\eigen_summary.json": "8a2f695605de057eace5247b4615c1ec2fcdf9b2679d54d77e88b184d2673866",
+        "de-smoke-k25\\eigen\\spectrum.v2.json": "83b72b30a22774a33730857684f172333aecffab78bc5621a9029ca0c2390c2f",
+        "de-smoke-k25\\frequency_domain\\manifest.v1.json": "0b631ee61ff8d45a487fe19a3177384ebec295986a28362a12769056afeb4684",
+        "de-smoke-k25\\metadata.json": "455185a0774f0f07c38a46e07dbb70722e94f722a9aa7c6b7f40177f95443d93",
+        "de-smoke-k25\\eigen\\modes\\sample_0000\\mode_0000.json": "55338d214a2a8a7468d2e520f77d4fc6c4236ca401dd320deeeb7bfa9d2d6139",
+        "de-smoke-k25\\eigen\\metadata\\linearization_state.v6.json": "7787a1f5a86f33fb30b8a24dad4cda5cc3bb3d5127db2f6b15881054349fd48a",
+        "de-smoke-k25\\eigen\\metadata\\equilibrium_artifact.v7.json": "2ea532a9592402c54afa44a4a3b6b30cfbab0aad0e0ade2efdaea962d5b656ee",
+        "mode_metadata": "55338d214a2a8a7468d2e520f77d4fc6c4236ca401dd320deeeb7bfa9d2d6139",
+        "mode_binary": "2edb77eb56707b2b8deb7ceb21ea2ed6cc67a401e3b1dd566fa74176dd3e3992",
+        "mesh_cache": "0496546a06cc9e34753cb894b12308e8f903a80e6641f657af84e6f9a679af01"
+      },
+      "profile_record": {
+        "run_path": "C:\\git\\fullmag\\storage\\runs\\eigensolve-dispersion-plan-20260-c5dfad6d7f548079\\3e3b5a6123934d8b8f63cfbf02ccad55\\comsol-dispersion\\ff04ba0fba7942c093cfc60799cb3a2c",
+        "pilot": "de-smoke-k25",
+        "geometry": "damon_eshbach",
+        "k_rad_per_m": 25000000.0,
+        "frequency_hz": 13581679730.277756,
+        "parameters": {
+          "film_thickness_m": 1e-08,
+          "exchange_stiffness_j_per_m": 1.3e-11,
+          "saturation_magnetisation_a_per_m": 800000.0,
+          "gamma0_rad_s_per_a_m": 221100.0,
+          "bias_field_a_per_m": 79577.47154594767
+        },
+        "artifact_sha256": {
+          "de-smoke-k25\\eigen\\branches.v2.json": "5b76405b763d483fdafb90e402c79a779cc266360a041074da3ad57455a49be1",
+          "de-smoke-k25\\eigen\\diagnostics\\solver.v1.json": "eabb34f175c3c5813c10f67bf3ee158d87dc0c88270163c857827520ca6775f5",
+          "de-smoke-k25\\eigen\\dispersion.csv": "f1cd3b2c41f8ba4f34eb500d45feb6fac09a76a39a41b07947aa6bb13b212f64",
+          "de-smoke-k25\\eigen\\metadata\\eigen_summary.json": "8a2f695605de057eace5247b4615c1ec2fcdf9b2679d54d77e88b184d2673866",
+          "de-smoke-k25\\eigen\\spectrum.v2.json": "83b72b30a22774a33730857684f172333aecffab78bc5621a9029ca0c2390c2f",
+          "de-smoke-k25\\frequency_domain\\manifest.v1.json": "0b631ee61ff8d45a487fe19a3177384ebec295986a28362a12769056afeb4684",
+          "de-smoke-k25\\metadata.json": "455185a0774f0f07c38a46e07dbb70722e94f722a9aa7c6b7f40177f95443d93",
+          "de-smoke-k25\\eigen\\modes\\sample_0000\\mode_0000.json": "55338d214a2a8a7468d2e520f77d4fc6c4236ca401dd320deeeb7bfa9d2d6139",
+          "de-smoke-k25\\eigen\\metadata\\linearization_state.v6.json": "7787a1f5a86f33fb30b8a24dad4cda5cc3bb3d5127db2f6b15881054349fd48a",
+          "de-smoke-k25\\eigen\\metadata\\equilibrium_artifact.v7.json": "2ea532a9592402c54afa44a4a3b6b30cfbab0aad0e0ade2efdaea962d5b656ee"
+        }
+      }
+    },
+    {
+      "root": "C:\\git\\fullmag\\storage\\runs\\eigensolve-dispersion-plan-20260-c5dfad6d7f548079\\3e3b5a6123934d8b8f63cfbf02ccad55\\comsol-dispersion\\7556866ed8e3493cb7a4253e04c91062",
+      "k_rad_per_um": 25,
+      "requested_growth": "1.075",
+      "actual_growth": 1.075,
+      "frequency_hz": 13591128076.90979,
+      "relative_residual_l2": 1.5426374305400064e-11,
+      "certification_tolerance": 1e-08,
+      "selection_scope": "frequency_window",
+      "nodes": 10098,
+      "tetrahedra": 49692,
+      "magnetic_nodes": 396,
+      "magnetic_tetrahedra": 1476,
+      "body_volume_m3": 1.6000000000000008e-23,
+      "body_z_planes_m": [
+        -5e-09,
+        -1.666666666666667e-09,
+        1.6666666666666665e-09,
+        4.999999999999999e-09
+      ],
+      "all_z_planes_m": [
+        -2.005e-06,
+        -1.9284915772985436e-06,
+        -1.8284915772985437e-06,
+        -1.7284915772985438e-06,
+        -1.628491577298544e-06,
+        -1.528491577298544e-06,
+        -1.4284915772985442e-06,
+        -1.328491577298544e-06,
+        -1.231503792835855e-06,
+        -1.141282597986842e-06,
+        -1.057355905104039e-06,
+        -9.792845628874781e-07,
+        -9.066600584999796e-07,
+        -8.39102379999981e-07,
+        -7.762580279069591e-07,
+        -7.177981654948457e-07,
+        -6.634168981347402e-07,
+        -6.128296726834793e-07,
+        -5.657717885427714e-07,
+        -5.21997012597927e-07,
+        -4.812762907887693e-07,
+        -4.433965495709482e-07,
+        -4.081595809962309e-07,
+        -3.7538100557788924e-07,
+        -3.448893075143156e-07,
+        -3.1652493722261915e-07,
+        -2.9013947648615735e-07,
+        -2.655948618475882e-07,
+        -2.42762662183803e-07,
+        -2.2152340668260742e-07,
+        -2.017659597047511e-07,
+        -1.8338693926023358e-07,
+        -1.6629017605603125e-07,
+        -1.5038621028468023e-07,
+        -1.3559182352063278e-07,
+        -1.2182960327500723e-07,
+        -1.090275379302393e-07,
+        -9.711863993510633e-08,
+        -8.604059528847103e-08,
+        -7.573543747764746e-08,
+        -6.614924416525345e-08,
+        -5.7231855037445066e-08,
+        -4.8936609337158203e-08,
+        -4.1220101708984375e-08,
+        -3.4041955078125e-08,
+        -2.7364609375000003e-08,
+        -2.1153125e-08,
+        -1.5375e-08,
+        -1e-08,
+        -5e-09,
+        -1.666666666666667e-09,
+        1.6666666666666665e-09,
+        4.999999999999999e-09,
+        9.999999999999999e-09,
+        1.5374999999999997e-08,
+        2.1153125e-08,
+        2.7364609375000003e-08,
+        3.4041955078125e-08,
+        4.1220101708984375e-08,
+        4.8936609337158203e-08,
+        5.7231855037445066e-08,
+        6.614924416525345e-08,
+        7.573543747764746e-08,
+        8.604059528847103e-08,
+        9.711863993510633e-08,
+        1.090275379302393e-07,
+        1.2182960327500723e-07,
+        1.3559182352063278e-07,
+        1.5038621028468023e-07,
+        1.6629017605603125e-07,
+        1.8338693926023358e-07,
+        2.017659597047511e-07,
+        2.2152340668260742e-07,
+        2.42762662183803e-07,
+        2.655948618475882e-07,
+        2.9013947648615735e-07,
+        3.1652493722261915e-07,
+        3.448893075143156e-07,
+        3.7538100557788924e-07,
+        4.081595809962309e-07,
+        4.433965495709482e-07,
+        4.812762907887693e-07,
+        5.21997012597927e-07,
+        5.657717885427714e-07,
+        6.128296726834793e-07,
+        6.634168981347402e-07,
+        7.177981654948457e-07,
+        7.762580279069591e-07,
+        8.39102379999981e-07,
+        9.066600584999796e-07,
+        9.792845628874781e-07,
+        1.057355905104039e-06,
+        1.141282597986842e-06,
+        1.231503792835855e-06,
+        1.328491577298544e-06,
+        1.4284915772985442e-06,
+        1.528491577298544e-06,
+        1.628491577298544e-06,
+        1.7284915772985438e-06,
+        1.8284915772985437e-06,
+        1.9284915772985436e-06,
+        2.005e-06
+      ],
+      "body_coordinate_digest": "4c06592d1a93b2db96e484c0010d3e57ab73229cc7e3b71a5636129f8e419b3e",
+      "body_tetra_digest": "201ab3550f89cdaf2e2ff61699f11eaa7505e882aeb78a5f7bb8ae777aa851f1",
+      "parameters": {
+        "film_thickness_m": 1e-08,
+        "exchange_stiffness_j_per_m": 1.3e-11,
+        "saturation_magnetisation_a_per_m": 800000.0,
+        "gamma0_rad_s_per_a_m": 221100.0,
+        "bias_field_a_per_m": 79577.47154594767
+      },
+      "model_controls_except_air_growth": {
+        "air_padding_each_side_m": 2e-06,
+        "analytic_comparison": "postsolve_only",
+        "cell_period_m": 4e-08,
+        "dispersion_geometry": "damon_eshbach",
+        "eigen_solver_max_outer_iterations": 2000,
+        "eigen_solver_rtol": 1e-08,
+        "exchange_stiffness_j_per_m": 1.3e-11,
+        "external_induction_t": 0.1,
+        "film_thickness_m": 1e-08,
+        "frequency_window_hz": [
+          8500000000.0,
+          16000000000.0
+        ],
+        "gamma0_m_per_a_s": 221100.0,
+        "k_vectors_rad_per_m": [
+          [
+            0.0,
+            25000000.0,
+            0.0
+          ]
+        ],
+        "kx_rad_per_m": [
+          0.0
+        ],
+        "ky_rad_per_m": [
+          25000000.0
+        ],
+        "magnetic_element_size_m": 5e-09,
+        "mesh_level": "L2",
+        "modal_target": "frequency_window",
+        "mu0_t_m_a": 1.2566370614359173e-06,
+        "orientation": "M0=x,k=y,normal=z",
+        "outer_boundary_kind": "poisson_dirichlet",
+        "outer_boundary_potential_a": 0.0,
+        "qualification": "NOT VERIFIED",
+        "requested_mode_count": 1,
+        "sampling": "k25",
+        "saturation_magnetization_a_per_m": 800000.0,
+        "schema": "fullmag.de-smoke.v1",
+        "selection_scope": "frequency_window",
+        "target_frequency_hz": null,
+        "through_thickness_elements": 3,
+        "window_complete": null
+      },
+      "spectrum_completeness": null,
+      "window_complete": null,
+      "uniform_profile_overlap_squared_consistent_mass": 0.999847709070999,
+      "actual_linearization_state_bound": true,
+      "equilibrium_schema": "equilibrium_artifact.v7",
+      "linearization_schema": "LinearizationState.v6",
+      "duration_seconds": 135.0213475227356,
+      "row_preflight": {
+        "schema": "fullmag.de-smoke-row-preflight.v2",
+        "status": "pass",
+        "qualification": "NOT VERIFIED",
+        "sampling": "k25",
+        "selection_scope": "frequency_window",
+        "mode_rows": 1,
+        "sample_count": 1,
+        "max_absolute_residual_norm": null,
+        "max_relative_residual_l2": 1.5426374305400064e-11,
+        "residual_scope": "full_projected_weak_form_and_periodic_seams",
+        "full_descriptor_certified": true,
+        "gamma_demag_operator_probe": null,
+        "dynamic_demag_operator_probes": [
+          {
+            "sample_index": 0,
+            "status": "passed",
+            "subwindow_count": 3,
+            "subwindows": [
+              {
+                "hermitian_relative_defect": 5.1344002623498e-16,
+                "directions": {
+                  "global_y": {
+                    "q_l2_norm": 18.110770276274835,
+                    "potential_relative_residual": 3.1062334200880493e-14,
+                    "energy_form_relative_defect": 1.6155286907567776e-16
+                  },
+                  "global_z": {
+                    "q_l2_norm": 18.110770276274835,
+                    "potential_relative_residual": 5.664810799119193e-15,
+                    "energy_form_relative_defect": 1.0052178520264395e-15
+                  }
+                },
+                "subwindow_index": 0
+              },
+              {
+                "hermitian_relative_defect": 5.1344002623498e-16,
+                "directions": {
+                  "global_y": {
+                    "q_l2_norm": 18.110770276274835,
+                    "potential_relative_residual": 3.1062334200880493e-14,
+                    "energy_form_relative_defect": 1.6155286907567776e-16
+                  },
+                  "global_z": {
+                    "q_l2_norm": 18.110770276274835,
+                    "potential_relative_residual": 5.664810799119193e-15,
+                    "energy_form_relative_defect": 1.0052178520264395e-15
+                  }
+                },
+                "subwindow_index": 1
+              },
+              {
+                "hermitian_relative_defect": 5.1344002623498e-16,
+                "directions": {
+                  "global_y": {
+                    "q_l2_norm": 18.110770276274835,
+                    "potential_relative_residual": 3.1062334200880493e-14,
+                    "energy_form_relative_defect": 1.6155286907567776e-16
+                  },
+                  "global_z": {
+                    "q_l2_norm": 18.110770276274835,
+                    "potential_relative_residual": 5.664810799119193e-15,
+                    "energy_form_relative_defect": 1.0052178520264395e-15
+                  }
+                },
+                "subwindow_index": 2
+              }
+            ]
+          }
+        ],
+        "pending_requirements": [
+          "numeric-source attestation",
+          "T4 Gamma operator probe and finite-box Nz comparison",
+          "complex fields, Bloch phase and mesh identity",
+          "explicit n0 branch identification and analytical comparison",
+          "mesh, airbox and mode-count convergence"
+        ]
+      },
+      "ksp_report": {
+        "status": "pass",
+        "qualification": "NOT VERIFIED",
+        "sampling": "k25",
+        "requested_type": "fgmres",
+        "requested_rtol": 1e-09,
+        "configured_rtol": 1e-09,
+        "configured_atol": 1e-50,
+        "sample_count": 1,
+        "by_sample": {
+          "0": {
+            "sample_index": 0,
+            "k_vector_rad_m": [
+              0.0,
+              25000000.0,
+              0.0
+            ],
+            "breakdown_tolerance": null,
+            "subwindow_count": 3,
+            "subwindows": [
+              {
+                "index": 0,
+                "ksp_type": "fgmres",
+                "ksp_rtol": 1e-09,
+                "ksp_atol": 1e-50,
+                "pc_side": 1,
+                "norm_type": 2,
+                "eps_converged_reason": 1,
+                "ksp_converged_reason": 2,
+                "true_residual_criterion": {
+                  "solve_count": 61,
+                  "measured_count": 61,
+                  "violation_count": 0,
+                  "unavailable_count": 0,
+                  "maximum_tolerance_ratio": 0.9979845136608845
+                },
+                "last_tolerance_ratio": 0.33965116208830964
+              },
+              {
+                "index": 1,
+                "ksp_type": "fgmres",
+                "ksp_rtol": 1e-09,
+                "ksp_atol": 1e-50,
+                "pc_side": 1,
+                "norm_type": 2,
+                "eps_converged_reason": 1,
+                "ksp_converged_reason": 2,
+                "true_residual_criterion": {
+                  "solve_count": 61,
+                  "measured_count": 61,
+                  "violation_count": 0,
+                  "unavailable_count": 0,
+                  "maximum_tolerance_ratio": 0.9940829488255964
+                },
+                "last_tolerance_ratio": 0.8674675275680818
+              },
+              {
+                "index": 2,
+                "ksp_type": "fgmres",
+                "ksp_rtol": 1e-09,
+                "ksp_atol": 1e-50,
+                "pc_side": 1,
+                "norm_type": 2,
+                "eps_converged_reason": 1,
+                "ksp_converged_reason": 2,
+                "true_residual_criterion": {
+                  "solve_count": 47,
+                  "measured_count": 47,
+                  "violation_count": 0,
+                  "unavailable_count": 0,
+                  "maximum_tolerance_ratio": 0.9977715686605056
+                },
+                "last_tolerance_ratio": 0.8030629340257156
+              }
+            ]
+          }
+        }
+      },
+      "mode_identity": {
+        "source_mesh_topology_sha256": "sha256:228582ae2356b804cdcbf7aa4855228133344bab872838182d216ac8cf53266c",
+        "equilibrium_artifact_sha256": "sha256:31b34482b7ac5330402c12913654a3079ff66e2361bb8e98743501284e011efd",
+        "linearization_state_sha256": "sha256:328ea0e4ba75e3ca3eda581e1bc1659a7c1d6a7edbf99819a345f6e35e9c181e",
+        "operator_input_signature_sha256": "sha256:2ed7068e3667f7263b2a28fd5404226b219492b6a4a6e182cfce81094e42dbb1",
+        "phase_constraint_sha256": "sha256:3a54b3e664ad2001e726d410da1b6762b41cb3b7259018bd7200aa71c807ee8f"
+      },
+      "input_sha256": {
+        "run_result": "e51197860860e88a3478f929e3f7fbe056fa77b4ae125f8c1de20d859a4e70a1",
+        "de-smoke-k25\\eigen\\branches.v2.json": "99ed781adb8aa1e2c0e98ff67021fdac2700d87131e9314bf99b4a429ac67f9a",
+        "de-smoke-k25\\eigen\\diagnostics\\solver.v1.json": "781b18058379c683576939cdea30d49896690e7e2f0ae8aee307201378ffa546",
+        "de-smoke-k25\\eigen\\dispersion.csv": "994e2fb2e2b02dbc2e98748cb4a06b522387b96f655213e8e599cb61580b8bf1",
+        "de-smoke-k25\\eigen\\metadata\\eigen_summary.json": "c9a793eb897ec657b98be9e6a480b3110bc7effc9bfda2a1db176c2ad5f69469",
+        "de-smoke-k25\\eigen\\spectrum.v2.json": "1dd87212bc122a392818f2d0ba14da33f5d591b7172a34f8dc76d713f73788db",
+        "de-smoke-k25\\frequency_domain\\manifest.v1.json": "72972828b37b6db51e09d3a3d98248458020c6edd9d32ff394ab645a78d3f598",
+        "de-smoke-k25\\metadata.json": "dc348af5943fb81017fb897390bc7dd1cf79bff6f734616832081c6ab5614b60",
+        "de-smoke-k25\\eigen\\modes\\sample_0000\\mode_0000.json": "2758d70fd1a4803a9906c4d7484e836cb2cf3ded273737fd480cb953b9653a4f",
+        "de-smoke-k25\\eigen\\metadata\\linearization_state.v6.json": "ed5146c4a5505ddd0bc1252b5ba2423d4f90a04c3c6f86e77239f3fcf43bcb84",
+        "de-smoke-k25\\eigen\\metadata\\equilibrium_artifact.v7.json": "c1ea9b94d055632162fa5d0841896aa44ae9a183b8dd4f1b66396880e22c6e04",
+        "mode_metadata": "2758d70fd1a4803a9906c4d7484e836cb2cf3ded273737fd480cb953b9653a4f",
+        "mode_binary": "3b07abd0b265d43119a9653b7f703ab3d81c3c92692145e99ec474752ebbd913",
+        "mesh_cache": "707175336f1911d3515213e8df66fa01aa5614b323161a32fde7f5c81b3a6a7a"
+      },
+      "profile_record": {
+        "run_path": "C:\\git\\fullmag\\storage\\runs\\eigensolve-dispersion-plan-20260-c5dfad6d7f548079\\3e3b5a6123934d8b8f63cfbf02ccad55\\comsol-dispersion\\7556866ed8e3493cb7a4253e04c91062",
+        "pilot": "de-smoke-k25",
+        "geometry": "damon_eshbach",
+        "k_rad_per_m": 25000000.0,
+        "frequency_hz": 13591128076.90979,
+        "parameters": {
+          "film_thickness_m": 1e-08,
+          "exchange_stiffness_j_per_m": 1.3e-11,
+          "saturation_magnetisation_a_per_m": 800000.0,
+          "gamma0_rad_s_per_a_m": 221100.0,
+          "bias_field_a_per_m": 79577.47154594767
+        },
+        "artifact_sha256": {
+          "de-smoke-k25\\eigen\\branches.v2.json": "99ed781adb8aa1e2c0e98ff67021fdac2700d87131e9314bf99b4a429ac67f9a",
+          "de-smoke-k25\\eigen\\diagnostics\\solver.v1.json": "781b18058379c683576939cdea30d49896690e7e2f0ae8aee307201378ffa546",
+          "de-smoke-k25\\eigen\\dispersion.csv": "994e2fb2e2b02dbc2e98748cb4a06b522387b96f655213e8e599cb61580b8bf1",
+          "de-smoke-k25\\eigen\\metadata\\eigen_summary.json": "c9a793eb897ec657b98be9e6a480b3110bc7effc9bfda2a1db176c2ad5f69469",
+          "de-smoke-k25\\eigen\\spectrum.v2.json": "1dd87212bc122a392818f2d0ba14da33f5d591b7172a34f8dc76d713f73788db",
+          "de-smoke-k25\\frequency_domain\\manifest.v1.json": "72972828b37b6db51e09d3a3d98248458020c6edd9d32ff394ab645a78d3f598",
+          "de-smoke-k25\\metadata.json": "dc348af5943fb81017fb897390bc7dd1cf79bff6f734616832081c6ab5614b60",
+          "de-smoke-k25\\eigen\\modes\\sample_0000\\mode_0000.json": "2758d70fd1a4803a9906c4d7484e836cb2cf3ded273737fd480cb953b9653a4f",
+          "de-smoke-k25\\eigen\\metadata\\linearization_state.v6.json": "ed5146c4a5505ddd0bc1252b5ba2423d4f90a04c3c6f86e77239f3fcf43bcb84",
+          "de-smoke-k25\\eigen\\metadata\\equilibrium_artifact.v7.json": "c1ea9b94d055632162fa5d0841896aa44ae9a183b8dd4f1b66396880e22c6e04"
+        }
+      }
+    }
+  ],
+  "comparisons": [
+    {
+      "k_rad_per_um": 10,
+      "baseline_growth": 1.3,
+      "candidate_growth": 1.15,
+      "body_topology_comparison_passed": true,
+      "max_body_m0_component_difference": 4.783647197650786e-20,
+      "max_body_static_field_difference_a_per_m": {
+        "h_demag0_a_per_m": 3.620345169860956e-11,
+        "h_eff0_a_per_m": 2.0372681319713593e-09
+      },
+      "comparison_scale_a_per_m": {
+        "h_demag0_a_per_m": 1.0,
+        "h_eff0_a_per_m": 79577.47154594939
+      },
+      "unchanged_static_field_comparison_bounds_a_per_m": {
+        "h_demag0_a_per_m": 1e-12,
+        "h_eff0_a_per_m": 7.957747154594938e-08
+      },
+      "static_field_gate_passed": false,
+      "squared_mode_overlap_consistent_P1_mass": 0.9999999424841307,
+      "frequency_change_hz": 10868580.294813156
+    },
+    {
+      "k_rad_per_um": 10,
+      "baseline_growth": 1.3,
+      "candidate_growth": 1.075,
+      "body_topology_comparison_passed": true,
+      "max_body_m0_component_difference": 1.3224649079342903e-22,
+      "max_body_static_field_difference_a_per_m": {
+        "h_demag0_a_per_m": 9.996927864309488e-14,
+        "h_eff0_a_per_m": 1.4551915228366852e-11
+      },
+      "comparison_scale_a_per_m": {
+        "h_demag0_a_per_m": 1.0,
+        "h_eff0_a_per_m": 79577.47154594939
+      },
+      "unchanged_static_field_comparison_bounds_a_per_m": {
+        "h_demag0_a_per_m": 1e-12,
+        "h_eff0_a_per_m": 7.957747154594938e-08
+      },
+      "static_field_gate_passed": true,
+      "squared_mode_overlap_consistent_P1_mass": 0.9999998954267169,
+      "frequency_change_hz": 14649290.548566818
+    },
+    {
+      "k_rad_per_um": 25,
+      "baseline_growth": 1.3,
+      "candidate_growth": 1.15,
+      "body_topology_comparison_passed": true,
+      "max_body_m0_component_difference": 4.783647197650786e-20,
+      "max_body_static_field_difference_a_per_m": {
+        "h_demag0_a_per_m": 3.620345169860956e-11,
+        "h_eff0_a_per_m": 2.0372681319713593e-09
+      },
+      "comparison_scale_a_per_m": {
+        "h_demag0_a_per_m": 1.0,
+        "h_eff0_a_per_m": 79577.47154594939
+      },
+      "unchanged_static_field_comparison_bounds_a_per_m": {
+        "h_demag0_a_per_m": 1e-12,
+        "h_eff0_a_per_m": 7.957747154594938e-08
+      },
+      "static_field_gate_passed": false,
+      "squared_mode_overlap_consistent_P1_mass": 0.9999998137030156,
+      "frequency_change_hz": 24090184.271751404
+    },
+    {
+      "k_rad_per_um": 25,
+      "baseline_growth": 1.3,
+      "candidate_growth": 1.075,
+      "body_topology_comparison_passed": true,
+      "max_body_m0_component_difference": 1.3224649079342903e-22,
+      "max_body_static_field_difference_a_per_m": {
+        "h_demag0_a_per_m": 9.996927864309488e-14,
+        "h_eff0_a_per_m": 1.4551915228366852e-11
+      },
+      "comparison_scale_a_per_m": {
+        "h_demag0_a_per_m": 1.0,
+        "h_eff0_a_per_m": 79577.47154594939
+      },
+      "unchanged_static_field_comparison_bounds_a_per_m": {
+        "h_demag0_a_per_m": 1e-12,
+        "h_eff0_a_per_m": 7.957747154594938e-08
+      },
+      "static_field_gate_passed": true,
+      "squared_mode_overlap_consistent_P1_mass": 0.9999996383819058,
+      "frequency_change_hz": 33538530.903785706
+    }
+  ],
+  "status": "actual results preserved; strict isolation is NOT VERIFIED",
+  "whole_S00_S12": "OPEN"
+}

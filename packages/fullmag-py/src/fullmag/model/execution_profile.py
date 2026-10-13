@@ -418,3 +418,58 @@ class ExecutionProfile:
                 _required(profile, "defaults", "execution_profile")
             ),
         )
+
+
+def _parallel_execution_lane(source: Mapping[str, object], backend: object, device: object) -> tuple[object, object]:
+    """Project authored selectors for policy validation, never resource admission.
+
+    Profile declarations make legacy selectors inactive. Replay only backend
+    and device with the shared application resolver's layer order/conflict
+    rules. The original profile/layers remain intact for full Rust binding.
+    """
+    if "execution_profile" not in source:
+        return backend, device
+    profile = ExecutionProfile.from_ir(source["execution_profile"])
+    raw_layers = source.get("execution_layers", [])
+    if not isinstance(raw_layers, list):
+        raise TypeError("execution_layers must be a list")
+    layers = [ExecutionRequestLayer.from_ir(item) for item in raw_layers]
+    values = {"backend": "auto", "device": "auto"}
+    origins = {key: "product_default" for key in values}
+    defaults = profile.defaults.to_ir()
+    for key in values:
+        if key in defaults:
+            values[key], origins[key] = defaults[key], "profile"
+    ranks = {"script": 0, "study": 1, "step": 2, "submit": 3, "cli": 3}
+    previous_rank = -1
+    submitted = False
+    for layer in layers:
+        if layer.kind == "legacy_env":
+            continue
+        rank = ranks[layer.kind]
+        if rank < previous_rank:
+            raise ValueError("execution_request_layers must be ordered script, study, step, then submit or cli")
+        protected = layer.kind in {"submit", "cli"}
+        if protected and submitted:
+            raise ValueError("execution_request_layers may contain only one submit or cli layer")
+        submitted = submitted or protected
+        previous_rank = rank
+        patch = layer.request.to_ir()
+        for key in values:
+            if key not in patch:
+                continue
+            if protected and origins[key] != "product_default" and values[key] != "auto" and values[key] != patch[key]:
+                raise ValueError(f"execution_intent_conflict: {key} from {origins[key]} conflicts with {layer.kind}")
+            values[key], origins[key] = patch[key], layer.kind
+    for layer in layers:
+        if layer.kind != "legacy_env":
+            continue
+        patch = layer.request.to_ir()
+        for key in values:
+            if key not in patch:
+                continue
+            if origins[key] != "product_default" and values[key] != patch[key]:
+                raise ValueError(f"execution_intent_conflict: {key} conflicts with legacy_env")
+            if origins[key] == "product_default":
+                values[key], origins[key] = patch[key], "legacy_env"
+    return values["backend"], values["device"]

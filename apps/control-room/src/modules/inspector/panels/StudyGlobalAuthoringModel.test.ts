@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import type { JsonObject, JsonValue } from "@/kernel/api/apiTypes";
+import { activeLaneCapabilityFixture } from "@/kernel/resources/activeLaneCapabilityFixture.testSupport";
 import type { ActiveLaneCapabilitySnapshot } from "@/kernel/resources/useActiveLaneCapabilities";
 
 import {
@@ -10,6 +12,13 @@ import {
   resolveFdmGridPreview,
   validateStudyGlobalDraft,
 } from "./StudyGlobalAuthoringModel";
+
+function requireJsonObject(value: JsonValue | undefined): JsonObject {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("expected a JSON object in the study merge patch");
+  }
+  return value;
+}
 
 function activeLaneSnapshot({
   device,
@@ -470,6 +479,14 @@ describe("StudyGlobalAuthoringModel", () => {
       requestedDevice: "gpu",
       requestedMode: "extended",
       requestedPrecision: "single",
+      parallelExecution: {
+        mode: "serial",
+        maxCpuPercent: "90",
+        maxMemoryPercent: "80",
+        memoryReserveMiB: "1024",
+        maxWorkers: "",
+        threadsPerWorker: "1",
+      },
       solver: {
         adaptiveTimestep: null,
         demagInterval: "",
@@ -486,6 +503,223 @@ describe("StudyGlobalAuthoringModel", () => {
         torqueTolerance: "",
       },
     });
+  });
+
+  it("defaults missing parallel execution policy to serial", () => {
+    expect(createStudyGlobalDraft({ study: {} }).parallelExecution.mode).toBe(
+      "serial",
+    );
+  });
+
+  it("loads an explicit null parallel policy as canonical serial defaults", () => {
+    const draft = createStudyGlobalDraft({ study: { parallel_execution: null } });
+    expect(draft.parallelExecution).toEqual({
+      mode: "serial",
+      maxCpuPercent: "90",
+      maxMemoryPercent: "80",
+      memoryReserveMiB: "1024",
+      maxWorkers: "",
+      threadsPerWorker: "1",
+    });
+    expect(
+      validateStudyGlobalDraft(draft).map((issue) => issue.message),
+    ).not.toContain("Parallel execution mode must be serial or adaptive.");
+
+    const request = buildStudyGlobalMergePatch(draft);
+    expect(request.kind).toBe("merge_patch");
+    if (request.kind !== "merge_patch") throw new Error("expected merge patch");
+    expect(requireJsonObject(request.merge_patch.study).parallel_execution).toEqual({
+      mode: "serial",
+      max_cpu_percent: 90,
+      max_memory_percent: 80,
+      memory_reserve_bytes: 1073741824,
+      max_workers: null,
+      threads_per_worker: 1,
+    });
+  });
+
+  it("preserves valid non-default serial policy fields through the study patch", () => {
+    const draft = createStudyGlobalDraft({
+      study: {
+        parallel_execution: {
+          mode: "serial",
+          max_cpu_percent: 75,
+          max_memory_percent: 60,
+          memory_reserve_bytes: 268435456,
+          max_workers: 2,
+          threads_per_worker: 3,
+        },
+      },
+    });
+    expect(draft.parallelExecution).toEqual({
+      mode: "serial",
+      maxCpuPercent: "75",
+      maxMemoryPercent: "60",
+      memoryReserveMiB: "256",
+      maxWorkers: "2",
+      threadsPerWorker: "3",
+    });
+    const policyIssues = validateStudyGlobalDraft(draft).filter((issue) =>
+      issue.message.startsWith("Maximum CPU target") ||
+      issue.message.startsWith("Maximum memory target") ||
+      issue.message.startsWith("Memory reserve") ||
+      issue.message.startsWith("Maximum workers") ||
+      issue.message.startsWith("Threads per worker"),
+    );
+    expect(policyIssues).toEqual([]);
+
+    const request = buildStudyGlobalMergePatch(draft);
+    expect(request.kind).toBe("merge_patch");
+    if (request.kind !== "merge_patch") throw new Error("expected merge patch");
+    expect(requireJsonObject(request.merge_patch.study).parallel_execution).toEqual({
+      mode: "serial",
+      max_cpu_percent: 75,
+      max_memory_percent: 60,
+      memory_reserve_bytes: 268435456,
+      max_workers: 2,
+      threads_per_worker: 3,
+    });
+  });
+
+  it("still validates numeric limits for serial parallel policies", () => {
+    const draft = createStudyGlobalDraft({
+      study: {
+        parallel_execution: {
+          mode: "serial",
+          max_cpu_percent: 0,
+          max_memory_percent: 101,
+          memory_reserve_bytes: -1,
+          max_workers: 0,
+          threads_per_worker: 0,
+        },
+      },
+    });
+    expect(validateStudyGlobalDraft(draft).map((issue) => issue.message)).toEqual(
+      expect.arrayContaining([
+        "Maximum CPU target must be finite and in the range (0, 100].",
+        "Maximum memory target must be finite and in the range (0, 100].",
+        "Memory reserve (MiB) must be finite, nonnegative, and convert to a safe integer number of bytes.",
+        "Maximum workers must be a positive integer.",
+        "Threads per worker must be a positive integer.",
+      ]),
+    );
+    expect(() => buildStudyGlobalMergePatch(draft)).toThrow(
+      "Maximum CPU target must be finite and in the range (0, 100].",
+    );
+  });
+
+  it("keeps malformed imported parallel policy values visible for validation", () => {
+    const draft = createStudyGlobalDraft({
+      study: {
+        parallel_execution: {
+          mode: "legacy",
+          max_cpu_percent: true,
+          max_memory_percent: " ",
+          memory_reserve_bytes: true,
+          max_workers: " ",
+          threads_per_worker: false,
+        },
+      },
+    });
+
+    expect(draft.parallelExecution).toEqual({
+      mode: "legacy",
+      maxCpuPercent: "invalid imported policy value: true",
+      maxMemoryPercent: 'invalid imported policy value: " "',
+      memoryReserveMiB: "invalid imported policy value: true",
+      maxWorkers: 'invalid imported policy value: " "',
+      threadsPerWorker: "invalid imported policy value: false",
+    });
+    expect(validateStudyGlobalDraft(draft).map((issue) => issue.message)).toEqual(
+      expect.arrayContaining([
+        "Parallel execution mode must be serial or adaptive.",
+        "Maximum CPU target must be finite and in the range (0, 100].",
+        "Maximum memory target must be finite and in the range (0, 100].",
+        "Memory reserve (MiB) must be finite, nonnegative, and convert to a safe integer number of bytes.",
+        "Maximum workers must be a positive integer.",
+        "Threads per worker must be a positive integer.",
+      ]),
+    );
+    expect(() => buildStudyGlobalMergePatch(draft)).toThrow(
+      "Parallel execution mode must be serial or adaptive.",
+    );
+  });
+
+  it("matches adaptive admission to solver stages and device transitions", () => {
+    const draft = createStudyGlobalDraft({ study: {
+      requested_backend: "fem", requested_device: "cpu",
+      parallel_execution: { mode: "adaptive" },
+    } });
+    const adaptiveIssues = (stages: readonly unknown[] | undefined) =>
+      validateStudyGlobalDraft(draft, {
+        studyStages: stages,
+      }).filter((issue) => issue.message.startsWith("Adaptive parallel execution"));
+    const accepted = [
+      [{ kind: "relax" }],
+      [{ kind: "eigenmodes", k_sampling: { path: "gamma-x", points: 3 } }],
+      [{ kind: "eigenmodes", k_sampling: { kind: "single", k_vector: [0, 0, 0] } }],
+      [{ kind: "eigenmodes" }],
+      [{ kind: "relax" }, { kind: "eigenmodes" }, { kind: "save_state" }],
+      [{ kind: "change_device", device: "gpu" }, { kind: "change_device", device: "cpu" }, { kind: "eigenmodes" }],
+    ];
+    for (const stages of accepted) expect(adaptiveIssues(stages)).toEqual([]);
+    const rejected = [
+      undefined, [], [{ kind: "frequency_response" }], [{ kind: "run" }],
+      [{ kind: "unknown" }], [{ kind: "save_state" }],
+      [{ kind: "experimental_eigen_task" }], [{ kind: "custom_relax_adapter" }],
+      [{ kind: "eigenmodes", bias_field_sweep: { samples_a_per_m: "invalid" } }],
+      [{ kind: "eigenmodes", bias_field_sweep: { samples_a_per_m: [] } }],
+      [{ kind: "eigenmodes", eigen_bias_field_sweep: { samples_a_per_m: ["not-a-vector"] } }],
+      [{ kind: "change_device", device: true }, { kind: "eigenmodes" }],
+      [{ kind: "change_device", device: {} }, { kind: "eigenmodes" }],
+      [{ kind: "relax" }, { kind: "frequency_response" }],
+      [{ kind: "eigenmodes", bias_field_sweep: { samples_a_per_m: [[1, 0, 0], [2, 0, 0]] } }],
+      [{ kind: "change_device", device: "gpu" }, { kind: "eigenmodes" }],
+    ];
+    for (const stages of rejected) expect(adaptiveIssues(stages).length).toBeGreaterThan(0);
+    expect(validateStudyGlobalDraft({ ...draft, parallelExecution: {
+      ...draft.parallelExecution, mode: "serial",
+    } }, { studyStages: [{ kind: "frequency_response" }] })
+      .filter((issue) => issue.message.startsWith("Adaptive parallel execution"))).toEqual([]);
+  });
+
+  it("uses the current workflow context rather than a prior eligible preview", () => {
+    const draft = createStudyGlobalDraft({ study: {
+      requested_backend: "fem", requested_device: "cpu",
+      parallel_execution: { mode: "adaptive" },
+    } });
+    const issues = (kind: string) => validateStudyGlobalDraft(draft, {
+      studyStages: [{ kind }],
+    }).filter((issue) => issue.message.startsWith("Adaptive parallel execution"));
+    expect(issues("eigenmodes")).toEqual([]);
+    expect(issues("frequency_response").length).toBeGreaterThan(0);
+  });
+
+  it("rejects adaptive parallel execution outside an explicit FEM CPU lane", () => {
+    const adaptive = createStudyGlobalDraft({
+      study: { parallel_execution: { mode: "adaptive" } },
+    });
+    const invalidLanes = [
+      adaptive,
+      { ...adaptive, requestedBackend: "fdm", requestedDevice: "cpu" },
+      { ...adaptive, requestedBackend: "fem", requestedDevice: "gpu" },
+    ];
+
+    for (const draft of invalidLanes) {
+      expect(validateStudyGlobalDraft(draft).map((issue) => issue.message)).toContain(
+        "Adaptive parallel execution requires an explicit FEM CPU lane for independent eigen k execution.",
+      );
+    }
+
+    expect(
+      validateStudyGlobalDraft({
+        ...adaptive,
+        requestedBackend: "fem",
+        requestedDevice: "cpu",
+      }).map((issue) => issue.message),
+    ).not.toContain(
+      "Adaptive parallel execution requires an explicit FEM CPU lane for independent eigen k execution.",
+    );
   });
 
   it("round-trips the complete FDM demag and boundary policy", () => {
@@ -544,6 +778,123 @@ describe("StudyGlobalAuthoringModel", () => {
     });
   });
 
+  it.each(["cpu", "gpu"])(
+    "uses the bound profile lane for adaptive eigen execution on %s",
+    (device) => {
+      const draft = createStudyGlobalDraft({ study: {
+        requested_backend: device === "cpu" ? "fdm" : "fem",
+        requested_device: device === "cpu" ? "gpu" : "cpu",
+        parallel_execution: { mode: "adaptive" },
+      } });
+      const lane = activeLaneCapabilityFixture();
+      lane.requested = { ...lane.requested, backend: "fem", discretization: "fem", device };
+      lane.resolved = { ...lane.requested };
+      const messages = validateStudyGlobalDraft(draft, {
+        activeLane: lane, executionProfileBound: true,
+      }).map((issue) => issue.message);
+      const cpuOnlyMessage = "Adaptive parallel execution requires an explicit FEM CPU lane for independent eigen k execution.";
+      expect(messages.includes(cpuOnlyMessage)).toBe(device !== "cpu");
+      const request = buildStudyGlobalMergePatch(draft, { executionProfileBound: true });
+      if (request.kind !== "merge_patch") throw new Error("expected merge patch");
+      const study = requireJsonObject(request.merge_patch.study);
+      expect(study.requested_cpu_threads).toBeUndefined();
+      expect(requireJsonObject(study.parallel_execution).mode).toBe("adaptive");
+    },
+  );
+
+  it("round-trips adaptive parallel execution settings through the study patch", () => {
+    const draft = createStudyGlobalDraft({
+      study: {
+        parallel_execution: {
+          mode: "adaptive",
+          max_cpu_percent: 90,
+          max_memory_percent: 80,
+          memory_reserve_bytes: 1073741824,
+          max_workers: 4,
+          threads_per_worker: 2,
+        },
+      },
+    });
+    expect(draft.parallelExecution).toEqual({
+      mode: "adaptive",
+      maxCpuPercent: "90",
+      maxMemoryPercent: "80",
+      memoryReserveMiB: "1024",
+      maxWorkers: "4",
+      threadsPerWorker: "2",
+    });
+    const request = buildStudyGlobalMergePatch(draft);
+    expect(request.kind).toBe("merge_patch");
+    if (request.kind !== "merge_patch") throw new Error("expected merge patch");
+    expect(requireJsonObject(request.merge_patch.study).parallel_execution).toEqual({
+      mode: "adaptive",
+      max_cpu_percent: 90,
+      max_memory_percent: 80,
+      memory_reserve_bytes: 1073741824,
+      max_workers: 4,
+      threads_per_worker: 2,
+    });
+  });
+
+  it("rejects fractional or unsafe memory reserve MiB without masking the input", () => {
+    const draft = createStudyGlobalDraft({ study: {} });
+    for (const memoryReserveMiB of ["0.1", "8589934592"]) {
+      const invalidDraft = {
+        ...draft,
+        parallelExecution: {
+          ...draft.parallelExecution,
+          memoryReserveMiB,
+        },
+      };
+      expect(
+        validateStudyGlobalDraft(invalidDraft).map((issue) => issue.message),
+      ).toContain(
+        "Memory reserve (MiB) must be finite, nonnegative, and convert to a safe integer number of bytes.",
+      );
+      expect(() => buildStudyGlobalMergePatch(invalidDraft)).toThrow(
+        "Memory reserve (MiB)",
+      );
+    }
+  });
+
+  it("round-trips arbitrary safe byte reserves through exact MiB values", () => {
+    for (const [memoryReserveBytes, expectedMiB] of [
+      [1000, "0.00095367431640625"],
+      [524288, "0.5"],
+    ] as const) {
+      const draft = createStudyGlobalDraft({
+        study: { parallel_execution: { memory_reserve_bytes: memoryReserveBytes } },
+      });
+      expect(draft.parallelExecution.memoryReserveMiB).toBe(expectedMiB);
+      const request = buildStudyGlobalMergePatch(draft);
+      expect(request.kind).toBe("merge_patch");
+      if (request.kind !== "merge_patch") throw new Error("expected merge patch");
+      expect(requireJsonObject(request.merge_patch.study).parallel_execution).toMatchObject({
+        memory_reserve_bytes: memoryReserveBytes,
+      });
+    }
+  });
+
+  it("accepts a half MiB reserve and exports canonical bytes", () => {
+    const draft = createStudyGlobalDraft({ study: {} });
+    const halfMiBDraft = {
+      ...draft,
+      parallelExecution: {
+        ...draft.parallelExecution,
+        memoryReserveMiB: "0.5",
+      },
+    };
+    expect(validateStudyGlobalDraft(halfMiBDraft).map((issue) => issue.message)).not.toContain(
+      "Memory reserve (MiB) must be finite, nonnegative, and convert to a safe integer number of bytes.",
+    );
+    const request = buildStudyGlobalMergePatch(halfMiBDraft);
+    expect(request.kind).toBe("merge_patch");
+    if (request.kind !== "merge_patch") throw new Error("expected merge patch");
+    expect(requireJsonObject(request.merge_patch.study).parallel_execution).toMatchObject({
+      memory_reserve_bytes: 524288,
+    });
+  });
+
   it("serializes global study settings into a model merge patch", () => {
     expect(
       buildStudyGlobalMergePatch({
@@ -557,6 +908,14 @@ describe("StudyGlobalAuthoringModel", () => {
         requestedDevice: "gpu",
         requestedMode: "strict",
         requestedPrecision: "double",
+        parallelExecution: {
+          mode: "adaptive",
+          maxCpuPercent: "90",
+          maxMemoryPercent: "80",
+          memoryReserveMiB: "1024",
+          maxWorkers: "",
+          threadsPerWorker: "1",
+        },
         solver: {
           adaptiveTimestep: null,
           demagInterval: "",
@@ -587,6 +946,14 @@ describe("StudyGlobalAuthoringModel", () => {
           requested_device: "gpu",
           requested_mode: "strict",
           requested_precision: "double",
+          parallel_execution: {
+            mode: "adaptive",
+            max_cpu_percent: 90,
+            max_memory_percent: 80,
+            memory_reserve_bytes: 1073741824,
+            max_workers: null,
+            threads_per_worker: 1,
+          },
           solver: {
             adaptive_timestep: null,
             demag_interval_s: null,
@@ -618,6 +985,14 @@ describe("StudyGlobalAuthoringModel", () => {
       requestedDevice: "cpu",
       requestedMode: "strict",
       requestedPrecision: "double",
+      parallelExecution: {
+        mode: "adaptive",
+        maxCpuPercent: "90",
+        maxMemoryPercent: "80",
+        memoryReserveMiB: "1024",
+        maxWorkers: "",
+        threadsPerWorker: "1",
+      },
       solver: {
         adaptiveTimestep: null,
         demagInterval: "",
@@ -697,6 +1072,14 @@ describe("StudyGlobalAuthoringModel", () => {
       requestedDevice: "auto",
       requestedMode: "strict",
       requestedPrecision: "double",
+      parallelExecution: {
+        mode: "adaptive",
+        maxCpuPercent: "90",
+        maxMemoryPercent: "80",
+        memoryReserveMiB: "1024",
+        maxWorkers: "",
+        threadsPerWorker: "1",
+      },
       solver: {
         adaptiveTimestep: null,
         demagInterval: "",
@@ -788,6 +1171,14 @@ describe("StudyGlobalAuthoringModel", () => {
         requestedDevice: "auto",
         requestedMode: "strict",
         requestedPrecision: "double",
+        parallelExecution: {
+          mode: "adaptive",
+          maxCpuPercent: "90",
+          maxMemoryPercent: "80",
+          memoryReserveMiB: "1024",
+          maxWorkers: "",
+          threadsPerWorker: "1",
+        },
       solver: {
         adaptiveTimestep: null,
         demagInterval: "",
@@ -808,6 +1199,8 @@ describe("StudyGlobalAuthoringModel", () => {
       "Backend is required.",
       "External field must contain three finite numbers.",
       "CPU threads must be a positive integer.",
+      "Adaptive parallel execution requires an explicit FEM CPU lane for independent eigen k execution.",
+      "Adaptive parallel execution requires a known Relax or Eigen workflow.",
       "Adaptive dt max must be greater than or equal to dt min.",
       "FEM demag policy must be a JSON object.",
     ]);

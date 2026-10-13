@@ -1,5 +1,7 @@
 "use client";
 
+import { useAnalysisResultDatasetCatalogResource } from "@/kernel/resources/analysisResultResources";
+import { usePostprocessingDefinitionsResource } from "@/kernel/resources/postprocessingDefinitionResources";
 import { useEffect, useMemo, useRef } from "react";
 import {
   ChevronsDownUp,
@@ -59,6 +61,11 @@ import {
   useSolverProfileResource,
   useSolverStatusResource,
 } from "@/kernel/resources/studyRuntimeResources";
+import {
+  projectFlatActiveLaneDiscretization,
+  resolveSessionAuthoringDiscretization,
+  type SessionDiscretizationCapabilitiesProjection,
+} from "@/kernel/resources/sessionDiscretization";
 import { WorkspaceRenderProfiler } from "@/kernel/performance/reactRenderProfiler";
 import { usePhysicsGraphResource } from "@/kernel/resources/physicsGraphResources";
 import { useObservationFrameListResource } from "@/kernel/resources/observationFrameResources";
@@ -184,9 +191,8 @@ function qualityStatus(value: unknown): string | null {
 }
 
 type ExplorerModelRuntimeStatus = {
-  capabilities: Pick<LiveStatusResource["capabilities"], "explicit_topology"> & {
-    active_lane_discretization?: string | null;
-  };
+  capabilities: Pick<LiveStatusResource["capabilities"], "explicit_topology"> &
+    SessionDiscretizationCapabilitiesProjection;
   domain: Pick<LiveStatusResource["domain"], "discretization">;
   resources: Pick<
     LiveStatusResource["resources"],
@@ -198,17 +204,19 @@ function selectExplorerModelRuntimeStatus(status: {
   data: LiveStatusResource | null;
 }): ExplorerModelRuntimeStatus | null {
   if (!status.data) return null;
-  const activeLane = status.data.capabilities?.active_lane;
+  const sourceCapabilities = status.data.capabilities;
+  const flatLane = projectFlatActiveLaneDiscretization(sourceCapabilities);
   const hasActiveLane = Object.prototype.hasOwnProperty.call(
-    status.data.capabilities,
+    sourceCapabilities ?? {},
     "active_lane",
   );
   return {
     capabilities: {
-      explicit_topology: status.data.capabilities.explicit_topology,
+      explicit_topology: status.data.capabilities?.explicit_topology ?? false,
       ...(hasActiveLane
-        ? { active_lane_discretization: activeLane?.resolved?.discretization ?? null }
+        ? { active_lane: sourceCapabilities?.active_lane ?? null }
         : {}),
+      ...(flatLane ? { active_lane_discretization: flatLane.value } : {}),
     },
     domain: {
       discretization: status.data.domain.discretization,
@@ -221,7 +229,7 @@ function selectExplorerModelRuntimeStatus(status: {
   };
 }
 
-function explorerModelRuntimeStatusEquals(
+export function explorerModelRuntimeStatusEquals(
   previous: ExplorerModelRuntimeStatus | null,
   next: ExplorerModelRuntimeStatus | null,
 ): boolean {
@@ -230,6 +238,24 @@ function explorerModelRuntimeStatusEquals(
   return (
     previous.capabilities.explicit_topology ===
       next.capabilities.explicit_topology &&
+    Object.prototype.hasOwnProperty.call(
+      previous.capabilities,
+      "active_lane",
+    ) === Object.prototype.hasOwnProperty.call(next.capabilities, "active_lane") &&
+    Object.prototype.hasOwnProperty.call(previous.capabilities.active_lane ?? {}, "authored") ===
+      Object.prototype.hasOwnProperty.call(next.capabilities.active_lane ?? {}, "authored") &&
+    previous.capabilities.active_lane?.authored?.backend === next.capabilities.active_lane?.authored?.backend &&
+    previous.capabilities.active_lane?.authored?.discretization === next.capabilities.active_lane?.authored?.discretization &&
+    previous.capabilities.active_lane?.resolved?.discretization ===
+      next.capabilities.active_lane?.resolved?.discretization &&
+    Object.prototype.hasOwnProperty.call(
+      previous.capabilities,
+      "active_lane_discretization",
+    ) ===
+      Object.prototype.hasOwnProperty.call(
+        next.capabilities,
+        "active_lane_discretization",
+      ) &&
     previous.capabilities.active_lane_discretization ===
       next.capabilities.active_lane_discretization &&
     previous.domain.discretization === next.domain.discretization &&
@@ -247,12 +273,12 @@ export function resolveExplorerModelDiscretization({
   activeLaneDiscretization: string | null | undefined;
   domainDiscretization: string | null | undefined;
 }): "fdm" | "fem" | null {
-  if (activeLaneDiscretization !== undefined) {
-    const activeLane = activeLaneDiscretization?.trim().toLowerCase();
-    return activeLane === "fdm" || activeLane === "fem" ? activeLane : null;
-  }
-  const domain = domainDiscretization?.trim().toLowerCase();
-  return domain === "fdm" || domain === "fem" ? domain : null;
+  return resolveSessionAuthoringDiscretization({
+    ...(activeLaneDiscretization !== undefined
+      ? { capabilities: { active_lane_discretization: activeLaneDiscretization } }
+      : {}),
+    domain: { discretization: domainDiscretization },
+  });
 }
 
 function planarMonitorTargetCapabilitiesFromResources({
@@ -393,11 +419,7 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
     selectExplorerModelRuntimeStatus,
     { enabled: modelTabActive, isEqual: explorerModelRuntimeStatusEquals },
   );
-  const modelDiscretization = resolveExplorerModelDiscretization({
-    activeLaneDiscretization:
-      sessionStatusData?.capabilities.active_lane_discretization,
-    domainDiscretization: sessionStatusData?.domain.discretization,
-  });
+  const modelDiscretization = resolveSessionAuthoringDiscretization(sessionStatusData);
   const modelResource = useSceneResource({ enabled: modelTabActive });
   const domainMeta = useDomainMetaResource({ enabled: modelTabActive });
   const fdmMultilayerLayout = useFdmMultilayerLayoutResource({
@@ -535,6 +557,12 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
     : "Analysis overlay rebind command is unavailable.";
   const frequencyDomainSpectrum = useFrequencyDomainEigenSpectrumResource({
     enabled: activeTab === "results" || modeVisualizationResourceActive,
+  });
+  const analysisDefinitions = usePostprocessingDefinitionsResource({
+    enabled: activeTab === "results",
+  });
+  const analysisDatasetCatalog = useAnalysisResultDatasetCatalogResource(currentRunId, {
+    enabled: activeTab === "results",
   });
   const frequencyDomainBranches = useFrequencyDomainEigenBranchesResource({
     enabled: activeTab === "results",
@@ -754,6 +782,7 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
               activeAnalysisFieldOverlay,
               currentTransports: currentTransports.data,
               frozenSpins: frozenSpins.data,
+              scene: modelResource.data,
               frequencyDomainManifest: frequencyDomainManifest.data,
               frequencyDomainResponseSweep: frequencyDomainResponseSweep.data,
               frequencyDomainSpectrum: frequencyDomainSpectrum.data,
@@ -764,6 +793,8 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
           )
         : buildExplorerTree(activeTab, {
               activeAnalysisFieldOverlay,
+              analysisDefinitions: analysisDefinitions.data?.definitions ?? null,
+              analysisDatasets: resultContextIsCurrent ? analysisDatasetCatalog.data?.items ?? null : null,
     artifacts: resultContextIsCurrent ? runtimeSnapshot.source.artifacts : undefined,
               resultContextContractGaps,
               resultContextRunId: resolvedResultContextRunId,
@@ -788,6 +819,8 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
     activeBuild.data,
     latestSuccessfulBuild.data,
     activeTab,
+    analysisDatasetCatalog.data,
+    analysisDefinitions.data,
     crossSections,
     currentTransports.data,
     frozenSpins.data,

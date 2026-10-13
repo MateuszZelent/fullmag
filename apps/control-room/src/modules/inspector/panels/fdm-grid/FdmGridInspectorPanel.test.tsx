@@ -1,5 +1,8 @@
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+import type { SceneResource } from "@/kernel/api/apiTypes";
+import { isAntennaVisualizationObject } from "../antenna/AntennaVisualizationObjectModel";
 
 import type { Selection } from "@/kernel/selection/selectionTypes";
 import {
@@ -18,6 +21,19 @@ import type {
   FdmGridSelectionInspectorModel,
 } from "./fdmGridInspectorModel";
 import type { FdmMultilayerInspectorModel } from "./fdmMultilayerInspectorModel";
+
+vi.mock("@/kernel/resources/geometryLifecycleResources", async (importOriginal) => {
+  const original = await importOriginal<typeof import("@/kernel/resources/geometryLifecycleResources")>();
+  return {
+    ...original,
+    useSceneResource: () => ({
+      data: { objects: [] },
+      error: null,
+      revision: 1,
+      status: "ready",
+    }),
+  };
+});
 
 function readyModel(): FdmGridInspectorModel {
   return {
@@ -89,6 +105,9 @@ describe("FdmGridInspectorPanelView", () => {
     const mainEntry = ObjectVisualizationPanel({
       selection: universeSelection,
     });
+
+    const scene = { objects: [] } as unknown as SceneResource;
+    expect(isAntennaVisualizationObject(scene, universeSelection.objectId)).toBe(false);
 
     expect(gridEntry.type).toBe(VisualizationTargetInspectorPanel);
     expect(mainEntry.type).toBe(VisualizationTargetInspectorPanel);

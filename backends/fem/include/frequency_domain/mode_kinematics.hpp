@@ -7,7 +7,10 @@
 namespace fullmag::fem::frequency_domain {
 
 constexpr double kGammaConsistencyRelativeTolerance = 1.0e-12;
-constexpr double kDefaultZeroFrequencyToleranceRadPerS = 1.0e-9;
+// The default mapper marks only an exactly zero finite angular frequency as
+// zero. An explicit ModeKinematicsPolicy may request an absolute tolerance;
+// that numerical classification does not certify a nullspace or Goldstone mode.
+constexpr double kDefaultZeroFrequencyToleranceRadPerS = 0.0;
 
 struct DynamicPencilMetadata {
     double gamma_abs_rad_per_s_t = 0.0;

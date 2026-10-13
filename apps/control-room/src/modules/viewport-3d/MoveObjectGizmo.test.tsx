@@ -7,7 +7,7 @@ import {
   moveAxisPointerHandlers,
 } from "./MoveObjectGizmo";
 import { isMoveCommitPending } from "./moveCommitLock";
-import { SIMULATION_PREPARATION_PATH } from "@/kernel/api/apiPaths";
+import { MODEL_GEOMETRY_REALIZATION_CURRENT_PATH, SIMULATION_PREPARATION_PATH } from "@/kernel/api/apiPaths";
 import {
   commitObjectTranslation,
   PROBLEM_IR_03_RIGID_TRANSFORM_REASON,
@@ -440,8 +440,9 @@ describe("MoveObjectGizmo", () => {
       object_id: "magnet-z",
       transform: { translation: [4e-9, 5e-9, 6e-9] },
     });
-    expect(invalidate).toHaveBeenCalledTimes(8);
-    expect(new Set(invalidate.mock.calls.map(([resourceKey]) => resourceKey)).size).toBe(8);
+    expect(invalidate).toHaveBeenCalledTimes(9);
+    expect(new Set(invalidate.mock.calls.map(([resourceKey]) => resourceKey)).size).toBe(9);
+    expect(invalidate).toHaveBeenCalledWith(MODEL_GEOMETRY_REALIZATION_CURRENT_PATH, 22);
     // Simulation preparation is keyed by a scene-scoped revision token; every
     // other dependent receives the numeric scene revision.
     expect(

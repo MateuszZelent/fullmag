@@ -12,6 +12,11 @@ import {
   type Selection,
 } from "@/kernel/selection/selectionTypes";
 import { resolveSceneRevision } from "@/kernel/visualization/visualizationDisplayResolution";
+import {
+  buildAuthoredMicrostripGeometry,
+  buildAuthoredCpwGeometry,
+  type AuthoredAntennaGeometry,
+} from "@/shared/domain/geometry/authoredMicrostripGeometry";
 
 import { magnetizationHslRgb } from "./orientation/magnetizationColor";
 import type { Viewport3DBounds } from "./viewport3dRenderModel";
@@ -21,6 +26,8 @@ type Viewport3DPrimitiveKind =
   | "box-cylinder-difference"
   | "cylinder"
   | "sphere"
+  | "microstrip"
+  | "cpw"
   | "unsupported";
 type Viewport3DPrimitiveMeshState =
   | "primitive-only"
@@ -37,6 +44,7 @@ export interface Viewport3DPrimitiveObject {
   label: string;
   magnetizationTexturePreview: Viewport3DMagnetizationTexturePreview | null;
   meshState: Viewport3DPrimitiveMeshState;
+  antennaPreview?: AuthoredAntennaGeometry;
   objectId: string;
   role?: string | null;
   sceneRevision: number;
@@ -66,6 +74,7 @@ export interface Viewport3DMagnetizationTexturePreview {
 }
 
 export interface Viewport3DPrimitiveRenderModel {
+  diagnostics?: Array<{ objectId: string; message: string }>;
   draftOverlay?: Viewport3DPrimitiveObject | null;
   objects: Viewport3DPrimitiveObject[];
   sceneRevision: number | null;
@@ -314,7 +323,10 @@ function objectMeshState(
   if (tags.includes("mesh:dirty") || tags.includes("mesh:building")) {
     return "mesh-stale";
   }
-  if (objectHasCsgPreview(object) && manifestSceneRevision(manifest) !== sceneRevision) {
+  const geometry = asRecord(object?.geometry);
+  const requiresCurrentScene = objectHasCsgPreview(object) ||
+    geometry?.geometry_kind === "MicrostripAntennaLayout" || geometry?.geometry_kind === "CPWAntennaLayout";
+  if (requiresCurrentScene && manifestSceneRevision(manifest) !== sceneRevision) {
     return "mesh-stale";
   }
 
@@ -492,6 +504,7 @@ export function buildViewport3DPrimitiveRenderModel(
     return { objects: [], sceneRevision };
   }
 
+  const diagnostics: NonNullable<Viewport3DPrimitiveRenderModel["diagnostics"]> = [];
   const objects = sceneRecord.objects.flatMap((value): Viewport3DPrimitiveObject[] => {
     const object = asRecord(value);
     const objectId = asString(object?.id);
@@ -509,19 +522,33 @@ export function buildViewport3DPrimitiveRenderModel(
     const state = objectMeshState(objectId, sceneRevision, manifest, object);
     const transform = asRecord(object.transform);
     const csgPreview = csgPreviewFromGeometry(geometry);
+    let antennaPreview: AuthoredAntennaGeometry | undefined;
+    if (geometry.geometry_kind === "MicrostripAntennaLayout" || geometry.geometry_kind === "CPWAntennaLayout") {
+      try {
+        antennaPreview = geometry.geometry_kind === "CPWAntennaLayout"
+          ? buildAuthoredCpwGeometry(geometry.geometry_params, object.transform)
+          : buildAuthoredMicrostripGeometry(geometry.geometry_params, object.transform);
+      } catch (error) {
+        diagnostics.push({ objectId, message: error instanceof Error ? error.message : String(error) });
+        return [];
+      }
+    }
     return [
       {
-        bounds: boundsFromGeometry(geometry, transform),
+        bounds: antennaPreview
+          ? boundsFromMinMax(antennaPreview.boundsMin, antennaPreview.boundsMax)
+          : boundsFromGeometry(geometry, transform),
         csgPreview,
         fallbackLabel: fallbackLabel(state),
         geometryKey: geometryKey(objectId, geometry, transform),
-        kind: primitiveKindFromGeometry(geometry),
+        kind: antennaPreview ? geometry.geometry_kind === "CPWAntennaLayout" ? "cpw" : "microstrip" : primitiveKindFromGeometry(geometry),
         label: asString(object.name) ?? objectId,
         magnetizationTexturePreview: magnetizationTexturePreview(
           sceneRecord,
           object,
         ),
         meshState: state,
+        antennaPreview,
         objectId,
         role: objectRole,
         sceneRevision,
@@ -531,6 +558,7 @@ export function buildViewport3DPrimitiveRenderModel(
   });
 
   return {
+    diagnostics,
     objects,
     sceneRevision,
   };

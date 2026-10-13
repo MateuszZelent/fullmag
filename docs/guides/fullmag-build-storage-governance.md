@@ -79,7 +79,7 @@ Tożsamość projektu wyznacza się z Git, a nie z bieżącego katalogu procesu:
 Dla obecnego układu Windows oznacza to logicznie:
 
 ```text
-C:\git\fullmag\
+D:\git\fullmag\
   fullmag\       główny checkout
   worktrees\    dodatkowe checkouty źródeł
   storage\      wszystkie nowe kontrolowane dane

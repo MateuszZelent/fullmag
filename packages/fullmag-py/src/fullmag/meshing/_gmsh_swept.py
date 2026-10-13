@@ -25,16 +25,18 @@ import numbers
 import tempfile
 from dataclasses import dataclass, replace as _dc_replace
 from pathlib import Path
-from typing import Any, Iterator, Literal
+from typing import Any, Iterator, Literal, Mapping
 
 import numpy as np
 from numpy.typing import NDArray
 
 from fullmag._progress import emit_progress, indeterminate_progress_phase
-from fullmag.model.geometry import ArchWaveguide, Box, Cylinder, Geometry
+from fullmag.model.geometry import ArchWaveguide, Box, Cylinder, Difference, Geometry
 
 from ._gmsh_types import (
     AirboxOptions,
+    FEM_EXACT_LAYER_PLANE_ABS_TOLERANCE_M,
+    FEM_EXACT_LAYER_PLANE_REL_TOLERANCE,
     FEM_TOPOLOGY_RELATIVE_DETERMINANT_EPS,
     MeshData,
     MeshRealizationReport,
@@ -55,16 +57,26 @@ from ._gmsh_infra import (
     _configure_gmsh_threads,
     _GmshProgressLogger,
 )
-from ._gmsh_extraction import _extract_mesh_data
-from ._gmsh_fields import _add_surface_threshold_field, _apply_mesh_options
+from ._gmsh_extraction import (
+    _extract_mesh_data,
+    _extract_quality_metrics,
+    certify_extracted_periodic_mesh,
+)
+from ._gmsh_fields import (
+    _add_surface_threshold_field,
+    _apply_mesh_options,
+    _apply_post_mesh_options,
+)
 from ._gmsh_airbox import (
     _MIXED_SHARED_GMSH_VERSION,
+    _add_airbox_geo,
     _add_conforming_swept_box_airbox_geo,
     _attach_mixed_layer_topology_certificate,
     _gmsh_cell_parts_in_extraction_order,
     _gmsh_cell_family_counts_for_entities,
     _gmsh_require_triangular_shell_interface,
 )
+from ._airbox_grading import _add_airbox_grading_field
 
 
 # ---------------------------------------------------------------------------
@@ -136,6 +148,255 @@ def _resolve_sweep_axis(
     return axis
 
 
+_SCOPED_LAYER_PLANE_PROOF_TOKEN = object()
+_SCOPED_LAYER_PLANE_PROOF_KEY = "_gmsh_layer_plane_proof"
+
+
+def _clear_scoped_layer_plane_proofs(options: MeshOptions) -> None:
+    """Invalidate prior mesh-attempt evidence before direct option reuse."""
+    for config in [*options.size_fields, *options.lower_bound_fields]:
+        if isinstance(config, dict):
+            config.pop(_SCOPED_LAYER_PLANE_PROOF_KEY, None)
+
+
+def _fresh_scoped_layer_plane_attempt_options(options: MeshOptions) -> MeshOptions:
+    """Clone size descriptors and remove proof before planning a new attempt."""
+
+    def _clone_descriptors(
+        descriptors: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        cloned: list[dict[str, Any]] = []
+        for descriptor in descriptors:
+            if isinstance(descriptor, Mapping):
+                entry = dict(descriptor)
+                entry.pop(_SCOPED_LAYER_PLANE_PROOF_KEY, None)
+                cloned.append(entry)
+            else:
+                cloned.append(descriptor)
+        return cloned
+
+    return _dc_replace(
+        options,
+        size_fields=_clone_descriptors(options.size_fields),
+        lower_bound_fields=_clone_descriptors(options.lower_bound_fields),
+    )
+
+
+def _quality_volumes_in_si(
+    quality: MeshQualityReport | None, coordinate_scale: float
+) -> MeshQualityReport | None:
+    """Convert dimensional volumes when Gmsh coordinates are scaled from SI."""
+    if quality is None:
+        return None
+    volume_factor = coordinate_scale ** -3
+    return _dc_replace(
+        quality,
+        volume_min=quality.volume_min * volume_factor,
+        volume_max=quality.volume_max * volume_factor,
+        volume_mean=quality.volume_mean * volume_factor,
+        volume_std=quality.volume_std * volume_factor,
+        element_volume=(
+            [volume * volume_factor for volume in quality.element_volume]
+            if quality.element_volume is not None else None
+        ),
+    )
+
+
+def _recertify_scaled_periodic_mesh(mesh: MeshData) -> MeshData:
+    """Return immutable SI mesh with newly validated periodic evidence."""
+    candidate = _dc_replace(mesh, periodic_mesh_certificate=None)
+    if not candidate.periodic_boundary_pairs:
+        return candidate
+    certificate = certify_extracted_periodic_mesh(
+        candidate.nodes,
+        candidate.boundary_faces,
+        candidate.boundary_markers,
+        candidate.periodic_boundary_pairs,
+        candidate.periodic_node_pairs,
+    )
+    return _dc_replace(candidate, periodic_mesh_certificate=certificate)
+
+
+THIN_FILM_SCOPED_LAYER_PARTITION_UNSUPPORTED = (
+    "thin_film_scoped_fields_require_exact_cell_geometric_airbox"
+)
+THIN_FILM_SCOPED_LAYER_PARTITION_UNSUPPORTED_REASON = (
+    "scoped thin-film fields currently require the exact-cell GEO Box path and "
+    "a geometric bbox airbox so requested body layer planes can be built before "
+    "3D meshing"
+)
+
+
+def _has_component_scoped_size_fields(options: MeshOptions) -> bool:
+    return bool(options.lower_bound_fields) or any(
+        isinstance(config, dict)
+        and isinstance(config.get("params"), dict)
+        and isinstance(config["params"].get("GeometryName"), str)
+        and bool(config["params"]["GeometryName"].strip())
+        for config in options.size_fields
+    )
+
+
+def _supports_scoped_layer_partitioned_box(
+    geometry: Geometry,
+    *,
+    airbox: AirboxOptions | None,
+) -> bool:
+    """Whether a Box or canonical ring supports exact GEO z-layer partitions."""
+    if airbox is None or airbox.grading_mode != "geometric":
+        return False
+    if isinstance(geometry, Box):
+        base = geometry
+    else:
+        components = _box_cylinder_ring_components(geometry)
+        if components is None:
+            return False
+        base, _tool = components
+    return _coincident_ring_airbox_bounds(base, airbox) is not None
+
+
+def _add_source_face_lower_bound_fields(
+    gmsh: Any,
+    *,
+    lower_bound_fields: list[dict[str, Any]],
+    source_surface: int,
+    hscale: float,
+) -> list[int]:
+    """Compile component lower bounds on a source face owned by the component."""
+    field_ids: list[int] = []
+    for config in lower_bound_fields:
+        if not isinstance(config, dict):
+            raise ValueError("mesh_lower_bound_field_invalid: config must be an object")
+        params = config.get("params", {})
+        if not isinstance(params, dict):
+            raise ValueError("mesh_lower_bound_field_invalid: params must be an object")
+        geometry_name = params.get("GeometryName")
+        if not isinstance(geometry_name, str) or not geometry_name.strip():
+            reason = "mesh_lower_bound_owner_binding_missing: GeometryName is required"
+            config["_gmsh_status"] = "rejected"
+            config["_gmsh_reason"] = reason
+            raise ValueError(reason)
+
+        size = float(params["MinimumElementSize"]) * hscale
+        if not math.isfinite(size) or size <= 0.0:
+            raise ValueError(
+                "mesh_lower_bound_field_invalid: MinimumElementSize must be finite and positive"
+            )
+        kind = config.get("kind")
+        if kind == "ComponentVolumeLowerBound":
+            field_id = gmsh.model.mesh.field.add("Constant")
+            gmsh.model.mesh.field.setNumbers(
+                field_id, "SurfacesList", [source_surface]
+            )
+            gmsh.model.mesh.field.setNumber(field_id, "VIn", size)
+            gmsh.model.mesh.field.setNumber(field_id, "VOut", 0.0)
+            gmsh.model.mesh.field.setNumber(field_id, "IncludeBoundary", 1)
+            field_ids.append(int(field_id))
+            continue
+
+        if kind != "ComponentRegionLowerBound":
+            reason = f"mesh_lower_bound_field_unsupported: kind='{kind}'"
+            config["_gmsh_status"] = "rejected"
+            config["_gmsh_reason"] = reason
+            raise ValueError(reason)
+
+        shape_kind = params.get("ShapeKind")
+        center = [float(value) * hscale for value in params.get("Center", [])]
+        if len(center) != 3:
+            raise ValueError("mesh_lower_bound_shape_unsupported: region center must be 3D")
+
+        if shape_kind == "box":
+            box_size = [float(value) * hscale for value in params.get("Size", [])]
+            if len(box_size) != 3:
+                raise ValueError("mesh_lower_bound_shape_unsupported: box size must be 3D")
+            shape_field = gmsh.model.mesh.field.add("Box")
+            gmsh.model.mesh.field.setNumber(shape_field, "VIn", size)
+            gmsh.model.mesh.field.setNumber(shape_field, "VOut", 0.0)
+            for axis, name in enumerate(("X", "Y", "Z")):
+                half_size = 0.5 * box_size[axis]
+                gmsh.model.mesh.field.setNumber(
+                    shape_field, f"{name}Min", center[axis] - half_size
+                )
+                gmsh.model.mesh.field.setNumber(
+                    shape_field, f"{name}Max", center[axis] + half_size
+                )
+        elif shape_kind == "cylinder":
+            axis = [
+                float(value) for value in params.get("Axis", [0.0, 0.0, 1.0])
+            ]
+            if len(axis) != 3:
+                raise ValueError(
+                    "mesh_lower_bound_shape_unsupported: cylinder axis must be 3D"
+                )
+            axis_norm = math.sqrt(sum(value * value for value in axis))
+            if not math.isfinite(axis_norm) or axis_norm <= 0.0:
+                raise ValueError("mesh_lower_bound_shape_unsupported: cylinder axis is zero")
+            axis_unit = [value / axis_norm for value in axis]
+            height = float(params["Height"]) * hscale
+            half_axis = [0.5 * height * value for value in axis_unit]
+            cylinder_fields: list[int] = []
+            for origin, direction in (
+                ([center[index] - half_axis[index] for index in range(3)], axis_unit),
+                (
+                    [center[index] + half_axis[index] for index in range(3)],
+                    [-value for value in axis_unit],
+                ),
+            ):
+                cylinder = gmsh.model.mesh.field.add("Cylinder")
+                gmsh.model.mesh.field.setNumber(cylinder, "VIn", size)
+                gmsh.model.mesh.field.setNumber(cylinder, "VOut", 0.0)
+                gmsh.model.mesh.field.setNumber(
+                    cylinder, "Radius", float(params["Radius"]) * hscale
+                )
+                gmsh.model.mesh.field.setNumber(cylinder, "XCenter", origin[0])
+                gmsh.model.mesh.field.setNumber(cylinder, "YCenter", origin[1])
+                gmsh.model.mesh.field.setNumber(cylinder, "ZCenter", origin[2])
+                for axis_name, value in zip(("XAxis", "YAxis", "ZAxis"), direction):
+                    gmsh.model.mesh.field.setNumber(
+                        cylinder, axis_name, value * height
+                    )
+                cylinder_fields.append(int(cylinder))
+            shape_field = gmsh.model.mesh.field.add("Min")
+            gmsh.model.mesh.field.setNumbers(
+                shape_field, "FieldsList", cylinder_fields
+            )
+        elif shape_kind == "sphere":
+            shape_field = gmsh.model.mesh.field.add("Ball")
+            gmsh.model.mesh.field.setNumber(shape_field, "VIn", size)
+            gmsh.model.mesh.field.setNumber(shape_field, "VOut", 0.0)
+            gmsh.model.mesh.field.setNumber(
+                shape_field, "Radius", float(params["Radius"]) * hscale
+            )
+            gmsh.model.mesh.field.setNumber(shape_field, "XCenter", center[0])
+            gmsh.model.mesh.field.setNumber(shape_field, "YCenter", center[1])
+            gmsh.model.mesh.field.setNumber(shape_field, "ZCenter", center[2])
+        else:
+            region_id = params.get("RegionId", "<unknown>")
+            reason = (
+                "mesh_lower_bound_shape_unsupported: "
+                f"region='{region_id}' shape_kind='{shape_kind}'"
+            )
+            config["_gmsh_status"] = "rejected"
+            config["_gmsh_reason"] = reason
+            raise ValueError(reason)
+
+        owner_mask = gmsh.model.mesh.field.add("Constant")
+        gmsh.model.mesh.field.setNumbers(
+            owner_mask, "SurfacesList", [source_surface]
+        )
+        gmsh.model.mesh.field.setNumber(owner_mask, "VIn", 1.0)
+        gmsh.model.mesh.field.setNumber(owner_mask, "VOut", 0.0)
+        gmsh.model.mesh.field.setNumber(owner_mask, "IncludeBoundary", 1)
+        scoped_field = gmsh.model.mesh.field.add("MathEval")
+        gmsh.model.mesh.field.setString(
+            scoped_field,
+            "F",
+            f"Min(F{shape_field}, {size:.17g}*F{owner_mask})",
+        )
+        field_ids.append(int(scoped_field))
+    return field_ids
+
+
 def _apply_mixed_source_face_mesh_options(
     gmsh: Any,
     *,
@@ -186,13 +447,40 @@ def _apply_mixed_source_face_mesh_options(
             continue
         generic_fields.append(config)
 
+    for config in opts.lower_bound_fields:
+        params = config.get("params") if isinstance(config, dict) else None
+        if not isinstance(params, dict):
+            raise ValueError("mesh_lower_bound_field_invalid: params must be an object")
+        geometry_name = params.get("GeometryName")
+        if isinstance(geometry_name, str) and geometry_name.strip():
+            geometry_names.add(geometry_name)
+    source_lower_bound_ids = _add_source_face_lower_bound_fields(
+        gmsh,
+        lower_bound_fields=opts.lower_bound_fields,
+        source_surface=source_surface,
+        hscale=hscale,
+    )
+    if source_lower_bound_ids and not source_field_ids and not generic_fields:
+        # _apply_mesh_options receives Gmsh-scaled hmax here. Supply its base
+        # upper target directly instead of asking its SI lower-only fallback
+        # to scale that already-scaled value a second time.
+        source_default = gmsh.model.mesh.field.add("Constant")
+        gmsh.model.mesh.field.setNumbers(
+            source_default, "SurfacesList", [source_surface]
+        )
+        gmsh.model.mesh.field.setNumber(source_default, "VIn", hmax_scaled)
+        gmsh.model.mesh.field.setNumber(source_default, "VOut", hmax_scaled)
+        gmsh.model.mesh.field.setNumber(source_default, "IncludeBoundary", 1)
+        source_field_ids.append(int(source_default))
+
     _apply_mesh_options(
         gmsh,
         hmax_scaled,
         order,
-        _dc_replace(opts, size_fields=generic_fields),
+        _dc_replace(opts, size_fields=generic_fields, lower_bound_fields=[]),
         hscale=hscale,
         preexisting_field_ids=source_field_ids,
+        preexisting_lower_bound_field_ids=source_lower_bound_ids,
         component_surface_tags={name: [source_surface] for name in geometry_names},
     )
     field_ids = [int(field_id) for field_id in gmsh.model.mesh.field.list()]
@@ -204,6 +492,51 @@ def _apply_mixed_source_face_mesh_options(
     gmsh.model.mesh.field.setNumbers(restricted, "SurfacesList", [source_surface])
     gmsh.model.mesh.field.setAsBackgroundMesh(restricted)
     return int(restricted)
+
+
+def _reapply_periodic_surface_mappings(
+    gmsh: Any,
+    periodic_specs: list[dict[str, object]],
+) -> None:
+    """Reattach periodic maps after a multi-step GEO extrusion.
+
+    Gmsh accepts the periodic declarations before generation, but a sequence
+    of GEO extrusions can replace the boundary mesh entities while building
+    the final 3-D mesh. Reapplying the same affine maps after generation
+    makes the correspondence observable through ``getPeriodicNodes`` without
+    changing the authored surface pairing.
+    """
+    for spec in periodic_specs:
+        translation = [
+            float(value)
+            for value in spec.get("translation", (0.0, 0.0, 0.0))
+        ]
+        if len(translation) != 3:
+            raise ValueError("periodic surface translation must contain three values")
+        affine = [
+            1.0,
+            0.0,
+            0.0,
+            translation[0],
+            0.0,
+            1.0,
+            0.0,
+            translation[1],
+            0.0,
+            0.0,
+            1.0,
+            translation[2],
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+        ]
+        gmsh.model.mesh.setPeriodic(  # type: ignore[attr-defined]
+            2,
+            [int(spec["slave_tag"])],
+            [int(spec["master_tag"])],
+            affine,
+        )
 
 
 def _set_mixed_volume_mesh_size_options(
@@ -1529,15 +1862,74 @@ class SweepabilityResult:
         self.reason = reason
 
 
+def _box_cylinder_ring_components(
+    geometry: Geometry,
+) -> tuple[Box, Cylinder] | None:
+    """Return the canonical thin-film ring components, if present.
+
+    The GEO ring realization deliberately accepts only the public geometry
+    form used by the COMSOL benchmark: a centered ``Box`` minus a centered,
+    full-height Z-axis ``Cylinder``.  Accepting translated or nested CSG here
+    would require a different face/volume construction and could silently
+    change the authored geometry.
+    """
+    if not isinstance(geometry, Difference):
+        return None
+    base = geometry.base
+    tool = geometry.tool
+    if not isinstance(base, Box) or not isinstance(tool, Cylinder):
+        return None
+    if tool.axis != (0.0, 0.0, 1.0):
+        return None
+    sx, sy, sz = (float(value) for value in base.size)
+    if not math.isclose(tool.height, sz, rel_tol=1.0e-9, abs_tol=1.0e-18):
+        return None
+    if tool.radius >= 0.5 * min(sx, sy):
+        return None
+    return base, tool
+
+
+def _is_box_cylinder_ring(geometry: Geometry) -> bool:
+    """Return whether *geometry* has the strict GEO ring representation."""
+    return _box_cylinder_ring_components(geometry) is not None
+
+
 def classify_sweepability(geometry: Geometry) -> SweepabilityResult:
     """Classify whether *geometry* can be swept-meshed.
 
     Currently supports:
-    - ``Box`` with aspect ratio > 2 in any axis
-    - ``Cylinder`` where height ≪ diameter (thin disk)
+    - the canonical ``Box - Cylinder`` ring with a full-height Z-axis hole,
+    - ``Box`` with aspect ratio > 2 in any axis,
+    - ``Cylinder`` where height ≪ diameter (thin disk).
 
     Returns a :class:`SweepabilityResult` with diagnostics.
     """
+    ring = _box_cylinder_ring_components(geometry)
+    if ring is not None:
+        base, tool = ring
+        sx, sy, sz = (float(value) for value in base.size)
+        lateral = max(sx, sy)
+        ar = lateral / sz if sz > 0.0 else float("inf")
+        return SweepabilityResult(
+            sweepable=True,
+            thin_axis=2,
+            thickness=sz,
+            aspect_ratio=ar,
+            reason=(
+                "Thin box-cylinder ring: full-height Z-axis hole, "
+                f"lateral/thickness={ar:.1f}"
+            ),
+        )
+
+    if isinstance(geometry, Difference):
+        return SweepabilityResult(
+            sweepable=False,
+            reason=(
+                "Only centered Box minus full-height Z-axis Cylinder is "
+                "supported by the swept ring realization"
+            ),
+        )
+
     if isinstance(geometry, Cylinder):
         if geometry.axis != (0.0, 0.0, 1.0):
             return SweepabilityResult(
@@ -1675,6 +2067,1152 @@ def _compute_layer_heights(
 # Swept mesh generators
 # ---------------------------------------------------------------------------
 
+
+def _coincident_ring_airbox_bounds(
+    base: Box,
+    airbox: AirboxOptions,
+) -> tuple[float, float, float, float, float, float] | None:
+    """Resolve the exact-cell airbox bounds supported by the ring GEO route."""
+    sx, sy, sz = (float(value) for value in base.size)
+    if str(airbox.shape).strip().lower() != "bbox":
+        return None
+    if airbox.size is None:
+        ox, oy, oz = sx * float(airbox.padding_factor), sy * float(airbox.padding_factor), sz * float(airbox.padding_factor)
+    else:
+        ox, oy, oz = (float(value) for value in airbox.size)
+    cx, cy, cz = (0.0, 0.0, 0.0) if airbox.center is None else tuple(float(value) for value in airbox.center)
+    if not all(math.isfinite(value) and value > 0.0 for value in (ox, oy, oz)):
+        raise ValueError("airbox dimensions must be finite and positive")
+    # The partitioned GEO construction has no lateral transition shell.  It
+    # is therefore reserved for the exact periodic cell used by the antidot
+    # benchmark; larger lateral airboxes continue through the generic GEO
+    # shell path below.
+    if not (
+        math.isclose(ox, sx, rel_tol=1.0e-9, abs_tol=1.0e-18)
+        and math.isclose(oy, sy, rel_tol=1.0e-9, abs_tol=1.0e-18)
+        and math.isclose(cx, 0.0, rel_tol=0.0, abs_tol=1.0e-18)
+        and math.isclose(cy, 0.0, rel_tol=0.0, abs_tol=1.0e-18)
+    ):
+        return None
+    bounds = (cx - ox / 2.0, cy - oy / 2.0, cz - oz / 2.0, cx + ox / 2.0, cy + oy / 2.0, cz + oz / 2.0)
+    body_min = (-sx / 2.0, -sy / 2.0, -sz / 2.0)
+    body_max = (sx / 2.0, sy / 2.0, sz / 2.0)
+    tolerance = max(max(abs(value) for value in bounds + body_min + body_max) * 1.0e-10, 1.0e-18)
+    if any(
+        body_min[axis] < bounds[axis] - tolerance
+        or body_max[axis] > bounds[axis + 3] + tolerance
+        for axis in range(3)
+    ):
+        return None
+    return bounds
+
+
+def _box_airbox_layer_levels(
+    body_bottom: float, body_top: float, zmin: float, zmax: float,
+    n_layers: int, *, h_inner: float, h_outer: float, growth: float,
+) -> list[float]:
+    """Plan exact film planes and independently graded exterior planes (SI)."""
+    if isinstance(n_layers, bool) or not isinstance(n_layers, int) or n_layers < 1:
+        raise ValueError("film layer count must be a positive integer")
+    if not all(math.isfinite(v) for v in (body_bottom, body_top, zmin, zmax, h_inner, h_outer, growth)):
+        raise ValueError("layer planning inputs must be finite")
+    if not zmin < body_bottom < body_top < zmax:
+        raise ValueError("Box airbox requires positive clearance on both z faces")
+    if h_inner <= 0 or h_outer < h_inner or growth < 1:
+        raise ValueError("air layer sizes must be positive, ordered, and growth >= 1")
+
+    def exterior(interface: float, boundary: float, direction: float) -> list[float]:
+        coordinate_span = direction * (boundary - interface)
+        if not math.isfinite(coordinate_span) or coordinate_span <= 0.0:
+            raise ValueError("air layer coordinate span must be finite and positive")
+        coordinate_scale = max(abs(interface), abs(boundary), coordinate_span)
+        coordinate_spacing = math.ulp(coordinate_scale)
+        if coordinate_spacing >= h_inner:
+            raise ValueError("air layer size is below coordinate resolution")
+
+        result = []
+        position = interface
+        relative_sum = 0.0
+        compensation = 0.0
+        step = h_inner
+
+        def roundoff_bound(distance: float, *, prior_steps: int) -> float:
+            relative_scale = max(coordinate_span, abs(distance), abs(step))
+            relative_spacing = math.ulp(relative_scale)
+            bound = (
+                2.0 * coordinate_spacing
+                + 4.0 * (prior_steps + 2) * relative_spacing
+            )
+            if not math.isfinite(bound):
+                raise ValueError("air layer coordinate roundoff bound must be finite")
+            return bound
+
+        def close_boundary(bound: float) -> list[float]:
+            if not result:
+                return [boundary]
+            previous = result[-2] if len(result) > 1 else interface
+            extended_step = abs(boundary - previous)
+            if extended_step - h_outer <= bound:
+                result[-1] = boundary
+                return result
+            raise ValueError(
+                "air layer roundoff closure would exceed maximum element size"
+            )
+
+        while True:
+            distance = math.fsum((relative_sum, -compensation))
+            remaining = coordinate_span - distance
+            bound = roundoff_bound(distance, prior_steps=len(result))
+            if remaining <= bound:
+                if remaining < -bound:
+                    raise ValueError("air layer relative plan overshot the boundary")
+                return close_boundary(bound)
+
+            if remaining <= step:
+                if boundary == position:
+                    raise ValueError("air layer size is below coordinate resolution")
+                if abs(boundary - position) - step > bound:
+                    raise ValueError(
+                        "air layer step exceeds maximum element size at coordinate precision"
+                    )
+                result.append(boundary)
+                return result
+
+            corrected_step = step - compensation
+            next_sum = relative_sum + corrected_step
+            next_compensation = (next_sum - relative_sum) - corrected_step
+            next_distance = math.fsum((next_sum, -next_compensation))
+            next_bound = roundoff_bound(
+                next_distance, prior_steps=len(result) + 1,
+            )
+            if coordinate_span - next_distance <= 0.0:
+                overshoot = next_distance - coordinate_span
+                if overshoot > next_bound:
+                    raise ValueError("air layer relative plan overshot the boundary")
+                if boundary == position:
+                    raise ValueError("air layer size is below coordinate resolution")
+                if abs(boundary - position) - step > next_bound:
+                    raise ValueError(
+                        "air layer step exceeds maximum element size at coordinate precision"
+                    )
+                result.append(boundary)
+                return result
+
+            following = interface + direction * next_distance
+            if following == position:
+                raise ValueError("air layer size is below coordinate resolution")
+            if abs(following - position) - step > next_bound:
+                raise ValueError(
+                    "air layer step exceeds maximum element size at coordinate precision"
+                )
+            if direction * (following - boundary) >= 0.0:
+                if coordinate_span - next_distance > next_bound:
+                    raise ValueError(
+                        "air layer size is below coordinate resolution"
+                    )
+                if abs(boundary - position) - step > next_bound:
+                    raise ValueError(
+                        "air layer step exceeds maximum element size at coordinate precision"
+                    )
+                result.append(boundary)
+                return result
+            result.append(following)
+            position = following
+            relative_sum = next_sum
+            compensation = next_compensation
+            step = min(step * growth, h_outer)
+
+    lower = exterior(body_bottom, zmin, -1.0)
+    upper = exterior(body_top, zmax, 1.0)
+    film = [body_bottom + (body_top - body_bottom) * i / n_layers for i in range(n_layers + 1)]
+    film[0], film[-1] = body_bottom, body_top
+    return [*reversed(lower), *film, *upper]
+
+
+def _scaled_airbox_maximum_element_size(
+    airbox: AirboxOptions | None,
+    *,
+    scale: float,
+) -> float | None:
+    if airbox is None or airbox.maximum_element_size is None:
+        return None
+    return float(airbox.maximum_element_size) * float(scale)
+
+
+def _resolve_box_airbox_layer_sizes(
+    body_hmax: float,
+    airbox: AirboxOptions,
+) -> tuple[float, float]:
+    """Resolve the exact Box air-layer interface size and finite outer cap (SI)."""
+    base_hmax = float(body_hmax)
+    growth = float(airbox.grading_ratio)
+    if not math.isfinite(base_hmax) or base_hmax <= 0.0:
+        raise ValueError("Box airbox body maximum element size must be finite and positive")
+    if not math.isfinite(growth) or growth <= 1.0:
+        raise ValueError("Box airbox grading ratio must be finite and greater than 1.0")
+
+    explicit_inner = airbox.minimum_element_size
+    h_inner = float(explicit_inner) if explicit_inner is not None else base_hmax
+    if not math.isfinite(h_inner) or h_inner <= 0.0:
+        raise ValueError("Box airbox minimum element size must be finite and positive")
+
+    explicit_outer = airbox.maximum_element_size
+    if explicit_outer is not None:
+        h_outer = float(explicit_outer)
+        if not math.isfinite(h_outer) or h_outer <= 0.0:
+            raise ValueError("Box airbox maximum element size must be finite and positive")
+        if explicit_inner is not None and h_inner > h_outer:
+            raise ValueError(
+                "Box airbox minimum_element_size must be <= maximum_element_size"
+            )
+        if explicit_inner is None:
+            h_inner = min(h_inner, h_outer)
+        return h_inner, h_outer
+
+    # Match the existing lateral/OCC/GEO default: permit four geometric growth
+    # steps when no authored far-air size is available, while keeping the cap
+    # finite and positive before it reaches Gmsh.
+    h_outer = h_inner
+    for _ in range(4):
+        h_outer *= growth
+        if not math.isfinite(h_outer) or h_outer <= 0.0:
+            raise ValueError(
+                "implicit airbox outer element size must be finite and positive"
+            )
+    return h_inner, h_outer
+
+
+def generate_swept_tetrahedral_box_airbox_mesh(
+    geometry: Box, hmax: float, n_layers: int, *, order: int,
+    distribution: str, recombine: bool, airbox: AirboxOptions | None,
+    options: MeshOptions,
+) -> MeshData:
+    """Realize a fixed-layer Tet4 Box, partitioning scoped fields by exact z layers."""
+    if airbox is not None and int(airbox.boundary_marker) == 10:
+        raise ValueError(
+            "shared-domain interface and outer boundary markers must be distinct"
+        )
+    _clear_scoped_layer_plane_proofs(options)
+    if order != 1 or distribution != DISTRIBUTION_FIXED or recombine:
+        raise ValueError("layered tetrahedral Box requires P1 fixed non-recombined layers")
+    if options.sweep_direction not in (None, "auto", "z"):
+        raise ValueError("layered tetrahedral Box supports only the z sweep direction")
+    if options.sweep_face_meshing not in (None, "triangular"):
+        raise ValueError("layered tetrahedral Box requires a triangular source face")
+    if options.through_thickness_element_ratio not in (None, 1.0) or options.through_thickness_symmetric:
+        raise ValueError("layered tetrahedral Box requires uniform film layers")
+    if airbox is None:
+        raise ValueError("layered tetrahedral Box currently requires an exact-cell bbox airbox")
+    if _has_component_scoped_size_fields(
+        options
+    ) and not _supports_scoped_layer_partitioned_box(geometry, airbox=airbox):
+        raise ValueError(
+            f"{THIN_FILM_SCOPED_LAYER_PARTITION_UNSUPPORTED}: "
+            f"{THIN_FILM_SCOPED_LAYER_PARTITION_UNSUPPORTED_REASON}"
+        )
+    if airbox.grading_mode != "geometric":
+        raise ValueError("layered tetrahedral Box currently supports only geometric airbox grading")
+    if isinstance(n_layers, bool) or not isinstance(n_layers, int) or n_layers < 1:
+        raise ValueError("film layer count must be a positive integer")
+    if not math.isfinite(float(hmax)) or hmax <= 0:
+        raise ValueError("film lateral mesh size must be finite and positive")
+    bounds = _coincident_ring_airbox_bounds(geometry, airbox)
+    if bounds is None:
+        raise ValueError("layered tetrahedral Box requires coincident lateral bbox airbox bounds")
+    return _generate_coincident_ring_airbox_mesh(
+        geometry, base=geometry, tool=None, hmax=hmax, n_layers=n_layers,
+        order=order, airbox=airbox, options=options, bounds=bounds,
+    )
+
+
+def _generate_coincident_ring_airbox_mesh(
+    geometry: Geometry,
+    *,
+    base: Box,
+    tool: Cylinder | None,
+    hmax: float,
+    n_layers: int,
+    order: int,
+    airbox: AirboxOptions,
+    options: MeshOptions,
+    bounds: tuple[float, float, float, float, float, float],
+) -> MeshData:
+    """Mesh a Box or ring and exact-cell airbox as synchronized GEO partitions."""
+    SCALE = 1.0e6
+    body_hmax_scaled = float(hmax) * SCALE
+    if not math.isfinite(body_hmax_scaled) or body_hmax_scaled <= 0.0:
+        raise ValueError(
+            "scaled Box body maximum element size must be finite and positive"
+        )
+    sx, sy, sz = (float(value) for value in base.size)
+    radius = float(tool.radius) if tool is not None else None
+    xmin, ymin, zmin, xmax, ymax, zmax = (float(value) * SCALE for value in bounds)
+    body_bottom = -0.5 * sz * SCALE
+    body_top = 0.5 * sz * SCALE
+    if airbox.grading_mode != "geometric":
+        raise ValueError("exact-cell layered airbox currently supports only geometric airbox grading")
+    h_inner, h_outer = _resolve_box_airbox_layer_sizes(hmax, airbox)
+    h_inner_scaled = h_inner * SCALE
+    h_outer_scaled = h_outer * SCALE
+    if not all(
+        math.isfinite(value) and value > 0.0
+        for value in (h_inner_scaled, h_outer_scaled)
+    ):
+        raise ValueError("scaled Box airbox element sizes must be finite and positive")
+    levels = [value * SCALE for value in _box_airbox_layer_levels(
+        body_bottom / SCALE, body_top / SCALE, zmin / SCALE, zmax / SCALE,
+        n_layers, h_inner=h_inner, h_outer=h_outer, growth=float(airbox.grading_ratio),
+    )]
+    if any(levels[index + 1] <= levels[index] for index in range(len(levels) - 1)):
+        raise ValueError("coincident ring airbox must have positive z clearance")
+
+    gmsh = _import_gmsh()
+    gmsh_version = str(getattr(gmsh, "__version__", "unknown"))
+    if gmsh_version != _MIXED_SHARED_GMSH_VERSION:
+        raise RuntimeError(
+            "shared-domain swept ring meshing is qualified only for Gmsh "
+            f"{_MIXED_SHARED_GMSH_VERSION}; detected {gmsh_version}"
+        )
+    gmsh.initialize()
+    gmsh.option.setNumber("General.Terminal", 0)
+    try:
+        _configure_gmsh_threads(gmsh, requested_threads=1, honor_environment=False)
+        gmsh.model.add("fullmag_swept_box_cylinder_ring_coincident_airbox")
+        source_hmax_scaled = body_hmax_scaled
+        z_source = levels[0]
+        outer_points = [
+            gmsh.model.geo.addPoint(x, y, z_source, source_hmax_scaled)
+            for x, y in (
+                (xmin, ymin),
+                (xmax, ymin),
+                (xmax, ymax),
+                (xmin, ymax),
+            )
+        ]
+        outer_lines = [
+            gmsh.model.geo.addLine(outer_points[index], outer_points[(index + 1) % 4])
+            for index in range(4)
+        ]
+        outer_loop = gmsh.model.geo.addCurveLoop(outer_lines)
+        if tool is None:
+            annulus_surface = gmsh.model.geo.addPlaneSurface([outer_loop])
+            hole_surface = None
+        else:
+            center = gmsh.model.geo.addPoint(0.0, 0.0, z_source, source_hmax_scaled)
+            right = gmsh.model.geo.addPoint(radius * SCALE, 0.0, z_source, source_hmax_scaled)
+            top = gmsh.model.geo.addPoint(0.0, radius * SCALE, z_source, source_hmax_scaled)
+            left = gmsh.model.geo.addPoint(-radius * SCALE, 0.0, z_source, source_hmax_scaled)
+            bottom = gmsh.model.geo.addPoint(0.0, -radius * SCALE, z_source, source_hmax_scaled)
+            arcs = [
+                gmsh.model.geo.addCircleArc(right, center, top),
+                gmsh.model.geo.addCircleArc(top, center, left),
+                gmsh.model.geo.addCircleArc(left, center, bottom),
+                gmsh.model.geo.addCircleArc(bottom, center, right),
+            ]
+            circle_loop = gmsh.model.geo.addCurveLoop(arcs)
+            annulus_surface = gmsh.model.geo.addPlaneSurface([outer_loop, -circle_loop])
+            hole_surface = gmsh.model.geo.addPlaneSurface([circle_loop])
+        gmsh.model.geo.synchronize()
+
+        scoped_layer_partitioning = (
+            (isinstance(geometry, Box) or tool is not None)
+            and _has_component_scoped_size_fields(options)
+        )
+        if scoped_layer_partitioning and not _supports_scoped_layer_partitioned_box(
+            base,
+            airbox=airbox,
+        ):
+            raise ValueError(
+                f"{THIN_FILM_SCOPED_LAYER_PARTITION_UNSUPPORTED}: "
+                f"{THIN_FILM_SCOPED_LAYER_PARTITION_UNSUPPORTED_REASON}"
+            )
+
+        source_fields: list[int] = []
+        if not scoped_layer_partitioning:
+            if options.size_fields or options.lower_bound_fields:
+                source_fields.append(
+                    _apply_mixed_source_face_mesh_options(
+                        gmsh,
+                        source_surface=annulus_surface,
+                        hmax_scaled=source_hmax_scaled,
+                        order=order,
+                        opts=options,
+                        hscale=SCALE,
+                    )
+                )
+            else:
+                # The final air field must not coarsen the magnetic source face.
+                source_field = gmsh.model.mesh.field.add("Constant")
+                gmsh.model.mesh.field.setNumbers(source_field, "SurfacesList", [annulus_surface])
+                gmsh.model.mesh.field.setNumber(source_field, "VIn", source_hmax_scaled)
+                gmsh.model.mesh.field.setNumber(source_field, "VOut", 1.0e22)
+                gmsh.model.mesh.field.setNumber(source_field, "IncludeBoundary", 1)
+                gmsh.model.mesh.field.setAsBackgroundMesh(source_field)
+                source_fields.append(source_field)
+                gmsh.option.setNumber("Mesh.MeshSizeFromPoints", 1)
+                gmsh.option.setNumber("Mesh.MeshSizeExtendFromBoundary", 0)
+                gmsh.option.setNumber("Mesh.CharacteristicLengthMax", source_hmax_scaled)
+                gmsh.option.setNumber("Mesh.Algorithm", options.algorithm_2d)
+                if options.hmin is not None:
+                    gmsh.option.setNumber("Mesh.CharacteristicLengthMin", options.hmin * SCALE)
+            gmsh.model.mesh.generate(2)
+
+        annulus_volumes: list[int] = []
+        hole_volumes: list[int] = []
+        current_annulus = int(annulus_surface)
+        current_hole = int(hole_surface) if hole_surface is not None else None
+        for level_index in range(len(levels) - 1):
+            step = float(levels[level_index + 1] - levels[level_index])
+            source_entities = [(2, current_annulus)] + (
+                [(2, current_hole)] if current_hole is not None else []
+            )
+            # Keep every requested z interval as a separate CAD volume. The
+            # unscoped compatibility route still extrudes its premeshed source
+            # triangulation; scoped fields require geometry-only extrusion so
+            # the final conforming 3D mesh resolves magnetic-owner and air
+            # sizing independently instead of copying one cap mesh everywhere.
+            if scoped_layer_partitioning:
+                extruded = gmsh.model.geo.extrude(
+                    source_entities,
+                    0.0,
+                    0.0,
+                    step,
+                )
+            else:
+                extruded = gmsh.model.geo.extrude(
+                    source_entities,
+                    0.0,
+                    0.0,
+                    step,
+                    numElements=[1],
+                    heights=[1.0],
+                    recombine=True,
+                )
+            gmsh.model.geo.synchronize()
+            volumes = [int(tag) for dim, tag in extruded if int(dim) == 3]
+            if len(volumes) != (2 if tool is not None else 1):
+                raise RuntimeError("coincident ring extrusion must produce annulus and hole volumes")
+            annulus_step: list[int] = []
+            hole_step: list[int] = []
+            for volume in volumes:
+                box = gmsh.model.getBoundingBox(3, volume)
+                x_span = float(box[3] - box[0])
+                if math.isclose(x_span, sx * SCALE, rel_tol=1.0e-7, abs_tol=1.0e-9):
+                    annulus_step.append(volume)
+                else:
+                    hole_step.append(volume)
+            if len(annulus_step) != 1 or len(hole_step) != (1 if tool is not None else 0):
+                raise RuntimeError("coincident ring extrusion volume identity is ambiguous")
+            annulus_volumes.append(annulus_step[0])
+            if hole_step:
+                hole_volumes.append(hole_step[0])
+            top_surfaces = []
+            for dim, tag in extruded:
+                if int(dim) != 2:
+                    continue
+                box = gmsh.model.getBoundingBox(2, int(tag))
+                if abs(float(box[2]) - levels[level_index + 1]) <= 1.0e-8 and abs(float(box[5]) - levels[level_index + 1]) <= 1.0e-8:
+                    top_surfaces.append((int(tag), float(box[3] - box[0])))
+            next_annulus = [tag for tag, x_span in top_surfaces if math.isclose(x_span, sx * SCALE, rel_tol=1.0e-7, abs_tol=1.0e-9)]
+            next_hole = [tag for tag, x_span in top_surfaces if not math.isclose(x_span, sx * SCALE, rel_tol=1.0e-7, abs_tol=1.0e-9)]
+            if len(next_annulus) != 1 or len(next_hole) != (1 if tool is not None else 0):
+                raise RuntimeError("coincident ring extrusion top-face identity is ambiguous")
+            current_annulus = next_annulus[0]
+            current_hole = next_hole[0] if next_hole else None
+
+        body_volumes = [volume for i, volume in enumerate(annulus_volumes)
+                        if body_bottom < 0.5 * (levels[i] + levels[i + 1]) < body_top]
+        air_volumes = [volume for volume in annulus_volumes if volume not in body_volumes] + hole_volumes
+        if len(body_volumes) != n_layers:
+            raise RuntimeError("coincident ring realization lost a magnetic layer volume")
+        gmsh.model.addPhysicalGroup(3, body_volumes, tag=1)
+        gmsh.model.setPhysicalName(3, 1, "magnetic")
+        gmsh.model.addPhysicalGroup(3, air_volumes, tag=2)
+        gmsh.model.setPhysicalName(3, 2, "air")
+
+        def boundary_surfaces(volumes: list[int]) -> set[int]:
+            return {
+                abs(int(tag))
+                for dim, tag in gmsh.model.getBoundary(
+                    [(3, volume) for volume in volumes], oriented=False
+                )
+                if int(dim) == 2
+            }
+
+        body_boundary = boundary_surfaces(body_volumes)
+        air_boundary = boundary_surfaces(air_volumes)
+        interface_surfaces = sorted(body_boundary & air_boundary)
+        if interface_surfaces:
+            gmsh.model.addPhysicalGroup(2, interface_surfaces, tag=10)
+            gmsh.model.setPhysicalName(2, 10, "mag_air_interface")
+        # The boundary of the combined volumes excludes magnetic-air interfaces.
+        # Bounding-box extrema alone also select horizontal internal interfaces.
+        outer_surfaces = sorted(boundary_surfaces(body_volumes + air_volumes))
+        from ._gmsh_occ import (
+            _add_periodic_boundary_physical_groups,
+            _configure_axis_periodic_surfaces,
+            _scale_periodic_boundary_pairs,
+        )
+
+        def is_z_cap(surface: int) -> bool:
+            box = gmsh.model.getBoundingBox(2, surface)
+            return any(abs(float(box[2]) - z) <= 1.0e-8
+                       and abs(float(box[5]) - z) <= 1.0e-8 for z in (zmin, zmax))
+
+        periodic_candidates = [surface for surface in outer_surfaces if not is_z_cap(surface)]
+        periodic_specs = _configure_axis_periodic_surfaces(
+            gmsh,
+            surface_tags=periodic_candidates,
+            pair_ids=list(options.periodic_pair_ids),
+        )
+        periodic_surfaces = _add_periodic_boundary_physical_groups(
+            gmsh,
+            periodic_specs,
+            reserved_markers={10, int(airbox.boundary_marker)},
+        )
+        gamma_surfaces = [surface for surface in outer_surfaces if surface not in periodic_surfaces]
+        if gamma_surfaces:
+            gmsh.model.addPhysicalGroup(2, gamma_surfaces, tag=int(airbox.boundary_marker))
+            gmsh.model.setPhysicalName(2, int(airbox.boundary_marker), "Gamma_out")
+
+        airbox_scaled = _dc_replace(
+            airbox,
+            size=tuple(float(value) * SCALE for value in airbox.size)
+            if airbox.size is not None
+            else None,
+            center=tuple(float(value) * SCALE for value in airbox.center)
+            if airbox.center is not None
+            else None,
+            maximum_element_size=(
+                float(airbox.maximum_element_size) * SCALE
+                if airbox.maximum_element_size is not None
+                else None
+            ),
+            minimum_element_size=(
+                float(airbox.minimum_element_size) * SCALE
+                if airbox.minimum_element_size is not None
+                else None
+            ),
+        )
+        airbox_field = None
+        if airbox_scaled.grading_ratio > 1.0 and interface_surfaces:
+            airbox_field = _add_airbox_grading_field(
+                gmsh,
+                surface_tags=interface_surfaces,
+                h_inner=h_inner_scaled,
+                h_outer=h_outer_scaled,
+                grading_ratio=float(airbox_scaled.grading_ratio),
+                grading_mode=str(airbox_scaled.grading_mode),
+                dist_max=max(h_inner_scaled, min(xmax - xmin, ymax - ymin, zmax - zmin)),
+                object_bounds_min=(xmin, ymin, body_bottom),
+                object_bounds_max=(xmax, ymax, body_top),
+                airbox_bounds_min=(xmin, ymin, zmin),
+                airbox_bounds_max=(xmax, ymax, zmax),
+                airbox_shape="bbox",
+                air_volume_tags=air_volumes,
+            )
+
+        final_options = _dc_replace(
+            options,
+            size_fields=(
+                list(options.size_fields)
+                if options.lower_bound_fields or scoped_layer_partitioning
+                else []
+            ),
+        )
+        # _apply_mesh_options raises the global characteristic-length ceiling
+        # to accommodate the far-air target. Keep the body hmax independent of
+        # that global value with an owner-volume upper field; its VOut is the
+        # neutral global ceiling, so the constraint does not coarsen air.
+        body_upper_field = gmsh.model.mesh.field.add("Constant")
+        gmsh.model.mesh.field.setNumbers(
+            body_upper_field, "VolumesList", body_volumes
+        )
+        gmsh.model.mesh.field.setNumber(
+            body_upper_field, "VIn", body_hmax_scaled
+        )
+        gmsh.model.mesh.field.setNumber(body_upper_field, "IncludeBoundary", 1)
+        gmsh.model.mesh.field.setNumber(
+            body_upper_field,
+            "VOut",
+            max(body_hmax_scaled, h_outer_scaled),
+        )
+        preexisting_fields = [*source_fields, int(body_upper_field)]
+        if airbox_field is not None:
+            preexisting_fields.append(int(airbox_field))
+        _apply_mesh_options(
+            gmsh,
+            body_hmax_scaled,
+            order,
+            final_options,
+            hscale=SCALE,
+            preexisting_field_ids=preexisting_fields,
+            airbox_maximum_element_size=h_outer_scaled,
+            component_volume_tags={geometry.geometry_name: body_volumes},
+            component_surface_tags={
+                geometry.geometry_name: sorted(
+                    {
+                        abs(int(tag))
+                        for dim, tag in gmsh.model.getBoundary(
+                            [(3, volume) for volume in body_volumes],
+                            oriented=False,
+                        )
+                        if int(dim) == 2
+                    }
+                )
+            },
+        )
+        with _GmshProgressLogger(gmsh):
+            gmsh.model.mesh.generate(3)
+        _apply_post_mesh_options(gmsh, options)
+        _reapply_periodic_surface_mappings(gmsh, periodic_specs)
+        from ._gmsh_layered_tetrahedra import subdivide_layered_prisms
+        subdivide_layered_prisms(gmsh)
+        quality, _per_domain_quality = (
+            _extract_quality_metrics(gmsh, options)
+            if options.compute_quality
+            else (None, None)
+        )
+        raw_mesh = _extract_mesh_data(
+            gmsh,
+            quality=quality,
+            has_physical_groups=True,
+            periodic_pair_specs=periodic_specs,
+            boundary_role_markers=(10, int(airbox.boundary_marker)),
+        )
+        if any(kind != "tet4" for kind in raw_mesh.cell_types.tolist()):
+            raise RuntimeError(
+                "coincident ring shared-domain realization requires tet4 volume cells; "
+                f"Gmsh produced {sorted(set(raw_mesh.cell_types.tolist()))}"
+            )
+        if any(kind != "tri3" for kind in raw_mesh.facet_types.tolist()):
+            raise RuntimeError(
+                "coincident ring shared-domain realization requires tri3 boundary facets; "
+                f"Gmsh produced {sorted(set(raw_mesh.facet_types.tolist()))}"
+            )
+        nodes = np.asarray(raw_mesh.nodes, dtype=np.float64) / SCALE
+        elements = raw_mesh.elements
+        magnetic_mask = np.asarray(raw_mesh.element_markers, dtype=np.int32) == 1
+        if not np.any(magnetic_mask):
+            raise RuntimeError("coincident ring realization produced no magnetic cells")
+        magnetic_elements = elements[magnetic_mask]
+        magnetic_nodes = np.unique(magnetic_elements.reshape(-1))
+        if scoped_layer_partitioning:
+            layer_planes = np.linspace(
+                body_bottom / SCALE,
+                body_top / SCALE,
+                n_layers + 1,
+                dtype=np.float64,
+            )
+            body_node_z = nodes[magnetic_nodes, 2]
+            plane_tolerance = max(
+                FEM_EXACT_LAYER_PLANE_ABS_TOLERANCE_M,
+                FEM_EXACT_LAYER_PLANE_REL_TOLERANCE * (body_top - body_bottom) / SCALE,
+            )
+            exact_plane_count = _count_exact_layer_planes(nodes[magnetic_nodes], 2)
+            resolved_layers = exact_plane_count - 1
+            if resolved_layers != n_layers:
+                raise RuntimeError(
+                    "scoped layer-partitioned realization requested "
+                    f"{n_layers} layers but resolved {resolved_layers} exact z intervals"
+                )
+            node_plane_distance = np.min(
+                np.abs(body_node_z[:, None] - layer_planes[None, :]),
+                axis=1,
+            )
+            if np.any(node_plane_distance > plane_tolerance):
+                raise RuntimeError(
+                    "scoped layer-partitioned realization has magnetic nodes outside "
+                    "the requested through-thickness planes"
+                )
+            plane_incidence = [
+                int(np.count_nonzero(np.abs(body_node_z - plane) <= plane_tolerance))
+                for plane in layer_planes
+            ]
+            if any(count == 0 for count in plane_incidence):
+                raise RuntimeError(
+                    "scoped layer-partitioned realization lost a requested body plane: "
+                    f"incidence={plane_incidence}"
+                )
+            body_cell_z = nodes[magnetic_elements, 2]
+            for plane in layer_planes[1:-1]:
+                crosses_plane = (
+                    np.min(body_cell_z, axis=1) < plane - plane_tolerance
+                ) & (
+                    np.max(body_cell_z, axis=1) > plane + plane_tolerance
+                )
+                if np.any(crosses_plane):
+                    raise RuntimeError(
+                        "scoped layer-partitioned realization has tetrahedra crossing "
+                        f"requested body plane z={plane:.17g} m"
+                    )
+            body_centroid_z = np.mean(body_cell_z, axis=1)
+            for lower_plane, upper_plane in zip(layer_planes[:-1], layer_planes[1:], strict=True):
+                in_partition = (
+                    (body_centroid_z >= lower_plane - plane_tolerance)
+                    & (body_centroid_z <= upper_plane + plane_tolerance)
+                )
+                if not np.any(in_partition):
+                    raise RuntimeError(
+                        "scoped layer-partitioned realization has an empty body layer "
+                        f"[{lower_plane:.17g}, {upper_plane:.17g}] m"
+                    )
+            layer_plane_proof: dict[str, object] = {
+                "_verification_token": _SCOPED_LAYER_PLANE_PROOF_TOKEN,
+                "geometry_name": geometry.geometry_name,
+                "requested_layer_partitions": int(n_layers),
+                "resolved_layer_partitions": int(resolved_layers),
+                "exact_plane_count": int(exact_plane_count),
+                "layer_planes_m": [float(value) for value in layer_planes],
+                "all_magnetic_nodes_on_requested_planes": True,
+                "no_magnetic_tetrahedra_cross_requested_planes": True,
+                "verification": "passed",
+            }
+        else:
+            exact_plane_count = _count_exact_layer_planes(nodes[magnetic_nodes], 2)
+            resolved_layers = exact_plane_count - 1
+            if resolved_layers != n_layers:
+                raise RuntimeError(
+                    f"coincident ring realization requested {n_layers} layers but resolved {resolved_layers}"
+                )
+        result = MeshData(
+            nodes=nodes,
+            cell_types=raw_mesh.cell_types,
+            cell_offsets=raw_mesh.cell_offsets,
+            cell_nodes=raw_mesh.cell_nodes,
+            element_markers=raw_mesh.element_markers,
+            facet_types=raw_mesh.facet_types,
+            facet_roles=raw_mesh.facet_roles,
+            facet_offsets=raw_mesh.facet_offsets,
+            facet_nodes=raw_mesh.facet_nodes,
+            boundary_markers=raw_mesh.boundary_markers,
+            cell_global_ordinals=raw_mesh.cell_global_ordinals,
+            facet_global_ordinals=raw_mesh.facet_global_ordinals,
+            cell_mesh_parts=raw_mesh.cell_mesh_parts,
+            periodic_boundary_pairs=_scale_periodic_boundary_pairs(
+                raw_mesh.periodic_boundary_pairs,
+                scale=SCALE,
+            ),
+            periodic_node_pairs=raw_mesh.periodic_node_pairs,
+            periodic_mesh_certificate=None,
+            quality=_quality_volumes_in_si(raw_mesh.quality, SCALE),
+            per_domain_quality=(
+                {marker: _quality_volumes_in_si(quality, SCALE)
+                 for marker, quality in raw_mesh.per_domain_quality.items()}
+                if raw_mesh.per_domain_quality is not None else None
+            ),
+        )
+        result = _recertify_scaled_periodic_mesh(result)
+        result.validate_strict(require_positive_orientation=True)
+        if scoped_layer_partitioning:
+            scoped_descriptors = [
+                config
+                for config in [*options.size_fields, *options.lower_bound_fields]
+                if isinstance(config, dict)
+                and isinstance(config.get("params"), dict)
+                and isinstance(config["params"].get("GeometryName"), str)
+            ]
+            if not scoped_descriptors or any(
+                config.get("_gmsh_status") != "applied"
+                for config in scoped_descriptors
+            ):
+                raise RuntimeError(
+                    "scoped layer-plane proof requires every component field to be applied"
+                )
+            for config in scoped_descriptors:
+                config[_SCOPED_LAYER_PLANE_PROOF_KEY] = layer_plane_proof
+        return result
+    finally:
+        gmsh.finalize()
+
+
+def generate_swept_box_cylinder_ring_mesh(
+    geometry: Difference,
+    hmax: float,
+    n_layers: int,
+    *,
+    order: int = 1,
+    distribution: str = DISTRIBUTION_FIXED,
+    element_ratio: float = 1.0,
+    symmetric: bool = False,
+    recombine: bool = False,
+    airbox: AirboxOptions | None = None,
+    options: MeshOptions | None = None,
+) -> MeshData:
+    """Generate an exact-layer tet4 mesh for the canonical box-with-hole CSG.
+
+    The magnetic source face is the rectangle with a circular hole and is
+    extruded with ``n_layers`` fixed subdivisions.  ``recombine=False`` is
+    intentional: the shared-domain FEM contract requires tet4/tri3 when
+    periodic face pairs are present.  The GEO airbox is then added around the
+    already extruded magnetic volume, preserving the CSG interface and the
+    source z-planes while allowing Gmsh to tetrahedralize the air region.
+    """
+    components = _box_cylinder_ring_components(geometry)
+    if components is None:
+        raise ValueError(
+            "swept ring meshing requires centered Box minus full-height Z-axis Cylinder"
+        )
+    base, tool = components
+    opts = options or MeshOptions()
+    if isinstance(n_layers, bool) or not isinstance(n_layers, numbers.Integral):
+        raise TypeError("n_layers must be an integer")
+    n_layers = int(n_layers)
+    if n_layers < 1:
+        raise ValueError("n_layers must be >= 1")
+    if airbox is not None and n_layers not in (1, 2, 3):
+        raise ValueError(
+            "shared-domain swept ring meshing is qualified for exactly 1, 2, or 3 layers"
+        )
+    if isinstance(order, bool) or not isinstance(order, numbers.Integral):
+        raise TypeError("order must be an integer")
+    order = int(order)
+    if order != 1:
+        raise ValueError(
+            f"swept ring meshing supports order=1; requested order={order}"
+        )
+    if distribution != DISTRIBUTION_FIXED or element_ratio != 1.0 or symmetric:
+        raise ValueError(
+            "swept ring meshing currently supports only fixed distribution"
+        )
+    if opts.sweep_face_meshing not in (None, "triangular") or recombine:
+        raise ValueError(
+            "swept ring meshing requires triangular, non-recombined source faces"
+        )
+    if opts.sweep_direction not in (None, "auto", "z"):
+        raise ValueError("swept ring meshing supports only sweep_direction='z'")
+    if airbox is not None and str(airbox.shape).strip().lower() != "bbox":
+        raise ValueError("swept ring shared-domain meshing supports only a bbox airbox")
+    if airbox is not None and int(airbox.boundary_marker) == 10:
+        raise ValueError(
+            "shared-domain interface and outer boundary markers must be distinct"
+        )
+    if isinstance(hmax, bool) or not math.isfinite(float(hmax)) or float(hmax) <= 0.0:
+        raise ValueError("hmax must be finite and positive")
+    hmax = float(hmax)
+    if opts.hmin is not None and (
+        isinstance(opts.hmin, bool)
+        or not math.isfinite(float(opts.hmin))
+        or float(opts.hmin) <= 0.0
+    ):
+        raise ValueError("hmin must be finite and positive")
+
+    if airbox is not None:
+        coincident_bounds = _coincident_ring_airbox_bounds(base, airbox)
+        if coincident_bounds is not None:
+            return _generate_coincident_ring_airbox_mesh(
+                geometry,
+                base=base,
+                tool=tool,
+                hmax=hmax,
+                n_layers=n_layers,
+                order=order,
+                airbox=airbox,
+                options=opts,
+                bounds=coincident_bounds,
+            )
+
+    sx, sy, sz = (float(value) for value in base.size)
+    radius = float(tool.radius)
+    SCALE = 1.0e6
+    sx_scaled, sy_scaled, sz_scaled = sx * SCALE, sy * SCALE, sz * SCALE
+    r_scaled = radius * SCALE
+    hmax_scaled = hmax * SCALE
+    source_hmax_scaled = min(hmax_scaled, 2.0 * sz_scaled / n_layers)
+    layer_heights = _compute_layer_heights(
+        n_layers, sz, distribution, element_ratio, symmetric
+    )
+    cumulative: list[float] = []
+    accumulated = 0.0
+    for layer_height in layer_heights:
+        accumulated += layer_height
+        cumulative.append(accumulated)
+
+    emit_progress(
+        "Gmsh swept: box-cylinder ring "
+        f"{sx:.2e}x{sy:.2e}x{sz:.2e}, hole r={radius:.2e}, "
+        f"{n_layers} layers ({distribution})"
+    )
+
+    gmsh = _import_gmsh()
+    gmsh_version = str(getattr(gmsh, "__version__", "unknown"))
+    if airbox is not None and gmsh_version != _MIXED_SHARED_GMSH_VERSION:
+        raise RuntimeError(
+            "shared-domain swept ring meshing is qualified only for Gmsh "
+            f"{_MIXED_SHARED_GMSH_VERSION}; detected {gmsh_version}"
+        )
+    gmsh.initialize()
+    gmsh.option.setNumber("General.Terminal", 0)
+    try:
+        effective_gmsh_thread_count = _configure_gmsh_threads(
+            gmsh,
+            requested_threads=1 if airbox is not None else None,
+            honor_environment=airbox is None,
+        )
+        gmsh.model.add("fullmag_swept_box_cylinder_ring")
+
+        z_bottom = -0.5 * sz_scaled
+        p_outer = [
+            gmsh.model.geo.addPoint(x, y, z_bottom, source_hmax_scaled)
+            for x, y in (
+                (-0.5 * sx_scaled, -0.5 * sy_scaled),
+                (0.5 * sx_scaled, -0.5 * sy_scaled),
+                (0.5 * sx_scaled, 0.5 * sy_scaled),
+                (-0.5 * sx_scaled, 0.5 * sy_scaled),
+            )
+        ]
+        outer_lines = [
+            gmsh.model.geo.addLine(p_outer[index], p_outer[(index + 1) % 4])
+            for index in range(4)
+        ]
+        p_center = gmsh.model.geo.addPoint(0.0, 0.0, z_bottom, source_hmax_scaled)
+        p_right = gmsh.model.geo.addPoint(r_scaled, 0.0, z_bottom, source_hmax_scaled)
+        p_top = gmsh.model.geo.addPoint(0.0, r_scaled, z_bottom, source_hmax_scaled)
+        p_left = gmsh.model.geo.addPoint(-r_scaled, 0.0, z_bottom, source_hmax_scaled)
+        p_bottom = gmsh.model.geo.addPoint(0.0, -r_scaled, z_bottom, source_hmax_scaled)
+        arcs = [
+            gmsh.model.geo.addCircleArc(p_right, p_center, p_top),
+            gmsh.model.geo.addCircleArc(p_top, p_center, p_left),
+            gmsh.model.geo.addCircleArc(p_left, p_center, p_bottom),
+            gmsh.model.geo.addCircleArc(p_bottom, p_center, p_right),
+        ]
+        outer_loop = gmsh.model.geo.addCurveLoop(outer_lines)
+        inner_loop = gmsh.model.geo.addCurveLoop([-arc for arc in reversed(arcs)])
+        source_surface = gmsh.model.geo.addPlaneSurface([outer_loop, inner_loop])
+        gmsh.model.geo.synchronize()
+
+        source_field_ids: list[int] = []
+        if opts.size_fields or opts.lower_bound_fields:
+            source_field_ids.append(
+                _apply_mixed_source_face_mesh_options(
+                    gmsh,
+                    source_surface=source_surface,
+                    hmax_scaled=source_hmax_scaled,
+                    order=order,
+                    opts=opts,
+                    hscale=SCALE,
+                )
+            )
+        else:
+            gmsh.option.setNumber("Mesh.MeshSizeFromPoints", 1)
+            gmsh.option.setNumber("Mesh.MeshSizeExtendFromBoundary", 0)
+            gmsh.option.setNumber("Mesh.CharacteristicLengthMax", source_hmax_scaled)
+            gmsh.option.setNumber("Mesh.Algorithm", opts.algorithm_2d)
+            if opts.hmin is not None:
+                gmsh.option.setNumber("Mesh.CharacteristicLengthMin", opts.hmin * SCALE)
+        gmsh.model.mesh.generate(2)
+
+        extruded = gmsh.model.geo.extrude(
+            [(2, source_surface)],
+            0.0,
+            0.0,
+            sz_scaled,
+            numElements=[1] * n_layers,
+            heights=cumulative,
+            recombine=False,
+        )
+        gmsh.model.geo.synchronize()
+        body_volumes = [int(tag) for dim, tag in extruded if int(dim) == 3]
+        if len(body_volumes) != 1:
+            body_volumes = [int(tag) for dim, tag in gmsh.model.getEntities(3)]
+        if len(body_volumes) != 1:
+            raise RuntimeError(
+                "swept ring extrusion must produce exactly one magnetic volume"
+            )
+        body_volume = body_volumes[0]
+        body_surfaces = sorted(
+            {
+                abs(int(tag))
+                for dim, tag in gmsh.model.getBoundary(
+                    [(3, body_volume)], oriented=False
+                )
+                if int(dim) == 2
+            }
+        )
+        if not body_surfaces:
+            raise RuntimeError("swept ring extrusion produced no magnetic surfaces")
+
+        airbox_field_id: int | None = None
+        airbox_scaled: AirboxOptions | None = None
+        outer_surfaces: list[int] = []
+        if airbox is not None:
+            from ._gmsh_generators import _scale_airbox_options
+
+            airbox_scaled = _scale_airbox_options(airbox, SCALE)
+            airbox_field_id = _add_airbox_geo(
+                gmsh,
+                [body_volume],
+                body_surfaces,
+                airbox_scaled,
+                hmax_scaled,
+                mesh_options=None,
+            )
+            outer_surfaces = [
+                int(tag)
+                for tag in gmsh.model.getEntitiesForPhysicalGroup(
+                    2, int(airbox_scaled.boundary_marker)
+                )
+            ]
+
+        from ._gmsh_occ import (
+            _add_periodic_boundary_physical_groups,
+            _configure_axis_periodic_surfaces,
+            _scale_periodic_boundary_pairs,
+        )
+
+        periodic_candidates = outer_surfaces or [
+            int(tag)
+            for dim, tag in gmsh.model.getEntities(2)
+            if int(dim) == 2
+        ]
+        periodic_pair_specs = _configure_axis_periodic_surfaces(
+            gmsh,
+            surface_tags=periodic_candidates,
+            pair_ids=list(opts.periodic_pair_ids),
+        )
+        periodic_surface_tags = _add_periodic_boundary_physical_groups(
+            gmsh,
+            periodic_pair_specs,
+            reserved_markers=(
+                {10, int(airbox_scaled.boundary_marker)}
+                if airbox_scaled is not None
+                else {1}
+            ),
+        )
+
+        def _replace_surface_group(
+            marker: int,
+            tags: list[int],
+            name: str,
+        ) -> None:
+            try:
+                gmsh.model.removePhysicalGroups([(2, int(marker))])
+            except Exception:
+                # Older Gmsh builds may not expose group removal.  In that
+                # case the caller still gets a fail-closed extraction below
+                # if overlapping groups duplicate boundary facets.
+                pass
+            if tags:
+                gmsh.model.addPhysicalGroup(2, tags, tag=int(marker))
+                gmsh.model.setPhysicalName(2, int(marker), name)
+
+        if airbox_scaled is not None:
+            _replace_surface_group(
+                int(airbox_scaled.boundary_marker),
+                [tag for tag in outer_surfaces if tag not in periodic_surface_tags],
+                "Gamma_out",
+            )
+            _replace_surface_group(
+                10,
+                [tag for tag in body_surfaces if tag not in periodic_surface_tags],
+                "mag_air_interface",
+            )
+
+        final_options = _dc_replace(
+            opts,
+            size_fields=(list(opts.size_fields) if opts.lower_bound_fields else []),
+        )
+        preexisting_field_ids = list(source_field_ids)
+        if airbox_field_id is not None:
+            preexisting_field_ids.append(int(airbox_field_id))
+        _apply_mesh_options(
+            gmsh,
+            hmax_scaled,
+            order,
+            final_options,
+            hscale=SCALE,
+            preexisting_field_ids=preexisting_field_ids,
+            airbox_maximum_element_size=(
+                airbox_scaled.maximum_element_size
+                if airbox_scaled is not None
+                else None
+            ),
+            component_volume_tags={geometry.geometry_name: [body_volume]},
+            component_surface_tags={geometry.geometry_name: body_surfaces},
+        )
+        with _GmshProgressLogger(gmsh):
+            gmsh.model.mesh.generate(3)
+        _apply_post_mesh_options(gmsh, opts)
+
+        quality, _per_domain_quality = (
+            _extract_quality_metrics(gmsh, opts)
+            if opts.compute_quality
+            else (None, None)
+        )
+        raw_mesh = _extract_mesh_data(
+            gmsh,
+            quality=quality,
+            has_physical_groups=airbox_scaled is not None,
+            periodic_pair_specs=periodic_pair_specs,
+            boundary_role_markers=(
+                (10, int(airbox_scaled.boundary_marker))
+                if airbox_scaled is not None
+                else None
+            ),
+        )
+        if any(kind != "tet4" for kind in raw_mesh.cell_types.tolist()):
+            raise RuntimeError(
+                "swept ring shared-domain realization requires tet4 volume cells; "
+                f"Gmsh produced {sorted(set(raw_mesh.cell_types.tolist()))}"
+            )
+        if any(kind != "tri3" for kind in raw_mesh.facet_types.tolist()):
+            raise RuntimeError(
+                "swept ring shared-domain realization requires tri3 boundary facets; "
+                f"Gmsh produced {sorted(set(raw_mesh.facet_types.tolist()))}"
+            )
+
+        nodes = np.asarray(raw_mesh.nodes, dtype=np.float64) / SCALE
+        elements = raw_mesh.elements
+        magnetic_mask = np.asarray(raw_mesh.element_markers, dtype=np.int32) == 1
+        if not np.any(magnetic_mask):
+            raise RuntimeError("swept ring realization produced no magnetic cells")
+        magnetic_nodes = np.unique(elements[magnetic_mask].reshape(-1))
+        resolved_layers = _count_exact_layer_planes(nodes[magnetic_nodes], 2) - 1
+        if resolved_layers != n_layers:
+            raise RuntimeError(
+                "swept ring realization requested "
+                f"{n_layers} layers but resolved {resolved_layers}"
+            )
+
+        result = MeshData(
+            nodes=nodes,
+            cell_types=raw_mesh.cell_types,
+            cell_offsets=raw_mesh.cell_offsets,
+            cell_nodes=raw_mesh.cell_nodes,
+            element_markers=raw_mesh.element_markers,
+            facet_types=raw_mesh.facet_types,
+            facet_roles=raw_mesh.facet_roles,
+            facet_offsets=raw_mesh.facet_offsets,
+            facet_nodes=raw_mesh.facet_nodes,
+            boundary_markers=raw_mesh.boundary_markers,
+            cell_global_ordinals=raw_mesh.cell_global_ordinals,
+            facet_global_ordinals=raw_mesh.facet_global_ordinals,
+            cell_mesh_parts=raw_mesh.cell_mesh_parts,
+            periodic_boundary_pairs=_scale_periodic_boundary_pairs(
+                raw_mesh.periodic_boundary_pairs,
+                scale=SCALE,
+            ),
+            periodic_node_pairs=raw_mesh.periodic_node_pairs,
+            periodic_mesh_certificate=None,
+            quality=_quality_volumes_in_si(raw_mesh.quality, SCALE),
+            per_domain_quality=(
+                {marker: _quality_volumes_in_si(quality, SCALE)
+                 for marker, quality in raw_mesh.per_domain_quality.items()}
+                if raw_mesh.per_domain_quality is not None else None
+            ),
+        )
+        result = _recertify_scaled_periodic_mesh(result)
+        result.validate_strict(require_positive_orientation=True)
+        emit_progress(
+            "Gmsh swept ring realization: "
+            f"layers={resolved_layers}, nodes={result.n_nodes}, "
+            f"cells={result.n_elements}, facets={result.n_boundary_faces}, "
+            f"periodic_pairs={len(result.periodic_boundary_pairs)}"
+        )
+        return result
+    finally:
+        gmsh.finalize()
+
 def generate_swept_cylinder_mesh(
     radius: float,
     height: float,
@@ -1688,6 +3226,7 @@ def generate_swept_cylinder_mesh(
     recombine: bool = False,
     airbox: AirboxOptions | None = None,
     options: MeshOptions | None = None,
+    geometry_name: str | None = None,
 ) -> MeshData:
     """Generate a swept (extruded) mesh for a thin cylinder.
 
@@ -1717,7 +3256,13 @@ def generate_swept_cylinder_mesh(
         )
         from ._gmsh_generators import generate_cylinder_mesh
         return generate_cylinder_mesh(
-            radius, height, hmax, order=order, airbox=airbox, options=options,
+            radius,
+            height,
+            hmax,
+            order=order,
+            airbox=airbox,
+            options=options,
+            geometry_name=geometry_name,
         )
 
     layer_heights = _compute_layer_heights(
@@ -1788,6 +3333,41 @@ def generate_swept_cylinder_mesh(
             recombine=recombine,
         )
         gmsh.model.geo.synchronize()
+
+        if opts.lower_bound_fields:
+            body_volumes = [
+                int(tag) for dim, tag in extrude_result if int(dim) == 3
+            ]
+            component_volume_tags = (
+                {geometry_name: body_volumes}
+                if isinstance(geometry_name, str)
+                and geometry_name.strip()
+                and body_volumes
+                else None
+            )
+            component_surface_tags = None
+            if component_volume_tags is not None:
+                component_surface_tags = {
+                    geometry_name: sorted(
+                        {
+                            abs(int(tag))
+                            for dim, tag in gmsh.model.getBoundary(
+                                [(3, volume) for volume in body_volumes],
+                                oriented=False,
+                            )
+                            if int(dim) == 2
+                        }
+                    )
+                }
+            _apply_mesh_options(
+                gmsh,
+                hmax_scaled,
+                order,
+                opts,
+                hscale=SCALE,
+                component_volume_tags=component_volume_tags,
+                component_surface_tags=component_surface_tags,
+            )
 
         # Generate 3D mesh from the extrusion
         gmsh.model.mesh.generate(3)
@@ -1948,6 +3528,7 @@ def generate_swept_box_mesh(
     recombine: bool = False,
     airbox: AirboxOptions | None = None,
     options: MeshOptions | None = None,
+    geometry_name: str | None = None,
     requested_direction: str | None = None,
 ) -> MeshData:
     """Generate a native ``prism6`` mesh for an axis-aligned box.
@@ -2166,7 +3747,7 @@ def generate_swept_box_mesh(
             gmsh.option.setNumber("Mesh.CharacteristicLengthMin", opts.hmin * SCALE)
         gmsh.option.setNumber("Mesh.Algorithm", opts.algorithm_2d)
         source_refinement_field: int | None = None
-        if airbox is not None and opts.size_fields:
+        if airbox is not None and (opts.size_fields or opts.lower_bound_fields):
             source_refinement_field = _apply_mixed_source_face_mesh_options(
                 gmsh,
                 source_surface=source_surf,
@@ -2281,7 +3862,49 @@ def generate_swept_box_mesh(
             )
             if field_id is not None
         ]
-        if len(active_background_fields) > 1:
+        if opts.lower_bound_fields:
+            if domain_volume_entities is not None:
+                body_volumes = [int(domain_volume_entities[0])]
+            else:
+                body_volumes = [
+                    int(tag) for dim, tag in extrusion_entities if int(dim) == 3
+                ]
+            component_volume_tags = (
+                {geometry_name: body_volumes}
+                if isinstance(geometry_name, str)
+                and geometry_name.strip()
+                and body_volumes
+                else None
+            )
+            component_surface_tags = None
+            if component_volume_tags is not None:
+                component_surface_tags = {
+                    geometry_name: sorted(
+                        {
+                            abs(int(tag))
+                            for dim, tag in gmsh.model.getBoundary(
+                                [(3, volume) for volume in body_volumes],
+                                oriented=False,
+                            )
+                            if int(dim) == 2
+                        }
+                    )
+                }
+            _apply_mesh_options(
+                gmsh,
+                hmax_scaled,
+                order,
+                opts,
+                hscale=SCALE,
+                preexisting_field_ids=active_background_fields,
+                airbox_maximum_element_size=_scaled_airbox_maximum_element_size(
+                    airbox,
+                    scale=SCALE,
+                ),
+                component_volume_tags=component_volume_tags,
+                component_surface_tags=component_surface_tags,
+            )
+        elif len(active_background_fields) > 1:
             combined_background = gmsh.model.mesh.field.add("Min")
             gmsh.model.mesh.field.setNumbers(
                 combined_background,
@@ -2599,6 +4222,11 @@ def should_use_swept(geometry: Geometry, opts: MeshOptions) -> bool:
                 "explicit swept meshing requires a Z-axis cylinder; use free_tet for arbitrary axes"
             )
         return True
+    if strategy == "thin_film_tetrahedral":
+        # The public thin-film recipe keeps tetrahedral topology.  The
+        # Box and canonical antidot ring use GEO extrusion to realize
+        # exact magnetic source planes while preserving Tet4 topology.
+        return isinstance(geometry, Box) or _is_box_cylinder_ring(geometry)
     if strategy == SWEEP_STRATEGY_AUTO or strategy is None:
         # Auto-detect: use swept if geometry is sweepable AND
         # through_thickness_elements is set
@@ -2630,10 +4258,23 @@ def generate_swept_mesh(
     if (
         options is not None
         and options.mesh_strategy == SWEEP_STRATEGY_PRISM
-        and not isinstance(geometry, Box)
+        and not isinstance(geometry, (Box, Difference))
     ):
         raise TypeError(
-            "body-only swept prism meshing supports only axis-aligned Box geometry"
+            "body-only swept prism meshing supports only axis-aligned Box or canonical Box-Cylinder ring geometry"
+        )
+    if isinstance(geometry, Difference):
+        return generate_swept_box_cylinder_ring_mesh(
+            geometry,
+            hmax,
+            n_layers,
+            order=order,
+            distribution=distribution,
+            element_ratio=element_ratio,
+            symmetric=symmetric,
+            recombine=recombine,
+            airbox=airbox,
+            options=options,
         )
     if isinstance(geometry, Cylinder):
         _resolve_sweep_axis(geometry, options=options, fallback_axis=2)
@@ -2645,9 +4286,17 @@ def generate_swept_mesh(
             geometry.radius, geometry.height, hmax, n_layers,
             order=order, distribution=distribution,
             element_ratio=element_ratio, symmetric=symmetric,
-            recombine=recombine, airbox=airbox, options=options,
+            recombine=recombine,
+            airbox=airbox,
+            options=options,
+            geometry_name=geometry.geometry_name,
         )
     if isinstance(geometry, Box):
+        if options is not None and options.mesh_strategy == "thin_film_tetrahedral":
+            return generate_swept_tetrahedral_box_airbox_mesh(
+                geometry, hmax, n_layers, order=order, distribution=distribution,
+                recombine=recombine, airbox=airbox, options=options,
+            )
         result = classify_sweepability(geometry)
         fallback_axis = result.thin_axis if result.thin_axis is not None else 2
         thin_axis = _resolve_sweep_axis(
@@ -2661,6 +4310,7 @@ def generate_swept_mesh(
             distribution=distribution, element_ratio=element_ratio,
             symmetric=symmetric, recombine=recombine,
             airbox=airbox, options=options,
+            geometry_name=geometry.geometry_name,
             requested_direction=(
                 options.sweep_direction if options is not None else None
             ),
@@ -2692,6 +4342,7 @@ def generate_swept_mesh(
                 order=order,
                 airbox=airbox,
                 options=options,
+                geometry_name=geometry.geometry_name,
             )
     raise TypeError(
         f"Swept meshing not supported for geometry type {type(geometry).__name__}. "

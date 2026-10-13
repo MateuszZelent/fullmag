@@ -12,6 +12,10 @@ describe("phasorConventionAdapter", () => {
       expect(result.phaseAnimationDirection).toBe(1);
     });
 
+    it("maps the published positive alias to the same decay and animation signs", () => {
+      expect(phasorAdapter("exp_plus_i_omega_t")).toEqual(phasorAdapter("exp_i_omega_t"));
+    });
+
     it("handles exp_minus_i_omega_t correctly", () => {
       const result = phasorAdapter("exp_minus_i_omega_t");
       expect(result.decayRateSign).toBe(-1);

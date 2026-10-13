@@ -1,0 +1,525 @@
+{
+  "schema": "fullmag.de-residual-threshold-audit.v1",
+  "checked_at_utc": "2026-09-25T06:56:31.699886+00:00",
+  "head": "4e7ab1528d008ed487c1ed2789f976ba6c8bf3af",
+  "working_tree_dirty": true,
+  "qualification": "NOT VERIFIED",
+  "notes": [
+    "Read-only extraction of completed historical pilots; no new solver run.",
+    "Raw zero residual/frequency fields with residual_evaluation_candidates=0 mean not measured, not a zero-error eigenpair.",
+    "linear_iterations_total=0 in jobs132-134 predates KSP instrumentation and does not mean no inner solves.",
+    "First-unconverged EPS estimate is the final monitor observation, not the first iteration."
+  ],
+  "runs": [
+    {
+      "job_number": 132,
+      "job_id": "60a2a77007e7462aa10bba1d6732588f",
+      "run_id": "8787e6eac6434ef9a2ffcc3b1702c65f",
+      "log_path": "C:\\git\\fullmag\\storage\\runs\\eigensolve-dispersion-plan-20260-c5dfad6d7f548079\\60a2a77007e7462aa10bba1d6732588f\\comsol-dispersion\\8787e6eac6434ef9a2ffcc3b1702c65f\\de-smoke-k2\\runtime.log",
+      "log_sha256": "19e8d95a2702dc59b08696d862a98d1b70264fa3be89889d72801c8721269d5c",
+      "tangent_dof_count_complex": 100,
+      "ksp_rtol": 1.0000000000000001e-11,
+      "operator_normalization_scale": 79529629105481888,
+      "accepted_mode_count_after_dedup": 0,
+      "subwindows": [
+        {
+          "shift_hz": 9375000000,
+          "outer_iterations": 100,
+          "linear_iterations_total": 0,
+          "candidate_modes": 0,
+          "residual_rejections": 0,
+          "residual_evaluation_candidates": 0,
+          "eps_converged_reason": -1,
+          "eps_first_unconverged_error_estimate": 3.495752016959925e-09,
+          "eps_normalized_absolute_tolerance": 1e-10,
+          "worst_candidate_frequency_hz": 0,
+          "worst_candidate_residuals": {
+            "eps_normalized_absolute": 0,
+            "magnetic": 0,
+            "potential": 0
+          },
+          "candidate_frequency_hz": [
+            0,
+            0
+          ]
+        },
+        {
+          "shift_hz": 11125000000,
+          "outer_iterations": 100,
+          "linear_iterations_total": 0,
+          "candidate_modes": 0,
+          "residual_rejections": 0,
+          "residual_evaluation_candidates": 0,
+          "eps_converged_reason": -1,
+          "eps_first_unconverged_error_estimate": 6.018971441234022e-09,
+          "eps_normalized_absolute_tolerance": 1e-10,
+          "worst_candidate_frequency_hz": 0,
+          "worst_candidate_residuals": {
+            "eps_normalized_absolute": 0,
+            "magnetic": 0,
+            "potential": 0
+          },
+          "candidate_frequency_hz": [
+            0,
+            0
+          ]
+        }
+      ]
+    },
+    {
+      "job_number": 132,
+      "job_id": "60a2a77007e7462aa10bba1d6732588f",
+      "run_id": "ca448b26d8934e849c8bb50460e92612",
+      "log_path": "C:\\git\\fullmag\\storage\\runs\\eigensolve-dispersion-plan-20260-c5dfad6d7f548079\\60a2a77007e7462aa10bba1d6732588f\\comsol-dispersion\\ca448b26d8934e849c8bb50460e92612\\de-smoke-k2\\runtime.log",
+      "log_sha256": "b4fc22d2c706a47fc67124d3a9df626a76a290df5f082e62585e336baeae099f",
+      "tangent_dof_count_complex": 100,
+      "ksp_rtol": 1.0000000000000001e-11,
+      "operator_normalization_scale": 79529629105481888,
+      "accepted_mode_count_after_dedup": 0,
+      "subwindows": [
+        {
+          "shift_hz": 9375000000,
+          "outer_iterations": 500,
+          "linear_iterations_total": 0,
+          "candidate_modes": 0,
+          "residual_rejections": 0,
+          "residual_evaluation_candidates": 0,
+          "eps_converged_reason": -1,
+          "eps_first_unconverged_error_estimate": 3.495752016959925e-09,
+          "eps_normalized_absolute_tolerance": 1e-10,
+          "worst_candidate_frequency_hz": 0,
+          "worst_candidate_residuals": {
+            "eps_normalized_absolute": 0,
+            "magnetic": 0,
+            "potential": 0
+          },
+          "candidate_frequency_hz": [
+            0,
+            0
+          ]
+        },
+        {
+          "shift_hz": 11125000000,
+          "outer_iterations": 500,
+          "linear_iterations_total": 0,
+          "candidate_modes": 0,
+          "residual_rejections": 0,
+          "residual_evaluation_candidates": 0,
+          "eps_converged_reason": -1,
+          "eps_first_unconverged_error_estimate": 6.018971441234022e-09,
+          "eps_normalized_absolute_tolerance": 1e-10,
+          "worst_candidate_frequency_hz": 0,
+          "worst_candidate_residuals": {
+            "eps_normalized_absolute": 0,
+            "magnetic": 0,
+            "potential": 0
+          },
+          "candidate_frequency_hz": [
+            0,
+            0
+          ]
+        }
+      ]
+    },
+    {
+      "job_number": 133,
+      "job_id": "059f9538791346289316580c94ce4a36",
+      "run_id": "f45f34706cf24e35ad57612b2309bcdf",
+      "log_path": "C:\\git\\fullmag\\storage\\runs\\eigensolve-dispersion-plan-20260-c5dfad6d7f548079\\059f9538791346289316580c94ce4a36\\comsol-dispersion\\f45f34706cf24e35ad57612b2309bcdf\\de-smoke-k2\\runtime.log",
+      "log_sha256": "807f76c0732cb6226adfaa48a9686fe7c60bee9dd15f4f2393b8f45df938ea1b",
+      "tangent_dof_count_complex": 100,
+      "ksp_rtol": 1.0000000000000001e-11,
+      "operator_normalization_scale": 79529629105481888,
+      "accepted_mode_count_after_dedup": 0,
+      "subwindows": [
+        {
+          "shift_hz": 9375000000,
+          "outer_iterations": 500,
+          "linear_iterations_total": 0,
+          "candidate_modes": 2,
+          "residual_rejections": 2,
+          "residual_evaluation_candidates": 2,
+          "eps_converged_reason": -1,
+          "eps_first_unconverged_error_estimate": 8.112199013440522e-08,
+          "eps_normalized_absolute_tolerance": 1e-08,
+          "worst_candidate_frequency_hz": 9723336272.685122,
+          "worst_candidate_residuals": {
+            "eps_normalized_absolute": 3.495752016959925e-09,
+            "magnetic": 2.1678405357802513e-07,
+            "potential": 1.2442441494581795e-14
+          },
+          "candidate_frequency_hz": [
+            9723336272.685122,
+            9723336315.97046
+          ]
+        },
+        {
+          "shift_hz": 11125000000,
+          "outer_iterations": 500,
+          "linear_iterations_total": 0,
+          "candidate_modes": 2,
+          "residual_rejections": 0,
+          "residual_evaluation_candidates": 0,
+          "eps_converged_reason": -1,
+          "eps_first_unconverged_error_estimate": 7.130023641446417e-08,
+          "eps_normalized_absolute_tolerance": 1e-08,
+          "worst_candidate_frequency_hz": 0,
+          "worst_candidate_residuals": {
+            "eps_normalized_absolute": 0,
+            "magnetic": 0,
+            "potential": 0
+          },
+          "candidate_frequency_hz": [
+            9723336289.23692,
+            9723336310.829433
+          ]
+        }
+      ]
+    },
+    {
+      "job_number": 133,
+      "job_id": "059f9538791346289316580c94ce4a36",
+      "run_id": "f683308e79b449e7a2db987253ae9535",
+      "log_path": "C:\\git\\fullmag\\storage\\runs\\eigensolve-dispersion-plan-20260-c5dfad6d7f548079\\059f9538791346289316580c94ce4a36\\comsol-dispersion\\f683308e79b449e7a2db987253ae9535\\de-smoke-k2\\runtime.log",
+      "log_sha256": "d7eb411432a830db2ffd0131c9b92a03046ab1c327f71e1bdbfdd3f7afb08bbf",
+      "tangent_dof_count_complex": 100,
+      "ksp_rtol": 1.0000000000000001e-11,
+      "operator_normalization_scale": 79529629105481888,
+      "accepted_mode_count_after_dedup": 0,
+      "subwindows": [
+        {
+          "shift_hz": 9375000000,
+          "outer_iterations": 2000,
+          "linear_iterations_total": 0,
+          "candidate_modes": 2,
+          "residual_rejections": 2,
+          "residual_evaluation_candidates": 2,
+          "eps_converged_reason": -1,
+          "eps_first_unconverged_error_estimate": 8.112199013440522e-08,
+          "eps_normalized_absolute_tolerance": 1e-08,
+          "worst_candidate_frequency_hz": 9723336272.685122,
+          "worst_candidate_residuals": {
+            "eps_normalized_absolute": 3.495752016959925e-09,
+            "magnetic": 2.1678405357802513e-07,
+            "potential": 1.2442441494581795e-14
+          },
+          "candidate_frequency_hz": [
+            9723336272.685122,
+            9723336315.97046
+          ]
+        },
+        {
+          "shift_hz": 11125000000,
+          "outer_iterations": 2000,
+          "linear_iterations_total": 0,
+          "candidate_modes": 2,
+          "residual_rejections": 0,
+          "residual_evaluation_candidates": 0,
+          "eps_converged_reason": -1,
+          "eps_first_unconverged_error_estimate": 7.130023641446417e-08,
+          "eps_normalized_absolute_tolerance": 1e-08,
+          "worst_candidate_frequency_hz": 0,
+          "worst_candidate_residuals": {
+            "eps_normalized_absolute": 0,
+            "magnetic": 0,
+            "potential": 0
+          },
+          "candidate_frequency_hz": [
+            9723336289.23692,
+            9723336310.829433
+          ]
+        }
+      ]
+    },
+    {
+      "job_number": 134,
+      "job_id": "f29dad61e46048ff934ada17e75cde53",
+      "run_id": "2959f883fa954f09ab9885c6b400ebf4",
+      "log_path": "C:\\git\\fullmag\\storage\\runs\\eigensolve-dispersion-plan-20260-c5dfad6d7f548079\\f29dad61e46048ff934ada17e75cde53\\comsol-dispersion\\2959f883fa954f09ab9885c6b400ebf4\\de-smoke-k2\\runtime.log",
+      "log_sha256": "0487fe4ab4158af9adf1912c7846b55edeaf88e372b84dbba248a1f0978a6a51",
+      "tangent_dof_count_complex": 100,
+      "ksp_rtol": 1.0000000000000001e-11,
+      "operator_normalization_scale": 79529629105481888,
+      "accepted_mode_count_after_dedup": 0,
+      "subwindows": [
+        {
+          "shift_hz": 9375000000,
+          "outer_iterations": 2000,
+          "linear_iterations_total": 0,
+          "candidate_modes": 0,
+          "residual_rejections": 0,
+          "residual_evaluation_candidates": 0,
+          "eps_converged_reason": -1,
+          "eps_first_unconverged_error_estimate": 3.495752016959925e-09,
+          "eps_normalized_absolute_tolerance": 1.0000000000000001e-11,
+          "worst_candidate_frequency_hz": 0,
+          "worst_candidate_residuals": {
+            "eps_normalized_absolute": 0,
+            "magnetic": 0,
+            "potential": 0
+          },
+          "candidate_frequency_hz": [
+            0,
+            0
+          ]
+        },
+        {
+          "shift_hz": 11125000000,
+          "outer_iterations": 2000,
+          "linear_iterations_total": 0,
+          "candidate_modes": 0,
+          "residual_rejections": 0,
+          "residual_evaluation_candidates": 0,
+          "eps_converged_reason": -1,
+          "eps_first_unconverged_error_estimate": 6.018971441234022e-09,
+          "eps_normalized_absolute_tolerance": 1.0000000000000001e-11,
+          "worst_candidate_frequency_hz": 0,
+          "worst_candidate_residuals": {
+            "eps_normalized_absolute": 0,
+            "magnetic": 0,
+            "potential": 0
+          },
+          "candidate_frequency_hz": [
+            0,
+            0
+          ]
+        }
+      ]
+    },
+    {
+      "job_number": 134,
+      "job_id": "f29dad61e46048ff934ada17e75cde53",
+      "run_id": "3c7bb4a6dac14a1386957de91907431b",
+      "log_path": "C:\\git\\fullmag\\storage\\runs\\eigensolve-dispersion-plan-20260-c5dfad6d7f548079\\f29dad61e46048ff934ada17e75cde53\\comsol-dispersion\\3c7bb4a6dac14a1386957de91907431b\\de-smoke-k2\\runtime.log",
+      "log_sha256": "582e64fc177340470c1a2b058e1e608a14269641fe6404d2a22e2c0949d6f090",
+      "tangent_dof_count_complex": 100,
+      "ksp_rtol": 1.0000000000000001e-11,
+      "operator_normalization_scale": 79529629105481888,
+      "accepted_mode_count_after_dedup": 0,
+      "subwindows": [
+        {
+          "shift_hz": 9375000000,
+          "outer_iterations": 2000,
+          "linear_iterations_total": 0,
+          "candidate_modes": 0,
+          "residual_rejections": 0,
+          "residual_evaluation_candidates": 0,
+          "eps_converged_reason": -1,
+          "eps_first_unconverged_error_estimate": 3.495752016959925e-09,
+          "eps_normalized_absolute_tolerance": 1.0000000000000001e-11,
+          "worst_candidate_frequency_hz": 0,
+          "worst_candidate_residuals": {
+            "eps_normalized_absolute": 0,
+            "magnetic": 0,
+            "potential": 0
+          },
+          "candidate_frequency_hz": [
+            0,
+            0
+          ]
+        },
+        {
+          "shift_hz": 11125000000,
+          "outer_iterations": 2000,
+          "linear_iterations_total": 0,
+          "candidate_modes": 0,
+          "residual_rejections": 0,
+          "residual_evaluation_candidates": 0,
+          "eps_converged_reason": -1,
+          "eps_first_unconverged_error_estimate": 6.018971441234022e-09,
+          "eps_normalized_absolute_tolerance": 1.0000000000000001e-11,
+          "worst_candidate_frequency_hz": 0,
+          "worst_candidate_residuals": {
+            "eps_normalized_absolute": 0,
+            "magnetic": 0,
+            "potential": 0
+          },
+          "candidate_frequency_hz": [
+            0,
+            0
+          ]
+        }
+      ]
+    },
+    {
+      "job_number": 135,
+      "job_id": "a31670fd5df145479a2054fd4c02e23c",
+      "run_id": "4d5d2c97987447a09721477d52740dec",
+      "log_path": "C:\\git\\fullmag\\storage\\runs\\eigensolve-dispersion-plan-20260-c5dfad6d7f548079\\a31670fd5df145479a2054fd4c02e23c\\comsol-dispersion\\4d5d2c97987447a09721477d52740dec\\de-smoke-k2\\runtime.log",
+      "log_sha256": "250bd3d282b9730cd1c6b505a3eb8ec6d15c0346127e3e25702c2bf01f54bcb2",
+      "tangent_dof_count_complex": 100,
+      "ksp_rtol": 1.0000000000000001e-11,
+      "operator_normalization_scale": 79529629105481888,
+      "accepted_mode_count_after_dedup": 0,
+      "subwindows": [
+        {
+          "shift_hz": 9375000000,
+          "outer_iterations": 2000,
+          "linear_iterations_total": 321674,
+          "candidate_modes": 0,
+          "residual_rejections": 0,
+          "residual_evaluation_candidates": 0,
+          "ksp_last_iterations": 15,
+          "ksp_final_residual": 1.3217272668620667e-24,
+          "ksp_converged_reason": 2,
+          "eps_converged_reason": -1,
+          "eps_first_unconverged_error_estimate": 3.495752016959925e-09,
+          "eps_normalized_absolute_tolerance": 1.0000000000000001e-11,
+          "worst_candidate_frequency_hz": 0,
+          "worst_candidate_residuals": {
+            "eps_normalized_absolute": 0,
+            "magnetic": 0,
+            "potential": 0
+          },
+          "candidate_frequency_hz": [
+            0,
+            0
+          ]
+        },
+        {
+          "shift_hz": 11125000000,
+          "outer_iterations": 2000,
+          "linear_iterations_total": 288664,
+          "candidate_modes": 0,
+          "residual_rejections": 0,
+          "residual_evaluation_candidates": 0,
+          "ksp_last_iterations": 13,
+          "ksp_final_residual": 1.5471221846117597e-23,
+          "ksp_converged_reason": 2,
+          "eps_converged_reason": -1,
+          "eps_first_unconverged_error_estimate": 6.018971441234022e-09,
+          "eps_normalized_absolute_tolerance": 1.0000000000000001e-11,
+          "worst_candidate_frequency_hz": 0,
+          "worst_candidate_residuals": {
+            "eps_normalized_absolute": 0,
+            "magnetic": 0,
+            "potential": 0
+          },
+          "candidate_frequency_hz": [
+            0,
+            0
+          ]
+        }
+      ]
+    },
+    {
+      "job_number": 136,
+      "job_id": "b1e00ef90b494fa08801036bd4d4f17a",
+      "run_id": "8cbc020e2e594c39ac77e192d7067b68",
+      "log_path": "C:\\git\\fullmag\\storage\\runs\\eigensolve-dispersion-plan-20260-c5dfad6d7f548079\\b1e00ef90b494fa08801036bd4d4f17a\\comsol-dispersion\\8cbc020e2e594c39ac77e192d7067b68\\de-smoke-k2\\runtime.log",
+      "log_sha256": "efb0a45aa36a2bb0deb67948e0e4b86aa8dedb729d2319f10d70ecfb6a1cc6db",
+      "tangent_dof_count_complex": 100,
+      "ksp_rtol": 1.0000000000000001e-11,
+      "operator_normalization_scale": 79529629105481888,
+      "accepted_mode_count_after_dedup": 0,
+      "subwindows": [
+        {
+          "shift_hz": 9375000000,
+          "outer_iterations": 2000,
+          "linear_iterations_total": 474071,
+          "candidate_modes": 0,
+          "residual_rejections": 0,
+          "residual_evaluation_candidates": 0,
+          "ksp_last_iterations": 15,
+          "ksp_final_residual": 9.291867865464143e-25,
+          "ksp_converged_reason": 2,
+          "eps_converged_reason": -1,
+          "eps_nev": 8,
+          "eps_ncv": 32,
+          "eps_mpd": 32,
+          "eps_first_unconverged_error_estimate": 3.49575202048209e-09,
+          "eps_normalized_absolute_tolerance": 1.0000000000000001e-11,
+          "worst_candidate_frequency_hz": 0,
+          "worst_candidate_residuals": {
+            "eps_normalized_absolute": 0,
+            "magnetic": 0,
+            "potential": 0
+          },
+          "candidate_frequency_hz": [
+            0,
+            0
+          ]
+        },
+        {
+          "shift_hz": 11125000000,
+          "outer_iterations": 2000,
+          "linear_iterations_total": 416220,
+          "candidate_modes": 0,
+          "residual_rejections": 0,
+          "residual_evaluation_candidates": 0,
+          "ksp_last_iterations": 13,
+          "ksp_final_residual": 5.104141066776643e-24,
+          "ksp_converged_reason": 2,
+          "eps_converged_reason": -1,
+          "eps_nev": 8,
+          "eps_ncv": 32,
+          "eps_mpd": 32,
+          "eps_first_unconverged_error_estimate": 6.018971433930088e-09,
+          "eps_normalized_absolute_tolerance": 1.0000000000000001e-11,
+          "worst_candidate_frequency_hz": 0,
+          "worst_candidate_residuals": {
+            "eps_normalized_absolute": 0,
+            "magnetic": 0,
+            "potential": 0
+          },
+          "candidate_frequency_hz": [
+            0,
+            0
+          ]
+        }
+      ]
+    }
+  ],
+  "comparison": {
+    "parameters": {
+      "geometry": "damon_eshbach",
+      "bias_field_a_per_m": 79577.47154594767,
+      "film_thickness_m": 1e-08,
+      "exchange_stiffness_j_per_m": 1.3e-11,
+      "saturation_magnetisation_a_per_m": 800000.0,
+      "gamma0_rad_s_per_a_m": 221100.0
+    },
+    "ky_rad_per_m": 2000000.0,
+    "candidate_status": "rejected_under_requested_rtol_1e-8",
+    "candidate_hz": 9723336272.685122,
+    "reference_model": "uniform_thickness_Kalinikos_Slavin_n0_open_film",
+    "reference_hz": 9725724283.841093,
+    "difference_hz": -2388011.155971527,
+    "relative_difference": -0.0002455355597463793,
+    "magnetic_to_eps_residual_ratio": 62.01356747454616,
+    "gamma_open_hz": 9309813711.433355,
+    "gamma_finite_dirichlet_airbox_hz": 9299249697.068401,
+    "air_each_side_m": 2e-06
+  },
+  "dependency_attestation": {
+    "dependency": {
+      "diagnostics_json": "{\"schema_version\":\"fullmag_fem_frequency_domain_dependency_info.v1\",\"petsc_available\":true,\"slepc_available\":true,\"modal_eigen_native_cpu_slepc_available\":true,\"petsc_version\":\"3.24.6\",\"slepc_version\":\"3.24.3\",\"petsc_pkgconfig_dir\":\"/opt/fullmag-deps/lib/pkgconfig\",\"slepc_pkgconfig_dir\":\"/opt/fullmag-deps/lib/pkgconfig\",\"petsc_find_module_file\":\"/workspace/backends/fem/cmake/FindPETSc.cmake\",\"slepc_find_module_file\":\"/workspace/backends/fem/cmake/FindSLEPc.cmake\",\"petsc_library_path\":\"/usr/lib/x86_64-linux-gnu/libpetsc_real.so\",\"slepc_library_path\":\"/usr/lib/x86_64-linux-gnu/libslepc_real.so\",\"reason\":\"\"}",
+      "modal_eigen_native_cpu_slepc_available": true,
+      "petsc_available": true,
+      "petsc_find_module_file": "/workspace/backends/fem/cmake/FindPETSc.cmake",
+      "petsc_library_path": "/usr/lib/x86_64-linux-gnu/libpetsc_real.so",
+      "petsc_pkgconfig_dir": "/opt/fullmag-deps/lib/pkgconfig",
+      "petsc_version": "3.24.6",
+      "reason": "",
+      "slepc_available": true,
+      "slepc_find_module_file": "/workspace/backends/fem/cmake/FindSLEPc.cmake",
+      "slepc_library_path": "/usr/lib/x86_64-linux-gnu/libslepc_real.so",
+      "slepc_pkgconfig_dir": "/opt/fullmag-deps/lib/pkgconfig",
+      "slepc_version": "3.24.3"
+    },
+    "library": "outputs/.fullmag/local/lib/libfullmag_fem.so.0.1.0",
+    "schema": "fullmag.fem.slepc_runtime.dependency_attestation.v1",
+    "source": {
+      "commit": "4e7ab1528d008ed487c1ed2789f976ba6c8bf3af",
+      "snapshot_sha256": "c26f2f6f2890cde8955398e91e9d4e50542d31a1d63a152965c67eea4ccf344c"
+    },
+    "status": "pass"
+  },
+  "source_sha256": {
+    "backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp": "d2cae90b537d4cc0f87b06c4bfc03897abe54a42e7fd0db4d655f06bbddbef59",
+    "backends/fem/cpu/frequency_domain/production_cpu_modal_eigen.cpp": "c32848e897f79a60572347eb5566ad8af30f5a197d581cf5ec3992b07ba041ac",
+    "examples/fem_de_smoke_numeric.py": "8b6fa0d3a705574c5dc382d04959b8fd6dbe093e75da5a1231978cbd2df0d4e8",
+    "scripts/compare_de_100nm_pilot.py": "4520a98974b24a0eb1f1a525eba280b1a32879096315900be1c3f074c5309071",
+    "scripts/verify_fem_frequency_domain_eigen_artifacts.py": "4c26042e3e7f2d9d791c06245f9060815fa6ee41ff43eefdcef87f65da75528e"
+  }
+}

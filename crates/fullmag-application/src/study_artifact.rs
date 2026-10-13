@@ -10,10 +10,14 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
+pub use fullmag_antenna_artifacts::solution::AntennaExternalLeadSolutionArtifact as AntennaInspectionArtifact;
+
 pub const STUDY_MAGNETIZATION_CODEC_ID: &str = "fullmag.runner.field_json";
 pub const STUDY_MAGNETIZATION_CODEC_VERSION: &str = "v1";
 pub const STUDY_SCALAR_CODEC_ID: &str = "fullmag.study.scalar_json";
 pub const STUDY_SCALAR_CODEC_VERSION: &str = "v1";
+pub const STUDY_ANTENNA_INSPECTION_CODEC_ID: &str = "fullmag.antenna.inspection_package";
+pub const STUDY_ANTENNA_INSPECTION_CODEC_VERSION: &str = "v1";
 pub const STUDY_SCALAR_ARTIFACT_SCHEMA: &str = "study_scalar.v1";
 pub const MAGNETIZATION_STATE_IDENTITY_SCHEMA: &str = "magnetization_state.v1";
 
@@ -21,6 +25,7 @@ pub const MAGNETIZATION_STATE_IDENTITY_SCHEMA: &str = "magnetization_state.v1";
 pub enum DecodedStudyArtifact {
     MagnetizationState(MagnetizationStateArtifact),
     Scalar(StudyScalarArtifact),
+    AntennaInspection(AntennaInspectionArtifact),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -126,6 +131,15 @@ pub fn decode_study_artifact(
         ) => decode_magnetization_state(bytes).map(DecodedStudyArtifact::MagnetizationState),
         ("scalar", STUDY_SCALAR_CODEC_ID, STUDY_SCALAR_CODEC_VERSION) => {
             decode_scalar(bytes).map(DecodedStudyArtifact::Scalar)
+        }
+        ("artifact", STUDY_ANTENNA_INSPECTION_CODEC_ID, STUDY_ANTENNA_INSPECTION_CODEC_VERSION) => {
+            // CAS verifies the exact package bytes; the neutral decoder checks
+            // every retained payload. Request/attempt binding remains separate.
+            fullmag_antenna_artifacts::package::decode_self_describing_antenna_inspection_package(
+                bytes,
+            )
+            .map(DecodedStudyArtifact::AntennaInspection)
+            .map_err(|error| invalid(format!("decode antenna inspection package: {error}")))
         }
         _ => Err(invalid("unsupported study artifact codec")),
     }
@@ -881,5 +895,46 @@ mod tests {
             })
         );
         assert!(decode_bytes("scalar", "opaque", "v1", &bytes).is_err());
+    }
+
+    #[test]
+    fn antenna_inspection_codec_requires_its_exact_artifact_tuple_and_framing() {
+        let bytes = b"not an inspection package";
+        let error = decode_bytes(
+            "artifact",
+            STUDY_ANTENNA_INSPECTION_CODEC_ID,
+            STUDY_ANTENNA_INSPECTION_CODEC_VERSION,
+            bytes,
+        )
+        .unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("decode antenna inspection package"));
+        for kind in ["state", "initial_state", "field", "scalar"] {
+            let error = decode_bytes(
+                kind,
+                STUDY_ANTENNA_INSPECTION_CODEC_ID,
+                STUDY_ANTENNA_INSPECTION_CODEC_VERSION,
+                bytes,
+            )
+            .unwrap_err();
+            assert!(error
+                .to_string()
+                .contains("unsupported study artifact codec"));
+        }
+        assert!(decode_bytes("artifact", STUDY_ANTENNA_INSPECTION_CODEC_ID, "v2", bytes).is_err());
+    }
+
+    #[test]
+    fn antenna_inspection_codec_checks_outer_cas_before_package_decode() {
+        let descriptor = ResolvedStudyArtifact {
+            artifact_id: "inspection-result".into(),
+            object_ref: "0".repeat(64),
+            data_kind: "artifact".into(),
+            codec_id: STUDY_ANTENNA_INSPECTION_CODEC_ID.into(),
+            codec_version: STUDY_ANTENNA_INSPECTION_CODEC_VERSION.into(),
+        };
+        let error = decode_study_artifact(&descriptor, b"not an inspection package").unwrap_err();
+        assert!(error.to_string().contains("manifest CAS digest"));
     }
 }

@@ -91,4 +91,23 @@ describe("viewport3DCameraGesture", () => {
     expect(() => beginViewport3DCameraGesture(ref)).not.toThrow();
     expect(() => endViewport3DCameraGesture(ref)).not.toThrow();
   });
+
+  it("releases debug holds on scene cleanup and accepts gestures after effect replay", () => {
+    resetViewport3DFieldUpdateHoldForTest();
+    try {
+      const ref = createViewport3DCameraGestureRef();
+      const oldEpoch = beginViewport3DCameraGesture(ref, "debug");
+      expect(viewport3DFieldUpdateHoldActive()).toBe(true);
+      cancelViewport3DCameraGesture(ref);
+      expect(viewport3DFieldUpdateHoldActive()).toBe(false);
+      const newEpoch = beginViewport3DCameraGesture(ref, "orbit");
+      expect(newEpoch).toBeGreaterThan(oldEpoch);
+      expect(settleViewport3DCameraGesture(ref, oldEpoch)).toBe(false);
+      expect(viewport3DFieldUpdateHoldActive()).toBe(true);
+      settleViewport3DCameraGesture(ref, newEpoch);
+      expect(viewport3DFieldUpdateHoldActive()).toBe(false);
+    } finally {
+      resetViewport3DFieldUpdateHoldForTest();
+    }
+  });
 });

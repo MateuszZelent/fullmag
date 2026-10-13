@@ -18,6 +18,9 @@ import { InspectorGroup } from "../primitives/InspectorGroup";
 import {
   buildAntennaCanonicalFieldDrive,
   buildAntennaLegacyMigrationPatch,
+  antennaWaveformDefaults,
+  antennaObjectDraftKey,
+  isAntennaObjectRevisionConflict,
   resolveAntennaObjectDraft,
   resolveAntennaObjectPanelModel,
   type AntennaObjectDraft,
@@ -30,6 +33,8 @@ type Feedback = {
 
 interface DraftState {
   draft: AntennaObjectDraft;
+  dirtyKeys: Array<keyof AntennaObjectDraft>;
+  editedAgainst: Partial<AntennaObjectDraft>;
   key: string;
 }
 
@@ -38,8 +43,39 @@ interface FeedbackState {
   key: string;
 }
 
+type RevisionConflictPhase =
+  | "conflict"
+  | "refresh-error"
+  | "refreshing"
+  | "rebased"
+  | "refetched";
+
+const draftFieldLabels: Record<keyof AntennaObjectDraft, string> = {
+  amplitudeB: "Amplitude",
+  direction: "Direction",
+  waveformKind: "Waveform",
+  sincAmplitude: "Waveform amplitude",
+  sincCutoffHz: "Cutoff",
+  sincT0: "t0",
+  sinusoidalFrequencyHz: "Frequency",
+  sinusoidalOffset: "Offset",
+  sinusoidalPhaseRad: "Phase",
+};
+
+interface RevisionConflictState {
+  baseRevision: number;
+  key: string;
+  phase: RevisionConflictPhase;
+}
+
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function sceneRevision(value: unknown): number | null {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0
+    ? value
+    : null;
 }
 
 function invalidateSceneResource(
@@ -59,21 +95,17 @@ export function AntennaObjectPanel({ selection }: InspectorPanelProps) {
     () => resolveAntennaObjectDraft(selection, scene.data),
     [scene.data, selection],
   );
-  const resourceRevision = scene.data?.revision ?? -1;
+  const draftKey = `${sessionScopeKey ?? "none"}:${antennaObjectDraftKey(selection, scene.data)}`;
   const [acknowledgedBase, setAcknowledgedBase] = useState<{
-    draft: AntennaObjectDraft;
-    objectId: string;
-    revision: number;
+    draft: AntennaObjectDraft; key: string; revision: number;
   } | null>(null);
-  const hasPendingAcknowledgedBase =
-    acknowledgedBase?.objectId === model.objectId &&
-    resourceRevision < acknowledgedBase.revision;
-  const baselineDraft = hasPendingAcknowledgedBase
-    ? acknowledgedBase.draft
-    : baseDraft;
-  const draftKey = `${model.objectId}:${hasPendingAcknowledgedBase ? acknowledgedBase.revision : (scene.data?.revision ?? "none")}`;
+  const baselineDraft = acknowledgedBase?.key === draftKey &&
+    (scene.data?.revision ?? -1) < acknowledgedBase.revision
+    ? acknowledgedBase.draft : baseDraft;
   const [draftState, setDraftState] = useState<DraftState>({
     draft: baseDraft,
+    dirtyKeys: [],
+    editedAgainst: {},
     key: draftKey,
   });
   const [feedbackState, setFeedbackState] = useState<FeedbackState>({
@@ -81,21 +113,57 @@ export function AntennaObjectPanel({ selection }: InspectorPanelProps) {
     key: draftKey,
   });
   const [pending, setPending] = useState(false);
+  const [revisionConflictState, setRevisionConflictState] =
+    useState<RevisionConflictState | null>(null);
+  const baseRevision = acknowledgedBase?.key === draftKey
+    ? Math.max(sceneRevision(scene.data?.revision) ?? -1, acknowledgedBase.revision)
+    : sceneRevision(scene.data?.revision);
+  const canCommit =
+    scene.status === "ready" && baseRevision !== null && model.mode !== "missing";
+  const draft: AntennaObjectDraft =
+    draftState.key === draftKey
+      ? {
+          ...baselineDraft,
+          ...Object.fromEntries(
+            draftState.dirtyKeys.map((key) => [key, draftState.draft[key]]),
+          ),
+        }
+      : baselineDraft;
+  const locallyConflictingKeys =
+    draftState.key === draftKey
+      ? draftState.dirtyKeys.filter(
+          (key) =>
+            draftState.editedAgainst[key] !== baselineDraft[key] &&
+            draftState.draft[key] !== baselineDraft[key],
+        )
+      : [];
   const applyInFlight = useRef(false);
-  const draft = draftState.key === draftKey ? draftState.draft : baselineDraft;
   const draftRef = useRef(draft);
-  useLayoutEffect(() => {
-    draftRef.current = draft;
-  }, [draft]);
+  const activeDraftKeyRef = useRef(draftKey);
+  useLayoutEffect(() => { activeDraftKeyRef.current = draftKey; }, [draftKey]);
+  useLayoutEffect(() => { draftRef.current = draft; }, [draft]);
   const dirty = JSON.stringify(draft) !== JSON.stringify(baselineDraft);
   const validation = model.mode === "canonical"
     ? buildAntennaCanonicalFieldDrive(selection, scene.data, draft)
-    : model.mode === "legacy"
-      ? buildAntennaLegacyMigrationPatch(selection, scene.data, draft)
-      : null;
+    : model.mode === "legacy" ? buildAntennaLegacyMigrationPatch(selection, scene.data, draft) : null;
   const valid = Boolean(validation && !validation.error);
   const feedback =
     feedbackState.key === draftKey ? feedbackState.feedback : null;
+  const revisionConflict =
+    revisionConflictState?.key === draftKey ? revisionConflictState : null;
+  const conflictBaseRevision = revisionConflict?.baseRevision ?? null;
+  const conflictPhase = revisionConflict?.phase ?? null;
+  const conflictViewPhase =
+    revisionConflict && conflictPhase === "refreshing"
+      ? scene.status === "error"
+        ? "refresh-error"
+        : scene.status === "ready" &&
+            baseRevision !== null &&
+            conflictBaseRevision !== null &&
+            baseRevision !== conflictBaseRevision
+          ? "refetched"
+          : "refreshing"
+      : conflictPhase;
 
   const acknowledgeAntennaDraft = useRegisterInspectorEditSession(
     model.mode === "missing" ? null : "staged",
@@ -109,9 +177,24 @@ export function AntennaObjectPanel({ selection }: InspectorPanelProps) {
   );
 
   function updateDraft(patch: Partial<AntennaObjectDraft>): void {
-    const next = { ...draftRef.current, ...patch };
-    draftRef.current = next;
-    setDraftState({ draft: next, key: draftKey });
+    draftRef.current = { ...draftRef.current, ...patch };
+    setDraftState((current) => {
+      const dirtyKeys = current.key === draftKey ? current.dirtyKeys : [];
+      const dirtyKeySet = new Set(dirtyKeys);
+      const patchKeys = Object.keys(patch) as Array<keyof AntennaObjectDraft>;
+      const editedAgainst = current.key === draftKey ? { ...current.editedAgainst } : {};
+      for (const key of patchKeys) {
+        if (!dirtyKeySet.has(key) || current.draft[key] === baselineDraft[key]) {
+          Object.assign(editedAgainst, { [key]: baselineDraft[key] });
+        }
+      }
+      return {
+        draft: { ...(current.key === draftKey ? current.draft : baselineDraft), ...patch },
+        dirtyKeys: [...new Set([...dirtyKeys, ...patchKeys])],
+        editedAgainst,
+        key: draftKey,
+      };
+    });
   }
 
   function setFeedback(feedbackValue: Feedback | null): void {
@@ -120,67 +203,86 @@ export function AntennaObjectPanel({ selection }: InspectorPanelProps) {
 
   function resetDraft(): void {
     draftRef.current = baselineDraft;
-    setDraftState({ draft: baselineDraft, key: draftKey });
+    setDraftState({ draft: baselineDraft, dirtyKeys: [], editedAgainst: {}, key: draftKey });
+    setRevisionConflictState(null);
     setFeedback(null);
   }
 
   async function commitDraft(): Promise<boolean> {
     if (applyInFlight.current) return false;
-    if (!validation || validation.error) {
+    if (!canCommit || baseRevision === null) {
       setFeedback({
         kind: "error",
-        message: validation?.error ?? "A committed antenna drive is not available.",
+        message: "Scene revision is unavailable; refresh before saving.",
       });
       return false;
     }
-    if (!sessionScopeKey) {
-      setFeedback({ kind: "error", message: "Session identity is not ready. Try again after it loads." });
+    if (locallyConflictingKeys.length > 0) {
+      setFeedback({
+        kind: "error",
+        message: "The server changed an edited field. Compare and rebase before saving.",
+      });
       return false;
     }
+    if (revisionConflict && revisionConflict.phase !== "rebased") {
+      setFeedback({
+        kind: "error",
+        message: "Refetch and rebase the server change before saving again.",
+      });
+      return false;
+    }
+    if (!sessionScopeKey || !valid) return false;
     const submittedDraft = draft;
     applyInFlight.current = true;
     setPending(true);
-    try {
-      const historyGeneration = authoringHistory?.getGeneration?.();
-      const historyContext = {
+    const historyGeneration = authoringHistory?.getGeneration?.();
+    const historyContext = {
         api,
         authoringHistory,
         sessionScopeKey,
         isCurrentSessionScope: () =>
           commands.getSessionScopeKey() === sessionScopeKey &&
+          activeDraftKeyRef.current === draftKey &&
           (historyGeneration === undefined ||
             authoringHistory?.getGeneration?.() === historyGeneration),
       };
+    try {
       const response = await runAuthoringMutationWithHistory(
         historyContext,
         model.mode === "canonical"
           ? `Update antenna drive ${model.objectId}`
           : `Migrate antenna drive ${model.objectId}`,
-        async ({ baseRevision }) =>
+        async () =>
           model.mode === "canonical"
             ? saveCanonicalDrive(baseRevision, submittedDraft)
             : migrateLegacyDrive(baseRevision, submittedDraft),
       );
       if (historyContext.isCurrentSessionScope() === false) return false;
       invalidateSceneResource(resources, response.scene_revision);
-      const acknowledgedDraft = { ...submittedDraft };
-      setAcknowledgedBase({
-        draft: acknowledgedDraft,
-        objectId: model.objectId,
-        revision: response.scene_revision,
-      });
+      setRevisionConflictState(null);
+      setAcknowledgedBase({ draft: submittedDraft, key: draftKey, revision: response.scene_revision });
       const latestDraft = draftRef.current;
-      const rebasedDraft = latestDraft === submittedDraft
-        ? acknowledgedDraft
-        : latestDraft;
-      const acknowledgedDraftKey = `${model.objectId}:${response.scene_revision}`;
-      draftRef.current = rebasedDraft;
-      setDraftState({ draft: rebasedDraft, key: acknowledgedDraftKey });
-      if (latestDraft === submittedDraft && !acknowledgeAntennaDraft()) return false;
+      const dirtyKeys = (Object.keys(submittedDraft) as Array<keyof AntennaObjectDraft>)
+        .filter((key) => latestDraft[key] !== submittedDraft[key]);
+      setDraftState({ draft: latestDraft, dirtyKeys, editedAgainst: submittedDraft, key: draftKey });
+      if (dirtyKeys.length === 0 && !acknowledgeAntennaDraft()) return false;
       setFeedback({ kind: "success", message: model.mode === "legacy" ? "Legacy source migrated to a regional field drive." : "Antenna field drive committed." });
       return true;
     } catch (error) {
-      setFeedback({ kind: "error", message: errorMessage(error) });
+      if (!historyContext.isCurrentSessionScope()) return false;
+      if (isAntennaObjectRevisionConflict(error) && baseRevision !== null) {
+        setRevisionConflictState({
+          baseRevision,
+          key: draftKey,
+          phase: "conflict",
+        });
+        setFeedback({
+          kind: "error",
+          message: "The antenna field drive changed on the server. Refetch and compare before retrying.",
+        });
+      } else {
+        setFeedback({ kind: "error", message: errorMessage(error) });
+      }
       return false;
     } finally {
       applyInFlight.current = false;
@@ -188,31 +290,74 @@ export function AntennaObjectPanel({ selection }: InspectorPanelProps) {
     }
   }
 
-  async function saveCanonicalDrive(
-    capturedRevision?: number | null,
-    submittedDraft: AntennaObjectDraft = draft,
-  ) {
+  function refetchAfterRevisionConflict(): void {
+    if (!revisionConflict) return;
+    setRevisionConflictState({
+      ...revisionConflict,
+      phase: "refreshing",
+    });
+    setFeedback({ kind: "error", message: "Refetching the canonical scene…" });
+    scene.refetch();
+  }
+
+  function rebaseAfterRevisionConflict(): void {
+    if (!revisionConflict || conflictViewPhase !== "refetched") return;
+    setDraftState((current) => {
+      if (current.key !== draftKey) return { draft: baseDraft, dirtyKeys: [], editedAgainst: {}, key: draftKey };
+      const edited = Object.fromEntries(
+        current.dirtyKeys.map((key) => [key, current.draft[key]]),
+      ) as Partial<AntennaObjectDraft>;
+      return {
+        draft: { ...baseDraft, ...edited },
+        dirtyKeys: current.dirtyKeys,
+        editedAgainst: Object.fromEntries(
+          current.dirtyKeys.map((key) => [key, baseDraft[key]]),
+        ),
+        key: draftKey,
+      };
+    });
+    setRevisionConflictState({
+      ...revisionConflict,
+      phase: "rebased",
+    });
+    setFeedback({
+      kind: "error",
+      message: "Draft rebased onto the latest server revision. Review and retry Save.",
+    });
+  }
+
+  function rebaseLocalDraft(): void {
+    setDraftState((current) => ({
+      ...current,
+      editedAgainst: Object.fromEntries(
+        current.dirtyKeys.map((key) => [key, baseDraft[key]]),
+      ),
+    }));
+    setFeedback({
+      kind: "success",
+      message: "Draft rebased onto the current scene. Review before saving.",
+    });
+  }
+
+  async function saveCanonicalDrive(baseRevisionValue: number, submittedDraft: AntennaObjectDraft) {
     const patch = buildAntennaCanonicalFieldDrive(selection, scene.data, submittedDraft);
     if (patch.error || !patch.drive) throw new Error(patch.error ?? "Invalid antenna drive draft.");
     const drive = patch.drive as unknown as RegionalFieldDriveResource;
     return api.model.replaceFieldDrive(
       drive.id,
       {
-        base_revision: capturedRevision ?? scene.data?.revision ?? null,
+        base_revision: baseRevisionValue,
         drive,
       },
       sessionScopeKey ? { sessionScopeKey } : undefined,
     );
   }
 
-  async function migrateLegacyDrive(
-    capturedRevision?: number | null,
-    submittedDraft: AntennaObjectDraft = draft,
-  ) {
+  async function migrateLegacyDrive(baseRevisionValue: number, submittedDraft: AntennaObjectDraft) {
     const patch = buildAntennaLegacyMigrationPatch(selection, scene.data, submittedDraft);
     if (patch.error || !patch.drives || !patch.modules) throw new Error(patch.error ?? "Invalid legacy antenna migration.");
     return api.model.commitTransaction({
-      base_revision: capturedRevision ?? scene.data?.revision ?? null,
+      base_revision: baseRevisionValue,
       kind: "merge_patch",
       merge_patch: {
         field_drives: { drives: patch.drives as JsonObject[] },
@@ -224,7 +369,7 @@ export function AntennaObjectPanel({ selection }: InspectorPanelProps) {
   return (
     <div className="fm-inspector-panel">
       <InspectorGroup
-        title="Antenna"
+        title="Regional field drive"
         badge={model.mode === "canonical" ? "Regional drive" : model.mode === "legacy" ? "Migration required" : "unassigned"}
       >
         {model.mode === "legacy" ? <FeedbackBanner kind="warning" message="Deprecated prescribed_zeeman_mask source. Saving migrates it atomically to RegionalFieldDrive." /> : null}
@@ -249,11 +394,12 @@ export function AntennaObjectPanel({ selection }: InspectorPanelProps) {
           label="Waveform"
           type="select"
           value={draft.waveformKind}
-          onChange={(event) =>
-            updateDraft({
-              waveformKind: event.target.value as AntennaObjectDraft["waveformKind"],
-            })
-          }
+          onChange={(event) => {
+            const waveformKind = event.target.value as AntennaObjectDraft["waveformKind"];
+            if (waveformKind !== draft.waveformKind) {
+              updateDraft({ waveformKind, ...antennaWaveformDefaults[waveformKind] });
+            }
+          }}
         >
           <option value="constant">Constant</option>
           <option value="sinc_pulse">Sinc pulse</option>
@@ -261,6 +407,14 @@ export function AntennaObjectPanel({ selection }: InspectorPanelProps) {
         </FormField>
         {draft.waveformKind === "sinc_pulse" ? (
           <>
+            <FormField
+              label="Waveform amplitude"
+              type="number"
+              value={draft.sincAmplitude}
+              onChange={(event) =>
+                updateDraft({ sincAmplitude: event.target.value })
+              }
+            />
             <FormField
               label="Cutoff"
               unit="Hz"
@@ -278,21 +432,131 @@ export function AntennaObjectPanel({ selection }: InspectorPanelProps) {
           </>
         ) : null}
         {draft.waveformKind === "sinusoidal" ? (
-          <FormField
-            label="Frequency"
-            unit="Hz"
-            value={draft.sinusoidalFrequencyHz}
-            onChange={(event) =>
-              updateDraft({ sinusoidalFrequencyHz: event.target.value })
-            }
-          />
+          <>
+            <FormField
+              label="Frequency"
+              unit="Hz"
+              value={draft.sinusoidalFrequencyHz}
+              onChange={(event) =>
+                updateDraft({ sinusoidalFrequencyHz: event.target.value })
+              }
+            />
+            <FormField
+              label="Phase"
+              unit="rad"
+              type="number"
+              value={draft.sinusoidalPhaseRad}
+              onChange={(event) =>
+                updateDraft({ sinusoidalPhaseRad: event.target.value })
+              }
+            />
+            <FormField
+              label="Offset"
+              type="number"
+              value={draft.sinusoidalOffset}
+              onChange={(event) =>
+                updateDraft({ sinusoidalOffset: event.target.value })
+              }
+            />
+          </>
         ) : null}
         {feedback ? (
           <FeedbackBanner kind={feedback.kind} message={feedback.message} />
         ) : null}
+        {locallyConflictingKeys.length > 0 && !revisionConflict ? (
+          <InspectorGroup title="Concurrent field edit" badge="review required">
+            {locallyConflictingKeys.map((key) => (
+              <div key={key}>
+                <FieldRow label={`Server ${draftFieldLabels[key]}`} value={baseDraft[key]} />
+                <FieldRow label={`Draft ${draftFieldLabels[key]}`} value={draft[key]} />
+              </div>
+            ))}
+            <Button size="sm" type="button" variant="ghost" onClick={rebaseLocalDraft}>
+              Rebase Draft
+            </Button>
+          </InspectorGroup>
+        ) : null}
+        {revisionConflict ? (
+          <InspectorGroup
+            title="Revision conflict"
+            badge={conflictViewPhase ?? undefined}
+          >
+            <FieldRow
+              label="Conflict base revision"
+              value={String(revisionConflict.baseRevision)}
+            />
+            <FieldRow
+              label="Server revision"
+              value={baseRevision === null ? "unavailable" : String(baseRevision)}
+            />
+            <FieldRow label="Draft amplitude" value={draft.amplitudeB} unit="T" />
+            <FieldRow label="Server amplitude" value={baseDraft.amplitudeB} unit="T" />
+            <FieldRow label="Draft direction" value={draft.direction} />
+            <FieldRow label="Server direction" value={baseDraft.direction} />
+            <FieldRow label="Draft waveform" value={draft.waveformKind} />
+            <FieldRow label="Server waveform" value={baseDraft.waveformKind} />
+            {draft.waveformKind === "sinusoidal" ? (
+              <>
+                <FieldRow label="Draft frequency" value={draft.sinusoidalFrequencyHz} unit="Hz" />
+                <FieldRow label="Draft phase" value={draft.sinusoidalPhaseRad} unit="rad" />
+                <FieldRow label="Draft offset" value={draft.sinusoidalOffset} />
+              </>
+            ) : null}
+            {baseDraft.waveformKind === "sinusoidal" ? (
+              <>
+                <FieldRow label="Server frequency" value={baseDraft.sinusoidalFrequencyHz} unit="Hz" />
+                <FieldRow label="Server phase" value={baseDraft.sinusoidalPhaseRad} unit="rad" />
+                <FieldRow label="Server offset" value={baseDraft.sinusoidalOffset} />
+              </>
+            ) : null}
+            {draft.waveformKind === "sinc_pulse" ? (
+              <>
+                <FieldRow label="Draft waveform amplitude" value={draft.sincAmplitude} />
+                <FieldRow label="Draft cutoff" value={draft.sincCutoffHz} unit="Hz" />
+                <FieldRow label="Draft t0" value={draft.sincT0} unit="s" />
+              </>
+            ) : null}
+            {baseDraft.waveformKind === "sinc_pulse" ? (
+              <>
+                <FieldRow label="Server waveform amplitude" value={baseDraft.sincAmplitude} />
+                <FieldRow label="Server cutoff" value={baseDraft.sincCutoffHz} unit="Hz" />
+                <FieldRow label="Server t0" value={baseDraft.sincT0} unit="s" />
+              </>
+            ) : null}
+            <div className="fm-inspector-toolbar">
+              <Button
+                disabled={pending || conflictViewPhase === "refreshing"}
+                size="sm"
+                type="button"
+                variant="ghost"
+                onClick={refetchAfterRevisionConflict}
+              >
+                Refetch Scene
+              </Button>
+              <Button
+                disabled={pending || conflictViewPhase !== "refetched"}
+                size="sm"
+                type="button"
+                variant="ghost"
+                onClick={rebaseAfterRevisionConflict}
+              >
+                Rebase Draft
+              </Button>
+              <Button
+                disabled={pending || conflictViewPhase !== "rebased"}
+                size="sm"
+                type="button"
+                variant="primary"
+                onClick={() => void commitDraft()}
+              >
+                Retry Save
+              </Button>
+            </div>
+          </InspectorGroup>
+        ) : null}
         <div className="fm-inspector-toolbar">
           <Button
-            disabled={pending || model.mode === "missing"}
+            disabled={!canCommit || pending || revisionConflict !== null || locallyConflictingKeys.length > 0}
             size="sm"
             type="button"
             variant="primary"

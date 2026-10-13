@@ -45,8 +45,9 @@ struct DeviceVectorField {
 
 /// Device-side copy of one resolved regional-drive waveform descriptor.
 /// Spatial bases are stored separately as flattened SoA arrays with layout
-/// [drive][cell]. Time offsets are resolved at the Rust/native boundary so
-/// the CUDA kernels only evaluate an absolute stage time.
+/// [drive][cell]. The native FDM clock is stage-local; the upload boundary
+/// encodes the canonical waveform coordinate in `time_offset_s` so kernels do
+/// not need a second host-side waveform evaluation.
 struct RegionalFieldDriveParams {
     int waveform = FULLMAG_FDM_REGIONAL_FIELD_DRIVE_CONSTANT;
     int reserved = 0;
@@ -1849,6 +1850,25 @@ inline bool fullmag_fdm_should_fill_step_stats(const Context &ctx) {
         ctx, ctx.accepted_step_pending ? ctx.pending_step_count : ctx.step_count);
 }
 
+// CONTROL diagnostics are deliberately limited to fixed-step integrations.
+// Adaptive paths use their own device-side control flow and must not turn the
+// lightweight policy into the full energy-reduction path.
+inline bool fullmag_fdm_should_fill_control_stats_for_step(
+    const Context &ctx,
+    uint64_t step)
+{
+    if (ctx.stats_mode != FULLMAG_FDM_STATS_CONTROL || ctx.adaptive_enabled) {
+        return false;
+    }
+    const uint32_t stride = ctx.stats_stride == 0 ? 1 : ctx.stats_stride;
+    return stride <= 1 || (step % stride) == 0;
+}
+
+inline bool fullmag_fdm_should_fill_control_stats(const Context &ctx) {
+    return fullmag_fdm_should_fill_control_stats_for_step(
+        ctx, ctx.accepted_step_pending ? ctx.pending_step_count : ctx.step_count);
+}
+
 inline void fullmag_fdm_reset_hot_loop_audit(Context &ctx) {
     ctx.hot_loop_d2h_bytes = 0;
     ctx.hot_loop_host_sync_count = 0;
@@ -2111,7 +2131,9 @@ inline bool fullmag_fdm_multilayer_has_active_mask(const Context &ctx) {
 
 inline uint64_t fullmag_fdm_required_operator_mask(const Context &ctx) {
     uint64_t required_operator_mask = FULLMAG_FDM_OPERATOR_LLG_INTEGRATOR;
-    if (ctx.adaptive_enabled || ctx.stats_mode == FULLMAG_FDM_STATS_FULL) {
+    if (ctx.adaptive_enabled ||
+        ctx.stats_mode == FULLMAG_FDM_STATS_FULL ||
+        ctx.stats_mode == FULLMAG_FDM_STATS_CONTROL) {
         required_operator_mask |= FULLMAG_FDM_OPERATOR_REDUCTION;
     }
     if (ctx.enable_exchange) required_operator_mask |= FULLMAG_FDM_OPERATOR_EXCHANGE;
@@ -2850,6 +2872,10 @@ bool context_mark_static_external_field_profile(
 bool context_upload_regional_field_drives(
     Context &ctx,
     const fullmag_fdm_regional_field_drive_desc_v1 *drives,
+    uint32_t drive_count);
+bool context_upload_regional_field_drives(
+    Context &ctx,
+    const fullmag_fdm_regional_field_drive_desc_v2 *drives,
     uint32_t drive_count);
 
 /// Upload sparse demag boundary correction tensors.

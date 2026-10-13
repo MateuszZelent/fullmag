@@ -102,9 +102,7 @@ pub(crate) fn prepare_accepted_fem_task(
     if execution_plan.common.resolved_backend != BackendTarget::Fem {
         bail!("accepted FEM preparer requires a task resolved to the FEM backend");
     }
-    let BackendPlanIR::Fem(fem_plan) = &execution_plan.backend_plan else {
-        bail!("accepted FEM preparer currently requires a time-domain FEM plan");
-    };
+    let (mesh, fe_order) = accepted_preparation_mesh(&execution_plan.backend_plan)?;
 
     if let Some(existing) = store.read_task_preparation_receipt(run_id.as_str(), task_id)? {
         let receipt = accepted
@@ -138,16 +136,28 @@ pub(crate) fn prepare_accepted_fem_task(
         bail!("new accepted FEM preparation requires an active resource lease");
     }
 
-    let native = produce_native_fem_evidence(&fem_plan.mesh, fem_plan.fe_order)?;
+    let native = produce_native_fem_evidence(mesh, fe_order)?;
     let preparation_id = format!("prep-{task_id}");
-    let receipt = accepted
-        .materialize_fem_preparation_receipt(preparation_id, &step.step_id, &native)
-        .with_context(|| {
-            format!(
-                "materialize accepted FEM preparation for `{}`",
-                step.step_id
-            )
-        })?;
+    let receipt = match &execution_plan.backend_plan {
+        BackendPlanIR::Fem(_) => accepted.materialize_fem_preparation_receipt(
+            preparation_id,
+            &step.step_id,
+            &native,
+        ),
+        BackendPlanIR::AntennaExternalLeadInspection(_) => accepted
+            .materialize_antenna_external_lead_inspection_preparation_receipt(
+                preparation_id,
+                &step.step_id,
+                &native,
+            ),
+        _ => bail!("accepted FEM preparer requires a time-domain FEM or antenna inspection plan"),
+    }
+    .with_context(|| {
+        format!(
+            "materialize accepted FEM preparation for `{}`",
+            step.step_id
+        )
+    })?;
     let payload =
         serde_json::to_value(&receipt).context("serialize accepted FEM preparation receipt")?;
     let durable = FmsTaskPreparationReceipt::new(
@@ -180,6 +190,18 @@ pub(crate) fn prepare_accepted_fem_task(
     })
 }
 
+/// Select only the mesh consumed by the pinned workflow. Inspection uses the
+/// conductor plus leads, never the original device or a magnetic target mesh.
+fn accepted_preparation_mesh(plan: &BackendPlanIR) -> Result<(&fullmag_ir::MeshIR, u32)> {
+    match plan {
+        BackendPlanIR::Fem(fem) => Ok((&fem.mesh, fem.fe_order)),
+        BackendPlanIR::AntennaExternalLeadInspection(antenna) => {
+            Ok((&antenna.input.combined_mesh, 1))
+        }
+        _ => bail!("accepted FEM preparer requires a time-domain FEM or antenna inspection plan"),
+    }
+}
+
 #[cfg(feature = "fem-native")]
 fn produce_native_fem_evidence(
     mesh: &fullmag_ir::MeshIR,
@@ -196,4 +218,29 @@ fn produce_native_fem_evidence(
     _fe_order: u32,
 ) -> Result<fullmag_plan::NativeFemMeshSpaceEvidence> {
     bail!("accepted FEM preparation requires the fem-native feature")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mesh_selection_preserves_magnetic_mesh_order_and_rejects_fdm() {
+        let mut fem = fullmag_ir::FemPlanIR::default();
+        fem.fe_order = 2;
+        let plan = BackendPlanIR::Fem(fem);
+        let (mesh, order) = accepted_preparation_mesh(&plan).unwrap();
+        let BackendPlanIR::Fem(fem) = &plan else {
+            panic!("test fixture must be FEM");
+        };
+        assert!(std::ptr::eq(mesh, &fem.mesh));
+        // Selection must not silently coerce magnetic order; native H1
+        // validation remains responsible for rejecting unsupported orders.
+        assert_eq!(order, 2);
+        let error = accepted_preparation_mesh(
+            &BackendPlanIR::Fdm(fullmag_ir::FdmPlanIR::default()),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("time-domain FEM or antenna inspection"));
+    }
 }

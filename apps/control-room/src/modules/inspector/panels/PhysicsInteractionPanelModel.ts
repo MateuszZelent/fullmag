@@ -58,8 +58,9 @@ export function interactionLabel(id: PhysicsInteractionId): string {
 
 export function isWritableObjectInteraction(
   id: PhysicsInteractionId,
+  objectId?: string | null,
 ): id is ObjectInteractionKind {
-  return isObjectInteractionKind(id) && findInteractionSpec(id)?.storage === "object_interaction";
+  return isObjectInteractionKind(id) && findInteractionSpec(id, objectId)?.storage === "object_interaction";
 }
 
 export function isWritableStudyInteraction(id: PhysicsInteractionId): boolean {
@@ -248,12 +249,13 @@ function interactionDraftValueDirty(
 export function buildInteractionApplyPatch(
   draft: PhysicsInteractionDraft,
   scene?: SceneResource | null,
+  objectId?: string | null,
 ): InteractionApplyPatchResult {
-  const spec = findInteractionSpec(draft.id);
+  const spec = findInteractionSpec(draft.id, objectId);
   if (!spec) return { error: `Unknown physics interaction: ${draft.id}` };
 
   if (spec.storage === "object_interaction") {
-    const result = buildObjectInteractionPatchFromDraft(draft, scene);
+    const result = buildObjectInteractionPatchFromDraft(draft, scene, objectId);
     return "error" in result
       ? result
       : { patch: result.patch, storage: "object_interaction" };

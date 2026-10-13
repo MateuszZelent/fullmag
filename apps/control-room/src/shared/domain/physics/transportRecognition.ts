@@ -77,9 +77,10 @@ function isChargeSolver(value: unknown, coupling: unknown, hasStructuredClosure:
   }
   return (coupling === undefined || coupling === "one_way")
     && value.engine === "cg"
-    && value.operator_version === (hasStructuredClosure
+    && (value.operator_version === (hasStructuredClosure
       ? "fv_charge_harmonic_source_cut_v1"
       : "fv_charge_harmonic_v1")
+      || (!hasStructuredClosure && value.operator_version === "fem_charge_conforming_h1_p1.transparent.v1"))
     && value.physical_residual_version === "charge_balance_integrated_l2.v1";
 }
 
@@ -248,6 +249,9 @@ function isChargeBoundary(value: unknown): boolean {
     return hasOnlyKeys(value, ["id", "kind", "potential_V", "surfaces"])
       && isFiniteNumber(value.potential_V);
   }
+  if (value.kind === "equipotential_current_terminal") {
+    return hasOnlyKeys(value, ["id", "kind", "surfaces"]);
+  }
   if (value.kind === "normal_current_electrode") {
     return hasOnlyKeys(value, ["id", "kind", "outward_current_density_Apm2", "surfaces"])
       && isFiniteNumber(value.outward_current_density_Apm2);
@@ -411,7 +415,8 @@ export function isKnownCurrentTransport(value: SceneCurrentTransport): value is 
     && (value.gauge === undefined
       || value.gauge === null
       || value.gauge === "dirichlet_reference"
-      || value.gauge === "zero_mean")
+      || value.gauge === "zero_mean"
+      || value.gauge === "terminal_reference")
     && (value.model !== "magnetoresistive_poisson" || value.coupling === "bidirectional")
     && (!hasStructuredClosure || (value.model === "ohmic_poisson" && value.coupling === "one_way"))
     && (value.materials === undefined || isArrayOf(

@@ -1,17 +1,19 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { ECharts } from "echarts";
 
 import type { EventBus } from "@/kernel/events/EventBus";
 import type { KernelEventMap } from "@/kernel/events/eventTypes";
+import { InteractiveChartSurface } from "@/shared/analysis-charts/InteractiveChartSurface";
 import {
-  InteractiveChartSurface,
   chartSeriesRenderModel,
-} from "@/shared/analysis-charts/InteractiveChartSurface";
+  type InteractiveChartSurfaceIdentity,
+} from "@/shared/analysis-charts/interactiveChartModel";
 import type { ChartDataPresentationState } from "@/shared/analysis-charts/chartPresentationState";
 import type { ChartSeries } from "@/shared/domain/analysis/chartSeries";
-import type { InteractiveChartSurfaceIdentity } from "@/shared/analysis-charts/InteractiveChartSurface";
 import type {
+  ChartRenderModel,
   ChartResultExportContext,
 } from "@/shared/analysis-charts/chartRenderer";
 import type { ChartExportRequest } from "@/shared/analysis-charts/chartExport";
@@ -29,6 +31,7 @@ import {
   recordChartInstanceDisposed,
   recordChartModelBuilt,
   recordChartResize,
+  registerRenderedChartDiagnostics,
   recordChartSetOption,
 } from "./chartDiagnostics";
 import { cancelRangeCommit, scheduleRangeCommit } from "./chartRangeCommit";
@@ -38,6 +41,7 @@ interface EChartsSurfaceProps {
   bus?: EventBus<KernelEventMap>;
   chartId?: string;
   dataStatus?: string;
+  dataExportModel?: ChartRenderModel;
   descriptorId?: string;
   displayUnits?: Readonly<Record<string, string>>;
   exportProvenance?: ChartResultExportContext;
@@ -60,6 +64,7 @@ function EChartsSurfaceImpl({
   bus,
   chartId,
   dataStatus,
+  dataExportModel,
   descriptorId,
   displayUnits,
   exportProvenance,
@@ -120,10 +125,12 @@ function EChartsSurfaceImpl({
     <InteractiveChartSurface
       allSeries={allSeries}
       dataStatus={dataStatus}
+      dataExportModel={dataExportModel}
       diagnostics={{
         instanceCreated: (chart) => {
           recordChartInstanceCreated();
           if (onRangeChange) recordChartDispatchDataZoom(chart as never);
+          return registerRenderedChartDiagnostics(chart as unknown as ECharts);
         },
         instanceDisposed: recordChartInstanceDisposed,
         modelUpdated: (model) => {

@@ -5,6 +5,6 @@
   "type": "module",
   "scripts": {
     "build": "node build.mjs",
-    "test": "node test.mjs"
+    "test": "node build.mjs && node test.mjs"
   }
 }

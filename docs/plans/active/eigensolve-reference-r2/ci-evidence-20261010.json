@@ -1,0 +1,1240 @@
+{
+  "schema_version": "eigensolve_r2_ci_evidence.v1",
+  "scope": "source_and_bounded_native_contracts_only",
+  "scientific_qualification": "NOT VERIFIED",
+  "runs": [
+    {
+      "run_id": 38068292627,
+      "sha": "39a20c4596231563e0568a2eec9cb4c4529aed56",
+      "conclusion": "success",
+      "scope": "synthetic_A1_geometry_and_artifact_consumers"
+    },
+    {
+      "run_id": 38068966497,
+      "sha": "924c26129a0b5e5b3aadf32bfb3df852479ef4e4",
+      "conclusion": "failure",
+      "passed": 1561,
+      "failed": 30,
+      "ignored": 1,
+      "new_typed_consumer_cases_passed": 7,
+      "new_reference_method_cases_passed": 7
+    },
+    {
+      "run_id": 38068716019,
+      "sha": "19bcb4fd8dba368ab14e405f319a243c4e5577b8",
+      "conclusion": "success",
+      "scope": "modal-phase-slepc",
+      "passed_ctests": [
+        "fem_modal_eigen_phase_convention_contract",
+        "fem_modal_eigen_typed_cpu_transport_contract"
+      ],
+      "artifact_name": "fem-cpu-source-contract-modal-phase-slepc-38068716019-1",
+      "receipt_sha256": "1a362fc3ba0d856abadaff87420974f8a6fdb8eb0f0f9ccf082fc08c94f6cc3a",
+      "petsc_scalar_type": "real",
+      "petsc_version": "3.24.6",
+      "slepc_version": "3.24.3",
+      "mfem_ref": "v4.10"
+    },
+    {
+      "run_id": 38069118693,
+      "sha": "924c26129a0b5e5b3aadf32bfb3df852479ef4e4",
+      "conclusion": "failure",
+      "scope": "full_Rust_API",
+      "compile_error": "E0425 latest_fields in FrozenSpins fixture",
+      "tests_ran": false
+    },
+    {
+      "run_id": 38072219897,
+      "sha": "2101053ab52bdaa2ac3c8242ee902d076c1f7263",
+      "conclusion": "failure",
+      "scope": "full_Rust_API_main_suite",
+      "passed": 1004,
+      "failed": 6,
+      "ignored": 3,
+      "filtered": 355
+    },
+    {
+      "run_id": 38076097697,
+      "sha": "ea59d2cb201d4e24c7755ec48a6335b7143854a7",
+      "conclusion": "failure",
+      "scope": "default_feature_runner",
+      "passed": 1593,
+      "failed": 3,
+      "ignored": 1,
+      "new_fdm_identity_writer_cases_passed": 5
+    },
+    {
+      "run_id": 38074310973,
+      "sha": "f9c29e2b2bc195d598e600bbcb3bd47316e58251",
+      "conclusion": "success",
+      "scope": "dispersion_artifact_consumers"
+    },
+    {
+      "run_id": 38076097764,
+      "sha": "ea59d2cb201d4e24c7755ec48a6335b7143854a7",
+      "conclusion": "success",
+      "scope": "dispersion_artifact_consumers"
+    },
+    {
+      "run_id": 38076097699,
+      "sha": "ea59d2cb201d4e24c7755ec48a6335b7143854a7",
+      "conclusion": "failure",
+      "scope": "hosted_UI_contracts",
+      "vitest_passed": 100,
+      "vitest_failed": 1,
+      "failure": "undamped_signed_zero",
+      "complete_typecheck": "passed",
+      "architecture": "passed",
+      "pnpm_manifests_regressions": "passed",
+      "physical_workspace_install": "passed",
+      "react_doctor": {
+        "status": "failure",
+        "errors": 9,
+        "issues": 617,
+        "score": 57,
+        "scope": "analyzed_app_not_claimed_as_new_regressions"
+      },
+      "browser": "NOT VERIFIED"
+    },
+    {
+      "run_id": 38074313403,
+      "sha": "f9c29e2b2bc195d598e600bbcb3bd47316e58251",
+      "conclusion": "failure",
+      "scope": "modal-phase-slepc",
+      "phase": "native_link",
+      "tests_ran": false,
+      "failure": "CPU_test_object_references_GPU_provider_symbols",
+      "receipt_sha256": "a6731f43cdca14bfe852f4f924d7100ba2d09ebff0b4f72bcdb0ccbc49578eb6",
+      "qualification_claimed": false
+    },
+    {
+      "run_id": 38076746447,
+      "sha": "fe99244d060489a3f67c4afc7de09445bdba5220",
+      "conclusion": "success",
+      "scope": "complete_default_feature_runner",
+      "passed": 1596,
+      "failed": 0,
+      "ignored": 1,
+      "scientific_qualification": "NOT VERIFIED"
+    },
+    {
+      "run_id": 38076746462,
+      "sha": "fe99244d060489a3f67c4afc7de09445bdba5220",
+      "conclusion": "failure",
+      "scope": "hosted_UI_contracts",
+      "vitest_passed": 105,
+      "vitest_failed": 0,
+      "manifest_regressions_passed": 5,
+      "complete_typecheck": "passed",
+      "architecture": "passed",
+      "physical_workspace_install": "passed",
+      "manifest_proof_sha256": "339aed894bbaa59a95dd839d8ba7560460ee3177fc6b308d626986ee8f64df18",
+      "react_doctor": {
+        "status": "failure",
+        "errors": 9,
+        "issues": 617,
+        "score": 57,
+        "artifact_diagnostics_sha256": "2cb699880a6151ccb7818ac1967279b7c1afb6bf2bfa2520d8ae847a255a4030"
+      },
+      "browser": "NOT VERIFIED"
+    },
+    {
+      "run_id": 38076759242,
+      "sha": "fe99244d060489a3f67c4afc7de09445bdba5220",
+      "conclusion": "failure",
+      "scope": "modal-phase-slepc",
+      "phase": "ctest",
+      "native_build": "passed",
+      "passed_ctests": [
+        "fem_modal_eigen_phase_convention_contract",
+        "fem_modal_eigen_typed_cpu_transport_contract"
+      ],
+      "failed_ctests": [
+        "fem_poisson_airbox_selected_window_contract"
+      ],
+      "failure": "local_retry_fixture_does_not_force_retry",
+      "receipt_sha256": "659363266c391c62127b8688a8ba2139bdc6cb75c459b58d3356169c6a666be4",
+      "qualification_claimed": false
+    },
+    {
+      "run_id": 38078081246,
+      "sha": "b6e13fc60f1ef6421ad03579fa10bc5458b6c9c3",
+      "conclusion": "failure",
+      "scope": "floquet-count-slepc",
+      "native_build": "passed",
+      "passed_ctests": [
+        "fem_modal_eigen_floquet_count_contract"
+      ],
+      "failed_ctests": [
+        "fem_modal_eigen_live_shift_configuration_contract"
+      ],
+      "serializer_regression_reached_before_cli_branches": true,
+      "actual_live_factor_query": "NOT VERIFIED",
+      "failure": "legacy_fixture_rejected_before_production_SLEPc",
+      "receipt_sha256": "50da93d180270a0b88c75442e63f3a4c548238ec6ea90f95478227ceb4eeeb51",
+      "qualification_claimed": false
+    },
+    {
+      "run_id": 38081980214,
+      "sha": "36da16235309b3c57db253bb784cdea9ffeb1df4",
+      "conclusion": "success",
+      "scope": "independent_small_pencil_damping_oracle",
+      "tests_passed": 7,
+      "numpy_version": "2.2.6",
+      "scipy_version": "1.15.3",
+      "log_sha256": "7ec096d14150d268379a9fcbb4eef34c5f7f22549fa778c1f85ecf8973ba5761",
+      "native_assembly": "NOT VERIFIED",
+      "native_exact_damping": "NOT VERIFIED",
+      "dispersion_qualification": "NOT VERIFIED",
+      "qualification_claimed": false
+    },
+    {
+      "run_id": 38080351130,
+      "sha": "b176d824ce21eca7f96132ebac6579e61d53a753",
+      "conclusion": "failure",
+      "scope": "modal-phase-slepc",
+      "native_build": "passed",
+      "passed_ctests": [
+        "fem_modal_eigen_phase_convention_contract",
+        "fem_modal_eigen_typed_cpu_transport_contract"
+      ],
+      "failed_ctests": [
+        "fem_poisson_airbox_selected_window_contract"
+      ],
+      "failure": "selected_window_failed_before_terminal_marker; detailed_fixture_identity_not_available",
+      "receipt_sha256": "a84df656125d5004021a8348a81dba6d0572ecb19d4bd68ec91ddc7fc9687a14",
+      "qualification_claimed": false
+    },
+    {
+      "run_id": 38080625714,
+      "sha": "b8675a329e34db1ea491a5b96aa9410cdca66e63",
+      "conclusion": "failure",
+      "scope": "floquet-count-slepc",
+      "native_build": "passed",
+      "passed_ctests": [
+        "fem_modal_eigen_floquet_count_contract"
+      ],
+      "failed_ctests": [
+        "fem_modal_eigen_live_shift_configuration_contract"
+      ],
+      "actual_native_nearest_SLEPc_reached": true,
+      "true_probe_attempt_count": 0,
+      "actual_live_factor_query": "NOT VERIFIED",
+      "failure": "one_iteration_fixture_budget_failed_before_positive_recursive_callback_and_candidate_observer",
+      "receipt_sha256": "3c5a05b00527a8499cd3dffe89f0e4fae27fd8197503b2d4e192f555b368021d",
+      "qualification_claimed": false
+    },
+    {
+      "run_id": 38083332284,
+      "sha": "f2bbdf31043ce80c2c859d5a58aa529867225574",
+      "conclusion": "success",
+      "scope": "independent_small_pencil_damping_oracle",
+      "tests_passed": 8,
+      "genuine_positive_alpha_growth_case_passed": true,
+      "log_sha256": "175726218ec2c1b4f92cf04c342445819b039b56d32d2af42aba29053b4e579c",
+      "native_assembly": "NOT VERIFIED",
+      "native_exact_damping": "NOT VERIFIED",
+      "qualification_claimed": false
+    },
+    {
+      "run_id": 38082733810,
+      "sha": "21403fc7331d6dd01e22fb4057ab09e059490592",
+      "conclusion": "failure",
+      "scope": "rust",
+      "phase": "API_test_compilation",
+      "failure": "E0597 temporary RwLockWriteGuard outlives state in topology regression",
+      "production_runtime": "NOT VERIFIED",
+      "new_API_regressions_executed": false,
+      "qualification_claimed": false
+    },
+    {
+      "run_id": 38083353383,
+      "sha": "f2bbdf31043ce80c2c859d5a58aa529867225574",
+      "conclusion": "success",
+      "scope": "private_MFEM_Gilbert_assembly",
+      "passed_ctests": [
+        "fem_poisson_airbox_shared_domain_contract"
+      ],
+      "gilbert_mass_contract": "passed",
+      "MFEM": true,
+      "SLEPc": false,
+      "GPU": false,
+      "receipt_sha256": "7a82fd4a5d48a4fa963c46d8c21e3cae83a0cbe7dc5bcf64901c06b2127be279",
+      "native_exact_damping": "NOT VERIFIED",
+      "qualification_claimed": false
+    },
+    {
+      "run_id": 38083482772,
+      "sha": "c26c87f934309d625aa64a87124e61e4fe9b7ed6",
+      "conclusion": "failure",
+      "scope": "floquet-count-slepc",
+      "native_build": "passed",
+      "passed_ctests": [
+        "fem_modal_eigen_floquet_count_contract"
+      ],
+      "failed_ctests": [
+        "fem_modal_eigen_live_shift_configuration_contract"
+      ],
+      "true_probe_attempt_count": 0,
+      "eps_solve_error_code": 82,
+      "actual_live_factor_query": "NOT VERIFIED",
+      "failure": "64_iteration_fixture_still_failed_before_positive_recursive_reason",
+      "receipt_sha256": "72f91e57532eab23aa31c596b3a3f38b18b69605c866d108ec90917c59c8720c",
+      "qualification_claimed": false
+    },
+    {
+      "run_id": 38083492602,
+      "sha": "c26c87f934309d625aa64a87124e61e4fe9b7ed6",
+      "conclusion": "failure",
+      "scope": "modal-phase-slepc",
+      "native_build": "passed",
+      "failure": "FrequencyWindowRetriesWhenALocalIntervalIsSaturated: frequency_window_refinement_disagreement / cluster_frequency_mismatch",
+      "window_complete": false,
+      "independent_count": "not_performed",
+      "receipt_sha256": "80a637c86b0c5e4f11241500439c08df18997a8b760df4881d01d3ce75782389",
+      "qualification_claimed": false
+    },
+    {
+      "run_id": 38083872121,
+      "sha": "95860f55c6a87012c480d76261c9db70188e1124",
+      "conclusion": "failure",
+      "scope": "rust_API_source_contracts",
+      "API_tests_passed": 1016,
+      "API_tests_failed": 1,
+      "API_tests_ignored": 3,
+      "failed_test": "router_v2::tests::v2_older_runtime_m_frame_preserves_newer_selected_source_and_bundle",
+      "failure": "fixture interprets FMVP extension/header bytes as f64 field samples",
+      "log_sha256": "31b7f02aa1c6464968a1a31cceab6aeb0d4903e9b7c338fcc97250c23d1625de",
+      "qualification_claimed": false
+    },
+    {
+      "run_id": 38085530937,
+      "sha": "7be53ea1524d018fcc56295f4a01fe5542040f1d",
+      "conclusion": "failure",
+      "scope": "modal-phase-slepc",
+      "native_build": "passed",
+      "passed_ctests": [
+        "fem_modal_eigen_phase_convention_contract",
+        "fem_modal_eigen_typed_cpu_transport_contract"
+      ],
+      "failed_ctests": [
+        "fem_poisson_airbox_selected_window_contract"
+      ],
+      "dense_interior_solver_status": "ok",
+      "dense_first_four_frequencies_and_six_local_modes": "passed_before_parameter_assertion",
+      "failure": "stale refined requested count lower bound >=5 despite actual unsaturated base count2",
+      "receipt_sha256": "655ec1730f7c2664ea66d9a1a69356b365326fed85370e3e3313c5f32792c34a",
+      "qualification_claimed": false
+    },
+    {
+      "run_id": 38085900429,
+      "sha": "3be9ed87496e24e2fc0582e1b10443715bc46bd5",
+      "conclusion": "failure",
+      "scope": "modal-phase-slepc",
+      "native_build": "passed",
+      "passed_ctests": [
+        "fem_modal_eigen_phase_convention_contract",
+        "fem_modal_eigen_typed_cpu_transport_contract"
+      ],
+      "failed_ctests": [
+        "fem_modal_eigen_damping_admission_contract",
+        "fem_poisson_airbox_selected_window_contract"
+      ],
+      "failure": "tiny validation fixture incorrectly expects typed mode_count=1; legacy tiny publishes accepted count in JSON; window refined bound stale",
+      "shared_damping_admission_cases_executed": false,
+      "receipt_sha256": "8b43bd27f3ba3a8f3015ac4aef30c6cad0c4a33962e17ccff6ac267075cc292a",
+      "qualification_claimed": false
+    },
+    {
+      "run_id": 38087023290,
+      "sha": "66daacf174f8706989d6dddb1ab25b5ec7a3a918",
+      "conclusion": "success",
+      "scope": "floquet_count_and_live_PCLU_configuration",
+      "passed_ctests": [
+        "fem_modal_eigen_floquet_count_contract",
+        "fem_modal_eigen_live_shift_configuration_contract"
+      ],
+      "actual_query_count": 8,
+      "actual_monitor_iteration": 7,
+      "actual_shift_type": "MAT_SHIFT_NONZERO",
+      "actual_shift_amount": 1.490116119384766e-08,
+      "actual_getter_codes": 0,
+      "raw_solver_status": 4,
+      "factor_perturbation_measured": false,
+      "accepted_scientific_solve": false,
+      "receipt_sha256": "c85fe5658f97d9d7f5e221ab1384b09b5cb3921f38c13a43209005a8fe280a80",
+      "qualification_claimed": false
+    },
+    {
+      "run_id": 38087198875,
+      "sha": "436547e3c140d11b661bc0d46608077026e2d4e8",
+      "conclusion": "failure",
+      "scope": "modal_phase_typed_transport_damping_admission_selected_window",
+      "native_build": "passed",
+      "passed_ctests": [
+        "fem_modal_eigen_phase_convention_contract",
+        "fem_modal_eigen_typed_cpu_transport_contract",
+        "fem_modal_eigen_damping_admission_contract"
+      ],
+      "failed_ctests": [
+        "fem_poisson_airbox_selected_window_contract"
+      ],
+      "failure": "positive clipped-edge fixture demanded retry after retained discovery already covered interval",
+      "receipt_sha256": "9fd67a92d36dc45daf170c19cb8fc69339e65413e9a55811a29f8c876e46b47b",
+      "qualification_claimed": false
+    },
+    {
+      "run_id": 38086656946,
+      "sha": "fab55bab3ed45f82a20bbf150cfa4db5a155d623",
+      "conclusion": "failure",
+      "scope": "focused_API_session_source_contracts",
+      "tests_passed": 78,
+      "tests_failed": 5,
+      "subsequent_router_tests_executed": false,
+      "qualification_claimed": false
+    },
+    {
+      "run_id": 38123800798,
+      "sha": "d33822c150d82e48fbbfe97ec72676ced5f547f2",
+      "conclusion": "failure",
+      "scope": "modal_phase_selected_window_corrected_fixture",
+      "qualification_claimed": false,
+      "observation_history": [
+        {
+          "conclusion": "in_progress_at_checkpoint",
+          "scope": "earlier_checkpoint"
+        }
+      ],
+      "failure": "FrequencyWindowCoversBothClippedEdges: compound request/retry assertion incorrectly fixes zero-retry refinement seed at4 instead of observed base-pass-dependent policy",
+      "job_id": 114423830438,
+      "artifact_id": 11696722255,
+      "artifact_digest": "sha256:d89e4d7bccb8610f748cc6a2c8b7260bb5597b9199524f724875aeaf58ee4ea5",
+      "detailed_test_results": "3/4 CTest passed; selected-window suite stopped at positive clipped-edge fixture",
+      "native_build": "passed",
+      "passed_ctests": [
+        "fem_modal_eigen_phase_convention_contract",
+        "fem_modal_eigen_typed_cpu_transport_contract",
+        "fem_modal_eigen_damping_admission_contract"
+      ],
+      "failed_ctests": [
+        "fem_poisson_airbox_selected_window_contract"
+      ],
+      "receipt_sha256": "f9c1d5907a861aab8d27ae6bc67b3f46a625de2a4d56b34a0aad1054e49c4c29"
+    },
+    {
+      "run_id": 38124461222,
+      "sha": "309910665e025041445c84af9e677d7cb04833c5",
+      "conclusion": "success",
+      "scope": "focused_API_session_and_physical_publication_source_contracts",
+      "session_tests_passed": 83,
+      "session_tests_failed": 0,
+      "session_tests_filtered": 1304,
+      "passed_exact_router_tests": [
+        "router_v2::tests::v2_older_runtime_m_frame_preserves_newer_selected_source_and_bundle",
+        "router_v2::tests::v2_m_publication_bundle_requires_matching_physical_scalar_row"
+      ],
+      "router_tests_passed": 2,
+      "job_id": 114425815572,
+      "job_url": "https://github.com/MateuszZelent/fullmag/actions/runs/38124461222/job/114425815572",
+      "proof": "decoded job logs show exact source SHA, 83 session tests and each named router case actually executed",
+      "managed_runtime": "NOT VERIFIED",
+      "browser": "NOT VERIFIED",
+      "scientific_qualification": "NOT VERIFIED",
+      "qualification_claimed": false
+    },
+    {
+      "run_id": 38135631293,
+      "sha": "630b0f85ddcbc0e50d0a999b106ebed5885dab13",
+      "conclusion": "failure",
+      "scope": "modal_phase_selected_window_fixture",
+      "phase": "native_test_compilation",
+      "failure": "new bounded diagnostics use std::cerr without iostream declaration",
+      "tests_executed": false,
+      "receipt_sha256": "dfc0cbc979c45358c6a820b79d6025d2a98c114ee2578e7a53bfd03541e25432",
+      "qualification_claimed": false
+    },
+    {
+      "run_id": 38136752769,
+      "sha": "c840ead87b29b6ed802318a3282393fc3c9923aa",
+      "conclusion": "failure",
+      "scope": "focused_authoring_policy_contracts",
+      "tests_passed": 76,
+      "tests_failed": 7,
+      "subtests_passed": 24,
+      "tests_deselected": 341,
+      "failure": "two new render round-trip fixtures lack local render_scene_document_as_script import; production validation assertions reached and passed",
+      "log_sha256": "451e55580f9ee778c77c9cc48720d253d4c507f50defc6ccdd997118aa97f541",
+      "qualification_claimed": false
+    },
+    {
+      "run_id": 38137488625,
+      "sha": "618413ee951f9fcec07d3a0c94573fd8fbd669ab",
+      "conclusion": "success",
+      "scope": "focused_authoring_policy_and_script_round_trip",
+      "tests_passed": 83,
+      "tests_failed": 0,
+      "subtests_passed": 24,
+      "tests_deselected": 341,
+      "log_sha256": "14ef8901cd718a34fa669daf948024d4eee2d60c8249742a734c3e753cccab92",
+      "managed_runtime": "NOT VERIFIED",
+      "browser": "NOT VERIFIED",
+      "qualification_claimed": false
+    },
+    {
+      "run_id": 38138305982,
+      "sha": "3d8c25939bfb3da0ee802c5f8c874ae0832b8da4",
+      "conclusion": "failure",
+      "scope": "focused_field_output_selection",
+      "runner_test_compilation": "passed",
+      "output_selection_tests_passed": 15,
+      "actual_single_writer_test_passed": true,
+      "tracked_bias_aggregation_executed": false,
+      "failure": "CI host lacks rg; named-execution guard failed after single writer actually passed; replace guard with available grep",
+      "log_sha256": "2cde2b8c23cebb8b0e223755d7409490283a7d1817aea1c3ea01f335ab5bfcb4",
+      "qualification_claimed": false
+    },
+    {
+      "run_id": 38138452216,
+      "sha": "3d8c25939bfb3da0ee802c5f8c874ae0832b8da4",
+      "conclusion": "success",
+      "scope": "four_bounded_native_modal_source_contracts",
+      "tests_passed": 4,
+      "tests_failed": 0,
+      "passed_exact_tests": [
+        "fem_modal_eigen_damping_admission_contract",
+        "fem_modal_eigen_phase_convention_contract",
+        "fem_poisson_airbox_selected_window_contract",
+        "fem_modal_eigen_typed_cpu_transport_contract"
+      ],
+      "receipt_sha256": "34df8d4fdfa7cf66126ee31f681ea9ee992f91dcb1807c87763cc9da1a5d74e6",
+      "ctest_log_sha256": "3a943f72999dd70c4854b2bf4aebccf47d2d012e6b6ac096fe65fbfcfa01e5bb",
+      "qualification_claimed": false,
+      "managed_scientific_benchmark": "NOT VERIFIED",
+      "gpu": "NOT VERIFIED"
+    },
+    {
+      "run_id": 38139795905,
+      "sha": "14d57a7227ec70718630e5bd9f09097a653a3599",
+      "conclusion": "failure",
+      "scope": "field_selection_actual_tracked_bias_aggregation",
+      "output_selection_tests_passed": 15,
+      "actual_single_writer_test_passed": true,
+      "tracked_bias_aggregation_executed": true,
+      "tracked_bias_aggregation_passed": false,
+      "failure": "final branches.v2.json lacks mode_output_selection_path: actual Null versus expected eigen/mode_output_selection.v1.json at eigen_path.rs:1329; merger rebuilds branch payload and drops field from tracking template",
+      "log_sha256": "46cd2906e909a4500a89ac5cac578731ddfde45fb25a88141eabe66e2a8b0192",
+      "qualification_claimed": false
+    },
+    {
+      "run_id": 38139947223,
+      "sha": "d1c16043544020b5b2d9247306625b569969d95f",
+      "conclusion": "failure",
+      "scope": "frequency_reference_overlay_source_contracts",
+      "focused_tests_passed": 114,
+      "frequency_render_model_tests_passed": 9,
+      "typecheck": "passed",
+      "architecture_hygiene": "passed",
+      "react_doctor": "failure: pre-existing 617 diagnostics exactly equal to baseline38076746462",
+      "browser": "NOT VERIFIED",
+      "log_sha256": "99553034f1765386df5fee71313d713d5963bcb86d7aefb58ce129174e479959",
+      "qualification_claimed": false,
+      "react_doctor_baseline_run": 38076746462,
+      "react_doctor_diagnostics_equal": true,
+      "react_doctor_diagnostics_sha256": "2cb699880a6151ccb7818ac1967279b7c1afb6bf2bfa2520d8ae847a255a4030"
+    },
+    {
+      "run_id": 38140440374,
+      "sha": "37744c3fdf6daabfe4c1d2d9f579ce5be598b047",
+      "conclusion": "failure",
+      "scope": "field_selection_tracked_bias_including_interrupted_prefix",
+      "prior_branch_pointer_assertion": "passed",
+      "output_selection_tests_passed": 15,
+      "actual_single_writer_test_passed": true,
+      "failure": "paused tracked sweep rejects requested future sample1 as unknown; eigen_path.rs1727",
+      "log_sha256": "0754b37a93f75964fae602a12df8aa39a91ff86e96d3237cb18109f12ee0fecd",
+      "qualification_claimed": false
+    },
+    {
+      "run_id": 38140833390,
+      "sha": "80cb2ad0fe1d358acec4eed68c6c58e01c85257b",
+      "conclusion": "failure",
+      "scope": "all_mode_identity_and_field_selection",
+      "identity_tests_passed": 5,
+      "identity_tests_failed": 0,
+      "named_identity_regression": "fem::eigen_sweep::native_field_sweep_identity_tests::every_mode_in_a_field_sweep_sample_must_share_valid_provenance",
+      "output_selection_tests_passed": 15,
+      "actual_single_writer_test_passed": true,
+      "failure": "later independent paused-prefix selection regression still rejects requested future sample1",
+      "log_sha256": "da2707402f4140fc40bc62896b90ec82a8d63bfe8d1da84b1959c9236bdce6c4",
+      "qualification_claimed": false
+    },
+    {
+      "run_id": 38141096311,
+      "sha": "a35a31078c43b9d75f4e6fc01e5e6c3733d9156a",
+      "conclusion": "success",
+      "scope": "physical_field_freshness_API_source_contracts",
+      "session_tests_passed": 83,
+      "exact_router_tests_passed": 3,
+      "named_freshness_regression": "router_v2::tests::v2_progress_keeps_live_magnetization_at_its_original_observation_step",
+      "log_sha256": "5f29f6f23f4758ef392b41b63d37eca20b4758ef7c5a4780040885f294044562",
+      "browser": "NOT VERIFIED",
+      "managed_runtime": "NOT VERIFIED",
+      "qualification_claimed": false
+    },
+    {
+      "run_id": 38141462905,
+      "sha": "6eba81b9b16bbb59019195096fce7dc6faae66c0",
+      "conclusion": "failure",
+      "scope": "Floquet_control_and_checkpoint_lifecycle",
+      "control_priority_test": "passed",
+      "checkpoint_test": "failed",
+      "failure": "test hardcodes copied partial path without artifacts/ prefix; actual checkpoint receipt records correct path",
+      "log_sha256": "2456efb2f4c95977446524e171a86e0eec11cc45724b8f9948ffae6b157f887e",
+      "qualification_claimed": false
+    },
+    {
+      "run_id": 38141709909,
+      "sha": "0f998d1e1aff3e27eb7a5f9ae39ee88ce291f10e",
+      "conclusion": "failure",
+      "scope": "reference_click_and_global_symbol_budget_source_contracts",
+      "tests_passed": 135,
+      "test_files_passed": 8,
+      "typecheck": "passed",
+      "architecture_hygiene": "passed",
+      "react_doctor": "failure: baseline617 diagnostics; two source positions shifted, semantic diagnostics unchanged",
+      "react_doctor_baseline_run": 38139947223,
+      "react_doctor_semantic_equal": true,
+      "log_sha256": "e02b9c8a435637802000ebca3bbd75873fcd0276c39c1d4dd6113e4786840853",
+      "browser": "NOT VERIFIED",
+      "performance_measurement": "NOT VERIFIED",
+      "qualification_claimed": false
+    },
+    {
+      "run_id": 38142110863,
+      "sha": "18768a00c8fcb614073a46410a71a196f7778e5b",
+      "conclusion": "success",
+      "scope": "field_selection_interrupted_prefix_and_Floquet_terminal_source_contracts",
+      "output_selector_tests_passed": 16,
+      "identity_tests_passed": 5,
+      "exact_Floquet_control_and_checkpoint_tests_passed": 2,
+      "actual_single_writer_test_passed": true,
+      "actual_tracked_bias_aggregation_passed": true,
+      "log_sha256": "2ed0f6e7388c6559302899deda7b21fd8f4b94f9cc0e007149e678a7a782f334",
+      "native_C_ABI_interruption": "NOT VERIFIED",
+      "scientific_qualification": "NOT VERIFIED",
+      "qualification_claimed": false
+    },
+    {
+      "run_id": 38142322832,
+      "sha": "c1a07869cbe86bf8b084362a293930cd5cc1d80e",
+      "conclusion": "failure",
+      "scope": "retention_Linux_and_Windows_contracts",
+      "Linux": "success",
+      "Windows": "failure:2older lifecycle tests wait on host Docker info beyond5s",
+      "new_forced_tick_regression": "passed on both platforms",
+      "failure": "fixture inventories real host daemon instead of isolated temp storage; mock only Docker root telemetry in lifecycle fixture, keep inventory and concurrency checks",
+      "log_sha256": "a411fd9b4f738595127cdf12fb21ec35576c365f6a1ff9edf1edaf50a09c06a9",
+      "host_cleanup_performed": false,
+      "qualification_claimed": false
+    },
+    {
+      "run_id": 38142944158,
+      "sha": "a511d35d068d550cdb989aeac058654ede197939",
+      "conclusion": "success",
+      "scope": "output_publication_with_completed_sweep_count_guard",
+      "tests_passed": 25,
+      "actual_tracked_bias_pipeline_with_incomplete_completed_negative_case": "passed",
+      "log_sha256": "b857d1ca5e5229e3695b3a7aa3f6cc6d4150f2e153784b7005ebeda26147fc52",
+      "qualification_claimed": false
+    },
+    {
+      "run_id": 38142989199,
+      "sha": "3182d6b10ff2cb93bd2f3669433a3d5d4898e5dc",
+      "conclusion": "success",
+      "scope": "retention_source_contracts_Linux_Windows",
+      "retention_tests_run_per_platform": 99,
+      "Linux_retention_skips": 1,
+      "Windows_retention_skips": 4,
+      "new_forced_tick_regression": "passed on both platforms",
+      "log_sha256": "69aaaa141389d095149cfaf7a6230bcc641d2e093f69138ef9769790139c8ba4",
+      "host_cleanup_performed": false,
+      "qualification_claimed": false
+    },
+    {
+      "run_id": 38144011041,
+      "sha": "1a7087841e4d6bac9591699354068f83add19910",
+      "conclusion": "failure",
+      "scope": "startup_health_client_contracts",
+      "tests_run_per_platform": 34,
+      "errors_per_platform": 2,
+      "failure": "real request signature lacks new timeout keyword; mocked request tests did not cover actual transport entrypoint",
+      "log_sha256": "331ee703eaaaa3a5b6d66cd9fa90a28cebb1f75eb458aeb5ce10f5a6460315ed",
+      "qualification_claimed": false
+    },
+    {
+      "run_id": 38144113006,
+      "sha": "7a0469dbaded0d80921472f2938fa3b1f805e6ae",
+      "conclusion": "success",
+      "scope": "public_Floquet_planner_all_pairs_and_generic_contracts",
+      "named_dynamic_all_pairs_subset_rejection": "passed",
+      "named_generic_Floquet": "passed",
+      "log_sha256": "dd041bcfa11becffa21e6945cc1d48ede8b9ba82fbb0250a21633e8c316d3114",
+      "native_runtime": "NOT VERIFIED",
+      "qualification_claimed": false
+    },
+    {
+      "run_id": 38144770123,
+      "sha": "bb871609ee012fcf29e7fddec335f48207b13fe9",
+      "conclusion": "success",
+      "scope": "startup_health_actual_transport_and_retention_Linux_Windows",
+      "actual_timeout_override_regression": "passed",
+      "cold_start_and_total_deadline": "passed",
+      "log_sha256": "f7615a6152a945a9bd44aa0f113e352b250550ee12b51dae02ffa992407236fa",
+      "live_host_restarted": false,
+      "qualification_claimed": false
+    },
+    {
+      "run_id": 38145183697,
+      "sha": "e4b8065e2aa544dc15c5d4fcf780a82a52850b08",
+      "conclusion": "failure",
+      "scope": "inspector_revision_fences_and_contextual_ribbon",
+      "tests_passed": 139,
+      "test_files": 10,
+      "typecheck": "passed",
+      "architecture": "passed",
+      "React_Doctor": "failure:617 diagnostics semantically equal to baseline38141709909 after ignoring source positions only",
+      "browser": "NOT VERIFIED",
+      "qualification_claimed": false
+    },
+    {
+      "run_id": 38145536160,
+      "sha": "cf9ca10cd7c96c7680ff12057f235000181606fe",
+      "conclusion": "failure",
+      "scope": "sweep_provenance_and_Floquet_solver_identity",
+      "failure": "homogeneous Floquet path reports generic dense identity; expected Floquet Schur identity",
+      "log_sha256": "22bc0782bd482064f02dddedb95fd4a0862c887d173c36c8cf39011edb9c8729",
+      "qualification_claimed": false
+    },
+    {
+      "run_id": 38146649283,
+      "sha": "dabfac3608f8173e3e7c1c89fab67a06719f4b29",
+      "conclusion": "success",
+      "scope": "complete_default_feature_runner_and_scientific_documentation_contracts",
+      "runner_tests_passed": 1604,
+      "runner_tests_ignored": 1,
+      "scientific_contract_tests_passed": 38,
+      "log_sha256": "72499ddf092ad1cb5e9262cc1b8c6ec7299d12cbfdc7b135915e6dc346218f88",
+      "scientific_qualification": "NOT VERIFIED"
+    },
+    {
+      "run_id": 38146649275,
+      "sha": "dabfac3608f8173e3e7c1c89fab67a06719f4b29",
+      "conclusion": "success",
+      "scope": "actual_sweep_publication_final_revision_refs_tracking_and_Floquet_identity",
+      "tests_passed": 27,
+      "native_runtime": "NOT VERIFIED",
+      "log_sha256": "ed0cda56f8232c8e17316f695a8ccf3cae85c9abd632195b832f4e082c066f51",
+      "qualification_claimed": false
+    },
+    {
+      "run_id": 38147211342,
+      "sha": "d8081b28754c73a76ca3721c93a790a252bfa6a1",
+      "conclusion": "failure",
+      "scope": "delayed_global_quantity_ACK_overlay_generation",
+      "tests_passed": 143,
+      "test_files": 11,
+      "new_ACK_regressions_passed": 4,
+      "architecture": "passed",
+      "typecheck": "failure:TS2352 new test minimal VisualizationStateResource fixture missing required fields",
+      "React_Doctor": "failure:617 diagnostic semantics unchanged vs38145183697",
+      "log_sha256": "d7ccac1011e46875a5b3cdf857cf50707acf22d64ac7f7407b51b442b07ef113",
+      "browser": "NOT VERIFIED",
+      "qualification_claimed": false
+    },
+    {
+      "run_id": 38147674127,
+      "sha": "cfabf4053cadcddc764185145fcab2376d8c8c47",
+      "conclusion": "failure",
+      "scope": "overlay_ACK_typed_visualization_fixture",
+      "typecheck": "failure:10 nested fixture mismatches against generated API types; older fixture cast hid these",
+      "regression_contracts": "passed",
+      "architecture": "passed",
+      "React_Doctor": "failure:617 diagnostics semantically unchanged",
+      "log_sha256": "0acd8b2331f4fe2f58196918be030c3d62bac4afb26f181128a2a54c66f24461",
+      "qualification_claimed": false
+    },
+    {
+      "run_id": 38148168315,
+      "sha": "5e0117aa74cb83d5a0d5e8643bea8453c2be4c1a",
+      "conclusion": "failure",
+      "scope": "overlay_ACK_generation_with_current_API_typed_fixture",
+      "tests_passed": 143,
+      "test_files": 11,
+      "new_ACK_regressions_passed": 4,
+      "complete_typecheck": "passed",
+      "architecture": "passed",
+      "React_Doctor": "failure:617 diagnostic semantics unchanged vs38147674127 ignoring only source positions",
+      "log_sha256": "8da2b4f4f7dd7822fee28a6089828e9a0000ac6a55c0fadc403a728a7959f4c0",
+      "browser": "NOT VERIFIED",
+      "qualification_claimed": false
+    },
+    {
+      "run_id": 38149497927,
+      "sha": "fdf811f10ba90d87861ceac67a5b81fc385cc6c1",
+      "conclusion": "failure",
+      "scope": "floquet-modal-slepc",
+      "dispatch": "bootstrap.yml contract_scope=floquet-modal-slepc",
+      "head_sha_verified_after_ACK": true,
+      "private_runtime_attestation": "NOT VERIFIED",
+      "qualification_claimed": false,
+      "tests_passed": 7,
+      "tests_failed": 5,
+      "tests_total": 12,
+      "failure_phase": "native CTest after successful image and source build",
+      "failed_tests": [
+        "fem_modal_eigen_contract",
+        "modal_eigen_borrowed_pmat_row_restore_fault_quarantine",
+        "modal_eigen_borrowed_pmat_row_primary_cleanup_fault_quarantine",
+        "modal_eigen_borrowed_pmat_pattern_mismatch_fixture",
+        "fem_modal_eigen_mixed_dense_contract"
+      ],
+      "artifact_id": 11705733979,
+      "artifact_archive_sha256": "070850b37a12f60601584a05d5e18a46d4f59b3c0fa199692faf1798ecb31599",
+      "scientific_qualification": "NOT VERIFIED"
+    },
+    {
+      "run_id": 38149842014,
+      "sha": "be02a211f0a359dd9e81d90cec5f66bba9a12f4b",
+      "conclusion": "failure",
+      "scope": "postprocessing_definition_history_invalidation",
+      "tests_passed": 177,
+      "test_files": 12,
+      "new_history_regressions_passed": 10,
+      "complete_typecheck": "passed",
+      "architecture": "passed",
+      "React_Doctor": "failure:617 diagnostics semantically unchanged vs38148168315 ignoring only source positions",
+      "log_sha256": "47c6af054f62b37d5d8aa7d3582a37b6587e2604f2a590eea8da3150993d5f3d",
+      "browser": "NOT VERIFIED",
+      "qualification_claimed": false
+    },
+    {
+      "run_id": 38150465728,
+      "sha": "839023d43438fab98b96440861e7d6ede99a936d",
+      "conclusion": "success",
+      "scope": "actual_hysteresis_stage_source_reference_and_revision",
+      "tests_passed": 114,
+      "session_tests_passed": 83,
+      "results_module_tests_passed": 28,
+      "exact_router_cases_passed": 3,
+      "new_hysteresis_cases_passed": 5,
+      "log_sha256": "72b3fc502d5743d95a6496695de272ad59e65786554180bbe947f479b741f23e",
+      "scientific_qualification": "NOT VERIFIED"
+    },
+    {
+      "run_id": 38152887838,
+      "sha": "c0baba9d76ebd6be82b08e447a1d3c94e534b923",
+      "conclusion": "failure",
+      "scope": "full_reference_content_sha256_snapshot_session_fence_and_overlay",
+      "tests_passed": 196,
+      "test_files": 14,
+      "complete_typecheck": "passed",
+      "architecture": "passed",
+      "React_Doctor": "failure:617 diagnostic semantics unchanged vs38149842014 ignoring only source positions",
+      "browser": "NOT VERIFIED",
+      "qualification_claimed": false,
+      "log_sha256": "8e3de266345d50229504f7219fea55e074148a1a73096d44bc9017eae95d7e61"
+    },
+    {
+      "run_id": 38153278619,
+      "sha": "9c82dca62c3e12fe0252f509f473e3c6c2cf7586",
+      "conclusion": "failure",
+      "scope": "floquet-modal-slepc_pattern_descriptor_and_row_fault_diagnostics",
+      "dispatch": "bootstrap.yml contract_scope=floquet-modal-slepc",
+      "head_sha_verified_after_ACK": true,
+      "private_runtime_attestation": "NOT VERIFIED",
+      "qualification_claimed": false,
+      "tests_passed": 7,
+      "tests_failed": 5,
+      "tests_total": 12,
+      "failure_phase": "native CTest after successful source build",
+      "failed_tests": [
+        "fem_modal_eigen_contract",
+        "modal_eigen_borrowed_pmat_row_restore_fault_quarantine",
+        "modal_eigen_borrowed_pmat_row_primary_cleanup_fault_quarantine",
+        "modal_eigen_borrowed_pmat_pattern_mismatch_fixture",
+        "fem_modal_eigen_mixed_dense_contract"
+      ],
+      "diagnostic_boundary": "row-fault source-contract checks production_phi_rhs_unchanged and production_phi_solution_unchanged are false; absence versus mismatch must be diagnosed, not assumed",
+      "scientific_qualification": "NOT VERIFIED"
+    },
+    {
+      "run_id": 38153749590,
+      "sha": "a848dce7bb842efb701563a4a991138a148fa221",
+      "conclusion": "failure",
+      "scope": "complete_default_feature_runner_with_adaptive_pool_control",
+      "runner_tests_passed": 1614,
+      "runner_tests_failed": 1,
+      "runner_tests_ignored": 1,
+      "failed_test": "dispatch::tests::explicit_cpu_zhang_li_plan_reaches_cpu_preflight",
+      "failure": "existing small-mesh GPU policy also applies to an already CPU resolution and overwrites fallback provenance; threshold environment exposes defect",
+      "new_pool_contracts": "passed",
+      "log_sha256": "73da3113b6c795677a60fb6f11e7a3dec1f8bc897e2e992da098f04ac9de8672",
+      "scientific_qualification": "NOT VERIFIED"
+    },
+    {
+      "run_id": 38154212824,
+      "sha": "1c398528a762ced690fb09cf00082619c4031bc8",
+      "conclusion": "success",
+      "scope": "complete_default_feature_runner_after_cpu_provenance_guard",
+      "tests_passed": 1616,
+      "log_sha256": "771eb0ec395e749667ceec1490cdd4c7b0b6a6cc859fa60caf87c1f7a0fd6318",
+      "scientific_qualification": "NOT VERIFIED",
+      "runner_tests_ignored": 1,
+      "scientific_contract_tests_passed": 38
+    },
+    {
+      "run_id": 38153749586,
+      "sha": "a848dce7bb842efb701563a4a991138a148fa221",
+      "conclusion": "success",
+      "scope": "adaptive_pool_prefix_tracking_output_selection_and_writer_contracts",
+      "tests_passed": 56,
+      "log_sha256": "ba3f6e7c923afdf989fbc90284944762bd4d66ac2437fd3ac01056efd1746228",
+      "scientific_qualification": "NOT VERIFIED"
+    },
+    {
+      "run_id": 38232017811,
+      "sha": "b2dfb307980271deffc977f4f491e8fe0a691fc5",
+      "conclusion": "success",
+      "scope": "Python_Eigenmodes_solver_policy_actual_script_to_IR",
+      "log_sha256": "7823df524f08dd198881e582a9a9981cb0982c561bf5d2fccafd87590098d959",
+      "qualification_claimed": false,
+      "tests_passed": 84,
+      "subtests_passed": 24,
+      "scientific_qualification": "NOT VERIFIED"
+    },
+    {
+      "run_id": 38232241407,
+      "sha": "ea5d1bf9d83972bbb9a3c6a58b7894a9ba39a121",
+      "conclusion": "success",
+      "scope": "Schur_R4_unique_scientific_source_maps",
+      "log_sha256": "e557215f886eff169fa9b6af9fda3c2fa6e4d38aca35086f5e5492ec8dcf94df",
+      "qualification_claimed": false,
+      "source_maps_validated": 2,
+      "native_runtime": "NOT VERIFIED"
+    },
+    {
+      "run_id": 38236056590,
+      "sha": "83109c49a70dc03468b5deff31f9abe95a183784",
+      "conclusion": "success",
+      "scope": "actual_Rust_scene_solver_overrides_and_Python_authoring",
+      "rust_tests_passed": 3,
+      "python_tests_passed": 84,
+      "python_subtests_passed": 24,
+      "log_sha256": "c875e926c4537a6f36da93a7a2f2127b5b04912d35d8a2696a94f7a5e24ea145",
+      "scientific_qualification": "NOT VERIFIED"
+    },
+    {
+      "run_id": 38233264045,
+      "sha": "ad12a2a200e4bab7d41053955e8ad9283bc6a3f2",
+      "conclusion": "failure",
+      "scope": "floquet_modal_slepc_contract",
+      "tests_passed": 9,
+      "tests_failed": 3,
+      "remaining": [
+        "fem_modal_eigen_contract",
+        "modal_eigen_borrowed_pmat_pattern_mismatch_fixture",
+        "fem_modal_eigen_mixed_dense_contract"
+      ],
+      "receipt_sha256": "2ee2a3a09e92f5e3b6ac7768b59d1662b1f9a11db2fee0f124b75c3c6f35902b",
+      "log_sha256": "89fa4633de0dd0fd3230f155c4794fe5c78e3488ab0adb9372f52e77fb376d72",
+      "scientific_qualification": "NOT VERIFIED"
+    },
+    {
+      "run_id": 38235835993,
+      "sha": "3557bfe7dc009d9a483346b4501ca7d023de0efe",
+      "conclusion": "failure",
+      "scope": "postprocessing_revision_hooks_commands_and_existing_UI_contracts",
+      "tests_passed": 196,
+      "tests_failed": 2,
+      "typecheck": "PASS",
+      "architecture": "PASS",
+      "react_doctor": "FAIL",
+      "browser": "NOT VERIFIED",
+      "failed_log_sha256": "9c9e56ee6ddd7710bd9f643717d2a2a47e3bc22e35709a6e30322fe45ec4614e"
+    },
+    {
+      "run_id": 38238266747,
+      "sha": "116575d9b87eb0d23fd46152fc8fc47dfa6c7038",
+      "conclusion": "success",
+      "scope": "stable_chart_series_identity_reference_silence_and_scoped_doctor",
+      "tests_passed": 236,
+      "test_files_passed": 20,
+      "typecheck": "PASS",
+      "architecture": "PASS",
+      "react_doctor": "PASS",
+      "doctor_scanned_files": 206,
+      "doctor_remaining_issues": 7,
+      "browser": "NOT VERIFIED",
+      "log_sha256": "d1a7a454702bb45aae476e15843a0bef06bcb65a3ae80d86e29218e16bf3b240"
+    },
+    {
+      "run_id": 38239150905,
+      "sha": "f6389eadd85fa4634e31861555ce3f41f2dd2adf",
+      "conclusion": "success",
+      "scope": "retained_eigen_branch_plot_handoff_and_existing_UI_contracts",
+      "tests_passed": 239,
+      "test_files_passed": 21,
+      "typecheck": "PASS",
+      "architecture": "PASS",
+      "react_doctor": "PASS",
+      "browser": "NOT VERIFIED",
+      "log_sha256": "24ecf4389a4b87cfc67ac7ca7b2ff43d30a1a04c3587f6fe04072c2d6472329f"
+    },
+    {
+      "run_id": 38240680441,
+      "sha": "02f6f86caaebe4946ef19b8595eddac4adc579d4",
+      "conclusion": "success",
+      "scope": "actual_HTTP_postprocessing_revision_overflow_and_existing_API_fields",
+      "postprocessing_tests_passed": 4,
+      "session_tests_passed": 83,
+      "result_dataset_tests_passed": 28,
+      "physical_field_cases_passed": 3,
+      "log_sha256": "0973a4bd19e488a640e254d4510afc8860b77d7ba6d40755fe6d2af4fe6663fb",
+      "scientific_qualification": "NOT VERIFIED"
+    },
+    {
+      "run_id": 38238582251,
+      "sha": "3ebf5744603aa53fdfb1d8b8a0796828da106310",
+      "conclusion": "success",
+      "scope": "native_K0_residual_default_phase_damping_and_selected_window",
+      "ctests_passed": 4,
+      "receipt_sha256": "f9a5efc4e64011792941b8838c64b45f80dae3f6da4cdf61ba6857c725f0c388",
+      "log_sha256": "392d22f5f02dcf37d999ec166876f50ab5107c8809c228b2527f0dddd837dcb3",
+      "scientific_qualification": "NOT VERIFIED"
+    },
+    {
+      "run_id": 38243351489,
+      "sha": "cf6f7f597d7f6300d7f90351698d4cd047fc28ab",
+      "conclusion": "failure",
+      "scope": "spectrum_scope_source_contracts",
+      "evidence": "missing scope in strict v0.4 adapter; compile failed"
+    },
+    {
+      "run_id": 38245737002,
+      "sha": "4d74a86d033f968a1d04be4dfcae044b5d4232c2",
+      "conclusion": "failure",
+      "scope": "spectrum_scope_source_contracts",
+      "evidence": "duplicate study/eigen_contract scope types; compile failed"
+    },
+    {
+      "run_id": 38246154059,
+      "sha": "4516cf41c450673cc6276bb1b54b98e144fd517b",
+      "conclusion": "failure",
+      "scope": "spectrum_scope_source_contracts",
+      "evidence": "named wire tests passed; planner regression treated PlanError as iterator; compile failed"
+    },
+    {
+      "run_id": 38246325843,
+      "sha": "9e123c7103855805aee0c1e9a64f895139743edc",
+      "conclusion": "failure",
+      "scope": "spectrum_scope_source_contracts",
+      "evidence": "same PlanError regression compilation failure"
+    },
+    {
+      "run_id": 38246536065,
+      "sha": "841a3f92dd763e8a8fd129af1edafeb9502b01b9",
+      "conclusion": "failure",
+      "scope": "spectrum_scope_source_contracts",
+      "evidence": "named legacy/v0.4 scope tests passed; complete planner 522 passed 2 failed; later producer/application gates skipped"
+    },
+    {
+      "run_id": 38246943509,
+      "sha": "6265812be7b146f0f70102f1db79414765329490",
+      "conclusion": "failure",
+      "scope": "bounded_native_floquet_slepc_contracts",
+      "passed": 10,
+      "failed": 2,
+      "failed_tests": [
+        "fem_modal_eigen_contract",
+        "fem_modal_eigen_mixed_dense_contract"
+      ],
+      "evidence": "Pattern success observer, row cleanup/quarantine and Gamma admission pass; two real true-residual failures remain.",
+      "receipt_sha256": "e6ca02ed415d1da23c71a51777e71d412e348dca8e21ed5c5da3098079b88a22",
+      "native_log_sha256": "b9af77228f89f7d33af8ab56b15003334a96885f9b4cc0c58eed399307d0549a"
+    },
+    {
+      "run_id": 38247247461,
+      "sha": "7523deb7ecc2f0c44ed67c99eaa506efd76feb23",
+      "conclusion": "failure",
+      "scope": "spectrum_scope_source_contracts",
+      "evidence": "IR/planner/application/runner including actual three producer regressions and runner integration compilation pass; final API/CLI binaries fail because CLI lacks direct fullmag-quantities dependency."
+    },
+    {
+      "run_id": 38248502096,
+      "sha": "3b424eb3dc35844cab221edfcaa540bcb003e928",
+      "conclusion": "failure",
+      "scope": "dependency_free_native_modal_cabi",
+      "passed": 2,
+      "failed": 2,
+      "evidence": "Compile passed; new negative GPU fixture used legacy ABI and hit correct v20 attestation requirement; corrected fixture uses sized envelope, no production guard weakened."
+    },
+    {
+      "run_id": 38258939384,
+      "sha": "0ba13b00592b741e847bd612126b2f373afbed7c",
+      "conclusion": "success",
+      "scope": "scene_postprocessing_lowering_and_authoring_controls",
+      "scene_lowering_passed": 62,
+      "authoring_passed": 84,
+      "subtests_passed": 24,
+      "rust_passed": 3,
+      "evidence": "Full lowering of authoring-validated SceneDocument with postprocessing; strict unknown/unlowered semantics and existing authoring policy checks."
+    },
+    {
+      "run_id": 38288433960,
+      "sha": "554d3a49bfbd03b143d373644d92675a18a2661e",
+      "conclusion": "success",
+      "scope": "dependency_free_native_modal_cabi",
+      "passed": 4,
+      "failed": 0,
+      "receipt_sha256": "5f575404974019060c3dac4da5faa611d4a60d62fddc17a1ea6d279723c63236",
+      "evidence": "Actual production budget helper/default/partial/negative atomicity and v20 C ABI rejection for auto/CPU/GPU; includes dedicated CTest, no device solve or scientific qualification."
+    },
+    {
+      "run_id": 38288674955,
+      "sha": "472257d74bcedd20d532b5f60809523c50e19b9a",
+      "conclusion": "success",
+      "scope": "complete_spectrum_scope_source_contracts",
+      "runner_passed": 1618,
+      "runner_ignored": 1,
+      "evidence": "Named legacy/v0.4 scope, complete IR/planner/application/runner, resolver/generic/single-k/path producers, integration callers and API/CLI binary compilation pass. API/UI behavior, native/GPU and science are separate unverified gates."
+    },
+    {
+      "run_id": 38291115523,
+      "sha": "172760a3938db5a565c7b6ef05ad86a6ab82b661",
+      "conclusion": "success",
+      "scope": "complete_fms_and_api_source_contracts",
+      "session_fms_passed": 242,
+      "api_session_passed": 83,
+      "results_passed": 28,
+      "postprocessing_passed": 4,
+      "field_cases_passed": 3,
+      "evidence": "Actual ZIP/CAS auxiliary geometry export and preflight complete graph, invalid magnet material fail-closed; typed snapshot scanner and full session library regression. No browser or scientific qualification."
+    },
+    {
+      "run_id": 38290669920,
+      "sha": "ebda5536f95993d86b76ba29f7bf172c3a248cf2",
+      "conclusion": "failure",
+      "scope": "bounded_native_floquet_factor_logging",
+      "passed": 10,
+      "failed": 2,
+      "receipt_sha256": "d5580cdcd6e318beec55ad36b6009db419d5d9acbc4b49c11c8be15c470c74d4",
+      "native_log_sha256": "ca08ba4ef8e1def49e440405e939389a1f4a23d6823a8d576eaf0d023d8b0d8b",
+      "evidence": "Mat logging active; actual live Inode LU shift observed in both failed cases. Fresh numeric/ordering comparison and rootcause remain unverified; no tolerance changes."
+    },
+    {
+      "run_id": 38296088416,
+      "sha": "c888e65823a216b1e0b25f0c2fedf3c68df54265",
+      "conclusion": "success",
+      "scope": "strict_parallel_policy_and_effective_profile_authoring",
+      "authoring_passed": 135,
+      "application_replay_passed": 10,
+      "policy_shape_passed": 2,
+      "adaptive_named_passed": 3,
+      "scene_lowering_passed": 62,
+      "python_passed": 84,
+      "subtests_passed": 24,
+      "evidence": "Full authoring and shared strict-map regressions pass; UI/runtime/science remain separate gates."
+    },
+    {
+      "run_id": 38296613349,
+      "sha": "a484daee9ba8716013ae9a9d46d4798f4bf52aa6",
+      "conclusion": "success",
+      "scope": "positive_phasor_alias_ui_source_contracts",
+      "passed": 244,
+      "test_files": 21,
+      "react_doctor_score": 85,
+      "evidence": "Published positive phasor alias regressions, full frontend typecheck, architecture gate and React Doctor pass; browser/WebGL and scientific runtime unverified."
+    },
+    {
+      "run_id": 38297537720,
+      "sha": "6cae503d97617dab27b31eac0ec98a138cee5984",
+      "scope": "ribbon_layout_react_regression",
+      "passed": 245,
+      "test_files": 22,
+      "conclusion": "success",
+      "evidence": "Scoped contract CI verified; native GPU/browser/scientific qualification remains separate."
+    },
+    {
+      "run_id": 38297896837,
+      "sha": "ad7d508721fe37725e970021b3331217c4e72764",
+      "scope": "result_tracking_score_ui_regression",
+      "passed": 247,
+      "test_files": 23,
+      "conclusion": "success",
+      "evidence": "Scoped contract CI verified; native GPU/browser/scientific qualification remains separate."
+    },
+    {
+      "run_id": 38297238378,
+      "sha": "c3038906371a3f73d0ea5aa10de5d7bfc4814739",
+      "scope": "selected_sample_raw_mode_contract",
+      "selection_passed": 18,
+      "conclusion": "success",
+      "evidence": "Scoped contract CI verified; native GPU/browser/scientific qualification remains separate."
+    },
+    {
+      "run_id": 38296088382,
+      "sha": "c888e65823a216b1e0b25f0c2fedf3c68df54265",
+      "scope": "complete_spectrum_scope_source_contracts",
+      "conclusion": "success",
+      "evidence": "Scoped contract CI verified; native GPU/browser/scientific qualification remains separate."
+    },
+    {
+      "run_id": 38298716226,
+      "sha": "090c13bdd5b667d082dadceb2969f88bd522844f",
+      "conclusion": "success",
+      "scope": "mfem_cpu_nodal_material_source_assembly_contract_only",
+      "passed": 1,
+      "failed": 0,
+      "mfem_compile_gate_observed": true,
+      "slepc_compile_gate_observed": false,
+      "receipt_sha256": "d6b173bba0df6f2876b757f4d61df962214a1716e4a2964e82b6354b5b195e4c",
+      "native_log_sha256": "1ea7cf63c8c75c230346e50f696aacb354976d991f70b805ef0b1f0bad9874cc",
+      "evidence": "Actual analytic heterogeneous tet/prism source moments, full/shifted representations, uniform equivalence, tangent reduction and K0 descriptor/reciprocal feedback; full eigen/GPU/science unverified."
+    },
+    {
+      "run_id": 38301833078,
+      "sha": "588a7e899b3937b4e651e2ec22ab11eb598dd91c",
+      "scope": "scoped_ui_source_contracts",
+      "passed": 310,
+      "test_files": 26,
+      "conclusion": "success",
+      "evidence": "Typecheck, architecture and React Doctor85 PASS; browser/runtime NOT VERIFIED."
+    },
+    {
+      "run_id": 38350388758,
+      "sha": "463557a7c3c7ab4f9ee85d90fa3d76047d135f57",
+      "scope": "a1_external_reference_source_contracts",
+      "passed": 132,
+      "subtests_passed": 147,
+      "conclusion": "success",
+      "evidence": "Eight explicit A1 gate regressions PASS; external model equivalence and scientific qualification NOT VERIFIED."
+    },
+    {
+      "run_id": 38351063325,
+      "sha": "4a80754b8b5531f86c04730f5f475ddc267a20f5",
+      "scope": "scoped_ui_source_contracts_with_indexed_fmvp5",
+      "passed": 325,
+      "test_files": 27,
+      "conclusion": "success",
+      "evidence": "Typecheck, architecture, React Doctor85 PASS. Explicit FMVP5 node map preserved and mismatched versions/indices/topology rejected. Browser/WebGL NOT VERIFIED."
+    },
+    {
+      "run_id": 38351275794,
+      "sha": "754f07787dfe40a707b8a7c4aa569433b90dee76",
+      "scope": "tetra_only_eigen_tracking_planner_admission",
+      "passed": 3,
+      "conclusion": "success",
+      "evidence": "Named negative prism/mixed and positive tetra planner guards PASS. Production unchanged; native mixed tracking and scientific qualification NOT VERIFIED."
+    }
+  ]
+}

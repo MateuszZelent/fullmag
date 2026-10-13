@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest";
+import type { StageExecutionResource } from "@/kernel/api/apiTypes";
 import { activeLaneCapabilityFixture } from "@/kernel/resources/activeLaneCapabilityFixture.testSupport";
 
 import {
   resolveCommandSummary,
   resolveStudyInspectorModel,
+  type StageExecutionScope,
+  stageExecutionForCurrentScope,
   studyRuntimeProvenanceFromCurrentRun,
   studySnapshotFromScene,
 } from "./StudyInspectorPanelModel";
@@ -68,6 +71,37 @@ describe("StudyInspectorPanelModel", () => {
       authored: "problem_ir.runtime_selection",
       effective: "session.runtime_resolution",
     });
+  });
+
+  it("uses per-run GPU execution instead of the session CPU capability preview", () => {
+    const activeLane = activeLaneCapabilityFixture();
+    activeLane.requested.device = "cpu";
+    if (activeLane.resolved) activeLane.resolved.device = "cpu";
+    const provenance = studyRuntimeProvenanceFromCurrentRun({
+      requested_backend: "fem",
+      requested_device: "gpu",
+      requested_mode: "strict",
+      requested_precision: "double",
+      resolved_backend: "fem",
+      resolved_device: "gpu",
+      resolved_mode: "strict",
+      resolved_precision: "double",
+      resolved_engine_id: "fem_gpu_native",
+      resolved_runtime_family: "fem_gpu_native",
+    } as never, activeLane);
+
+    expect(provenance.effective.device).toBe("gpu");
+    expect(provenance.resolved.device).toBe("gpu");
+    expect(provenance.resolved.backend).toBe("fem");
+    expect(provenance.resolved.engine).toBe("fem_gpu_native");
+  });
+
+  it("does not present a scratch CPU preview as an executed device without run metadata", () => {
+    const provenance = studyRuntimeProvenanceFromCurrentRun(
+      null,
+      activeLaneCapabilityFixture(),
+    );
+    expect(provenance.resolved.device).toBe("not loaded");
   });
 
   it("keeps runtime provenance explicitly unavailable while the current run is not loaded", () => {
@@ -220,6 +254,194 @@ describe("StudyInspectorPanelModel", () => {
     expect(model.runtime.maxTorque).toBe("unavailable");
     expect(model.runtime.torqueDiagnostic).toContain("max_torque_Apm");
   });
+
+  it("keeps ready, stale, and failed-refresh stage telemetry only for the exact current identity", () => {
+    const stageExecution: StageExecutionResource = {
+      revision: 5,
+      runtime_state: "running",
+      total_stages: 1,
+      completed_stage_indexes: [],
+      stage_statuses: ["running"],
+      stages: [{ stage_id: "stage-1", index: 0, converged: false, status: "running" }],
+      run_id: "run-1",
+      session_id: "session-1",
+      session_epoch: "session-1@1",
+    };
+    const scope = (
+      resourceStatus: StageExecutionScope["resourceStatus"],
+      overrides: Partial<StageExecutionScope> = {},
+    ): StageExecutionScope => ({
+      expectedRunId: "run-1",
+      expectedSessionId: "session-1",
+      expectedSessionEpoch: "session-1@1",
+      resourceStatus,
+      scopeReady: true,
+      ...overrides,
+    });
+
+    expect(stageExecutionForCurrentScope(stageExecution)).toBe(stageExecution);
+    for (const resourceStatus of ["ready", "stale", "error"] as const) {
+      expect(
+        stageExecutionForCurrentScope(stageExecution, scope(resourceStatus)),
+      ).toBe(stageExecution);
+    }
+
+    for (const resourceStatus of ["idle", "loading"] as const) {
+      expect(
+        stageExecutionForCurrentScope(stageExecution, scope(resourceStatus)),
+      ).toBeNull();
+    }
+    expect(
+      stageExecutionForCurrentScope(stageExecution, scope("invalid" as never)),
+    ).toBeNull();
+    expect(stageExecutionForCurrentScope(stageExecution, scope(undefined))).toBeNull();
+    expect(stageExecutionForCurrentScope(null, scope("ready"))).toBeNull();
+    expect(stageExecutionForCurrentScope(null, scope("stale"))).toBeNull();
+    expect(stageExecutionForCurrentScope(null, scope("error"))).toBeNull();
+    expect(stageExecutionForCurrentScope(null, scope("loading"))).toBeNull();
+    expect(
+      stageExecutionForCurrentScope(
+        stageExecution,
+        scope("stale", { scopeReady: false }),
+      ),
+    ).toBeNull();
+    expect(
+      stageExecutionForCurrentScope(
+        stageExecution,
+        scope("error", { scopeReady: false }),
+      ),
+    ).toBeNull();
+
+    const wrongIdentityPayloads: StageExecutionResource[] = [
+      { ...stageExecution, session_id: "session-2" },
+      { ...stageExecution, session_epoch: "session-1@2" },
+      { ...stageExecution, run_id: "run-2" },
+    ];
+    for (const resourceStatus of ["ready", "stale", "error"] as const) {
+      for (const overrides of [
+        { expectedSessionId: "session-2" },
+        { expectedSessionEpoch: "session-1@2" },
+        { expectedRunId: "run-2" },
+      ]) {
+        expect(
+          stageExecutionForCurrentScope(
+            stageExecution,
+            scope(resourceStatus, overrides),
+          ),
+        ).toBeNull();
+      }
+      for (const payload of wrongIdentityPayloads) {
+        expect(
+          stageExecutionForCurrentScope(payload, scope(resourceStatus)),
+        ).toBeNull();
+      }
+      for (const identityField of ["session_id", "session_epoch", "run_id"] as const) {
+        const missingIdentity = { ...stageExecution } as unknown as Record<string, unknown>;
+        delete missingIdentity[identityField];
+        expect(
+          stageExecutionForCurrentScope(
+            missingIdentity as never,
+            scope(resourceStatus),
+          ),
+        ).toBeNull();
+      }
+    }
+
+    const noCurrentRun = { ...stageExecution, run_id: null };
+    for (const resourceStatus of ["ready", "stale", "error"] as const) {
+      expect(
+        stageExecutionForCurrentScope(
+          noCurrentRun,
+          scope(resourceStatus, { expectedRunId: null }),
+        ),
+      ).toBe(noCurrentRun);
+    }
+    const missingExpectedRunScope: StageExecutionScope = {
+      expectedSessionId: "session-1",
+      expectedSessionEpoch: "session-1@1",
+      resourceStatus: "error",
+      scopeReady: true,
+    };
+    expect(
+      stageExecutionForCurrentScope(stageExecution, missingExpectedRunScope),
+    ).toBeNull();
+  });
+
+  it("projects the last confirmed progress, metric, and parallel execution after a scoped refresh error", () => {
+    const snapshot = studySnapshotFromScene({
+      study: {
+        stages: [{ kind: "run", stage_id: "stage-1" }],
+      },
+    } as never);
+    const parallelExecution = {
+      completed_workers: 2,
+      failed_workers: 0,
+      total_workers: 4,
+    } as never;
+    const lastGoodStageExecution = {
+      active_stage_index: 0,
+      active_stage_kind: "run",
+      completed_stage_indexes: [],
+      revision: 17,
+      run_id: "run-1",
+      runtime_state: "running",
+      session_epoch: "session-1@1",
+      session_id: "session-1",
+      stage_statuses: ["running"],
+      stages: [
+        {
+          index: 0,
+          metric_name: "steps",
+          metric_value: 37,
+          parallel_execution: parallelExecution,
+          progress_detail: "Last confirmed worker progress",
+          progress_label: "Step 37 of 100",
+          progress_percent: 37,
+          stage_id: "stage-1",
+          status: "running",
+          threshold: 100,
+        },
+      ],
+      total_stages: 1,
+    } as unknown as StageExecutionResource;
+    const scopedStageExecution = stageExecutionForCurrentScope(
+      lastGoodStageExecution,
+      {
+        expectedRunId: "run-1",
+        expectedSessionEpoch: "session-1@1",
+        expectedSessionId: "session-1",
+        resourceStatus: "error",
+        scopeReady: true,
+      },
+    );
+    const model = resolveStudyInspectorModel({
+      currentRun: null,
+      selectedStageRef: {
+        nodeId: "model:study:stages:stage:stage-1",
+        stageId: "stage-1",
+        stageIndex: 0,
+      },
+      snapshot,
+      solverStatus: null,
+      stageExecution: scopedStageExecution,
+    });
+
+    expect(scopedStageExecution).toBe(lastGoodStageExecution);
+    expect(model.selectedStage).toMatchObject({
+      parallelExecution,
+      progressDetail: "Last confirmed worker progress",
+      progressLabel: "Step 37 of 100",
+      progressPercent: 37,
+      runtimeMetric: {
+        name: "steps",
+        rawValue: 37,
+        threshold: "100",
+        value: "37",
+      },
+      stageId: "stage-1",
+    });
+  });
+
   it("projects stage authoring, boundary policy, runtime progress, and max torque", () => {
     const snapshot = studySnapshotFromScene({
       study: {

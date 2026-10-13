@@ -192,7 +192,7 @@ export class TestElement extends TestNode {
   readonly attributes = new TestNamedNodeMap();
   clientHeight = 0;
   clientWidth = 0;
-  readonly namespaceURI = "http://www.w3.org/1999/xhtml";
+  readonly namespaceURI: string;
   offsetHeight = 0;
   offsetWidth = 0;
   scrollHeight = 0;
@@ -205,22 +205,42 @@ export class TestElement extends TestNode {
   };
   readonly tagName: string;
   private controlValue = "";
+  inputMode = "";
 
-  get inputMode(): string {
-    return this.getAttribute("inputMode") ?? "";
+  private optionSelected = false;
+
+  get selected(): boolean {
+    return this.optionSelected;
   }
 
-  set inputMode(value: string) {
-    if (value) this.setAttribute("inputMode", value);
-    else this.removeAttribute("inputMode");
+  set selected(value: boolean) {
+    this.optionSelected = Boolean(value);
+    let select = this.parentNode;
+    while (select instanceof TestElement && select.tagName === "OPTGROUP") select = select.parentNode;
+    if (this.optionSelected && select instanceof TestElement
+      && select.tagName === "SELECT" && !select.hasAttribute("multiple")) {
+      for (const option of select.options) {
+        if (option !== this) option.optionSelected = false;
+      }
+    }
   }
 
   get value(): string {
+    if (this.tagName === "OPTION") return this.getAttribute("value") ?? this.textContent;
+    if (this.tagName === "SELECT") return this.options.find((option) => option.selected)?.value ?? "";
     return this.controlValue;
   }
 
   set value(value: string) {
-    this.controlValue = String(value);
+    if (this.tagName === "SELECT") {
+      let matched = false;
+      for (const option of this.options) {
+        option.selected = !matched && option.value === String(value);
+        matched ||= option.selected;
+      }
+    } else {
+      this.controlValue = String(value);
+    }
   }
 
   get innerHTML(): string {
@@ -240,7 +260,11 @@ export class TestElement extends TestNode {
         const match = /^<([\w:-]+)([^>]*)>$/.exec(token);
         if (!match) continue;
         const [, tagName, rawAttributes] = match;
-        const element = this.ownerDocument.createElement(tagName);
+        const parent = stack.at(-1);
+        const inSvg = tagName.toLowerCase() === "svg" || parent?.namespaceURI === SVG_NAMESPACE;
+        const element = inSvg
+          ? this.ownerDocument.createElementNS(SVG_NAMESPACE, tagName)
+          : this.ownerDocument.createElement(tagName);
         for (const attribute of rawAttributes.matchAll(/([^\s=/>]+)(?:=(?:"([^"]*)"|'([^']*)'|([^\s"'>]+)))?/g)) {
           const [, name, doubleQuoted, singleQuoted, bare] = attribute;
           if (name) element.setAttribute(name, decodeHtml(doubleQuoted ?? singleQuoted ?? bare ?? ""));
@@ -258,14 +282,21 @@ export class TestElement extends TestNode {
   }
 
   get options(): TestElement[] {
-    return this.childNodes.filter(
-      (child): child is TestElement => child instanceof TestElement && child.tagName === "OPTION",
-    );
+    return this.childNodes.flatMap((child) => {
+      if (!(child instanceof TestElement)) return [];
+      if (child.tagName === "OPTION") return [child];
+      return child.tagName === "OPTGROUP" ? child.options : [];
+    });
   }
 
-  constructor(ownerDocument: TestDocument, tagName: string) {
+  constructor(
+    ownerDocument: TestDocument,
+    tagName: string,
+    namespaceURI = HTML_NAMESPACE,
+  ) {
     super(ownerDocument, 1, tagName.toUpperCase());
     this.tagName = tagName.toUpperCase();
+    this.namespaceURI = namespaceURI;
     const style = Object.create(null) as TestElement["style"];
     style.removeProperty = (name: string) => {
       Reflect.deleteProperty(style, name);
@@ -299,7 +330,7 @@ export class TestElement extends TestNode {
   }
 
   getAttribute(name: string): string | null {
-    return this.attributes.get(normalizeAttributeName(name)) ?? null;
+    return this.attributes.get(this.normalizeAttributeName(name)) ?? null;
   }
 
   getAttributeNames(): string[] {
@@ -321,16 +352,31 @@ export class TestElement extends TestNode {
   }
 
   hasAttribute(name: string): boolean {
-    return this.attributes.has(normalizeAttributeName(name));
+    return this.attributes.has(this.normalizeAttributeName(name));
   }
 
+  /** Matches the simple tag and single-class selectors modeled by this test DOM. */
   matches(selector: string): boolean {
-    if (selector.startsWith(".")) {
+    if (/^[A-Za-z_][A-Za-z0-9_-]*$/.test(selector)) {
+      return this.tagName.toLowerCase() === selector.toLowerCase();
+    }
+    const className = /^\.([A-Za-z_][A-Za-z0-9_-]*)$/.exec(selector)?.[1];
+    if (className !== undefined) {
       return (this.getAttribute("class") ?? "")
         .split(/\s+/)
-        .includes(selector.slice(1));
+        .includes(className);
     }
-    return this.tagName.toLowerCase() === selector.toLowerCase();
+    return false;
+  }
+
+  closest(selector: string): TestElement | null {
+    if (this.matches(selector)) return this;
+    let candidate: TestNode | null = this.parentNode;
+    while (candidate) {
+      if (candidate instanceof TestElement && candidate.matches(selector)) return candidate;
+      candidate = candidate.parentNode;
+    }
+    return null;
   }
 
   querySelector<TElement extends TestElement = TestElement>(
@@ -342,17 +388,31 @@ export class TestElement extends TestNode {
   }
 
   removeAttribute(name: string): void {
-    this.attributes.delete(normalizeAttributeName(name));
+    const normalizedName = this.normalizeAttributeName(name);
+    this.attributes.delete(normalizedName);
+    if (normalizedName === "inputmode") this.inputMode = "";
   }
 
   setAttribute(name: string, value: string): void {
-    this.attributes.set(normalizeAttributeName(name), String(value));
+    const normalizedName = this.normalizeAttributeName(name);
+    const normalizedValue = String(value);
+    this.attributes.set(normalizedName, normalizedValue);
+    if (normalizedName === "inputmode") this.inputMode = normalizedValue;
+  }
+
+  private normalizeAttributeName(name: string): string {
+    return this.namespaceURI === SVG_NAMESPACE ? name : name.toLowerCase();
   }
 }
 
-function normalizeAttributeName(name: string): string {
-  return name.toLowerCase() === "inputmode" ? "inputmode" : name;
+class TestDocumentFragment extends TestNode {
+  constructor(ownerDocument: TestDocument) {
+    super(ownerDocument, 11, "#document-fragment");
+  }
 }
+
+const HTML_NAMESPACE = "http://www.w3.org/1999/xhtml";
+const SVG_NAMESPACE = "http://www.w3.org/2000/svg";
 
 const VOID_HTML_ELEMENTS = new Set(["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"]);
 
@@ -380,6 +440,208 @@ function serializeTestNode(node: TestNode): string {
   return `<${node.tagName.toLowerCase()}${attributes}>${node.childNodes.map(serializeTestNode).join("")}</${node.tagName.toLowerCase()}>`;
 }
 
+export class TestHTMLOptionElement extends TestElement {
+  private selectedness = false;
+  private selectednessIsDirty = false;
+
+  override get value(): string {
+    const attribute = this.getAttribute("value");
+    if (attribute !== null) return attribute;
+    return this.textContent
+      .replace(/[\t\n\f\r ]+/g, " ")
+      .replace(/^[\t\n\f\r ]+|[\t\n\f\r ]+$/g, "");
+  }
+
+  override set value(value: string) {
+    this.setAttribute("value", String(value));
+  }
+
+  get selected(): boolean {
+    return this.selectedness;
+  }
+
+  set selected(value: boolean) {
+    const select = this.nearestSelect();
+    if (select) select._setOptionSelected(this, Boolean(value));
+    else this.setSelectednessFromSelect(Boolean(value), true);
+  }
+
+  get defaultSelected(): boolean {
+    return this.hasAttribute("selected");
+  }
+
+  set defaultSelected(value: boolean) {
+    if (value) this.setAttribute("selected", "");
+    else this.removeAttribute("selected");
+  }
+
+  override get disabled(): boolean {
+    if (super.disabled) return true;
+    let ancestor = this.parentNode;
+    while (ancestor && !(ancestor instanceof TestHTMLSelectElement)) {
+      if (ancestor instanceof TestElement && ancestor.tagName === "OPTGROUP" && ancestor.disabled) {
+        return true;
+      }
+      ancestor = ancestor.parentNode;
+    }
+    return false;
+  }
+
+  override setAttribute(name: string, value: string): void {
+    const normalizedName = name.toLowerCase();
+    const wasPresent = this.hasAttribute(normalizedName);
+    super.setAttribute(name, value);
+    if (normalizedName === "selected" && !wasPresent && !this.selectednessIsDirty) {
+      this.setSelectednessFromSelect(true, false);
+      this.nearestSelect()?._resetOptionSelection();
+    }
+  }
+
+  override removeAttribute(name: string): void {
+    const normalizedName = name.toLowerCase();
+    const wasPresent = this.hasAttribute(normalizedName);
+    super.removeAttribute(name);
+    if (normalizedName === "selected" && wasPresent && !this.selectednessIsDirty) {
+      this.setSelectednessFromSelect(false, false);
+      this.nearestSelect()?._resetOptionSelection();
+    }
+  }
+
+  setSelectednessFromSelect(value: boolean, markDirty: boolean): void {
+    this.selectedness = value;
+    if (markDirty) this.selectednessIsDirty = true;
+  }
+
+  private nearestSelect(): TestHTMLSelectElement | null {
+    let ancestor = this.parentNode;
+    while (ancestor) {
+      if (ancestor instanceof TestHTMLSelectElement) return ancestor;
+      ancestor = ancestor.parentNode;
+    }
+    return null;
+  }
+}
+
+/**
+ * Model the select/option value and selectedness IDL used by React DOM and
+ * Radix's hidden form control, without changing TestElement input values.
+ */
+export class TestHTMLSelectElement extends TestElement {
+  private explicitNoSelection = false;
+
+  override get value(): string {
+    this.ensureDefaultSelection();
+    return this.collectOptions().find((option) => option.selected)?.value ?? "";
+  }
+
+  override set value(value: string) {
+    const requestedValue = String(value);
+    const options = this.collectOptions();
+    let firstMatchingOption: TestHTMLOptionElement | undefined;
+    for (const option of options) {
+      option.setSelectednessFromSelect(false, false);
+      if (firstMatchingOption === undefined && option.value === requestedValue) {
+        firstMatchingOption = option;
+      }
+    }
+    if (firstMatchingOption) {
+      firstMatchingOption.setSelectednessFromSelect(true, true);
+      this.explicitNoSelection = false;
+    } else {
+      this.explicitNoSelection = true;
+    }
+  }
+
+  override get options(): TestHTMLOptionElement[] {
+    this.ensureDefaultSelection();
+    return this.collectOptions();
+  }
+
+  get selectedIndex(): number {
+    this.ensureDefaultSelection();
+    return this.collectOptions().findIndex((option) => option.selected);
+  }
+
+  set selectedIndex(index: number) {
+    const options = this.collectOptions();
+    const normalizedIndex = Number(index);
+    for (const option of options) option.setSelectednessFromSelect(false, false);
+    if (Number.isInteger(normalizedIndex) && options[normalizedIndex]) {
+      options[normalizedIndex]!.setSelectednessFromSelect(true, true);
+      this.explicitNoSelection = false;
+    } else {
+      this.explicitNoSelection = true;
+    }
+  }
+
+  get multiple(): boolean {
+    return this.hasAttribute("multiple");
+  }
+
+  set multiple(value: boolean) {
+    if (value) this.setAttribute("multiple", "");
+    else this.removeAttribute("multiple");
+  }
+
+  _resetOptionSelection(): void {
+    this.explicitNoSelection = false;
+    this.applySelectednessSettingAlgorithm();
+  }
+
+  _setOptionSelected(option: TestHTMLOptionElement, selected: boolean): void {
+    if (selected && !this.multiple) {
+      for (const sibling of this.collectOptions()) {
+        if (sibling !== option) sibling.setSelectednessFromSelect(false, false);
+      }
+    }
+    option.setSelectednessFromSelect(selected, true);
+    this.explicitNoSelection = false;
+    this.applySelectednessSettingAlgorithm();
+  }
+
+  private collectOptions(): TestHTMLOptionElement[] {
+    const options: TestHTMLOptionElement[] = [];
+    for (const child of this.childNodes) {
+      if (child instanceof TestHTMLOptionElement) {
+        options.push(child);
+      } else if (child instanceof TestElement && child.tagName === "OPTGROUP") {
+        for (const groupChild of child.childNodes) {
+          if (groupChild instanceof TestHTMLOptionElement) options.push(groupChild);
+        }
+      }
+    }
+    return options;
+  }
+
+  private ensureDefaultSelection(): void {
+    if (!this.explicitNoSelection) this.applySelectednessSettingAlgorithm();
+  }
+
+  private applySelectednessSettingAlgorithm(): void {
+    if (this.multiple) return;
+    const options = this.collectOptions();
+    let firstEnabledOption: TestHTMLOptionElement | undefined;
+    let lastSelectedOption: TestHTMLOptionElement | undefined;
+    for (const option of options) {
+      if (option.selected) {
+        lastSelectedOption?.setSelectednessFromSelect(false, false);
+        lastSelectedOption = option;
+      }
+      if (firstEnabledOption === undefined && !option.disabled) firstEnabledOption = option;
+    }
+    if (lastSelectedOption === undefined && firstEnabledOption && this.displaySize() === 1) {
+      firstEnabledOption.setSelectednessFromSelect(true, false);
+    }
+  }
+
+  private displaySize(): number {
+    const size = this.getAttribute("size");
+    if (size === null) return this.multiple ? 4 : 1;
+    const parsed = /^[\t\n\f\r ]*([0-9]+)/.exec(size)?.[1];
+    return parsed === undefined ? (this.multiple ? 4 : 1) : Number(parsed);
+  }
+}
+
 export class TestDocument extends TestNode {
   activeElement: TestElement | null = null;
   readonly body: TestElement;
@@ -403,11 +665,16 @@ export class TestDocument extends TestNode {
   }
 
   createElement(tagName: string): TestElement {
+    const normalizedTagName = tagName.toLowerCase();
+    if (normalizedTagName === "select") {
+      return new TestHTMLSelectElement(this, tagName);
+    }
+    if (normalizedTagName === "option") return new TestHTMLOptionElement(this, tagName);
     return new TestElement(this, tagName);
   }
 
-  createElementNS(_namespace: string, tagName: string): TestElement {
-    return this.createElement(tagName);
+  createElementNS(namespace: string, tagName: string): TestElement {
+    return new TestElement(this, tagName, namespace);
   }
 
   createTextNode(value: string): TestNode {
@@ -451,6 +718,11 @@ export function installSimulationPreparationTestDom({
   const previous = new Map<string, PropertyDescriptor | undefined>();
   const document = new TestDocument();
   class TestHtmlIFrameElement extends TestElement {}
+  class TestWindowDocumentFragment extends TestDocumentFragment {
+    constructor() {
+      super(document);
+    }
+  }
   class TestResizeObserver {
     disconnect(): void {}
     observe(): void {}
@@ -472,10 +744,12 @@ export function installSimulationPreparationTestDom({
   const navigator = { clipboard, userAgent: "FullmagTestDom/1.0" };
   const window = {
     document,
+    DocumentFragment: TestWindowDocumentFragment,
     navigator,
     Element: TestElement,
     Event: TestEvent,
     HTMLElement: TestElement,
+    HTMLSelectElement: TestHTMLSelectElement,
     HTMLIFrameElement: TestHtmlIFrameElement,
     location: { search: "" },
     MutationObserver: TestMutationObserver,
@@ -492,10 +766,12 @@ export function installSimulationPreparationTestDom({
   document.defaultView = window;
   for (const [key, value] of Object.entries({
     document,
+    DocumentFragment: TestWindowDocumentFragment,
     navigator,
     Element: TestElement,
     Event: TestEvent,
     HTMLElement: TestElement,
+    HTMLSelectElement: TestHTMLSelectElement,
     MutationObserver: TestMutationObserver,
     Node: TestNode,
     ResizeObserver: TestResizeObserver,

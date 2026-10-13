@@ -512,7 +512,18 @@ def build():
             {
                 "kind": "run",
                 "entrypoint_kind": "build",
+                "integrator": "rk4",
+                "fixed_timestep": "1e-15",
+                "demag_interval_s": "",
                 "until_seconds": "4e-12",
+                "relax_algorithm": "",
+                "torque_tolerance": "",
+                "energy_tolerance": "",
+                "max_steps": "",
+                "sampling": {"outputs": [
+                    {"kind": "scalar", "name": "E_total", "every_seconds": 1e-12},
+                ]},
+                "spin_wave_response": None,
             },
         )
 

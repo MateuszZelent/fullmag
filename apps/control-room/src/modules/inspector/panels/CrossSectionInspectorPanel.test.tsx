@@ -23,7 +23,8 @@ const resourceMocks = vi.hoisted(() => ({
   qualityEnabled: [] as boolean[],
 }));
 
-vi.mock("@/kernel/KernelContext", () => ({
+vi.mock("@/kernel/KernelContext", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/kernel/KernelContext")>()),
   useKernel: () => ({
     layout: {
       setActiveViewportMainModule: vi.fn(),

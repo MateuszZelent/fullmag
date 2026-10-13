@@ -14,6 +14,7 @@ import type { PostprocessingDefinitionKind } from "@/shared/domain/analysis/post
 import { targetForFdmNativeLayer } from "@/kernel/visualization/ObjectVisualizationController";
 import { selectCrossSectionPlot } from "@/kernel/workspace/crossSectionWorkspace";
 import { parsePinnedQuickChart } from "@/kernel/workspace/quickChartWorkspace";
+import { analysisResultSelectionRef } from "@/shared/domain/analysis/results";
 
 import type { ExplorerNode } from "./explorerTypes";
 
@@ -25,6 +26,7 @@ type StudyStageSelectionKind = Extract<
 const STUDY_STAGE_SELECTION_KINDS = new Set<string>([
   "study.stage.action",
   "study.stage.add_field_drive",
+  "study.stage.antenna_field_solve",
   "study.stage.autosave",
   "study.stage.eigenmodes",
   "study.stage.eigenmodes.setup",
@@ -149,6 +151,20 @@ function postprocessingRootKind(
 }
 
 export function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
+  if (
+    node.kind === "results.pinned_visualizations.root" &&
+    node.analysisPinnedGroup === true
+  ) {
+    if (!node.analysisRunId || !node.analysisModuleId) return null;
+    return {
+      kind: "results.pinned_visualizations.root",
+      moduleId: node.analysisModuleId,
+      nodeId: node.id,
+      runId: node.analysisRunId,
+      type: "analysis-pinned-group",
+    };
+  }
+
   if (node.kind === "results.observation_frame" && node.observationFrame) {
     const frame = node.observationFrame;
     return {
@@ -164,6 +180,25 @@ export function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
       stateDigest: frame.accepted_state_ref.id.state_digest,
       type: "observation-frame",
     };
+  }
+
+  if (node.kind === "results.hysteresis.dataset") {
+    if (
+      !node.analysisRunId ||
+      !node.analysisStageId ||
+      !node.datasetId ||
+      !node.datasetRevision
+    ) {
+      return null;
+    }
+    return analysisResultSelectionRef({
+      datasetId: node.datasetId,
+      datasetRevision: node.datasetRevision,
+      focus: "dataset",
+      runId: node.analysisRunId,
+      stageId: node.analysisStageId,
+      nodeId: node.id,
+    });
   }
 
   if (
@@ -325,6 +360,8 @@ export function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
       ...(node.artifactRevision !== undefined
         ? { artifactRevision: node.artifactRevision }
         : {}),
+      ...(node.datasetId ? { datasetId: node.datasetId } : {}),
+      ...(node.datasetRevision ? { datasetRevision: node.datasetRevision } : {}),
       ...(node.availability ? { availability: node.availability } : {}),
       ...(node.contractGap !== undefined ? { contractGap: node.contractGap } : {}),
       ...(node.equilibriumId ? { equilibriumId: node.equilibriumId } : {}),
@@ -347,10 +384,12 @@ export function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
         ? { kPathCoordinateRadPerM: node.kPathCoordinateRadPerM }
         : {}),
       ...(node.modeIndex !== undefined ? { modeIndex: node.modeIndex } : {}),
+      ...(node.modeId ? { modeId: node.modeId } : {}),
       nodeId: node.id,
       ...(node.observableId ? { observableId: node.observableId } : {}),
       ...(node.resourceRef ? { resourceRef: node.resourceRef } : {}),
       ...(node.resourceState ? { resourceState: node.resourceState } : {}),
+      ...(node.sampleId ? { sampleId: node.sampleId } : {}),
       ...(node.analysisFieldRepresentation
         ? { representation: node.analysisFieldRepresentation }
         : {}),
@@ -413,6 +452,15 @@ export function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
     (node.kind === "object.root" ||
       node.kind === "object.geometry" ||
       node.kind === "object.antenna" ||
+      node.kind === "object.antenna.geometry" ||
+      node.kind === "object.antenna.regional" ||
+      node.kind === "object.antenna.conductor" ||
+      node.kind === "object.antenna.port" ||
+      node.kind === "object.antenna.solution" ||
+      node.kind === "object.antenna.projection" ||
+      node.kind === "object.antenna.drive" ||
+      node.kind === "object.antenna.spectrum" ||
+      node.kind === "object.antenna.visualization" ||
       node.kind === "object.material" ||
       node.kind === "object.physics" ||
       node.kind === "object.regions" ||
@@ -443,6 +491,12 @@ export function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
       kind: node.kind,
       nodeId: node.id,
       objectId: node.objectId,
+      ...(node.antennaResourceId
+        ? { antennaResourceId: node.antennaResourceId }
+        : {}),
+      ...(node.antennaResourceKind
+        ? { antennaResourceKind: node.antennaResourceKind }
+        : {}),
       ...(extensionId ? { extensionId } : {}),
       ...(node.regionId ? { regionId: node.regionId } : {}),
       type: "scene-object",

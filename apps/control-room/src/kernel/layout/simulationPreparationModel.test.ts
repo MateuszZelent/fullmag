@@ -405,3 +405,30 @@ describe("resolveSimulationPreparationViewModel", () => {
     );
   });
 });
+
+// A successful optional-resource lookup carries null rather than an API error.
+describe("nullable preparation resource", () => {
+  it("releases a restored session after an expected absent preparation lookup", () => {
+    const model = resolveSimulationPreparationViewModel(
+      resource<SimulationPreparationResource | null>(null, "ready"),
+      statusResource("ready", {
+        preparationRevision: 0,
+        solverState: "awaiting_command",
+      }),
+      1_000,
+    );
+    expect(model).toMatchObject({ isVisible: false, kind: "hidden" });
+  });
+
+  it("keeps genuine runtime startup visible when the optional resource is absent", () => {
+    const model = resolveSimulationPreparationViewModel(
+      resource<SimulationPreparationResource | null>(null, "ready"),
+      statusResource("ready", {
+        preparationRevision: 0,
+        solverState: "bootstrapping",
+      }),
+      1_000,
+    );
+    expect(model).toMatchObject({ isVisible: true, kind: "connecting" });
+  });
+});

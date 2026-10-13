@@ -41,6 +41,7 @@ import {
   modelTreeSnapshotFromScene,
   modelTreeSnapshotWithStageExecution,
 } from "./sceneModelTreeAdapter";
+import { resolveExplorerDomainLane } from "./meshExplorerNodes";
 
 describe("Explorer node contract", () => {
   it("preserves a valid node and its exported kind", () => {
@@ -64,6 +65,39 @@ describe("Explorer node contract", () => {
         parentId: "model:objects",
       }),
     ).toThrow("Explorer node requires a non-empty id");
+  });
+});
+
+describe("Explorer domain lane resolution", () => {
+  it("uses the resolved FEM lane over stale FDM DomainMeta presentation", () => {
+    const snapshot = modelTreeSnapshotFromScene({} as SceneResource, {
+      domainDiscretization: "fem",
+      domainPresentation: fdmExplorerPresentation(),
+    });
+
+    expect(resolveExplorerDomainLane(snapshot)).toBe("fem");
+  });
+
+  it("keeps explicit unresolved mode ahead of stale FDM artifact presentation", () => {
+    const snapshot = modelTreeSnapshotFromScene({} as SceneResource, {
+      domainMeta: {
+        discretization: "fdm",
+      } as DomainMetaResource,
+      domainDiscretization: null,
+      domainPresentation: fdmExplorerPresentation(),
+    });
+
+    expect(snapshot.domainDiscretization).toBeNull();
+    expect(resolveExplorerDomainLane(snapshot)).toBe("unresolved");
+  });
+
+  it("keeps the legacy artifact fallback when no resolved lane is supplied", () => {
+    const snapshot = modelTreeSnapshotFromScene({} as SceneResource, {
+      domainPresentation: fdmExplorerPresentation(),
+    });
+
+    expect(Object.prototype.hasOwnProperty.call(snapshot, "domainDiscretization")).toBe(false);
+    expect(resolveExplorerDomainLane(snapshot)).toBe("fdm");
   });
 });
 
@@ -1732,7 +1766,7 @@ describe("buildModelTree", () => {
     );
   });
 
-  it("builds an explicit Add Antenna pipeline instruction node", () => {
+  it("builds an explicit Add Field Drive pipeline instruction node", () => {
     const snapshot = modelTreeSnapshotFromScene({
       objects: [],
       study: {
@@ -1756,7 +1790,7 @@ describe("buildModelTree", () => {
     expect(node).toMatchObject({
       badge: "field drive",
       kind: "study.stage.add_field_drive",
-      label: "Add Antenna 1",
+      label: "Add Field Drive 1",
       stageId: "add-k0-antenna",
       stageIndex: 0,
     });

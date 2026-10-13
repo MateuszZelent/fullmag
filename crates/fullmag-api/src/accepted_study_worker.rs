@@ -531,6 +531,15 @@ fn expected_output_binding(
             fullmag_application::STUDY_SCALAR_CODEC_ID,
             fullmag_application::STUDY_SCALAR_CODEC_VERSION,
         )),
+        StudyPortDataKind::Artifact
+            if port.port_id == fullmag_authoring::ANTENNA_INSPECTION_OUTPUT_PORT_ID =>
+        {
+            Ok((
+                "artifact",
+                fullmag_application::STUDY_ANTENNA_INSPECTION_CODEC_ID,
+                fullmag_application::STUDY_ANTENNA_INSPECTION_CODEC_VERSION,
+            ))
+        }
         unsupported => bail!(
             "accepted worker receipt has no output binding for `{unsupported:?}` port `{}`",
             port.port_id
@@ -654,6 +663,35 @@ fn persist_completed_worker_execution(
     )
 }
 
+fn read_recovered_worker_object(
+    store: &SessionStore,
+    object_ref: &str,
+    expected_bytes: u64,
+    max_bytes: u64,
+) -> Result<Vec<u8>> {
+    if expected_bytes > max_bytes {
+        bail!("recovered worker object exceeds its read budget");
+    }
+    let length = store
+        .cas()
+        .verified_length(object_ref)?
+        .context("completed worker CAS object is missing")?;
+    if length != expected_bytes {
+        bail!("completed worker CAS object has a mismatched byte count");
+    }
+    if length == 0 {
+        return Ok(Vec::new());
+    }
+    let range = store
+        .cas()
+        .get_verified_range(object_ref, 0, length, max_bytes)?
+        .context("completed worker CAS object disappeared during recovery")?;
+    if range.object_length != expected_bytes {
+        bail!("completed worker CAS object changed length during recovery");
+    }
+    Ok(range.bytes)
+}
+
 fn recover_completed_worker_execution(
     store: &SessionStore,
     attempt_output_dir: &Path,
@@ -694,6 +732,37 @@ fn recover_completed_worker_execution(
     if completed.outputs.len() != declared.len() {
         bail!("completed worker receipt has an incomplete output set");
     }
+    // Enforce the aggregate budget before materializing any recovered payload.
+    let mut planned_object_sizes = BTreeMap::new();
+    let mut record_size = |object_ref: &str, bytes: u64| -> Result<()> {
+        if let Some(previous) = planned_object_sizes.insert(object_ref.to_owned(), bytes) {
+            if previous != bytes {
+                bail!("completed worker receipt has conflicting CAS object sizes");
+            }
+        }
+        Ok(())
+    };
+    for output in &completed.outputs {
+        if output.codec_id == "fullmag.antenna.inspection_package"
+            && output.byte_count > u64::try_from(
+                fullmag_antenna_artifacts::package::ANTENNA_INSPECTION_PACKAGE_MAX_BYTES,
+            )?
+        {
+            bail!("recovered antenna package exceeds its codec read budget");
+        }
+        record_size(&output.object_ref, output.byte_count)?;
+    }
+    if let Some(source) = &completed.observation_source {
+        record_size(&source.snapshot_object_ref, source.snapshot_byte_count)?;
+        record_size(&source.state_object_ref, source.state_byte_count)?;
+    }
+    let planned_bytes = planned_object_sizes
+        .values()
+        .try_fold(0_u64, |total, size| total.checked_add(*size))
+        .context("recovered worker planned byte count overflowed")?;
+    if planned_bytes > max_output_bytes {
+        bail!("recovered worker artifacts exceed the attempt storage budget");
+    }
     let mut seen = BTreeSet::new();
     let mut unique_object_sizes = BTreeMap::new();
     let mut outputs = Vec::with_capacity(completed.outputs.len());
@@ -718,7 +787,12 @@ fn recover_completed_worker_execution(
                 output.port_id
             );
         }
-        let bytes = store.cas().get(&output.object_ref)?.with_context(|| {
+        let bytes = read_recovered_worker_object(
+            store,
+            &output.object_ref,
+            output.byte_count,
+            max_output_bytes,
+        ).with_context(|| {
             format!(
                 "completed worker CAS output `{}` is missing",
                 output.port_id
@@ -760,14 +834,18 @@ fn recover_completed_worker_execution(
             {
                 bail!("completed worker observation source differs from the accepted attempt");
             }
-            let snapshot_bytes = store
-                .cas()
-                .get(&source.snapshot_object_ref)?
-                .context("completed worker observation snapshot is missing from CAS")?;
-            let state_bytes = store
-                .cas()
-                .get(&source.state_object_ref)?
-                .context("completed worker observation state is missing from CAS")?;
+            let snapshot_bytes = read_recovered_worker_object(
+                store,
+                &source.snapshot_object_ref,
+                source.snapshot_byte_count,
+                max_output_bytes,
+            )?;
+            let state_bytes = read_recovered_worker_object(
+                store,
+                &source.state_object_ref,
+                source.state_byte_count,
+                max_output_bytes,
+            )?;
             if u64::try_from(snapshot_bytes.len())? != source.snapshot_byte_count
                 || u64::try_from(state_bytes.len())? != source.state_byte_count
             {
@@ -1020,6 +1098,21 @@ pub(crate) fn execute_accepted_worker_start(
         .validate_execution_for_problem(specification, immutable_problem)
         .context("validate accepted task execution before dispatch")?;
     let request = &accepted_step.resolved_input.requested_execution;
+    if matches!(
+        &accepted_step.execution_plan.backend_plan,
+        fullmag_ir::BackendPlanIR::AntennaExternalLeadInspection(_)
+    ) {
+        crate::accepted_antenna_inspection_worker::validate_declared_outputs(&study_step.outputs)?;
+        return execute_accepted_antenna_worker_start(
+            store,
+            &accepted,
+            start,
+            accepted_step,
+            study_step,
+            case_id,
+            interrupt_requested,
+        );
+    }
     if request.backend == "fem" {
         crate::accepted_fem_study_worker::validate_declared_outputs(&study_step.outputs)
             .context("validate accepted FEM output contract before recovery or reservation")?;
@@ -1423,6 +1516,151 @@ fn execute_accepted_fem_worker_start(
             _ => {}
         }
         storage.finish(success, &storage_attempt_dir)?;
+    }
+    execution
+}
+
+fn execute_accepted_antenna_worker_start(
+    store: &SessionStore,
+    accepted: &fullmag_runtime_control::AcceptedStudySnapshot,
+    start: &fullmag_application::WorkerCommandEnvelope,
+    step: &AcceptedWorkerStep,
+    study_step: &fullmag_authoring::StudyStep,
+    case_id: &str,
+    interrupt: Option<&AtomicBool>,
+) -> Result<AcceptedRunnerExecution> {
+    let identity = worker_execution_receipt_identity(start, step, case_id)?;
+    // Preparation is checked on recovery too; a completed receipt is never a
+    // substitute for the immutable accepted request/preparation binding.
+    let prepared = crate::accepted_antenna_inspection_worker::prepare(
+        store, accepted, step, study_step, case_id,
+    )?;
+    let recover = |path: PathBuf| -> Result<AcceptedRunnerExecution> {
+        let current = retry_store_writer_busy(|| {
+            fullmag_runtime_control::load_current_task_claim(
+                store,
+                &step.claim.run_id,
+                step.claim.task_id.as_str(),
+            )
+        })?;
+        if !step.claim.is_same_or_renewed_by(&current) {
+            bail!("antenna inspection recovery belongs to a stale claim");
+        }
+        refuse_known_prelaunch_failure(&path, &identity)?;
+        let recovered = recover_completed_worker_execution(
+            store,
+            &path,
+            &identity,
+            &prepared.output_ports,
+            step.claim.lease.budget.storage_bytes,
+            None,
+            None,
+        )?;
+        if recovered.completed_step_count != 1 || recovered.outputs.len() != 1 {
+            bail!("antenna inspection completed receipt must contain one solve and one output");
+        }
+        crate::accepted_antenna_inspection_worker::validate_package(
+            &recovered.outputs[0].bytes,
+            &prepared.execution_plan,
+        )?;
+        Ok(recovered)
+    };
+    match existing_private_attempt_output_dir(store, &step.claim) {
+        Ok(path) => return recover(path),
+        Err(error) if is_not_found_error(&error) => {}
+        Err(error) => return Err(error).context("inspect existing antenna inspection attempt"),
+    }
+    crate::accepted_project_storage::AcceptedProjectStorage::preflight(
+        &prepared.problem,
+        store,
+        &step.claim,
+        &step.step_id,
+    )?;
+    let attempt =
+        match retry_store_writer_busy(|| create_private_attempt_output_dir(store, &step.claim)) {
+            Ok(path) => {
+                write_immutable_attempt_receipt(
+                    &path,
+                    WORKER_EXECUTION_STARTED_RECEIPT,
+                    &WorkerExecutionStartedReceipt {
+                        identity: identity.clone(),
+                    },
+                )?;
+                path
+            }
+            Err(error) => match existing_private_attempt_output_dir(store, &step.claim) {
+                Ok(path) => return recover(path),
+                Err(_) => return Err(error).context("reserve antenna inspection attempt"),
+            },
+        };
+    let mut storage = prepare_accepted_project_storage(
+        &prepared.problem,
+        store,
+        accepted,
+        step,
+        &identity,
+        &attempt,
+    )?;
+    let execution: Result<AcceptedRunnerExecution> = (|| {
+        let outcome = crate::accepted_antenna_inspection_worker::execute(
+            &prepared,
+            step.claim.lease.budget.storage_bytes,
+            interrupt,
+        )?;
+        let (status, count, outputs) = match outcome {
+            crate::accepted_antenna_inspection_worker::InspectionOutcome::Cancelled => {
+                (RunStatus::Cancelled, 0, Vec::new())
+            }
+            crate::accepted_antenna_inspection_worker::InspectionOutcome::Completed(outputs) => {
+                (RunStatus::Completed, 1, outputs)
+            }
+        };
+        if status == RunStatus::Completed {
+            if let Some(storage) = &mut storage {
+                crate::accepted_antenna_inspection_worker::stage_project_output(
+                    storage.data_root(),
+                    &outputs[0].bytes,
+                    &prepared.execution_plan,
+                )?;
+                // Recovery may trust a completed receipt only after project export is durable.
+                storage.finish(true, &attempt)?;
+            }
+            persist_completed_worker_execution(
+                store,
+                &attempt,
+                &identity,
+                &prepared.output_ports,
+                status,
+                count,
+                &outputs,
+                None,
+                None,
+            )?;
+        }
+        Ok(AcceptedRunnerExecution {
+            status,
+            completed_step_count: count,
+            outputs,
+            attempt_output_dir: attempt.clone(),
+            recovered_from_receipt: false,
+            accepted_state_ref: None,
+            observation_source: None,
+        })
+    })();
+    if let Some(storage) = &mut storage {
+        match &execution {
+            Ok(value) if value.status == RunStatus::Cancelled => {
+                storage.note_outcome("cancelled", None)
+            }
+            Err(error) => storage.note_outcome("failed", Some(format!("{error:#}"))),
+            _ => {}
+        }
+        storage.finish(
+            execution
+                .as_ref()
+                .is_ok_and(|v| v.status == RunStatus::Completed),
+            &attempt,
+        )?;
     }
     execution
 }

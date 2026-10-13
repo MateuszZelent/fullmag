@@ -16,6 +16,8 @@ public:
     void add_double(std::string_view name, double value);
     void add_bytes(std::string_view name, const std::uint8_t *value, std::uint64_t size);
     [[nodiscard]] std::string sha256_hex() const;
+    // Move the exact hashed stream to an owning binary artifact, without re-encoding.
+    [[nodiscard]] std::string release_payload() &&;
 
 private:
     void add_field(std::string_view name, std::uint8_t type, const std::uint8_t *value, std::uint64_t size);

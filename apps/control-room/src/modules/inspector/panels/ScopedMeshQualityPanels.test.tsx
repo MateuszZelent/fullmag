@@ -12,7 +12,8 @@ vi.mock("../InspectorTabState", () => ({
   useInspectorActiveTab: () => "policy",
 }));
 
-vi.mock("@/kernel/KernelContext", async () => {
+vi.mock("@/kernel/KernelContext", async (importOriginal) => {
+  const original = await importOriginal<typeof import("@/kernel/KernelContext")>();
   const { createContext } = await import("react");
   const kernel = {
     api: {
@@ -32,6 +33,7 @@ vi.mock("@/kernel/KernelContext", async () => {
     },
   };
   return {
+    ...original,
     KernelContext: createContext<unknown>(kernel),
     useKernel: () => kernel,
   };
@@ -47,6 +49,11 @@ const sessionStatusMock = {
   data: {
     capabilities: {
       explicit_topology: true,
+      active_lane: {
+        authored: { discretization: "fem" },
+        requested: { discretization: "fem" },
+        resolved: { discretization: "fem" },
+      },
     },
     domain: {
       discretization: "fem",
@@ -162,6 +169,13 @@ vi.mock("@/kernel/resources/geometryLifecycleResources", () => ({
     `meshing/objects/${objectId}/report`,
   resolveMeshRegionQualityResourceKey: (regionId: string) =>
     `meshing/regions/${regionId}/quality`,
+  useGeometryDiagnosticsResource: () => ({
+    data: { diagnostics: [], scene_revision: 1 },
+    error: null,
+    refetch: vi.fn(),
+    revision: 1,
+    status: "ready",
+  }),
   useSceneResource: () => ({
     data: null,
     error: null,
@@ -743,7 +757,7 @@ describe("scoped mesh quality panels", () => {
     );
 
     expect(html).toContain("Transactions");
-    expect(html).toContain("Apply Airbox Policy");
+    expect(html).toContain("Apply Universe Policy");
   });
 
   it("renders airbox quality histograms in the airbox mesh panel", () => {
@@ -782,7 +796,7 @@ describe("scoped mesh quality panels", () => {
     expect(html).toContain("Minimum element size");
     expect(html).toContain("Maximum element growth rate");
     expect(html).toContain("Curvature factor");
-    expect(html).toContain("Airbox Geometry");
+    expect(html).toContain("Canonical Universe Geometry");
     expect(html).toContain("Padding X");
     expect(html).toContain("Size X");
     expect(html).toContain("Effective maximum element size");
@@ -792,19 +806,20 @@ describe("scoped mesh quality panels", () => {
     expect(html).not.toContain("ż".repeat(513));
   });
 
-  it("keeps FDM Airbox parameters geometry-only and exposes the atomic grid replan", () => {
+  it("keeps FDM Airbox parameters geometry-only and exposes the resolved-lane grid replan", () => {
     const html = renderToStaticMarkup(
       <AirboxMeshParametersPanel
         lane="fdm"
+        runtimeLane="fdm"
         selection={{ ...airboxSelection, kind: "airbox.mesh.parameters" }}
       />,
     );
 
-    expect(html).toContain("Canonical Airbox Geometry");
+    expect(html).toContain("Canonical Universe Geometry");
     expect(html).toContain("Padding X");
     expect(html).toContain("Center X");
     expect(html).toContain(
-      "Apply Airbox Policy saves the canonical policy and queues an atomic FDM grid replan.",
+      "Apply Universe Policy saves the canonical policy and queues an FDM grid replan.",
     );
     expect(html).not.toContain("Maximum element growth rate");
     expect(html).not.toContain("Curvature factor");
@@ -848,14 +863,16 @@ describe("scoped mesh quality panels", () => {
     const overview = renderToStaticMarkup(<AirboxOverviewPanel selection={airboxSelection} />);
     const mesh = renderToStaticMarkup(<AirboxMeshOverviewPanel selection={airboxSelection} />);
 
-    expect(overview).toContain("manual");
+    expect(overview).toContain("Manual");
     expect(overview).toContain("1e-7, 2e-7, 3e-7");
     expect(overview).toContain("0.000001, 0.000002, 0.000003");
     expect(overview).toContain("12,345");
     expect(overview).toContain("59,244");
     expect(overview).toContain("Active quantity");
     expect(overview).toContain("m");
-    expect(overview).toContain("Shortcuts");
+    expect(overview).toContain("Mesh Parameters");
+    expect(overview).toContain("Mesh Build");
+    expect(overview).toContain("Visualization");
     expect(mesh).toContain("2e-8");
     expect(mesh).toContain("Parameters status");
     expect(mesh).toContain("Quality Gates status");

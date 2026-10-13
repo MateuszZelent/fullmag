@@ -1296,13 +1296,543 @@ void write_partial_artifact(
          << "}\n";
 }
 
+void write_antenna_endpoint(
+    std::ofstream &file, fullmag_fem_backend *backend,
+    const fullmag_fem_step_stats &stats)
+{
+    const auto m = first_node_m(backend);
+    // Copy the accepted effective field before H_drive materialization.
+    // Do not call snapshot_stats: a refresh could hide a stale step cache.
+    const auto effective = copy_field(backend, FULLMAG_FEM_OBSERVABLE_H_EFF, "antenna H_eff");
+    const auto torque = copy_field(backend, FULLMAG_FEM_OBSERVABLE_TORQUE, "antenna torque");
+    const auto drive = copy_field(backend, FULLMAG_FEM_OBSERVABLE_H_DRIVE, "antenna H_drive");
+    for (size_t i = 3; i < kFieldLength; ++i) {
+        require(std::abs(effective[i] - effective[i % 3]) < 1e-8 &&
+            std::abs(drive[i] - drive[i % 3]) < 1e-8 &&
+            std::abs(torque[i] - torque[i % 3]) < 1e-12,
+            "antenna endpoint fields lost nodewise uniformity");
+    }
+    file << ",{\"time_s\":" << stats.time_seconds
+         << ",\"m\":[" << m[0] << ',' << m[1] << ',' << m[2] << ']'
+         << ",\"h_eff_a_per_m\":[" << effective[0] << ',' << effective[1] << ',' << effective[2] << ']'
+         << ",\"h_drive_a_per_m\":[" << drive[0] << ',' << drive[1] << ',' << drive[2] << ']'
+         << ",\"torque_t\":[" << torque[0] << ',' << torque[1] << ',' << torque[2] << ']'
+         << ",\"drive_energy_j\":" << stats.drive_energy_joules
+         << ",\"external_energy_j\":" << stats.external_energy_joules
+         << ",\"total_energy_j\":" << stats.total_energy_joules
+         << ",\"max_torque_a_per_m\":" << stats.max_torque_Apm << '}';
+}
+
+void write_antenna_cpu_trajectories(const std::filesystem::path &output)
+{
+    const auto digest = qualification_source_snapshot_sha256();
+    std::filesystem::create_directories(output.parent_path());
+    std::ofstream file(output);
+    require(static_cast<bool>(file), "open antenna trajectory output");
+    file << std::setprecision(17)
+         << "{\"schema_version\":\"fem_antenna_trajectory.v4\","
+         << "\"status\":\"recorded_unvalidated\",\"backend\":\"fem\","
+         << "\"device\":\"cpu\",\"precision\":\"fp64\","
+         << "\"source_snapshot_sha256\":\"" << digest << "\",\"cases\":[\n";
+    const std::array<std::pair<fullmag_fem_integrator, const char *>, 4> integrators{{
+        {FULLMAG_FEM_INTEGRATOR_HEUN, "heun"},
+        {FULLMAG_FEM_INTEGRATOR_RK4, "rk4"},
+        {FULLMAG_FEM_INTEGRATOR_RK23_BS, "rk23"},
+        {FULLMAG_FEM_INTEGRATOR_RK45_DP54, "rk45"},
+    }};
+    const std::array<const char *, 5> waveforms{{
+        "{\"kind\":\"constant\"}",
+        "{\"kind\":\"sinusoidal\",\"frequency_hz\":1e9,\"phase_rad\":0.7,\"offset\":0.2}",
+        "{\"kind\":\"pulse\",\"t_on\":2.5e-10,\"t_off\":7.5e-10}",
+        "{\"kind\":\"piecewise_linear\",\"points\":[[0,0.2],[4e-10,1],[7e-10,-0.5],[1e-9,0.1]]}",
+        "{\"kind\":\"sinc_pulse\",\"cutoff_hz\":2e9,\"t0\":5e-10,\"amplitude\":0.8}",
+    }};
+    const std::array<fullmag_fem_time_point, 4> points{{
+        {0.0, 0.2}, {4e-10, 1.0}, {7e-10, -0.5}, {1e-9, 0.1},
+    }};
+    constexpr double dt = 5e-13;
+    constexpr size_t steps = 2000;
+    bool first_case = true;
+    const std::array<const char *, 3> clocks{{"zero_absolute", "shifted_absolute", "shifted_local"}};
+    for (size_t clock = 0; clock < clocks.size(); ++clock) {
+    for (bool adaptive_policy : {false, true}) {
+    for (const auto &[integrator, name] : integrators) {
+        if (adaptive_policy && integrator != FULLMAG_FEM_INTEGRATOR_RK23_BS &&
+            integrator != FULLMAG_FEM_INTEGRATOR_RK45_DP54) continue;
+        for (size_t wave = 0; wave < waveforms.size(); ++wave) {
+            auto initial = uniform_magnetization(0.6, 0.0, 0.8);
+            // The runner normally scales H/A by current before ABI transfer.
+            // This fixture isolates native preprojected-field consumption.
+            auto basis = uniform_magnetization(0.0, 0.0, 1e6 * 0.02);
+            fullmag_fem_regional_field_drive_desc drive{};
+            drive.abi_version = FULLMAG_FEM_REGIONAL_FIELD_DRIVE_ABI_VERSION;
+            drive.struct_size = sizeof(drive);
+            drive.stable_id_hash = 1;
+            drive.target.abi_version = FULLMAG_FEM_REGIONAL_FIELD_DRIVE_ABI_VERSION;
+            drive.target.struct_size = sizeof(drive.target);
+            drive.target.kind = FULLMAG_FEM_FIELD_TARGET_GLOBAL;
+            drive.spatial_profile.abi_version = FULLMAG_FEM_REGIONAL_FIELD_DRIVE_ABI_VERSION;
+            drive.spatial_profile.struct_size = sizeof(drive.spatial_profile);
+            drive.spatial_profile.kind = FULLMAG_FEM_SPATIAL_PROFILE_PREPROJECTED_NODAL;
+            drive.spatial_profile.preprojected_h_xyz_a_per_m = basis.data();
+            drive.spatial_profile.preprojected_h_value_count = basis.size();
+            drive.time_origin = clock == 2 ? FULLMAG_FEM_TIME_STAGE_LOCAL : FULLMAG_FEM_TIME_ABSOLUTE;
+            drive.waveform.abi_version = FULLMAG_FEM_REGIONAL_FIELD_DRIVE_ABI_VERSION;
+            drive.waveform.struct_size = sizeof(drive.waveform);
+            switch (wave) {
+            case 0: drive.waveform.kind = FULLMAG_FEM_TIME_CONSTANT; break;
+            case 1:
+                drive.waveform.kind = FULLMAG_FEM_TIME_SINUSOIDAL;
+                drive.waveform.parameters.sinusoidal = {1e9, 0.7, 0.2};
+                break;
+            case 2:
+                drive.waveform.kind = FULLMAG_FEM_TIME_PULSE;
+                drive.waveform.parameters.pulse = {2.5e-10, 7.5e-10};
+                break;
+            case 3:
+                drive.waveform.kind = FULLMAG_FEM_TIME_PIECEWISE_LINEAR;
+                drive.waveform.points = points.data();
+                drive.waveform.point_count = points.size();
+                break;
+            case 4:
+                drive.waveform.kind = FULLMAG_FEM_TIME_SINC_PULSE;
+                drive.waveform.parameters.sinc_pulse = {2e9, 5e-10, 0.8};
+                break;
+            }
+            auto plan = base_plan(initial, 0.1, integrator, dt);
+            plan.enable_exchange = 0;
+            plan.material.exchange_stiffness = 0.0;
+            plan.external_field_am[2] = 1e4;
+            plan.regional_field_drives = clock == 0 ? &drive : nullptr;
+            plan.regional_field_drive_count = clock == 0 ? 1 : 0;
+            fullmag_fem_adaptive_config_v2 adaptive{};
+            adaptive.abi_version = FULLMAG_FEM_ADAPTIVE_CONFIG_V2_ABI_VERSION;
+            adaptive.struct_size = sizeof(adaptive);
+            adaptive.base.atol = 2e-10;
+            adaptive.base.rtol = 0.0;
+            adaptive.base.dt_initial = dt;
+            adaptive.base.dt_min = 1e-20;
+            adaptive.base.dt_max = 5e-11;
+            adaptive.base.safety = 0.9;
+            adaptive.base.growth_limit = 2.0;
+            adaptive.base.shrink_limit = 0.2;
+            adaptive.base.max_reject = 80;
+            auto *backend = adaptive_policy
+                ? fullmag_fem_backend_create_v2(&plan, &adaptive)
+                : fullmag_fem_backend_create(&plan);
+            require(backend != nullptr, "create antenna CPU backend");
+            require_requested_execution_lane(backend);
+            double start_time = 0.0;
+            if (clock != 0) {
+                // Advance the actual solver clock under bias only, then start
+                // the antenna stage on that same backend (including FSAL).
+                for (size_t step = 0; step < 500; ++step) {
+                    fullmag_fem_step_stats stats{};
+                    require(fullmag_fem_backend_step(backend, dt, &stats) == FULLMAG_FEM_OK,
+                        std::string("antenna warmup: ") + last_error(backend));
+                    start_time = stats.time_seconds;
+                }
+                require(fullmag_fem_backend_begin_stage(backend, start_time) == FULLMAG_FEM_OK,
+                    std::string("antenna begin stage: ") + last_error(backend));
+                require(fullmag_fem_backend_reconfigure_regional_field_drives(
+                    backend, &drive, 1, start_time) == FULLMAG_FEM_OK,
+                    std::string("antenna drive handoff: ") + last_error(backend));
+            }
+            const auto stage_initial = first_node_m(backend);
+            if (!first_case) file << ",\n";
+            first_case = false;
+            file << "{\"clock_case\":\"" << clocks[clock] << "\",\"integrator\":\"" << name << "\",\"waveform\":" << waveforms[wave]
+                 << ",\"dt_s\":" << dt << ",\"timestep_policy\":\""
+                 << (adaptive_policy ? "adaptive" : "fixed") << "\","
+                 << "\"initial_m\":[" << stage_initial[0] << ',' << stage_initial[1] << ',' << stage_initial[2]
+                 << "],\"alpha\":0.1,\"gamma_mu0\":221100,"
+                 << "\"basis_hz_per_a\":1e6,\"peak_current_a\":0.02,\"bias_hz_a_per_m\":1e4,"
+                 << "\"start_time_s\":" << start_time << ",\"stage_start_time_s\":" << start_time
+                 << ",\"time_origin\":\"" << (clock == 2 ? "stage_local" : "absolute") << "\","
+                 << "\"samples\":[{\"time_s\":" << start_time << ",\"m\":["
+                 << stage_initial[0] << ',' << stage_initial[1] << ',' << stage_initial[2] << "]}";
+            double previous_time = start_time;
+            uint64_t accepted_steps = 0;
+            uint64_t rejected_attempts = 0;
+            if (adaptive_policy) {
+                double requested_dt = 5e-11;
+                for (size_t sample = 1; sample <= 20; ++sample) {
+                    const double target = start_time + sample * 5e-11;
+                    fullmag_fem_step_stats endpoint{};
+                    while (previous_time < target) {
+                        fullmag_fem_step_stats stats{};
+                        require(fullmag_fem_backend_step(backend,
+                            std::min(requested_dt, target - previous_time), &stats) == FULLMAG_FEM_OK,
+                            std::string("antenna adaptive step: ") + last_error(backend));
+                        require(std::isfinite(stats.time_seconds) && stats.time_seconds > previous_time &&
+                            stats.time_seconds <= target + 1e-24 &&
+                            std::isfinite(stats.dt_suggested) && stats.dt_suggested > 0.0,
+                            "antenna adaptive clock/suggestion invalid");
+                        previous_time = stats.time_seconds;
+                        requested_dt = stats.dt_suggested;
+                        endpoint = stats;
+                        rejected_attempts += stats.rejected_attempts;
+                        require(++accepted_steps < 200000, "antenna adaptive step budget exceeded");
+                    }
+                    write_antenna_endpoint(file, backend, endpoint);
+                }
+            } else {
+            for (size_t step = 1; step <= steps; ++step) {
+                fullmag_fem_step_stats stats{};
+                require(fullmag_fem_backend_step(backend, dt, &stats) == FULLMAG_FEM_OK,
+                    std::string("antenna CPU step: ") + last_error(backend));
+                require(stats.time_seconds > previous_time &&
+                    std::abs(stats.dt_seconds - dt) <= 1e-12 * dt,
+                    "antenna fixed step did not advance by requested dt");
+                previous_time = stats.time_seconds;
+                ++accepted_steps;
+                rejected_attempts += stats.rejected_attempts;
+                if (step % 100 == 0) {
+                    write_antenna_endpoint(file, backend, stats);
+                }
+            }
+            }
+            fullmag_fem_backend_destroy(backend);
+            file << "],\"accepted_steps\":" << accepted_steps
+                 << ",\"rejected_attempts\":" << rejected_attempts << "}";
+        }
+    }
+    }
+    }
+    file << "]}\n";
+    file.close();
+    require(static_cast<bool>(file), "write antenna trajectory output");
+    std::puts("FEM antenna CPU trajectories recorded; independent validation required");
+}
+
+void write_antenna_frozen_cpu(const std::filesystem::path &output)
+{
+    const auto digest = qualification_source_snapshot_sha256();
+    std::ofstream file(output);
+    require(static_cast<bool>(file), "open frozen antenna output");
+    file << std::setprecision(17)
+         << "{\"schema_version\":\"fem_antenna_frozen.v1\","
+         << "\"status\":\"recorded_unvalidated\",\"device\":\"cpu\","
+         << "\"precision\":\"fp64\",\"source_snapshot_sha256\":\""
+         << digest << "\",\"cases\":[";
+    const std::array<std::pair<fullmag_fem_integrator, const char *>, 4> integrators{{
+        {FULLMAG_FEM_INTEGRATOR_HEUN, "heun"},
+        {FULLMAG_FEM_INTEGRATOR_RK4, "rk4"},
+        {FULLMAG_FEM_INTEGRATOR_RK23_BS, "rk23"},
+        {FULLMAG_FEM_INTEGRATOR_RK45_DP54, "rk45"},
+    }};
+    const std::array<uint8_t, kNodeCount> frozen_mask{{1, 0, 0, 0}};
+    bool first_case = true;
+    for (bool adaptive_policy : {false, true}) {
+        for (const auto &[integrator, name] : integrators) {
+            if (adaptive_policy && integrator != FULLMAG_FEM_INTEGRATOR_RK23_BS &&
+                integrator != FULLMAG_FEM_INTEGRATOR_RK45_DP54) continue;
+            auto initial = uniform_magnetization(0.6, 0.0, 0.8);
+            initial[0] = 0.0;
+            initial[1] = 1.0;
+            initial[2] = 0.0;
+            const auto reference = initial;
+            auto basis = uniform_magnetization(0.0, 0.0, 2e4);
+            fullmag_fem_regional_field_drive_desc drive{};
+            drive.abi_version = FULLMAG_FEM_REGIONAL_FIELD_DRIVE_ABI_VERSION;
+            drive.struct_size = sizeof(drive);
+            drive.stable_id_hash = 1;
+            drive.target.abi_version = FULLMAG_FEM_REGIONAL_FIELD_DRIVE_ABI_VERSION;
+            drive.target.struct_size = sizeof(drive.target);
+            drive.target.kind = FULLMAG_FEM_FIELD_TARGET_GLOBAL;
+            drive.spatial_profile.abi_version = FULLMAG_FEM_REGIONAL_FIELD_DRIVE_ABI_VERSION;
+            drive.spatial_profile.struct_size = sizeof(drive.spatial_profile);
+            drive.spatial_profile.kind = FULLMAG_FEM_SPATIAL_PROFILE_PREPROJECTED_NODAL;
+            drive.spatial_profile.preprojected_h_xyz_a_per_m = basis.data();
+            drive.spatial_profile.preprojected_h_value_count = basis.size();
+            drive.waveform.abi_version = FULLMAG_FEM_REGIONAL_FIELD_DRIVE_ABI_VERSION;
+            drive.waveform.struct_size = sizeof(drive.waveform);
+            drive.waveform.kind = FULLMAG_FEM_TIME_SINUSOIDAL;
+            drive.waveform.parameters.sinusoidal = {1e9, 0.7, 0.2};
+            drive.time_origin = FULLMAG_FEM_TIME_ABSOLUTE;
+            auto plan = base_plan(initial, 0.1, integrator, 5e-13);
+            plan.enable_exchange = 0;
+            plan.material.exchange_stiffness = 0.0;
+            plan.external_field_am[2] = 1e4;
+            plan.regional_field_drives = &drive;
+            plan.regional_field_drive_count = 1;
+            plan.frozen_mask = frozen_mask.data();
+            plan.frozen_mask_len = frozen_mask.size();
+            plan.frozen_reference_xyz = reference.data();
+            plan.frozen_reference_len = reference.size();
+            fullmag_fem_adaptive_config_v2 adaptive{};
+            adaptive.abi_version = FULLMAG_FEM_ADAPTIVE_CONFIG_V2_ABI_VERSION;
+            adaptive.struct_size = sizeof(adaptive);
+            adaptive.base.atol = 2e-10;
+            adaptive.base.rtol = 0.0;
+            adaptive.base.dt_initial = 5e-13;
+            adaptive.base.dt_min = 1e-20;
+            adaptive.base.dt_max = 5e-11;
+            adaptive.base.safety = 0.9;
+            adaptive.base.growth_limit = 2.0;
+            adaptive.base.shrink_limit = 0.2;
+            adaptive.base.max_reject = 80;
+            auto *backend = adaptive_policy
+                ? fullmag_fem_backend_create_v2(&plan, &adaptive)
+                : fullmag_fem_backend_create(&plan);
+            require(backend != nullptr, "create frozen antenna CPU backend");
+            require_requested_execution_lane(backend);
+            if (!first_case) file << ',';
+            first_case = false;
+            file << "{\"integrator\":\"" << name << "\",\"timestep_policy\":\""
+                 << (adaptive_policy ? "adaptive" : "fixed")
+                 << "\",\"basis_hz_per_a\":1e6,\"peak_current_a\":0.02,"
+                 << "\"bias_hz_a_per_m\":1e4,\"alpha\":0.1,"
+                 << "\"waveform\":{\"kind\":\"sinusoidal\",\"frequency_hz\":1e9,"
+                 << "\"phase_rad\":0.7,\"offset\":0.2},\"samples\":[";
+            auto record = [&](double time_s, double max_torque) {
+                const auto m = copy_field(backend, FULLMAG_FEM_OBSERVABLE_M, "frozen antenna m");
+                const auto h = copy_field(backend, FULLMAG_FEM_OBSERVABLE_H_DRIVE, "frozen antenna drive");
+                require(m[0] == reference[0] && m[1] == reference[1] && m[2] == reference[2],
+                    "antenna moved the frozen spin");
+                for (size_t i = 6; i < kFieldLength; ++i) {
+                    require(std::abs(m[i] - m[3 + i % 3]) < 5e-13,
+                        "free antenna macrospins lost nodewise uniformity");
+                }
+                for (size_t i = 3; i < kFieldLength; ++i) {
+                    require(std::abs(h[i] - h[i % 3]) < 1e-8,
+                        "frozen antenna drive lost nodewise uniformity");
+                }
+                if (time_s > 0.0) file << ',';
+                file << "{\"time_s\":" << time_s
+                     << ",\"m_frozen\":[" << m[0] << ',' << m[1] << ',' << m[2] << ']'
+                     << ",\"m_free\":[" << m[3] << ',' << m[4] << ',' << m[5] << ']'
+                     << ",\"h_drive_frozen_a_per_m\":[" << h[0] << ',' << h[1] << ',' << h[2] << ']'
+                     << ",\"h_drive_free_a_per_m\":[" << h[3] << ',' << h[4] << ',' << h[5] << ']'
+                     << ",\"max_torque_a_per_m\":" << max_torque << '}';
+            };
+            record(0.0, 0.0);
+            uint64_t accepted = 0;
+            uint64_t rejected = 0;
+            double previous = 0.0;
+            double requested = adaptive_policy ? 5e-11 : 5e-13;
+            for (size_t sample = 1; sample <= 20; ++sample) {
+                const double target = sample * 5e-11;
+                fullmag_fem_step_stats endpoint{};
+                do {
+                    fullmag_fem_step_stats stats{};
+                    const double dt = adaptive_policy
+                        ? std::min(requested, target - previous) : 5e-13;
+                    require(fullmag_fem_backend_step(backend, dt, &stats) == FULLMAG_FEM_OK,
+                        std::string("frozen antenna step: ") + last_error(backend));
+                    require(stats.time_seconds > previous && stats.time_seconds <= target + 1e-20,
+                        "frozen antenna clock invalid");
+                    previous = stats.time_seconds;
+                    requested = stats.dt_suggested;
+                    endpoint = stats;
+                    rejected += stats.rejected_attempts;
+                    require(++accepted < 200000, "frozen antenna step budget exceeded");
+                } while (adaptive_policy ? previous < target : accepted % 100 != 0);
+                record(endpoint.time_seconds, endpoint.max_torque_Apm);
+            }
+            fullmag_fem_backend_destroy(backend);
+            file << "],\"accepted_steps\":" << accepted
+                 << ",\"rejected_attempts\":" << rejected << '}';
+        }
+    }
+    file << "]}\n";
+    file.close();
+    require(static_cast<bool>(file), "write frozen antenna output");
+    std::puts("FEM antenna frozen-spin trajectories recorded; independent validation required");
+}
+
+void write_antenna_mixed_cpu(const std::filesystem::path &output, bool periodic)
+{
+    const auto digest = qualification_source_snapshot_sha256();
+    constexpr std::array<uint32_t, 2> periodic_pairs{{1, 2}};
+    constexpr std::array<double, 15> nodes{{
+        0, 0, 0, kEdge, 0, 0, 0, kEdge, 0, 0, 0, kEdge, 0, 0, -kEdge,
+    }};
+    constexpr std::array<uint32_t, 2> cell_types{{FULLMAG_FEM_CELL_TET4, FULLMAG_FEM_CELL_TET4}};
+    constexpr std::array<uint32_t, 3> cell_offsets{{0, 4, 8}};
+    constexpr std::array<uint32_t, 8> cell_nodes{{0, 1, 2, 3, 0, 2, 1, 4}};
+    constexpr std::array<uint64_t, 2> cell_ordinals{{0, 1}};
+    constexpr std::array<uint32_t, 2> cell_markers{{1, 0}};
+    constexpr std::array<uint32_t, 6> facet_types{{
+        FULLMAG_FEM_FACET_TRI3, FULLMAG_FEM_FACET_TRI3, FULLMAG_FEM_FACET_TRI3,
+        FULLMAG_FEM_FACET_TRI3, FULLMAG_FEM_FACET_TRI3, FULLMAG_FEM_FACET_TRI3,
+    }};
+    constexpr std::array<uint32_t, 6> facet_roles{{
+        FULLMAG_FEM_FACET_ROLE_EXTERIOR, FULLMAG_FEM_FACET_ROLE_EXTERIOR,
+        FULLMAG_FEM_FACET_ROLE_EXTERIOR, FULLMAG_FEM_FACET_ROLE_EXTERIOR,
+        FULLMAG_FEM_FACET_ROLE_EXTERIOR, FULLMAG_FEM_FACET_ROLE_EXTERIOR,
+    }};
+    constexpr std::array<uint32_t, 7> facet_offsets{{0, 3, 6, 9, 12, 15, 18}};
+    constexpr std::array<uint32_t, 18> facet_nodes{{
+        0, 1, 3, 0, 3, 2, 1, 2, 3, 0, 2, 4, 0, 4, 1, 2, 1, 4,
+    }};
+    constexpr std::array<uint64_t, 6> facet_ordinals{{0, 1, 2, 3, 4, 5}};
+    constexpr std::array<uint32_t, 6> facet_markers{{1, 1, 1, 1, 1, 1}};
+    std::ofstream file(output);
+    require(static_cast<bool>(file), "open mixed antenna output");
+    file << std::setprecision(17)
+         << "{\"schema_version\":\""
+         << (periodic ? "fem_antenna_mixed_pbc.v1" : "fem_antenna_mixed.v1") << "\","
+         << "\"status\":\"recorded_unvalidated\",\"device\":\"cpu\","
+         << "\"precision\":\"fp64\",\"source_snapshot_sha256\":\""
+         << digest << "\",\"periodic_node_pairs\":["
+         << (periodic ? "1,2" : "") << "],\"cases\":[";
+    const std::array<std::pair<fullmag_fem_integrator, const char *>, 4> integrators{{
+        {FULLMAG_FEM_INTEGRATOR_HEUN, "heun"},
+        {FULLMAG_FEM_INTEGRATOR_RK4, "rk4"},
+        {FULLMAG_FEM_INTEGRATOR_RK23_BS, "rk23"},
+        {FULLMAG_FEM_INTEGRATOR_RK45_DP54, "rk45"},
+    }};
+    bool first_case = true;
+    bool periodic_mismatch_rejected = false;
+    for (const auto &[integrator, name] : integrators) {
+        auto initial = uniform_magnetization(0.6, 0.0, 0.8);
+        initial.insert(initial.end(), {1.0, 0.0, 0.0});
+        std::vector<double> basis(15, 0.0);
+        for (size_t node = 0; node < 5; ++node) basis[3 * node + 2] = 2e4;
+        fullmag_fem_regional_field_drive_desc drive{};
+        drive.abi_version = FULLMAG_FEM_REGIONAL_FIELD_DRIVE_ABI_VERSION;
+        drive.struct_size = sizeof(drive);
+        drive.stable_id_hash = 1;
+        drive.target.abi_version = FULLMAG_FEM_REGIONAL_FIELD_DRIVE_ABI_VERSION;
+        drive.target.struct_size = sizeof(drive.target);
+        drive.target.kind = FULLMAG_FEM_FIELD_TARGET_GLOBAL;
+        drive.spatial_profile.abi_version = FULLMAG_FEM_REGIONAL_FIELD_DRIVE_ABI_VERSION;
+        drive.spatial_profile.struct_size = sizeof(drive.spatial_profile);
+        drive.spatial_profile.kind = FULLMAG_FEM_SPATIAL_PROFILE_PREPROJECTED_NODAL;
+        drive.spatial_profile.preprojected_h_xyz_a_per_m = basis.data();
+        drive.spatial_profile.preprojected_h_value_count = basis.size();
+        drive.waveform.abi_version = FULLMAG_FEM_REGIONAL_FIELD_DRIVE_ABI_VERSION;
+        drive.waveform.struct_size = sizeof(drive.waveform);
+        drive.waveform.kind = FULLMAG_FEM_TIME_SINUSOIDAL;
+        drive.waveform.parameters.sinusoidal = {1e9, 0.7, 0.2};
+        drive.time_origin = FULLMAG_FEM_TIME_ABSOLUTE;
+        auto plan = base_plan(initial, 0.1, integrator, 5e-13);
+        plan.mesh.nodes_xyz = nodes.data();
+        plan.mesh.nodes_xyz_len = nodes.size();
+        plan.mesh.cell_types = cell_types.data();
+        plan.mesh.cell_types_len = cell_types.size();
+        plan.mesh.cell_offsets = cell_offsets.data();
+        plan.mesh.cell_offsets_len = cell_offsets.size();
+        plan.mesh.cell_nodes = cell_nodes.data();
+        plan.mesh.cell_nodes_len = cell_nodes.size();
+        plan.mesh.cell_global_ordinals = cell_ordinals.data();
+        plan.mesh.cell_global_ordinals_len = cell_ordinals.size();
+        plan.mesh.cell_markers = cell_markers.data();
+        plan.mesh.cell_markers_len = cell_markers.size();
+        plan.mesh.facet_types = facet_types.data();
+        plan.mesh.facet_types_len = facet_types.size();
+        plan.mesh.facet_roles = facet_roles.data();
+        plan.mesh.facet_roles_len = facet_roles.size();
+        plan.mesh.facet_offsets = facet_offsets.data();
+        plan.mesh.facet_offsets_len = facet_offsets.size();
+        plan.mesh.facet_nodes = facet_nodes.data();
+        plan.mesh.facet_nodes_len = facet_nodes.size();
+        plan.mesh.facet_global_ordinals = facet_ordinals.data();
+        plan.mesh.facet_global_ordinals_len = facet_ordinals.size();
+        plan.mesh.facet_markers = facet_markers.data();
+        plan.mesh.facet_markers_len = facet_markers.size();
+        if (periodic) {
+            plan.mesh.periodic_node_pairs = periodic_pairs.data();
+            plan.mesh.periodic_node_pairs_len = periodic_pairs.size();
+        }
+        plan.enable_exchange = periodic ? 1 : 0;
+        plan.material.exchange_stiffness = 0.0;
+        plan.external_field_am[2] = 1e4;
+        plan.regional_field_drives = &drive;
+        plan.regional_field_drive_count = 1;
+        auto *backend = fullmag_fem_backend_create(&plan);
+        require(backend != nullptr, "create mixed antenna CPU backend");
+        require_requested_execution_lane(backend);
+        if (!first_case) file << ',';
+        first_case = false;
+        file << "{\"integrator\":\"" << name << "\",\"samples\":[";
+        auto record = [&](double time_s, double max_torque) {
+            std::vector<double> m(15), h(15);
+            require(fullmag_fem_backend_copy_field_f64(
+                backend, FULLMAG_FEM_OBSERVABLE_M, m.data(), m.size()) == FULLMAG_FEM_OK,
+                "copy mixed antenna magnetization");
+            require(fullmag_fem_backend_copy_field_f64(
+                backend, FULLMAG_FEM_OBSERVABLE_H_DRIVE, h.data(), h.size()) == FULLMAG_FEM_OK,
+                "copy mixed antenna drive");
+            require(m[12] == 1.0 && m[13] == 0.0 && m[14] == 0.0,
+                "antenna moved airbox-only node");
+            for (size_t i = 3; i < 12; ++i) {
+                require(std::abs(m[i] - m[i % 3]) < 5e-13,
+                    "mixed antenna magnetic nodes lost uniformity");
+            }
+            for (size_t i = 3; i < 15; ++i) {
+                require(std::abs(h[i] - h[i % 3]) < 1e-8,
+                    "mixed antenna drive lost full-domain uniformity");
+            }
+            if (periodic) {
+                for (size_t component = 0; component < 3; ++component) {
+                    require(m[3 + component] == m[6 + component] &&
+                        h[3 + component] == h[6 + component],
+                        "periodic antenna pair disagrees after projection");
+                }
+            }
+            if (time_s > 0.0) file << ',';
+            file << "{\"time_s\":" << time_s
+                 << ",\"m_magnetic\":[" << m[0] << ',' << m[1] << ',' << m[2] << ']'
+                 << ",\"m_air\":[" << m[12] << ',' << m[13] << ',' << m[14] << ']'
+                 << ",\"h_drive_magnetic_a_per_m\":[" << h[0] << ',' << h[1] << ',' << h[2] << ']'
+                 << ",\"h_drive_air_a_per_m\":[" << h[12] << ',' << h[13] << ',' << h[14] << ']'
+                 << ",\"max_torque_a_per_m\":" << max_torque << '}';
+        };
+        record(0.0, 0.0);
+        uint64_t accepted = 0;
+        for (size_t step = 1; step <= 2000; ++step) {
+            fullmag_fem_step_stats stats{};
+            require(fullmag_fem_backend_step(backend, 5e-13, &stats) == FULLMAG_FEM_OK,
+                std::string("mixed antenna CPU step: ") + last_error(backend));
+            ++accepted;
+            if (step % 100 == 0) record(stats.time_seconds, stats.max_torque_Apm);
+        }
+        fullmag_fem_backend_destroy(backend);
+        if (periodic && !periodic_mismatch_rejected) {
+            basis[8] += 1.0;
+            auto *invalid_backend = fullmag_fem_backend_create(&plan);
+            require(invalid_backend == nullptr,
+                "inconsistent preprojected antenna basis passed periodic pair preflight");
+            periodic_mismatch_rejected = true;
+        }
+        file << "],\"accepted_steps\":" << accepted << '}';
+    }
+    file << ']';
+    if (periodic) {
+        file << ",\"periodic_basis_mismatch_rejected\":"
+             << (periodic_mismatch_rejected ? "true" : "false");
+    }
+    file << "}\n";
+    file.close();
+    require(static_cast<bool>(file), "write mixed antenna output");
+    std::puts("FEM antenna mixed-mesh trajectories recorded; independent validation required");
+}
+
 } // namespace
 
 int main(int argc, char **argv)
 {
     require(
         argc == 2 || argc == 3,
-        "usage: fem_llg_time_domain_qualification OUTPUT_JSON [cpu|gpu]");
+        "usage: fem_llg_time_domain_qualification OUTPUT_JSON [cpu|gpu|antenna-cpu|antenna-frozen-cpu|antenna-mixed-cpu|antenna-mixed-pbc-cpu]");
+    if (argc == 3 && std::string(argv[2]) == "antenna-cpu") {
+        write_antenna_cpu_trajectories(argv[1]);
+        return 0;
+    }
+    if (argc == 3 && std::string(argv[2]) == "antenna-frozen-cpu") {
+        write_antenna_frozen_cpu(argv[1]);
+        return 0;
+    }
+    if (argc == 3 && std::string(argv[2]) == "antenna-mixed-cpu") {
+        write_antenna_mixed_cpu(argv[1], false);
+        return 0;
+    }
+    if (argc == 3 && std::string(argv[2]) == "antenna-mixed-pbc-cpu") {
+        write_antenna_mixed_cpu(argv[1], true);
+        return 0;
+    }
     if (argc == 3) {
         const std::string lane = argv[2];
         require(lane == "cpu" || lane == "gpu", "qualification lane must be cpu or gpu");

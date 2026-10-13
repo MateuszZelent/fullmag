@@ -8,6 +8,7 @@ use axum::http::HeaderMap;
 use axum::Json;
 
 use crate::error::ApiError;
+use crate::router_v2::handlers::data::field_resolution::is_fdm_backend_kind;
 use crate::router_v2::handlers::sessions::status::domain_generation_id;
 use crate::schemas::commands::{
     CommandResponse, RuntimeCommandIntent, RuntimeCommandPrecondition, RuntimeCommandTarget,
@@ -196,12 +197,45 @@ async fn fdm_grid_refresh_rejection_reason(
     let snapshot = current
         .as_ref()
         .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
-    if !crate::router_v2::handlers::data::field_resolution::is_fdm_snapshot(snapshot) {
+    if !fdm_grid_refresh_targets_active_fdm_lane(snapshot) {
         return Ok(Some(
             "FDM grid refresh is only applicable to an FDM structured-grid session.".into(),
         ));
     }
     Ok(None)
+}
+
+fn fdm_grid_refresh_targets_active_fdm_lane(snapshot: &SessionStateResponse) -> bool {
+    if let Some(resolved_backend) = snapshot.session.resolved_backend.as_deref() {
+        return backend_label_is_fdm(resolved_backend);
+    }
+
+    if let Some(backend_kind) = snapshot
+        .metadata
+        .as_ref()
+        .and_then(|metadata| metadata.get("execution_plan"))
+        .and_then(|plan| plan.get("backend_plan"))
+        .and_then(|backend_plan| backend_plan.get("kind"))
+    {
+        return backend_kind
+            .as_str()
+            .is_some_and(backend_label_is_fdm);
+    }
+
+    snapshot.session.explicit_selection
+        && backend_label_is_fdm(&snapshot.session.requested_backend)
+}
+
+fn backend_label_is_fdm(label: &str) -> bool {
+    if is_fdm_backend_kind(label) {
+        return true;
+    }
+
+    let Some((realization, backend_kind)) = label.trim().split_once('-') else {
+        return false;
+    };
+    matches!(realization.trim().to_ascii_lowercase().as_str(), "cpu" | "gpu")
+        && is_fdm_backend_kind(backend_kind)
 }
 
 fn request_has_adaptive_solver_policy(req: &StructuredCommandRequest) -> bool {
@@ -1312,6 +1346,12 @@ fn scene_geometry_entry(
                     object_id,
                 )?),
             })
+        }
+        "MicrostripAntenna" | "microstrip" | "CPWAntenna" | "cpw" => {
+            Err(ApiError::bad_request(format!(
+                "antenna geometry object '{}' requires the conductor mesh planner; magnetic mesh lowering is not available in this command",
+                object_id
+            )))
         }
         other => Err(ApiError::bad_request(format!(
             "mesh build cannot lower geometry kind '{}' for object '{}'",

@@ -45,14 +45,13 @@ const mocks = vi.hoisted(() => ({
   objectEditSession: null as ObjectEditSessionController<GeometryObjectDraft> | null,
 }));
 
-vi.mock("@/kernel/KernelContext", async () => {
-  const React = await import("react");
+vi.mock("@/kernel/KernelContext", async (importOriginal) => {
   const { ObjectEditSessionController } = await import(
     "@/kernel/authoring/object-edit/ObjectEditSessionController"
   );
   mocks.objectEditSession ??= new ObjectEditSessionController();
   return {
-    KernelContext: React.createContext(null),
+    ...(await importOriginal<typeof import("@/kernel/KernelContext")>()),
     useKernel: () => ({
       api: { model: { commitTransaction: mocks.commitTransaction, patchObject: mocks.patchObject, scene: mocks.readScene } },
       authoringHistory: {

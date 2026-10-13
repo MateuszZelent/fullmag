@@ -12,6 +12,7 @@ utoipa = ["dep:utoipa"]
 
 [dependencies]
 fullmag-application = { path = "../fullmag-application" }
+fullmag-session = { path = "../fullmag-session" }
 fullmag-workspace = { path = "../fullmag-workspace" }
 serde.workspace = true
 serde_json.workspace = true

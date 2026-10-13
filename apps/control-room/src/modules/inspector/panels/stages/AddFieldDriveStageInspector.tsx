@@ -89,7 +89,7 @@ export function AddFieldDriveStageInspector(props: StageInspectorFrameProps) {
       <StageInspectorFrame
         {...props}
         expectedKind="add_field_drive"
-        kindLabel="Add Antenna"
+        kindLabel="Add Field Drive"
       />
       <InspectorGroup
         title="Regional Field Drive"

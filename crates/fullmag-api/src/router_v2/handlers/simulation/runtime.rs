@@ -12,8 +12,9 @@ use serde_json::Value;
 
 use crate::error::ApiError;
 use crate::router_v2::handlers::analysis::hysteresis::{
-    hysteresis_bookmarks_resource, read_hysteresis_minor_loops_if_available,
-    read_hysteresis_points_if_available, read_hysteresis_settle_trace_if_available,
+    hysteresis_bookmarks_resource, is_hysteresis_stage_at,
+    read_hysteresis_minor_loops_if_available, read_hysteresis_points_if_available,
+    read_hysteresis_settle_trace_if_available,
 };
 use crate::schemas::commands::CommandFailureRequest;
 use crate::schemas::hysteresis::{
@@ -39,8 +40,9 @@ use crate::schemas::runtime::{
     CommandDetailResource, CommandDiagnosticReferenceResource, CommandExecutionReadbackResource,
     CommandQueueStatusResource, CommandResourceInvalidationResource, CommandStatusResource,
     CurrentRunResource, ObjectEnergySummary, ObjectMagnetizationAverage, ObjectMetricsResource,
-    RuntimeCommandReadinessResource, SolverEnergyCurrentResource, SolverEnergyHistoryResource,
-    SolverEnergyRow, SolverStatusResource, StageExecutionRecordResource, StageExecutionResource,
+    ParallelExecutionTelemetryResource, RuntimeCommandReadinessResource,
+    SolverEnergyCurrentResource, SolverEnergyHistoryResource, SolverEnergyRow,
+    SolverStatusResource, StageExecutionRecordResource, StageExecutionResource,
 };
 use crate::session::{
     build_runtime_status_view, command_ledger_revisions, effective_runtime_status_code,
@@ -544,6 +546,11 @@ pub async fn get_stage_execution(
     };
 
     Ok(Json(StageExecutionResource {
+        session_id: request_context.session_id.clone(),
+        session_epoch: crate::router_v2::handlers::sessions::current_live_session_epoch(snapshot),
+        request_scope_epoch: request_context.request_scope_epoch.clone(),
+        run_id: snapshot.run.as_ref().map(|run| run.run_id.clone())
+            .unwrap_or_else(|| snapshot.session.run_id.clone()),
         revision: snapshot.state_version,
         runtime_state: stage.runtime_state.as_str().to_string(),
         total_stages: stage.total_stages as u32,
@@ -575,6 +582,7 @@ pub async fn get_stage_execution(
                         .stage_id
                         .clone()
                         .unwrap_or_else(|| stage_id_for_index(index)),
+                    antenna_solve_stage_id: record.antenna_solve_stage_id.clone(),
                     index: index as u32,
                     label: Some(format!("Stage {}", index + 1)),
                     kind,
@@ -627,6 +635,10 @@ pub async fn get_stage_execution(
                     current_settle_step_index: record.current_settle_step_index,
                     current_settle_step_kind: record.current_settle_step_kind.clone(),
                     current_settle_step_method: record.current_settle_step_method.clone(),
+                    parallel_execution: record
+                        .parallel_execution
+                        .as_ref()
+                        .map(ParallelExecutionTelemetryResource::from),
                 }
             })
             .collect(),
@@ -1400,11 +1412,7 @@ async fn resolve_hysteresis_stage_progress(
             continue;
         }
 
-        let record_kind = record.kind.as_deref();
-        let active_stage_kind = stage_kind_for_index(stage_execution, index);
-        if !is_hysteresis_stage_kind(record_kind)
-            && !is_hysteresis_stage_kind(active_stage_kind.as_deref())
-        {
+        if !is_hysteresis_stage_at(stage_execution, index, record) {
             return Err(ApiError::not_found(format!(
                 "stage '{}' is not a hysteresis stage",
                 stage_id
@@ -1439,10 +1447,6 @@ async fn resolve_hysteresis_stage_progress(
         "hysteresis stage '{}' not found",
         stage_id
     )))
-}
-
-fn is_hysteresis_stage_kind(kind: Option<&str>) -> bool {
-    matches!(kind, Some("hysteresis" | "flat_hysteresis"))
 }
 
 fn enrich_hysteresis_progress_counts(
@@ -1483,6 +1487,9 @@ async fn attach_hysteresis_live_magnetization(
     let Some(snapshot) = guard.as_ref() else {
         return;
     };
+    if crate::session::has_nonphysical_latest_step(snapshot) {
+        return;
+    }
     let m_avg = snapshot
         .live_state
         .as_ref()
@@ -1492,7 +1499,9 @@ async fn attach_hysteresis_live_magnetization(
         .or_else(|| {
             snapshot
                 .scalar_rows
-                .last()
+                .iter()
+                .rev()
+                .find(|row| row.is_physical_observation())
                 .map(|row| [row.mx, row.my, row.mz])
         });
     let Some(m_avg) = m_avg else {
@@ -1740,12 +1749,14 @@ pub async fn get_solver_status(
     crate::ensure_current_live_request_context(
         snapshot,
         &request_context,
-        state
-            .current_live_session_epoch
-            .load(std::sync::atomic::Ordering::Acquire),
+        state.current_live_session_epoch.load(std::sync::atomic::Ordering::Acquire),
     )?;
-    let latest = snapshot.live_state.as_ref().map(|value| &value.latest_step);
-    let latest_scalar_row = snapshot.scalar_rows.last();
+    let latest = snapshot.live_state.as_ref().map(|value| &value.latest_step)
+        .filter(|step| step.is_physical_observation());
+    let latest_scalar_row = (!crate::session::has_nonphysical_latest_step(snapshot))
+        .then(|| snapshot.scalar_rows.iter().rev()
+            .find(|row| row.is_physical_observation()))
+        .flatten();
     let runtime_status = build_runtime_status_view(&effective_runtime_status_code(snapshot));
     let mut warnings = material_field_plan_warnings(snapshot.metadata.as_ref());
     for warning in snapshot
@@ -1907,14 +1918,16 @@ pub async fn get_solver_energies_history(
             .load(std::sync::atomic::Ordering::Acquire),
     )?;
 
-    let total_rows = snapshot.scalar_rows.len();
-    let rows = match query.limit {
-        Some(limit) => {
-            let start = total_rows.saturating_sub(limit);
-            &snapshot.scalar_rows[start..]
-        }
-        None => snapshot.scalar_rows.as_slice(),
-    };
+    let physical_rows: Vec<&ScalarRow> = snapshot
+        .scalar_rows
+        .iter()
+        .filter(|row| row.is_physical_observation())
+        .collect();
+    let total_rows = physical_rows.len();
+    let start = query
+        .limit
+        .map_or(0, |limit| total_rows.saturating_sub(limit));
+    let rows = &physical_rows[start..];
 
     Ok(Json(SolverEnergyHistoryResource {
         revision: snapshot.scalar_revision,
@@ -2516,37 +2529,52 @@ pub async fn get_command_detail(
 }
 
 fn latest_energy_row(snapshot: &SessionStateResponse) -> Option<ScalarRow> {
-    snapshot.scalar_rows.last().cloned().or_else(|| {
-        snapshot.live_state.as_ref().map(|live_state| ScalarRow {
-            observation_frame: None,
-            step: live_state.latest_step.step,
-            time: live_state.latest_step.time,
-            solver_dt: live_state.latest_step.dt,
-            error_estimate: None,
-            max_error: None,
-            dt_suggested: None,
-            rejected_attempts: 0,
-            pseudo_time_s: live_state.latest_step.pseudo_time_s,
-            active_runtime_s: Some(live_state.latest_step.wall_time_ns as f64 * 1.0e-9),
-            mx: 0.0,
-            my: 0.0,
-            mz: 0.0,
-            e_ex: live_state.latest_step.e_ex,
-            e_demag: live_state.latest_step.e_demag,
-            e_ext: live_state.latest_step.e_ext,
-            e_ani: live_state.latest_step.e_ani,
-            e_dmi: live_state.latest_step.e_dmi,
-            e_rotated_dmi: Some(live_state.latest_step.e_rotated_dmi),
-            e_total: live_state.latest_step.e_total,
-            max_dm_dt: live_state.latest_step.max_dm_dt,
-            max_h_eff: live_state.latest_step.max_h_eff,
-            max_h_demag: live_state.latest_step.max_h_demag,
-            max_torque_Apm: live_state.latest_step.max_torque_Apm,
-            max_torque_T: live_state.latest_step.max_torque_T,
-            per_object_scalars: live_state.latest_step.per_object_scalars.clone(),
-            table_expressions: Vec::new(),
+    if crate::session::has_nonphysical_latest_step(snapshot) {
+        return None;
+    }
+    snapshot
+        .scalar_rows
+        .iter()
+        .rev()
+        .find(|row| row.is_physical_observation())
+        .cloned()
+        .or_else(|| {
+            snapshot
+                .live_state
+                .as_ref()
+                .filter(|live_state| live_state.latest_step.is_physical_observation())
+                .map(|live_state| ScalarRow {
+                    kind: live_state.latest_step.kind.clone(),
+                    solver_progress: live_state.latest_step.solver_progress.clone(),
+                    observation_frame: None,
+                    step: live_state.latest_step.step,
+                    time: live_state.latest_step.time,
+                    solver_dt: live_state.latest_step.dt,
+                    error_estimate: None,
+                    max_error: None,
+                    dt_suggested: None,
+                    rejected_attempts: 0,
+                    pseudo_time_s: live_state.latest_step.pseudo_time_s,
+                    active_runtime_s: Some(live_state.latest_step.wall_time_ns as f64 * 1.0e-9),
+                    mx: 0.0,
+                    my: 0.0,
+                    mz: 0.0,
+                    e_ex: live_state.latest_step.e_ex,
+                    e_demag: live_state.latest_step.e_demag,
+                    e_ext: live_state.latest_step.e_ext,
+                    e_ani: live_state.latest_step.e_ani,
+                    e_dmi: live_state.latest_step.e_dmi,
+                    e_rotated_dmi: Some(live_state.latest_step.e_rotated_dmi),
+                    e_total: live_state.latest_step.e_total,
+                    max_dm_dt: live_state.latest_step.max_dm_dt,
+                    max_h_eff: live_state.latest_step.max_h_eff,
+                    max_h_demag: live_state.latest_step.max_h_demag,
+                    max_torque_Apm: live_state.latest_step.max_torque_Apm,
+                    max_torque_T: live_state.latest_step.max_torque_T,
+                    per_object_scalars: live_state.latest_step.per_object_scalars.clone(),
+                    table_expressions: Vec::new(),
+                })
         })
-    })
 }
 
 fn latest_object_scalars<'a>(
@@ -2554,7 +2582,11 @@ fn latest_object_scalars<'a>(
     object_id: &str,
     object_name: &str,
 ) -> Option<&'a HashMap<String, f64>> {
-    let per_object = &snapshot.live_state.as_ref()?.latest_step.per_object_scalars;
+    let latest_step = &snapshot.live_state.as_ref()?.latest_step;
+    if !latest_step.is_physical_observation() {
+        return None;
+    }
+    let per_object = &latest_step.per_object_scalars;
     let get_fallback = |id: &str| {
         per_object.get(id).or_else(|| {
             if id.ends_with("_geom") {
@@ -4089,15 +4121,107 @@ fn hysteresis_invalidation_stage_id(
     stage_linkage: Option<&CommandStageLinkage>,
 ) -> Option<String> {
     let stage_execution = snapshot.stage_execution.as_ref()?;
+    hysteresis_invalidation_stage_id_from_execution(stage_execution, stage_linkage)
+}
+
+fn hysteresis_invalidation_stage_id_from_execution(
+    stage_execution: &StageExecutionState,
+    stage_linkage: Option<&CommandStageLinkage>,
+) -> Option<String> {
     let linkage = stage_linkage?;
     let stage_index = linkage.stage_index? as usize;
     let stage_record = stage_execution.stages.get(stage_index)?;
-    if is_hysteresis_stage_kind(stage_record.kind.as_deref())
-        || is_hysteresis_stage_kind(stage_execution.active_stage_kind.as_deref())
-    {
+    if is_hysteresis_stage_at(stage_execution, stage_index, stage_record) {
         return linkage.stage_id.clone();
     }
     None
+}
+
+#[cfg(test)]
+mod hysteresis_invalidation_tests {
+    use super::{hysteresis_invalidation_stage_id_from_execution, CommandStageLinkage};
+    use crate::types::{RuntimeLifecycleState, StageExecutionState, StageLifecycleState};
+
+    fn stage_record(
+        stage_id: &str,
+        kind: Option<&str>,
+        status: StageLifecycleState,
+    ) -> crate::types::StageExecutionRecord {
+        serde_json::from_value(serde_json::json!({
+            "stage_id": stage_id,
+            "kind": kind,
+            "status": status.as_str(),
+        }))
+        .expect("stage execution fixture")
+    }
+
+    fn stage_execution(
+        stages: Vec<crate::types::StageExecutionRecord>,
+        active_stage_index: Option<usize>,
+        active_stage_kind: Option<&str>,
+    ) -> StageExecutionState {
+        StageExecutionState {
+            total_stages: stages.len(),
+            completed_stage_indexes: Vec::new(),
+            stages,
+            stage_statuses: Vec::new(),
+            active_stage_index,
+            active_stage_kind: active_stage_kind.map(str::to_string),
+            runtime_state: RuntimeLifecycleState::Running,
+        }
+    }
+
+    fn linkage(stage_index: u32) -> CommandStageLinkage {
+        CommandStageLinkage {
+            stage_id: Some(format!("stage-{stage_index:03}")),
+            stage_index: Some(stage_index),
+            started_at_unix_ms: None,
+            applied_step: None,
+            applied_time_seconds: None,
+            segment_id: None,
+            completed_at_unix_ms: None,
+            artifact_refs: Vec::new(),
+            checkpoint_ref: None,
+            loaded_state_ref: None,
+            resume_from_checkpoint_ref: None,
+            state_transition: None,
+        }
+    }
+
+    #[test]
+    fn invalidation_does_not_follow_hysteresis_kind_from_a_different_active_stage() {
+        let stage_execution = stage_execution(
+            vec![
+                stage_record("stage-000", None, StageLifecycleState::Running),
+                stage_record("stage-001", None, StageLifecycleState::Running),
+            ],
+            Some(1),
+            Some("flat_hysteresis"),
+        );
+
+        assert_eq!(
+            hysteresis_invalidation_stage_id_from_execution(&stage_execution, Some(&linkage(0))),
+            None
+        );
+    }
+
+    #[test]
+    fn invalidation_rejects_explicit_relax_kind_with_active_hysteresis_kind() {
+        let stage_execution = stage_execution(
+            vec![stage_record(
+                "stage-000",
+                Some("relax"),
+                StageLifecycleState::Running,
+            )],
+            Some(0),
+            Some("flat_hysteresis"),
+        );
+
+        assert_eq!(
+            hysteresis_invalidation_stage_id_from_execution(&stage_execution, Some(&linkage(0))),
+            None
+        );
+    }
 }
 
 fn push_hysteresis_command_invalidations(

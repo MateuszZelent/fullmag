@@ -40,6 +40,8 @@ import {
 } from "./modelRootNodes";
 import {
   buildPhysicsFirstResultsTree,
+  withCatalogAnalysisFamilies,
+  withPinnedAnalysisDefinitions,
   physicsFirstResultsSnapshotFromResources,
 } from "./resultsExplorerNodes";
 
@@ -204,7 +206,14 @@ export function buildExplorerTree(
       artifacts: resources.artifacts,
       tableCatalog: resources.tableCatalog,
     });
-    return buildPhysicsFirstResultsTree(adapted.snapshot);
+    return withPinnedAnalysisDefinitions(
+      withCatalogAnalysisFamilies(
+        buildPhysicsFirstResultsTree(adapted.snapshot),
+        resources.analysisDatasets ?? [],
+        resources.analysisDefinitions ?? [],
+      ),
+      resources.analysisDefinitions ?? [],
+    );
   }
   if (tabId === "jobs") return buildRuntimeJobTree(runtime?.jobs);
 

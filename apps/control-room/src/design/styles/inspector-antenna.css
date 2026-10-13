@@ -1,0 +1,55 @@
+.fm-antenna-inspection .fm-inspector-field-row {
+  align-items: start;
+  padding-block: var(--fm-space-1);
+}
+
+.fm-antenna-inspection .fm-inspector-field-row__label,
+.fm-antenna-inspection .fm-inspector-field-row__value {
+  overflow: visible;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.fm-antenna-inspection .fm-inspector-field-row__value {
+  display: block;
+  text-align: right;
+}
+
+.fm-antenna-inspection .fm-inspector-field-row__value small {
+  margin-inline-start: var(--fm-space-1);
+}
+
+.fm-antenna-inspection [data-testid="antenna-inspection-sample-preview"] {
+  display: grid;
+  gap: var(--fm-space-2);
+}
+
+.fm-antenna-inspection .fm-antenna-field-preview__sample {
+  min-block-size: calc(var(--fm-control-height-regular) * 2 + var(--fm-space-2));
+}
+
+.fm-antenna-inspection__status {
+  min-block-size: calc(var(--fm-font-size-xs) * 1.4 * 2);
+  margin: 0;
+  font-size: var(--fm-font-size-xs);
+  line-height: 1.4;
+}
+
+.fm-antenna-inspection__execution-select {
+  min-width: 0;
+  height: auto;
+  min-height: var(--fm-control-height-regular);
+  text-align: left;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.fm-antenna-inspection__execution-select > span {
+  min-width: 0;
+}
+
+.fm-antenna-inspection__execution-options {
+  max-width: min(var(--radix-select-trigger-width), calc(100vw - var(--fm-space-8)));
+  white-space: normal;
+  overflow-wrap: anywhere;
+}

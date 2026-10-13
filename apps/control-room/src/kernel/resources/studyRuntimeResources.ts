@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 
 import {
   ANALYSIS_FREQUENCY_DOMAIN_EIGEN_BRANCHES_V2_PATH,
@@ -76,6 +76,12 @@ import {
   SIMULATION_STAGES_EXECUTION_PATH,
 } from "../api/apiPaths";
 import { ControlRoomApiError } from "../api/ControlRoomApi";
+import {
+  hasSessionActiveLaneDeclaration,
+  projectFlatActiveLaneDiscretization,
+  resolveSessionDiscretization,
+  type SessionDiscretizationCapabilitiesProjection,
+} from "./sessionDiscretization";
 import type {
   BinaryResourceResult,
   ArtifactResource,
@@ -162,6 +168,7 @@ import {
   useSessionStatusSelector,
 } from "./useSessionStatus";
 import { emitResourceLoadFailed } from "./resourceLoadFailure";
+import type { ResourceResult } from "./resourceTypes";
 import type { ResourceRetryPolicy } from "./ResourceRuntimeStore";
 import { useResource } from "./useResource";
 import { useSessionScopedResourceKey } from "./useSessionScopedResourceKey";
@@ -175,6 +182,15 @@ export function ignoreMissingResource<T>(error: unknown): T | null {
     return null;
   }
   throw error;
+}
+
+function shouldNotifyMeshPeriodicPairsFailure(error: unknown): boolean {
+  return !(
+    error &&
+    typeof error === "object" &&
+    "name" in error &&
+    (error as { name?: unknown }).name === "TimeoutError"
+  );
 }
 
 function ignoreMissingFieldMetaResource<T>({
@@ -259,7 +275,7 @@ type StudyRuntimeCommandSessionStatus = {
   capabilities: Pick<
     LiveStatusResource["capabilities"],
     "binary_fields" | "explicit_topology"
-  >;
+  > & SessionDiscretizationCapabilitiesProjection;
   domain: Pick<LiveStatusResource["domain"], "discretization">;
   resources: Pick<
     LiveStatusResource["resources"],
@@ -281,11 +297,23 @@ export function selectStudyRuntimeCommandSessionStatus(status: {
   data: LiveStatusResource | null;
 }): StudyRuntimeCommandSessionStatus | null {
   if (!status.data) return null;
+  const capabilities: StudyRuntimeCommandSessionStatus["capabilities"] = {
+    binary_fields: status.data.capabilities?.binary_fields ?? false,
+    explicit_topology: status.data.capabilities?.explicit_topology ?? false,
+  };
+  const sourceCapabilities = status.data.capabilities;
+  const flatLane = projectFlatActiveLaneDiscretization(sourceCapabilities);
+  if (
+    Object.prototype.hasOwnProperty.call(
+      sourceCapabilities ?? {},
+      "active_lane",
+    )
+  ) {
+    capabilities.active_lane = sourceCapabilities?.active_lane ?? null;
+  }
+  if (flatLane) capabilities.active_lane_discretization = flatLane.value;
   return {
-    capabilities: {
-      binary_fields: status.data.capabilities.binary_fields,
-      explicit_topology: status.data.capabilities.explicit_topology,
-    },
+    capabilities,
     domain: {
       discretization: status.data.domain.discretization,
     },
@@ -316,6 +344,20 @@ export function studyRuntimeCommandSessionStatusEquals(
   if (previous === next) return true;
   if (!previous || !next) return previous === next;
   return (
+    Object.prototype.hasOwnProperty.call(previous.capabilities, "active_lane") ===
+      Object.prototype.hasOwnProperty.call(next.capabilities, "active_lane") &&
+    previous.capabilities.active_lane?.resolved?.discretization ===
+      next.capabilities.active_lane?.resolved?.discretization &&
+    Object.prototype.hasOwnProperty.call(
+      previous.capabilities,
+      "active_lane_discretization",
+    ) ===
+      Object.prototype.hasOwnProperty.call(
+        next.capabilities,
+        "active_lane_discretization",
+      ) &&
+    previous.capabilities.active_lane_discretization ===
+      next.capabilities.active_lane_discretization &&
     previous.capabilities.binary_fields === next.capabilities.binary_fields &&
     previous.capabilities.explicit_topology ===
       next.capabilities.explicit_topology &&
@@ -350,6 +392,30 @@ export function runtimeCommandControlSessionStatusEquals(
 ): boolean {
   if (previous === next) return true;
   if (!previous || !next) return previous === next;
+  const previousCapabilities = previous.capabilities as
+    LiveStatusResource["capabilities"] & SessionDiscretizationCapabilitiesProjection;
+  const nextCapabilities = next.capabilities as
+    LiveStatusResource["capabilities"] & SessionDiscretizationCapabilitiesProjection;
+  if (
+    Object.prototype.hasOwnProperty.call(
+      previousCapabilities,
+      "active_lane",
+    ) !==
+      Object.prototype.hasOwnProperty.call(nextCapabilities, "active_lane") ||
+    resolveSessionDiscretization(previous) !==
+      resolveSessionDiscretization(next)
+  ) {
+    return false;
+  }
+  const previousFlatLane =
+    projectFlatActiveLaneDiscretization(previousCapabilities);
+  const nextFlatLane = projectFlatActiveLaneDiscretization(nextCapabilities);
+  if (
+    Boolean(previousFlatLane) !== Boolean(nextFlatLane) ||
+    previousFlatLane?.value !== nextFlatLane?.value
+  ) {
+    return false;
+  }
   if (previous.capabilities.binary_fields !== next.capabilities.binary_fields) {
     return false;
   }
@@ -451,10 +517,7 @@ export function shouldLoadRuntimeMeshManifest(
         capabilities: Pick<
           LiveStatusResource["capabilities"],
           "explicit_topology"
-        > & {
-          active_lane_discretization?: string | null;
-          active_lane?: LiveStatusResource["capabilities"]["active_lane"] | null;
-        };
+        > & SessionDiscretizationCapabilitiesProjection;
         domain: Pick<LiveStatusResource["domain"], "discretization">;
         resources: Pick<LiveStatusResource["resources"], "mesh_revision"> &
           Partial<
@@ -465,26 +528,11 @@ export function shouldLoadRuntimeMeshManifest(
     | undefined,
 ): boolean {
   if (!enabled || !status) return false;
-  const hasActiveLaneDiscretization = Object.prototype.hasOwnProperty.call(
-    status.capabilities,
-    "active_lane_discretization",
-  );
-  const hasActiveLane = Object.prototype.hasOwnProperty.call(
-    status.capabilities,
-    "active_lane",
-  );
-  const activeLaneDiscretization = hasActiveLaneDiscretization
-    ? status.capabilities.active_lane_discretization
-    : hasActiveLane
-      ? status.capabilities.active_lane?.resolved?.discretization ?? null
-      : undefined;
-  const laneDiscretization =
-    activeLaneDiscretization !== undefined
-      ? activeLaneDiscretization
-      : status.domain.discretization;
-  const requiresSharedDomain =
-    status.capabilities.explicit_topology ||
-    laneDiscretization?.toLowerCase() === "fem";
+  const laneDeclared = hasSessionActiveLaneDeclaration(status);
+  const lane = resolveSessionDiscretization(status);
+  const requiresSharedDomain = laneDeclared
+    ? lane === "fem"
+    : status.capabilities.explicit_topology || lane === "fem";
   return (
     requiresSharedDomain &&
     (hasPositiveRevision(status.resources.mesh_revision) ||
@@ -580,8 +628,13 @@ export function frequencyDomainSweepProgressRevision(
     : null;
 }
 
+type FrequencyDomainArtifactGenerationMetadata = Pick<
+  FrequencyDomainJsonArtifactResource,
+  "generation_id" | "generation_status"
+>;
+
 export function frequencyDomainTextArtifactRevision(
-  data: FrequencyDomainTextArtifactResource | null,
+  data: (FrequencyDomainTextArtifactResource & FrequencyDomainArtifactGenerationMetadata) | null,
 ): string | null {
   if (!data) return null;
   const text = data.text ?? "";
@@ -590,23 +643,34 @@ export function frequencyDomainTextArtifactRevision(
     checksum = Math.imul(31, checksum) + text.charCodeAt(index);
     checksum >>>= 0;
   }
-  return [
+  return JSON.stringify([
     data.schema_version,
     data.status,
     data.artifact_path,
     data.resource_key,
     data.content_type,
+    data.revision ?? "",
+    data.content_digest ?? "",
+    data.artifact_set_id ?? "",
+    data.session_id ?? "",
+    data.run_id ?? "",
+    data.stage_id ?? "",
+    data.mesh_generation_id ?? "",
+    data.generation_id ?? "",
+    data.generation_status ?? "",
     data.path_metadata == null ? "" : JSON.stringify(data.path_metadata),
     data.missing_reason ?? "",
     text.length,
     checksum.toString(16),
-  ].join("|");
+  ]);
 }
 
 export function frequencyDomainJsonArtifactRevision(
   data: Pick<
     FrequencyDomainJsonArtifactResource,
     | "artifact_path"
+    | "artifact_set_id"
+    | "session_id"
     | "content_digest"
     | "mesh_generation_id"
     | "missing_reason"
@@ -614,19 +678,23 @@ export function frequencyDomainJsonArtifactRevision(
     | "run_id"
     | "stage_id"
     | "status"
-  > | null,
+  > & FrequencyDomainArtifactGenerationMetadata | null,
 ): string | null {
   if (!data) return null;
-  return [
+  return JSON.stringify([
     data.status,
     data.artifact_path,
+    data.artifact_set_id ?? "",
+    data.session_id ?? "",
     data.revision ?? "",
     data.content_digest ?? "",
     data.run_id ?? "",
     data.stage_id ?? "",
     data.mesh_generation_id ?? "",
+    data.generation_id ?? "",
+    data.generation_status ?? "",
     data.missing_reason ?? "",
-  ].join(":");
+  ]);
 }
 
 export function frequencyDomainFieldRevision(
@@ -795,27 +863,213 @@ export function useResultContextRunResource(
   });
 }
 
+export interface StageExecutionSessionIdentity {
+  runId: string | null;
+  sessionEpoch: string;
+  sessionId: string;
+}
+
+type StageExecutionSessionStatus = Pick<
+  ResourceResult<LiveStatusResource>,
+  "data" | "status"
+>;
+
+function nonEmptyStageExecutionIdentityValue(value: unknown): string | null {
+  return typeof value === "string" && value.trim().length > 0 ? value : null;
+}
+
+export function selectStageExecutionSessionIdentity(
+  status: StageExecutionSessionStatus,
+): StageExecutionSessionIdentity | null {
+  // A retained status snapshot keeps its last-good identity during refresh failure;
+  // the stage payload is still exposed only after an exact tuple match.
+  if (
+    !status.data ||
+    (status.status !== "ready" && status.status !== "stale" &&
+      status.status !== "error")
+  ) return null;
+
+  const sessionId = nonEmptyStageExecutionIdentityValue(
+    status.data.session?.session_id,
+  );
+  const sessionEpoch = nonEmptyStageExecutionIdentityValue(
+    status.data.session?.session_epoch,
+  );
+  if (!sessionId || !sessionEpoch) return null;
+
+  let runId: string | null;
+  if (status.data.run === null) {
+    runId = null;
+  } else {
+    runId = nonEmptyStageExecutionIdentityValue(status.data.run?.run_id);
+    if (!runId) return null;
+  }
+
+  return { runId, sessionEpoch, sessionId };
+}
+
+export function stageExecutionSessionIdentityEquals(
+  previous: StageExecutionSessionIdentity | null,
+  next: StageExecutionSessionIdentity | null,
+): boolean {
+  return (
+    previous === next ||
+    (previous !== null &&
+      next !== null &&
+      previous.runId === next.runId &&
+      previous.sessionEpoch === next.sessionEpoch &&
+      previous.sessionId === next.sessionId)
+  );
+}
+
+export function stageExecutionMatchesSessionIdentity(
+  stageExecution: StageExecutionResource | null,
+  identity: StageExecutionSessionIdentity | null,
+): boolean {
+  return (
+    stageExecution !== null &&
+    identity !== null &&
+    stageExecution.session_id === identity.sessionId &&
+    stageExecution.session_epoch === identity.sessionEpoch &&
+    stageExecution.run_id === identity.runId
+  );
+}
+
+function stageExecutionIdentityRefreshRevision(
+  identity: StageExecutionSessionIdentity,
+): string {
+  // This is a local cache invalidation token, separate from payload revision.
+  return `stage-execution-identity:${JSON.stringify([
+    identity.sessionId,
+    identity.sessionEpoch,
+    identity.runId,
+  ])}`;
+}
+
 export function useStageExecutionResource({
   enabled = true,
-}: RuntimeResourceOptions = {}) {
-  const { api } = useKernel();
-  const { resourceKey, sessionIdentity } = useSessionScopedResourceKey(
+}: RuntimeResourceOptions = {}): ResourceResult<StageExecutionResource | null> {
+  const { api, resources } = useKernel();
+  const { resourceKey, sessionIdentity: resourceSessionIdentity } = useSessionScopedResourceKey(
     SIMULATION_STAGES_EXECUTION_PATH,
   );
+  const sessionIdentity = useSessionStatusSelector(
+    selectStageExecutionSessionIdentity,
+    {
+      enabled: enabled && resourceSessionIdentity !== null,
+      isEqual: stageExecutionSessionIdentityEquals,
+    },
+  );
+  const requestedIdentityRef =
+    useRef<StageExecutionSessionIdentity | null>(null);
   const load = useCallback(
     ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) =>
       api.simulation.stages
         .execution({ sessionScopeKey, signal })
-        .catch(ignoreMissingResource<StageExecutionResource>),
-    [api],
+        .catch(ignoreMissingResource<StageExecutionResource>)
+        .then((data) => {
+          if (data !== null && sessionIdentity !== null &&
+              !stageExecutionMatchesSessionIdentity(data, sessionIdentity)) {
+            // A successful GET can race the server's run transition. Do not
+            // settle this external revision with another run's snapshot;
+            // the shared runtime applies its bounded materialization retry.
+            throw Object.assign(
+              new Error("Stage execution has not reached the current run identity"),
+              { code: "not_ready" },
+            );
+          }
+          return data;
+        }),
+    [api, sessionIdentity],
   );
 
-  return useResource<StageExecutionResource | null>({
-    enabled: enabled && sessionIdentity !== null,
+  const stageExecutionResource = useResource<StageExecutionResource | null>({
+    enabled: enabled && resourceSessionIdentity !== null && sessionIdentity !== null,
     load,
     resolveRevision: (data) => data?.revision ?? null,
     resourceKey,
   });
+  const {
+    data: stageExecutionData,
+    status: stageExecutionStatus,
+  } = stageExecutionResource;
+
+  useEffect(() => {
+    if (!sessionIdentity) return;
+
+    const readyDataMatches =
+      stageExecutionStatus === "ready" &&
+      stageExecutionMatchesSessionIdentity(
+        stageExecutionData,
+        sessionIdentity,
+      );
+    if (readyDataMatches) {
+      requestedIdentityRef.current = sessionIdentity;
+      return;
+    }
+
+    if (
+      !stageExecutionSessionIdentityEquals(
+        requestedIdentityRef.current,
+        sessionIdentity,
+      )
+    ) {
+      const firstIdentity = requestedIdentityRef.current === null;
+      requestedIdentityRef.current = sessionIdentity;
+      // Let useResource's normal, deduplicated loader satisfy the first
+      // unsettled identity. A settled cache can belong to another run, so
+      // advance the shared resource revision when it needs refreshing.
+      if (firstIdentity && stageExecutionStatus === "loading") return;
+      resources.invalidate(
+        resourceKey,
+        stageExecutionIdentityRefreshRevision(sessionIdentity),
+      );
+      return;
+    }
+
+    if (
+      stageExecutionStatus === "ready" &&
+      stageExecutionData !== null &&
+      !stageExecutionMatchesSessionIdentity(stageExecutionData, sessionIdentity)
+    ) {
+      resources.invalidate(
+        resourceKey,
+        stageExecutionIdentityRefreshRevision(sessionIdentity),
+      );
+    }
+  }, [
+    sessionIdentity,
+    stageExecutionData,
+    stageExecutionStatus,
+    resourceKey,
+    resources,
+  ]);
+
+  const stageExecutionStatusCanRetainData =
+    stageExecutionResource.status === "ready" ||
+    stageExecutionResource.status === "stale" ||
+    stageExecutionResource.status === "error";
+  const stageExecutionMatches =
+    sessionIdentity !== null &&
+    stageExecutionStatusCanRetainData &&
+    stageExecutionMatchesSessionIdentity(
+      stageExecutionResource.data,
+      sessionIdentity,
+    );
+  const readyDataMismatch =
+    sessionIdentity !== null &&
+    stageExecutionResource.status === "ready" &&
+    stageExecutionResource.data !== null &&
+    !stageExecutionMatchesSessionIdentity(
+      stageExecutionResource.data,
+      sessionIdentity,
+    );
+
+  return {
+    ...stageExecutionResource,
+    data: stageExecutionMatches ? stageExecutionResource.data : null,
+    status: readyDataMismatch ? "loading" : stageExecutionResource.status,
+  };
 }
 
 export function useArtifactsResource({
@@ -863,6 +1117,11 @@ export function useMeshPeriodicPairsResource({
   return useResource<MeshPeriodicPairsResource | null>({
     enabled: enabled && sessionIdentity !== null,
     load,
+    // Periodic pairs are an optional overlay. Keep the error state for
+    // degraded/unavailable consumers without turning its timeout into a
+    // viewport-wide resource failure notification. Other failures remain
+    // visible to the global error surface.
+    notifyOnError: shouldNotifyMeshPeriodicPairsFailure,
     resolveRevision: (data) => data?.revision ?? null,
     resourceKey,
   });

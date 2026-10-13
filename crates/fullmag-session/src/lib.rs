@@ -26,6 +26,7 @@ mod durability;
 mod development_owner;
 pub mod development_restart_transport;
 pub mod execution_profiles;
+pub mod frequency_domain_artifact_generation;
 pub mod fms;
 pub mod host_resource_ledger;
 pub mod mesh_operation;
@@ -65,7 +66,9 @@ pub use durability::{
     PublicationUncertain, WriterReleaseUnconfirmed,
 };
 pub use fms::{
-    inspect_fms, pack_fms, pack_fms_file, preflight_fms, preflight_fms_staged, unpack_fms, unpack_fms_staged, FmsPreflight, FmsStagedPreflight, PackOptions,
+    inspect_fms, pack_fms, pack_fms_file, preflight_fms, preflight_fms_staged,
+    unpack_fms, unpack_fms_for_visualization, unpack_fms_staged, FmsPreflight,
+    FmsStagedPreflight, PackOptions,
 };
 pub use store::{CheckpointStillReferenced, GcPlan, RunBacklogFull, SessionStore};
 pub use task_cancellation::{

@@ -532,10 +532,18 @@ export type ExplorerDomainLane = "fdm" | "fem" | "unresolved";
 export function resolveExplorerDomainLane(
   snapshot: ModelTreeSnapshot | null,
 ): ExplorerDomainLane {
-  if (isFdmDomain(snapshot?.domainPresentation) || snapshot?.domainDiscretization === "fdm") {
+  if (
+    snapshot &&
+    Object.prototype.hasOwnProperty.call(snapshot, "domainDiscretization")
+  ) {
+    if (snapshot.domainDiscretization === "fdm") return "fdm";
+    if (snapshot.domainDiscretization === "fem") return "fem";
+    return "unresolved";
+  }
+  if (isFdmDomain(snapshot?.domainPresentation)) {
     return "fdm";
   }
-  if (isFemDomain(snapshot?.domainPresentation) || snapshot?.domainDiscretization === "fem") {
+  if (isFemDomain(snapshot?.domainPresentation)) {
     return "fem";
   }
   return "unresolved";

@@ -31,6 +31,7 @@ import {
 } from "../api/apiPaths";
 import type {
   JsonObject,
+  SceneResource,
   RequestOptions,
   StructuredCommandRequest,
 } from "../api/apiTypes";
@@ -70,11 +71,16 @@ import {
 import { DEFAULT_RELAX_TORQUE_APM } from "@/shared/domain/physics/torqueUnits";
 import { regionRuntimeBlockerPrefix } from "@/shared/domain/region/regionCapabilityCatalog";
 import { createDefaultHysteresisStage } from "@/shared/domain/study/hysteresisDefaults";
+import { readStudyStageSource } from "@/shared/domain/study/studyStageSource";
 import {
   applyControlRoomUiState,
   exportControlRoomUiState,
 } from "../persistence/controlRoomUiState";
 import { SESSION_STATUS_RESOURCE_KEY } from "../resources/useSessionStatus";
+import {
+  hasSessionActiveLaneDeclaration,
+  resolveSessionAuthoringDiscretization,
+} from "../resources/sessionDiscretization";
 import {
   sessionRequestScopeKey,
   sessionResourceIdentityFromStatus,
@@ -92,6 +98,7 @@ import {
   materializeCurrentLivePreparation,
   requiresSharedDomainMeshForLivePreparation,
 } from "./livePreparationMaterialization";
+import { addAntennaFieldSolveStudyCommand } from "./antennaFieldSolveStudyCommand";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -615,11 +622,11 @@ function meshReadyStatus(status: string): boolean {
   );
 }
 
-function requiresExplicitMesh(status: LiveStatusResource): boolean {
-  return (
-    status.capabilities.explicit_topology ||
-    status.domain.discretization.toLowerCase() === "fem"
-  );
+export function requiresExplicitMesh(status: LiveStatusResource): boolean {
+  const lane = resolveSessionAuthoringDiscretization(status);
+  return hasSessionActiveLaneDeclaration(status)
+    ? lane === "fem"
+    : status.capabilities.explicit_topology || lane === "fem";
 }
 
 function asRecord(value: unknown): JsonRecord | null {
@@ -1767,6 +1774,13 @@ function invalidateStudyAuthoringResources(
   context.resources?.invalidate(SIMULATION_STAGES_EXECUTION_PATH, revision);
 }
 
+function flatStageEditingReason(scene: unknown): string | null {
+  const study = scene && typeof scene === "object" ? (scene as { study?: { study_pipeline?: unknown } }).study : undefined;
+  const source = readStudyStageSource(study);
+  return source.kind === "flat" ? null : source.error
+    ?? "This scene uses a canonical pipeline. Flat-stage insertion/removal is unavailable; no dormant stages will be written.";
+}
+
 function addStageCommand(
   id: string,
   title: string,
@@ -1782,9 +1796,10 @@ function addStageCommand(
     scope: "workspace",
     isEnabled: (context) =>
       isApiAvailable(context) &&
+      flatStageEditingReason(resourceData<SceneResource>(context, MODEL_SCENE_PATH)) === null &&
       (capabilityDisabledReason?.(context) ?? null) === null,
     disabledReason: (context) =>
-      disabledWithoutApi(context) ?? capabilityDisabledReason?.(context) ?? null,
+      disabledWithoutApi(context) ?? flatStageEditingReason(resourceData<SceneResource>(context, MODEL_SCENE_PATH)) ?? capabilityDisabledReason?.(context) ?? null,
     run: async (context) => {
       if (!context.api) {
         return { message: "Control-room API is unavailable.", status: "failed" };
@@ -1809,6 +1824,8 @@ function addStageCommand(
             };
           }
           const currentStages = studyStages(scene);
+          const editingReason = flatStageEditingReason(scene);
+          if (editingReason) return { message: editingReason, status: "failed" };
           const addedStage = stageWithDefaultId(stage, currentStages.length);
           const nextStages = [...currentStages, addedStage];
           const response = await context.api!.model.commitTransaction(
@@ -1950,9 +1967,12 @@ function removeSelectedStageCommand(): CommandContribution {
     group: "study-authoring",
     scope: "selection",
     isEnabled: (context) =>
-      Boolean(context.api) && selectedStageIndex(context) !== null,
+      Boolean(context.api) && selectedStageIndex(context) !== null
+      && flatStageEditingReason(resourceData<SceneResource>(context, MODEL_SCENE_PATH)) === null,
     disabledReason: (context) => {
       if (!context.api) return "Control Room API is not available.";
+      const editingReason = flatStageEditingReason(resourceData<SceneResource>(context, MODEL_SCENE_PATH));
+      if (editingReason) return editingReason;
       return selectedStageIndex(context) === null
         ? "Select a study stage to remove it."
         : null;
@@ -1987,6 +2007,8 @@ function removeSelectedStageCommand(): CommandContribution {
             };
           }
           const stages = studyStages(scene);
+          const editingReason = flatStageEditingReason(scene);
+          if (editingReason) return { message: editingReason, status: "failed" };
           const targetIndex = selectedId
             ? stages.findIndex((stage) => stage.stage_id === selectedId)
             : index;
@@ -2149,6 +2171,7 @@ function studyNavigationCommand(
 }
 
 export const STUDY_RUNTIME_COMMANDS: CommandContribution[] = [
+  addAntennaFieldSolveStudyCommand,
   studyNavigationCommand(
     "study.open-overview",
     "Open Study Overview",
@@ -2172,9 +2195,9 @@ export const STUDY_RUNTIME_COMMANDS: CommandContribution[] = [
   ),
   addStageCommand(
     "study.add-field-drive-stage",
-    "Add Antenna Stage",
+    "Add Field Drive Stage",
     DEFAULT_ADD_FIELD_DRIVE_STAGE,
-    "Antenna instruction added.",
+    "Field-drive instruction added; no conductor/current solve was requested.",
   ),
   addStageCommand(
     "study.add-table-autosave-stage",

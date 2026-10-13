@@ -400,6 +400,8 @@ pub(crate) fn live_state_manifest_from_update(
         runtime_status: Some(fullmag_runner::RuntimeStatus::from_status_code(status_str)),
         updated_at_unix_ms: unix_time_millis().unwrap_or(0),
         latest_step: LiveStepView {
+            kind: update.stats.kind.clone(),
+            solver_progress: update.stats.solver_progress.clone(),
             step: update.stats.step,
             time: update.stats.time,
             dt: update.stats.dt,
@@ -435,6 +437,7 @@ pub(crate) fn running_run_manifest_from_update(
     artifact_dir: &Path,
     update: &fullmag_runner::StepUpdate,
 ) -> RunManifest {
+    let physical = update.stats.is_physical_observation();
     RunManifest {
         run_id: run_id.to_string(),
         session_id: session_id.to_string(),
@@ -443,15 +446,21 @@ pub(crate) fn running_run_manifest_from_update(
         } else {
             "running".to_string()
         },
-        total_steps: update.stats.step as usize,
-        final_time: Some(update.stats.time),
-        final_e_ex: Some(update.stats.e_ex),
-        final_e_demag: Some(update.stats.e_demag),
-        final_e_ext: Some(update.stats.e_ext),
-        final_e_ani: Some(update.stats.e_ani),
-        final_e_dmi: Some(update.stats.e_dmi),
-        final_e_rotated_dmi: Some(update.stats.e_rotated_dmi),
-        final_e_total: Some(update.stats.e_total),
+        // Modal iteration/phase counters belong to progress diagnostics, not
+        // the number of accepted physical time-integration steps.
+        total_steps: if physical {
+            update.stats.step as usize
+        } else {
+            0
+        },
+        final_time: physical.then_some(update.stats.time),
+        final_e_ex: physical.then_some(update.stats.e_ex),
+        final_e_demag: physical.then_some(update.stats.e_demag),
+        final_e_ext: physical.then_some(update.stats.e_ext),
+        final_e_ani: physical.then_some(update.stats.e_ani),
+        final_e_dmi: physical.then_some(update.stats.e_dmi),
+        final_e_rotated_dmi: physical.then_some(update.stats.e_rotated_dmi),
+        final_e_total: physical.then_some(update.stats.e_total),
         artifact_dir: artifact_dir.display().to_string(),
     }
 }
@@ -476,6 +485,9 @@ pub(crate) fn initial_step_update(
     };
 
     match backend_plan {
+        BackendPlanIR::AntennaExternalLeadInspection(_) => {
+            antenna_inspection_step_update(stats, false)
+        }
         BackendPlanIR::Fdm(fdm) => fullmag_runner::StepUpdate {
             coupled_checkpoint: None,
             stats,
@@ -572,6 +584,29 @@ pub(crate) fn initial_step_update(
     }
 }
 
+fn antenna_inspection_step_update(
+    stats: fullmag_runner::StepStats,
+    finished: bool,
+) -> fullmag_runner::StepUpdate {
+    fullmag_runner::StepUpdate {
+        coupled_checkpoint: None,
+        stats,
+        grid: [0, 0, 0],
+        fem_mesh_generation_id: None,
+        magnetization: None,
+        preview_field: None,
+        cached_preview_fields: None,
+        hysteresis_field_m_t: None,
+        hysteresis_point_index: None,
+        hysteresis_settle_step_index: None,
+        hysteresis_settle_step_kind: None,
+        hysteresis_settle_step_method: None,
+        scalar_row_due: false,
+        terminal_field_snapshot: false,
+        finished,
+    }
+}
+
 fn initial_frequency_response_progress_scalars(
     fem: &fullmag_ir::FemFrequencyResponsePlanIR,
 ) -> std::collections::HashMap<String, std::collections::HashMap<String, f64>> {
@@ -636,6 +671,9 @@ pub(crate) fn final_stage_step_update(
         .expect("single step should offset");
 
     Some(match backend_plan {
+        BackendPlanIR::AntennaExternalLeadInspection(_) => {
+            antenna_inspection_step_update(stats, finished)
+        }
         BackendPlanIR::Fdm(fdm) => fullmag_runner::StepUpdate {
             coupled_checkpoint: checkpoint,
             stats,
@@ -736,6 +774,9 @@ pub(crate) fn snapshot_step_update_from_stats(
     finished: bool,
 ) -> fullmag_runner::StepUpdate {
     match backend_plan {
+        BackendPlanIR::AntennaExternalLeadInspection(_) => {
+            antenna_inspection_step_update(stats, finished)
+        }
         BackendPlanIR::Fdm(fdm) => fullmag_runner::StepUpdate {
             coupled_checkpoint: None,
             stats,
@@ -838,6 +879,18 @@ pub(crate) fn materialize_script_stages(
     )
 }
 
+pub(crate) fn requires_antenna_lead_materialization(config: &ScriptExecutionConfig) -> bool {
+    std::iter::once(&config.ir)
+        .chain(config.stages.iter().map(|stage| &stage.ir))
+        .any(|ir| {
+            ir.current_modules.iter().any(|module| {
+                matches!(module, fullmag_ir::CurrentModuleIR::CurrentTransport {
+                    definition: Some(definition), ..
+                } if definition.external_lead_preparation.is_some())
+            })
+        })
+}
+
 fn reject_direct_minimizer_llg_command(
     algorithm: fullmag_ir::RelaxationAlgorithmIR,
     command: &crate::types::SessionCommand,
@@ -866,6 +919,39 @@ fn reject_direct_minimizer_llg_command(
             "relaxation algorithm '{}' is a direct minimizer and rejects LLG-only controls: {}",
             algorithm.as_str(),
             rejected.join(", ")
+        );
+    }
+    Ok(())
+}
+
+/// Validate a state import privately, without publishing or creating a runtime.
+pub(crate) fn validate_imported_magnetization(
+    base_problem: &ProblemIR,
+    magnetization: &[[f64; 3]],
+) -> Result<()> {
+    let mut candidate = base_problem.clone();
+    apply_continuation_initial_state(&mut candidate, magnetization)?;
+    let plan = fullmag_plan::plan(&candidate)
+        .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+    let expected_vectors = match &plan.backend_plan {
+        BackendPlanIR::AntennaExternalLeadInspection(_) => {
+            bail!("antenna inspection does not accept a magnetization import")
+        }
+        BackendPlanIR::Fdm(fdm) => fdm.initial_magnetization.len(),
+        BackendPlanIR::FdmMultilayer(fdm) => fdm
+            .layers
+            .iter()
+            .map(|layer| layer.initial_magnetization.len())
+            .sum(),
+        BackendPlanIR::Fem(fem) => fem.mesh.nodes.len(),
+        BackendPlanIR::FemEigen(fem) => fem.mesh.nodes.len(),
+        BackendPlanIR::FemFrequencyResponse(fem) => fem.mesh.nodes.len(),
+    };
+    if magnetization.len() != expected_vectors {
+        bail!(
+            "imported magnetization has {} vectors, but the resolved global flat carrier requires {} (length mismatch)",
+            magnetization.len(),
+            expected_vectors
         );
     }
     Ok(())
@@ -951,13 +1037,18 @@ pub(crate) fn apply_continuation_initial_state(
         return Ok(());
     }
 
+    let has_shared_domain = problem
+        .geometry_assets
+        .as_ref()
+        .and_then(|assets| assets.fem_domain_mesh_asset.as_ref())
+        .is_some();
     let shared_domain_node_count = problem
         .geometry_assets
         .as_ref()
         .and_then(|assets| assets.fem_domain_mesh_asset.as_ref())
         .and_then(|asset| asset.mesh.as_ref())
         .map(|mesh| mesh.nodes.len());
-    let planned_fem_node_count = if shared_domain_node_count.is_some() {
+    let planned_fem_node_count = if has_shared_domain {
         match planned_fem_mesh_node_count(problem) {
             Ok(node_count) => node_count,
             Err(_error) if shared_domain_node_count == Some(final_magnetization.len()) => None,
@@ -1015,7 +1106,9 @@ fn planned_fem_mesh_node_count(problem: &ProblemIR) -> Result<Option<usize>> {
         BackendPlanIR::Fem(fem) => Some(fem.mesh.nodes.len()),
         BackendPlanIR::FemEigen(fem) => Some(fem.mesh.nodes.len()),
         BackendPlanIR::FemFrequencyResponse(fem) => Some(fem.mesh.nodes.len()),
-        BackendPlanIR::Fdm(_) | BackendPlanIR::FdmMultilayer(_) => None,
+        BackendPlanIR::AntennaExternalLeadInspection(_)
+        | BackendPlanIR::Fdm(_)
+        | BackendPlanIR::FdmMultilayer(_) => None,
     })
 }
 
@@ -1075,6 +1168,9 @@ pub(crate) fn continuation_source_from_backend_plan(
     backend_plan: &BackendPlanIR,
 ) -> ContinuationSource {
     match backend_plan {
+        BackendPlanIR::AntennaExternalLeadInspection(_) => ContinuationSource::Unsupported(
+            "antenna inspection does not define a magnetic continuation carrier".to_string(),
+        ),
         BackendPlanIR::Fdm(plan) => match fdm_continuation_identity(plan) {
             Ok(identity) => ContinuationSource::Fdm(identity),
             Err(error) => ContinuationSource::Unsupported(error.to_string()),
@@ -1247,6 +1343,9 @@ pub(crate) fn resample_continuation_if_cross_backend(
         (ContinuationSource::Fem(_), BackendPlanIR::FdmMultilayer(_)) => {
             // Multi-layer FDM continuation from FEM is not yet supported.
             bail!("FEM → FDM-multilayer cross-backend continuation is not yet supported");
+        }
+        (_, BackendPlanIR::AntennaExternalLeadInspection(_)) => {
+            bail!("antenna inspection does not accept cross-backend magnetization transfer")
         }
         (ContinuationSource::Unsupported(_), _) => unreachable!(),
     }
@@ -1575,7 +1674,8 @@ pub(crate) fn build_interactive_command_stage(
             solve_command.kind = match &base_problem.study {
                 fullmag_ir::StudyIR::Relaxation { .. } => "relax".to_string(),
                 fullmag_ir::StudyIR::TimeEvolution { .. } => "run".to_string(),
-                fullmag_ir::StudyIR::Eigenmodes { .. }
+                fullmag_ir::StudyIR::AntennaFieldSolve { .. }
+                | fullmag_ir::StudyIR::Eigenmodes { .. }
                 | fullmag_ir::StudyIR::FrequencyResponse { .. }
                 | fullmag_ir::StudyIR::Hysteresis { .. } => {
                     anyhow::bail!("interactive 'solve' is not supported for this study kind")
@@ -1832,15 +1932,11 @@ pub(crate) fn bind_frozen_spins_replan_to_paused_command(
 pub(crate) fn build_resumable_interactive_command(
     command: &crate::types::SessionCommand,
     stage_result: &fullmag_runner::RunResult,
+    elapsed_seconds: f64,
 ) -> Option<crate::types::SessionCommand> {
     match command.kind.as_str() {
         "run" => {
             let requested_until_seconds = command.until_seconds?;
-            let elapsed_seconds = stage_result
-                .steps
-                .last()
-                .map(|step| step.time)
-                .unwrap_or(0.0);
             let remaining_until_seconds = (requested_until_seconds - elapsed_seconds).max(0.0);
             if remaining_until_seconds <= 0.0 {
                 return None;
@@ -2057,6 +2153,71 @@ mod tests {
             "until_seconds": 1e-12
         }))
         .expect("minimal solver command")
+    }
+
+    #[test]
+    fn antenna_field_solve_pipeline_uses_the_dedicated_planner_lane() {
+        let mut problem = sample_problem_ir();
+        problem.backend_policy.requested_backend = fullmag_ir::BackendTarget::Fdm;
+        let payload = BTreeMap::from([
+            ("stage_id".to_string(), json!("solve_antenna")),
+            ("port_mode_ids".to_string(), json!(["drive"])),
+        ]);
+        let config = ScriptExecutionConfig {
+            antenna_inventory: Default::default(),
+            ir: problem,
+            shared_geometry_assets: None,
+            default_until_seconds: None,
+            study_pipeline: Some(StudyPipelineDocument {
+                version: "study_pipeline.v1".to_string(),
+                nodes: vec![StudyPipelineNode::Primitive {
+                    id: "solve_antenna".to_string(),
+                    label: "Antenna field solve".to_string(),
+                    enabled: true,
+                    notes: None,
+                    source: None,
+                    stage_kind: "antenna_field_solve".to_string(),
+                    payload,
+                }],
+            }),
+            stages: vec![],
+        };
+        let error = materialize_script_stages(config)
+            .expect_err("FDM antenna precomputation must fail closed");
+        let message = format!("{error:#}");
+        assert!(message
+            .contains("antenna field precomputation requires requested_backend='fem'"));
+        assert!(!message.contains("not yet executable by the runtime"));
+    }
+
+    #[test]
+    fn antenna_lead_preflight_deferral_checks_root_and_future_stage_intent() {
+        let mut config = ScriptExecutionConfig {
+            antenna_inventory: Default::default(), ir: sample_problem_ir(),
+            shared_geometry_assets: None, default_until_seconds: None,
+            study_pipeline: None, stages: vec![],
+        };
+        assert!(!requires_antenna_lead_materialization(&config));
+        let module = serde_json::from_value(json!({
+            "kind":"current_transport", "name":"charge", "model":"ohmic_poisson", "coupling":"one_way",
+            "domain":[{"object_id":"device"}], "materials":[{"region":{"object_id":"device"},"material":{"sigma_Spm":4e7}}],
+            "boundaries":[], "gauge":"terminal_reference", "solver":{"engine":"cg", "linear":{"relative_tolerance":1e-10,"absolute_tolerance":0.,"max_iterations":100},
+            "operator_version":"fem_charge_conforming_h1_p1.transparent.v1","physical_residual_version":"charge_balance_integrated_l2.v1"},
+            "external_lead_preparation":{"schema_version":"antenna_external_lead_preparation.v1","kind":"isolated_branch_straight_stubs","revision":"r1",
+            "extensions":[{"id":"minus","observation_id":"observe-minus","object_id":"device","boundary_markers":[11],"length_m":1e-6,"outward_direction_xyz":[-1.,0.,0.],"conductivity_spm":4e7},
+            {"id":"plus","observation_id":"observe-plus","object_id":"device","boundary_markers":[12],"length_m":1e-6,"outward_direction_xyz":[1.,0.,0.],"conductivity_spm":4e7}],
+            "drives":[{"id":"drive","port_mode_ref":"port","outer_terminal_currents_a":{"minus":-0.002,"plus":0.002}}]}
+        })).expect("authored lead module");
+        config.ir.current_modules.push(module);
+        assert!(requires_antenna_lead_materialization(&config));
+        let stage_ir = config.ir.clone();
+        config.ir.current_modules.clear();
+        config.stages.push(fullmag_application::script_stage_contract::ScriptExecutionStage {
+            ir: stage_ir, default_until_seconds: None, entrypoint_kind: "flat_workspace".into(), action: None,
+        });
+        assert!(requires_antenna_lead_materialization(&config));
+        config.stages[0].ir.current_modules.clear();
+        assert!(!requires_antenna_lead_materialization(&config));
     }
 
     #[test]
@@ -2562,6 +2723,95 @@ mod tests {
     }
 
     #[test]
+    fn imported_magnetization_validation_rejects_wrong_size_without_mutating_problem() {
+        let problem = fullmag_ir::ProblemIR::bootstrap_example();
+        let before = serde_json::to_value(&problem).expect("problem should serialize");
+        let plan = fullmag_plan::plan(&problem).expect("bootstrap plan should resolve");
+        let BackendPlanIR::Fdm(fdm) = plan.backend_plan else {
+            panic!("bootstrap import fixture requires FDM");
+        };
+        let expected = fdm.initial_magnetization.len();
+        assert!(expected > 1);
+        for count in [0, expected - 1, expected + 1] {
+            let error = validate_imported_magnetization(&problem, &vec![[1.0, 0.0, 0.0]; count])
+                .expect_err("mismatched carrier size must be rejected");
+            assert!(error.to_string().contains("length mismatch"));
+            assert_eq!(serde_json::to_value(&problem).unwrap(), before);
+        }
+        validate_imported_magnetization(&problem, &vec![[0.0, 1.0, 0.0]; expected])
+            .expect("matching sampled state should be accepted privately");
+        assert_eq!(serde_json::to_value(&problem).unwrap(), before);
+    }
+
+    #[test]
+    fn imported_fem_state_requires_global_nodes_not_local_initializer() {
+        let mut mesh: fullmag_ir::MeshIR = serde_json::from_str(include_str!(
+            "../tests/fixtures/import_shared_domain.mesh.json"
+        ))
+        .expect("shared-domain fixture should parse");
+        mesh.element_markers[1] = 0;
+        let problem = fem_target_problem_ir(mesh);
+        let before = serde_json::to_value(&problem).unwrap();
+        let mut local = problem.clone();
+        apply_continuation_initial_state(&mut local, &vec![[1.0, 0.0, 0.0]; 4]).unwrap();
+        fullmag_plan::plan(&local).expect("local magnetic initializer is legal for authoring");
+        let error = validate_imported_magnetization(&problem, &vec![[1.0, 0.0, 0.0]; 4])
+            .expect_err("local initializer is not a global runtime carrier");
+        assert!(error.to_string().contains("global flat carrier"));
+        validate_imported_magnetization(&problem, &vec![[0.0, 1.0, 0.0]; 5])
+            .expect("global carrier should be accepted");
+        assert_eq!(serde_json::to_value(&problem).unwrap(), before);
+    }
+
+    #[test]
+    fn imported_fem_state_supports_multi_magnet_source_only_mesh() {
+        let mesh = serde_json::from_str(include_str!(
+            "../tests/fixtures/import_shared_domain.mesh.json"
+        ))
+        .expect("shared-domain fixture should parse");
+        let mut problem = fem_target_problem_ir(mesh);
+        problem.geometry.entries.push(fullmag_ir::GeometryEntryIR::Box {
+            name: "ring".to_string(),
+            size: [1.0, 1.0, 1.0],
+        });
+        problem.regions.push(fullmag_ir::RegionIR {
+            name: "ring".to_string(),
+            geometry: "ring".to_string(),
+        });
+        let mut ring = problem.magnets[0].clone();
+        ring.object_id = Some("ring".to_string());
+        ring.name = "ring".to_string();
+        ring.region = "ring".to_string();
+        problem.magnets.push(ring);
+        let asset = problem.geometry_assets.as_mut().unwrap()
+            .fem_domain_mesh_asset.as_mut().unwrap();
+        asset.region_markers.push(fullmag_ir::FemDomainRegionMarkerIR {
+            geometry_name: "ring".to_string(),
+            marker: 2,
+        });
+        asset.mesh = None;
+        asset.mesh_source = Some(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/import_shared_domain.mesh.json")
+                .display().to_string(),
+        );
+        let before = serde_json::to_value(&problem).unwrap();
+        let plan = fullmag_plan::plan(&problem).expect("source-only shared domain should resolve");
+        let BackendPlanIR::Fem(fem) = plan.backend_plan else {
+            panic!("source-only import fixture requires FEM");
+        };
+        let expected = fem.mesh.nodes.len();
+        assert_eq!(expected, 8, "shared magnetic interface nodes are packed per object");
+        validate_imported_magnetization(&problem, &vec![[0.0, 1.0, 0.0]; expected])
+            .expect("source-only multi-magnet global carrier should be accepted");
+        for count in [5, expected - 1] {
+            validate_imported_magnetization(&problem, &vec![[0.0, 1.0, 0.0]; count])
+                .expect_err("source mesh node count is not the resolved runtime carrier length");
+        }
+        assert_eq!(serde_json::to_value(&problem).unwrap(), before);
+    }
+
+    #[test]
     fn continuation_initial_state_supports_multi_magnet_shared_domain() {
         let mut problem = sample_problem_ir();
         problem.backend_policy.requested_backend = fullmag_ir::BackendTarget::Fem;
@@ -2982,8 +3232,91 @@ mod tests {
     }
 
     #[test]
+    fn materialize_script_stages_does_not_synthesize_solver_for_empty_pipeline() {
+        let config = ScriptExecutionConfig {
+            antenna_inventory: Default::default(),
+            ir: sample_problem_ir(),
+            shared_geometry_assets: None,
+            default_until_seconds: Some(5e-12),
+            study_pipeline: Some(StudyPipelineDocument {
+                version: "study_pipeline.v1".to_string(),
+                nodes: vec![],
+            }),
+            stages: vec![],
+        };
+        assert!(materialize_script_stages(config).expect("empty pipeline").is_empty());
+    }
+
+    #[test]
+    fn materialize_script_stages_does_not_synthesize_solver_for_disabled_pipeline() {
+        let config = ScriptExecutionConfig {
+            antenna_inventory: Default::default(),
+            ir: sample_problem_ir(),
+            shared_geometry_assets: None,
+            default_until_seconds: Some(5e-12),
+            study_pipeline: Some(StudyPipelineDocument {
+                version: "study_pipeline.v1".to_string(),
+                nodes: vec![StudyPipelineNode::Primitive {
+                    id: "disabled_run".to_string(),
+                    label: "Disabled run".to_string(),
+                    enabled: false,
+                    notes: None,
+                    source: Some("script_imported".to_string()),
+                    stage_kind: "run".to_string(),
+                    payload: serde_json::from_value(json!({"until_seconds": "5e-12"}))
+                        .expect("payload"),
+                }],
+            }),
+            stages: vec![],
+        };
+        assert!(materialize_script_stages(config).expect("disabled pipeline").is_empty());
+    }
+
+    #[test]
+    fn materialize_script_stages_skips_enabled_children_of_disabled_group() {
+        let document = serde_json::from_value(json!({
+            "version": "study_pipeline.v1",
+            "nodes": [{
+                "node_kind": "group", "id": "disabled_group", "label": "Disabled",
+                "enabled": false,
+                "children": [{
+                    "node_kind": "primitive", "id": "child_run", "label": "Run",
+                    "enabled": true, "stage_kind": "run",
+                    "payload": {"until_seconds": "5e-12"}
+                }]
+            }]
+        })).expect("group document");
+        let config = ScriptExecutionConfig {
+            antenna_inventory: Default::default(),
+            ir: sample_problem_ir(),
+            shared_geometry_assets: None,
+            default_until_seconds: Some(5e-12),
+            study_pipeline: Some(document),
+            stages: vec![],
+        };
+        assert!(materialize_script_stages(config).expect("disabled group").is_empty());
+    }
+
+    #[test]
+    fn materialize_script_stages_retains_legacy_solver_without_pipeline() {
+        let config = ScriptExecutionConfig {
+            antenna_inventory: Default::default(),
+            ir: sample_problem_ir(),
+            shared_geometry_assets: None,
+            default_until_seconds: Some(5e-12),
+            study_pipeline: None,
+            stages: vec![],
+        };
+        let stages = materialize_script_stages(config).expect("legacy solver");
+        assert_eq!(stages.len(), 1);
+        assert!(stages[0].action.is_none());
+        assert!((stages[0].until_seconds - 5e-12).abs() < 1e-24);
+    }
+
+    #[test]
     fn materialize_script_stages_uses_study_pipeline_when_explicit_stages_are_absent() {
         let config = ScriptExecutionConfig {
+            antenna_inventory: Default::default(),
             ir: sample_problem_ir(),
             shared_geometry_assets: None,
             default_until_seconds: Some(5e-12),
@@ -3053,6 +3386,7 @@ mod tests {
     #[test]
     fn stage_local_table_autosave_is_owned_by_relaxation_only() {
         let config = ScriptExecutionConfig {
+            antenna_inventory: Default::default(),
             ir: sample_problem_ir(),
             shared_geometry_assets: None,
             default_until_seconds: Some(5e-12),
@@ -3119,6 +3453,7 @@ mod tests {
     fn stage_local_autosave_materializes_without_leaking_to_following_stage() {
         let config = ScriptExecutionConfig {
             ir: sample_problem_ir(),
+            antenna_inventory: Default::default(),
             shared_geometry_assets: None,
             default_until_seconds: Some(5e-12),
             study_pipeline: Some(StudyPipelineDocument {
@@ -3226,6 +3561,7 @@ mod tests {
         ] {
             let config = ScriptExecutionConfig {
                 ir: sample_problem_ir(),
+                antenna_inventory: Default::default(),
                 shared_geometry_assets: None,
                 default_until_seconds: Some(5e-12),
                 study_pipeline: Some(StudyPipelineDocument {
@@ -3246,6 +3582,7 @@ mod tests {
     fn materialized_compatible_solver_stages_are_marked_continue_in_place() {
         let config = ScriptExecutionConfig {
             ir: sample_problem_ir(),
+            antenna_inventory: Default::default(),
             shared_geometry_assets: None,
             default_until_seconds: Some(5e-12),
             study_pipeline: Some(StudyPipelineDocument {
@@ -3417,6 +3754,7 @@ mod tests {
         };
 
         let stages = materialize_script_stages(ScriptExecutionConfig {
+            antenna_inventory: Default::default(),
             ir: base.clone(),
             shared_geometry_assets: None,
             default_until_seconds: Some(1e-12),
@@ -3534,6 +3872,7 @@ mod tests {
         };
 
         let stages = materialize_script_stages(ScriptExecutionConfig {
+            antenna_inventory: Default::default(),
             ir: base,
             shared_geometry_assets: None,
             default_until_seconds: Some(1e-12),
@@ -3582,6 +3921,7 @@ mod tests {
     #[test]
     fn materialized_hysteresis_points_continue_same_branch_state() {
         let config = ScriptExecutionConfig {
+            antenna_inventory: Default::default(),
             ir: sample_problem_ir(),
             shared_geometry_assets: None,
             default_until_seconds: Some(5e-12),
@@ -3631,6 +3971,7 @@ mod tests {
     #[test]
     fn materialize_pipeline_relax_without_time_budget_is_unbounded() {
         let config = ScriptExecutionConfig {
+            antenna_inventory: Default::default(),
             ir: sample_problem_ir_with_adaptive_relax_dt(3e-16),
             shared_geometry_assets: None,
             default_until_seconds: None,
@@ -3772,6 +4113,7 @@ mod tests {
     #[test]
     fn materialize_pipeline_relax_without_time_budget_ignores_dt_seed_fallback() {
         let config = ScriptExecutionConfig {
+            antenna_inventory: Default::default(),
             ir: sample_problem_ir_with_adaptive_relax_dt_limits(3e-16, 3e-16),
             shared_geometry_assets: None,
             default_until_seconds: None,
@@ -4060,6 +4402,7 @@ mod tests {
             action: None,
         };
         let config = ScriptExecutionConfig {
+            antenna_inventory: Default::default(),
             ir: sample_problem_ir(),
             shared_geometry_assets: None,
             default_until_seconds: Some(5e-12),
@@ -4104,6 +4447,7 @@ mod tests {
             .expect("stage autosave"),
         );
         let config = ScriptExecutionConfig {
+            antenna_inventory: Default::default(),
             ir: sample_problem_ir(),
             shared_geometry_assets: None,
             default_until_seconds: Some(5e-12),
@@ -4141,6 +4485,7 @@ mod tests {
             }),
         };
         let config = ScriptExecutionConfig {
+            antenna_inventory: Default::default(),
             ir: sample_problem_ir(),
             shared_geometry_assets: None,
             default_until_seconds: Some(5e-12),
@@ -4202,6 +4547,7 @@ mod tests {
         }]))
         .expect("transport fixture should deserialize");
         let config = ScriptExecutionConfig {
+            antenna_inventory: Default::default(),
             ir: ir.clone(),
             shared_geometry_assets: None,
             default_until_seconds: Some(3e-12),
@@ -4319,6 +4665,7 @@ mod tests {
     #[test]
     fn materialize_script_stages_supports_contextual_set_field_and_set_current_nodes() {
         let config = ScriptExecutionConfig {
+            antenna_inventory: Default::default(),
             ir: sample_problem_ir(),
             shared_geometry_assets: None,
             default_until_seconds: Some(3e-12),
@@ -4423,6 +4770,7 @@ mod tests {
         }]))
         .expect("transport fixture should deserialize");
         let config = ScriptExecutionConfig {
+            antenna_inventory: Default::default(),
             ir,
             shared_geometry_assets: None,
             default_until_seconds: Some(3e-12),
@@ -4521,6 +4869,7 @@ mod tests {
             }]
         }));
         let config = ScriptExecutionConfig {
+            antenna_inventory: Default::default(),
             ir,
             shared_geometry_assets: None,
             default_until_seconds: Some(3e-12),
@@ -4566,6 +4915,7 @@ mod tests {
     #[test]
     fn materialize_script_stages_adds_field_drive_only_after_explicit_action() {
         let config = ScriptExecutionConfig {
+            antenna_inventory: Default::default(),
             ir: sample_problem_ir(),
             shared_geometry_assets: None,
             default_until_seconds: Some(2e-9),
@@ -4679,6 +5029,7 @@ mod tests {
             })
         };
         let config = ScriptExecutionConfig {
+            antenna_inventory: Default::default(),
             ir: sample_problem_ir(),
             shared_geometry_assets: None,
             default_until_seconds: Some(1.0e-12),
@@ -4765,6 +5116,7 @@ mod tests {
     fn materialize_script_stages_rejects_unknown_or_repeated_field_drive_removal() {
         for drive_id in ["missing", ""] {
             let config = ScriptExecutionConfig {
+                antenna_inventory: Default::default(),
                 ir: sample_problem_ir(),
                 shared_geometry_assets: None,
                 default_until_seconds: Some(1.0e-12),
@@ -4792,6 +5144,7 @@ mod tests {
 
         let drive = sample_regional_field_drive("pulse");
         let config = ScriptExecutionConfig {
+            antenna_inventory: Default::default(),
             ir: sample_problem_ir(),
             shared_geometry_assets: None,
             default_until_seconds: Some(1.0e-12),
@@ -4829,6 +5182,7 @@ mod tests {
         let mut ir = sample_problem_ir();
         ir.field_drives.push(sample_regional_field_drive("pulse"));
         let config = ScriptExecutionConfig {
+            antenna_inventory: Default::default(),
             ir: ir.clone(),
             shared_geometry_assets: None,
             default_until_seconds: Some(1.0e-12),
@@ -4856,6 +5210,7 @@ mod tests {
     #[test]
     fn materialize_script_stages_applies_visible_autosave_and_fft_actions_in_order() {
         let config = ScriptExecutionConfig {
+            antenna_inventory: Default::default(),
             ir: sample_problem_ir(),
             shared_geometry_assets: None,
             default_until_seconds: Some(2e-9),
@@ -5020,6 +5375,7 @@ mod tests {
             })
         };
         let config = ScriptExecutionConfig {
+            antenna_inventory: Default::default(),
             ir: sample_problem_ir(),
             shared_geometry_assets: None,
             default_until_seconds: Some(2e-9),
@@ -5096,6 +5452,7 @@ mod tests {
     #[test]
     fn materialize_pipeline_auto_sampling_fails_after_sinc_drive_removal() {
         let config = ScriptExecutionConfig {
+            antenna_inventory: Default::default(),
             ir: sample_problem_ir(),
             shared_geometry_assets: None,
             default_until_seconds: Some(1.0e-9),
@@ -5178,6 +5535,7 @@ mod tests {
             .expect("drive"),
         );
         let stages = materialize_script_stages(ScriptExecutionConfig {
+            antenna_inventory: Default::default(),
             ir: ir.clone(),
             shared_geometry_assets: None,
             default_until_seconds: Some(1e-9),
@@ -5207,6 +5565,7 @@ mod tests {
             },
         }];
         let error = materialize_script_stages(ScriptExecutionConfig {
+            antenna_inventory: Default::default(),
             ir,
             shared_geometry_assets: None,
             default_until_seconds: Some(1e-9),
@@ -5220,6 +5579,7 @@ mod tests {
     #[test]
     fn materialize_script_stages_rejects_hidden_configuration_inside_plain_run() {
         let config = ScriptExecutionConfig {
+            antenna_inventory: Default::default(),
             ir: sample_problem_ir(),
             shared_geometry_assets: None,
             default_until_seconds: Some(2e-9),
@@ -5248,6 +5608,7 @@ mod tests {
     #[test]
     fn materialize_script_stages_supports_synthetic_state_actions() {
         let config = ScriptExecutionConfig {
+            antenna_inventory: Default::default(),
             ir: sample_problem_ir(),
             shared_geometry_assets: None,
             default_until_seconds: Some(3e-12),
@@ -5326,6 +5687,7 @@ mod tests {
     #[test]
     fn materialize_script_stages_supports_change_device_action() {
         let config = ScriptExecutionConfig {
+            antenna_inventory: Default::default(),
             ir: sample_problem_ir(),
             shared_geometry_assets: None,
             default_until_seconds: Some(3e-12),
@@ -5403,6 +5765,7 @@ mod tests {
         base.backend_policy.requested_backend = fullmag_ir::BackendTarget::Fem;
         set_runtime_selection_device(&mut base, "gpu");
         let config = ScriptExecutionConfig {
+            antenna_inventory: Default::default(),
             ir: base,
             shared_geometry_assets: None,
             default_until_seconds: Some(3e-12),
@@ -5480,6 +5843,7 @@ mod tests {
     #[test]
     fn materialize_script_stages_supports_relax_run_macro() {
         let config = ScriptExecutionConfig {
+            antenna_inventory: Default::default(),
             ir: sample_problem_ir(),
             shared_geometry_assets: None,
             default_until_seconds: Some(5e-12),
@@ -5524,6 +5888,7 @@ mod tests {
     #[test]
     fn materialize_script_stages_supports_field_sweep_relax_macro() {
         let config = ScriptExecutionConfig {
+            antenna_inventory: Default::default(),
             ir: sample_problem_ir(),
             shared_geometry_assets: None,
             default_until_seconds: Some(2e-12),
@@ -5570,6 +5935,7 @@ mod tests {
     #[test]
     fn materialize_script_stages_supports_hysteresis_loop_macro() {
         let config = ScriptExecutionConfig {
+            antenna_inventory: Default::default(),
             ir: sample_problem_ir(),
             shared_geometry_assets: None,
             default_until_seconds: Some(1e-12),
@@ -5628,6 +5994,7 @@ mod tests {
     #[test]
     fn materialize_script_stages_supports_field_sweep_relax_snapshot_macro() {
         let config = ScriptExecutionConfig {
+            antenna_inventory: Default::default(),
             ir: sample_problem_ir(),
             shared_geometry_assets: None,
             default_until_seconds: Some(1e-12),
@@ -5669,6 +6036,7 @@ mod tests {
     #[test]
     fn materialize_script_stages_supports_hysteresis_loop_save_point_state() {
         let config = ScriptExecutionConfig {
+            antenna_inventory: Default::default(),
             ir: sample_problem_ir(),
             shared_geometry_assets: None,
             default_until_seconds: Some(1e-12),
@@ -5718,6 +6086,7 @@ mod tests {
     #[test]
     fn materialize_script_stages_supports_parameter_sweep_b_ext() {
         let config = ScriptExecutionConfig {
+            antenna_inventory: Default::default(),
             ir: sample_problem_ir(),
             shared_geometry_assets: None,
             default_until_seconds: Some(1e-12),
@@ -5763,6 +6132,7 @@ mod tests {
     #[test]
     fn materialize_script_stages_supports_parameter_sweep_current_density_with_snapshots() {
         let config = ScriptExecutionConfig {
+            antenna_inventory: Default::default(),
             ir: sample_problem_ir(),
             shared_geometry_assets: None,
             default_until_seconds: Some(1e-12),
@@ -6090,10 +6460,14 @@ mod tests {
         sampling.outputs = vec![
             fullmag_ir::OutputIR::EigenSpectrum {
                 quantity: "spectrum".to_string(),
+                scope: None,
             },
             fullmag_ir::OutputIR::EigenMode {
                 field: "mode".to_string(),
+                all_modes: false,
                 indices: vec![0, 1],
+                branches: vec![],
+                sample_selector: None,
             },
         ];
         target_ir.study = fullmag_ir::StudyIR::Eigenmodes {
@@ -6273,6 +6647,7 @@ mod tests {
         let mut sampling = eigen_ir.study.sampling().clone();
         sampling.outputs = vec![fullmag_ir::OutputIR::EigenSpectrum {
             quantity: "spectrum".to_string(),
+            scope: None,
         }];
         eigen_ir.study = fullmag_ir::StudyIR::Eigenmodes {
             dynamics,
@@ -6338,14 +6713,19 @@ mod tests {
                 },
                 fullmag_ir::OutputIR::EigenSpectrum {
                     quantity: "spectrum".to_string(),
+                    scope: None,
                 },
                 fullmag_ir::OutputIR::EigenMode {
                     field: "mode".to_string(),
+                    all_modes: false,
                     indices: vec![0, 1, 7],
+                    branches: vec![],
+                    sample_selector: None,
                 },
             ];
         }
         let config = ScriptExecutionConfig {
+            antenna_inventory: Default::default(),
             ir,
             shared_geometry_assets: None,
             default_until_seconds: Some(3e-12),
@@ -6438,10 +6818,14 @@ mod tests {
         sampling.outputs = vec![
             fullmag_ir::OutputIR::EigenSpectrum {
                 quantity: "spectrum".to_string(),
+                scope: None,
             },
             fullmag_ir::OutputIR::EigenMode {
                 field: "mode".to_string(),
+                all_modes: false,
                 indices: vec![0, 1, 7],
+                branches: vec![],
+                sample_selector: None,
             },
         ];
         base.study = fullmag_ir::StudyIR::TimeEvolution {
@@ -6480,6 +6864,7 @@ mod tests {
             mode_tracking: None,
         };
         let stages = materialize_script_stages(ScriptExecutionConfig {
+            antenna_inventory: Default::default(),
             ir: base,
             shared_geometry_assets: None,
             default_until_seconds: Some(3e-12),

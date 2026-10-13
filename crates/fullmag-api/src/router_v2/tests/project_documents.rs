@@ -133,7 +133,13 @@ async fn coordinator_transition_survives_store_reopen_and_writer_conflict() {
     use fullmag_application::*;
     use fullmag_session::*;
     let (_app, _state, directory) = test_router_with_session_store_state().await;
-    let store = SessionStore::open(directory.join("coordinator-store")).unwrap();
+    let open_coordinator_store = |stage: &str| {
+        let root = directory.join("coordinator-store");
+        SessionStore::open(&root).unwrap_or_else(|error| {
+            panic!("coordinator store {stage}; root={}; error={error:#}", root.display())
+        })
+    };
+    let store = open_coordinator_store("initial open");
     let mut task =
         TaskRecord::new(RunId::parse("run-coordinator").unwrap(), "a".repeat(64)).unwrap();
     task.queue().unwrap();
@@ -280,7 +286,7 @@ async fn coordinator_transition_survives_store_reopen_and_writer_conflict() {
         CoordinatorGenesisCommitDisposition::Replayed
     );
     let initial = coordinator.checkpoint();
-    let competing_store = SessionStore::open(directory.join("coordinator-store")).unwrap();
+    let competing_store = open_coordinator_store("competing handle before deliberate conflict");
     let lock = store.write_transaction().unwrap();
     let failed = coordinator.commit_command(WorkerCommand::Start, None, |transition| {
         crate::coordinator_persistence::commit_transition(&competing_store, transition)
@@ -346,7 +352,7 @@ async fn coordinator_transition_survives_store_reopen_and_writer_conflict() {
         serde_json::from_slice::<WorkerCommandEnvelope>(&effect_bytes).unwrap(),
         start
     );
-    let reopened_receiver_store = SessionStore::open(directory.join("coordinator-store")).unwrap();
+    let reopened_receiver_store = open_coordinator_store("receiver recovery");
     let mut restored_receiver = fullmag_runtime_control::DurableWorkerInbox::recover(
         reopened_receiver_store,
         coordinator.claim().clone(),
@@ -356,7 +362,7 @@ async fn coordinator_transition_survives_store_reopen_and_writer_conflict() {
         .receive(&start, |_| panic!("pending after reopen must not execute"))
         .is_err());
     restored_receiver.confirm_applied(&start).unwrap();
-    let applied_receiver_store = SessionStore::open(directory.join("coordinator-store")).unwrap();
+    let applied_receiver_store = open_coordinator_store("applied receiver recovery");
     let mut applied_receiver = fullmag_runtime_control::DurableWorkerInbox::recover(
         applied_receiver_store,
         coordinator.claim().clone(),
@@ -401,7 +407,7 @@ async fn coordinator_transition_survives_store_reopen_and_writer_conflict() {
             Ok(())
         })
         .unwrap();
-    let reopened = SessionStore::open(directory.join("coordinator-store")).unwrap();
+    let reopened = open_coordinator_store("coordinator recovery");
     let journal = reopened
         .read_coordinator_journal("run-coordinator")
         .unwrap();
@@ -561,7 +567,7 @@ async fn coordinator_transition_survives_store_reopen_and_writer_conflict() {
     store.release_resource_lease(&durable_lease).unwrap();
     let stop_command = after_exit.commands[1].clone();
     let mut stale_inbox = fullmag_runtime_control::DurableWorkerInbox::recover(
-        SessionStore::open(directory.join("coordinator-store")).unwrap(),
+        open_coordinator_store("receiver restart"),
         after_exit.coordinator.claim().clone(),
     )
     .unwrap();
@@ -1106,7 +1112,8 @@ async fn explicit_project_run_submit_is_durable_and_replays_without_live_session
     assert_eq!(conflict.status(), StatusCode::CONFLICT);
     assert!(state.current_live_state.read().await.is_none());
     let store =
-        fullmag_session::SessionStore::open(state.submit_store_root.as_ref().unwrap()).unwrap();
+        fullmag_session::SessionStore::open_existing(state.submit_store_root.as_ref().unwrap())
+            .unwrap();
     assert!(store
         .read_run_intent(accepted["run_id"].as_str().unwrap())
         .unwrap()

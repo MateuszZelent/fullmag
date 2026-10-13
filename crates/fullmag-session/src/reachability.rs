@@ -13,6 +13,7 @@ use anyhow::{bail, Context, Result};
 use fullmag_quantities::SolutionSet;
 
 use crate::archive_document::{ArchiveDocuments, ArchiveFileSnapshot};
+use crate::typed_documents::{LiveSnapshotArtifactReference, LiveSnapshotArtifactReferences};
 use crate::types::{
     ArtifactIndex, BackendStatePayload, CommonSolverState, FieldRole, FmsArtifactCatalog,
     FmsBatchExpansionProgress, FmsBatchIntent, FmsCheckpoint, FmsCoordinatorJournalDirection,
@@ -86,6 +87,12 @@ pub struct ReachabilityReport {
     /// graph cannot be advertised as solved or resumable.
     pub warnings: Vec<String>,
     pub complete: bool,
+    /// True when incompleteness comes only from the two known project
+    /// documents whose object references are intentionally opaque today.
+    pub opaque_project_documents_only: bool,
+    /// Monotonic safety bit for missing payloads and unknown references.
+    /// Once set, the report cannot become visualization-safe again.
+    pub has_blocking_incompleteness: bool,
     /// Number of checkpoints and material primary/restart payloads proved by
     /// the walk.  These counters let archive inspection downgrade honestly
     /// instead of treating a descriptor-only checkpoint as resumable.
@@ -111,18 +118,51 @@ impl ReachabilityReport {
     }
 
     fn missing(&mut self, message: impl Into<String>) -> Result<()> {
-        self.conservative(message);
+        let message = message.into();
+        self.complete = false;
+        self.has_blocking_incompleteness = true;
+        self.opaque_project_documents_only = false;
+        self.warnings.push(message.clone());
         Ok(())
     }
 
-    fn conservative(&mut self, message: impl Into<String>) {
+    fn mark_blocking_incomplete(&mut self, message: impl Into<String>) {
         self.complete = false;
+        self.has_blocking_incompleteness = true;
+        self.opaque_project_documents_only = false;
         self.warnings.push(message.into());
+    }
+
+    fn mark_opaque_project_document(&mut self, message: impl Into<String>) {
+        self.complete = false;
+        if !self.has_blocking_incompleteness {
+            self.opaque_project_documents_only = true;
+        }
+        self.warnings.push(message.into());
+    }
+
+    fn conservative(&mut self, message: impl Into<String>) {
+        self.mark_blocking_incomplete(message);
     }
 
     /// Refuse to publish a graph which is missing a required payload.
     pub fn require_complete(&self) -> Result<()> {
         if self.complete {
+            return Ok(());
+        }
+        bail!(
+            "incomplete session object graph: {}",
+            self.warnings.join("; ")
+        )
+    }
+
+    /// Allow only the known opaque project documents during a read-only
+    /// visualization import. Missing files, checkpoint payloads, and unknown
+    /// references remain fail-closed.
+    pub fn require_visualization_safe(&self) -> Result<()> {
+        if self.complete
+            || (self.opaque_project_documents_only && !self.has_blocking_incompleteness)
+        {
             return Ok(());
         }
         bail!(
@@ -376,6 +416,41 @@ pub(crate) fn walk_export_file_documents(
     walker.walk_archive()
 }
 
+/// Export planning reads project documents separately from the run-file
+/// inventory. Overlay the already-read project documents so live snapshot
+/// artifact refs receive the same graph validation without materializing run
+/// payloads in memory.
+pub(crate) fn walk_export_file_documents_with_project(
+    documents: &HashMap<String, ArchiveFileSnapshot>,
+    root: &Path,
+    inline_project_documents: &HashMap<String, Vec<u8>>,
+) -> Result<ReachabilityReport> {
+    for name in inline_project_documents.keys() {
+        validate_file_ref(name).with_context(|| format!("invalid inline project document `{name}`"))?;
+        if !name.starts_with("project/") || name.starts_with("objects/") {
+            bail!("inline export overlay accepts only project documents: `{name}`");
+        }
+        if documents.contains_key(name) {
+            bail!("inline project document shadows file inventory entry `{name}`");
+        }
+    }
+    let root = fs::canonicalize(root)?;
+    let mut walker = ArchiveWalker {
+        documents: ArchiveDocuments::FilesWithInline {
+            snapshots: documents,
+            root: &root,
+            inline: inline_project_documents,
+        },
+        cas_root: Some(&root),
+        mode: ReachabilityMode::Export,
+        report: ReachabilityReport::new(),
+        seen_checkpoints: HashSet::new(),
+        tensor_descriptor_cache: None,
+        namespace_files: HashSet::new(),
+        unclassified_paths: HashSet::new(),
+    };
+    walker.walk_archive()
+}
 /// Traverse a decoded import inventory using the same typed restore graph.
 pub(crate) fn walk_import_file_documents(
     documents: &HashMap<String, ArchiveFileSnapshot>,
@@ -523,8 +598,7 @@ impl StoreWalker {
                         self.walk_project_namespace(&entry.path())?;
                     } else {
                         self.walk_arbitrary_files(&entry.path(), &name)?;
-                        self.report.complete = false;
-                        self.report.warnings.push(format!(
+                        self.report.mark_blocking_incomplete(format!(
                             "untyped session document root `{name}` requires conservative GC"
                         ));
                     }
@@ -583,27 +657,31 @@ impl StoreWalker {
             let relative = format!("project/{name}");
             let data = self.read_file(&entry.path(), &relative)?;
             if name == "current_live_snapshot.json" {
-                match crate::typed_documents::inspect_live_snapshot(&data) {
-                    crate::typed_documents::TypedInspection::Typed { object_refs } => {
+                let inspection = crate::typed_documents::inspect_live_snapshot(&data);
+                match inspection.object_refs {
+                    Ok(object_refs) => {
                         for object_ref in object_refs {
                             self.follow_store_object_ref(&object_ref, &relative, "live snapshot")?;
                         }
                     }
-                    crate::typed_documents::TypedInspection::Untyped(reason) => {
-                        self.report.complete = false;
-                        self.report.warnings.push(format!(
-                            "project document `{relative}` has untyped object references ({reason}); conservative GC required"
-                        ));
+                    Err(reason) => self.report.mark_opaque_project_document(format!(
+                        "project document `{relative}` has untyped object references ({reason}); conservative GC required"
+                    )),
+                }
+                match inspection.artifact_refs {
+                    Ok(artifact_refs) => {
+                        self.follow_store_live_snapshot_artifacts(&artifact_refs, &relative)?;
                     }
+                    Err(reason) => self.report.mark_blocking_incomplete(format!(
+                        "project document `{relative}` has invalid live artifact references ({reason}); conservative GC required"
+                    )),
                 }
             } else if !KNOWN_LEAFS.contains(&name.as_str()) {
-                self.report.complete = false;
-                self.report.warnings.push(format!(
+                self.report.mark_blocking_incomplete(format!(
                     "unknown project document `{relative}` requires conservative GC"
                 ));
             } else if name == "asset_index.json" {
-                self.report.complete = false;
-                self.report.warnings.push(format!(
+                self.report.mark_opaque_project_document(format!(
                     "project document `{relative}` has untyped object references; conservative GC required"
                 ));
             }
@@ -611,6 +689,77 @@ impl StoreWalker {
         Ok(())
     }
 
+    fn follow_store_live_snapshot_artifacts(
+        &mut self,
+        references: &LiveSnapshotArtifactReferences,
+        source: &str,
+    ) -> Result<()> {
+        for artifact in &references.artifacts {
+            let relative = live_snapshot_artifact_path(&references.run_id, &artifact.path)
+                .with_context(|| format!("invalid live artifact reference in `{source}`"))?;
+            self.follow_store_live_artifact(&relative, &artifact.kind, source)?;
+        }
+        Ok(())
+    }
+
+    fn follow_store_live_artifact(
+        &mut self,
+        relative: &str,
+        kind: &str,
+        source: &str,
+    ) -> Result<()> {
+        reject_link_chain(&self.root, relative)?;
+        let path = self.root.join(relative);
+        let metadata = match fs::symlink_metadata(&path) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return self.missing(format!(
+                    "live snapshot `{source}` references missing run artifact `{relative}`"
+                ));
+            }
+            Err(error) => return Err(error).with_context(|| format!("checking live artifact `{relative}`")),
+        };
+        if metadata.is_file() {
+            self.report.file_refs.insert(relative.to_string());
+            return Ok(());
+        }
+        // Persisted `ArtifactEntry.kind == "zarr"` is emitted for Zarr
+        // directory roots (and may also identify a single Zarr file). No path
+        // suffix heuristic is used to decide whether a subtree is legal.
+        if !metadata.is_dir() || kind != "zarr" {
+            bail!("live snapshot artifact `{relative}` is not a file or supported Zarr directory");
+        }
+
+        let mut pending = vec![(path, relative.to_string())];
+        let mut file_count = 0usize;
+        while let Some((directory, directory_relative)) = pending.pop() {
+            reject_link_chain(&self.root, &directory_relative)?;
+            for entry in read_directory(&directory)? {
+                let name = entry.file_name();
+                let name = name
+                    .to_str()
+                    .context("live Zarr artifact contains a non-portable path component")?;
+                let child_relative = format!("{directory_relative}/{name}");
+                validate_file_ref(&child_relative)?;
+                reject_link_chain(&self.root, &child_relative)?;
+                let child_metadata = fs::symlink_metadata(entry.path())?;
+                if child_metadata.is_dir() {
+                    pending.push((entry.path(), child_relative));
+                } else if child_metadata.is_file() {
+                    file_count = file_count.saturating_add(1);
+                    self.report.file_refs.insert(child_relative);
+                } else {
+                    bail!("unsupported live Zarr artifact entry `{child_relative}`");
+                }
+            }
+        }
+        if file_count == 0 {
+            self.missing(format!(
+                "live snapshot `{source}` references an empty Zarr artifact subtree `{relative}`"
+            ))?;
+        }
+        Ok(())
+    }
     fn walk_objects_dir(&mut self) -> Result<()> {
         let objects = self.root.join("objects");
         if !objects.exists() {
@@ -2476,8 +2625,7 @@ impl StoreWalker {
                 // this walker cannot interpret.  Retaining the file itself is
                 // insufficient for a safe mark set, so GC/export stays
                 // incomplete until the document schema gets a typed walker.
-                self.report.complete = false;
-                self.report.warnings.push(format!(
+                self.report.mark_blocking_incomplete(format!(
                     "untyped session reference `{source}` requires conservative retention"
                 ));
             }
@@ -2872,20 +3020,85 @@ impl<'a> ArchiveWalker<'a> {
         let Some(data) = self.documents.read(NAME)? else {
             return Ok(());
         };
-        match crate::typed_documents::inspect_live_snapshot(&data) {
-            crate::typed_documents::TypedInspection::Typed { object_refs } => {
-                self.report.file_refs.insert(NAME.to_string());
+        self.report.file_refs.insert(NAME.to_string());
+        let inspection = crate::typed_documents::inspect_live_snapshot(&data);
+        match inspection.object_refs {
+            Ok(object_refs) => {
                 for object_ref in object_refs {
                     self.add_archive_payload(&object_ref, NAME, None)?;
                 }
             }
-            crate::typed_documents::TypedInspection::Untyped(reason) => {
-                self.report.conservative(format!(
-                    "archive project document `{NAME}` has untyped object references ({reason}); conservative retention required"
-                ));
+            Err(reason) => self.report.mark_opaque_project_document(format!(
+                "archive project document `{NAME}` has untyped object references ({reason}); conservative retention required"
+            )),
+        }
+        match inspection.artifact_refs {
+            Ok(artifact_refs) => {
+                self.follow_archive_live_snapshot_artifacts(&artifact_refs, NAME)?;
+            }
+            Err(reason) => self.report.mark_blocking_incomplete(format!(
+                "archive project document `{NAME}` has invalid live artifact references ({reason}); conservative retention required"
+            )),
+        }
+        Ok(())
+    }
+
+    fn follow_archive_live_snapshot_artifacts(
+        &mut self,
+        references: &LiveSnapshotArtifactReferences,
+        source: &str,
+    ) -> Result<()> {
+        for artifact in &references.artifacts {
+            let relative = live_snapshot_artifact_path(&references.run_id, &artifact.path)
+                .with_context(|| format!("invalid live artifact reference in `{source}`"))?;
+            let exact_member = self.documents.contains_key(&relative);
+            let prefix = format!("{relative}/");
+            let descendants = self
+                .documents
+                .keys()
+                .filter(|name| name.starts_with(&prefix))
+                .cloned()
+                .collect::<Vec<_>>();
+            if exact_member && !descendants.is_empty() {
+                bail!("archive live artifact `{relative}` is both a file and a subtree");
+            }
+            if exact_member {
+                if !self.archive_live_artifact_member_present(&relative)? {
+                    self.report.missing(format!(
+                        "live snapshot `{source}` references missing archived artifact `{relative}`"
+                    ))?;
+                }
+            } else if artifact.kind == "zarr" && !descendants.is_empty() {
+                for member in descendants {
+                    if !self.archive_live_artifact_member_present(&member)? {
+                        self.report.missing(format!(
+                            "live snapshot `{source}` references missing archived Zarr member `{member}`"
+                        ))?;
+                    }
+                }
+            } else {
+                self.report.missing(format!(
+                    "live snapshot `{source}` references missing archived artifact `{relative}`"
+                ))?;
             }
         }
         Ok(())
+    }
+
+    fn archive_live_artifact_member_present(&self, relative: &str) -> Result<bool> {
+        if !self.documents.contains_key(relative) {
+            return Ok(false);
+        }
+        let Some(root) = self.cas_root else {
+            return Ok(true);
+        };
+        reject_link_chain(root, relative)?;
+        match fs::symlink_metadata(root.join(relative)) {
+            Ok(metadata) if metadata.is_file() => Ok(true),
+            Ok(_) => bail!("archived live artifact member `{relative}` is not a regular file"),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+            Err(error) => Err(error).with_context(|| format!("checking archived artifact `{relative}`")),
+        }
     }
 
     fn validate_archive_namespace(&mut self) -> Result<()> {
@@ -2917,13 +3130,11 @@ impl<'a> ArchiveWalker<'a> {
                 }
                 "project" => {
                     if !KNOWN_PROJECT_LEAFS.contains(&remainder) {
-                        self.report.complete = false;
-                        self.report.warnings.push(format!(
+                        self.report.mark_blocking_incomplete(format!(
                             "unknown archive project document `{name}` requires conservative retention"
                         ));
                     } else if remainder == "asset_index.json" {
-                        self.report.complete = false;
-                        self.report.warnings.push(format!(
+                        self.report.mark_opaque_project_document(format!(
                             "archive project document `{name}` has untyped object references; conservative retention required"
                         ));
                     }
@@ -3356,7 +3567,8 @@ impl<'a> ArchiveWalker<'a> {
         validate_object_ref(object_ref)?;
         let relative = format!("objects/sha256/{object_ref}");
         let file_root = self.cas_root.or_else(|| match &self.documents {
-            ArchiveDocuments::Files { root, .. } => Some(*root),
+            ArchiveDocuments::Files { root, .. }
+            | ArchiveDocuments::FilesWithInline { root, .. } => Some(*root),
             ArchiveDocuments::Memory(_) => None,
         });
         if let Some(root) = file_root {
@@ -4290,8 +4502,7 @@ impl<'a> ArchiveWalker<'a> {
                 }
             }
             ReferenceKind::Unknown => {
-                self.report.complete = false;
-                self.report.warnings.push(format!(
+                self.report.mark_blocking_incomplete(format!(
                     "untyped archive reference `{source}` requires conservative retention"
                 ));
             }
@@ -4642,6 +4853,13 @@ fn is_object_ref(value: &str) -> bool {
             .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
 }
 
+fn live_snapshot_artifact_path(run_id: &str, artifact_path: &str) -> Result<String> {
+    validate_component(run_id).context("invalid live snapshot session.run_id")?;
+    validate_file_ref(artifact_path).context("unsafe live snapshot artifact path")?;
+    let relative = format!("runs/{run_id}/artifacts/{artifact_path}");
+    validate_file_ref(&relative).context("unsafe session run artifact path")?;
+    Ok(relative)
+}
 fn validate_component(component: &str) -> Result<()> {
     crate::repository_path::validate_store_id(component)
 }
@@ -4679,6 +4897,322 @@ mod tests {
     use std::fs;
     use std::path::Path;
 
+    #[test]
+    fn conservative_after_opaque_project_document_blocks_visualization() {
+        let mut report = ReachabilityReport::new();
+        report.mark_opaque_project_document("opaque project document");
+        report.conservative("unknown run document");
+
+        assert!(report.has_blocking_incompleteness);
+        assert!(!report.opaque_project_documents_only);
+        assert!(report.require_visualization_safe().is_err());
+    }
+
+    #[test]
+    fn opaque_project_document_after_conservative_blocks_visualization() {
+        let mut report = ReachabilityReport::new();
+        report.conservative("unknown run document");
+        report.mark_opaque_project_document("opaque project document");
+
+        assert!(report.has_blocking_incompleteness);
+        assert!(!report.opaque_project_documents_only);
+        assert!(report.require_visualization_safe().is_err());
+    }
+
+    fn live_snapshot_bytes(
+        run_id: &str,
+        artifacts: &[(&str, &str)],
+        opaque_inline_field: bool,
+    ) -> Vec<u8> {
+        let artifacts = artifacts
+            .iter()
+            .map(|(path, kind)| json!({"path": path, "kind": kind}))
+            .collect::<Vec<_>>();
+        let mut snapshot = json!({
+            "session_protocol_version": "v2",
+            "capability_profile_version": "v1",
+            "session": {"session_id": "session-1", "run_id": run_id},
+            "runtime_status": {},
+            "artifacts": artifacts,
+            "display_selection": {},
+            "preview_config": {},
+            "mesh_revision": 1,
+            "mesh_build_revision": 1,
+        });
+        if opaque_inline_field {
+            snapshot["metadata"] = json!({"legacy_payload_ref": "not-a-cas-object"});
+        }
+        serde_json::to_vec(&snapshot).unwrap()
+    }
+
+    #[test]
+    fn live_snapshot_artifacts_retain_spectrum_and_zarr_in_store_archive_and_export_inventory() {
+        let directory = tempfile::tempdir().unwrap();
+        let run_id = "run-live";
+        let spectrum_relative = "eigen/spectrum.v2.json";
+        let zarr_relative = "fields/m.zarr";
+        let zarr_file_relative = "single.zarr";
+        let snapshot = live_snapshot_bytes(
+            run_id,
+            &[(spectrum_relative, "json"), (zarr_relative, "zarr"), (zarr_file_relative, "zarr")],
+            false,
+        );
+
+        let store_root = directory.path().join("store");
+        let store_snapshot = store_root.join("project/current_live_snapshot.json");
+        fs::create_dir_all(store_snapshot.parent().unwrap()).unwrap();
+        fs::write(&store_snapshot, &snapshot).unwrap();
+        let store_artifacts = store_root.join("runs/run-live/artifacts");
+        fs::create_dir_all(store_artifacts.join("eigen")).unwrap();
+        fs::write(store_artifacts.join(spectrum_relative), b"spectrum").unwrap();
+        fs::write(store_artifacts.join(zarr_file_relative), b"single-zarr-file").unwrap();
+        let zarr_root = store_artifacts.join(zarr_relative);
+        fs::create_dir_all(&zarr_root).unwrap();
+        fs::write(zarr_root.join(".zgroup"), b"{}").unwrap();
+
+        let store_report = walk_store_root(&store_root, ReachabilityMode::Restore).unwrap();
+        assert!(store_report.complete, "{:?}", store_report.warnings);
+        assert!(store_report.file_refs.contains("runs/run-live/artifacts/eigen/spectrum.v2.json"));
+        assert!(store_report.file_refs.contains("runs/run-live/artifacts/fields/m.zarr/.zgroup"));
+        assert!(store_report.file_refs.contains("runs/run-live/artifacts/single.zarr"));
+
+        let spectrum_path = "runs/run-live/artifacts/eigen/spectrum.v2.json";
+        let zarr_member_path = "runs/run-live/artifacts/fields/m.zarr/.zgroup";
+        let zarr_file_path = "runs/run-live/artifacts/single.zarr";
+        let archive = HashMap::from([
+            ("project/current_live_snapshot.json".to_string(), snapshot.clone()),
+            (spectrum_path.to_string(), b"spectrum".to_vec()),
+            (zarr_member_path.to_string(), b"{}".to_vec()),
+            (zarr_file_path.to_string(), b"single-zarr-file".to_vec()),
+        ]);
+        let archive_report = walk_archive_documents(&archive, ReachabilityMode::Export).unwrap();
+        assert!(archive_report.complete, "{:?}", archive_report.warnings);
+        assert!(archive_report.file_refs.contains(spectrum_path));
+        assert!(archive_report.file_refs.contains(zarr_member_path));
+        assert!(archive_report.file_refs.contains(zarr_file_path));
+
+        let inventory_root = directory.path().join("inventory");
+        let inventory_spectrum = inventory_root.join(spectrum_path);
+        let inventory_zarr_member = inventory_root.join(zarr_member_path);
+        let inventory_zarr_file = inventory_root.join(zarr_file_path);
+        fs::create_dir_all(inventory_spectrum.parent().unwrap()).unwrap();
+        fs::create_dir_all(inventory_zarr_member.parent().unwrap()).unwrap();
+        fs::create_dir_all(inventory_zarr_file.parent().unwrap()).unwrap();
+        fs::write(&inventory_spectrum, b"spectrum").unwrap();
+        fs::write(&inventory_zarr_member, b"{}").unwrap();
+        fs::write(&inventory_zarr_file, b"single-zarr-file").unwrap();
+        let snapshots = HashMap::from([
+            (
+                spectrum_path.to_string(),
+                ArchiveFileSnapshot::capture(&inventory_spectrum).unwrap(),
+            ),
+            (
+                zarr_member_path.to_string(),
+                ArchiveFileSnapshot::capture(&inventory_zarr_member).unwrap(),
+            ),
+            (
+                zarr_file_path.to_string(),
+                ArchiveFileSnapshot::capture(&inventory_zarr_file).unwrap(),
+            ),
+        ]);
+        let inline_project = HashMap::from([(
+            "project/current_live_snapshot.json".to_string(),
+            snapshot,
+        )]);
+        let export_report = walk_export_file_documents_with_project(
+            &snapshots,
+            &inventory_root,
+            &inline_project,
+        )
+        .unwrap();
+        assert!(export_report.complete, "{:?}", export_report.warnings);
+        assert!(export_report.file_refs.contains(spectrum_path));
+        assert!(export_report.file_refs.contains(zarr_member_path));
+        assert!(export_report.file_refs.contains(zarr_file_path));
+    }
+
+    #[test]
+    fn missing_live_artifacts_block_store_gc_and_archive_even_when_snapshot_is_opaque() {
+        let directory = tempfile::tempdir().unwrap();
+        let snapshot = live_snapshot_bytes(
+            "run-missing",
+            &[("eigen/spectrum.v2.json", "json"), ("fields/m.zarr", "zarr")],
+            true,
+        );
+        let store_root = directory.path().join("store");
+        let snapshot_path = store_root.join("project/current_live_snapshot.json");
+        fs::create_dir_all(snapshot_path.parent().unwrap()).unwrap();
+        fs::write(&snapshot_path, &snapshot).unwrap();
+
+        let store_report = walk_store_root(&store_root, ReachabilityMode::Restore).unwrap();
+        assert!(!store_report.complete);
+        assert!(store_report.has_blocking_incompleteness);
+        assert!(!store_report.opaque_project_documents_only);
+        assert!(store_report.require_visualization_safe().is_err());
+        assert!(walk_store_root(&store_root, ReachabilityMode::Gc).is_err());
+
+        let archive = HashMap::from([(
+            "project/current_live_snapshot.json".to_string(),
+            snapshot.clone(),
+        )]);
+        let archive_report = walk_archive_documents(&archive, ReachabilityMode::Export).unwrap();
+        assert!(!archive_report.complete);
+        assert!(archive_report.has_blocking_incompleteness);
+        assert!(!archive_report.opaque_project_documents_only);
+        assert!(archive_report.require_visualization_safe().is_err());
+
+        let inventory_root = directory.path().join("empty-inventory");
+        fs::create_dir_all(&inventory_root).unwrap();
+        let inline_project = HashMap::from([(
+            "project/current_live_snapshot.json".to_string(),
+            snapshot,
+        )]);
+        let export_report =
+            walk_export_file_documents_with_project(&HashMap::new(), &inventory_root, &inline_project)
+                .unwrap();
+        assert!(!export_report.complete);
+        assert!(export_report.has_blocking_incompleteness);
+        assert!(!export_report.opaque_project_documents_only);
+        assert!(export_report.require_visualization_safe().is_err());
+    }
+
+    #[test]
+    fn unsafe_live_artifact_paths_and_run_ids_fail_closed_in_store_and_archive() {
+        let directory = tempfile::tempdir().unwrap();
+        for path in [
+            "../outside.json",
+            "C:/outside.json",
+            "fields\\m.zarr",
+            "/absolute.json",
+            "fields//spectrum.json",
+        ] {
+            let snapshot = live_snapshot_bytes("run-safe", &[(path, "json")], false);
+            let store_root = directory.path().join(format!("store-{}", path.len()));
+            let snapshot_path = store_root.join("project/current_live_snapshot.json");
+            fs::create_dir_all(snapshot_path.parent().unwrap()).unwrap();
+            fs::write(&snapshot_path, &snapshot).unwrap();
+            assert!(
+                walk_store_root(&store_root, ReachabilityMode::Restore).is_err(),
+                "store accepted artifact path {path:?}"
+            );
+            let archive = HashMap::from([(
+                "project/current_live_snapshot.json".to_string(),
+                snapshot,
+            )]);
+            assert!(
+                walk_archive_documents(&archive, ReachabilityMode::Export).is_err(),
+                "archive accepted artifact path {path:?}"
+            );
+        }
+        for run_id in ["../outside", "C:drive", "nested/run", "bad\\run"] {
+            let snapshot = live_snapshot_bytes(run_id, &[("spectrum.json", "json")], false);
+            let store_root = directory.path().join(format!("run-{}", run_id.len()));
+            let snapshot_path = store_root.join("project/current_live_snapshot.json");
+            fs::create_dir_all(snapshot_path.parent().unwrap()).unwrap();
+            fs::write(&snapshot_path, &snapshot).unwrap();
+            assert!(
+                walk_store_root(&store_root, ReachabilityMode::Restore).is_err(),
+                "store accepted run id {run_id:?}"
+            );
+            let archive = HashMap::from([(
+                "project/current_live_snapshot.json".to_string(),
+                snapshot,
+            )]);
+            assert!(
+                walk_archive_documents(&archive, ReachabilityMode::Export).is_err(),
+                "archive accepted run id {run_id:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn store_and_file_export_reject_live_artifact_symlinks_or_reparse_points() {
+        let directory = tempfile::tempdir().unwrap();
+        let external = directory.path().join("outside.bin");
+        fs::write(&external, b"outside").unwrap();
+        let external_directory = directory.path().join("outside-directory");
+        fs::create_dir_all(&external_directory).unwrap();
+        fs::write(external_directory.join("payload.bin"), b"outside directory").unwrap();
+
+        let store_root = directory.path().join("store-link");
+        let snapshot_path = store_root.join("project/current_live_snapshot.json");
+        fs::create_dir_all(snapshot_path.parent().unwrap()).unwrap();
+        fs::write(
+            &snapshot_path,
+            live_snapshot_bytes("run-link", &[("fields/m.zarr", "zarr")], false),
+        )
+        .unwrap();
+        let zarr_root = store_root.join("runs/run-link/artifacts/fields/m.zarr");
+        fs::create_dir_all(&zarr_root).unwrap();
+        let zarr_link = zarr_root.join("linked-directory");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&external_directory, &zarr_link).unwrap();
+        #[cfg(windows)]
+        std::os::windows::fs::symlink_dir(&external_directory, &zarr_link).unwrap();
+        assert!(walk_store_root(&store_root, ReachabilityMode::Restore).is_err());
+
+        let inventory_root = directory.path().join("inventory-link");
+        let relative = "runs/run-link/artifacts/spectrum.json";
+        let inventory_path = inventory_root.join(relative);
+        fs::create_dir_all(inventory_path.parent().unwrap()).unwrap();
+        let inventory_link = inventory_path;
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&external, &inventory_link).unwrap();
+        #[cfg(windows)]
+        std::os::windows::fs::symlink_file(&external, &inventory_link).unwrap();
+        let snapshots = HashMap::from([(
+            relative.to_string(),
+            ArchiveFileSnapshot::from_bytes(b"outside"),
+        )]);
+        let inline_project = HashMap::from([(
+            "project/current_live_snapshot.json".to_string(),
+            live_snapshot_bytes("run-link", &[("spectrum.json", "json")], false),
+        )]);
+        assert!(walk_export_file_documents_with_project(
+            &snapshots,
+            &inventory_root,
+            &inline_project,
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn file_export_project_overlay_rejects_nonproject_and_shadow_keys() {
+        let directory = tempfile::tempdir().unwrap();
+        let snapshot_path = "project/current_live_snapshot.json";
+        let snapshots = HashMap::from([(
+            snapshot_path.to_string(),
+            ArchiveFileSnapshot::from_bytes(b"inventory"),
+        )]);
+        let shadow = HashMap::from([(snapshot_path.to_string(), b"inline".to_vec())]);
+        assert!(walk_export_file_documents_with_project(&snapshots, directory.path(), &shadow).is_err());
+
+        let nonproject = HashMap::from([(
+            "objects/sha256/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+            b"inline".to_vec(),
+        )]);
+        assert!(walk_export_file_documents_with_project(&HashMap::new(), directory.path(), &nonproject).is_err());
+    }
+
+    #[test]
+    fn archive_rejects_live_artifact_file_and_subtree_collision() {
+        let snapshot = live_snapshot_bytes("run-conflict", &[("fields/m.zarr", "zarr")], false);
+        let archive = HashMap::from([
+            (
+                "project/current_live_snapshot.json".to_string(),
+                snapshot,
+            ),
+            (
+                "runs/run-conflict/artifacts/fields/m.zarr".to_string(),
+                b"file payload".to_vec(),
+            ),
+            (
+                "runs/run-conflict/artifacts/fields/m.zarr/.zgroup".to_string(),
+                b"{}".to_vec(),
+            ),
+        ]);
+        assert!(walk_archive_documents(&archive, ReachabilityMode::Export).is_err());
+    }
     fn digest(letter: char) -> String {
         format!("sha256:{}", letter.to_string().repeat(64))
     }

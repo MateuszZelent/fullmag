@@ -37,6 +37,193 @@ impl Drop for TempDirGuard {
     }
 }
 
+#[test]
+fn branch_writer_preserves_recorded_pair_policy_and_gap() {
+    let temp = TempDirGuard::new("tracking-edge");
+    let mut result = sample_result();
+    result.samples[0].modes[0].reduced_vector = Some(vec![Complex64::new(1.0, 0.0); 3]);
+    let mut empty = result.samples[0].clone();
+    empty.sample.sample_index = 1;
+    empty.modes.clear();
+    let mut next = result.samples[0].clone();
+    next.sample.sample_index = 2;
+    next.modes[0].raw_mode_index = 13;
+    next.modes[0].reduced_vector = Some(vec![Complex64::new(0.0, 1.0); 3]);
+    result.samples.extend([empty, next]);
+    let cfg = fullmag_ir::ModeTrackingIR { overlap_floor: 0.7, max_branch_gap: 1,
+                                         ..fullmag_ir::ModeTrackingIR::default() };
+    crate::eigen::tracking::track_branches(&mut result, Some(&cfg));
+    let edge = result.branches[0].points[1].tracking_edge.as_ref().unwrap();
+    assert_eq!(edge.previous_sample_index, Some(0));
+    assert_eq!(edge.skipped_sample_count, 1);
+    assert_eq!(edge.score_source.as_str(), "modal_overlap_unweighted_score");
+    write_branch_bundle(&temp.path, &result).unwrap();
+    let payload: Value = serde_json::from_slice(&std::fs::read(
+        temp.path.join("eigen/branches.v2.json")).unwrap()).unwrap();
+    assert_eq!(payload["tracking_method"], "overlap_hungarian");
+    assert_eq!(payload["overlap_floor"], 0.7);
+    assert_eq!(payload["tracking_policy_availability"], "complete");
+    assert_eq!(payload["branches"][0]["points"][1]["tracking_edge"],
+               serde_json::to_value(edge).unwrap());
+    assert_eq!(payload["branches"][0]["points"][1]["raw_mode_index"], 13);
+    let legacy: Value = serde_json::from_slice(&std::fs::read(
+        temp.path.join("eigen/branches.json")).unwrap()).unwrap();
+    for key in ["branches", "tracking_method", "overlap_floor", "frequency_window_hz",
+                "tracking_policy_availability"] { assert_eq!(payload[key], legacy[key]); }
+    result.branches[0].points[1].tracking_edge = None;
+    write_branch_bundle(&temp.path, &result).unwrap();
+    for name in ["branches.v2.json", "branches.json"] {
+        let partial: Value = serde_json::from_slice(&std::fs::read(
+            temp.path.join("eigen").join(name)).unwrap()).unwrap();
+        assert_eq!(partial["tracking_policy_availability"], "missing_or_mixed");
+        assert!(partial["tracking_method"].is_null());
+        assert!(partial["overlap_floor"].is_null());
+        assert!(partial["frequency_window_hz"].is_null());
+    }
+}
+
+#[test]
+fn tracked_pair_overlap_is_published_as_confidence_in_json_and_csv() {
+    let temp = TempDirGuard::new("tracked-overlap-confidence");
+    let mut result = sample_result();
+    result.branches.clear();
+    result.samples[0].modes[0].reduced_vector = Some(vec![
+        Complex64::new(1.0, 0.0),
+        Complex64::new(0.0, 0.0),
+        Complex64::new(0.0, 0.0),
+        Complex64::new(0.0, 0.0),
+        Complex64::new(0.0, 0.0),
+        Complex64::new(0.0, 0.0),
+    ]);
+    result.samples[0].modes[0].node_mass_weights = Some(vec![1.0, 1.0]);
+    let mut next_sample = result.samples[0].clone();
+    next_sample.sample.sample_index = 1;
+    next_sample.sample.label = Some("X".to_string());
+    next_sample.sample.path_s = 1.0;
+    next_sample.modes[0].reduced_vector = Some(vec![
+        Complex64::new(0.8, 0.0),
+        Complex64::new(0.0, 0.0),
+        Complex64::new(0.0, 0.0),
+        Complex64::new(0.6, 0.0),
+        Complex64::new(0.0, 0.0),
+        Complex64::new(0.0, 0.0),
+    ]);
+    next_sample.modes[0].node_mass_weights = Some(vec![1.0, 1.0]);
+    result.samples.push(next_sample);
+
+    let tracking = fullmag_ir::ModeTrackingIR {
+        method: fullmag_ir::ModeTrackingMethodIR::OverlapHungarian,
+        frequency_window_hz: None,
+        overlap_floor: 0.5,
+        max_branch_gap: 0,
+    };
+    crate::eigen::tracking::track_branches(&mut result, Some(&tracking));
+    let point = &result.branches[0].points[1];
+    assert!((point.overlap_prev.unwrap() - 0.8).abs() < 1.0e-12);
+    assert!((point.tracking_confidence - 0.8).abs() < 1.0e-12);
+    assert_eq!(
+        point.tracking_edge.as_ref().unwrap().score_source.as_str(),
+        "modal_overlap_weighted_score"
+    );
+
+    write_branch_bundle(&temp.path, &result).expect("tracked branch artifacts should write");
+    let branches: Value = serde_json::from_slice(
+        &std::fs::read(temp.path.join("eigen/branches.v2.json"))
+            .expect("branch JSON should be readable"),
+    )
+    .expect("branch JSON should be valid");
+    let json_point = &branches["branches"][0]["points"][1];
+    assert_eq!(json_point["tracking_confidence"].as_f64(), Some(0.8));
+    assert_eq!(json_point["overlap_prev"].as_f64(), Some(0.8));
+    assert_eq!(
+        json_point["tracking_edge"]["score_source"],
+        "modal_overlap_weighted_score"
+    );
+
+    let branch_table = std::fs::read_to_string(temp.path.join("eigen/branch_table.csv"))
+        .expect("branch table CSV should be readable");
+    let lines = branch_table.lines().collect::<Vec<_>>();
+    let headers = lines[0].split(',').collect::<Vec<_>>();
+    let columns = lines[2].split(',').collect::<Vec<_>>();
+    let column = |name: &str| headers.iter().position(|header| *header == name).unwrap();
+    assert_eq!(columns[column("tracking_confidence")], "0.800000");
+    assert_eq!(columns[column("overlap_prev")], "0.800000");
+}
+
+#[test]
+fn actual_plan_gamma_is_shared_by_spectra_and_mode_fields() {
+    let temp = TempDirGuard::new("actual-gamma");
+    let mut result = sample_result();
+    result.gamma0_rad_s_per_a_m = 1.7e5;
+    write_path_bundle(&temp.path, &result).unwrap();
+    write_mode_bundle(&temp.path, &result).unwrap();
+    let gamma = result.gamma0_rad_s_per_a_m / crate::MU0;
+    for name in ["spectrum.v2.json", "spectrum.v3.json", "path.json"] {
+        let payload: Value = serde_json::from_slice(&std::fs::read(
+            temp.path.join("eigen").join(name)).unwrap()).unwrap();
+        let mode = &payload["samples"][0]["modes"][0];
+        assert_eq!(mode["gamma0_rad_s_per_A_m"], result.gamma0_rad_s_per_a_m);
+        assert_eq!(mode["gamma_rad_s_T"], gamma);
+        assert_eq!(mode["mu0_T_m_per_A"], crate::MU0);
+    }
+    let payload: Value = serde_json::from_slice(&std::fs::read(
+        temp.path.join("eigen/modes/sample_0000/mode_0000.json")).unwrap()).unwrap();
+    assert_eq!(payload["gamma0_rad_s_per_A_m"], result.gamma0_rad_s_per_a_m);
+    assert_eq!(payload["gamma_rad_s_T"], gamma);
+}
+
+#[test]
+fn invalid_plan_gamma_cannot_publish_reference_metadata() {
+    for gamma0 in [0.0, -1.0, f64::NAN, f64::INFINITY, f64::MAX] {
+        let temp = TempDirGuard::new("invalid-gamma");
+        let mut result = sample_result_with_k0_kittel_sweep();
+        result.gamma0_rad_s_per_a_m = gamma0;
+        assert!(write_path_bundle(&temp.path, &result).is_err());
+        assert!(write_mode_bundle(&temp.path, &result).is_err());
+        assert!(build_kittel_fit_artifact(&result).is_err());
+        assert!(!temp.path.join("eigen").exists());
+    }
+}
+
+#[test]
+fn nonreference_gamma_drives_kittel_oracle_and_parameter() {
+    for model in ["macrospin_larmor", "thin_film_in_plane"] {
+        let mut result = sample_result_with_k0_kittel_sweep();
+        result.gamma0_rad_s_per_a_m = 1.7e5;
+        let validation = result.k0_kittel_validation.as_mut().unwrap();
+        validation.model = model.into();
+        validation.material.effective_magnetisation = Some(8e5);
+        let fields = validation.samples.iter().map(|sample| sample.bias_field[0]).collect::<Vec<_>>();
+        for (index, field) in fields.iter().copied().enumerate() {
+            let factor = if model == "macrospin_larmor" { field }
+                else { (field*(field+8e5)).sqrt() };
+            let frequency = result.gamma0_rad_s_per_a_m * factor / std::f64::consts::TAU;
+            result.samples[index].modes[0].frequency_real_hz = frequency;
+            result.samples[index].modes[0].angular_frequency_rad_per_s = std::f64::consts::TAU*frequency;
+            result.samples[index].modes[0].eigenvalue_imag = std::f64::consts::TAU*frequency;
+            result.branches[0].points[index].frequency_real_hz = frequency;
+        }
+        let fit = build_kittel_fit_artifact(&result).unwrap().unwrap();
+        assert_eq!(fit.parameters.iter().find(|param| param.name == "gamma0_rad_s_per_A_m")
+                   .unwrap().value, result.gamma0_rad_s_per_a_m);
+        for (index, point) in fit.points.iter().enumerate() {
+            assert_eq!(point.expected_frequency_hz, result.samples[index].modes[0].frequency_real_hz);
+            assert!(point.relative_frequency_error < 1e-12);
+        }
+    }
+}
+
+#[test]
+fn kittel_oracle_rejects_nonfinite_frequency_from_finite_inputs() {
+    let mut result = sample_result_with_k0_kittel_sweep();
+    // gamma0/mu0 is representable, but gamma0 * H0 is not.
+    result.gamma0_rad_s_per_a_m = 1e300;
+    for sample in &mut result.k0_kittel_validation.as_mut().unwrap().samples {
+        sample.bias_field = [1e100, 0.0, 0.0];
+    }
+    assert!(build_kittel_fit_artifact(&result).is_err());
+}
+
 fn artifact_identity() -> FrequencyDomainArtifactIdentity {
     FrequencyDomainArtifactIdentity::try_new(
         "session:test-frequency-domain",
@@ -64,13 +251,13 @@ fn artifact_identity_rejects_mutable_aliases() {
         assert!(error.to_string().contains("exact identity"));
     }
 }
-
 fn sample_result() -> PathSolveResult {
     sample_result_with_solver_model(EigenSolverModel::ReferenceScalarTangent)
 }
 
 fn sample_result_with_solver_model(solver_model: EigenSolverModel) -> PathSolveResult {
     PathSolveResult {
+        gamma0_rad_s_per_a_m: 2.211e5, // Explicit fixture parameter.
         samples: vec![SingleKSolveResult {
             sample: KSampleDescriptor {
                 sample_index: 0,
@@ -91,6 +278,7 @@ fn sample_result_with_solver_model(solver_model: EigenSolverModel) -> PathSolveR
                 norm: 1.0,
                 mass_norm: Some(7.25),
                 max_amplitude: 1.0,
+                residual_relative_l2: Some(2.5e-10),
                 residual_norm: Some(1.25e-9),
                 residual_linf: Some(2.5e-10),
                 tangent_leakage_mean_abs: Some(3.0e-12),
@@ -103,6 +291,7 @@ fn sample_result_with_solver_model(solver_model: EigenSolverModel) -> PathSolveR
                 amplitude: Some(vec![1.0]),
                 phase: Some(vec![0.0]),
                 node_mass_weights: None,
+                consistent_p1_metric: None,
                 component_participation:
                     crate::eigen::ModalParticipationObservable::unavailable_without_context("cpu"),
             }],
@@ -126,6 +315,7 @@ fn sample_result_with_solver_model(solver_model: EigenSolverModel) -> PathSolveR
                 frequency_imag_hz: 0.0,
                 tracking_confidence: 1.0,
                 overlap_prev: None,
+                tracking_edge: None,
             }],
         }],
         solver_model,
@@ -133,9 +323,89 @@ fn sample_result_with_solver_model(solver_model: EigenSolverModel) -> PathSolveR
         include_demag: false,
         dispersion_validation: None,
         k0_kittel_validation: None,
+        solver_policy: None,
         dispersion_analytic_reference: None,
         k0_kittel_periodic_airbox_demag: None,
     }
+}
+
+#[test]
+fn sample_diagnostics_never_fall_back_to_another_sample() {
+    let mut result = sample_result();
+    result.samples[0].sample.sample_index = 3;
+    for entries in [
+        serde_json::json!([{ "sample_index": 0, "diagnostics": {"owner": "wrong"} }]),
+        serde_json::json!([
+            { "sample_index": 0, "diagnostics": {"owner": "wrong"} },
+            { "sample_index": 1, "diagnostics": {"owner": "also-wrong"} }
+        ]),
+        serde_json::json!([{ "diagnostics": {"owner": "unindexed"} }]),
+    ] {
+        result.samples[0].solver_diagnostics = Some(serde_json::json!({
+            "relax_to_eigen_handoff_sha256": "wrong-root",
+            "sample_solver_diagnostics": entries,
+        }));
+        assert!(sample_native_solver_diagnostics(&result.samples[0]).is_none());
+    }
+}
+
+#[test]
+fn sample_diagnostics_reject_duplicate_or_malformed_identity_records() {
+    let mut result = sample_result();
+    for entries in [
+        serde_json::json!([
+            { "sample_index": 0, "diagnostics": {"owner": "first"} },
+            { "sample_index": 0, "diagnostics": {"owner": "duplicate"} }
+        ]),
+        serde_json::json!({"sample_index": 0}),
+        serde_json::json!([{ "sample_index": 0, "diagnostics": null }]),
+    ] {
+        result.samples[0].solver_diagnostics = Some(serde_json::json!({
+            "sample_solver_diagnostics": entries,
+        }));
+        assert!(sample_native_solver_diagnostics(&result.samples[0]).is_none());
+    }
+}
+
+#[test]
+fn enriched_sample_diagnostics_require_valid_selected_diagnostics() {
+    for diagnostics in [serde_json::Value::Null, serde_json::json!([]), serde_json::json!(7)] {
+        let root = serde_json::json!({
+            "solver_adapter": "native",
+            "sample_solver_diagnostics": [{"sample_index": 3, "diagnostics": diagnostics}],
+        });
+        assert!(native_solver_diagnostics_for_sample(&root, 3).is_none());
+    }
+    assert!(native_solver_diagnostics_for_sample(&serde_json::Value::Null, 0).is_none());
+    assert!(native_solver_diagnostics_for_sample(&serde_json::json!([]), 0).is_none());
+}
+
+#[test]
+fn native_diagnostics_selector_preserves_local_and_enriched_records() {
+    let local = serde_json::json!({"owner": "local"});
+    assert_eq!(native_solver_diagnostics_for_sample(&local, 3), Some(&local));
+    let enriched = serde_json::json!({
+        "solver_adapter": "native",
+        "sample_solver_diagnostics": [{"sample_index": 3, "diagnostics": {"owner": "selected"}}],
+    });
+    assert_eq!(native_solver_diagnostics_for_sample(&enriched, 3), Some(&enriched));
+    assert!(native_solver_diagnostics_for_sample(&enriched, 0).is_none());
+}
+
+#[test]
+fn sample_diagnostics_select_unique_matching_sample() {
+    let mut result = sample_result();
+    result.samples[0].sample.sample_index = 3;
+    result.samples[0].solver_diagnostics = Some(serde_json::json!({
+        "sample_solver_diagnostics": [
+            { "sample_index": 0, "diagnostics": {"owner": "wrong"} },
+            { "sample_index": 3, "diagnostics": {"owner": "selected"} }
+        ],
+    }));
+    assert_eq!(
+        sample_native_solver_diagnostics(&result.samples[0]).unwrap()["owner"],
+        "selected"
+    );
 }
 
 #[test]
@@ -153,6 +423,7 @@ fn single_sample_mode_provenance_prefers_enriched_root_diagnostics() {
         &result.samples[0],
         &result.samples[0].modes[0],
         result.solver_model,
+        result.gamma0_rad_s_per_a_m,
     );
 
     assert_eq!(
@@ -163,6 +434,30 @@ fn single_sample_mode_provenance_prefers_enriched_root_diagnostics() {
 
 fn sample_result_with_modal_overlap_tracking() -> PathSolveResult {
     let mut result = sample_result_with_solver_model(EigenSolverModel::ProductionCpuShiftInvert);
+    let node_mass_weights = vec![1.0, 4.0, 9.0];
+    result.samples[0].modes[0].reduced_vector = Some(vec![
+        Complex64::new(1.0, 0.0),
+        Complex64::new(0.0, 0.0),
+        Complex64::new(0.0, 0.0),
+        Complex64::new(0.0, 0.0),
+        Complex64::new(0.0, 0.0),
+        Complex64::new(0.0, 0.0),
+        Complex64::new(0.0, 0.0),
+        Complex64::new(0.0, 0.0),
+        Complex64::new(0.0, 0.0),
+    ]);
+    result.samples[0].modes[0].node_mass_weights = Some(node_mass_weights.clone());
+    result.samples[0].modes[0].norm = 1.0;
+    result.samples[0].modes[0].mass_norm = Some(1.0);
+    result.samples[0].modes[0].lifted_real = Some(vec![
+        [1.0, 0.0, 0.0],
+        [0.0, 0.0, 0.0],
+        [0.0, 0.0, 0.0],
+    ]);
+    result.samples[0].modes[0].lifted_imag = Some(vec![[0.0, 0.0, 0.0]; 3]);
+    result.samples[0].modes[0].amplitude = Some(vec![1.0, 0.0, 0.0]);
+    result.samples[0].modes[0].phase = Some(vec![0.0, 0.0, 0.0]);
+
     let mut sample_1 = result.samples[0].clone();
     sample_1.sample.sample_index = 1;
     sample_1.sample.label = Some("X".to_string());
@@ -171,6 +466,28 @@ fn sample_result_with_modal_overlap_tracking() -> PathSolveResult {
     sample_1.modes[0].frequency_real_hz = 1.25e9;
     sample_1.modes[0].angular_frequency_rad_per_s = std::f64::consts::TAU * 1.25e9;
     sample_1.modes[0].eigenvalue_imag = std::f64::consts::TAU * 1.25e9;
+    sample_1.modes[0].reduced_vector = Some(vec![
+        Complex64::new(1.0, 0.0),
+        Complex64::new(0.0, 0.0),
+        Complex64::new(0.0, 0.0),
+        Complex64::new(0.375, 0.0),
+        Complex64::new(0.0, 0.0),
+        Complex64::new(0.0, 0.0),
+        Complex64::new(0.0, 0.0),
+        Complex64::new(0.0, 0.0),
+        Complex64::new(0.0, 0.0),
+    ]);
+    sample_1.modes[0].norm = 1.140625_f64.sqrt();
+    sample_1.modes[0].mass_norm = Some(1.25);
+    sample_1.modes[0].max_amplitude = 1.0;
+    sample_1.modes[0].lifted_real = Some(vec![
+        [1.0, 0.0, 0.0],
+        [0.375, 0.0, 0.0],
+        [0.0, 0.0, 0.0],
+    ]);
+    sample_1.modes[0].lifted_imag = Some(vec![[0.0, 0.0, 0.0]; 3]);
+    sample_1.modes[0].amplitude = Some(vec![1.0, 0.375, 0.0]);
+    sample_1.modes[0].phase = Some(vec![0.0, 0.0, 0.0]);
     let mut sample_2 = sample_1.clone();
     sample_2.sample.sample_index = 2;
     sample_2.sample.label = Some("G".to_string());
@@ -179,26 +496,87 @@ fn sample_result_with_modal_overlap_tracking() -> PathSolveResult {
     sample_2.modes[0].frequency_real_hz = 1.5e9;
     sample_2.modes[0].angular_frequency_rad_per_s = std::f64::consts::TAU * 1.5e9;
     sample_2.modes[0].eigenvalue_imag = std::f64::consts::TAU * 1.5e9;
+    sample_2.modes[0].reduced_vector = Some(vec![
+        Complex64::new(0.0, 0.0),
+        Complex64::new(0.0, 0.0),
+        Complex64::new(0.0, 0.0),
+        Complex64::new(1.0, 0.0),
+        Complex64::new(0.0, 0.0),
+        Complex64::new(0.0, 0.0),
+        Complex64::new(0.0, 0.0),
+        Complex64::new(0.0, 0.0),
+        Complex64::new(0.0, 0.0),
+    ]);
+    sample_2.modes[0].norm = 1.0;
+    sample_2.modes[0].mass_norm = Some(2.0);
+    sample_2.modes[0].max_amplitude = 1.0;
+    sample_2.modes[0].lifted_real = Some(vec![
+        [0.0, 0.0, 0.0],
+        [1.0, 0.0, 0.0],
+        [0.0, 0.0, 0.0],
+    ]);
+    sample_2.modes[0].lifted_imag = Some(vec![[0.0, 0.0, 0.0]; 3]);
+    sample_2.modes[0].amplitude = Some(vec![0.0, 1.0, 0.0]);
+    sample_2.modes[0].phase = Some(vec![0.0, 0.0, 0.0]);
     result.samples.push(sample_1);
     result.samples.push(sample_2);
-    result.branches[0].points.push(TrackedBranchPoint {
-        sample_index: 1,
-        raw_mode_index: 0,
-        frequency_real_hz: 1.25e9,
-        frequency_imag_hz: 0.0,
-        tracking_confidence: 0.8,
-        overlap_prev: Some(0.8),
-    });
-    result.branches[0].points.push(TrackedBranchPoint {
-        sample_index: 2,
-        raw_mode_index: 0,
-        frequency_real_hz: 1.5e9,
-        frequency_imag_hz: 0.0,
-        tracking_confidence: 0.6,
-        overlap_prev: Some(0.6),
-    });
+
+    let tracking = fullmag_ir::ModeTrackingIR {
+        method: fullmag_ir::ModeTrackingMethodIR::OverlapHungarian,
+        frequency_window_hz: None,
+        overlap_floor: 0.5,
+        max_branch_gap: 0,
+    };
+    result.branches.clear();
+    crate::eigen::tracking::track_branches(&mut result, Some(&tracking));
     result.notes = vec!["modal overlap tracking".to_string()];
     result
+}
+
+// Keep Cartesian mode payloads, nodal summaries, and mass norms coherent when
+// selector tests replace the base Kittel mode. The X component is the same
+// fixture frame used by the declared bias-field sweep.
+fn set_kittel_fixture_x_mode(
+    mode: &mut SingleKModeResult,
+    x_components: &[f64],
+    node_mass_weights: &[f64],
+) {
+    assert_eq!(x_components.len(), node_mass_weights.len());
+    assert!(node_mass_weights
+        .iter()
+        .all(|weight| weight.is_finite() && *weight > 0.0));
+
+    let mut reduced_vector = Vec::with_capacity(x_components.len() * 3);
+    let mut lifted_real = Vec::with_capacity(x_components.len());
+    let mut lifted_imag = Vec::with_capacity(x_components.len());
+    let mut amplitude = Vec::with_capacity(x_components.len());
+    let mut phase = Vec::with_capacity(x_components.len());
+    let mut norm_squared = 0.0;
+    let mut mass_norm_squared = 0.0;
+
+    for (&x, &weight) in x_components.iter().zip(node_mass_weights) {
+        reduced_vector.extend([
+            Complex64::new(x, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+        ]);
+        lifted_real.push([x, 0.0, 0.0]);
+        lifted_imag.push([0.0, 0.0, 0.0]);
+        amplitude.push(x.abs());
+        phase.push(if x < 0.0 { std::f64::consts::PI } else { 0.0 });
+        norm_squared += x * x;
+        mass_norm_squared += weight * x * x;
+    }
+
+    mode.reduced_vector = Some(reduced_vector);
+    mode.lifted_real = Some(lifted_real);
+    mode.lifted_imag = Some(lifted_imag);
+    mode.node_mass_weights = Some(node_mass_weights.to_vec());
+    mode.amplitude = Some(amplitude.clone());
+    mode.phase = Some(phase);
+    mode.norm = norm_squared.sqrt();
+    mode.mass_norm = Some(mass_norm_squared.sqrt());
+    mode.max_amplitude = amplitude.into_iter().fold(0.0_f64, f64::max);
 }
 
 fn sample_result_with_k0_kittel_sweep() -> PathSolveResult {
@@ -207,11 +585,7 @@ fn sample_result_with_k0_kittel_sweep() -> PathSolveResult {
     let fields_a_per_m = [40_000.0, 80_000.0, 120_000.0];
 
     result.samples.clear();
-    result.branches = vec![TrackedBranch {
-        branch_id: 0,
-        label: Some("k0_kittel_uniform_branch".to_string()),
-        points: Vec::new(),
-    }];
+    result.branches.clear();
 
     for (sample_index, field_a_per_m) in fields_a_per_m.iter().copied().enumerate() {
         let frequency_hz =
@@ -227,16 +601,42 @@ fn sample_result_with_k0_kittel_sweep() -> PathSolveResult {
         sample.modes[0].angular_frequency_rad_per_s = std::f64::consts::TAU * frequency_hz;
         sample.modes[0].eigenvalue_real = 0.0;
         sample.modes[0].eigenvalue_imag = std::f64::consts::TAU * frequency_hz;
+        // Synthetic four-node mode data exercise artifact selection only; no
+        // FEM convergence or qualified metric is claimed by this fixture.
+        let uniform_mode = [
+            Complex64::new(1.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(1.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(1.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(1.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+        ];
+        sample.modes[0].reduced_vector = Some(uniform_mode.to_vec());
+        sample.modes[0].node_mass_weights = Some(vec![1.0; 4]);
+        sample.modes[0].norm = 2.0;
+        sample.modes[0].mass_norm = Some(2.0);
+        sample.modes[0].max_amplitude = 1.0;
+        sample.modes[0].lifted_real = Some(vec![[1.0, 0.0, 0.0]; 4]);
+        sample.modes[0].lifted_imag = Some(vec![[0.0, 0.0, 0.0]; 4]);
+        sample.modes[0].amplitude = Some(vec![1.0; 4]);
+        sample.modes[0].phase = Some(vec![0.0; 4]);
         result.samples.push(sample);
-        result.branches[0].points.push(TrackedBranchPoint {
-            sample_index,
-            raw_mode_index: 0,
-            frequency_real_hz: frequency_hz,
-            frequency_imag_hz: 0.0,
-            tracking_confidence: 1.0,
-            overlap_prev: (sample_index > 0).then_some(1.0),
-        });
     }
+
+    let tracking = fullmag_ir::ModeTrackingIR {
+        method: fullmag_ir::ModeTrackingMethodIR::OverlapHungarian,
+        frequency_window_hz: None,
+        overlap_floor: 0.5,
+        max_branch_gap: 0,
+    };
+    crate::eigen::tracking::track_branches(&mut result, Some(&tracking));
+    result.branches[0].label = Some("k0_kittel_uniform_branch".to_string());
 
     result.k0_kittel_validation = Some(fullmag_ir::FemEigenK0KittelValidationIR {
         kind: "k0_kittel_field_sweep".to_string(),
@@ -284,10 +684,7 @@ fn eigen_artifact_writer_emits_v2_contract_files() {
     .expect("spectrum.v2.json should be valid JSON");
     assert_eq!(spectrum["schema_version"], "eigen_spectrum.v2");
     assert_eq!(spectrum["sample_count"], 1);
-    assert_eq!(
-        spectrum["samples"][0]["sample_id"],
-        "bias-field-sample-0000"
-    );
+    assert_eq!(spectrum["samples"][0]["sample_id"], "k-path-sample-0000");
     assert_eq!(
         spectrum["samples"][0]["modes"][0]["mode_id"],
         "sample-0000/mode-0000"
@@ -296,7 +693,17 @@ fn eigen_artifact_writer_emits_v2_contract_files() {
         spectrum["samples"][0]["modes"][0]["mode_field_id"],
         "analysis:eigen:sample-0000:mode-0000"
     );
-    assert!(spectrum["samples"][0]["modes"][0]["mode_field_resource_key"].is_null());
+    assert!(spectrum["samples"][0]["modes"][0]
+        .get("mode_field_resource_key")
+        .is_none());
+    assert_eq!(
+        spectrum["samples"][0]["modes"][0]["residual_absolute_l2"],
+        1.25e-9
+    );
+    assert_eq!(
+        spectrum["samples"][0]["modes"][0]["residual_relative_l2"],
+        2.5e-10
+    );
     assert!(spectrum["samples"][0]["modes"][0]
         .get("component_participation")
         .is_none());
@@ -337,12 +744,32 @@ fn eigen_artifact_writer_emits_v2_contract_files() {
         false
     );
     assert_eq!(
+        branches["branches"][0]["points"][0]["sample_id"],
+        "k-path-sample-0000"
+    );
+    assert_eq!(
+        branches["branches"][0]["points"][0]["mode_id"],
+        "sample-0000/mode-0000"
+    );
+    assert_eq!(
+        branches["branches"][0]["points"][0]["mode_field_available"],
+        true
+    );
+    assert_eq!(
         branches["branches"][0]["points"][0]["mode_field_id"],
         "analysis:eigen:sample-0000:mode-0000"
     );
-    assert!(branches["branches"][0]["points"][0]["mode_field_resource_key"].is_null());
+    assert!(branches["branches"][0]["points"][0].get("mode_field_resource_key").is_none());
 
     assert!(!branches.to_string().contains("/v2/sessions/current"));
+
+    let branch_table = std::fs::read_to_string(eigen_dir.join("branch_table.csv"))
+        .expect("branch_table.csv should be written");
+    assert_eq!(
+        branch_table.lines().next(),
+        Some("sample_index,sample_id,branch_id,raw_mode_index,mode_id,frequency_real_hz,frequency_imag_hz,tracking_confidence,overlap_prev,mode_field_available,mode_field_id")
+    );
+    assert!(!branch_table.contains("/v2/sessions/current"));
 
     let dispersion = std::fs::read_to_string(eigen_dir.join("dispersion.csv"))
         .expect("dispersion.csv should be written");
@@ -353,7 +780,7 @@ fn eigen_artifact_writer_emits_v2_contract_files() {
     assert_eq!(
             Some(dispersion_header),
             Some(
-                "sample_index,path_s_rad_per_m,kx_rad_per_m,ky_rad_per_m,kz_rad_per_m,label,raw_mode_index,branch_id,frequency_hz,omega_rad_s,analytic_frequency_hz,relative_error,validation_geometry,line_width_hz,residual_norm,overlap_score,tracking_score_source,mode_field_id"
+                "sample_index,sample_id,path_s_rad_per_m,kx_rad_per_m,ky_rad_per_m,kz_rad_per_m,label,raw_mode_index,mode_id,branch_id,frequency_hz,omega_rad_s,analytic_frequency_hz,relative_error,validation_geometry,line_width_hz,residual_norm,overlap_score,tracking_score_source,mode_field_available,mode_field_id"
             )
         );
     let dispersion_row = dispersion_lines
@@ -378,6 +805,18 @@ fn eigen_artifact_writer_emits_v2_contract_files() {
         Some(&"seed")
     );
     assert_eq!(
+        dispersion_columns.get(column("sample_id")),
+        Some(&"k-path-sample-0000")
+    );
+    assert_eq!(
+        dispersion_columns.get(column("mode_id")),
+        Some(&"sample-0000/mode-0000")
+    );
+    assert_eq!(
+        dispersion_columns.get(column("mode_field_available")),
+        Some(&"true")
+    );
+    assert_eq!(
         dispersion_columns.get(column("mode_field_id")),
         Some(&"analysis:eigen:sample-0000:mode-0000")
     );
@@ -393,11 +832,13 @@ fn eigen_artifact_writer_emits_v2_contract_files() {
     assert_eq!(mode["raw_mode_index"], 0);
     assert_eq!(mode["frequency_hz"], 1.0e9);
     assert_eq!(mode["frequency_real_hz"], 1.0e9);
+    assert_eq!(mode["residual_absolute_l2"], 1.25e-9);
+    assert_eq!(mode["residual_relative_l2"], 2.5e-10);
     assert_eq!(
         mode["mode_field_id"],
         "analysis:eigen:sample-0000:mode-0000"
     );
-    assert!(mode["mode_field_resource_key"].is_null());
+    assert!(mode.get("mode_field_resource_key").is_none());
     assert!(!mode.to_string().contains("/v2/sessions/current"));
     for required in [
         "residual_norm",
@@ -531,6 +972,226 @@ fn eigen_artifact_writer_emits_v2_contract_files() {
     assert_eq!(
         family_manifest["capabilities"]["modal_artifact_available"],
         true
+    );
+}
+
+#[test]
+fn generic_diagnostics_writer_uses_flags_and_does_not_publish_a_spectrum() {
+    let temp = TempDirGuard::new("eigen-diagnostics-v2-flags");
+    let result = sample_result();
+    let outputs = [fullmag_ir::OutputIR::EigenDiagnostics {
+        include_tracking: false,
+        include_residuals: true,
+        include_overlaps: false,
+        include_tangent_leakage: true,
+        include_orthogonality: false,
+    }];
+
+    write_frequency_domain_eigen_manifest_with_outputs(
+        &temp.path,
+        &result,
+        &artifact_identity(),
+        &outputs,
+        Some(1),
+        None,
+    )
+    .expect("generic writer should publish requested diagnostics");
+
+    let manifest: Value = serde_json::from_slice(
+        &std::fs::read(temp.path.join("frequency_domain/manifest.v1.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        manifest["artifacts"]["eigen_diagnostics_v2_path"],
+        "eigen/diagnostics.v2.json"
+    );
+    assert_eq!(
+        manifest["resources"]["eigen_diagnostics_resource_key"],
+        "/v2/sessions/current/analysis/frequency-domain/eigen/diagnostics.v2"
+    );
+    assert!(manifest["artifacts"]["spectrum_v2_path"].is_null());
+    assert_eq!(manifest["spectrum_output_scopes"], serde_json::json!([]));
+    assert!(manifest["artifacts"]["mode_metadata_paths"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+    assert!(!temp.path.join("eigen/spectrum.v2.json").exists());
+
+    let diagnostics: Value = serde_json::from_slice(
+        &std::fs::read(temp.path.join("eigen/diagnostics.v2.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(diagnostics["schema_version"], "eigen_diagnostics.v2");
+    assert_eq!(diagnostics["solver_model_scope"], "path_orchestrator");
+    assert_eq!(diagnostics["solver_model"], "reference_scalar_tangent");
+    assert_eq!(diagnostics["sample_count"], 1);
+    assert!(diagnostics["basis_transport_policy"].is_null());
+    assert!(diagnostics["solver_adapter"].is_null());
+    assert_eq!(
+        diagnostics["sample_execution_provenance_status"],
+        "orchestrator_only_reference"
+    );
+    assert_eq!(
+        diagnostics["sample_execution_provenance"]["samples"][0]["sample_index"],
+        0
+    );
+    assert_eq!(diagnostics["dispersion"]["mode_count"], 1);
+    assert_eq!(diagnostics["tracking"]["status"], "not_requested");
+    assert_eq!(diagnostics["residuals"]["status"], "available");
+    assert_eq!(diagnostics["residuals"]["data"]["records"][0]["residual_absolute_l2"], 1.25e-9);
+    assert_eq!(diagnostics["overlaps"]["status"], "not_requested");
+    assert_eq!(diagnostics["tangent_leakage"]["status"], "available");
+    assert_eq!(diagnostics["tangent_leakage"]["data"]["records"][0]["mean_abs"], 3.0e-12);
+    assert_eq!(diagnostics["orthogonality"]["status"], "not_requested");
+}
+
+#[test]
+fn generic_manifest_reports_the_union_of_requested_spectrum_scopes() {
+    let result = sample_result();
+    let spectrum = |scope: Option<fullmag_ir::EigenSpectrumScopeIR>| {
+        fullmag_ir::OutputIR::EigenSpectrum {
+            quantity: "eigenfrequency".to_string(),
+            scope,
+        }
+    };
+    let mode = fullmag_ir::OutputIR::EigenMode {
+        field: "mode".to_string(),
+        all_modes: false,
+        indices: vec![0],
+        branches: Vec::new(),
+        sample_selector: None,
+    };
+    let cases: Vec<(&str, Vec<fullmag_ir::OutputIR>, Value)> = vec![
+        (
+            "per-sample",
+            vec![
+                spectrum(Some(fullmag_ir::EigenSpectrumScopeIR::PerSample)),
+                mode.clone(),
+            ],
+            serde_json::json!(["per_sample"]),
+        ),
+        (
+            "global",
+            vec![
+                spectrum(Some(fullmag_ir::EigenSpectrumScopeIR::Global)),
+                mode.clone(),
+            ],
+            serde_json::json!(["global"]),
+        ),
+        (
+            "legacy-per-sample",
+            vec![spectrum(None), mode.clone()],
+            serde_json::json!(["per_sample"]),
+        ),
+        (
+            "both-scopes",
+            vec![
+                spectrum(Some(fullmag_ir::EigenSpectrumScopeIR::Global)),
+                spectrum(Some(fullmag_ir::EigenSpectrumScopeIR::PerSample)),
+                mode.clone(),
+            ],
+            serde_json::json!(["per_sample", "global"]),
+        ),
+        (
+            "dispersion-without-spectrum-request",
+            vec![
+                fullmag_ir::OutputIR::DispersionCurve {
+                    name: "dispersion".to_string(),
+                    include_branch_table: true,
+                },
+                mode,
+            ],
+            serde_json::json!([]),
+        ),
+    ];
+
+    let mut expected_mode_paths = None;
+    for (case, outputs, expected_scopes) in cases {
+        let temp = TempDirGuard::new(&format!("spectrum-scope-{case}"));
+        write_frequency_domain_eigen_manifest_with_outputs(
+            &temp.path,
+            &result,
+            &artifact_identity(),
+            &outputs,
+            Some(1),
+            None,
+        )
+        .expect("generic frequency-domain manifest should write");
+        let manifest: Value = serde_json::from_slice(
+            &std::fs::read(temp.path.join("frequency_domain/manifest.v1.json"))
+                .expect("generic frequency-domain manifest should exist"),
+        )
+        .expect("generic frequency-domain manifest should be valid JSON");
+
+        assert_eq!(
+            manifest["spectrum_output_scopes"], expected_scopes,
+            "wrong requested spectrum scope set for {case}"
+        );
+        let mode_paths = manifest["artifacts"]["mode_metadata_paths"].clone();
+        if let Some(expected) = expected_mode_paths.as_ref() {
+            assert_eq!(
+                &mode_paths, expected,
+                "scope metadata must not change selected mode paths for {case}"
+            );
+        } else {
+            expected_mode_paths = Some(mode_paths);
+        }
+    }
+}
+
+#[test]
+fn eigen_artifact_writer_keeps_missing_relative_residual_unavailable() {
+    let temp = TempDirGuard::new("eigen-artifacts-missing-relative-residual");
+    let mut result = sample_result();
+    result.samples[0].modes[0].residual_relative_l2 = None;
+
+    write_path_bundle(&temp.path, &result).expect("path spectrum should write");
+    write_mode_bundle(&temp.path, &result).expect("mode bundle should write");
+    write_frequency_domain_eigen_manifest(&temp.path, &result, &artifact_identity())
+        .expect("frequency-domain eigen manifest should write");
+
+    let eigen_dir = temp.path.join("eigen");
+    let spectrum: Value = serde_json::from_slice(
+        &std::fs::read(eigen_dir.join("spectrum.v2.json"))
+            .expect("spectrum.v2.json should be written"),
+    )
+    .expect("spectrum.v2.json should be valid JSON");
+    assert!(spectrum["samples"][0]["modes"][0]["residual_relative_l2"].is_null());
+
+    let mode: Value = serde_json::from_slice(
+        &std::fs::read(eigen_dir.join("modes/sample_0000_mode_0000.json"))
+            .expect("flat mode artifact should be written"),
+    )
+    .expect("flat mode artifact should be valid JSON");
+    assert!(mode["residual_relative_l2"].is_null());
+}
+
+#[test]
+fn path_writer_keeps_bias_namespace_explicit_for_physical_field_sweeps() {
+    let temp = TempDirGuard::new("eigen-artifacts-bias-namespace");
+    let result = sample_result();
+
+    write_path_bundle_with_sample_namespace(&temp.path, &result, true)
+        .expect("field-sweep path bundle should write");
+
+    let spectrum: Value = serde_json::from_slice(
+        &std::fs::read(temp.path.join("eigen/spectrum.v2.json"))
+            .expect("spectrum.v2.json should be written"),
+    )
+    .expect("spectrum.v2.json should be valid JSON");
+    assert_eq!(
+        spectrum["samples"][0]["sample_id"],
+        "bias-field-sample-0000"
+    );
+
+    let spectrum_v3: Value = serde_json::from_slice(
+        &std::fs::read(temp.path.join("eigen/spectrum.v3.json"))
+            .expect("spectrum.v3.json should be written"),
+    )
+    .expect("spectrum.v3.json should be valid JSON");
+    assert_eq!(
+        spectrum_v3["samples"][0]["sample_id"],
+        "bias-field-sample-0000"
     );
 }
 
@@ -738,6 +1399,20 @@ fn eigen_branch_writer_reports_modal_overlap_statistics() {
     let temp = TempDirGuard::new("eigen-branch-overlap-stats");
     let result = sample_result_with_modal_overlap_tracking();
 
+    for (point, expected_overlap) in result.branches[0]
+        .points
+        .iter()
+        .skip(1)
+        .zip([0.8, 0.6])
+    {
+        let edge = point
+            .tracking_edge
+            .as_ref()
+            .expect("actual tracker should record each pair edge");
+        assert_eq!(edge.score_source.as_str(), "modal_overlap_weighted_score");
+        assert!((point.overlap_prev.unwrap() - expected_overlap).abs() < 1.0e-12);
+    }
+
     write_branch_bundle(&temp.path, &result).expect("branch bundle should write");
 
     let branches: Value = serde_json::from_slice(
@@ -801,6 +1476,7 @@ fn eigen_manifest_preserves_native_gpu_execution_and_hardened_provenance() {
     result.include_demag = true;
     result.samples[0].solver_diagnostics = Some(serde_json::json!({
         "sample_solver_diagnostics": [{
+            "sample_index": 0,
             "diagnostics": {
                 "physics_contract_version": "micromagnetics_frequency_domain_v5",
                 "operator_dictionary_version": "FrequencyOperatorDictionary.v1",
@@ -923,7 +1599,10 @@ fn eigen_artifacts_write_k0_kittel_summary_and_points() {
         summary["schema_version"],
         "frequency_domain_kittel_k0_validation.v1"
     );
-    assert_eq!(summary["status"], "passed");
+    assert_eq!(summary["status"], "partial");
+    assert_eq!(summary["frequency_comparison_status"], "passed");
+    assert_eq!(summary["periodic_mode_seam_metrics_complete"], false);
+    assert_eq!(summary["qualification"], "NOT VERIFIED");
     assert_eq!(summary["model"], "macrospin_larmor");
     assert_eq!(summary["sweep_point_count"], 3);
     assert!(
@@ -953,6 +1632,48 @@ fn eigen_artifacts_write_k0_kittel_summary_and_points() {
     assert_eq!(kittel_fit["source"]["artifact"], "eigen/spectrum.v2.json");
     assert_eq!(kittel_fit["model"], "macrospin_larmor");
     assert_eq!(kittel_fit["complete"], false);
+}
+
+#[test]
+fn k0_kittel_relative_residual_is_null_when_any_point_is_missing() {
+    let mut result = sample_result_with_k0_kittel_sweep();
+    result.samples[1].modes[0].residual_relative_l2 = None;
+
+    let artifacts = k0_kittel_validation_auxiliary_artifacts(&result)
+        .expect("Kittel artifacts should preserve unavailable residual metadata");
+    let summary = artifacts
+        .iter()
+        .find(|artifact| artifact.relative_path == "validation/kittel_k0_pbc/summary.v1.json")
+        .expect("Kittel summary should be present");
+    let summary: Value = serde_json::from_slice(&summary.bytes).expect("summary should be JSON");
+    assert!(summary["solver"]["max_eigen_residual_relative"].is_null());
+    assert_eq!(summary["status"], "partial");
+    assert_eq!(summary["frequency_comparison_status"], "passed");
+    assert_eq!(summary["qualification"], "NOT VERIFIED");
+    assert!(summary["missing_evidence"]
+        .as_array()
+        .expect("missing evidence should be an array")
+        .iter()
+        .any(|item| item.as_str() == Some("per_mode_residual_measurement")));
+
+    let points = artifacts
+        .iter()
+        .find(|artifact| artifact.relative_path == "validation/kittel_k0_pbc/points.v1.csv")
+        .expect("Kittel points should be present");
+    let rows = String::from_utf8(points.bytes.clone()).expect("points should be UTF-8");
+    let header = rows
+        .lines()
+        .next()
+        .expect("points header should be present");
+    let residual_column = header
+        .split(',')
+        .position(|column| column == "mode_residual_relative")
+        .expect("relative residual column should be present");
+    let missing_row = rows
+        .lines()
+        .find(|row| row.split(',').nth(2) == Some("1"))
+        .expect("field index 1 row should be present");
+    assert_eq!(missing_row.split(',').nth(residual_column), Some(""));
 }
 
 #[test]
@@ -1187,7 +1908,10 @@ fn k0_kittel_artifacts_accept_periodic_airbox_with_real_metrics() {
         .expect("summary should be emitted");
     let summary: Value =
         serde_json::from_slice(&summary_artifact.bytes).expect("summary should be valid JSON");
-    assert_eq!(summary["status"], "passed");
+    assert_eq!(summary["status"], "partial");
+    assert_eq!(summary["frequency_comparison_status"], "passed");
+    assert_eq!(summary["periodic_mode_seam_metrics_complete"], false);
+    assert_eq!(summary["qualification"], "NOT VERIFIED");
     assert_eq!(summary["case_id"], "K0-3");
     assert_eq!(summary["demag_kind"], "periodic_airbox_k0");
     assert_eq!(summary["demag"]["gauge_policy"], "mean_zero_augmented");
@@ -1224,29 +1948,31 @@ fn k0_kittel_selector_prefers_uniform_branch_over_frequency_only_match() {
 
     for sample_result in &mut result.samples {
         let expected_frequency = sample_result.modes[0].frequency_real_hz;
+        let node_mass_weights = sample_result.modes[0]
+            .node_mass_weights
+            .clone()
+            .expect("Kittel fixture should carry nodal mass weights");
         let mut nonuniform = sample_result.modes[0].clone();
         nonuniform.raw_mode_index = 0;
         nonuniform.frequency_real_hz = expected_frequency;
         nonuniform.angular_frequency_rad_per_s = std::f64::consts::TAU * expected_frequency;
         nonuniform.eigenvalue_imag = std::f64::consts::TAU * expected_frequency;
-        nonuniform.reduced_vector = Some(vec![
-            Complex64::new(1.0, 0.0),
-            Complex64::new(-1.0, 0.0),
-            Complex64::new(1.0, 0.0),
-            Complex64::new(-1.0, 0.0),
-        ]);
+        set_kittel_fixture_x_mode(
+            &mut nonuniform,
+            &[1.0, -1.0, 1.0, -1.0],
+            &node_mass_weights,
+        );
 
         let mut uniform = sample_result.modes[0].clone();
         uniform.raw_mode_index = 1;
         uniform.frequency_real_hz = expected_frequency * 1.001;
         uniform.angular_frequency_rad_per_s = std::f64::consts::TAU * uniform.frequency_real_hz;
         uniform.eigenvalue_imag = std::f64::consts::TAU * uniform.frequency_real_hz;
-        uniform.reduced_vector = Some(vec![
-            Complex64::new(1.0, 0.0),
-            Complex64::new(1.0, 0.0),
-            Complex64::new(1.0, 0.0),
-            Complex64::new(1.0, 0.0),
-        ]);
+        set_kittel_fixture_x_mode(
+            &mut uniform,
+            &[1.0, 1.0, 1.0, 1.0],
+            &node_mass_weights,
+        );
 
         sample_result.modes = vec![nonuniform, uniform];
         let sample_index = sample_result.sample.sample_index;
@@ -1257,6 +1983,7 @@ fn k0_kittel_selector_prefers_uniform_branch_over_frequency_only_match() {
             frequency_imag_hz: 0.0,
             tracking_confidence: 1.0,
             overlap_prev: (sample_index > 0).then_some(1.0),
+            tracking_edge: None,
         });
         result.branches[1].points.push(TrackedBranchPoint {
             sample_index,
@@ -1265,6 +1992,7 @@ fn k0_kittel_selector_prefers_uniform_branch_over_frequency_only_match() {
             frequency_imag_hz: 0.0,
             tracking_confidence: 1.0,
             overlap_prev: (sample_index > 0).then_some(1.0),
+            tracking_edge: None,
         });
     }
 
@@ -1321,18 +2049,21 @@ fn k0_kittel_selector_does_not_use_expected_frequency_as_a_tiebreaker() {
 
     for sample_result in &mut result.samples {
         let expected_frequency = sample_result.modes[0].frequency_real_hz;
+        let node_mass_weights = sample_result.modes[0]
+            .node_mass_weights
+            .clone()
+            .expect("Kittel fixture should carry nodal mass weights");
         let mut branch_zero_mode = sample_result.modes[0].clone();
         branch_zero_mode.raw_mode_index = 0;
         branch_zero_mode.frequency_real_hz = expected_frequency * 1.001;
         branch_zero_mode.angular_frequency_rad_per_s =
             std::f64::consts::TAU * branch_zero_mode.frequency_real_hz;
         branch_zero_mode.eigenvalue_imag = branch_zero_mode.angular_frequency_rad_per_s;
-        branch_zero_mode.reduced_vector = Some(vec![
-            Complex64::new(1.0, 0.0),
-            Complex64::new(1.0, 0.0),
-            Complex64::new(1.0, 0.0),
-            Complex64::new(1.0, 0.0),
-        ]);
+        set_kittel_fixture_x_mode(
+            &mut branch_zero_mode,
+            &[1.0, 1.0, 1.0, 1.0],
+            &node_mass_weights,
+        );
 
         let mut analytical_match_mode = sample_result.modes[0].clone();
         analytical_match_mode.raw_mode_index = 1;
@@ -1340,12 +2071,11 @@ fn k0_kittel_selector_does_not_use_expected_frequency_as_a_tiebreaker() {
         analytical_match_mode.angular_frequency_rad_per_s =
             std::f64::consts::TAU * analytical_match_mode.frequency_real_hz;
         analytical_match_mode.eigenvalue_imag = analytical_match_mode.angular_frequency_rad_per_s;
-        analytical_match_mode.reduced_vector = Some(vec![
-            Complex64::new(1.0, 0.0),
-            Complex64::new(1.0, 0.0),
-            Complex64::new(1.0, 0.0),
-            Complex64::new(1.0, 0.0),
-        ]);
+        set_kittel_fixture_x_mode(
+            &mut analytical_match_mode,
+            &[1.0, 1.0, 1.0, 1.0],
+            &node_mass_weights,
+        );
 
         sample_result.modes = vec![branch_zero_mode, analytical_match_mode];
         let sample_index = sample_result.sample.sample_index;
@@ -1356,6 +2086,7 @@ fn k0_kittel_selector_does_not_use_expected_frequency_as_a_tiebreaker() {
             frequency_imag_hz: 0.0,
             tracking_confidence: 1.0,
             overlap_prev: (sample_index > 0).then_some(1.0),
+            tracking_edge: None,
         });
         result.branches[1].points.push(TrackedBranchPoint {
             sample_index,
@@ -1364,6 +2095,7 @@ fn k0_kittel_selector_does_not_use_expected_frequency_as_a_tiebreaker() {
             frequency_imag_hz: 0.0,
             tracking_confidence: 1.0,
             overlap_prev: (sample_index > 0).then_some(1.0),
+            tracking_edge: None,
         });
     }
 
@@ -1411,15 +2143,7 @@ fn k0_kittel_selector_uses_mass_weighted_uniformity_when_weights_are_available()
         unweighted_uniform.frequency_real_hz = expected_frequency;
         unweighted_uniform.angular_frequency_rad_per_s = std::f64::consts::TAU * expected_frequency;
         unweighted_uniform.eigenvalue_imag = std::f64::consts::TAU * expected_frequency;
-        unweighted_uniform.reduced_vector = Some(vec![
-            Complex64::new(0.0, 0.0),
-            Complex64::new(0.0, 0.0),
-            Complex64::new(0.0, 0.0),
-            Complex64::new(1.0, 0.0),
-            Complex64::new(0.0, 0.0),
-            Complex64::new(0.0, 0.0),
-        ]);
-        unweighted_uniform.node_mass_weights = Some(mass_weights.clone());
+        set_kittel_fixture_x_mode(&mut unweighted_uniform, &[0.0, 1.0], &mass_weights);
 
         let mut mass_weighted_uniform = sample_result.modes[0].clone();
         mass_weighted_uniform.raw_mode_index = 1;
@@ -1428,15 +2152,7 @@ fn k0_kittel_selector_uses_mass_weighted_uniformity_when_weights_are_available()
             std::f64::consts::TAU * mass_weighted_uniform.frequency_real_hz;
         mass_weighted_uniform.eigenvalue_imag =
             std::f64::consts::TAU * mass_weighted_uniform.frequency_real_hz;
-        mass_weighted_uniform.reduced_vector = Some(vec![
-            Complex64::new(1.0, 0.0),
-            Complex64::new(0.0, 0.0),
-            Complex64::new(0.0, 0.0),
-            Complex64::new(-1.0, 0.0),
-            Complex64::new(0.0, 0.0),
-            Complex64::new(0.0, 0.0),
-        ]);
-        mass_weighted_uniform.node_mass_weights = Some(mass_weights);
+        set_kittel_fixture_x_mode(&mut mass_weighted_uniform, &[1.0, -1.0], &mass_weights);
 
         sample_result.modes = vec![unweighted_uniform, mass_weighted_uniform];
         let sample_index = sample_result.sample.sample_index;
@@ -1447,6 +2163,7 @@ fn k0_kittel_selector_uses_mass_weighted_uniformity_when_weights_are_available()
             frequency_imag_hz: 0.0,
             tracking_confidence: 1.0,
             overlap_prev: (sample_index > 0).then_some(1.0),
+            tracking_edge: None,
         });
         result.branches[1].points.push(TrackedBranchPoint {
             sample_index,
@@ -1455,6 +2172,7 @@ fn k0_kittel_selector_uses_mass_weighted_uniformity_when_weights_are_available()
             frequency_imag_hz: 0.0,
             tracking_confidence: 1.0,
             overlap_prev: (sample_index > 0).then_some(1.0),
+            tracking_edge: None,
         });
     }
 
@@ -1873,6 +2591,67 @@ fn kittel_fit_contains_only_postsolve_comparison_and_digest_bound_source() {
 }
 
 #[test]
+fn kittel_fit_validation_requires_finite_residual_for_each_selected_point() {
+    for residual in [None, Some(f64::NAN), Some(-1.0)] {
+        let mut result = sample_result_with_k0_kittel_sweep();
+        result.samples[1].modes[0].residual_relative_l2 = residual;
+
+        let fit = build_kittel_fit_artifact(&result)
+            .expect("diagnostic Kittel fit should remain writable")
+            .expect("fixture declares Kittel validation");
+        assert_eq!(fit.validation_status, "not_verified");
+        assert_eq!(fit.status, ServerArtifactStatus::Partial);
+        assert!(!fit.complete);
+        assert_eq!(fit.points.len(), 3);
+        assert_eq!(fit.points[0].status, ServerArtifactStatus::Complete);
+        assert_eq!(fit.points[1].status, ServerArtifactStatus::Partial);
+        assert_eq!(fit.points[2].status, ServerArtifactStatus::Complete);
+    }
+
+    let complete_result = sample_result_with_k0_kittel_sweep();
+    let complete_fit = build_kittel_fit_artifact(&complete_result)
+        .expect("complete residual control should build")
+        .expect("fixture declares Kittel validation");
+    assert_eq!(complete_fit.validation_status, "passed");
+    assert!(complete_fit
+        .points
+        .iter()
+        .all(|point| point.status == ServerArtifactStatus::Complete));
+}
+
+#[test]
+fn kittel_fit_frequency_failure_precedes_unavailable_residual() {
+    let mut result = sample_result_with_k0_kittel_sweep();
+    result.samples[1].modes[0].frequency_real_hz *= 2.0;
+    result.samples[1].modes[0].residual_relative_l2 = None;
+
+    let fit = build_kittel_fit_artifact(&result)
+        .expect("frequency failure should remain reportable")
+        .expect("fixture declares Kittel validation");
+    assert_eq!(fit.validation_status, "failed");
+    assert_eq!(fit.points[1].status, ServerArtifactStatus::Partial);
+}
+
+#[test]
+fn undeclared_kittel_validation_does_not_break_path_writer() {
+    let temp = TempDirGuard::new("eigen-artifacts-kittel-validation-optional-off");
+    let mut result = sample_result_with_k0_kittel_sweep();
+    result.k0_kittel_validation = None;
+
+    write_path_bundle(&temp.path, &result)
+        .expect("ordinary path writer should work without optional Kittel validation");
+    assert!(!write_kittel_fit_artifact(&temp.path, &result)
+        .expect("optional Kittel fit artifact should remain non-failing"));
+    assert!(build_kittel_fit_artifact(&result)
+        .expect("optional Kittel fit builder should remain non-failing")
+        .is_none());
+    assert!(k0_kittel_validation_auxiliary_artifacts(&result)
+        .expect("optional Kittel summary builder should remain non-failing")
+        .is_empty());
+    assert!(!temp.path.join("fmr/kittel_fit.v1.json").exists());
+}
+
+#[test]
 fn eigen_manifest_carries_k0_kittel_validation_contract() {
     let temp = TempDirGuard::new("eigen-artifacts-k0-kittel-validation");
     let result = sample_result_with_k0_kittel_sweep();
@@ -2012,62 +2791,40 @@ fn production_dispersion_with_de_bv_validation_writes_analytic_columns() {
         manifest["validation"]["dynamic_demag_operator_source"],
         "numeric_modal_solver"
     );
-    assert!(manifest["validation"]
-        .get("dispersion_reference_model")
-        .is_none());
-}
-
-#[test]
-fn de_bv_reference_manifest_names_analytic_frequency_source_not_demag_k() {
-    let temp = TempDirGuard::new("eigen-artifacts-de-bv-reference-source");
-    let mut result =
-        sample_result_with_solver_model(EigenSolverModel::ReferenceThinFilmDeBvKalinikosN0);
-    result.include_demag = true;
-    result.samples[0].sample.path_s = 1.0;
-    result.samples[0].sample.k_vector = [3.0e6, 0.0, 0.0];
-    result.dispersion_validation = Some(fullmag_ir::FemEigenDispersionValidationIR {
-        kind: "thin_film_de_bv_low_k".to_string(),
-        analytic_model: "kalinikos_slab_n0".to_string(),
-        film_thickness_m: 20e-9,
-        equilibrium_magnetization: [1.0, 0.0, 0.0],
-        film_normal: [0.0, 0.0, 1.0],
-        frequency_window_hz: fullmag_ir::FemEigenDispersionValidationWindowIR {
-            min: 0.0,
-            max: 5.0e9,
-        },
-        max_k_rad_per_m: 3.0e6,
-        max_relative_error: 0.10,
-        scenarios: vec![fullmag_ir::FemEigenDispersionValidationScenarioIR {
-            geometry: "backward_volume".to_string(),
-            branch_id: "branch_0".to_string(),
-            sample_indices: vec![0],
-        }],
-    });
-
-    write_frequency_domain_eigen_manifest(&temp.path, &result, &artifact_identity())
-        .expect("frequency-domain manifest should write");
-
-    let manifest: Value = serde_json::from_slice(
-        &std::fs::read(temp.path.join("frequency_domain/manifest.v1.json"))
-            .expect("frequency-domain manifest should be written"),
-    )
-    .expect("frequency-domain manifest should parse");
-    assert_eq!(
-        manifest["requested_execution"]["include_demag"],
-        Value::Bool(true)
-    );
-    assert_eq!(
-        manifest["validation"]["dispersion_frequency_source"],
-        "analytic_reference_model"
-    );
     assert_eq!(
         manifest["validation"]["dispersion_reference_model"],
         "kalinikos_slab_n0"
     );
-    assert_eq!(
-        manifest["validation"]["dynamic_demag_operator_source"],
-        "analytic_thin_film_de_bv_reference_not_fem_demag_k"
-    );
+}
+
+#[test]
+fn native_modal_manifest_distinguishes_numeric_solve_from_comparison() {
+    let temp = TempDirGuard::new("eigen-artifacts-modal-frequency-source");
+    for (solver_model, expected_source) in [
+        (
+            EigenSolverModel::ProductionCpuShiftInvert,
+            Some("numeric_modal_solver"),
+        ),
+        (EigenSolverModel::ReferenceScalarTangent, None),
+    ] {
+        let mut result = sample_result_with_solver_model(solver_model);
+        result.samples[0].sample.k_vector = [1.5e6, 0.0, 0.0];
+        result.samples[0].sample.path_s = 1.5e6;
+        result.include_demag = true;
+        write_frequency_domain_eigen_manifest(&temp.path, &result, &artifact_identity())
+            .expect("frequency-domain manifest should write");
+
+        let manifest: Value = serde_json::from_slice(
+            &std::fs::read(temp.path.join("frequency_domain/manifest.v1.json"))
+                .expect("frequency-domain manifest should be written"),
+        )
+        .expect("frequency-domain manifest should parse");
+        assert_eq!(
+            manifest["validation"]["dispersion_frequency_source"],
+            expected_source.map_or(Value::Null, |source| Value::String(source.to_string()))
+        );
+        assert!(manifest["validation"]["dispersion_reference_model"].is_null());
+    }
 }
 
 #[test]

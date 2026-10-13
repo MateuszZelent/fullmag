@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import contextlib
 import copy
 import io
@@ -55,6 +56,69 @@ class ProblemApiTests(unittest.TestCase):
 
         self.assertEqual(fem.order, 1)
         self.assertIs(type(fem.order), int)
+
+    def test_fem_eigen_solver_policy_rejects_boolean_residual_tolerance(self) -> None:
+        for residual_tolerance in (True, False):
+            with self.subTest(residual_tolerance=residual_tolerance):
+                with self.assertRaisesRegex(
+                    TypeError,
+                    "residual_tolerance must be a real number",
+                ):
+                    fm.FemEigenSolverPolicy(residual_tolerance=residual_tolerance)
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "residual_tolerance must be finite and positive",
+        ):
+            fm.FemEigenSolverPolicy(residual_tolerance=0.0)
+
+        policy = fm.FemEigenSolverPolicy(
+            residual_tolerance=1e-6,
+            max_outer_iterations=17,
+            max_linear_iterations=29,
+        )
+        self.assertEqual(policy.residual_tolerance, 1e-6)
+        self.assertEqual(policy.max_outer_iterations, 17)
+        self.assertEqual(policy.max_linear_iterations, 29)
+        self.assertEqual(
+            policy.to_ir(),
+            {
+                "residual_tolerance": 1e-6,
+                "max_outer_iterations": 17,
+                "max_linear_iterations": 29,
+            },
+        )
+        self.assertEqual(fm.FemEigenSolverPolicy().to_ir(), {})
+
+    def test_fem_eigen_solver_iteration_fields_match_native_signed_range(self) -> None:
+        max_iterations = 2_147_483_647
+        for field_name in ("max_outer_iterations", "max_linear_iterations"):
+            with self.subTest(field=field_name, bound="maximum"):
+                policy = fm.FemEigenSolverPolicy(**{field_name: max_iterations})
+                self.assertEqual(getattr(policy, field_name), max_iterations)
+                self.assertEqual(policy.to_ir()[field_name], max_iterations)
+
+            with self.subTest(field=field_name, bound="first out of range"):
+                with self.assertRaisesRegex(ValueError, "native signed iteration limit"):
+                    fm.FemEigenSolverPolicy(**{field_name: max_iterations + 1})
+
+            for invalid_value in (0, -1):
+                with self.subTest(field=field_name, value=invalid_value):
+                    with self.assertRaisesRegex(ValueError, "must be positive"):
+                        fm.FemEigenSolverPolicy(**{field_name: invalid_value})
+
+            for invalid_value in (
+                True,
+                False,
+                1.0,
+                1.5,
+                float("nan"),
+                float("inf"),
+                float("-inf"),
+            ):
+                with self.subTest(field=field_name, value=invalid_value):
+                    with self.assertRaises(TypeError):
+                        fm.FemEigenSolverPolicy(**{field_name: invalid_value})
 
     def test_fem_size_rejects_boolean_values(self) -> None:
         for field_name, kwargs in (
@@ -2064,6 +2128,271 @@ class ProblemApiTests(unittest.TestCase):
             },
         )
 
+    def test_eigen_diagnostics_flags_require_exact_bools_and_preserve_state(self) -> None:
+        defaults = fm.SaveEigenDiagnostics().to_ir()
+        self.assertEqual(
+            defaults,
+            {
+                "kind": "eigen_diagnostics",
+                "include_tracking": True,
+                "include_residuals": True,
+                "include_overlaps": True,
+                "include_tangent_leakage": True,
+                "include_orthogonality": True,
+            },
+        )
+        explicit = {
+            "include_tracking": False,
+            "include_residuals": True,
+            "include_overlaps": False,
+            "include_tangent_leakage": True,
+            "include_orthogonality": False,
+        }
+        self.assertEqual(
+            fm.SaveEigenDiagnostics(**explicit).to_ir(),
+            {"kind": "eigen_diagnostics", **explicit},
+        )
+
+        for flag in explicit:
+            for invalid in ("false", 0, 1, None):
+                with self.subTest(flag=flag, invalid=invalid):
+                    with self.assertRaises(ValueError):
+                        fm.SaveEigenDiagnostics(**{flag: invalid})
+
+                    with flat_world.ExecutionContext() as context:
+                        builder = fm.study("invalid_eigen_diagnostics_flag")
+                        state = context.state
+                        existing_output = fm.SaveSpectrum(scope="global")
+                        state._outputs.append(existing_output)
+                        state._outputs_explicit = False
+                        stage_draft = object()
+                        state._declared_stages.append(stage_draft)
+                        state._extra_runtime_metadata["execution_profile"] = {
+                            "requested_backend": "fem"
+                        }
+                        state._legacy_execution_selection_calls.add("device")
+                        last_result = object()
+                        last_step = object()
+                        state._last_result = last_result
+                        state._last_step = last_step
+
+                        outputs_before = state._outputs
+                        stages_before = state._declared_stages
+                        runtime_metadata_before = copy.deepcopy(
+                            state._extra_runtime_metadata
+                        )
+                        runtime_aliases_before = set(
+                            state._legacy_execution_selection_calls
+                        )
+                        with self.assertRaises(ValueError):
+                            builder.save("diagnostics", **{flag: invalid})
+                        self.assertIs(state._outputs, outputs_before)
+                        self.assertEqual(state._outputs, [existing_output])
+                        self.assertFalse(state._outputs_explicit)
+                        self.assertIs(state._declared_stages, stages_before)
+                        self.assertEqual(state._declared_stages, [stage_draft])
+                        self.assertEqual(
+                            state._extra_runtime_metadata,
+                            runtime_metadata_before,
+                        )
+                        self.assertEqual(
+                            state._legacy_execution_selection_calls,
+                            runtime_aliases_before,
+                        )
+                        self.assertIs(state._last_result, last_result)
+                        self.assertIs(state._last_step, last_step)
+
+    def test_eigen_output_selectors_round_trip_through_script_builder(self) -> None:
+        script = """
+        import fullmag as fm
+
+        study = fm.study("eigen_output_selectors")
+        study.engine("fem")
+        body = study.geometry(fm.Box(100e-9, 20e-9, 5e-9), name="film")
+        body.Ms = 800e3
+        body.Aex = 13e-12
+        body.alpha = 0.01
+        body.m = fm.texture.uniform(1, 0, 0)
+        study.save(
+            "spectrum",
+            spectrum_quantity=" eigenfrequency ",
+            spectrum_scope="global",
+        )
+        study.save(
+            "mode",
+            field="mode_complex",
+            indices=[0, 2],
+            branches=[4],
+            sample_indices=[0, 2],
+            sample_labels=["Gamma", "X"],
+        )
+        study.save("dispersion", name="bands", include_branch_table=False)
+        study.save(
+            "diagnostics",
+            include_tracking=False,
+            include_overlaps=False,
+        )
+        study.stages.add_eigenmodes(count=5, include_demag=False)
+        """
+
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            source = root / "eigen_output_selectors.py"
+            source.write_text(textwrap.dedent(script), encoding="utf-8")
+            loaded = fm.load_problem_from_script(source, lightweight_assets=True)
+            original_ir = loaded.stages[0].problem.study.to_ir()
+            rendered = rewrite_loaded_problem_script(loaded)["rendered_source"]
+            rewritten = root / "eigen_output_selectors_rewritten.py"
+            rewritten.write_text(rendered, encoding="utf-8")
+            reloaded = fm.load_problem_from_script(
+                rewritten,
+                lightweight_assets=True,
+            )
+
+        self.assertIn('study.save("mode", field="mode_complex"', rendered)
+        self.assertIn("branches=[4]", rendered)
+        self.assertIn("sample_indices=[0, 2]", rendered)
+        self.assertIn('sample_labels=["Gamma", "X"]', rendered)
+        self.assertIn(
+            'study.save("dispersion", name="bands", include_branch_table=False)',
+            rendered,
+        )
+        self.assertIn(
+            'study.save("diagnostics", include_tracking=False, include_overlaps=False)',
+            rendered,
+        )
+        self.assertEqual(reloaded.stages[0].problem.study.to_ir(), original_ir)
+
+    def test_eigen_spectrum_quantity_rejects_unsupported_values_without_state_mutation(
+        self,
+    ) -> None:
+        invalid_quantities = ("", "   ", "eigenvalue", "amplitude", "frequency_hz")
+        for invalid_quantity in invalid_quantities:
+            with self.subTest(quantity=invalid_quantity):
+                with self.assertRaises(ValueError):
+                    fm.SaveSpectrum(quantity=invalid_quantity)
+
+                with flat_world.ExecutionContext() as context:
+                    fm.study("rejected_spectrum_quantity")
+                    state = context.state
+                    existing_output = fm.SaveSpectrum(scope="global")
+                    state._outputs.append(existing_output)
+                    state._outputs_explicit = False
+                    stage_draft = object()
+                    state._declared_stages.append(stage_draft)
+                    state._extra_runtime_metadata["execution_profile"] = {
+                        "requested_backend": "fem"
+                    }
+                    state._legacy_execution_selection_calls.add("device")
+                    last_result = object()
+                    last_step = object()
+                    state._last_result = last_result
+                    state._last_step = last_step
+
+                    outputs_before = state._outputs
+                    stages_before = state._declared_stages
+                    runtime_metadata_before = copy.deepcopy(
+                        state._extra_runtime_metadata
+                    )
+                    runtime_aliases_before = set(
+                        state._legacy_execution_selection_calls
+                    )
+
+                    with self.assertRaises(ValueError):
+                        flat_world.save(
+                            "spectrum",
+                            spectrum_quantity=invalid_quantity,
+                        )
+
+                    self.assertIs(state._outputs, outputs_before)
+                    self.assertEqual(state._outputs, [existing_output])
+                    self.assertFalse(state._outputs_explicit)
+                    self.assertIs(state._declared_stages, stages_before)
+                    self.assertEqual(state._declared_stages, [stage_draft])
+                    self.assertEqual(
+                        state._extra_runtime_metadata,
+                        runtime_metadata_before,
+                    )
+                    self.assertEqual(
+                        state._legacy_execution_selection_calls,
+                        runtime_aliases_before,
+                    )
+                    self.assertIs(state._last_result, last_result)
+                    self.assertIs(state._last_step, last_step)
+
+    def test_study_save_mode_accepts_numpy_and_sequence_selectors(self) -> None:
+        cases = (
+            (
+                {"indices": np.array([0, 2], dtype=np.int64)},
+                {"kind": "eigen_mode", "field": "mode", "indices": [0, 2]},
+            ),
+            (
+                {"indices": np.array([0], dtype=np.int64)},
+                {"kind": "eigen_mode", "field": "mode", "indices": [0]},
+            ),
+            (
+                {
+                    "indices": (0,),
+                    "branches": np.array([3, 1], dtype=np.int64),
+                    "sample_indices": np.array([0, 2], dtype=np.int64),
+                    "sample_labels": np.array(["Gamma", "X"]),
+                },
+                {
+                    "kind": "eigen_mode",
+                    "field": "mode",
+                    "indices": [0],
+                    "branches": [3, 1],
+                    "sample_selector": {
+                        "sample_indices": [0, 2],
+                        "sample_labels": ["Gamma", "X"],
+                    },
+                },
+            ),
+            (
+                {
+                    "indices": range(1, 3),
+                    "sample_indices": (2, 0),
+                    "sample_labels": ["X", "M"],
+                },
+                {
+                    "kind": "eigen_mode",
+                    "field": "mode",
+                    "indices": [1, 2],
+                    "sample_selector": {
+                        "sample_indices": [2, 0],
+                        "sample_labels": ["X", "M"],
+                    },
+                },
+            ),
+        )
+        for selectors, expected in cases:
+            with self.subTest(selectors=tuple(selectors)):
+                fm.reset()
+                try:
+                    fm.study("numpy_save_mode").save("mode", **selectors)
+                    outputs = flat_world._state._outputs
+                    self.assertEqual(len(outputs), 1)
+                    self.assertEqual(outputs[0].to_ir(), expected)
+                finally:
+                    fm.reset()
+
+    def test_study_save_mode_preserves_empty_and_invalid_selectors(
+        self,
+    ) -> None:
+        invalid_cases = (
+            ({"indices": np.array([], dtype=np.int64)}, "requires at least one"),
+            ({"indices": np.array([-1], dtype=np.int64)}, "must be >= 0"),
+            ({"indices": np.array([True])}, "integers"),
+        )
+        for selectors, error in invalid_cases:
+            with self.subTest(selectors=tuple(selectors)):
+                fm.reset()
+                try:
+                    with self.assertRaisesRegex(ValueError, error):
+                        fm.study("invalid_save_mode").save("mode", **selectors)
+                finally:
+                    fm.reset()
+
     def test_eigenmodes_rejects_frequency_response_outputs(self) -> None:
         with self.assertRaisesRegex(ValueError, "Eigenmodes outputs"):
             fm.Eigenmodes(outputs=[fm.SaveResponse("susceptibility_tensor")])
@@ -2804,6 +3133,55 @@ class ProblemApiTests(unittest.TestCase):
         self.assertEqual(runtime["gpu_count"], 1)
         self.assertEqual(runtime["device_index"], 0)
         self.assertEqual(runtime["cpu_threads"], 8)
+
+    def test_parallel_execution_policy_survives_runtime_selection_copies(self) -> None:
+        policy = fm.ParallelExecutionPolicy(
+            mode="adaptive",
+            max_cpu_percent=90.0,
+            max_memory_percent=80.0,
+            memory_reserve_bytes=1_073_741_824,
+            max_workers=3,
+            threads_per_worker=2,
+        )
+        runtime = fm.backend.cpu().engine("fem").with_parallel_execution(policy)
+        for copied in (
+            runtime.engine("fem"),
+            runtime.threads(4),
+            runtime.mode("extended"),
+            runtime.precision("double"),
+        ):
+            self.assertEqual(copied.parallel_execution, policy)
+        metadata = runtime.to_runtime_metadata()
+        self.assertEqual(metadata["parallel_execution"], policy.to_ir())
+
+        for unsupported in (
+            fm.backend.cpu().engine("fdm"),
+            fm.backend.cuda(1).engine("fem"),
+            fm.backend.cpu(),
+        ):
+            with self.subTest(runtime=unsupported):
+                with self.assertRaisesRegex(ValueError, "unsupported parallel_execution realization"):
+                    unsupported.with_parallel_execution(policy)
+
+    def test_parallel_execution_policy_rejects_non_integral_or_unknown_fields(self) -> None:
+        invalid_values = (
+            {"max_cpu_percent": True},
+            {"max_memory_percent": float("nan")},
+            {"max_memory_percent": float("inf")},
+            {"max_workers": True},
+            {"threads_per_worker": 1.0},
+            {"memory_reserve_bytes": 2**64},
+            {"max_workers": 2**32},
+            {"unknown": 1},
+        )
+        for overrides in invalid_values:
+            with self.subTest(overrides=overrides):
+                with self.assertRaises((TypeError, ValueError)):
+                    fm.ParallelExecutionPolicy.from_ir(overrides)
+        with self.assertRaises((TypeError, ValueError)):
+            build_scene_document_from_builder(
+                {"parallel_execution": {"unknown": 1}}
+            )
 
     def test_fdm_precision_policy_round_trips_through_public_authoring(self) -> None:
         problem = self._build_problem()
@@ -4300,6 +4678,42 @@ class ProblemApiTests(unittest.TestCase):
         self.assertIsNone(scene["editor"]["focused_entity_id"])
         self.assertEqual(scene["editor"]["mesh_entity_view_state"], {})
 
+    def test_scene_document_round_trips_parallel_execution_policy(self) -> None:
+        builder = {
+            "revision": 1,
+            "backend": "fem",
+            "requested_device": "cpu",
+            "parallel_execution": {
+                "mode": "adaptive",
+                "max_cpu_percent": 90.0,
+                "max_memory_percent": 80.0,
+                "memory_reserve_bytes": 1_073_741_824,
+                "max_workers": 4,
+                "threads_per_worker": 1,
+            },
+            "solver": {},
+            "mesh": {},
+            "universe": None,
+            "stages": [],
+            "initial_state": None,
+            "geometries": [
+                {
+                    "name": "film",
+                    "geometry_kind": "Box",
+                    "geometry_params": {"size": [20e-9, 20e-9, 10e-9]},
+                    "material": {"Ms": 800e3, "Aex": 13e-12, "alpha": 0.1},
+                    "magnetization": {"kind": "uniform", "value": [1.0, 0.0, 0.0]},
+                    "mesh": {"mode": "inherit", "hmax": ""},
+                }
+            ],
+            "current_modules": [],
+            "excitation_analysis": None,
+        }
+        scene = build_scene_document_from_builder(builder)
+        self.assertEqual(scene["study"]["parallel_execution"], builder["parallel_execution"])
+        rebuilt = build_builder_from_scene_document(scene)
+        self.assertEqual(rebuilt["parallel_execution"], builder["parallel_execution"])
+
     def test_scene_document_preserves_preset_texture_round_trip(self) -> None:
         builder = {
             "revision": 1,
@@ -5444,7 +5858,14 @@ class ProblemApiTests(unittest.TestCase):
 
         rewritten = rewrite_loaded_problem_script(loaded)["rendered_source"]
         self.assertIn("fm.Box(1e-07, 4e-08, 2e-08, name=\"host\")", rewritten)
-        self.assertIn(".translate((1.5e-08, 0, 0))", rewritten)
+        translation_offsets = [
+            ast.literal_eval(node.args[0])
+            for node in ast.walk(ast.parse(rewritten))
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "translate"
+        ]
+        self.assertEqual(translation_offsets, [(15e-9, 0.0, 0.0)])
         self.assertIn(" - ", rewritten)
 
     def test_script_builder_rewrites_file_texture_override_with_loadfile(self) -> None:
@@ -5642,6 +6063,44 @@ class ProblemApiTests(unittest.TestCase):
         self.assertEqual(
             reloaded.stages[0].problem.study.to_ir()["solver_policy"],
             policy,
+        )
+
+    def test_eigen_solver_policy_lowers_from_python_stage(self) -> None:
+        script = """
+        import fullmag as fm
+
+        study = fm.study("eigenmodes_solver_policy")
+        study.engine("fem")
+        study.device("cpu", precision="double")
+        body = study.geometry(fm.Box(size=(2e-7, 2e-7, 1e-8), name="film"), name="film")
+        body.Ms = 800e3
+        body.Aex = 13e-12
+        body.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
+        study.stages.add_eigenmodes(
+            count=4,
+            include_demag=False,
+            solver_rtol=2.5e-6,
+            solver_max_outer_iterations=17,
+            solver_max_linear_iterations=29,
+        )
+        """
+
+        with TemporaryDirectory() as tmp_dir:
+            script_path = Path(tmp_dir) / "eigenmodes_solver_policy.py"
+            script_path.write_text(textwrap.dedent(script), encoding="utf-8")
+            loaded = fm.load_problem_from_script(script_path, lightweight_assets=True)
+
+        expected_policy = {
+            "residual_tolerance": 2.5e-6,
+            "max_outer_iterations": 17,
+            "max_linear_iterations": 29,
+        }
+        study = loaded.stages[0].problem.study
+        self.assertEqual(study.solver_policy.to_ir(), expected_policy)
+        self.assertEqual(study.to_ir()["solver_policy"], expected_policy)
+        self.assertNotIn(
+            "solver_policy",
+            fm.Eigenmodes(outputs=[fm.SaveSpectrum()]).to_ir(),
         )
 
     def test_frequency_response_accepts_uppercase_max_iterations_alias(self) -> None:
@@ -7153,6 +7612,122 @@ class ProblemApiTests(unittest.TestCase):
         self.assertIn("samples_per_segment=[41]", rewritten)
         self.assertIn('bc=fm.FloquetBC(["x_periodic"])', rewritten)
 
+    def test_script_rewrite_applies_eigen_solver_policy_overrides(self) -> None:
+        script = """
+        import fullmag as fm
+
+        study = fm.study("eigen_solver_policy_stage_override")
+        study.engine("fem")
+        study.device("cpu", precision="double")
+        body = study.geometry(fm.Box(100e-9, 20e-9, 5e-9), name="track")
+        body.Ms = 800e3
+        body.Aex = 13e-12
+        body.alpha = 0.1
+        body.m = fm.texture.uniform(1, 0, 0)
+        study.stages.add_eigenmodes(
+            count=4,
+            include_demag=False,
+            solver_rtol=1e-6,
+            solver_max_outer_iterations=100,
+            solver_max_linear_iterations=200,
+        )
+        """
+
+        with TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "eigen_solver_policy_stage_override.py"
+            path.write_text(textwrap.dedent(script), encoding="utf-8")
+            loaded = fm.load_problem_from_script(path, lightweight_assets=True)
+
+        partial_override = rewrite_loaded_problem_script(
+            loaded,
+            overrides={
+                "stages": [
+                    {"kind": "eigenmodes", "eigen_solver_rtol": 2e-6},
+                ],
+            },
+        )["rendered_source"]
+        self.assertIn("solver_rtol=2e-06", partial_override)
+        self.assertIn("solver_max_outer_iterations=100", partial_override)
+        self.assertIn("solver_max_linear_iterations=200", partial_override)
+
+        replaced_policy = rewrite_loaded_problem_script(
+            loaded,
+            overrides={
+                "stages": [
+                    {
+                        "kind": "eigenmodes",
+                        "eigen_solver_rtol": 3e-6,
+                        "eigen_solver_max_outer_iterations": 300,
+                        "eigen_solver_max_linear_iterations": 400,
+                    },
+                ],
+            },
+        )["rendered_source"]
+        self.assertIn("solver_rtol=3e-06", replaced_policy)
+        self.assertIn("solver_max_outer_iterations=300", replaced_policy)
+        self.assertIn("solver_max_linear_iterations=400", replaced_policy)
+        self.assertNotIn("solver_max_outer_iterations=100", replaced_policy)
+        self.assertNotIn("solver_max_linear_iterations=200", replaced_policy)
+
+        cleared_policy = rewrite_loaded_problem_script(
+            loaded,
+            overrides={
+                "stages": [
+                    {
+                        "kind": "eigenmodes",
+                        "eigen_solver_rtol": None,
+                        "eigen_solver_max_outer_iterations": "",
+                        "eigen_solver_max_linear_iterations": None,
+                    },
+                ],
+            },
+        )["rendered_source"]
+        self.assertNotIn("solver_rtol=", cleared_policy)
+        self.assertNotIn("solver_max_outer_iterations=", cleared_policy)
+        self.assertNotIn("solver_max_linear_iterations=", cleared_policy)
+
+        partially_cleared_policy = rewrite_loaded_problem_script(
+            loaded,
+            overrides={
+                "stages": [
+                    {"kind": "eigenmodes", "eigen_solver_rtol": None},
+                ],
+            },
+        )["rendered_source"]
+        self.assertNotIn("solver_rtol=", partially_cleared_policy)
+        self.assertIn("solver_max_outer_iterations=100", partially_cleared_policy)
+        self.assertIn("solver_max_linear_iterations=200", partially_cleared_policy)
+
+        no_policy_script = script.replace(
+            "            solver_rtol=1e-6,\n"
+            "            solver_max_outer_iterations=100,\n"
+            "            solver_max_linear_iterations=200,\n",
+            "",
+        )
+        with TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "eigen_solver_policy_stage_without_policy.py"
+            path.write_text(textwrap.dedent(no_policy_script), encoding="utf-8")
+            loaded_without_policy = fm.load_problem_from_script(
+                path, lightweight_assets=True
+            )
+
+        authored_without_policy = rewrite_loaded_problem_script(
+            loaded_without_policy,
+            overrides={
+                "stages": [
+                    {
+                        "kind": "eigenmodes",
+                        "eigen_solver_rtol": 4e-6,
+                        "eigen_solver_max_outer_iterations": 500,
+                        "eigen_solver_max_linear_iterations": 600,
+                    },
+                ],
+            },
+        )["rendered_source"]
+        self.assertIn("solver_rtol=4e-06", authored_without_policy)
+        self.assertIn("solver_max_outer_iterations=500", authored_without_policy)
+        self.assertIn("solver_max_linear_iterations=600", authored_without_policy)
+
     def test_study_stage_preserves_floquet_k_path_demag_intent(self) -> None:
         script = """
         import fullmag as fm
@@ -7292,17 +7867,44 @@ class ProblemApiTests(unittest.TestCase):
             {"backward_volume", "damon_eshbach"},
         )
 
-    def test_thin_film_de_bv_dispersion_validation_rejects_broad_k_range(self) -> None:
-        with self.assertRaisesRegex(ValueError, "max_k_rad_per_m"):
-            fm.ThinFilmDEBVDispersionValidation(
-                film_thickness_m=80e-9,
-                equilibrium_magnetization=(1.0, 0.0, 0.0),
-                scenarios=[
-                    fm.DispersionValidationScenario("bv", "branch_0", [0, 1, 2]),
-                    fm.DispersionValidationScenario("de", "branch_0", [0, 3, 4]),
-                ],
-                max_k_rad_per_m=4.0e6,
-            )
+    def test_numeric_de_bv_example_has_far_dirichlet_boundaries(self) -> None:
+        import math
+        example = Path(__file__).resolve().parents[3] / "examples/fem_eigenmodes_dispersion_de_bv_low_k.py"
+        loaded = fm.load_problem_from_script(example, lightweight_assets=True)
+        ir = loaded.problem.to_ir(requested_backend="fem", execution_mode="strict", execution_precision="double", include_geometry_assets=False)
+        metadata = ir["problem_meta"]["runtime_metadata"]
+        thickness = metadata["dispersion_validation"]["film_thickness_m"]
+        height = metadata["study_universe"]["size"][2]
+        padding = (height - thickness) / 2
+        self.assertAlmostEqual(padding, 2e-6, delta=1e-15)
+        # Independent uniform-slab Gamma boundary estimate, not a FEM run.
+        h = 0.05 / (4 * math.pi * 1e-7)
+        ms = 140e3
+        nz = 1 - thickness / height
+        boundary_error = 1 - math.sqrt((h + ms * nz) / (h + ms))
+        self.assertLess(boundary_error, 0.01)
+
+    def test_thin_film_de_bv_dispersion_validation_accepts_c1_range(self) -> None:
+        validation = fm.ThinFilmDEBVDispersionValidation(
+            film_thickness_m=10e-9,
+            equilibrium_magnetization=(1.0, 0.0, 0.0),
+            scenarios=[
+                fm.DispersionValidationScenario("bv", "branch_0", [0, 1, 2]),
+                fm.DispersionValidationScenario("de", "branch_0", [0, 3, 4]),
+            ],
+            max_k_rad_per_m=1.5707963267948966e7,
+            frequency_window_hz=(0.0, 15e9),
+        )
+        self.assertEqual(validation.to_ir()["frequency_window_hz"], {"min": 0.0, "max": 15e9})
+        self.assertEqual(validation.to_ir()["max_k_rad_per_m"], 1.5707963267948966e7)
+        for bounds in [(0.0, float("nan")), (0.0, float("inf")), (float("nan"), 15e9)]:
+            with self.assertRaisesRegex(ValueError, "finite"):
+                fm.ThinFilmDEBVDispersionValidation(
+                    film_thickness_m=10e-9,
+                    equilibrium_magnetization=(1.0, 0.0, 0.0),
+                    scenarios=validation.scenarios,
+                    frequency_window_hz=bounds,
+                )
 
     def test_study_k0_kittel_validation_lowers_to_runtime_metadata(self) -> None:
         script = """

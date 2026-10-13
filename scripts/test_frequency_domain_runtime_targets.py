@@ -519,7 +519,7 @@ def test_de_bv_low_k_dispersion_example_declares_dynamic_demag_validation_target
     justfile = JUSTFILE.read_text(encoding="utf-8")
 
     assert 'study = fm.study("fem_eigenmodes_dispersion_de_bv_low_k")' in example
-    assert "study.pbc(x=True, y=True)" in example
+    assert 'study.pbc(x=True, y=True, demag="periodic_airbox_k0")' in example
     assert "fm.ThinFilmDEBVDispersionValidation" in example
     assert "fm.DispersionValidationScenario(\"backward_volume\"" in example
     assert "fm.DispersionValidationScenario(\"damon_eshbach\"" in example
@@ -1249,7 +1249,7 @@ def test_periodic_airbox_kittel_fixture_exports_a_shape_selectable_positive_fiel
     # field sample; requesting twelve modes would make this fixture claim a
     # qualification the GPU lane does not yet provide.
     assert "N_MODES = 1" in example
-    assert "study.fem_demag_solver(rtol=1e-10, max_iterations=1000)" in example
+    assert "study.fem_demag_solver(rtol=1e-9, max_iterations=1000)" in example
 
 
 def test_frequency_domain_runtime_suite_includes_periodic_airbox_eigen_convergence_gate() -> None:

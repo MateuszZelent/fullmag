@@ -1,0 +1,1423 @@
+{
+  "document": {
+    "path": "docs/physics/0920-regional-time-domain-field-drive.md"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "source_visible",
+      "reason": "Kod realizacji istnieje; pełna kwalifikacja runtime i numeryczna z rozdziału 13 pozostaje otwarta."
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "source_visible",
+      "reason": "Kod realizacji istnieje; pełna kwalifikacja runtime i numeryczna z rozdziału 13 pozostaje otwarta."
+    },
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "source_visible",
+      "reason": "Kod realizacji istnieje; pełna kwalifikacja runtime i numeryczna z rozdziału 13 pozostaje otwarta."
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "source_visible",
+      "reason": "Kod realizacji istnieje; pełna kwalifikacja runtime i numeryczna z rozdziału 13 pozostaje otwarta."
+    }
+  ],
+  "equations": [
+    {
+      "id": "regional-drive-superposition",
+      "symbols": [
+        "symbol-06",
+        "symbol-07",
+        "symbol-01",
+        "symbol-02",
+        "symbol-03",
+        "symbol-04",
+        "symbol-05",
+        "symbol-09",
+        "symbol-10",
+        "symbol-11",
+        "symbol-12",
+        "symbol-13",
+        "symbol-08"
+      ],
+      "sources": [
+        "fdm-field",
+        "fem-field",
+        "fdm-cuda"
+      ]
+    },
+    {
+      "id": "regional-drive-llg",
+      "symbols": [
+        "symbol-14",
+        "symbol-02",
+        "symbol-15",
+        "symbol-16",
+        "symbol-17"
+      ],
+      "sources": [
+        "fdm-llg",
+        "fem-llg"
+      ]
+    },
+    {
+      "id": "regional-drive-effective-field",
+      "symbols": [
+        "symbol-17",
+        "symbol-18",
+        "symbol-07"
+      ],
+      "sources": [
+        "fdm-field",
+        "fem-field"
+      ]
+    },
+    {
+      "id": "regional-drive-zeeman-energy",
+      "symbols": [
+        "symbol-19",
+        "symbol-20",
+        "symbol-02",
+        "symbol-08",
+        "symbol-21",
+        "symbol-22",
+        "symbol-14",
+        "symbol-07",
+        "symbol-23"
+      ],
+      "sources": [
+        "fem-energy"
+      ]
+    },
+    {
+      "id": "regional-drive-spatial-sinc",
+      "symbols": [
+        "symbol-26",
+        "symbol-01",
+        "symbol-25",
+        "symbol-24",
+        "symbol-29",
+        "symbol-27",
+        "symbol-31",
+        "symbol-32"
+      ],
+      "sources": [
+        "fdm-sinc",
+        "py-sinc"
+      ]
+    },
+    {
+      "id": "regional-drive-spatial-hann",
+      "symbols": [
+        "symbol-28",
+        "symbol-24",
+        "symbol-32",
+        "symbol-30"
+      ],
+      "sources": [
+        "fdm-sinc"
+      ]
+    },
+    {
+      "id": "regional-drive-spatial-gaussian",
+      "symbols": [
+        "symbol-37",
+        "symbol-01",
+        "symbol-38",
+        "symbol-39",
+        "symbol-40",
+        "symbol-41",
+        "symbol-42",
+        "symbol-43",
+        "symbol-44",
+        "symbol-45",
+        "symbol-46",
+        "symbol-32"
+      ],
+      "sources": [
+        "fdm-spatial",
+        "py-profiles"
+      ]
+    },
+    {
+      "id": "regional-drive-stage-clock",
+      "symbols": [
+        "symbol-13",
+        "symbol-34",
+        "symbol-36"
+      ],
+      "sources": [
+        "ir-clock",
+        "fdm-time",
+        "gamma-collector",
+        "clock-tests"
+      ]
+    },
+    {
+      "id": "regional-drive-time-sinc",
+      "symbols": [
+        "symbol-47",
+        "symbol-33",
+        "symbol-48",
+        "symbol-32",
+        "symbol-49",
+        "symbol-50"
+      ],
+      "sources": [
+        "fdm-time",
+        "py-wave",
+        "fdm-cuda"
+      ]
+    },
+    {
+      "id": "regional-drive-fdm-projection",
+      "symbols": [
+        "symbol-54",
+        "symbol-52",
+        "symbol-53",
+        "symbol-01",
+        "symbol-11",
+        "symbol-23",
+        "symbol-55",
+        "symbol-09",
+        "symbol-08",
+        "symbol-10"
+      ],
+      "sources": [
+        "fdm-plan"
+      ]
+    },
+    {
+      "id": "regional-drive-fem-projection",
+      "symbols": [
+        "symbol-58",
+        "symbol-21",
+        "symbol-57",
+        "symbol-23",
+        "symbol-59",
+        "symbol-53",
+        "symbol-11",
+        "symbol-60",
+        "symbol-09",
+        "symbol-08",
+        "symbol-10"
+      ],
+      "sources": [
+        "fem-project",
+        "fem-quadrature"
+      ]
+    },
+    {
+      "id": "regional-drive-pbc",
+      "symbols": [
+        "symbol-14",
+        "symbol-01",
+        "symbol-61",
+        "symbol-02",
+        "symbol-07"
+      ],
+      "sources": [
+        "fem-project"
+      ]
+    },
+    {
+      "id": "regional-drive-moment-response",
+      "symbols": [
+        "symbol-62",
+        "symbol-02",
+        "symbol-22",
+        "symbol-63",
+        "symbol-64",
+        "symbol-23",
+        "symbol-48"
+      ],
+      "sources": [
+        "gamma-moment"
+      ]
+    },
+    {
+      "id": "regional-drive-gamma-psd",
+      "symbols": [
+        "symbol-65",
+        "symbol-69",
+        "symbol-66",
+        "symbol-67",
+        "symbol-48",
+        "symbol-68",
+        "symbol-51"
+      ],
+      "sources": [
+        "gamma-fft",
+        "gamma-collector"
+      ]
+    }
+  ],
+  "symbols": [
+    {
+      "id": "symbol-01",
+      "latex": "\\mathbf r",
+      "meaning": "punkt obserwacji w przestrzeni",
+      "si_unit": "\\mathrm{m}"
+    },
+    {
+      "id": "symbol-02",
+      "latex": "t",
+      "meaning": "czas fizyczny",
+      "si_unit": "\\mathrm{s}"
+    },
+    {
+      "id": "symbol-03",
+      "latex": "q",
+      "meaning": "indeks aktywnego wymuszenia",
+      "si_unit": "1"
+    },
+    {
+      "id": "symbol-04",
+      "latex": "N_d",
+      "meaning": "liczba aktywnych wymuszeń",
+      "si_unit": "1"
+    },
+    {
+      "id": "symbol-05",
+      "latex": "\\sum_q",
+      "meaning": "suma po aktywnych wymuszeniach",
+      "si_unit": "1"
+    },
+    {
+      "id": "symbol-06",
+      "latex": "\\mathbf B_{\\mathrm{drive}}",
+      "meaning": "indukcja zadanego wymuszenia",
+      "si_unit": "\\mathrm{T}"
+    },
+    {
+      "id": "symbol-07",
+      "latex": "\\mathbf H_{\\mathrm{drive}}",
+      "meaning": "pole wymuszenia konsumowane przez LLG",
+      "si_unit": "\\mathrm{A\\,m^{-1}}"
+    },
+    {
+      "id": "symbol-08",
+      "latex": "\\mu_0",
+      "meaning": "przenikalność magnetyczna próżni",
+      "si_unit": "\\mathrm{H\\,m^{-1}}"
+    },
+    {
+      "id": "symbol-09",
+      "latex": "B_q",
+      "meaning": "nieujemna amplituda indukcji wymuszenia",
+      "si_unit": "\\mathrm{T}"
+    },
+    {
+      "id": "symbol-10",
+      "latex": "\\hat{\\mathbf e}_q",
+      "meaning": "jednostkowy kierunek pola",
+      "si_unit": "1"
+    },
+    {
+      "id": "symbol-11",
+      "latex": "S_q",
+      "meaning": "profil przestrzenny amplitudy",
+      "si_unit": "1"
+    },
+    {
+      "id": "symbol-12",
+      "latex": "f_q",
+      "meaning": "przebieg czasowy wymuszenia",
+      "si_unit": "1"
+    },
+    {
+      "id": "symbol-13",
+      "latex": "\\tau_q",
+      "meaning": "argument czasu przebiegu",
+      "si_unit": "\\mathrm{s}"
+    },
+    {
+      "id": "symbol-14",
+      "latex": "\\mathbf m",
+      "meaning": "znormalizowana magnetyzacja",
+      "si_unit": "1"
+    },
+    {
+      "id": "symbol-15",
+      "latex": "\\gamma_0",
+      "meaning": "dodatnia stała żyromagnetyczna dla pola H",
+      "si_unit": "\\mathrm{m\\,A^{-1}\\,s^{-1}}"
+    },
+    {
+      "id": "symbol-16",
+      "latex": "\\alpha",
+      "meaning": "tłumienie Gilberta",
+      "si_unit": "1"
+    },
+    {
+      "id": "symbol-17",
+      "latex": "\\mathbf H_{\\mathrm{eff}}",
+      "meaning": "całkowite pole efektywne",
+      "si_unit": "\\mathrm{A\\,m^{-1}}"
+    },
+    {
+      "id": "symbol-18",
+      "latex": "\\mathbf H_{\\mathrm{existing}}",
+      "meaning": "pole pozostałych interakcji",
+      "si_unit": "\\mathrm{A\\,m^{-1}}"
+    },
+    {
+      "id": "symbol-19",
+      "latex": "E_{\\mathrm{drive}}",
+      "meaning": "energia Zeemana od wymuszenia",
+      "si_unit": "\\mathrm{J}"
+    },
+    {
+      "id": "symbol-20",
+      "latex": "e_{\\mathrm{drive}}",
+      "meaning": "objętościowa gęstość energii",
+      "si_unit": "\\mathrm{J\\,m^{-3}}"
+    },
+    {
+      "id": "symbol-21",
+      "latex": "\\Omega_m",
+      "meaning": "dziedzina magnetyczna",
+      "si_unit": "\\mathrm{m^3}"
+    },
+    {
+      "id": "symbol-22",
+      "latex": "M_s",
+      "meaning": "magnetyzacja nasycenia",
+      "si_unit": "\\mathrm{A\\,m^{-1}}"
+    },
+    {
+      "id": "symbol-23",
+      "latex": "dV",
+      "meaning": "miara objętości",
+      "si_unit": "\\mathrm{m^3}"
+    },
+    {
+      "id": "symbol-24",
+      "latex": "\\xi",
+      "meaning": "współrzędna wzdłuż osi profilu sinc",
+      "si_unit": "\\mathrm{m}"
+    },
+    {
+      "id": "symbol-25",
+      "latex": "\\operatorname{sinc}_\\pi",
+      "meaning": "sinc unormowany przez pi",
+      "si_unit": "1"
+    },
+    {
+      "id": "symbol-26",
+      "latex": "S_{\\mathrm{sinc}}",
+      "meaning": "profil przestrzenny sinc",
+      "si_unit": "1"
+    },
+    {
+      "id": "symbol-27",
+      "latex": "W",
+      "meaning": "okno przestrzenne",
+      "si_unit": "1"
+    },
+    {
+      "id": "symbol-28",
+      "latex": "W_{\\mathrm{Hann}}",
+      "meaning": "okno Hanna",
+      "si_unit": "1"
+    },
+    {
+      "id": "symbol-29",
+      "latex": "\\mathrm{period\\_m}",
+      "meaning": "skala argumentu sinc",
+      "si_unit": "\\mathrm{m}"
+    },
+    {
+      "id": "symbol-30",
+      "latex": "\\mathrm{width\\_m}",
+      "meaning": "szerokość skończonego podparcia",
+      "si_unit": "\\mathrm{m}"
+    },
+    {
+      "id": "symbol-31",
+      "latex": "x",
+      "meaning": "bezwymiarowy argument sinc",
+      "si_unit": "1"
+    },
+    {
+      "id": "symbol-32",
+      "latex": "\\pi",
+      "meaning": "stała pi",
+      "si_unit": "1"
+    },
+    {
+      "id": "symbol-33",
+      "latex": "\\tau",
+      "meaning": "argument czasu pojedynczego przebiegu",
+      "si_unit": "\\mathrm{s}"
+    },
+    {
+      "id": "symbol-34",
+      "latex": "t_{\\mathrm{abs}}",
+      "meaning": "czas absolutny symulacji",
+      "si_unit": "\\mathrm{s}"
+    },
+    {
+      "id": "symbol-35",
+      "latex": "t_{\\mathrm{stage,start}}",
+      "meaning": "początek czasu przebiegu dla etapu bez wznowienia",
+      "si_unit": "\\mathrm{s}"
+    },
+    {
+      "id": "symbol-36",
+      "latex": "t_{\\mathrm{waveform,origin}}",
+      "meaning": "absolutny początek przebiegu, zachowany przy wznowieniu",
+      "si_unit": "\\mathrm{s}"
+    },
+    {
+      "id": "symbol-37",
+      "latex": "S_G",
+      "meaning": "przestrzenna obwiednia Gaussa z rzeczywistą nośną",
+      "si_unit": "1"
+    },
+    {
+      "id": "symbol-38",
+      "latex": "r_x",
+      "meaning": "współrzędna x punktu obserwacji",
+      "si_unit": "\\mathrm{m}"
+    },
+    {
+      "id": "symbol-39",
+      "latex": "r_y",
+      "meaning": "współrzędna y punktu obserwacji",
+      "si_unit": "\\mathrm{m}"
+    },
+    {
+      "id": "symbol-40",
+      "latex": "x_c",
+      "meaning": "środek obwiedni w osi x",
+      "si_unit": "\\mathrm{m}"
+    },
+    {
+      "id": "symbol-41",
+      "latex": "y_c",
+      "meaning": "środek obwiedni w osi y",
+      "si_unit": "\\mathrm{m}"
+    },
+    {
+      "id": "symbol-42",
+      "latex": "x_o",
+      "meaning": "niezależny początek nośnej w osi x",
+      "si_unit": "\\mathrm{m}"
+    },
+    {
+      "id": "symbol-43",
+      "latex": "\\sigma_x",
+      "meaning": "standardowa szerokość obwiedni w osi x",
+      "si_unit": "\\mathrm{m}"
+    },
+    {
+      "id": "symbol-44",
+      "latex": "\\sigma_y",
+      "meaning": "standardowa szerokość obwiedni w osi y",
+      "si_unit": "\\mathrm{m}"
+    },
+    {
+      "id": "symbol-45",
+      "latex": "\\lambda",
+      "meaning": "długość fali przestrzennej nośnej",
+      "si_unit": "\\mathrm{m}"
+    },
+    {
+      "id": "symbol-46",
+      "latex": "\\varphi_s",
+      "meaning": "faza przestrzenna w radianach",
+      "si_unit": "1"
+    },
+    {
+      "id": "symbol-47",
+      "latex": "f",
+      "meaning": "funkcja przebiegu czasowego",
+      "si_unit": "1"
+    },
+    {
+      "id": "symbol-48",
+      "latex": "a",
+      "meaning": "amplituda czasowego sinc; w analizie Gamma także indeks osi",
+      "si_unit": "1"
+    },
+    {
+      "id": "symbol-49",
+      "latex": "f_c",
+      "meaning": "częstotliwość odcięcia czasowego sinc",
+      "si_unit": "\\mathrm{Hz}"
+    },
+    {
+      "id": "symbol-50",
+      "latex": "t_0",
+      "meaning": "środek czasowego sinc",
+      "si_unit": "\\mathrm{s}"
+    },
+    {
+      "id": "symbol-51",
+      "latex": "c",
+      "meaning": "indeks komórki FDM; w analizie Gamma indeks osi",
+      "si_unit": "1"
+    },
+    {
+      "id": "symbol-52",
+      "latex": "V_c",
+      "meaning": "objętość komórki FDM i dziedzina jej całkowania",
+      "si_unit": "\\mathrm{m^3}"
+    },
+    {
+      "id": "symbol-53",
+      "latex": "\\chi_{T_q}",
+      "meaning": "wskaźnik dziedziny docelowej wymuszenia",
+      "si_unit": "1"
+    },
+    {
+      "id": "symbol-54",
+      "latex": "w_{qc}",
+      "meaning": "średnia profilu w komórce FDM",
+      "si_unit": "1"
+    },
+    {
+      "id": "symbol-55",
+      "latex": "\\mathbf H^0_{qc}",
+      "meaning": "statyczna baza pola komórkowego",
+      "si_unit": "\\mathrm{A\\,m^{-1}}"
+    },
+    {
+      "id": "symbol-56",
+      "latex": "i",
+      "meaning": "indeks węzła FEM",
+      "si_unit": "1"
+    },
+    {
+      "id": "symbol-57",
+      "latex": "\\phi_i",
+      "meaning": "funkcja kształtu P1",
+      "si_unit": "1"
+    },
+    {
+      "id": "symbol-58",
+      "latex": "M_i",
+      "meaning": "wierszowa suma masy geometrycznej FEM",
+      "si_unit": "\\mathrm{m^3}"
+    },
+    {
+      "id": "symbol-59",
+      "latex": "w_{qi}",
+      "meaning": "rzut profilu na węzeł FEM",
+      "si_unit": "1"
+    },
+    {
+      "id": "symbol-60",
+      "latex": "\\mathbf H^0_{qi}",
+      "meaning": "statyczna baza pola węzłowego",
+      "si_unit": "\\mathrm{A\\,m^{-1}}"
+    },
+    {
+      "id": "symbol-61",
+      "latex": "\\mathbf R",
+      "meaning": "wektor translacji okresowej",
+      "si_unit": "\\mathrm{m}"
+    },
+    {
+      "id": "symbol-62",
+      "latex": "\\overline{\\delta m}_a",
+      "meaning": "ważona momentem zmiana magnetyzacji",
+      "si_unit": "1"
+    },
+    {
+      "id": "symbol-63",
+      "latex": "m_a",
+      "meaning": "składowa magnetyzacji w osi a",
+      "si_unit": "1"
+    },
+    {
+      "id": "symbol-64",
+      "latex": "m_{0,a}",
+      "meaning": "składowa magnetyzacji odniesienia",
+      "si_unit": "1"
+    },
+    {
+      "id": "symbol-65",
+      "latex": "S_\\Gamma",
+      "meaning": "suma poprzecznych mocy binów odpowiedzi Gamma w bieżącym artefakcie",
+      "si_unit": "1"
+    },
+    {
+      "id": "symbol-66",
+      "latex": "P_b",
+      "meaning": "moc binu pierwszej składowej poprzecznej",
+      "si_unit": "1"
+    },
+    {
+      "id": "symbol-67",
+      "latex": "P_c",
+      "meaning": "moc binu drugiej składowej poprzecznej",
+      "si_unit": "1"
+    },
+    {
+      "id": "symbol-68",
+      "latex": "b",
+      "meaning": "indeks pierwszej osi poprzecznej",
+      "si_unit": "1"
+    },
+    {
+      "id": "symbol-69",
+      "latex": "\\nu",
+      "meaning": "częstotliwość osi analizy Gamma",
+      "si_unit": "\\mathrm{Hz}"
+    }
+  ],
+  "sources": [
+    {
+      "id": "py-drive",
+      "path": "packages/fullmag-py/src/fullmag/model/antenna.py",
+      "symbol": "class RegionalFieldDrive",
+      "responsibility": "Authoring i to_ir regionalnego źródła",
+      "solver_backend": "wspólna",
+      "evidence_status": "source_visible",
+      "evidence": "Python przykład wykonany; solver nie"
+    },
+    {
+      "id": "py-target",
+      "path": "packages/fullmag-py/src/fullmag/model/antenna.py",
+      "symbol": "class FieldTarget",
+      "responsibility": "Typowane cele global/object/region",
+      "solver_backend": "wspólna",
+      "evidence_status": "source_visible",
+      "evidence": "source_visible"
+    },
+    {
+      "id": "py-profiles",
+      "path": "packages/fullmag-py/src/fullmag/model/antenna.py",
+      "symbol": "class GaussianPlaneWaveFieldProfile",
+      "responsibility": "Walidacja i lowering parametrów Gaussa",
+      "solver_backend": "wspólna",
+      "evidence_status": "source_visible",
+      "evidence": "source_visible"
+    },
+    {
+      "id": "py-sinc",
+      "path": "packages/fullmag-py/src/fullmag/model/antenna.py",
+      "symbol": "class SincFieldProfile",
+      "responsibility": "Normalizacja osi i parametry sinc",
+      "solver_backend": "wspólna",
+      "evidence_status": "source_visible",
+      "evidence": "source_visible"
+    },
+    {
+      "id": "py-mask",
+      "path": "packages/fullmag-py/src/fullmag/model/antenna.py",
+      "symbol": "class GeometryMaskFieldProfile",
+      "responsibility": "Maska oraz uniform/sinc envelope",
+      "solver_backend": "wspólna",
+      "evidence_status": "source_visible",
+      "evidence": "source_visible"
+    },
+    {
+      "id": "py-activation",
+      "path": "packages/fullmag-py/src/fullmag/model/antenna.py",
+      "symbol": "class DriveActivation",
+      "responsibility": "Wybór etapów bez aktywacji Relax",
+      "solver_backend": "wspólna",
+      "evidence_status": "source_visible",
+      "evidence": "source_visible"
+    },
+    {
+      "id": "py-wave",
+      "path": "packages/fullmag-py/src/fullmag/model/energy.py",
+      "symbol": "class SincPulse",
+      "responsibility": "Przebieg sinc i obiektowe lowering",
+      "solver_backend": "wspólna",
+      "evidence_status": "source_visible",
+      "evidence": "source_visible"
+    },
+    {
+      "id": "py-registry",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "class StudyFieldDriveRegistry",
+      "responsibility": "Rejestr nazw i tożsamości study",
+      "solver_backend": "wspólna",
+      "evidence_status": "source_visible",
+      "evidence": "przykład wykonany"
+    },
+    {
+      "id": "py-export",
+      "path": "packages/fullmag-py/src/fullmag/runtime/script_builder.py",
+      "symbol": "_render_regional_field_drive_expr",
+      "responsibility": "Eksport typowanych wariantów",
+      "solver_backend": "wspólna",
+      "evidence_status": "source_visible",
+      "evidence": "source_visible"
+    },
+    {
+      "id": "py-migration",
+      "path": "packages/fullmag-py/src/fullmag/model/problem.py",
+      "symbol": "_migrate_legacy_prescribed_field_sources",
+      "responsibility": "Migracja prescribed mask, nie conductor solve",
+      "solver_backend": "wspólna",
+      "evidence_status": "source_visible",
+      "evidence": "source_visible"
+    },
+    {
+      "id": "ir-drive",
+      "path": "crates/fullmag-ir/src/study.rs",
+      "symbol": "RegionalFieldDriveIR",
+      "responsibility": "Kanoniczny regionalny descriptor",
+      "solver_backend": "wspólna",
+      "evidence_status": "source_visible",
+      "evidence": "source_visible"
+    },
+    {
+      "id": "ir-validation",
+      "path": "crates/fullmag-ir/src/validation.rs",
+      "symbol": "validate_field_drives",
+      "responsibility": "Walidacja kolekcji, referencji i parametrów",
+      "solver_backend": "wspólna",
+      "evidence_status": "source_visible",
+      "evidence": "source_visible"
+    },
+    {
+      "id": "ir-wave",
+      "path": "crates/fullmag-ir/src/field_drive_validation.rs",
+      "symbol": "validate_time_dependence",
+      "responsibility": "Zamknięty katalog i domeny przebiegów",
+      "solver_backend": "wspólna",
+      "evidence_status": "source_visible",
+      "evidence": "source_visible"
+    },
+    {
+      "id": "ir-clock",
+      "path": "crates/fullmag-ir/src/plan.rs",
+      "symbol": "TimeStageContextIR",
+      "responsibility": "Origin przebiegu i legacy fallback",
+      "solver_backend": "wspólna",
+      "evidence_status": "source_visible",
+      "evidence": "source arithmetic; Rust niewykonany"
+    },
+    {
+      "id": "fdm-plan",
+      "path": "crates/fullmag-plan/src/regional_field_drive.rs",
+      "symbol": "resolve_fdm_regional_field_drives",
+      "responsibility": "Cell-average basis i obecny signature z waveform",
+      "solver_backend": "FDM CPU/GPU",
+      "evidence_status": "source_visible",
+      "evidence": "source_visible"
+    },
+    {
+      "id": "fdm-spatial",
+      "path": "crates/fullmag-plan/src/regional_field_drive.rs",
+      "symbol": "spatial_point_value",
+      "responsibility": "Sinc/maska/Gauss w punkcie kwadratury",
+      "solver_backend": "FDM CPU/GPU",
+      "evidence_status": "source_visible",
+      "evidence": "source_visible"
+    },
+    {
+      "id": "fdm-sinc",
+      "path": "crates/fullmag-plan/src/regional_field_drive.rs",
+      "symbol": "sinc_value",
+      "responsibility": "Normalizowany sinc i przestrzenne okno",
+      "solver_backend": "FDM CPU/GPU",
+      "evidence_status": "source_visible",
+      "evidence": "source_visible"
+    },
+    {
+      "id": "fdm-time",
+      "path": "crates/fullmag-engine/src/fdm/shared/terms.rs",
+      "symbol": "RegionalFieldDriveTerm",
+      "responsibility": "Skalar czasu mnożący statyczną bazę",
+      "solver_backend": "FDM CPU",
+      "evidence_status": "source_visible",
+      "evidence": "source_visible"
+    },
+    {
+      "id": "fdm-field",
+      "path": "crates/fullmag-engine/src/fdm/cpu/fields/zeeman.rs",
+      "symbol": "regional_field_drives_add_into_at_time",
+      "responsibility": "Dodanie pola do H_eff tylko na aktywnych komórkach",
+      "solver_backend": "FDM CPU",
+      "evidence_status": "source_visible",
+      "evidence": "source_visible"
+    },
+    {
+      "id": "fdm-llg",
+      "path": "crates/fullmag-engine/src/fdm/cpu/fields.rs",
+      "symbol": "llg_rhs_from_field_at",
+      "responsibility": "Gilbert RHS z polem H i lokalnym alpha",
+      "solver_backend": "FDM CPU",
+      "evidence_status": "source_visible",
+      "evidence": "source_visible"
+    },
+    {
+      "id": "fdm-cuda",
+      "path": "backends/fdm/gpu/cuda/interactions/regional_field_drive.cuh",
+      "symbol": "regional_field_drive_component",
+      "responsibility": "Device waveform i sumowanie składowej bazy",
+      "solver_backend": "FDM GPU",
+      "evidence_status": "source_visible",
+      "evidence": "source_visible; parity niekwalifikowane"
+    },
+    {
+      "id": "fem-project",
+      "path": "backends/fem/cpu/mfem/interactions/zeeman_regional_field.cpp",
+      "symbol": "project_regional_field_drive_bases",
+      "responsibility": "Lumped L2 projection i bieżące tolerancje PBC",
+      "solver_backend": "FEM CPU",
+      "evidence_status": "source_visible",
+      "evidence": "source_visible; kontrakt tolerancji otwarty"
+    },
+    {
+      "id": "fem-field",
+      "path": "backends/fem/cpu/mfem/interactions/zeeman_regional_field.cpp",
+      "symbol": "materialize_regional_field_drive",
+      "responsibility": "Skalowanie H0 przez waveform w czasie RHS",
+      "solver_backend": "FEM CPU",
+      "evidence_status": "source_visible",
+      "evidence": "source_visible"
+    },
+    {
+      "id": "fem-energy",
+      "path": "backends/fem/cpu/mfem/interactions/zeeman_regional_field.cpp",
+      "symbol": "regional_field_drive_energy",
+      "responsibility": "Zewnętrzna energia Zeemana bez czynnika 1/2",
+      "solver_backend": "FEM CPU",
+      "evidence_status": "source_visible",
+      "evidence": "source_visible"
+    },
+    {
+      "id": "fem-llg",
+      "path": "backends/fem/cpu/mfem/integrators/llg_rhs.cpp",
+      "symbol": "llg_rhs_aos",
+      "responsibility": "Gilbert RHS AoS bez kompozycji interakcji",
+      "solver_backend": "FEM CPU",
+      "evidence_status": "source_visible",
+      "evidence": "source_visible"
+    },
+    {
+      "id": "fem-gpu",
+      "path": "backends/fem/gpu/cuda/interactions/zeeman/regional_field_kernels.cu",
+      "symbol": "gpu_regional_field_drive_upload",
+      "responsibility": "Upload bazy CPU do device, nie GPU projection",
+      "solver_backend": "FEM GPU",
+      "evidence_status": "source_visible",
+      "evidence": "source_visible; parity niekwalifikowane"
+    },
+    {
+      "id": "events",
+      "path": "crates/fullmag-runner/src/time_events.rs",
+      "symbol": "build_resolved_stage_event_schedule_with_origin",
+      "responsibility": "Harmonogram zdarzeń z waveform origin",
+      "solver_backend": "wspólna",
+      "evidence_status": "source_visible",
+      "evidence": "source_visible"
+    },
+    {
+      "id": "manifest",
+      "path": "crates/fullmag-runner/src/regional_field_drive_artifacts.rs",
+      "symbol": "RegionalFieldDriveManifest",
+      "responsibility": "Faktyczne pola provenance v1, nie pełny target manifest",
+      "solver_backend": "wspólna",
+      "evidence_status": "source_visible",
+      "evidence": "source_visible"
+    },
+    {
+      "id": "gamma-moment",
+      "path": "crates/fullmag-runner/src/spin_wave_response.rs",
+      "symbol": "moment_weighted_component",
+      "responsibility": "Średnia ważona momentem",
+      "solver_backend": "analiza",
+      "evidence_status": "source_visible",
+      "evidence": "source_visible"
+    },
+    {
+      "id": "gamma-fft",
+      "path": "crates/fullmag-runner/src/spin_wave_response.rs",
+      "symbol": "build_gamma_transverse_response_with_detrend",
+      "responsibility": "Dwie składowe my/mz i ich suma bin powers",
+      "solver_backend": "analiza",
+      "evidence_status": "source_visible",
+      "evidence": "source_visible; osie ogólne nie"
+    },
+    {
+      "id": "gamma-collector",
+      "path": "crates/fullmag-runner/src/spin_wave_response.rs",
+      "symbol": "append_requested_spin_wave_artifacts",
+      "responsibility": "Collector global/uniform i ograniczenie direction source",
+      "solver_backend": "analiza",
+      "evidence_status": "source_visible",
+      "evidence": "origin source regression 4/4; Rust/FFT nie"
+    },
+    {
+      "id": "finite-k",
+      "path": "crates/fullmag-runner/src/spin_wave_sampling.rs",
+      "symbol": "requested_finite_k_artifacts",
+      "responsibility": "Snapshoty FEM i odmowa nieważnych przekrojów",
+      "solver_backend": "analiza FEM",
+      "evidence_status": "source_visible",
+      "evidence": "source_visible; pełne S(k,f) nie"
+    },
+    {
+      "id": "py-tests",
+      "path": "packages/fullmag-py/tests/test_regional_field_drive.py",
+      "symbol": "class RegionalFieldDriveTests",
+      "responsibility": "Regresje authoringu w repo, nie dowód solve",
+      "solver_backend": "wspólna",
+      "evidence_status": "source_visible",
+      "evidence": "test source; nie uruchamiano w tym etapie"
+    },
+    {
+      "id": "clock-tests",
+      "path": "scripts/test_gamma_waveform_origin_source.py",
+      "symbol": "class GammaWaveformOriginSourceTests",
+      "responsibility": "Wykonywalna arytmetyka origin collectora",
+      "solver_backend": "analiza",
+      "evidence_status": "source_visible",
+      "evidence": "wcześniejsze 4/4 PASS; source-only"
+    },
+    {
+      "id": "fdm-classifier",
+      "path": "crates/fullmag-plan/src/regional_field_drive.rs",
+      "symbol": "geometry_cell_relation",
+      "responsibility": "Box/CSG classifier; Cylinder i fallback Boundary",
+      "solver_backend": "FDM CPU/GPU",
+      "evidence_status": "source_visible"
+    },
+    {
+      "id": "fem-quadrature",
+      "path": "backends/fem/cpu/mfem/interactions/zeeman_regional_field.cpp",
+      "symbol": "integrate_profile_adaptive",
+      "responsibility": "Gauss-Duffy smooth oraz adaptacja maski z max depth 10",
+      "solver_backend": "FEM CPU",
+      "evidence_status": "source_visible"
+    },
+    {
+      "id": "auto-sampling",
+      "path": "crates/fullmag-plan/src/sampling.rs",
+      "symbol": "resolve_auto_sampling_for_stage",
+      "responsibility": "Auto-sinc guard i rzeczywista częstość próbkowania",
+      "solver_backend": "wspólna",
+      "evidence_status": "source_visible"
+    }
+  ],
+  "public_api": {
+    "parameters": [
+      {
+        "python": "fm.RegionalFieldDrive.id",
+        "type": "str",
+        "default": "required",
+        "si_unit": "1",
+        "validation": "niepusty; unikalny w kolekcji",
+        "meaning": "niezmienna tożsamość",
+        "backend_support": "Authoring wspólny; wykonanie według macierzy FDM/FEM CPU/GPU, bez dziedziczenia kwalifikacji",
+        "problem_ir": "field_drives[].id"
+      },
+      {
+        "python": "fm.RegionalFieldDrive.name",
+        "type": "str",
+        "default": "required",
+        "si_unit": "1",
+        "validation": "niepusty; StudyFieldDriveRegistry odmawia duplikatu nazwy",
+        "meaning": "nazwa prezentacyjna",
+        "backend_support": "Authoring wspólny; wykonanie według macierzy FDM/FEM CPU/GPU, bez dziedziczenia kwalifikacji",
+        "problem_ir": "field_drives[].name"
+      },
+      {
+        "python": "fm.RegionalFieldDrive.target",
+        "type": "FieldTarget",
+        "default": "required",
+        "si_unit": "1",
+        "validation": "typowany; istniejący obiekt/region sprawdza IR/planner",
+        "meaning": "dziedzina odbioru",
+        "backend_support": "Authoring wspólny; wykonanie według macierzy FDM/FEM CPU/GPU, bez dziedziczenia kwalifikacji",
+        "problem_ir": "field_drives[].target"
+      },
+      {
+        "python": "fm.RegionalFieldDrive.amplitude_B_T",
+        "type": "float",
+        "default": "required",
+        "si_unit": "\\mathrm{T}",
+        "validation": "skończony i >=0",
+        "meaning": "amplituda indukcji",
+        "backend_support": "Authoring wspólny; wykonanie według macierzy FDM/FEM CPU/GPU, bez dziedziczenia kwalifikacji",
+        "problem_ir": "field_drives[].amplitude_B_T"
+      },
+      {
+        "python": "fm.RegionalFieldDrive.direction",
+        "type": "Sequence[float]",
+        "default": "required",
+        "si_unit": "1",
+        "validation": "trzy skończone składowe; wektor niezerowy, normalizowany",
+        "meaning": "kierunek pola",
+        "backend_support": "Authoring wspólny; wykonanie według macierzy FDM/FEM CPU/GPU, bez dziedziczenia kwalifikacji",
+        "problem_ir": "field_drives[].direction"
+      },
+      {
+        "python": "fm.RegionalFieldDrive.spatial_profile",
+        "type": "FieldSpatialProfile",
+        "default": "required",
+        "si_unit": "1",
+        "validation": "Uniform/Sinc/GaussianPlaneWave/GeometryMask; pozostałe typy odrzucone",
+        "meaning": "baza przestrzenna",
+        "backend_support": "Authoring wspólny; wykonanie według macierzy FDM/FEM CPU/GPU, bez dziedziczenia kwalifikacji",
+        "problem_ir": "field_drives[].spatial_profile"
+      },
+      {
+        "python": "fm.RegionalFieldDrive.waveform",
+        "type": "TimeDependence",
+        "default": "required",
+        "si_unit": "1",
+        "validation": "obiekt z to_ir; pełny zamknięty katalog i liczby sprawdza IR",
+        "meaning": "przebieg czasowy",
+        "backend_support": "Authoring wspólny; wykonanie według macierzy FDM/FEM CPU/GPU, bez dziedziczenia kwalifikacji",
+        "problem_ir": "field_drives[].waveform"
+      },
+      {
+        "python": "fm.RegionalFieldDrive.time_origin",
+        "type": "str",
+        "default": "stage_local",
+        "si_unit": "1",
+        "validation": "stage_local lub absolute, lowercase",
+        "meaning": "semantyka zegara",
+        "backend_support": "Authoring wspólny; wykonanie według macierzy FDM/FEM CPU/GPU, bez dziedziczenia kwalifikacji",
+        "problem_ir": "field_drives[].time_origin"
+      },
+      {
+        "python": "fm.RegionalFieldDrive.activation",
+        "type": "DriveActivation or None",
+        "default": "None -> all_time_evolution",
+        "si_unit": "1",
+        "validation": "typowana aktywacja; referencje stage_id sprawdza IR",
+        "meaning": "wybór etapów",
+        "backend_support": "Authoring wspólny; wykonanie według macierzy FDM/FEM CPU/GPU, bez dziedziczenia kwalifikacji",
+        "problem_ir": "field_drives[].activation"
+      },
+      {
+        "python": "fm.RegionalFieldDrive.enabled",
+        "type": "bool",
+        "default": "True",
+        "si_unit": "1",
+        "validation": "Python normalizuje przez bool; IR używa boolean",
+        "meaning": "włączenie źródła",
+        "backend_support": "Authoring wspólny; wykonanie według macierzy FDM/FEM CPU/GPU, bez dziedziczenia kwalifikacji",
+        "problem_ir": "field_drives[].enabled"
+      },
+      {
+        "python": "fm.RegionalFieldDrive.migration",
+        "type": "dict[str,str] or None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "tylko migrated_from=prescribed_zeeman_mask; pozostałe odrzucone",
+        "meaning": "provenance migracji",
+        "backend_support": "Authoring wspólny; wykonanie według macierzy FDM/FEM CPU/GPU, bez dziedziczenia kwalifikacji",
+        "problem_ir": "field_drives[].migration"
+      },
+      {
+        "python": "fm.FieldTarget.global_domain()",
+        "type": "bez parametrów",
+        "default": "global",
+        "si_unit": "1",
+        "validation": "bez object_id i region_id",
+        "meaning": "cała domena magnetyczna",
+        "backend_support": "Authoring wspólny; wykonanie według macierzy FDM/FEM CPU/GPU, bez dziedziczenia kwalifikacji",
+        "problem_ir": "field_drives[].target.kind"
+      },
+      {
+        "python": "fm.FieldTarget.object(object_id)",
+        "type": "str",
+        "default": "required",
+        "si_unit": "1",
+        "validation": "niepusty object_id; bez region_id",
+        "meaning": "jeden obiekt magnetyczny",
+        "backend_support": "Authoring wspólny; wykonanie według macierzy FDM/FEM CPU/GPU, bez dziedziczenia kwalifikacji",
+        "problem_ir": "field_drives[].target.object_id"
+      },
+      {
+        "python": "fm.FieldTarget.region(object_id, region_id)",
+        "type": "str, str",
+        "default": "required",
+        "si_unit": "1",
+        "validation": "obie tożsamości niepuste i rozwiązywalne",
+        "meaning": "region obiektu",
+        "backend_support": "Authoring wspólny; wykonanie według macierzy FDM/FEM CPU/GPU, bez dziedziczenia kwalifikacji",
+        "problem_ir": "field_drives[].target.object_id/region_id"
+      },
+      {
+        "python": "fm.UniformFieldProfile()",
+        "type": "bez parametrów",
+        "default": "uniform",
+        "si_unit": "1",
+        "validation": "brak dodatkowych pól",
+        "meaning": "stała baza przestrzenna",
+        "backend_support": "Authoring wspólny; wykonanie według macierzy FDM/FEM CPU/GPU, bez dziedziczenia kwalifikacji",
+        "problem_ir": "field_drives[].spatial_profile.kind"
+      },
+      {
+        "python": "fm.SincFieldProfile.axis",
+        "type": "Sequence[float]",
+        "default": "required",
+        "si_unit": "1",
+        "validation": "trzy skończone składowe; niezerowy, normalizowany",
+        "meaning": "oś profilu",
+        "backend_support": "Authoring wspólny; wykonanie według macierzy FDM/FEM CPU/GPU, bez dziedziczenia kwalifikacji",
+        "problem_ir": "field_drives[].spatial_profile.axis"
+      },
+      {
+        "python": "fm.SincFieldProfile.period_m",
+        "type": "float",
+        "default": "required",
+        "si_unit": "\\mathrm{m}",
+        "validation": "skończony >0",
+        "meaning": "skala sinc",
+        "backend_support": "Authoring wspólny; wykonanie według macierzy FDM/FEM CPU/GPU, bez dziedziczenia kwalifikacji",
+        "problem_ir": "field_drives[].spatial_profile.period_m"
+      },
+      {
+        "python": "fm.SincFieldProfile.center_m",
+        "type": "float",
+        "default": "0.0",
+        "si_unit": "\\mathrm{m}",
+        "validation": "skończony",
+        "meaning": "przesunięcie wzdłuż osi",
+        "backend_support": "Authoring wspólny; wykonanie według macierzy FDM/FEM CPU/GPU, bez dziedziczenia kwalifikacji",
+        "problem_ir": "field_drives[].spatial_profile.center_m"
+      },
+      {
+        "python": "fm.SincFieldProfile.width_m",
+        "type": "float or None",
+        "default": "None",
+        "si_unit": "\\mathrm{m}",
+        "validation": "None lub skończony >0",
+        "meaning": "skończone podparcie",
+        "backend_support": "Authoring wspólny; wykonanie według macierzy FDM/FEM CPU/GPU, bez dziedziczenia kwalifikacji",
+        "problem_ir": "field_drives[].spatial_profile.width_m"
+      },
+      {
+        "python": "fm.SincFieldProfile.window",
+        "type": "str",
+        "default": "none",
+        "si_unit": "1",
+        "validation": "none lub hann; lowercase",
+        "meaning": "okno przestrzenne",
+        "backend_support": "Authoring wspólny; wykonanie według macierzy FDM/FEM CPU/GPU, bez dziedziczenia kwalifikacji",
+        "problem_ir": "field_drives[].spatial_profile.window"
+      },
+      {
+        "python": "fm.GaussianPlaneWaveFieldProfile.center_x_m",
+        "type": "float",
+        "default": "required",
+        "si_unit": "\\mathrm{m}",
+        "validation": "skończony",
+        "meaning": "pozycja obwiedni",
+        "backend_support": "Authoring wspólny; wykonanie według macierzy FDM/FEM CPU/GPU, bez dziedziczenia kwalifikacji",
+        "problem_ir": "field_drives[].spatial_profile.center_x_m"
+      },
+      {
+        "python": "fm.GaussianPlaneWaveFieldProfile.center_y_m",
+        "type": "float",
+        "default": "required",
+        "si_unit": "\\mathrm{m}",
+        "validation": "skończony",
+        "meaning": "pozycja obwiedni",
+        "backend_support": "Authoring wspólny; wykonanie według macierzy FDM/FEM CPU/GPU, bez dziedziczenia kwalifikacji",
+        "problem_ir": "field_drives[].spatial_profile.center_y_m"
+      },
+      {
+        "python": "fm.GaussianPlaneWaveFieldProfile.carrier_origin_x_m",
+        "type": "float",
+        "default": "required",
+        "si_unit": "\\mathrm{m}",
+        "validation": "skończony",
+        "meaning": "niezależny początek nośnej",
+        "backend_support": "Authoring wspólny; wykonanie według macierzy FDM/FEM CPU/GPU, bez dziedziczenia kwalifikacji",
+        "problem_ir": "field_drives[].spatial_profile.carrier_origin_x_m"
+      },
+      {
+        "python": "fm.GaussianPlaneWaveFieldProfile.sigma_x_m",
+        "type": "float",
+        "default": "required",
+        "si_unit": "\\mathrm{m}",
+        "validation": "skończony >0",
+        "meaning": "skala przestrzenna",
+        "backend_support": "Authoring wspólny; wykonanie według macierzy FDM/FEM CPU/GPU, bez dziedziczenia kwalifikacji",
+        "problem_ir": "field_drives[].spatial_profile.sigma_x_m"
+      },
+      {
+        "python": "fm.GaussianPlaneWaveFieldProfile.sigma_y_m",
+        "type": "float",
+        "default": "required",
+        "si_unit": "\\mathrm{m}",
+        "validation": "skończony >0",
+        "meaning": "skala przestrzenna",
+        "backend_support": "Authoring wspólny; wykonanie według macierzy FDM/FEM CPU/GPU, bez dziedziczenia kwalifikacji",
+        "problem_ir": "field_drives[].spatial_profile.sigma_y_m"
+      },
+      {
+        "python": "fm.GaussianPlaneWaveFieldProfile.wavelength_m",
+        "type": "float",
+        "default": "required",
+        "si_unit": "\\mathrm{m}",
+        "validation": "skończony >0",
+        "meaning": "skala przestrzenna",
+        "backend_support": "Authoring wspólny; wykonanie według macierzy FDM/FEM CPU/GPU, bez dziedziczenia kwalifikacji",
+        "problem_ir": "field_drives[].spatial_profile.wavelength_m"
+      },
+      {
+        "python": "fm.GaussianPlaneWaveFieldProfile.carrier_phase_rad",
+        "type": "float",
+        "default": "0.0",
+        "si_unit": "1",
+        "validation": "skończony",
+        "meaning": "faza przestrzenna",
+        "backend_support": "Authoring wspólny; wykonanie według macierzy FDM/FEM CPU/GPU, bez dziedziczenia kwalifikacji",
+        "problem_ir": "field_drives[].spatial_profile.carrier_phase_rad"
+      },
+      {
+        "python": "fm.GeometryMaskFieldProfile.object_id",
+        "type": "str",
+        "default": "required",
+        "si_unit": "1",
+        "validation": "niepusty; istniejąca geometria o wspieranym predykacie",
+        "meaning": "obiekt maski, może być niemagnetyczny",
+        "backend_support": "Authoring wspólny; wykonanie według macierzy FDM/FEM CPU/GPU, bez dziedziczenia kwalifikacji",
+        "problem_ir": "field_drives[].spatial_profile.object_id"
+      },
+      {
+        "python": "fm.GeometryMaskFieldProfile.envelope",
+        "type": "UniformFieldProfile or SincFieldProfile",
+        "default": "UniformFieldProfile()",
+        "si_unit": "1",
+        "validation": "Gaussian jako envelope jest odrzucany",
+        "meaning": "obwiednia wewnątrz maski",
+        "backend_support": "Authoring wspólny; wykonanie według macierzy FDM/FEM CPU/GPU, bez dziedziczenia kwalifikacji",
+        "problem_ir": "field_drives[].spatial_profile.envelope"
+      },
+      {
+        "python": "fm.DriveActivation.all_time_evolution()",
+        "type": "bez parametrów",
+        "default": "all_time_evolution",
+        "si_unit": "1",
+        "validation": "bez listy stage_ids",
+        "meaning": "tylko etapy ewolucji czasu",
+        "backend_support": "Authoring wspólny; wykonanie według macierzy FDM/FEM CPU/GPU, bez dziedziczenia kwalifikacji",
+        "problem_ir": "field_drives[].activation.kind"
+      },
+      {
+        "python": "fm.DriveActivation.stage_ids(stage_ids)",
+        "type": "Sequence[str]",
+        "default": "required",
+        "si_unit": "1",
+        "validation": "niepusta lista niepustych unikalnych ID; referencje sprawdza IR",
+        "meaning": "jawny wybór etapów",
+        "backend_support": "Authoring wspólny; wykonanie według macierzy FDM/FEM CPU/GPU, bez dziedziczenia kwalifikacji",
+        "problem_ir": "field_drives[].activation.stage_ids"
+      },
+      {
+        "python": "fm.Constant()",
+        "type": "bez parametrów",
+        "default": "constant",
+        "si_unit": "1",
+        "validation": "brak dodatkowych pól",
+        "meaning": "przebieg jeden",
+        "backend_support": "Authoring wspólny; wykonanie według macierzy FDM/FEM CPU/GPU, bez dziedziczenia kwalifikacji",
+        "problem_ir": "field_drives[].waveform.kind"
+      },
+      {
+        "python": "fm.Sinusoidal.frequency_hz",
+        "type": "float",
+        "default": "required",
+        "si_unit": "\\mathrm{Hz}",
+        "validation": "skończony >0",
+        "meaning": "częstotliwość",
+        "backend_support": "Authoring wspólny; wykonanie według macierzy FDM/FEM CPU/GPU, bez dziedziczenia kwalifikacji",
+        "problem_ir": "field_drives[].waveform.frequency_hz"
+      },
+      {
+        "python": "fm.Sinusoidal.phase_rad",
+        "type": "float",
+        "default": "0.0",
+        "si_unit": "1",
+        "validation": "skończony",
+        "meaning": "faza w radianach",
+        "backend_support": "Authoring wspólny; wykonanie według macierzy FDM/FEM CPU/GPU, bez dziedziczenia kwalifikacji",
+        "problem_ir": "field_drives[].waveform.phase_rad"
+      },
+      {
+        "python": "fm.Sinusoidal.offset",
+        "type": "float",
+        "default": "0.0",
+        "si_unit": "1",
+        "validation": "skończony",
+        "meaning": "offset względem amplitudy",
+        "backend_support": "Authoring wspólny; wykonanie według macierzy FDM/FEM CPU/GPU, bez dziedziczenia kwalifikacji",
+        "problem_ir": "field_drives[].waveform.offset"
+      },
+      {
+        "python": "fm.Pulse.t_on",
+        "type": "float",
+        "default": "required",
+        "si_unit": "\\mathrm{s}",
+        "validation": "skończony",
+        "meaning": "początek impulsu, włącznie",
+        "backend_support": "Authoring wspólny; wykonanie według macierzy FDM/FEM CPU/GPU, bez dziedziczenia kwalifikacji",
+        "problem_ir": "field_drives[].waveform.t_on"
+      },
+      {
+        "python": "fm.Pulse.t_off",
+        "type": "float",
+        "default": "required",
+        "si_unit": "\\mathrm{s}",
+        "validation": "skończony > t_on",
+        "meaning": "koniec impulsu, wyłącznie",
+        "backend_support": "Authoring wspólny; wykonanie według macierzy FDM/FEM CPU/GPU, bez dziedziczenia kwalifikacji",
+        "problem_ir": "field_drives[].waveform.t_off"
+      },
+      {
+        "python": "fm.PiecewiseLinear.points",
+        "type": "Sequence[Sequence[float]]",
+        "default": "required",
+        "si_unit": "\\mathrm{s}\\times 1",
+        "validation": ">=2 pary skończonych liczb; czasy ściśle rosną",
+        "meaning": "czas i bezwymiarowa wartość; endpoint hold",
+        "backend_support": "Authoring wspólny; wykonanie według macierzy FDM/FEM CPU/GPU, bez dziedziczenia kwalifikacji",
+        "problem_ir": "field_drives[].waveform.points"
+      },
+      {
+        "python": "fm.SincPulse.cutoff_hz",
+        "type": "float",
+        "default": "required",
+        "si_unit": "\\mathrm{Hz}",
+        "validation": "skończony >0",
+        "meaning": "odcięcie idealnego sinc",
+        "backend_support": "Authoring wspólny; wykonanie według macierzy FDM/FEM CPU/GPU, bez dziedziczenia kwalifikacji",
+        "problem_ir": "field_drives[].waveform.cutoff_hz"
+      },
+      {
+        "python": "fm.SincPulse.t0",
+        "type": "float",
+        "default": "0.0",
+        "si_unit": "\\mathrm{s}",
+        "validation": "skończony >=0",
+        "meaning": "środek przebiegu",
+        "backend_support": "Authoring wspólny; wykonanie według macierzy FDM/FEM CPU/GPU, bez dziedziczenia kwalifikacji",
+        "problem_ir": "field_drives[].waveform.t0"
+      },
+      {
+        "python": "fm.SincPulse.amplitude",
+        "type": "float",
+        "default": "1.0",
+        "si_unit": "1",
+        "validation": "skończony; może być ujemny",
+        "meaning": "bezwymiarowa amplituda czasowa",
+        "backend_support": "Authoring wspólny; wykonanie według macierzy FDM/FEM CPU/GPU, bez dziedziczenia kwalifikacji",
+        "problem_ir": "field_drives[].waveform.amplitude"
+      }
+    ]
+  }
+}

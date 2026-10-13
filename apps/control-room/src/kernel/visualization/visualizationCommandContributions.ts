@@ -325,7 +325,7 @@ function stringPatchCommand(
   title: string,
   patchKey: keyof Pick<
     VisualizationTargetPatch,
-    "pointColor" | "shaderMonoColor" | "vectorMonoColor" | "wireframeColor"
+    "pointColor" | "primitiveMonoColor" | "shaderMonoColor" | "vectorMonoColor" | "wireframeColor"
   >,
 ): CommandContribution {
   return {
@@ -405,6 +405,11 @@ export const VISUALIZATION_TARGET_COMMANDS: CommandContribution[] = [
     "visualization.target.set-wireframe-opacity-percent",
     "Set selected target wireframe opacity",
     "wireframeOpacityPercent",
+  ),
+  stringPatchCommand(
+    "visualization.target.set-primitive-mono-color",
+    "Set selected target primitive color",
+    "primitiveMonoColor",
   ),
   stringPatchCommand(
     "visualization.target.set-shader-mono-color",

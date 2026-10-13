@@ -12,9 +12,10 @@ const renderedRequestIds: Array<string | null> = [];
 const renderedHandledCallbacks = new Map<string, () => void>();
 const renderedRanges: Array<{ fromValue: number; toValue: number } | null> = [];
 const renderedProvenance: Array<Record<string, unknown> | undefined> = [];
+const renderedDataExportModels: unknown[] = [];
 
 vi.mock("@/shared/analysis-charts/InteractiveChartSurface", () => ({
-  InteractiveChartSurface: ({ initialRange, onRequestedExportHandled, requestedExportRequest, surface }: { initialRange: { fromValue: number; toValue: number } | null; onRequestedExportHandled?: () => void; requestedExportRequest?: { format: string; requestId: string } | null; surface: { chartId: string; provenance?: Record<string, unknown> } }) => {
+  InteractiveChartSurface: ({ dataExportModel, initialRange, onRequestedExportHandled, requestedExportRequest, surface }: { dataExportModel?: unknown; initialRange: { fromValue: number; toValue: number } | null; onRequestedExportHandled?: () => void; requestedExportRequest?: { format: string; requestId: string } | null; surface: { chartId: string; provenance?: Record<string, unknown> } }) => {
     const format = requestedExportRequest?.format ?? null;
     renderedFormats.push(format);
     renderedRequests.push({ chartId: surface.chartId, format });
@@ -24,12 +25,12 @@ vi.mock("@/shared/analysis-charts/InteractiveChartSurface", () => ({
     }
     renderedRanges.push(initialRange);
     renderedProvenance.push(surface.provenance);
+    renderedDataExportModels.push(dataExportModel);
     return <div />;
   },
-  chartSeriesRenderModel: vi.fn(),
 }));
 
-import { EChartsSurface } from "./EChartsSurface";
+import { EChartsSurface, tableSeriesRenderModel } from "./EChartsSurface";
 
 const series = [{
   id: "data.table:table-a:step:mx",
@@ -43,6 +44,23 @@ const series = [{
 }];
 
 describe("Analysis chart export routing", () => {
+  it("forwards an unbounded data export model separately from the rendered series", async () => {
+    renderedDataExportModels.length = 0;
+    const fullModel = tableSeriesRenderModel(series, series, "step");
+    const dom = installSimulationPreparationTestDom();
+    const root = createRoot(dom.document.createElement("div") as unknown as Element);
+    try {
+      await act(async () => root.render(
+        <EChartsSurface dataExportModel={fullModel} series={series} xAxisLabel="step" />,
+      ));
+
+      expect(renderedDataExportModels.at(-1)).toBe(fullModel);
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
   it("delivers a CSV request exactly once to the mounted chart with the current Analysis chart identity", async () => {
     renderedFormats.length = 0;
     renderedRequests.length = 0;

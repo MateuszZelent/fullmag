@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import {
   acknowledgedAuthoringSceneRevision,
@@ -96,8 +96,10 @@ type AnisotropyField = keyof AnisotropyDraft;
 type MagneticDraftField = keyof MagneticParametersDraft;
 
 interface PanelScope {
-  key: string;
-  token: symbol;
+  readonly key: string;
+  readonly token: symbol;
+  readonly draftFieldRevisions: Map<MagneticDraftField, number>;
+  readonly anisotropyFieldRevisions: Map<AnisotropyField, number>;
 }
 
 interface PendingOperationsState {
@@ -165,7 +167,7 @@ function errorMessage(error: unknown): string {
 }
 
 function useObjectMaterialPanelState(selection: InspectorPanelProps["selection"]) {
-  const { api, authoringHistory, resources } = useKernel();
+  const { api, authoringHistory, commands, resources } = useKernel();
   const sessionIdentity = useSessionResourceIdentity();
   const sessionScopeKey = sessionRequestScopeKey(sessionIdentity);
   const scene = useSceneResource();
@@ -174,14 +176,26 @@ function useObjectMaterialPanelState(selection: InspectorPanelProps["selection"]
     ? sessionResourceIdentityKey(sessionIdentity)
     : "session:unknown";
   const scopeKey = `${sessionIdentityKey}|${object.mode}|${object.objectId}`;
-  const scopeRef = useRef<PanelScope>({ key: scopeKey, token: Symbol(scopeKey) });
-  if (scopeRef.current.key !== scopeKey) {
-    scopeRef.current = { key: scopeKey, token: Symbol(scopeKey) };
-  }
-  const scope = scopeRef.current;
+  const [scopeState, setScopeState] = useState<PanelScope>(() => ({
+    key: scopeKey, token: Symbol(scopeKey),
+    draftFieldRevisions: new Map(), anisotropyFieldRevisions: new Map(),
+  }));
+  const scope = useMemo(() => scopeState.key === scopeKey ? scopeState : {
+    key: scopeKey, token: Symbol(scopeKey),
+    draftFieldRevisions: new Map<MagneticDraftField, number>(),
+    anisotropyFieldRevisions: new Map<AnisotropyField, number>(),
+  }, [scopeState, scopeKey]);
+  if (scopeState !== scope) setScopeState(scope);
+  const scopeRef = useRef<PanelScope | null>(null);
+  useLayoutEffect(() => {
+    scopeRef.current = scope;
+    return () => { if (scopeRef.current === scope) scopeRef.current = null; };
+  }, [scope]);
+  const historyGeneration = authoringHistory?.getGeneration?.();
   const isCurrentScope = useCallback(
-    () => scopeRef.current.token === scope.token && scopeRef.current.key === scope.key,
-    [scope],
+    () => Boolean(sessionScopeKey) && scopeRef.current === scope && commands.getSessionScopeKey() === sessionScopeKey &&
+      (historyGeneration === undefined || authoringHistory?.getGeneration?.() === historyGeneration),
+    [authoringHistory, commands, historyGeneration, scope, sessionScopeKey],
   );
   const [assignmentBaseOverrideState, setAssignmentBaseOverrideState] =
     useState<AcknowledgedAssignmentBaseOverride | null>(null);
@@ -258,6 +272,12 @@ function useObjectMaterialPanelState(selection: InspectorPanelProps["selection"]
         currentScopeToken: scope.token,
       })
     : "discard";
+  // Keep confirmed assignment fields available while the new material GET loads.
+  const materialData = material.data ?? (
+    assignmentBaseDecision !== "discard" && assignmentBaseOverrideState?.materialId === materialId
+      ? currentSceneMaterial
+      : null
+  );
   const assignmentBaseOverride = assignmentBaseDecision === "use"
     ? assignmentBaseOverrideState
     : null;
@@ -271,64 +291,6 @@ function useObjectMaterialPanelState(selection: InspectorPanelProps["selection"]
     : assignmentBaseDecision === "rebase" && currentSceneBaseKey
       ? currentSceneBaseKey
       : resourceDraftKey;
-  useEffect(() => {
-    const current = assignmentBaseOverrideState;
-    if (!current) return;
-    const decision = acknowledgedAssignmentBaseDecision({
-      override: current,
-      currentSceneBaseKey,
-      currentResourceBaseKey: resourceDraftKey,
-      currentMaterialId: materialId,
-      currentObjectId: object.objectId,
-      currentSceneRevision,
-      currentScopeKey: scopeKey,
-      currentScopeToken: scope.token,
-    });
-    if (decision === "use") return;
-    if (decision === "rebase") {
-      if (!currentSceneBaseDraft || !currentSceneBaseKey || currentSceneRevision === null) return;
-      setDraftState((state) => {
-        if (state.identityKey !== current.identityKey) return state;
-        const revisions = new Map(draftFieldRevisionsRef.current);
-        const rebasedDraft = rebaseMagneticParametersDraftAfterAssignment({
-          previousBaseDraft: current.baseDraft,
-          draftAtStart: state.draft,
-          currentDraft: state.draft,
-          committedBaseDraft: currentSceneBaseDraft,
-          startingRevisions: revisions,
-          currentRevisions: revisions,
-        });
-        return {
-          baseKey: currentSceneBaseKey,
-          dirty: magneticParametersDraftDirty(rebasedDraft, currentSceneBaseDraft),
-          draft: rebasedDraft,
-          identityKey: current.identityKey,
-        };
-      });
-      setAssignmentBaseOverrideState((state) => {
-        if (state !== current) return state;
-        if (resourceDraftKey === currentSceneBaseKey) return null;
-        return {
-          ...current,
-          baseDraft: currentSceneBaseDraft,
-          baseKey: currentSceneBaseKey,
-          sceneRevision: currentSceneRevision,
-        };
-      });
-      return;
-    }
-    setAssignmentBaseOverrideState((state) => state === current ? null : state);
-  }, [
-    assignmentBaseOverrideState,
-    currentSceneBaseDraft,
-    currentSceneBaseKey,
-    currentSceneRevision,
-    materialId,
-    object.objectId,
-    resourceDraftKey,
-    scope,
-    scopeKey,
-  ]);
   const [draftState, setDraftState] = useState<
     InspectorDraftState<MagneticParametersDraft>
   >(() =>
@@ -338,6 +300,39 @@ function useObjectMaterialPanelState(selection: InspectorPanelProps["selection"]
       identityKey: draftIdentityKey,
     }),
   );
+  // Adjust this component's state before commit when the acknowledged base changes.
+  if (assignmentBaseOverrideState && assignmentBaseDecision !== "use") {
+    const current = assignmentBaseOverrideState;
+    if (assignmentBaseDecision === "rebase") {
+      if (currentSceneBaseDraft && currentSceneBaseKey && currentSceneRevision !== null) {
+        if (draftState.identityKey === current.identityKey) {
+          const revisions = new Map(scope.draftFieldRevisions);
+          const rebasedDraft = rebaseMagneticParametersDraftAfterAssignment({
+            previousBaseDraft: current.baseDraft,
+            draftAtStart: draftState.draft,
+            currentDraft: draftState.draft,
+            committedBaseDraft: currentSceneBaseDraft,
+            startingRevisions: revisions,
+            currentRevisions: revisions,
+          });
+          setDraftState({
+            baseKey: currentSceneBaseKey,
+            dirty: magneticParametersDraftDirty(rebasedDraft, currentSceneBaseDraft),
+            draft: rebasedDraft,
+            identityKey: current.identityKey,
+          });
+        }
+        setAssignmentBaseOverrideState(resourceDraftKey === currentSceneBaseKey ? null : {
+          ...current,
+          baseDraft: currentSceneBaseDraft,
+          baseKey: currentSceneBaseKey,
+          sceneRevision: currentSceneRevision,
+        });
+      }
+    } else {
+      setAssignmentBaseOverrideState(null);
+    }
+  }
   const [feedbackState, setFeedbackState] = useState<{
     value: Feedback;
     scopeToken: symbol;
@@ -376,8 +371,6 @@ function useObjectMaterialPanelState(selection: InspectorPanelProps["selection"]
             : null),
       }
     : null;
-  const draftFieldRevisionsRef = useRef<Map<MagneticDraftField, number>>(new Map());
-  const anisotropyFieldRevisionsRef = useRef<Map<AnisotropyField, number>>(new Map());
   const draftTransactionRevisionRef = useRef(0);
   function draftStateForResolution(
     state: InspectorDraftState<MagneticParametersDraft>,
@@ -386,7 +379,7 @@ function useObjectMaterialPanelState(selection: InspectorPanelProps["selection"]
       state.identityKey !== assignmentBaseOverrideState.identityKey) {
       return state;
     }
-    const revisions = new Map(draftFieldRevisionsRef.current);
+    const revisions = new Map(scope.draftFieldRevisions);
     const rebasedDraft = rebaseMagneticParametersDraftAfterAssignment({
       previousBaseDraft: assignmentBaseOverrideState.baseDraft,
       draftAtStart: state.draft,
@@ -417,8 +410,6 @@ function useObjectMaterialPanelState(selection: InspectorPanelProps["selection"]
   function startPending(operation: PendingOperation, pendingScope = scope): void {
     setPendingOperationsState((current) => {
       if (current.scopeToken !== pendingScope.token) {
-        draftFieldRevisionsRef.current.clear();
-        anisotropyFieldRevisionsRef.current.clear();
         return {
           operations: new Set([operation]),
           scopeKey: pendingScope.key,
@@ -445,9 +436,9 @@ function useObjectMaterialPanelState(selection: InspectorPanelProps["selection"]
   function updateAnisotropyDraft(patch: Partial<AnisotropyDraft>): void {
     const fields = Object.keys(patch) as AnisotropyField[];
     for (const field of fields) {
-      anisotropyFieldRevisionsRef.current.set(
+      scope.anisotropyFieldRevisions.set(
         field,
-        (anisotropyFieldRevisionsRef.current.get(field) ?? 0) + 1,
+        (scope.anisotropyFieldRevisions.get(field) ?? 0) + 1,
       );
     }
     setAnisotropyDraftState((current) => {
@@ -508,6 +499,7 @@ function useObjectMaterialPanelState(selection: InspectorPanelProps["selection"]
               api,
               authoringHistory,
               sessionScopeKey: operationSessionScopeKey,
+              isCurrentSessionScope: isCurrentScope,
             },
             "Update uniaxial anisotropy",
             mutation,
@@ -534,9 +526,9 @@ function useObjectMaterialPanelState(selection: InspectorPanelProps["selection"]
   function updateDraft(patch: Partial<MagneticParametersDraft>): void {
     const fields = Object.keys(patch) as MagneticDraftField[];
     for (const field of fields) {
-      draftFieldRevisionsRef.current.set(
+      scope.draftFieldRevisions.set(
         field,
-        (draftFieldRevisionsRef.current.get(field) ?? 0) + 1,
+        (scope.draftFieldRevisions.get(field) ?? 0) + 1,
       );
     }
     setDraftState((current) =>
@@ -609,7 +601,7 @@ function useObjectMaterialPanelState(selection: InspectorPanelProps["selection"]
         currentDraft: current.draft,
         committedBaseDraft,
         startingRevisions,
-        currentRevisions: draftFieldRevisionsRef.current,
+        currentRevisions: scope.draftFieldRevisions,
       });
       return {
         baseKey: committedBaseKey,
@@ -647,6 +639,7 @@ function useObjectMaterialPanelState(selection: InspectorPanelProps["selection"]
               api,
               authoringHistory,
               sessionScopeKey: operationSessionScopeKey,
+              isCurrentSessionScope: isCurrentScope,
             },
             "Update object material assignment",
             mutation,
@@ -672,7 +665,7 @@ function useObjectMaterialPanelState(selection: InspectorPanelProps["selection"]
   async function applyParameters({
     recordHistory = true,
   }: ApplyMaterialMutationOptions = {}): Promise<boolean> {
-    if (!materialId || !material.data) {
+    if (!materialId || !materialData) {
       setFeedback({
         kind: "error",
         message: "No committed material asset is assigned to this object.",
@@ -719,6 +712,7 @@ function useObjectMaterialPanelState(selection: InspectorPanelProps["selection"]
               api,
               authoringHistory,
               sessionScopeKey: operationSessionScopeKey,
+              isCurrentSessionScope: isCurrentScope,
             },
             "Update material parameters",
             mutation,
@@ -799,11 +793,12 @@ function useObjectMaterialPanelState(selection: InspectorPanelProps["selection"]
     const previousBaseDraft = baseDraft;
     const draftAtStart = draft;
     const identityKeyAtStart = draftIdentityKey;
-    const startingDraftRevisions = new Map(draftFieldRevisionsRef.current);
+    const startingDraftRevisions = new Map(scope.draftFieldRevisions);
     const historyContext = {
       api,
       authoringHistory,
       sessionScopeKey: operationSessionScopeKey,
+      isCurrentSessionScope: isCurrentScope,
     };
     const preparation = await prepareAuthoringMutation(historyContext);
     const baseRevision = preparation.baseRevision ?? object.baseRevision;
@@ -960,7 +955,7 @@ function useObjectMaterialPanelState(selection: InspectorPanelProps["selection"]
     const previousBaseDraft = baseDraft;
     const draftAtStart = draft;
     const identityKeyAtStart = draftIdentityKey;
-    const startingDraftRevisions = new Map(draftFieldRevisionsRef.current);
+    const startingDraftRevisions = new Map(scope.draftFieldRevisions);
     startPending("retry-assign", operationScope);
     try {
       const assigned = await runAuthoringMutationWithHistory(
@@ -968,6 +963,7 @@ function useObjectMaterialPanelState(selection: InspectorPanelProps["selection"]
           api,
           authoringHistory,
           sessionScopeKey: operationSessionScopeKey,
+          isCurrentSessionScope: isCurrentScope,
         },
         "Retry material assignment",
         async ({ baseRevision }) =>
@@ -1028,6 +1024,7 @@ function useObjectMaterialPanelState(selection: InspectorPanelProps["selection"]
     draftKey,
     feedback,
     material,
+    materialData,
     materialId,
     object,
     parametersTargetChanged,
@@ -1089,6 +1086,7 @@ function ObjectMaterialPanelView({
     draftKey,
     feedback,
     material,
+    materialData,
     materialId,
     object,
     parametersTargetChanged,
@@ -1184,7 +1182,7 @@ function ObjectMaterialPanelView({
               <FieldRow label="Current material" value={object.material} />
               <FieldRow
                 label="Material resource"
-                value={material.data?.name ?? materialId ?? "unassigned"}
+                value={materialData?.name ?? materialId ?? "unassigned"}
               />
               <FieldRow label="Mode" value={object.mode} />
               <FieldRow
@@ -1338,7 +1336,7 @@ function ObjectMaterialPanelView({
                 label="Name"
                 mono={false}
                 type="text"
-                disabled={!material.data}
+                disabled={!materialData}
                 value={draft.materialName}
                 onChange={(event) => updateDraft({ materialName: event.target.value })}
               />
@@ -1346,7 +1344,7 @@ function ObjectMaterialPanelView({
                 label="Ms"
                 type="number"
                 unit="A/m"
-                disabled={!material.data}
+                disabled={!materialData}
                 value={draft.ms}
                 onChange={(event) => updateDraft({ ms: event.target.value })}
               />
@@ -1354,14 +1352,14 @@ function ObjectMaterialPanelView({
                 label="Aex"
                 type="number"
                 unit="J/m"
-                disabled={!material.data}
+                disabled={!materialData}
                 value={draft.aex}
                 onChange={(event) => updateDraft({ aex: event.target.value })}
               />
               <FormField
                 label="alpha"
                 type="number"
-                disabled={!material.data}
+                disabled={!materialData}
                 value={draft.alpha}
                 onChange={(event) => updateDraft({ alpha: event.target.value })}
               />
@@ -1369,7 +1367,7 @@ function ObjectMaterialPanelView({
                 label="Dind"
                 type="number"
                 unit="J/m²"
-                disabled={!material.data}
+                disabled={!materialData}
                 value={draft.dind}
                 onChange={(event) => updateDraft({ dind: event.target.value })}
               />
@@ -1377,7 +1375,7 @@ function ObjectMaterialPanelView({
                 label="Dbulk"
                 type="number"
                 unit="J/m²"
-                disabled={!material.data}
+                disabled={!materialData}
                 value={draft.dbulk}
                 onChange={(event) => updateDraft({ dbulk: event.target.value })}
               />
@@ -1439,7 +1437,7 @@ function ObjectMaterialPanelView({
                 ) : null}
                 {showSection("material-parameters") ? (
                   <Button
-                    disabled={pendingOperations.has("parameters") || !material.data || parametersTargetChanged}
+                    disabled={pendingOperations.has("parameters") || !materialData || parametersTargetChanged}
                     size="sm"
                     type="button"
                     variant="primary"

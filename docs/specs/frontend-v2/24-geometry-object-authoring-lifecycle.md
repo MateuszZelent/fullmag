@@ -108,7 +108,7 @@ Required sections:
 - identity: object id, name, region name;
 - primitive geometry: type-specific dimensions and SI units;
 - transform: position, rotation, scale where supported;
-- magnetic parameters: the backend-backed `object.magnetic-parameters` inspector patches object `material_ref` through `/v2/sessions/current/model/objects/{object_id}`, reads and patches the assigned material asset through `/v2/sessions/current/model/materials/{material_id}`, and links to `object.physics` interaction entries;
+- parametry magnetyczne: Inspector `object.magnetic-parameters` zmienia `material_ref` przez `/v2/sessions/current/model/objects/{object_id}` i obsługuje tworzenie i przypisanie materiału oraz authoring anizotropii jednoosiowej. Osobny węzeł `object.material` odczytuje i zmienia parametry skalarne przypisanego materiału przez `/v2/sessions/current/model/materials/{material_id}`;
 - regions: the backend-backed `object.regions` inspector reads `/v2/sessions/current/model/regions` and patches `/v2/sessions/current/model/regions/{region_id}`;
 - magnetic texture: the backend-backed `object.magnetic-texture` inspector patches object `magnetization_ref` through `/v2/sessions/current/model/objects/{object_id}` and inspects referenced texture asset mapping/transform from `model/scene`;
 - mesh status: primitive-only, stale, building, ready, failed;

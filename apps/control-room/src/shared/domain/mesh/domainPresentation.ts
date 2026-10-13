@@ -1,9 +1,12 @@
 import type {
   DomainMetaResource,
   FdmRegionMembershipResource,
+  MeshActiveBuildResource,
   MeshSharedDomainManifestResource,
+  MeshUniverseConfigResource,
   ResourceRevision,
 } from "@/kernel/api/apiTypes";
+import type { ResourceStatus } from "@/kernel/resources/resourceTypes";
 import {
   FMRM_INACTIVE_REGION_ID,
   type DecodedTopology,
@@ -119,6 +122,50 @@ export interface DomainPresentationInput {
     FdmUniverseOutsideMagneticSupport,
     "kind"
   > | null;
+}
+
+export type UniverseDomainPolicyMode =
+  | { value: "auto"; source: "authored" | "canonical-default" }
+  | { value: "manual"; source: "authored" }
+  | { value: "invalid"; source: "authored" };
+
+export type UniverseDomainRealizationState =
+  | "runtime-unresolved"
+  | "loading"
+  | "building"
+  | "not-built"
+  | "current"
+  | "stale"
+  | "provenance-unavailable"
+  | "error";
+
+export interface UniverseDomainPolicyPresentation {
+  authored: {
+    center: readonly [number, number, number] | null;
+    centerSource: "authored" | "canonical-origin" | "invalid" | "not-applicable";
+    mode: UniverseDomainPolicyMode;
+    padding: readonly [number, number, number] | null;
+    paddingSource: "authored" | "invalid" | "not-authored";
+    size: readonly [number, number, number] | null;
+    sizeSource: "authored" | "invalid" | "not-applicable" | "not-authored";
+  };
+  realization: {
+    buildRevision: number | null;
+    detail: string;
+    requestedPolicyRevision: number | null;
+    sourceSceneRevision: number | null;
+    state: UniverseDomainRealizationState;
+  };
+}
+
+export interface UniverseDomainPolicyPresentationInput {
+  build?: MeshActiveBuildResource | null;
+  buildStatus?: ResourceStatus;
+  manifest?: MeshSharedDomainManifestResource | null;
+  manifestStatus?: ResourceStatus;
+  policy?: MeshUniverseConfigResource | null;
+  runtimeResolved: boolean;
+  sceneRevision?: number | null;
 }
 
 export type FdmCellState =
@@ -390,6 +437,125 @@ export function deriveAuthoredFdmUniverseOutsideMagneticSupport({
     bounds: domain,
     magneticSupportBounds: support,
     reason: "authored-universe-exceeds-magnetic-support",
+  };
+}
+
+function authoredVector3(value: unknown): readonly [number, number, number] | null {
+  if (
+    !Array.isArray(value) ||
+    value.length !== 3 ||
+    value.some((component) => typeof component !== "number" || !Number.isFinite(component))
+  ) {
+    return null;
+  }
+  return [value[0] as number, value[1] as number, value[2] as number];
+}
+
+function authoredVector3Source(
+  config: NonNullable<MeshUniverseConfigResource["config"]>,
+  key: "center" | "padding" | "size",
+): "authored" | "invalid" | "not-authored" {
+  if (!Object.prototype.hasOwnProperty.call(config, key)) return "not-authored";
+  return authoredVector3(config[key]) ? "authored" : "invalid";
+}
+
+function nonNegativeRevision(value: unknown): number | null {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0
+    ? value
+    : null;
+}
+
+export function buildUniverseDomainPolicyPresentation(
+  input: UniverseDomainPolicyPresentationInput,
+): UniverseDomainPolicyPresentation {
+  const config = input.policy?.config ?? {};
+  const rawMode = config.mode;
+  const hasAuthoredMode = Object.prototype.hasOwnProperty.call(config, "mode");
+  const mode: UniverseDomainPolicyMode = !hasAuthoredMode
+    ? { value: "auto", source: "canonical-default" }
+    : rawMode === "auto" || rawMode === "manual"
+      ? { value: rawMode, source: "authored" }
+      : { value: "invalid", source: "authored" };
+  const manual = mode.value === "manual";
+  const realization = input.build?.provenance ?? null;
+  const requestedPolicyRevision = nonNegativeRevision(
+    realization?.requested_policy_revision,
+  );
+  const sourceSceneRevision = nonNegativeRevision(
+    realization?.source_scene_revision ??
+      input.build?.source_scene_revision ??
+      input.manifest?.source_scene_revision,
+  );
+  const policyRevision = nonNegativeRevision(input.policy?.revision);
+  const sceneRevision = nonNegativeRevision(input.sceneRevision);
+  const sizeSource = manual
+    ? authoredVector3Source(config, "size")
+    : "not-applicable";
+  const paddingSource = authoredVector3Source(config, "padding");
+  const hasAuthoredCenter = Object.prototype.hasOwnProperty.call(config, "center");
+  const centerSource = !manual
+    ? "not-applicable"
+    : hasAuthoredCenter
+      ? authoredVector3(config.center) ? "authored" : "invalid"
+      : "canonical-origin";
+
+  let state: UniverseDomainRealizationState;
+  let detail: string;
+  if (!input.runtimeResolved) {
+    state = "runtime-unresolved";
+    detail = "The accepted method is known, but runtime realization has not resolved.";
+  } else if (input.build?.active_build != null) {
+    state = "building";
+    detail = "A backend mesh build is active.";
+  } else if (input.buildStatus === "error" || input.manifestStatus === "error") {
+    state = "error";
+    detail = input.build?.last_build_error ?? "Backend mesh realization status could not be loaded.";
+  } else if (input.buildStatus === "loading" || input.manifestStatus === "loading") {
+    state = "loading";
+    detail = "Loading backend mesh realization status.";
+  } else if (input.buildStatus === "stale" || input.manifestStatus === "stale") {
+    state = "stale";
+    detail = "The published manifest resource is marked stale.";
+  } else if (!input.manifest) {
+    state = "not-built";
+    detail = "No shared-domain mesh manifest is available for this session.";
+  } else if (
+    (requestedPolicyRevision !== null && policyRevision !== null && requestedPolicyRevision !== policyRevision) ||
+    (sourceSceneRevision !== null && sceneRevision !== null && sourceSceneRevision !== sceneRevision)
+  ) {
+    state = "stale";
+    detail = "The published mesh provenance does not match the current authored policy or scene revision.";
+  } else if (
+    requestedPolicyRevision === null ||
+    policyRevision === null ||
+    sourceSceneRevision === null ||
+    sceneRevision === null
+  ) {
+    state = "provenance-unavailable";
+    detail = "A mesh manifest exists, but matching policy and scene revisions are not all published.";
+  } else {
+    state = "current";
+    detail = "Backend mesh provenance matches the current authored policy and scene revisions.";
+  }
+
+  return {
+    authored: {
+      center: manual ? authoredVector3(config.center) : null,
+      centerSource,
+      mode,
+      padding: authoredVector3(config.padding),
+      paddingSource,
+      size: manual ? authoredVector3(config.size) : null,
+      sizeSource,
+    },
+    realization: {
+      buildRevision: nonNegativeRevision(realization?.mesh_revision) ??
+        nonNegativeRevision(input.manifest?.revision),
+      detail,
+      requestedPolicyRevision,
+      sourceSceneRevision,
+      state,
+    },
   };
 }
 

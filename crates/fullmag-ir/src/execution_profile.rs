@@ -1,7 +1,8 @@
 //! Immutable execution profiles and sparse requested-execution patches.
 //!
-//! This module stores authored intent only. Resolving defaults, replaying
-//! layers, and enforcing submit precedence belongs to `fullmag-application`.
+//! This module owns authored intent and pure request normalization shared
+//! across layers. Repository binding, capability checks, and runtime authority
+//! remain in `fullmag-application` and higher layers.
 
 use crate::{
     BackendTarget, ComputeParallelismIR, ComputePlacementIR, ComputeResourcesIR, ComputeTargetIR,

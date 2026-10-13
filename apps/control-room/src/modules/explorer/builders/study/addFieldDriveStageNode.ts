@@ -8,7 +8,7 @@ export function buildAddFieldDriveStageNode(
     badge: "field drive",
     icon: "magnet",
     kind: "study.stage.add_field_drive",
-    label: `Add Antenna ${stage.index + 1}`,
+    label: `Add Field Drive ${stage.index + 1}`,
     stage,
   });
 }

@@ -126,6 +126,7 @@ export function modeCompositionTargetIdForMeshPart(part: {
 export function buildModeCompositionScalarColorBuffer({
   field,
   geometryNodeIndices,
+  identity: fieldIdentity = null,
   layer,
   phaseRad,
   projectionKey,
@@ -133,6 +134,7 @@ export function buildModeCompositionScalarColorBuffer({
   topologyNodeCount,
 }: {
   field: DecodedComplexFieldVector;
+  identity?: ModeCompositionFieldLayerSnapshot["identity"];
   geometryNodeIndices?: Uint32Array | null;
   layer: ModeCompositionLayer;
   phaseRad?: number | null;
@@ -162,6 +164,7 @@ export function buildModeCompositionScalarColorBuffer({
     amplitudeScale,
     buildKey: rawModeBufferKey(
       field,
+      fieldIdentity,
       layer,
       topologyNodeCount,
       projectionKey ?? "indexed",
@@ -181,12 +184,14 @@ export function buildModeCompositionScalarColorBuffer({
     range,
     sourceFieldBufferId: rawModeBufferKey(
       field,
+      fieldIdentity,
       layer,
       topologyNodeCount,
       projectionKey ?? "indexed",
     ),
     targetRevision: rawModeBufferKey(
       field,
+      fieldIdentity,
       layer,
       topologyNodeCount,
       projectionKey ?? "indexed",
@@ -197,6 +202,7 @@ export function buildModeCompositionScalarColorBuffer({
 
 export function buildModeCompositionVectorLayerInput({
   field,
+  identity: fieldIdentity = null,
   layer,
   phaseRad: requestedPhaseRad,
   topologyNodeCount,
@@ -204,6 +210,7 @@ export function buildModeCompositionVectorLayerInput({
   vectorScale,
 }: {
   field: DecodedComplexFieldVector;
+  identity?: ModeCompositionFieldLayerSnapshot["identity"];
   layer: ModeCompositionLayer;
   phaseRad?: number | null;
   topologyNodeCount: number;
@@ -288,17 +295,23 @@ export function buildModeCompositionVectorLayerInput({
   if (visible === 0) return null;
   const visibleSegments = segments.slice(0, visible * 7);
   const topologyRevision = field.meshTopologyRevision ?? "unknown";
-  const fieldRevision = String(layer.mode.artifact_revision);
-  const identity = rawModeBufferKey(field, layer, topologyNodeCount, "vectors");
+  const fieldRevision = fieldIdentity?.fieldRevision ?? "unverified";
+  const bufferIdentity = rawModeBufferKey(
+    field,
+    fieldIdentity,
+    layer,
+    topologyNodeCount,
+    "vectors",
+  );
   return {
     buildReference: {
-      buildKey: `${identity}:vector:${layer.representation}:${phaseRad}`,
-      fieldBufferId: identity,
+      buildKey: `${bufferIdentity}:vector:${layer.representation}:${phaseRad}`,
+      fieldBufferId: bufferIdentity,
       fieldRevision,
       groupKey: `mode-composition-vector:${layer.target_id}`,
       resourceKey: `data/fields/${encodeURIComponent(field.quantityId)}`,
       revisionSummary: `${fieldRevision}:${topologyRevision}`,
-      targetRevision: `${identity}:vector:${layer.representation}:${phaseRad}`,
+      targetRevision: `${bufferIdentity}:vector:${layer.representation}:${phaseRad}`,
       topologyRevision,
     },
     segments: visibleSegments,
@@ -320,7 +333,7 @@ function modeFieldMatchesLayer(
       Number.isFinite(layer.phase_rad) &&
       Number.isFinite(layer.animation.phase_offset_rad) &&
       field.componentCount === 3 &&
-      field.formatVersion === 3 &&
+      (field.formatVersion === 3 || field.formatVersion === 5) &&
       field.indexing === "explicit_node_indices" &&
       field.scopeKind === "object" &&
       scopeId === layer.object_id.replace(/^object:/, "") &&
@@ -529,6 +542,7 @@ function resolveModeColorPalette(layer: ModeCompositionLayer): string {
 
 function rawModeBufferKey(
   field: DecodedComplexFieldVector,
+  identity: ModeCompositionFieldLayerSnapshot["identity"],
   layer: ModeCompositionLayer,
   topologyNodeCount: number,
   projectionKey: string,
@@ -538,6 +552,9 @@ function rawModeBufferKey(
     layer.mode.run_id,
     layer.mode.stage_id,
     layer.mode.artifact_revision,
+    identity?.artifactGenerationId ?? "unverified",
+    identity?.fieldRevision ?? "unverified",
+    identity?.binaryEncoding ?? "unverified",
     layer.mode.sample_id,
     layer.mode.mode_id,
     layer.field_id,

@@ -12,6 +12,52 @@ use std::time::{Duration, Instant};
 const POLL_INTERVAL: Duration = Duration::from_millis(250);
 const COMMAND_SETTLE_GRACE: Duration = Duration::from_secs(2);
 const API_INSTANCE_HEADER: &str = "x-fullmag-api-instance";
+const MAX_BOOTSTRAP_ATTEMPTS: u8 = 3;
+const MAX_BOOTSTRAP_ERROR_BYTES: usize = 4 * 1024;
+
+#[derive(Clone, PartialEq, Eq)]
+struct BootstrapOwner {
+    session_id: String,
+    backend: String,
+    scene_revision: Option<u64>,
+    command_id: String,
+}
+
+#[derive(Default)]
+struct BootstrapRetryState {
+    owner: Option<BootstrapOwner>,
+    failures: u8,
+    terminal_error: Option<String>,
+}
+
+impl BootstrapRetryState {
+    fn select_owner(&mut self, owner: BootstrapOwner) {
+        if self.owner.as_ref() != Some(&owner) {
+            *self = Self {
+                owner: Some(owner),
+                ..Self::default()
+            };
+        }
+    }
+
+    fn record_failure(&mut self, error: &anyhow::Error, retryable: bool) {
+        self.failures = self.failures.saturating_add(1);
+        if !retryable || self.failures >= MAX_BOOTSTRAP_ATTEMPTS {
+            let mut reason = format!(
+                "scratch runtime bootstrap failed after {} attempt(s): {error:#}",
+                self.failures,
+            );
+            if reason.len() > MAX_BOOTSTRAP_ERROR_BYTES {
+                let mut end = MAX_BOOTSTRAP_ERROR_BYTES;
+                while !reason.is_char_boundary(end) {
+                    end -= 1;
+                }
+                reason.truncate(end);
+            }
+            self.terminal_error = Some(reason);
+        }
+    }
+}
 
 #[derive(Clone, PartialEq, Eq)]
 struct GridSessionScope {
@@ -507,6 +553,7 @@ fn run(
     let mut settling_command: Option<(String, bool, Instant)> = None;
     let mut pending_failure: Option<(String, String)> = None;
     let mut child: Option<Child> = None;
+    let mut bootstrap_retry = BootstrapRetryState::default();
     let mut grid_command: Option<GridCommandCustody> = None;
     let mut child_proof: Option<ScratchChildProof> = None;
     // A lost synchronization response cannot prove that its writer stopped.
@@ -593,6 +640,7 @@ fn run(
                 handled_command_id = None;
                 settling_command = None;
                 pending_failure = None;
+                bootstrap_retry = BootstrapRetryState::default();
             }
             CurrentSession::Unavailable => {}
             CurrentSession::Active {
@@ -607,6 +655,7 @@ fn run(
                 handled_command_id = None;
                 settling_command = None;
                 pending_failure = None;
+                bootstrap_retry = BootstrapRetryState::default();
             }
             CurrentSession::Active {
                 session_id,
@@ -680,6 +729,24 @@ fn run(
 
                 if child.is_none() && matches!(backend.as_str(), "fdm" | "fem") {
                     if let Some((command_id, grid_refresh_only, command_kind)) = pending_compute_command(&client, &api_base) {
+                        let owner = BootstrapOwner {
+                            session_id: session_id.clone(),
+                            backend: backend.clone(),
+                            scene_revision,
+                            command_id: command_id.clone(),
+                        };
+                        bootstrap_retry.select_owner(owner.clone());
+                        if let Some(error) = bootstrap_retry.terminal_error.as_deref() {
+                            if bootstrap_owner_is_current(&client, &api_base, &owner)
+                                && current_grid_scope(&client, &api_base, &expected_api_instance_id)
+                                    .is_some_and(|scope| scope.session_id == owner.session_id) {
+                                if report_command_failure(&client, &api_base, &command_id, error) {
+                                    bootstrap_retry = BootstrapRetryState::default();
+                                }
+                            }
+                            control.wait_poll_interval(POLL_INTERVAL);
+                            continue;
+                        }
                         let proof_scope = current_grid_scope(&client, &api_base, &expected_api_instance_id)
                             .filter(|scope| scope.session_id == session_id);
                         let Some(attached_scope) = proof_scope.as_ref() else {
@@ -701,7 +768,9 @@ fn run(
                             &session_id,
                             &backend,
                             scene_revision,
-                        ) {
+                        ) && pending_compute_command(&client, &api_base).as_ref().map(|(id, _, _)| id.as_str())
+                            == Some(command_id.as_str())
+                        {
                             match render_current_scene(&client, &api_base) {
                                 Ok(script_path) => {
                                     if current_session_matches(
@@ -710,7 +779,9 @@ fn run(
                                         &session_id,
                                         &backend,
                                         scene_revision,
-                                    ) && current_grid_scope(&client, &api_base, &expected_api_instance_id).as_ref() == Some(attached_scope) {
+                                    ) && pending_compute_command(&client, &api_base)
+                                        .as_ref().map(|(id, _, _)| id.as_str()) == Some(command_id.as_str())
+                                        && current_grid_scope(&client, &api_base, &expected_api_instance_id).as_ref() == Some(attached_scope) {
                                         match spawn_attached_runtime(
                                             &executable,
                                             api_port,
@@ -739,14 +810,11 @@ fn run(
                                                 });
                                                 handled_command_id = Some(command_id);
                                                 child = Some(next_child);
+                                                bootstrap_retry = BootstrapRetryState::default();
                                             }
                                             Err(error) => {
-                                                eprintln!("[fullmag] failed to start attached scratch runtime: {error}");
-                                                if grid_refresh_only
-                                                    && current_grid_scope(&client, &api_base, &expected_api_instance_id) == grid_scope
-                                                {
-                                                    let _ = report_command_failure(&client, &api_base, &command_id, "grid-only runtime could not be started");
-                                                }
+                                                eprintln!("[fullmag] failed to start attached scratch runtime: {error:#}");
+                                                bootstrap_retry.record_failure(&error, false);
                                             }
                                         }
                                     } else {
@@ -762,13 +830,11 @@ fn run(
                                         continue;
                                     }
                                     eprintln!(
-                                        "[fullmag] scratch scene is not runnable yet; waiting for authoring ACK: {error}"
+                                        "[fullmag] scratch runtime bootstrap sync failed: {error:#}"
                                     );
-                                    if grid_refresh_only
-                                        && current_grid_scope(&client, &api_base, &expected_api_instance_id) == grid_scope
-                                    {
-                                        let _ = report_command_failure(&client, &api_base, &command_id, &format!("grid model synchronization failed: {error}"));
-                                    }
+                                    let retryable = matches!(error,
+                                        SceneSynchronizationError::Rejected(status) if status.as_u16() == 429);
+                                    bootstrap_retry.record_failure(&anyhow::anyhow!("{error}"), retryable);
                                 }
                             }
                         }
@@ -909,6 +975,72 @@ fn normalize_backend(value: &str) -> Option<String> {
     }
 }
 
+#[cfg(test)]
+mod bootstrap_tests {
+    use super::*;
+
+    fn owner() -> BootstrapOwner {
+        BootstrapOwner {
+            session_id: "session-A".to_string(),
+            backend: "fdm".to_string(),
+            scene_revision: Some(7),
+            command_id: "command-A".to_string(),
+        }
+    }
+
+    #[test]
+    fn transient_budget_is_retained_across_polls_and_terminal_ack_retries() {
+        let mut retry = BootstrapRetryState::default();
+        for attempt in 1..=MAX_BOOTSTRAP_ATTEMPTS {
+            retry.select_owner(owner());
+            retry.record_failure(&anyhow::anyhow!("timeout"), true);
+            assert_eq!(retry.failures, attempt);
+            assert_eq!(
+                retry.terminal_error.is_some(),
+                attempt == MAX_BOOTSTRAP_ATTEMPTS
+            );
+        }
+        let reason = retry.terminal_error.clone();
+        retry.select_owner(owner());
+        assert_eq!(retry.failures, MAX_BOOTSTRAP_ATTEMPTS);
+        assert_eq!(retry.terminal_error, reason);
+    }
+
+    #[test]
+    fn deterministic_failure_is_terminal_and_reason_is_utf8_bounded() {
+        let mut retry = BootstrapRetryState::default();
+        retry.select_owner(owner());
+        retry.record_failure(&anyhow::anyhow!("{}", "ł".repeat(5000)), false);
+        assert_eq!(retry.failures, 1);
+        assert!(retry.terminal_error.as_ref().unwrap().len() <= MAX_BOOTSTRAP_ERROR_BYTES);
+    }
+
+    #[test]
+    fn each_ownership_dimension_starts_a_new_budget() {
+        let mut variants = Vec::new();
+        let mut session = owner();
+        session.session_id = "session-B".to_string();
+        variants.push(session);
+        let mut backend = owner();
+        backend.backend = "fem".to_string();
+        variants.push(backend);
+        let mut scene = owner();
+        scene.scene_revision = Some(8);
+        variants.push(scene);
+        let mut command = owner();
+        command.command_id = "command-B".to_string();
+        variants.push(command);
+        for changed in variants {
+            let mut retry = BootstrapRetryState::default();
+            retry.select_owner(owner());
+            retry.record_failure(&anyhow::anyhow!("failed"), false);
+            retry.select_owner(changed);
+            assert_eq!(retry.failures, 0);
+            assert!(retry.terminal_error.is_none());
+        }
+    }
+}
+
 fn current_grid_scope(client: &Client, api_base: &str, expected_api_instance_id: &str) -> Option<GridSessionScope> {
     let response = client.get(format!("{api_base}/v2/sessions/current/status"))
         .send().ok()?.error_for_status().ok()?;
@@ -1038,6 +1170,23 @@ fn render_current_scene(client: &Client, api_base: &str) -> Result<PathBuf, Scen
         .filter(|path| !path.trim().is_empty())
         .ok_or_else(|| SceneSynchronizationError::Unknown(anyhow::anyhow!("model sync did not return script_path")))?;
     Ok(PathBuf::from(path))
+}
+
+fn bootstrap_owner_is_current(client: &Client, api_base: &str, owner: &BootstrapOwner) -> bool {
+    current_session_matches(
+        client,
+        api_base,
+        &owner.session_id,
+        &owner.backend,
+        owner.scene_revision,
+    ) && pending_compute_command(client, api_base).as_ref().map(|(id, _, _)| id.as_str()) == Some(owner.command_id.as_str())
+        && current_session_matches(
+            client,
+            api_base,
+            &owner.session_id,
+            &owner.backend,
+            owner.scene_revision,
+        )
 }
 
 fn spawn_attached_runtime(

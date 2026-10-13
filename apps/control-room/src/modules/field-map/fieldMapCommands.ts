@@ -370,7 +370,8 @@ export const fieldMapCommands: CommandContribution[] = Object.entries(
       id === "planar-monitor.duplicate" ||
       id === "planar-monitor.rename"
     ) {
-      if (!context.api || typeof input?.monitorId !== "string") {
+      const monitorId = input?.monitorId;
+      if (!context.api || typeof monitorId !== "string") {
         return {
           message: "Planar monitor API or monitor id is missing.",
           status: "failed",
@@ -449,7 +450,8 @@ export const fieldMapCommands: CommandContribution[] = Object.entries(
           };
         }
       } else {
-        if (typeof input.newName !== "string" || !input.newName.trim()) {
+        const newName = input?.newName;
+        if (typeof newName !== "string" || !newName.trim()) {
           context.layout?.setPanelVisible("right", true);
           return {
             message: "Edit the monitor name in the Inspector.",

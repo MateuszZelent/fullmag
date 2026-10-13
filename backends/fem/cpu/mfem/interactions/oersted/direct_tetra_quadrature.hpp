@@ -31,10 +31,22 @@ struct DirectTetraQuadratureDiagnostics {
     std::uint64_t refined_pairs = 0;
     std::uint64_t unconverged_pair_count = 0;
     double maximum_pair_error_apm = 0.0;
+    std::uint64_t kernel_evaluations = 0;
+    std::uint64_t ledger_leaf_visits = 0;
+};
+
+struct DirectTetraTargetDiagnostics {
+    double estimated_error_apm = 0.0;
+    double tolerance_apm = 0.0;
+    double roundoff_indicator_apm = 0.0;
+    std::uint64_t final_leaf_count = 0;
+    std::uint64_t kernel_evaluations = 0;
+    std::uint64_t ledger_leaf_visits = 0;
 };
 
 struct DirectTetraQuadratureResult {
     std::vector<double> h_xyz_apm;
+    std::vector<DirectTetraTargetDiagnostics> target_diagnostics;
     DirectTetraQuadratureDiagnostics diagnostics;
     std::string operator_version;
     std::string source_view_identity_digest;
@@ -43,7 +55,10 @@ struct DirectTetraQuadratureResult {
 class DirectTetraQuadrature {
 public:
     static constexpr const char *operator_version =
-        "fem_oersted_direct_tetra_quadrature.v1";
+        "fem_oersted_direct_tetra_quadrature.v3";
+    static constexpr std::uint64_t maximum_final_leaves_per_target = 1'000'000;
+    static constexpr std::uint64_t maximum_kernel_evaluations = 100'000'000;
+    static constexpr std::uint64_t maximum_ledger_leaf_visits = 100'000'000;
 
     static DirectTetraQuadratureResult Evaluate(
         const fullmag::fem::transport::ConservativeCurrentView &source,

@@ -1,4 +1,5 @@
-import { mkdirSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 const apiBase = (
@@ -25,11 +26,34 @@ const acceptanceDirectory =
   process.env.CONTROL_ROOM_ACCEPTANCE_DIR ??
   path.resolve(".fullmag/reports/live-charts-analysis-acceptance/latest");
 
-const ANALYSIS_SURFACES = [
-  "Dynamics", "Resonance & FMR", "Dispersion", "Hysteresis", "Comparison",
-];
+// ADR 0054 stage 3b: Analysis has no surface tabs; the selected Explorer
+// Results node owns the surface. This fixture publishes no current run
+// (status.run is null), so the Results tree has no analysis family nodes and
+// each page starts from the persisted analysis-view preference instead.
+const ANALYSIS_VIEW_PREFERENCES_STORAGE_KEY = "fm:analysis-view-preferences:v2";
+const DEFAULT_ANALYSIS_SURFACE = "dynamics";
+const SESSION_COLLECTION_PATH = "/v2/sessions";
+const DEVELOPMENT_BACKEND_FIXTURE_PATH = "/v2/platform/development-backend";
+const FIXTURE_SESSION_ID = "analysis-plots-fixture";
+const FIXTURE_SESSION_EPOCH = "00000000-0000-4000-8000-000000000017";
+const FIXTURE_REQUEST_SCOPE_EPOCH = "00000000-0000-4000-8000-000000000018";
+const REFERENCE_FIXTURE_RUN_ID = "analysis-frequency-fixture-run";
+const REFERENCE_FIXTURE_STAGE_ID = "analysis-frequency-fixture-stage";
+const CURRENT_RUN_FIXTURE_PATH = "/v2/sessions/current/simulation/runs/current";
+const POSTPROCESSING_DEFINITIONS_FIXTURE_PATH = "/v2/sessions/current/analysis/postprocessing/definitions";
+const ANALYTIC_REFERENCE_MODELS_FIXTURE_PATH = "/v2/sessions/current/analysis/references/analytic-models";
+const DATA_ARTIFACTS_FIXTURE_PATH = "/v2/sessions/current/data/artifacts";
+const DATA_OBSERVATION_FRAMES_FIXTURE_PATH = "/v2/sessions/current/data/observation-frames";
 const ROWS_BIN_PATTERN =
   /^\/v2\/sessions\/current\/data\/tables\/[^/]+\/rows\.bin(?:\?|$)/;
+const FREQUENCY_DOMAIN_PATHS = {
+  branches: "/v2/sessions/current/analysis/frequency-domain/eigen/branches.v2",
+  dispersion: "/v2/sessions/current/analysis/frequency-domain/eigen/dispersion",
+  manifest: "/v2/sessions/current/analysis/frequency-domain/manifest.v1",
+  modePrefix: "/v2/sessions/current/analysis/frequency-domain/eigen/modes/",
+  response: "/v2/sessions/current/analysis/frequency-domain/response/magnetic-sweep",
+  spectrum: "/v2/sessions/current/analysis/frequency-domain/eigen/spectrum.v2",
+};
 
 async function main() {
   const playwright = await loadPlaywright();
@@ -46,11 +70,10 @@ async function main() {
   const rowsBinRequests = [];
   const analysisPlotRequests = [];
 
-  await page.addInitScript(({ allowMissingSessionSmoke, baseUrl }) => {
+  await page.addInitScript(({ disableRealtime, baseUrl }) => {
     window.__FULLMAG_CONFIG__ = {
       ...(window.__FULLMAG_CONFIG__ ?? {}),
-      ...(allowMissingSessionSmoke ? { allowMissingSessionSmoke: true } : {}),
-      ...(allowMissingSessionSmoke ? { disableRealtime: true } : {}),
+      ...(disableRealtime ? { disableRealtime: true } : {}),
       controlRoomApiBase: baseUrl,
     };
     window.__FULLMAG_ENABLE_CHART_DIAGNOSTICS__ = true;
@@ -64,7 +87,7 @@ async function main() {
       resizeCalls: 0,
       setOptionCalls: 0,
     };
-  }, { allowMissingSessionSmoke: useFixture, baseUrl: apiBase });
+  }, { disableRealtime: useFixture, baseUrl: apiBase });
 
   if (useFixture) await installAnalysisDatasetFixtureRoutes(page);
 
@@ -102,9 +125,9 @@ async function main() {
       timeout: timeoutMs,
       waitUntil: "domcontentloaded",
     });
-    await page.locator("main").waitFor({ state: "visible", timeout: timeoutMs });
+    await page.locator("main.fm-workspace-shell").waitFor({ state: "visible", timeout: timeoutMs });
     await openAnalysisPlots(page);
-    await verifyAnalysisSurfaceContract(page);
+    await verifyAnalysisSurfaceContract(page, DEFAULT_ANALYSIS_SURFACE);
     const selectedDatasetRef = await selectPublishedDataset(page);
     await waitForAnalysisRowsAndCanvas(page);
     await verifyPinnedDatasetProvenance(page, selectedDatasetRef);
@@ -115,6 +138,9 @@ async function main() {
     await verifyLocalRangeSelection(page, rowsBinRequests);
     await verifyReducedMotionAndKeyboardControls(page);
     await verifyResponsiveAnalysisFixtures(page);
+    const frequencyDomainFixtureProof = useFixture
+      ? await verifyFrequencyDomainChartFixtures(browser, workspaceUrl, apiBase)
+      : [];
     const explicitDatasetRequestBaseline = analysisPlotRequests.length;
     await verifyNoImplicitLiveRefresh(
       page,
@@ -160,6 +186,11 @@ async function main() {
         workspaceUrl,
       })}`,
     );
+    if (frequencyDomainFixtureProof.length > 0) {
+      console.log(
+        `Analysis frequency-domain chart proof: ${JSON.stringify(frequencyDomainFixtureProof)}`,
+      );
+    }
     console.log(`Analysis plots smoke passed at ${workspaceUrl}.`);
   } finally {
     await browser.close();
@@ -367,15 +398,38 @@ async function openAnalysisPlots(page) {
     .waitFor({ state: "visible", timeout: timeoutMs });
 }
 
-async function verifyAnalysisSurfaceContract(page) {
-  const tabs = page.locator(".fm-analysis-plots__tabs .fm-analysis-plots__tab");
-  await tabs.first().waitFor({ state: "visible", timeout: timeoutMs });
-  const labels = (await tabs.allTextContents()).map((label) => label.trim());
-  if (JSON.stringify(labels) !== JSON.stringify(ANALYSIS_SURFACES)) {
+async function verifyAnalysisSurfaceContract(page, expectedSurface) {
+  const title = page.locator(".fm-analysis-plots__surface-title");
+  await title.waitFor({ state: "visible", timeout: timeoutMs });
+  await page.waitForFunction(
+    (surface) =>
+      document
+        .querySelector(".fm-analysis-plots__surface-title")
+        ?.getAttribute("data-analysis-surface-title") === surface,
+    expectedSurface,
+    { timeout: timeoutMs },
+  );
+  const tabCount = await page
+    .locator(".fm-analysis-plots [role='tablist'], .fm-analysis-plots__tab, .fm-analysis-plots__tabs")
+    .count();
+  if (tabCount !== 0) {
     throw new Error(
-      `Analysis workbench surfaces differ from the dataset-driven contract: ${JSON.stringify(labels)}`,
+      `Analysis must not render surface tabs; the Explorer selection owns the surface (found ${tabCount})`,
     );
   }
+}
+
+async function seedAnalysisSurfacePreference(page, surface) {
+  await page.addInitScript(
+    ({ key, activeSurface }) => {
+      try {
+        window.localStorage.setItem(key, JSON.stringify({ schemaVersion: 2, activeSurface }));
+      } catch {
+        // Storage unavailable: verifyAnalysisSurfaceContract reports the surface mismatch.
+      }
+    },
+    { key: ANALYSIS_VIEW_PREFERENCES_STORAGE_KEY, activeSurface: surface },
+  );
 }
 
 async function selectPublishedDataset(page) {
@@ -593,9 +647,10 @@ async function collectAnalysisPlotProof(page) {
       root?.querySelector('[aria-label="Analysis dataset"]')?.textContent?.trim() ?? "";
     const provenance =
       root?.querySelector(".fm-analysis-plots__header span")?.textContent?.trim() ?? "";
-    const surfaceLabels = Array.from(
-      root?.querySelectorAll(".fm-analysis-plots__tab") ?? [],
-    ).map((element) => element.textContent?.trim() ?? "");
+    const surfaceTitle =
+      root?.querySelector(".fm-analysis-plots__surface-title")?.getAttribute("data-analysis-surface-title") ?? null;
+    const surfaceTabCount =
+      root?.querySelectorAll("[role='tablist'], .fm-analysis-plots__tab, .fm-analysis-plots__tabs").length ?? 0;
     const pointSummary =
       root?.querySelector(".fm-chart-section__point-count")?.textContent?.trim() ?? "";
     const cursor =
@@ -653,7 +708,8 @@ async function collectAnalysisPlotProof(page) {
       retainedRefresh: root?.querySelector(".fm-analysis-chart-surface")?.getAttribute("data-status") === "refreshing",
       rootRect: rootRect ? { height: rootRect.height, width: rootRect.width } : null,
       selectedDatasetRef,
-      surfaceLabels,
+      surfaceTabCount,
+      surfaceTitle,
     };
   });
 }
@@ -691,8 +747,11 @@ function validateProof(proof, expectedDatasetRef) {
   if (!proof.provenance.includes(expectedDatasetRef) || !/\brevision\s+\d+\b/.test(proof.provenance)) {
     failures.push(`analysis provenance is incomplete: ${proof.provenance}`);
   }
-  if (JSON.stringify(proof.surfaceLabels) !== JSON.stringify(ANALYSIS_SURFACES)) {
-    failures.push(`analysis workbench surfaces changed: ${JSON.stringify(proof.surfaceLabels)}`);
+  if (proof.surfaceTabCount !== 0) {
+    failures.push(`analysis renders surface tabs (${proof.surfaceTabCount}); Explorer owns surface switching`);
+  }
+  if (proof.surfaceTitle !== DEFAULT_ANALYSIS_SURFACE) {
+    failures.push(`analysis surface title changed: ${proof.surfaceTitle} != ${DEFAULT_ANALYSIS_SURFACE}`);
   }
   if (!/[1-9]\d*(?:\s*\/\s*[1-9]\d*)?\s+rows/.test(proof.pointSummary)) {
     failures.push(`analysis point summary is missing: ${proof.pointSummary}`);
@@ -713,7 +772,1461 @@ function validateProof(proof, expectedDatasetRef) {
   return failures;
 }
 
-async function installAnalysisDatasetFixtureRoutes(page) {
+async function verifyFrequencyDomainChartFixtures(browser, workspaceUrl, baseUrl) {
+  const proofs = [];
+  const persistFixtureProof = (complete) => {
+    mkdirSync(acceptanceDirectory, { recursive: true });
+    writeFileSync(
+      path.join(acceptanceDirectory, "analysis-frequency-domain-fixture-proof.json"),
+      `${JSON.stringify({ complete, fixtureProofs: proofs }, null, 2)}\n`,
+      "utf8",
+    );
+  };
+  for (const fixture of createFrequencyDomainChartFixtures()) {
+    const page = await browser.newPage({ viewport: { height: 1000, width: 1440 } });
+    const errors = [];
+    const failedResponses = [];
+    const frequencyRequests = [];
+    await page.addInitScript(({ apiBase }) => {
+      window.__FULLMAG_CONFIG__ = {
+        ...(window.__FULLMAG_CONFIG__ ?? {}),
+        disableRealtime: true,
+        controlRoomApiBase: apiBase,
+      };
+      window.__FULLMAG_ENABLE_CHART_DIAGNOSTICS__ = true;
+      window.__FULLMAG_CHART_DIAGNOSTICS__ = {
+        activeInstances: 0,
+        createdInstances: 0,
+        disposedInstances: 0,
+        modelBuilds: 0,
+        plannedPoints: 0,
+        renderedPoints: 0,
+        resizeCalls: 0,
+        setOptionCalls: 0,
+      };
+    }, { apiBase: baseUrl });
+    await seedAnalysisSurfacePreference(page, fixture.surfaceId);
+    await installAnalysisDatasetFixtureRoutes(page, fixture);
+    page.on("console", (message) => {
+      if (message.type() !== "error") return;
+      const messageText = message.text();
+      if (!messageText.startsWith("Failed to load resource:")) errors.push(messageText);
+    });
+    page.on("pageerror", (error) => errors.push(error.message));
+    page.on("response", (response) => {
+      const responsePath = currentSessionPath(response.url());
+      if (
+        response.status() >= 400 &&
+        responsePath?.startsWith("/v2/sessions/current/analysis/")
+      ) {
+        failedResponses.push({ path: responsePath, status: response.status() });
+      }
+    });
+    page.on("request", (request) => {
+      const requestPath = currentSessionPath(request.url());
+      if (requestPath?.startsWith("/v2/sessions/current/analysis/frequency-domain/")) {
+        frequencyRequests.push(requestPath.split("?")[0]);
+      }
+    });
+
+    try {
+      await page.goto(workspaceUrl, { timeout: timeoutMs, waitUntil: "domcontentloaded" });
+      await page.locator("main.fm-workspace-shell").waitFor({ state: "visible", timeout: timeoutMs });
+      await openAnalysisPlots(page);
+      await selectFrequencyDomainSubview(page, fixture);
+
+      const legend = await waitForFrequencyChart(page, fixture);
+      const renderedSeries = await inspectFrequencyChartOption(page, fixture);
+      if (!frequencyRequests.includes(fixture.resourcePath)) {
+        throw new Error(
+          `${fixture.id} did not request its published chart artifact: ${frequencyRequests.join(", ")}`,
+        );
+      }
+      const proof = {
+        calculationMode: fixture.calculationMode,
+        chartResource: fixture.resourcePath,
+        fixture: fixture.id,
+        legend,
+        renderedSeries,
+        requestedSubview: await page
+          .locator(".fm-analysis-plots__subview")
+          .getAttribute("data-analysis-subview"),
+        renderedPoints: await page.evaluate(
+          () => window.__FULLMAG_CHART_DIAGNOSTICS__?.renderedPoints ?? 0,
+        ),
+      };
+
+      if (fixture.expectedSelection) {
+        proof.selectedPoint = await clickFrequencyDomainPoint(
+          page,
+          fixture.expectedSelection,
+          fixture.id,
+          fixture,
+          frequencyRequests,
+          failedResponses,
+        );
+      }
+      if (fixture.screenshot) {
+        mkdirSync(acceptanceDirectory, { recursive: true });
+        const screenshot = path.join(acceptanceDirectory, fixture.screenshot);
+        await page.screenshot({ path: screenshot });
+        proof.screenshot = screenshot;
+      }
+      await assertNoVisibleResourceErrors(page, errors);
+      if (failedResponses.length > 0) {
+        throw new Error(`${fixture.id} frequency-domain responses failed: ${JSON.stringify(failedResponses)}`);
+      }
+      proofs.push(proof);
+      persistFixtureProof(false);
+    } finally {
+      await page.close();
+    }
+  }
+  const referenceImportProof = await verifyReferenceImportResultInspector(browser, workspaceUrl, baseUrl);
+  proofs.push(referenceImportProof);
+  persistFixtureProof(false);
+  persistFixtureProof(true);
+  return proofs;
+}
+
+function createReferenceImportFixture() {
+  const dispersionText = [
+    "sample_index,sample_id,raw_mode_index,mode_id,branch_id,path_s_rad_per_m,frequency_hz,mode_field_available,mode_field_id",
+    "0,k-path-sample-00000,1,tracked-mode-00000,tracked,0,1000000000,false,",
+    "1,k-path-sample-00001,1,tracked-mode-00001,tracked,1000000,1100000000,false,",
+  ].join("\n");
+  return {
+    calculationMode: "dispersion_modal",
+    dispersionText,
+    id: "results-dispersion-reference-import",
+    kSampling: {
+      kind: "path",
+      points: [
+        { k_vector: [0, 0, 0], label: "Γ" },
+        { k_vector: [1000000, 0, 0], label: "X" },
+      ],
+      samples_per_segment: [1],
+    },
+    referenceImport: true,
+    spectrumPayload: {
+      samples: [
+        {
+          modes: [
+            {
+              frequency_hz: 1000000000,
+              mode_field_available: false,
+              mode_id: "tracked-mode-00000",
+              raw_mode_index: 1,
+            },
+          ],
+          sample_id: "k-path-sample-00000",
+          sample_index: 0,
+        },
+        {
+          modes: [
+            {
+              frequency_hz: 1100000000,
+              mode_field_available: false,
+              mode_id: "tracked-mode-00001",
+              raw_mode_index: 1,
+            },
+          ],
+          sample_id: "k-path-sample-00001",
+          sample_index: 1,
+        },
+      ],
+      schema_version: "eigen_spectrum.v2",
+    },
+    surfaceId: "dispersion",
+  };
+}
+
+async function verifyReferenceImportResultInspector(browser, workspaceUrl, baseUrl) {
+  const page = await browser.newPage({ viewport: { height: 1000, width: 1440 } });
+  const fixture = createReferenceImportFixture();
+  const fixtureState = await installAnalysisDatasetFixtureRoutes(page, fixture);
+  const errors = [];
+  const resourceRequests = [];
+  const runId = REFERENCE_FIXTURE_RUN_ID;
+  const stageId = REFERENCE_FIXTURE_STAGE_ID;
+  const rootId = "results:run:" + runId;
+  const groupId = rootId + ":k-resolved";
+  const stageNodeId = groupId + ":stage:" + stageId + ":modal_eigen";
+  const dispersionNodeId = stageNodeId + ":dispersion";
+  const dispersionSelector = ".fm-explorer [role=\"treeitem\"][data-node-id=\"" + dispersionNodeId + "\"]";
+  const oversizeFileName = "oversized-reference.csv";
+
+  await seedAnalysisSurfacePreference(page, "dispersion");
+  await page.addInitScript(({ apiBase: configuredApiBase }) => {
+    window.__FULLMAG_CONFIG__ = {
+      ...(window.__FULLMAG_CONFIG__ ?? {}),
+      disableRealtime: true,
+      controlRoomApiBase: configuredApiBase,
+    };
+  }, { apiBase: baseUrl });
+  page.on("console", (message) => {
+    if (message.type() !== "error") return;
+    const text = message.text();
+    if (!text.startsWith("Failed to load resource:")) errors.push(text);
+  });
+  page.on("pageerror", (error) => errors.push(error.message));
+  page.on("request", (request) => {
+    const requestPath = currentSessionPath(request.url());
+    if (
+      request.method() !== "OPTIONS" &&
+      requestPath &&
+      (
+        requestPath === CURRENT_RUN_FIXTURE_PATH ||
+        requestPath.startsWith("/v2/sessions/current/analysis/")
+      )
+    ) {
+      resourceRequests.push({
+        method: request.method(),
+        path: requestPath,
+        sessionScope: request.headers()["x-fullmag-session-scope"] ?? null,
+      });
+    }
+  });
+
+  try {
+    await page.goto(workspaceUrl, { timeout: timeoutMs, waitUntil: "domcontentloaded" });
+    await page.locator("main.fm-workspace-shell").waitFor({ state: "visible", timeout: timeoutMs });
+    await openAnalysisPlots(page);
+
+    const resultsTab = page.locator(".fm-explorer .fm-tabs-trigger")
+      .filter({ hasText: /^Results$/ })
+      .first();
+    await resultsTab.waitFor({ state: "visible", timeout: timeoutMs });
+    if (await resultsTab.getAttribute("aria-selected") !== "true") {
+      await resultsTab.click({ timeout: timeoutMs });
+    }
+
+    async function expandResultsNode(nodeId) {
+      const selector = ".fm-explorer [role=\"treeitem\"][data-node-id=\"" + nodeId + "\"]";
+      const row = page.locator(selector);
+      await row.waitFor({ state: "visible", timeout: timeoutMs });
+      if (await row.getAttribute("aria-expanded") === "false") {
+        const branch = row.locator(".fm-explorer-tree-row__branch");
+        if (await branch.count()) await branch.click({ timeout: timeoutMs });
+        else await row.dblclick({ timeout: timeoutMs });
+      }
+      await page.waitForFunction(
+        (nodeSelector) => document.querySelector(nodeSelector)?.getAttribute("aria-expanded") === "true",
+        selector,
+        { timeout: timeoutMs },
+      );
+    }
+
+    await expandResultsNode(rootId);
+    await expandResultsNode(groupId);
+    await expandResultsNode(stageNodeId);
+    const dispersionNode = page.locator(dispersionSelector);
+    await dispersionNode.click({ timeout: timeoutMs });
+    await page.waitForFunction(
+      (selector) => document.querySelector(selector)?.getAttribute("aria-selected") === "true",
+      dispersionSelector,
+      { timeout: timeoutMs },
+    );
+
+    const inspector = page.locator(".fm-inspector");
+    await inspector.waitFor({ state: "visible", timeout: timeoutMs });
+    const ownerText = (await inspector.innerText()).replace(/\s+/g, " ");
+    for (const expected of [runId, stageId, "Artifact revision", "17"]) {
+      if (!ownerText.includes(expected)) {
+        throw new Error("Selected dispersion Inspector is missing owner identity " + expected + ": " + ownerText);
+      }
+    }
+
+    const referenceGroup = inspector.locator("button").filter({ hasText: /^Import reference/ }).first();
+    await referenceGroup.waitFor({ state: "visible", timeout: timeoutMs });
+    await referenceGroup.click({ timeout: timeoutMs });
+    const fileInput = page.getByLabel("Reference file");
+    await fileInput.waitFor({ state: "visible", timeout: timeoutMs });
+    const validCsv = [
+      "path,frequency",
+      "1.234567890123e-6,2.345678901234",
+      "2.345678901234e-6,3.456789012345",
+      "",
+    ].join("\n");
+    await fileInput.setInputFiles({
+      name: "precision-reference.csv",
+      mimeType: "text/csv",
+      buffer: Buffer.from(validCsv, "utf8"),
+    });
+
+    const pointSummary = page.getByText(/^2 points\./);
+    await pointSummary.waitFor({ state: "visible", timeout: timeoutMs });
+    const pathColumn = page.getByRole("combobox", { name: "Path coordinate column" });
+    const frequencyColumn = page.getByRole("combobox", { name: "Frequency column" });
+    await pathColumn.waitFor({ state: "visible", timeout: timeoutMs });
+    await frequencyColumn.waitFor({ state: "visible", timeout: timeoutMs });
+    const selectedPathColumn = (await pathColumn.innerText()).trim();
+    const selectedFrequencyColumn = (await frequencyColumn.innerText()).trim();
+    if (!selectedPathColumn.includes("path") || !selectedFrequencyColumn.includes("frequency")) {
+      throw new Error("Reference column defaults do not select the uploaded path/frequency columns.");
+    }
+    const labelInput = page.getByLabel("Reference label");
+    await labelInput.fill("Precision browser reference");
+    const importButton = page.getByRole("button", { name: "Import as reference", exact: true });
+    if (await importButton.isDisabled()) {
+      throw new Error("Valid two-row reference data did not enable the real Import as reference command.");
+    }
+    await importButton.click({ timeout: timeoutMs });
+    await page.getByText(/Imported reference/, { exact: false })
+      .waitFor({ state: "visible", timeout: timeoutMs });
+
+    if (fixtureState.referenceCreateRequests.length !== 1) {
+      throw new Error("Expected one valid reference-create request, saw " + fixtureState.referenceCreateRequests.length + ".");
+    }
+    const validCreate = fixtureState.referenceCreateRequests[0];
+    const definition = validCreate?.body?.definition;
+    const expectedPoints = [
+      [1.234567890123e-6 * 1e6, 2.345678901234 * 1e9],
+      [2.345678901234e-6 * 1e6, 3.456789012345 * 1e9],
+    ];
+    const expectedSessionScope = "session=" + encodeURIComponent(FIXTURE_SESSION_ID) +
+      "&epoch=" + encodeURIComponent(FIXTURE_SESSION_EPOCH) +
+      "&request_scope_epoch=" + encodeURIComponent(FIXTURE_REQUEST_SCOPE_EPOCH);
+    if (
+      validCreate?.sessionScope !== expectedSessionScope ||
+      validCreate?.body?.expected_scene_revision !== 0 ||
+      definition?.data_ref?.run_id !== runId ||
+      definition?.data_ref?.dataset_id !== stageId ||
+      definition?.data_ref?.dataset_revision !== "17" ||
+      JSON.stringify(definition?.settings?.points) !== JSON.stringify(expectedPoints) ||
+      definition?.settings?.source_units?.path !== "rad/um" ||
+      definition?.settings?.source_units?.frequency !== "GHz"
+    ) {
+      throw new Error("Valid reference import did not preserve its typed Results owner, units, and full-precision SI points.");
+    }
+
+    const scopedOwnerPaths = [
+      CURRENT_RUN_FIXTURE_PATH,
+      POSTPROCESSING_DEFINITIONS_FIXTURE_PATH,
+      FREQUENCY_DOMAIN_PATHS.manifest,
+      FREQUENCY_DOMAIN_PATHS.spectrum,
+      FREQUENCY_DOMAIN_PATHS.dispersion,
+      "/v2/sessions/current/analysis/results/runs/" + runId + "/datasets",
+    ];
+    const scopedOwnerResources = scopedOwnerPaths.map((resourcePath) => {
+      const request = resourceRequests.find((candidate) =>
+        candidate.method === "GET" && candidate.path === resourcePath,
+      );
+      if (!request || request.sessionScope !== expectedSessionScope) {
+        throw new Error("Results owner resource was not read through the scoped v2 facade: " + resourcePath);
+      }
+      return resourcePath;
+    });
+
+    await page.evaluate((invalidFileName) => {
+      const ownDescriptor = Object.getOwnPropertyDescriptor(File.prototype, "text");
+      const originalText = File.prototype.text;
+      if (typeof originalText !== "function") {
+        throw new Error("Browser File.text is unavailable for the oversize-read assertion.");
+      }
+      const audit = { ownDescriptor, oversizedCalls: 0 };
+      Object.defineProperty(window, "__FULLMAG_REFERENCE_IMPORT_TEXT_AUDIT__", {
+        configurable: true,
+        value: audit,
+      });
+      Object.defineProperty(File.prototype, "text", {
+        configurable: true,
+        enumerable: ownDescriptor?.enumerable ?? false,
+        writable: true,
+        value: function (...args) {
+          if (this instanceof File && this.name === invalidFileName) audit.oversizedCalls += 1;
+          return originalText.apply(this, args);
+        },
+      });
+    }, oversizeFileName);
+
+    let overlimitEvidence;
+    try {
+      await page.getByLabel("Reference file").setInputFiles({
+        name: oversizeFileName,
+        mimeType: "text/csv",
+        buffer: Buffer.alloc(4 * 1024 * 1024 + 1, 0x20),
+      });
+      const oversizeMessage = page.getByText("Reference files must be 4 MiB or smaller.", { exact: true });
+      await oversizeMessage.waitFor({ state: "visible", timeout: timeoutMs });
+      if (await pointSummary.count() !== 0) {
+        throw new Error("Oversized selection left the previous reference point summary visible.");
+      }
+      if (
+        await page.getByRole("combobox", { name: "Path coordinate column" }).count() !== 0 ||
+        await page.getByRole("combobox", { name: "Frequency column" }).count() !== 0
+      ) {
+        throw new Error("Oversized selection left the previous reference column table visible.");
+      }
+      if (await page.getByLabel("Reference label").count() !== 0) {
+        throw new Error("Oversized selection retained a previous file's reference label control.");
+      }
+      if (!(await oversizeMessage.isVisible()) || await importButton.count() !== 0) {
+        throw new Error("Oversized file did not leave a visible error with the import action removed.");
+      }
+      const textAudit = await page.evaluate(() => {
+        const audit = window.__FULLMAG_REFERENCE_IMPORT_TEXT_AUDIT__;
+        return { oversizedCalls: audit?.oversizedCalls ?? -1 };
+      });
+      if (textAudit.oversizedCalls !== 0) {
+        throw new Error("Oversized reference bytes were read through File.text.");
+      }
+      if (fixtureState.referenceCreateRequests.length !== 1) {
+        throw new Error("Oversized selection attempted another reference-definition create.");
+      }
+      await page.waitForFunction(
+        (selector) => document.querySelector(selector)?.getAttribute("aria-selected") === "true",
+        dispersionSelector,
+        { timeout: timeoutMs },
+      );
+      const currentInspectorText = (await inspector.innerText()).replace(/\s+/g, " ");
+      if (!currentInspectorText.includes(runId) || !currentInspectorText.includes(stageId)) {
+        throw new Error("The selected Results owner changed after oversized reference rejection.");
+      }
+      overlimitEvidence = {
+        errorVisible: true,
+        fileTextCalls: textAudit.oversizedCalls,
+        invalidCreateRequests: fixtureState.referenceCreateRequests.length - 1,
+        pointSummaryCleared: true,
+        previousColumnsCleared: true,
+        previousLabelCleared: true,
+        selectedNodeId: await dispersionNode.getAttribute("data-node-id"),
+      };
+      const screenshot = path.join(acceptanceDirectory, "analysis-reference-import-overlimit.png");
+      mkdirSync(acceptanceDirectory, { recursive: true });
+      await page.screenshot({ path: screenshot, fullPage: true });
+      overlimitEvidence.screenshot = screenshot;
+    } finally {
+      await page.evaluate(() => {
+        const audit = window.__FULLMAG_REFERENCE_IMPORT_TEXT_AUDIT__;
+        if (audit?.ownDescriptor) {
+          Object.defineProperty(File.prototype, "text", audit.ownDescriptor);
+        } else {
+          Reflect.deleteProperty(File.prototype, "text");
+        }
+        Reflect.deleteProperty(window, "__FULLMAG_REFERENCE_IMPORT_TEXT_AUDIT__");
+      });
+    }
+
+    await assertNoVisibleResourceErrors(page, errors);
+    return {
+      artifactRevision: 17,
+      fixture: fixture.id,
+      owner: { runId, stageId },
+      proof: {
+        acceptedDefinitionId: definition.definition_id,
+        expectedSiPoints: expectedPoints,
+        requestedSessionScope: expectedSessionScope,
+        scopedOwnerResources,
+        validCreateRequestCount: fixtureState.referenceCreateRequests.length,
+        validSourceUnits: definition.settings.source_units,
+      },
+      rejectedOversize: overlimitEvidence,
+    };
+  } catch (error) {
+    try {
+      mkdirSync(acceptanceDirectory, { recursive: true });
+      const treeRows = await page.locator(".fm-explorer [role=\"treeitem\"]").evaluateAll((rows) =>
+        rows.slice(0, 128).map((row) => ({
+          nodeId: row.getAttribute("data-node-id"),
+          expanded: row.getAttribute("aria-expanded"),
+          selected: row.getAttribute("aria-selected"),
+          text: (row.textContent ?? "").slice(0, 256),
+        })),
+      );
+      writeFileSync(
+        path.join(acceptanceDirectory, "analysis-reference-import-failure.json"),
+        JSON.stringify({
+          fixture: fixture.id,
+          error: String(error.message ?? error).slice(0, 2048),
+          errors: errors.slice(-20).map((message) => String(message).slice(0, 1024)),
+          resourceRequests: resourceRequests.slice(-100),
+          treeRows,
+        }, null, 2) + "\n",
+      );
+      await page.screenshot({
+        path: path.join(acceptanceDirectory, "analysis-reference-import-failure.png"),
+        fullPage: true,
+      });
+    } catch (captureError) {
+      console.warn("Reference-import failure capture unavailable: " + String(captureError.message ?? captureError));
+    }
+    throw error;
+  } finally {
+    await page.close();
+  }
+}
+
+async function selectFrequencyDomainSubview(page, { subviewId, subviewLabel, surfaceId, surfaceLabel }) {
+  await verifyAnalysisSurfaceContract(page, surfaceId);
+
+  const subviewTrigger = page.getByRole("combobox", { name: `${surfaceLabel} subview` });
+  await subviewTrigger.waitFor({ state: "visible", timeout: timeoutMs });
+  if (await subviewTrigger.getAttribute("data-analysis-subview") !== subviewId) {
+    await subviewTrigger.click({ timeout: timeoutMs });
+    await page.getByRole("option", { name: subviewLabel, exact: true })
+      .click({ timeout: timeoutMs });
+  }
+  await page.waitForFunction(
+    (expectedSubview) =>
+      document.querySelector(".fm-analysis-plots__subview")
+        ?.getAttribute("data-analysis-subview") === expectedSubview,
+    subviewId,
+    { timeout: timeoutMs },
+  );
+}
+
+async function waitForFrequencyChart(page, fixture) {
+  await page.waitForFunction(
+    ({ expectedResourcePath, minimumRenderedPoints }) => {
+      const root = document.querySelector(".fm-analysis-plots");
+      const chartFrame = root?.querySelector(".fm-analysis-plots__chart-frame");
+      const canvas = root?.querySelector(".fm-analysis-chart-surface canvas");
+      const diagnostics = window.__FULLMAG_CHART_DIAGNOSTICS__;
+      return (
+        chartFrame?.getAttribute("data-resource-key") === expectedResourcePath &&
+        canvas instanceof HTMLCanvasElement &&
+        canvas.width > 0 && canvas.height > 0 &&
+        (diagnostics?.renderedPoints ?? 0) >= minimumRenderedPoints
+      );
+    },
+    {
+      expectedResourcePath: fixture.resourcePath,
+      minimumRenderedPoints: fixture.minimumRenderedPoints,
+    },
+    { timeout: timeoutMs },
+  ).catch(async () => {
+    const body = await page.locator(".fm-analysis-plots").innerText();
+    const chartResource = await page
+      .locator(".fm-analysis-plots__chart-frame")
+      .first()
+      .getAttribute("data-resource-key")
+      .catch(() => null);
+    const renderedPoints = await page.evaluate(
+      () => window.__FULLMAG_CHART_DIAGNOSTICS__?.renderedPoints ?? 0,
+    );
+    throw new Error(
+      `${fixture.id} did not render the requested chart artifact (resource=${chartResource}, renderedPoints=${renderedPoints}). Analysis snippet:\n${body.slice(0, 1_200)}`,
+    );
+  });
+
+  const labels = await page.locator(".fm-chart-legend__label").allTextContents();
+  const normalizedLabels = labels.map((label) => label.trim()).filter(Boolean);
+  for (const requiredLabel of fixture.requiredLegendLabels ?? []) {
+    if (!normalizedLabels.includes(requiredLabel)) {
+      throw new Error(
+        `${fixture.id} is missing chart series ${requiredLabel}: ${normalizedLabels.join(" | ")}`,
+      );
+    }
+  }
+  if (normalizedLabels.length < (fixture.minimumLegendCount ?? 1)) {
+    throw new Error(`${fixture.id} chart legend is empty: ${normalizedLabels.join(" | ")}`);
+  }
+  return normalizedLabels;
+}
+
+async function inspectFrequencyChartOption(page, fixture) {
+  const evidence = await page.evaluate(({ sourceGapRow, targetRowId }) => {
+    const diagnostics = window.__FULLMAG_CHART_DIAGNOSTICS__;
+    const readOption = diagnostics?.readRenderedOption;
+    if (typeof readOption !== "function") return { available: false, series: [] };
+    const option = readOption();
+    const series = Array.isArray(option?.series) ? option.series : [];
+    return {
+      available: true,
+      series: series.map((entry, seriesIndex) => {
+        const data = Array.isArray(entry.data) ? entry.data : [];
+        const targetDataIndex = targetRowId == null
+          ? -1
+          : data.findIndex((row) => Array.isArray(row) && row[2] === targetRowId);
+        const target = targetDataIndex >= 0 ? data[targetDataIndex] : null;
+        const targetPrevious = targetDataIndex > 0 ? data[targetDataIndex - 1] : null;
+        return {
+          connectNulls: entry.connectNulls ?? null,
+          dataLength: data.length,
+          name: entry.name ?? "",
+          nonNullPointCount: data.filter((row) =>
+            Array.isArray(row) && typeof row[1] === "number"
+          ).length,
+          nullSentinelCount: data.filter((row) =>
+            Array.isArray(row) && row[1] === null && row[2] === null
+          ).length,
+          seriesIndex,
+          showSymbol: entry.showSymbol === true,
+          symbolSize: entry.symbolSize ?? null,
+          symbolFill: entry.itemStyle?.color ?? null,
+          sourceGapRowRetained: sourceGapRow == null
+            ? null
+            : data.some((row) => Array.isArray(row) && row[2] === sourceGapRow),
+          targetDataIndex,
+          targetPreviousIsNullSentinel: Array.isArray(targetPrevious) &&
+            targetPrevious[1] === null && targetPrevious[2] === null,
+          targetSourceRowIndex: Array.isArray(target) && typeof target[2] === "number"
+            ? target[2]
+            : null,
+          type: entry.type ?? "",
+        };
+      }),
+    };
+  }, {
+    sourceGapRow: fixture.expectedSelection?.sourceGapRow ?? null,
+    targetRowId: fixture.expectedSelection?.rowId ?? null,
+  });
+
+  if (!evidence.available) {
+    throw new Error(`${fixture.id} has no opt-in reader for the applied ECharts option.`);
+  }
+  if (fixture.requireDispersionRenderEvidence) {
+    const line = evidence.series.find((entry) => entry.type === "line");
+    const scatter = evidence.series.find((entry) => entry.type === "scatter");
+    if (!line || !scatter) {
+      throw new Error(
+        `${fixture.id} did not apply both tracked line and raw scatter series: ${JSON.stringify(evidence.series)}`,
+      );
+    }
+    if (line.nonNullPointCount !== 5_000 || scatter.nonNullPointCount !== 5_000) {
+      throw new Error(
+        `${fixture.id} did not cap each series at 5,000 rendered points: ${JSON.stringify(evidence.series)}`,
+      );
+    }
+    if (scatter.showSymbol !== true || scatter.symbolSize !== 4 ||
+        line.showSymbol !== true || line.symbolSize !== 2 ||
+        line.symbolFill !== "transparent") {
+      throw new Error(
+        `${fixture.id} did not preserve visible scatter and transparent bounded line hit targets: ${JSON.stringify(evidence.series)}`,
+      );
+    }
+    if (line.connectNulls !== false) {
+      throw new Error(
+        `${fixture.id} applied a tracked line that connects across null gaps: ${JSON.stringify(line)}`,
+      );
+    }
+    if (
+      line.sourceGapRowRetained !== false ||
+      line.nullSentinelCount !== 1 ||
+      line.targetSourceRowIndex !== fixture.expectedSelection.rowId ||
+      !line.targetPreviousIsNullSentinel
+    ) {
+      throw new Error(
+        `${fixture.id} lost the decimated source gap or its post-gap row: ${JSON.stringify(line)}`,
+      );
+    }
+  }
+  return evidence.series;
+}
+
+async function inspectFrequencyDomainPointSpacing(page, expected) {
+  const evidence = await page.evaluate(({ rowId, seriesType }) => {
+    const diagnostics = window.__FULLMAG_CHART_DIAGNOSTICS__;
+    const option = diagnostics?.readRenderedOption?.();
+    const series = Array.isArray(option?.series) ? option.series : [];
+    const seriesIndex = series.findIndex((entry) =>
+      entry?.type === seriesType &&
+      Array.isArray(entry.data) &&
+      entry.data.some((row) => Array.isArray(row) && row[2] === rowId)
+    );
+    const resolvePoint = diagnostics?.resolveRenderedDataPoint;
+    if (seriesIndex < 0 || typeof resolvePoint !== "function") {
+      return { available: false, reason: "target-series-or-reader-missing" };
+    }
+    const line = series[seriesIndex];
+    const data = line.data;
+    const dataIndex = data.findIndex((row) => Array.isArray(row) && row[2] === rowId);
+    const targetData = data[dataIndex];
+    const targetCoordinate = dataIndex < 0 ? null : resolvePoint(seriesIndex, dataIndex);
+    if (
+      !targetCoordinate ||
+      targetData?.[2] !== rowId ||
+      targetCoordinate.data?.[2] !== rowId ||
+      !Number.isFinite(targetCoordinate.x) ||
+      !Number.isFinite(targetCoordinate.y)
+    ) {
+      return { available: false, reason: "target-source-row-missing" };
+    }
+    const target = {
+      data: targetCoordinate.data,
+      dataIndex: targetCoordinate.dataIndex,
+      seriesIndex: targetCoordinate.seriesIndex,
+      targetData: targetData.slice(0, 3),
+      type: line.type,
+      x: targetCoordinate.x,
+      y: targetCoordinate.y,
+    };
+    const distance = (left, right) => Math.hypot(left.x - right.x, left.y - right.y);
+    const lineNeighbors = [];
+    for (const direction of [-1, 1]) {
+      for (let offset = 1; offset < data.length; offset += 1) {
+        const candidateIndex = dataIndex + direction * offset;
+        if (candidateIndex < 0 || candidateIndex >= data.length) break;
+        const candidate = data[candidateIndex];
+        if (
+          !Array.isArray(candidate) ||
+          typeof candidate[1] !== "number" ||
+          typeof candidate[2] !== "number"
+        ) {
+          continue;
+        }
+        const coordinate = resolvePoint(seriesIndex, candidateIndex);
+        if (coordinate) {
+          lineNeighbors.push({
+            dataIndex: candidateIndex,
+            distancePx: distance(target, coordinate),
+            sourceRowIndex: candidate[2],
+          });
+          break;
+        }
+      }
+    }
+
+    const scatterIndex = series.findIndex((entry) =>
+      entry?.type === "scatter" && Array.isArray(entry.data)
+    );
+    const scatter = scatterIndex < 0 ? [] : series[scatterIndex].data;
+    const scatterCandidates = scatter
+      .map((row, index) => ({
+        dataIndex: index,
+        row,
+        xDistance: Array.isArray(row) && typeof row[0] === "number"
+          ? Math.abs(row[0] - targetData[0])
+          : Number.POSITIVE_INFINITY,
+      }))
+      .filter((candidate) =>
+        Array.isArray(candidate.row) &&
+        typeof candidate.row[1] === "number" &&
+        typeof candidate.row[2] === "number" &&
+        Number.isFinite(candidate.xDistance)
+      )
+      .sort((left, right) => left.xDistance - right.xDistance)
+      .slice(0, 16)
+      .map((candidate) => {
+        const coordinate = resolvePoint(scatterIndex, candidate.dataIndex);
+        return coordinate
+          ? {
+              dataIndex: candidate.dataIndex,
+              distancePx: distance(target, coordinate),
+              sourceRowIndex: candidate.row[2],
+            }
+          : null;
+      })
+      .filter(Boolean);
+
+    const nearestLineNeighbor = lineNeighbors
+      .sort((left, right) => left.distancePx - right.distancePx)[0] ?? null;
+    const nearestScatter = scatterCandidates
+      .sort((left, right) => left.distancePx - right.distancePx)[0] ?? null;
+    const competitorDistances = [
+      nearestLineNeighbor?.distancePx,
+      nearestScatter?.distancePx,
+    ].filter((value) => typeof value === "number" && Number.isFinite(value));
+    const zoom = Array.isArray(option?.dataZoom) ? option.dataZoom[0] : null;
+    const start = Number(zoom?.start);
+    const end = Number(zoom?.end);
+    const zoomRange = Number.isFinite(start) && Number.isFinite(end) && end > start
+      ? { start, end, span: end - start }
+      : null;
+
+    return {
+      available: zoomRange !== null && competitorDistances.length > 0,
+      nearestCompetitorDistancePx: competitorDistances.length > 0
+        ? Math.min(...competitorDistances)
+        : null,
+      nearestLineNeighbor,
+      nearestScatter,
+      reason: zoomRange === null ? "applied-data-zoom-range-missing" : null,
+      target,
+      zoomRange,
+    };
+  }, { rowId: expected.rowId, seriesType: expected.seriesType });
+
+  if (!evidence?.available) {
+    throw new Error(
+      "Could not measure actual chart point spacing for source row " +
+        expected.rowId + ": " + JSON.stringify(evidence),
+    );
+  }
+  return evidence;
+}
+
+async function zoomFrequencyDomainPoint(page, host, expected, fixture) {
+  const minimumCompetitorDistancePx = 14;
+  const maximumWheelSteps = 80;
+  const wheelDeltaY = -120;
+  let evidence = await inspectFrequencyDomainPointSpacing(page, expected);
+  const initialRange = evidence.zoomRange;
+  const wheelSteps = [];
+
+  while (
+    evidence.nearestCompetitorDistancePx < minimumCompetitorDistancePx &&
+    wheelSteps.length < maximumWheelSteps
+  ) {
+    const previousRange = evidence.zoomRange;
+    const target = evidence.target;
+    await page.mouse.move(target.x, target.y);
+    await page.keyboard.down("Control");
+    try {
+      await page.mouse.wheel(0, wheelDeltaY);
+      await page.waitForFunction(
+        (previousSpan) => {
+          const option = window.__FULLMAG_CHART_DIAGNOSTICS__?.readRenderedOption?.();
+          const zoom = Array.isArray(option?.dataZoom) ? option.dataZoom[0] : null;
+          const start = Number(zoom?.start);
+          const end = Number(zoom?.end);
+          return Number.isFinite(start) && Number.isFinite(end) &&
+            end - start < previousSpan - 0.001;
+        },
+        previousRange.span,
+        { timeout: 1_000 },
+      );
+    } finally {
+      await page.keyboard.up("Control");
+    }
+
+    await inspectFrequencyChartOption(page, fixture);
+    const nextEvidence = await inspectFrequencyDomainPointSpacing(page, expected);
+    if (nextEvidence.zoomRange.span >= previousRange.span - 0.001) {
+      throw new Error(
+        "Ctrl-wheel did not narrow the applied chart range for " + fixture.id +
+          ": " + JSON.stringify(nextEvidence),
+      );
+    }
+    const bounds = await host.boundingBox();
+    if (
+      !bounds ||
+      nextEvidence.target.x < bounds.x ||
+      nextEvidence.target.x > bounds.x + bounds.width ||
+      nextEvidence.target.y < bounds.y ||
+      nextEvidence.target.y > bounds.y + bounds.height
+    ) {
+      throw new Error(
+        "Ctrl-wheel moved the expected source point outside the chart viewport for " +
+          fixture.id + ": " + JSON.stringify(nextEvidence),
+      );
+    }
+    wheelSteps.push({
+      dataIndex: nextEvidence.target.dataIndex,
+      nearestCompetitorDistancePx: nextEvidence.nearestCompetitorDistancePx,
+      nearestLineNeighbor: nextEvidence.nearestLineNeighbor,
+      nearestScatter: nextEvidence.nearestScatter,
+      zoomRange: nextEvidence.zoomRange,
+    });
+    evidence = nextEvidence;
+  }
+
+  if (evidence.nearestCompetitorDistancePx < minimumCompetitorDistancePx) {
+    const screenshot = path.join(
+      acceptanceDirectory,
+      fixture.id + "-point-zoom-failure.png",
+    );
+    mkdirSync(acceptanceDirectory, { recursive: true });
+    await page.screenshot({ path: screenshot }).catch(() => undefined);
+    throw new Error(
+      "Could not isolate rendered source row " + expected.rowId +
+        " with real Ctrl-wheel zoom after " + wheelSteps.length +
+        " steps; screenshot=" + screenshot + "; evidence=" + JSON.stringify({
+          finalRange: evidence.zoomRange,
+          nearestCompetitorDistancePx: evidence.nearestCompetitorDistancePx,
+          nearestLineNeighbor: evidence.nearestLineNeighbor,
+          nearestScatter: evidence.nearestScatter,
+          target: evidence.target,
+          wheelSteps,
+        }),
+    );
+  }
+
+  return {
+    target: evidence.target,
+    evidence: {
+      finalRange: evidence.zoomRange,
+      initialRange,
+      maximumWheelSteps,
+      minimumCompetitorDistancePx,
+      nearestCompetitorDistancePx: evidence.nearestCompetitorDistancePx,
+      nearestLineNeighbor: evidence.nearestLineNeighbor,
+      nearestScatter: evidence.nearestScatter,
+      wheelDeltaY,
+      wheelSteps,
+    },
+  };
+}
+
+async function clickFrequencyDomainPoint(page, expected, fixtureId, fixture, frequencyRequests, failedResponses) {
+  const host = page.locator(".fm-analysis-plots__echarts").first();
+  await host.evaluate((element) => {
+    element.scrollIntoView({ behavior: "auto", block: "center", inline: "nearest" });
+  });
+  const { target: coordinateTarget, evidence: zoomEvidence } =
+    await zoomFrequencyDomainPoint(page, host, expected, fixture);
+
+  const expectedModePath = `${FREQUENCY_DOMAIN_PATHS.modePrefix}${expected.sampleIndex}/${expected.modeIndex}`;
+  await page.mouse.move(coordinateTarget.x, coordinateTarget.y);
+  // Tooltip text proves the user-facing mode/frequency content; the actual source row
+  // is proven separately by the applied option, click tuple, and selected Inspector.
+  const tooltip = await waitForFrequencyDomainTooltip(
+    page,
+    host,
+    coordinateTarget,
+    expected.tooltipTerms,
+    fixtureId,
+  );
+  const expectedModeRequest = page.waitForRequest(
+    (request) => currentSessionPath(request.url())?.split("?")[0] === expectedModePath,
+    { timeout: 800 },
+  ).catch(() => null);
+  const expectedModeResponse = page.waitForResponse(
+    (response) => currentSessionPath(response.url())?.split("?")[0] === expectedModePath,
+    { timeout: 800 },
+  ).catch(() => null);
+  const priorRenderedClick = await page.evaluate(() =>
+    window.__FULLMAG_CHART_DIAGNOSTICS__?.lastRenderedClick ?? null,
+  );
+  await page.mouse.click(coordinateTarget.x, coordinateTarget.y);
+  const request = await expectedModeRequest;
+  const modeResponse = await expectedModeResponse;
+  if (!request || !modeResponse) {
+    const renderedTelemetry = await page.evaluate(({ rowId, seriesType }) => {
+      const diagnostics = window.__FULLMAG_CHART_DIAGNOSTICS__;
+      const option = diagnostics?.readRenderedOption?.();
+      const series = Array.isArray(option?.series) ? option.series : [];
+      const seriesIndex = series.findIndex((entry) =>
+        entry?.type === seriesType &&
+        Array.isArray(entry.data) &&
+        entry.data.some((row) => Array.isArray(row) && row[2] === rowId)
+      );
+      const data = seriesIndex >= 0 ? series[seriesIndex].data : [];
+      const dataIndex = data.findIndex((row) => Array.isArray(row) && row[2] === rowId);
+      const point = dataIndex >= 0 ? data[dataIndex] : null;
+      const coordinate = dataIndex >= 0
+        ? diagnostics?.resolveRenderedDataPoint?.(seriesIndex, dataIndex)
+        : null;
+      return {
+        appliedTarget: {
+          data: Array.isArray(point) ? point.slice(0, 3) : null,
+          dataIndex: dataIndex >= 0 ? dataIndex : null,
+          pixel: coordinate ? { x: coordinate.x, y: coordinate.y } : null,
+          seriesIndex: seriesIndex >= 0 ? seriesIndex : null,
+          seriesType: seriesIndex >= 0 ? series[seriesIndex]?.type ?? null : null,
+        },
+        dataZoom: Array.isArray(option?.dataZoom) ? option.dataZoom : [],
+        lastRenderedClick: diagnostics?.lastRenderedClick ?? null,
+      };
+    }, { rowId: expected.rowId, seriesType: expected.seriesType });
+    const failureEvidence = {
+      expectedModePath,
+      failedResponses: failedResponses.slice(-20),
+      frequencyRequests: frequencyRequests.slice(-20),
+      priorRenderedClick,
+      renderedTelemetry,
+      requestSeen: Boolean(request),
+      responseSeen: Boolean(modeResponse),
+      targetCoordinate: coordinateTarget,
+      zoomEvidence,
+    };
+    mkdirSync(acceptanceDirectory, { recursive: true });
+    const screenshot = path.join(
+      acceptanceDirectory,
+      fixtureId + "-mode-click-failure.png",
+    );
+    await page.screenshot({ path: screenshot }).catch(() => undefined);
+    const evidencePath = path.join(
+      acceptanceDirectory,
+      fixtureId + "-mode-click-failure.json",
+    );
+    writeFileSync(
+      evidencePath,
+      JSON.stringify({ ...failureEvidence, screenshot }, null, 2) + "\n",
+      "utf8",
+    );
+    throw new Error(
+      "Mouse click at the rendered row " + expected.rowId +
+        " did not request and receive " + expectedModePath +
+        "; requestSeen=" + Boolean(request) +
+        "; responseSeen=" + Boolean(modeResponse) +
+        "; appliedTarget=" + JSON.stringify(renderedTelemetry.appliedTarget) +
+        "; clickEvent=" + JSON.stringify(renderedTelemetry.lastRenderedClick) +
+        "; observedModePaths=" + JSON.stringify(frequencyRequests.slice(-10)) +
+        "; evidence=" + evidencePath + "; screenshot=" + screenshot,
+    );
+  }
+  if (!modeResponse.ok()) {
+    throw new Error(
+      `Selected eigen mode resource returned HTTP ${modeResponse.status()} for ${expectedModePath}.`,
+    );
+  }
+  let modePayload = null;
+  try {
+    modePayload = (await modeResponse.json())?.payload ?? null;
+  } catch (error) {
+    throw new Error(
+      `Selected eigen mode resource was not valid JSON for ${expectedModePath}: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  const modeDetailCanonicalRelativeL2Present =
+    modePayload !== null &&
+    Object.prototype.hasOwnProperty.call(modePayload, "residual_relative_l2");
+  if (expected.expectModeDetailRelativeL2Absent && (
+    modePayload === null ||
+    typeof modePayload !== "object" ||
+    Array.isArray(modePayload) ||
+    modePayload.sample_index !== expected.sampleIndex ||
+    modePayload.raw_mode_index !== expected.modeIndex
+  )) {
+    throw new Error(
+      `Selected eigen mode response did not contain the requested sample/mode payload: ${JSON.stringify(modePayload)}`,
+    );
+  }
+  if (expected.expectModeDetailRelativeL2Absent && modeDetailCanonicalRelativeL2Present) {
+    throw new Error(
+      `Selected mode detail published residual_relative_l2; the browser fallback case must obtain it from the spectrum.`,
+    );
+  }
+  await page.waitForFunction(
+    ({ expectedFieldId, expectedIdentity, expectedResourceRef }) => {
+      const panel = document.querySelector(
+        '[data-inspector-owner="frequency-domain.eigen-mode"]',
+      );
+      const text = panel?.textContent ?? "";
+      return Boolean(
+        panel &&
+        text.includes(expectedIdentity) &&
+        text.includes(expectedFieldId) &&
+        text.includes(expectedResourceRef)
+      );
+    },
+    {
+      expectedFieldId: expected.fieldId,
+      expectedIdentity: `sample ${expected.sampleIndex}, mode ${expected.modeIndex}`,
+      expectedResourceRef: expected.resourceRef,
+    },
+    { timeout: 1_200 },
+  ).catch(() => undefined);
+  const inspectorText = await page
+    .locator('[data-inspector-owner="frequency-domain.eigen-mode"]')
+    .textContent()
+    .catch(() => "");
+  if (
+    !inspectorText?.includes(`sample ${expected.sampleIndex}, mode ${expected.modeIndex}`) ||
+    !inspectorText.includes(expected.fieldId) ||
+    !inspectorText.includes(expected.resourceRef)
+  ) {
+    const inspectorText = await page
+      .locator(".fm-inspector-panel")
+      .textContent()
+      .catch(() => "");
+    throw new Error(
+      `Rendered row ${expected.rowId} did not select sample ${expected.sampleIndex}, mode ${expected.modeIndex}, field ${expected.fieldId}. Inspector: ${inspectorText}`,
+    );
+  }
+  const residualFields = expected.residualFields
+    ? await waitForFrequencyDomainResidualFields(page, expected.residualFields)
+    : null;
+  const renderedClick = await page.evaluate(({ rowId, sourceGapRow }) => {
+    const diagnostics = window.__FULLMAG_CHART_DIAGNOSTICS__;
+    const click = diagnostics?.lastRenderedClick;
+    const option = diagnostics?.readRenderedOption?.();
+    const series = Array.isArray(option?.series) && click?.seriesIndex != null
+      ? option.series[click.seriesIndex]
+      : null;
+    const data = Array.isArray(series?.data) ? series.data : [];
+    const targetDataIndex = data.findIndex((row) => Array.isArray(row) && row[2] === rowId);
+    const clickedData = click?.dataIndex == null ? null : data[click.dataIndex];
+    const previousData = click?.dataIndex == null || click.dataIndex === 0
+      ? null
+      : data[click.dataIndex - 1];
+    return {
+      clickData: click?.data ?? null,
+      clickDataIndex: click?.dataIndex ?? null,
+      clickSeriesIndex: click?.seriesIndex ?? null,
+      clickedSourceRowIndex: Array.isArray(clickedData) ? clickedData[2] ?? null : null,
+      clickedSeriesType: series?.type ?? null,
+      previousIsNullSentinel: Array.isArray(previousData) &&
+        previousData[1] === null && previousData[2] === null,
+      sourceGapRowRetained: sourceGapRow == null
+        ? null
+        : data.some((row) => Array.isArray(row) && row[2] === sourceGapRow),
+      sourceRowIndex: click?.sourceRowIndex ?? null,
+      targetDataIndex,
+    };
+  }, { rowId: expected.rowId, sourceGapRow: expected.sourceGapRow ?? null });
+  if (
+    renderedClick.clickDataIndex !== renderedClick.targetDataIndex ||
+    renderedClick.clickedSourceRowIndex !== expected.rowId ||
+    renderedClick.clickedSeriesType !== expected.seriesType ||
+    renderedClick.sourceRowIndex !== expected.rowId ||
+    renderedClick.clickData?.[2] !== expected.rowId
+  ) {
+    throw new Error(
+      `ECharts click did not resolve to the rendered source row ${expected.rowId}: ${JSON.stringify(renderedClick)}`,
+    );
+  }
+  if (
+    expected.sourceGapRow != null &&
+    (renderedClick.sourceGapRowRetained !== false || !renderedClick.previousIsNullSentinel)
+  ) {
+    throw new Error(
+      `ECharts click did not follow the actual null gap sentinel: ${JSON.stringify(renderedClick)}`,
+    );
+  }
+  return {
+    coordinateTarget,
+    zoomEvidence,
+    expectedModePath,
+    fieldId: expected.fieldId,
+    modeId: expected.modeId,
+    modeDetailCanonicalRelativeL2Present,
+    resourceRef: expected.resourceRef,
+    renderedClick,
+    residualFields,
+    rowId: expected.rowId,
+    sampleId: expected.sampleId,
+    sampleIndex: expected.sampleIndex,
+    tooltip,
+  };
+}
+
+async function waitForFrequencyDomainResidualFields(page, expectedFields) {
+  await page.waitForFunction((fields) => {
+    const panel = document.querySelector(
+      '[data-inspector-owner="frequency-domain.eigen-mode"]',
+    );
+    if (!panel) return false;
+    const renderedFields = new Map(
+      Array.from(panel.querySelectorAll(".fm-inspector-field-row"))
+        .map((row) => [
+          row.querySelector(".fm-inspector-field-row__label")?.textContent?.trim() ?? "",
+          row.querySelector(".fm-inspector-field-row__value")?.textContent?.trim() ?? "",
+        ]),
+    );
+    return Object.entries(fields).every(([label, expected]) => {
+      if (!renderedFields.has(label)) return false;
+      const rendered = renderedFields.get(label);
+      return typeof expected === "number"
+        ? Number(rendered) === expected
+        : rendered === expected;
+    });
+  }, expectedFields, { timeout: 1_200 }).catch(async () => {
+    const renderedFields = await readFrequencyDomainInspectorFields(page);
+    throw new Error(
+      `Selected eigen mode residual fields did not match the published spectrum fallback: ${JSON.stringify({ expectedFields, renderedFields })}`,
+    );
+  });
+  return readFrequencyDomainInspectorFields(page);
+}
+
+async function readFrequencyDomainInspectorFields(page) {
+  return page.evaluate(() => {
+    const panel = document.querySelector(
+      '[data-inspector-owner="frequency-domain.eigen-mode"]',
+    );
+    if (!panel) return {};
+    return Object.fromEntries(
+      Array.from(panel.querySelectorAll(".fm-inspector-field-row"))
+        .map((row) => [
+          row.querySelector(".fm-inspector-field-row__label")?.textContent?.trim() ?? "",
+          row.querySelector(".fm-inspector-field-row__value")?.textContent?.trim() ?? "",
+        ]),
+    );
+  });
+}
+
+async function waitForFrequencyDomainTooltip(
+  page,
+  host,
+  coordinateTarget,
+  expectedTerms,
+  fixtureId,
+) {
+  if (!Array.isArray(expectedTerms) || expectedTerms.length === 0) {
+    throw new Error(`${fixtureId} is missing user-facing tooltip expectations.`);
+  }
+  const tooltipAppeared = await page.waitForFunction((terms) => {
+    const tooltipNodes = Array.from(document.querySelectorAll(".fm-chart-tooltip"));
+    return tooltipNodes.some((node) => {
+      const style = getComputedStyle(node);
+      const rect = node.getBoundingClientRect();
+      if (
+        style.display === "none" ||
+        style.visibility === "hidden" ||
+        style.opacity === "0" ||
+        rect.width <= 0 ||
+        rect.height <= 0
+      ) return false;
+      const text = (node.textContent ?? "").replace(/\s+/g, " ").trim().toLowerCase();
+      return terms.every((term) => text.includes(String(term).toLowerCase()));
+    });
+  }, expectedTerms, { timeout: 1_000 }).catch(() => null);
+
+  const tooltipTexts = await readFrequencyDomainTooltip(host);
+  const matchingTooltip = tooltipTexts.find((entry) =>
+    entry.visible && tooltipIncludesTerms(entry.text, expectedTerms),
+  );
+  if (tooltipAppeared && matchingTooltip) {
+    return { expectedTerms, text: matchingTooltip.text };
+  }
+
+  const evidence = await readFrequencyDomainTooltipEvidence(host, coordinateTarget);
+  const screenshotPath = path.join(
+    acceptanceDirectory,
+    `${fixtureId.replace(/[^a-z0-9_-]/gi, "-")}-tooltip-failure.png`,
+  );
+  let screenshot = screenshotPath;
+  try {
+    mkdirSync(acceptanceDirectory, { recursive: true });
+    await page.screenshot({ path: screenshotPath });
+  } catch (error) {
+    screenshot = `unavailable: ${error instanceof Error ? error.message : String(error)}`;
+  }
+  throw new Error(
+    `${fixtureId} did not show expected user-facing tooltip content ${JSON.stringify(expectedTerms)}. Evidence: ${JSON.stringify({ tooltipTexts, ...evidence })}. Screenshot: ${screenshot}`,
+  );
+}
+
+async function readFrequencyDomainTooltip(host) {
+  return host.evaluate((element) => {
+    const nodes = Array.from(element.ownerDocument.querySelectorAll(".fm-chart-tooltip"));
+    return nodes.map((node) => {
+      const style = getComputedStyle(node);
+      const rect = node.getBoundingClientRect();
+      return {
+        className: typeof node.className === "string" ? node.className : "",
+        text: (node.textContent ?? "").replace(/\s+/g, " ").trim(),
+        visible: style.display !== "none" &&
+          style.visibility !== "hidden" &&
+          style.opacity !== "0" &&
+          rect.width > 0 && rect.height > 0,
+      };
+    }).filter((entry) => entry.text.length > 0);
+  });
+}
+
+function tooltipIncludesTerms(tooltip, expectedTerms) {
+  const normalized = String(tooltip).replace(/\s+/g, " ").trim().toLowerCase();
+  return expectedTerms.every((term) => normalized.includes(String(term).toLowerCase()));
+}
+
+async function readFrequencyDomainTooltipEvidence(host, coordinateTarget) {
+  return host.evaluate((element, target) => {
+    const rect = element.getBoundingClientRect();
+    const document = element.ownerDocument;
+    const pointerTarget = document.elementFromPoint(target.x, target.y);
+    const footer = document.querySelector(".fm-footer");
+    const footerRect = footer?.getBoundingClientRect() ?? null;
+    const option = window.__FULLMAG_CHART_DIAGNOSTICS__?.readRenderedOption?.();
+    const series = Array.isArray(option?.series)
+      ? option.series[target.seriesIndex]
+      : null;
+    const data = Array.isArray(series?.data)
+      ? series.data[target.dataIndex]
+      : null;
+    return {
+      chartRect: {
+        height: rect.height,
+        left: rect.left,
+        top: rect.top,
+        width: rect.width,
+      },
+      renderedPoint: {
+        data,
+        dataIndex: target.dataIndex,
+        seriesIndex: target.seriesIndex,
+        seriesName: series?.name ?? null,
+        seriesType: series?.type ?? null,
+      },
+      pointer: { x: target.x, y: target.y },
+      pointerHit: {
+        className: typeof pointerTarget?.className === "string" ? pointerTarget.className : "",
+        tagName: pointerTarget?.tagName ?? null,
+        insideChartHost: pointerTarget !== null && element.contains(pointerTarget),
+        insideFooter: pointerTarget !== null && footer?.contains(pointerTarget) === true,
+      },
+      footerRect: footerRect ? {
+        bottom: footerRect.bottom,
+        left: footerRect.left,
+        right: footerRect.right,
+        top: footerRect.top,
+      } : null,
+      tooltipTexts: Array.from(document.querySelectorAll(".fm-chart-tooltip"))
+        .map((node) => ({
+          className: typeof node.className === "string" ? node.className : "",
+          text: (node.textContent ?? "").replace(/\s+/g, " ").trim(),
+          visible: getComputedStyle(node).display !== "none" &&
+            getComputedStyle(node).visibility !== "hidden" &&
+            getComputedStyle(node).opacity !== "0",
+        })),
+    };
+  }, coordinateTarget);
+}
+
+function createFrequencyDomainChartFixtures() {
+  const spectrumFieldId = "analysis:eigen:sample-0003:mode-0042";
+  const dispersionGap = makeDecimatedDispersionFixture();
+  return [
+    {
+      calculationMode: "free_modes",
+      expectedSelection: {
+        fieldId: spectrumFieldId,
+        modeId: "sample-0003/mode-0042",
+        modeIndex: 42,
+        expectModeDetailRelativeL2Absent: true,
+        rowId: 1,
+        resourceRef: frequencyModeFieldResourceKey(spectrumFieldId),
+        sampleId: "spectrum-sample-0003",
+        sampleIndex: 3,
+        seriesType: "line",
+        frequencyHz: 2.25e9,
+        tooltipTerms: ["mode index: 1", "Eigen frequency", "2.25 GHz"],
+        residualFields: {
+          "Absolute residual (L2)": "not available",
+          "Relative residual (L2)": 1e-7,
+          "Spectrum residual (type unspecified)": 2e-4,
+        },
+      },
+      id: "modal-spectrum-alias-and-derived-field-key",
+      minimumLegendCount: 1,
+      minimumRenderedPoints: 3,
+      resourcePath: FREQUENCY_DOMAIN_PATHS.spectrum,
+      spectrumPayload: {
+        samples: [{
+          modes: [
+            {
+              frequency_hz: 1.5e9,
+              mode_field_available: false,
+              mode_id: "sample-0003/mode-0017",
+              raw_mode_index: 17,
+            },
+            {
+              frequency_hz: 2.25e9,
+              mode_field_available: true,
+              mode_field_id: spectrumFieldId,
+              residual_norm: 2e-4,
+              residual_relative_l2: 1e-7,
+              mode_id: "sample-0003/mode-0042",
+              raw_mode_index: 42,
+            },
+            {
+              frequency_hz: 3e9,
+              mode_field_available: false,
+              mode_id: "sample-0003/mode-0073",
+              raw_mode_index: 73,
+            },
+          ],
+          sample_id: "spectrum-sample-0003",
+          sample_index: 3,
+        }],
+        schema_version: "eigen_spectrum.v2",
+      },
+      subviewId: "resonance.eigenmodes",
+      subviewLabel: "Eigenmodes",
+      surfaceId: "resonance-fmr",
+      surfaceLabel: "Resonance & FMR",
+    },
+    {
+      calculationMode: "frequency_response",
+      id: "frequency-response manifest through FMR response subview",
+      minimumLegendCount: 1,
+      minimumRenderedPoints: 3,
+      resourcePath: FREQUENCY_DOMAIN_PATHS.response,
+      responsePayload: {
+        points: [
+          { frequency_hz: 1e9, frequency_index: 0, max_response_amplitude: 0.25, phase_rad: 0.1, absorbed_power_density: 0.02 },
+          { frequency_hz: 2e9, frequency_index: 1, max_response_amplitude: 0.75, phase_rad: 0.3, absorbed_power_density: 0.06 },
+          { frequency_hz: 3e9, frequency_index: 2, max_response_amplitude: 0.4, phase_rad: 0.2, absorbed_power_density: 0.03 },
+        ],
+        schema_version: "magnetic_response_sweep.v2",
+      },
+      subviewId: "resonance.frequency-response",
+      subviewLabel: "Frequency Response",
+      surfaceId: "resonance-fmr",
+      surfaceLabel: "Resonance & FMR",
+    },
+    {
+      calculationMode: "dispersion_modal",
+      expectedSelection: dispersionGap.expected,
+      id: "dispersion-gap-decimation-and-raw-scatter",
+      minimumLegendCount: 2,
+      minimumRenderedPoints: 10_000,
+      requireDispersionRenderEvidence: true,
+      requiredLegendLabels: ["Branch tracked", "Raw modes"],
+      resourcePath: FREQUENCY_DOMAIN_PATHS.dispersion,
+      screenshot: "analysis-frequency-domain-decimated-gap-scatter.png",
+      dispersionText: dispersionGap.text,
+      subviewId: "dispersion.modal",
+      subviewLabel: "Modal fₙ(k)",
+      surfaceId: "dispersion",
+      surfaceLabel: "Dispersion",
+    },
+  ];
+}
+
+function makeDecimatedDispersionFixture() {
+  const sampleCount = 10_001;
+  const gapAtRow = 5_003;
+  const skippedSamples = 100;
+  const retainedAfterGapRow = 5_005;
+  const targetSampleIndex = retainedAfterGapRow + skippedSamples;
+  const targetModeId = `tracked-mode-${targetSampleIndex}`;
+  const targetFieldId = `analysis:eigen:sample-${String(targetSampleIndex).padStart(4, "0")}:mode-0001`;
+  const targetRowId = 2 * retainedAfterGapRow;
+  const rows = [
+    "sample_index,sample_id,raw_mode_index,mode_id,branch_id,path_s_rad_per_m,frequency_hz,mode_field_available,mode_field_id",
+  ];
+  for (let rowIndex = 0; rowIndex < sampleCount; rowIndex += 1) {
+    const sampleIndex = rowIndex < gapAtRow ? rowIndex : rowIndex + skippedSamples;
+    const sampleId = `k-path-sample-${String(sampleIndex).padStart(5, "0")}`;
+    const pathS = sampleIndex * 1e6;
+    const frequencyHz = 1e9 + sampleIndex * 1e5;
+    const isTarget = rowIndex === retainedAfterGapRow;
+    rows.push([
+      sampleIndex,
+      sampleId,
+      1,
+      targetOrTrackedModeId(isTarget, targetModeId, sampleIndex),
+      "tracked",
+      pathS,
+      frequencyHz,
+      isTarget ? "true" : "false",
+      isTarget ? targetFieldId : "",
+    ].join(","));
+    rows.push([
+      sampleIndex,
+      sampleId,
+      2,
+      `raw-mode-${sampleIndex}`,
+      "",
+      pathS + 200_000,
+      frequencyHz + 1e8,
+      "false",
+      "",
+    ].join(","));
+  }
+  return {
+    expected: {
+      fieldId: targetFieldId,
+      frequencyHz: 1e9 + targetSampleIndex * 1e5,
+      modeId: targetModeId,
+      modeIndex: 1,
+      resourceRef: frequencyModeFieldResourceKey(targetFieldId),
+      rowId: targetRowId,
+      sampleId: `k-path-sample-${String(targetSampleIndex).padStart(5, "0")}`,
+      sampleIndex: targetSampleIndex,
+      seriesType: "line",
+      sourceGapRow: 2 * gapAtRow,
+      tooltipTerms: ["path_s", "Branch tracked"],
+    },
+    text: rows.join("\n"),
+  };
+}
+
+function frequencyModeFieldResourceKey(fieldId) {
+  return `/v2/sessions/current/data/fields/${encodeURIComponent(fieldId)}/samples/vector?phase_rad=0&view=phase_rotated_real`;
+}
+
+function targetOrTrackedModeId(isTarget, targetModeId, sampleIndex) {
+  return isTarget ? targetModeId : `tracked-mode-${sampleIndex}`;
+}
+
+async function installAnalysisDatasetFixtureRoutes(page, frequencyDomainFixture = null) {
+  const referenceImportEnabled = frequencyDomainFixture?.referenceImport === true;
+  const referenceImportState = { referenceCreateRequests: [], definitions: [] };
   const datasetRef = "analysis-fixture";
   const revision = 17;
   const columns = [
@@ -733,6 +2246,67 @@ async function installAnalysisDatasetFixtureRoutes(page) {
     table_id: datasetRef,
     total_rows: 256,
   };
+  await page.route(`**${DEVELOPMENT_BACKEND_FIXTURE_PATH}`, async (route) => {
+    const request = route.request();
+    const url = new URL(request.url());
+    const headers = {
+      "access-control-allow-headers": request.headers()["access-control-request-headers"] ?? "*",
+      "access-control-allow-methods": "GET, OPTIONS",
+      "access-control-allow-origin": "*",
+      "access-control-expose-headers": "x-api-contract-version",
+      "x-api-contract-version": "1.0.0",
+    };
+    if (url.pathname !== DEVELOPMENT_BACKEND_FIXTURE_PATH) {
+      await route.fulfill({ body: "", headers, status: 404 });
+      return;
+    }
+    if (request.method() === "OPTIONS") {
+      await route.fulfill({ body: "", headers, status: 204 });
+      return;
+    }
+    if (request.method() !== "GET") {
+      await route.fulfill({ body: "", headers, status: 405 });
+      return;
+    }
+    await route.fulfill({
+      body: JSON.stringify({
+        schema_version: "1.0.0",
+        configured: false,
+        revision: 0,
+        state: "disabled",
+        current_build: null,
+        ready_build: null,
+        build_available: false,
+        build_request_id: null,
+        workspace_identity: null,
+        restart_available: false,
+        reason: "disabled",
+      }),
+      contentType: "application/json",
+      headers,
+      status: 200,
+    });
+  });
+  await page.route(`**${SESSION_COLLECTION_PATH}`, async (route) => {
+    const request = route.request();
+    const url = new URL(request.url());
+    const cors = {
+      "access-control-expose-headers": "x-api-contract-version",
+      "access-control-allow-origin": "*",
+      "x-api-contract-version": "1.0.0",
+    };
+    if (request.method() !== "GET" || url.pathname !== SESSION_COLLECTION_PATH) {
+      await fulfillMissingFixtureResource(route, cors);
+      return;
+    }
+    await route.fulfill({
+      body: JSON.stringify(sessionCollectionFixture()),
+      contentType: "application/json",
+      headers: cors,
+      status: 200,
+    });
+  });
+
   await page.route("**/v2/sessions/current/**", async (route) => {
     const request = route.request();
     const url = new URL(request.url());
@@ -741,17 +2315,179 @@ async function installAnalysisDatasetFixtureRoutes(page) {
       "access-control-allow-origin": "*",
       "x-api-contract-version": "1.0.0",
     };
-    if (request.method() !== "GET") {
-      await route.fulfill({ body: "", headers: cors, status: 204 });
+    if (referenceImportEnabled && request.method() === "OPTIONS") {
+      await route.fulfill({
+        body: "",
+        headers: {
+          ...cors,
+          "access-control-allow-headers": request.headers()["access-control-request-headers"] ?? "content-type",
+          "access-control-allow-methods": "GET, POST, OPTIONS",
+        },
+        status: 204,
+      });
       return;
     }
-    if (url.pathname === "/v2/sessions/current/status") {
+    if (
+      referenceImportEnabled &&
+      request.method() === "POST" &&
+      url.pathname === POSTPROCESSING_DEFINITIONS_FIXTURE_PATH
+    ) {
+      const body = request.postDataJSON();
+      if (!body || typeof body !== "object" || !body.definition || typeof body.definition !== "object") {
+        await route.fulfill({
+          body: JSON.stringify({ error: "Fixture received an invalid definition-create request." }),
+          contentType: "application/json",
+          headers: cors,
+          status: 400,
+        });
+        return;
+      }
+      referenceImportState.referenceCreateRequests.push({
+        body,
+        sessionScope: request.headers()["x-fullmag-session-scope"] ?? null,
+      });
+      const sceneRevision = referenceImportState.definitions.length + 1;
+      const definition = { ...body.definition, revision: sceneRevision };
+      referenceImportState.definitions.push(definition);
       await route.fulfill({
-        body: JSON.stringify(analysisStatusFixture()),
+        body: JSON.stringify({ definition, scene_revision: sceneRevision }),
         contentType: "application/json",
         headers: cors,
         status: 200,
       });
+      return;
+    }
+    if (request.method() !== "GET") {
+      await route.fulfill({ body: "", headers: cors, status: 204 });
+      return;
+    }
+    if (referenceImportEnabled && url.pathname === CURRENT_RUN_FIXTURE_PATH) {
+      await route.fulfill({
+        body: JSON.stringify(referenceCurrentRunFixture()),
+        contentType: "application/json",
+        headers: cors,
+        status: 200,
+      });
+      return;
+    }
+    if (referenceImportEnabled && url.pathname === POSTPROCESSING_DEFINITIONS_FIXTURE_PATH) {
+      await route.fulfill({
+        body: JSON.stringify({
+          count: referenceImportState.definitions.length,
+          definitions: referenceImportState.definitions,
+          scene_revision: referenceImportState.definitions.length,
+        }),
+        contentType: "application/json",
+        headers: cors,
+        status: 200,
+      });
+      return;
+    }
+    if (referenceImportEnabled && url.pathname === ANALYTIC_REFERENCE_MODELS_FIXTURE_PATH) {
+      await route.fulfill({
+        body: JSON.stringify({ models: [], schema_version: "analytic-reference-models.v1" }),
+        contentType: "application/json",
+        headers: cors,
+        status: 200,
+      });
+      return;
+    }
+    if (
+      referenceImportEnabled &&
+      url.pathname === "/v2/sessions/current/analysis/results/runs/" + REFERENCE_FIXTURE_RUN_ID + "/datasets"
+    ) {
+      await route.fulfill({
+        body: JSON.stringify({
+          items: [],
+          next_cursor: null,
+          revision: "17",
+          run_id: REFERENCE_FIXTURE_RUN_ID,
+          schema_version: "fullmag.analysis.result_dataset_index.v1",
+          status: "unsupported",
+          total_count: 0,
+          unsupported_reason: "no validated result dataset artifacts are published",
+        }),
+        contentType: "application/json",
+        headers: cors,
+        status: 200,
+      });
+      return;
+    }
+    if (referenceImportEnabled && url.pathname === DATA_ARTIFACTS_FIXTURE_PATH) {
+      await route.fulfill({ body: "[]", contentType: "application/json", headers: cors, status: 200 });
+      return;
+    }
+    if (referenceImportEnabled && url.pathname === DATA_OBSERVATION_FRAMES_FIXTURE_PATH) {
+      await route.fulfill({
+        body: JSON.stringify({ frames: [], next_cursor: null, run_id: REFERENCE_FIXTURE_RUN_ID }),
+        contentType: "application/json",
+        headers: cors,
+        status: 200,
+      });
+      return;
+    }
+    if (url.pathname === "/v2/sessions/current/status") {
+      await route.fulfill({
+        body: JSON.stringify(analysisStatusFixture({
+          frequencyDomainPublished: Boolean(frequencyDomainFixture),
+          eigenModesPublished: frequencyDomainFixture?.calculationMode !== "frequency_response",
+          currentRunPublished: referenceImportEnabled,
+        })),
+        contentType: "application/json",
+        headers: cors,
+        status: 200,
+      });
+      return;
+    }
+    if (url.pathname === "/v2/sessions/current/model/readiness") {
+      await route.fulfill({
+        body: JSON.stringify({
+          blockers: [],
+          capabilities: {
+            move: { available: false, reason: "Analysis fixture has no scene objects." },
+            rotate: { available: false, reason: "Analysis fixture has no scene objects." },
+            scale: { available: false, reason: "Analysis fixture has no scene objects." },
+          },
+          checks: [],
+          ready_to_export: true,
+          ready_to_run: false,
+          scene_revision: 0,
+        }),
+        contentType: "application/json",
+        headers: cors,
+        status: 200,
+      });
+      return;
+    }
+    const visualizationFixture = url.pathname === "/v2/sessions/current/visualization/state"
+      ? analysisVisualizationStateFixture()
+      : url.pathname === "/v2/sessions/current/visualization/mode-compositions/active"
+        ? analysisModeCompositionFixture(Boolean(frequencyDomainFixture))
+        : url.pathname === "/v2/sessions/current/model/universe"
+          ? {
+            scene_revision: 0,
+            mesh_dirty: false,
+            object_bounds_min: null,
+            object_bounds_max: null,
+            study_universe_mesh: null,
+            universe: null,
+          }
+          : null;
+    if (visualizationFixture !== null) {
+      await route.fulfill({
+        body: JSON.stringify(visualizationFixture),
+        contentType: "application/json",
+        headers: cors,
+        status: 200,
+      });
+      return;
+    }
+    if (frequencyDomainFixture && await fulfillFrequencyDomainFixtureResource(
+      route,
+      url.pathname,
+      frequencyDomainFixture,
+      cors,
+    )) {
       return;
     }
     if (url.pathname === "/v2/sessions/current/data/tables") {
@@ -795,16 +2531,378 @@ async function installAnalysisDatasetFixtureRoutes(page) {
     }
     await fulfillMissingFixtureResource(route, cors);
   });
+  return referenceImportState;
 }
 
-function analysisStatusFixture() {
+async function fulfillFrequencyDomainFixtureResource(route, pathname, fixture, headers) {
+  if (pathname === FREQUENCY_DOMAIN_PATHS.manifest) {
+    await route.fulfill({
+      body: JSON.stringify(frequencyDomainManifestFixture(fixture)),
+      contentType: "application/json",
+      headers,
+      status: 200,
+    });
+    return true;
+  }
+  if (pathname === FREQUENCY_DOMAIN_PATHS.spectrum && fixture.spectrumPayload) {
+    await route.fulfill({
+      body: JSON.stringify(frequencyDomainJsonArtifactFixture({
+        artifactPath: "eigen/spectrum.v2.json",
+        payload: fixture.spectrumPayload,
+        resourceKey: FREQUENCY_DOMAIN_PATHS.spectrum,
+        schemaVersion: "frequency_domain_eigen_spectrum.v1",
+      })),
+      contentType: "application/json",
+      headers,
+      status: 200,
+    });
+    return true;
+  }
+  if (pathname === FREQUENCY_DOMAIN_PATHS.response && fixture.responsePayload) {
+    await route.fulfill({
+      body: JSON.stringify(frequencyDomainJsonArtifactFixture({
+        artifactPath: "response/magnetic_response_sweep.v2.json",
+        payload: fixture.responsePayload,
+        resourceKey: FREQUENCY_DOMAIN_PATHS.response,
+        schemaVersion: "frequency_domain_response_sweep_resource.v1",
+      })),
+      contentType: "application/json",
+      headers,
+      status: 200,
+    });
+    return true;
+  }
+  if (pathname === FREQUENCY_DOMAIN_PATHS.response && fixture.referenceImport) {
+    await route.fulfill({
+      body: JSON.stringify(frequencyDomainUnavailableJsonArtifactFixture({
+        artifactPath: "response/magnetic_response_sweep.v2.json",
+        missingReason: "Response data is not published by the dispersion reference fixture.",
+        resourceKey: FREQUENCY_DOMAIN_PATHS.response,
+        schemaVersion: "frequency_domain_response_sweep_resource.v1",
+      })),
+      contentType: "application/json",
+      headers,
+      status: 200,
+    });
+    return true;
+  }
+  if (pathname === FREQUENCY_DOMAIN_PATHS.branches && fixture.referenceImport) {
+    await route.fulfill({
+      body: JSON.stringify(frequencyDomainUnavailableJsonArtifactFixture({
+        artifactPath: "eigen/branches.v2.json",
+        missingReason: "Mode branches are not published by the reference-import fixture.",
+        resourceKey: FREQUENCY_DOMAIN_PATHS.branches,
+        schemaVersion: "frequency_domain_eigen_branches.v1",
+      })),
+      contentType: "application/json",
+      headers,
+      status: 200,
+    });
+    return true;
+  }
+  if (pathname === FREQUENCY_DOMAIN_PATHS.dispersion && fixture.dispersionText) {
+    await route.fulfill({
+      body: JSON.stringify(frequencyDomainTextArtifactFixture(fixture.dispersionText)),
+      contentType: "application/json",
+      headers,
+      status: 200,
+    });
+    return true;
+  }
+  const expectedSelection = fixture.expectedSelection;
+  if (expectedSelection) {
+    const expectedModePath = `${FREQUENCY_DOMAIN_PATHS.modePrefix}${expectedSelection.sampleIndex}/${expectedSelection.modeIndex}`;
+    if (pathname === expectedModePath) {
+      const artifactPath = `eigen/modes/sample_${String(expectedSelection.sampleIndex).padStart(4, "0")}/mode_${String(expectedSelection.modeIndex).padStart(4, "0")}.json`;
+      await route.fulfill({
+        body: JSON.stringify(frequencyDomainJsonArtifactFixture({
+          artifactPath,
+          payload: {
+            frequency_hz: expectedSelection.frequencyHz,
+            frequency_real_hz: expectedSelection.frequencyHz,
+            mode_field_id: expectedSelection.fieldId,
+            mode_id: expectedSelection.modeId,
+            raw_mode_index: expectedSelection.modeIndex,
+            sample_id: expectedSelection.sampleId,
+            sample_index: expectedSelection.sampleIndex,
+            schema_version: "eigen_mode.v2",
+          },
+          resourceKey: pathname,
+          schemaVersion: "frequency_domain_eigen_mode_resource.v1",
+        })),
+        contentType: "application/json",
+        headers,
+        status: 200,
+      });
+      return true;
+    }
+  }
+  return false;
+}
+
+function frequencyDomainManifestFixture(fixture) {
+  const isResponse = fixture.calculationMode === "frequency_response";
+  const isDispersion = fixture.calculationMode === "dispersion_modal";
+  const artifacts = isResponse
+    ? { response_sweep_v2_path: "response/magnetic_response_sweep.v2.json" }
+    : isDispersion
+      ? {
+        ...(fixture.referenceImport ? { spectrum_v2_path: "eigen/spectrum.v2.json" } : {}),
+        dispersion_csv_path: "eigen/dispersion.csv",
+      }
+      : { spectrum_v2_path: "eigen/spectrum.v2.json" };
+  const payload = {
+    artifacts,
+    equilibrium_identity: "analysis-fixture-equilibrium",
+    geometry_identity: "analysis-fixture-geometry",
+    mesh_identity: "analysis-fixture-mesh",
+    observables: [],
+    physics: {
+      analysis_family: "magnetic_frequency_domain",
+      field_units: "dimensionless_delta_m",
+      frequency_units: "Hz",
+      normalization: "unit_l2",
+      phase_convention: "exp_minus_i_omega_t",
+    },
+    requested_execution: {
+      boundary_context: fixture.referenceImport ? "floquet_periodic" : "finite_open",
+      calculation_mode: fixture.calculationMode,
+      ...(fixture.referenceImport && fixture.kSampling ? { k_sampling: fixture.kSampling } : {}),
+    },
+    run_id: "analysis-frequency-fixture-run",
+    schema_version: "frequency_domain_manifest.v1",
+    stage_id: "analysis-frequency-fixture-stage",
+    stage_kind: isResponse ? "frequency_response" : "eigenmodes",
+    study_product: isResponse ? "driven_response" : "modal_eigen",
+  };
+  const payloadDigest = sha256Digest(Buffer.from(JSON.stringify(payload), "utf8"));
+  const resultManifest = {
+    artifact_path: "frequency_domain/manifest.v1.json",
+    artifact_set_id: "analysis-frequency-fixture-artifact-set",
+    content_digest: payloadDigest,
+    mesh_generation_id: "analysis-fixture-mesh",
+    payload,
+    resource_key: FREQUENCY_DOMAIN_PATHS.manifest,
+    revision: payloadDigest,
+    run_id: "analysis-frequency-fixture-run",
+    schema_version: "frequency_domain_manifest.v1",
+    session_id: FIXTURE_SESSION_ID,
+    stage_id: "analysis-frequency-fixture-stage",
+    status: "ready",
+  };
+  return {
+    capabilities: frequencyDomainCapabilitiesFixture(fixture.calculationMode),
+    eigen_namespace: "eigen",
+    eigenmodes: frequencyDomainAvailabilityFixture(
+      "eigenmodes",
+      !isResponse,
+    ),
+    existing_frequency_response_namespace_preserved: true,
+    family_namespace: "frequencyDomain",
+    floquet_nonzero_k_demag_supported: false,
+    floquet_nonzero_k_response_supported: false,
+    response: frequencyDomainAvailabilityFixture("frequency_response", isResponse),
+    response_cancel_requested: null,
+    response_progress: null,
+    result_manifest: resultManifest,
+    schema_version: "frequency_domain_manifest.v1",
+  };
+}
+
+function frequencyDomainAvailabilityFixture(studyKind, available) {
+  return {
+    diagnostics_json: JSON.stringify({
+      fixture: "analysis-plots-frequency-domain-smoke",
+      schema_version: "frequency_domain_availability.v1",
+    }),
+    driven_response_available: false,
+    dynamic_demag_k_available: false,
+    floquet_modal_available: false,
+    floquet_response_available: false,
+    gpu_available: false,
+    modal_solver_available: false,
+    reason: available
+      ? "A typed result artifact is published for this chart smoke; execution capability is not asserted."
+      : "Not published by this chart smoke fixture.",
+    static_periodic_response_available: false,
+    status: available ? "ok" : "unavailable",
+    study_kind: studyKind,
+  };
+}
+
+function frequencyDomainCapabilitiesFixture(calculationMode) {
+  const isModal = calculationMode === "free_modes" || calculationMode === "fmr_modal";
+  const isDispersion = calculationMode === "dispersion_modal";
+  const isResponse = calculationMode === "frequency_response" || calculationMode === "fmr_response";
+  const entry = (available, label) => ({
+    reason: available ? `${label} is published in the browser fixture.` : `Not published in the browser fixture: ${label}.`,
+    status: available ? "available" : "unavailable",
+  });
+  return {
+    boundary: {
+      floquet_modal: entry(false, "Floquet modal execution"),
+      floquet_response: entry(false, "Floquet response execution"),
+      periodic_pair_diagnostics: entry(false, "periodic-pair diagnostics"),
+      static_periodic: entry(false, "static-periodic execution"),
+    },
+    demag: {
+      floquet_dynamic_k: entry(false, "dynamic-k demagnetization"),
+      static_periodic_pbc: entry(false, "static-periodic demagnetization"),
+    },
+    dispersion: {
+      branch_tracking: entry(isDispersion, "tracked dispersion branches"),
+      k_path: entry(isDispersion, "dispersion k path"),
+      production_cpu: entry(false, "production CPU eigensolver"),
+      production_cpu_gamma_k_path: entry(false, "production CPU gamma k path"),
+      production_gpu: entry(false, "production GPU eigensolver"),
+      reference_cpu: entry(false, "reference CPU eigensolver"),
+    },
+    modal: {
+      absorption_from_modes: entry(false, "modal absorption"),
+      k_path: entry(isDispersion, "modal k path"),
+      linewidths: entry(false, "mode linewidths"),
+      mode_field_payload: entry(isModal || isDispersion, "mode field payload"),
+      mode_tracking: entry(isDispersion, "mode tracking"),
+      production_cpu: entry(false, "production CPU modal solver"),
+      production_gpu: entry(false, "production GPU modal solver"),
+      reference_cpu: entry(false, "reference CPU modal solver"),
+    },
+    response: {
+      frequency_sweep: entry(isResponse, "frequency-response sweep"),
+      magnetic_cpu: entry(false, "production CPU response solver"),
+      magnetic_gpu: entry(false, "production GPU response solver"),
+      magnetoelastic_elastodynamic: entry(false, "elastodynamic magnetoelastic response"),
+      magnetoelastic_quasistatic: entry(false, "quasistatic magnetoelastic response"),
+      mode_projected: entry(false, "mode-projected response"),
+    },
+    schema_version: "frequency_domain_capabilities.v1",
+    validation: { fmr_k0: entry(false, "FMR k=0 validation") },
+    visualization: {
+      modal_dispersion_chart: entry(isDispersion, "modal dispersion chart"),
+      modal_spectrum_chart: entry(isModal, "modal spectrum chart"),
+      mode_3d_overlay: entry(false, "3D mode overlay"),
+      mode_table: entry(isModal || isDispersion, "mode table"),
+      response_field_3d_overlay: entry(false, "3D response-field overlay"),
+      response_sweep_chart: entry(isResponse, "response-sweep chart"),
+    },
+  };
+}
+
+function frequencyDomainJsonArtifactFixture({ artifactPath, payload, resourceKey, schemaVersion }) {
+  const contentDigest = sha256Digest(Buffer.from(JSON.stringify(payload), "utf8"));
+  return {
+    artifact_path: artifactPath,
+    artifact_set_id: "analysis-frequency-fixture-artifact-set",
+    content_digest: contentDigest,
+    mesh_generation_id: "analysis-fixture-mesh",
+    missing_reason: null,
+    payload,
+    resource_key: resourceKey,
+    revision: contentDigest,
+    run_id: "analysis-frequency-fixture-run",
+    schema_version: schemaVersion,
+    session_id: FIXTURE_SESSION_ID,
+    stage_id: "analysis-frequency-fixture-stage",
+    status: "ready",
+  };
+}
+
+function frequencyDomainUnavailableJsonArtifactFixture({ artifactPath, missingReason, resourceKey, schemaVersion }) {
+  const revision = sha256Digest(Buffer.from("unavailable:" + resourceKey + ":" + missingReason, "utf8"));
+  return {
+    artifact_path: artifactPath,
+    artifact_set_id: "analysis-frequency-fixture-artifact-set",
+    content_digest: revision,
+    mesh_generation_id: "analysis-fixture-mesh",
+    missing_reason: missingReason,
+    payload: null,
+    resource_key: resourceKey,
+    revision,
+    run_id: REFERENCE_FIXTURE_RUN_ID,
+    schema_version: schemaVersion,
+    session_id: FIXTURE_SESSION_ID,
+    stage_id: REFERENCE_FIXTURE_STAGE_ID,
+    status: "unavailable",
+  };
+}
+
+function frequencyDomainTextArtifactFixture(text) {
+  const contentDigest = sha256Digest(Buffer.from(text, "utf8"));
+  return {
+    artifact_path: "eigen/dispersion.csv",
+    artifact_set_id: "analysis-frequency-fixture-artifact-set",
+    content_digest: contentDigest,
+    content_type: "text/csv; charset=utf-8",
+    mesh_generation_id: "analysis-fixture-mesh",
+    missing_reason: null,
+    path_metadata: null,
+    resource_key: FREQUENCY_DOMAIN_PATHS.dispersion,
+    revision: contentDigest,
+    run_id: "analysis-frequency-fixture-run",
+    schema_version: "frequency_domain_eigen_dispersion.v1",
+    session_id: FIXTURE_SESSION_ID,
+    stage_id: "analysis-frequency-fixture-stage",
+    status: "ready",
+    text,
+  };
+}
+
+function sha256Digest(value) {
+  return `sha256:${createHash("sha256").update(value).digest("hex")}`;
+}
+
+function referenceCurrentRunSummaryFixture() {
+  return {
+    requested_device: "cpu",
+    resolved_device: "cpu",
+    run_id: REFERENCE_FIXTURE_RUN_ID,
+    selection_reason: "Hosted browser Results fixture.",
+    solver_steps: 2,
+    solver_time: 0,
+    stage_count: 1,
+    stage_index: 0,
+    stage_label: "Dispersion",
+    started_at: "2026-10-09T00:00:00.000Z",
+  };
+}
+
+function referenceCurrentRunFixture() {
+  return {
+    active_stage_index: 0,
+    active_stage_kind: "eigenmodes",
+    artifact_dir: "/fixture/results/analysis-frequency-fixture-run",
+    requested_backend: "fem",
+    requested_device: "cpu",
+    requested_mode: "eigenmodes",
+    requested_precision: "fp64",
+    resolved_backend: "fem",
+    resolved_device: "cpu",
+    resolved_engine_id: "browser-fixture",
+    resolved_mode: "eigenmodes",
+    resolved_precision: "fp64",
+    revision: 17,
+    run_id: REFERENCE_FIXTURE_RUN_ID,
+    session_id: FIXTURE_SESSION_ID,
+    solver_time_seconds: 0,
+    started_at: "2026-10-09T00:00:00.000Z",
+    status: "completed",
+    total_stages: 1,
+    total_steps: 2,
+  };
+}
+
+function analysisStatusFixture({
+  eigenModesPublished = false,
+  frequencyDomainPublished = false,
+  currentRunPublished = false,
+} = {}) {
   return {
     api_contract_version: "1.0.0",
     capabilities: {
       algorithms_available: [],
       binary_fields: false,
       cell_fields: false,
-      eigen_modes: false,
+      eigen_modes: eigenModesPublished,
       explicit_topology: false,
       gpu_telemetry: false,
       node_fields: false,
@@ -833,8 +2931,8 @@ function analysisStatusFixture() {
     energies: {},
     metrics: { steps_per_second: null, total_steps: 0, uptime_seconds: 0 },
     resources: {
-      artifact_revision: 0,
-      artifacts_revision: 0,
+      artifact_revision: frequencyDomainPublished ? 17 : 0,
+      artifacts_revision: frequencyDomainPublished ? 17 : 0,
       command_completion_revision: 0,
       commands_revision: 0,
       display_revision: 0,
@@ -848,20 +2946,217 @@ function analysisStatusFixture() {
       scalars_revision: 17,
       scene_revision: 0,
       slice_revision: 0,
-      stages_revision: 0,
+      stages_revision: frequencyDomainPublished ? 17 : 0,
       topology_revision: 0,
       visualization_state_revision: 0,
       workspace_revision: 0,
     },
-    run: null,
+    run: currentRunPublished ? referenceCurrentRunSummaryFixture() : null,
     runtime_bundle_version: "analysis-plots-fixture",
     session: {
-      created_at: "0",
-      name: "analysis-plots-fixture",
-      session_id: "analysis-plots-fixture",
+      created_at: "2026-10-08T00:00:00.000Z",
+      name: FIXTURE_SESSION_ID,
+      request_scope_epoch: FIXTURE_REQUEST_SCOPE_EPOCH,
+      session_epoch: FIXTURE_SESSION_EPOCH,
+      session_id: FIXTURE_SESSION_ID,
       workspace_root: "/tmp/fullmag-analysis-plots-fixture",
     },
     solver: { state: "idle" },
+  };
+}
+
+function analysisModeCompositionFixture(frequencyDomainPublished) {
+  return {
+    artifact_revision: "",
+    composition_id: "active",
+    layers: [],
+    lifecycle: {
+      artifact_revision: frequencyDomainPublished ? 17 : 0,
+      mesh_revision: 0,
+      run_id: null,
+      session_id: FIXTURE_SESSION_ID,
+    },
+    phase_clock: { master_rate_hz: 1, synchronized: true },
+    revision: 0,
+    run_id: "",
+    schema_version: "mode-composition.v1",
+    stage_id: "",
+  };
+}
+function analysisVisualizationStateFixture() {
+  return {
+    active_quantity_id: "m",
+    auto_contrast: true,
+    camera: {
+      fov_degrees: 45,
+      orthographic_scale: null,
+      position: [0, 0, 1],
+      projection: "perspective",
+      target: [0, 0, 0],
+      up: [0, 1, 0],
+    },
+    clip: {
+      enabled: false,
+      axis: "x",
+      flipped: false,
+      position_percent: 50,
+    },
+    colormap: "viridis",
+    contrast_max: null,
+    contrast_min: null,
+    diagnostics: {
+      degraded_reasons: [],
+      warnings: [],
+    },
+    domains: {
+      active_scope: {
+        object_id: null,
+        part_id: null,
+        scope: "full",
+      },
+      topology_mode: "auto",
+      volume_edges_budget: 100_000,
+    },
+    fdm: {
+      x_chosen_size: 0,
+      y_chosen_size: 0,
+    },
+    fem: {},
+    field_component: "magnitude",
+    layers: {
+      airbox: {
+        render_mode: "wireframe",
+        show_airbox: false,
+        show_airbox_vectors: false,
+      },
+      bounds: {
+        visible: false,
+      },
+      points: {
+        visible: false,
+      },
+      primitives: {
+        visible: true,
+      },
+      quantity: {
+        visible: true,
+      },
+      surface: {
+        opacity: 1,
+        visible: true,
+      },
+      vectors: {
+        density: 50,
+        domain: "auto",
+        visible: false,
+      },
+      wireframe: {
+        visible: false,
+      },
+    },
+    max_points: 16_384,
+    overrides: [],
+    quantity: {
+      active_quantity_id: "m",
+      auto_contrast: true,
+      colormap: "viridis",
+      component: "magnitude",
+      contrast_max: null,
+      contrast_min: null,
+      field_component: "magnitude",
+    },
+    revision: 0,
+    sampling: {
+      max_bytes: null,
+      max_glyphs: 16_384,
+      max_points: 16_384,
+      profile: "balanced",
+      progressive: true,
+    },
+    schema_version: 5,
+    slice: {
+      axis: "z",
+      auto_contrast: true,
+      colormap: "viridis",
+      component: "magnitude",
+      layer_index: 0,
+      mode: "single",
+      position_percent: 50,
+      projection_include_air_as_zero: false,
+      projection_reduction: "mean_occupied",
+      projection_resolution: 128,
+      projection_samples: 32,
+      quantity_id: "m",
+      render_mode: "heatmap",
+      show_airbox: false,
+      show_magnetic_texture: true,
+      show_mesh: false,
+      show_primitives: true,
+      show_quantity: true,
+      show_vectors: false,
+      thickness_percent: null,
+    },
+    slice_layer: 0,
+    slice_mode: "single",
+    targets: {
+      airbox: {
+        label: "Airbox",
+        scope: "airbox",
+        scope_id: "airbox",
+        settings: {
+          active_quantity_id: "m",
+          bounds_visible: false,
+          geometry_scope: "full",
+          opacity: 0.28,
+          points_visible: false,
+          render_mode: "wireframe",
+          surface_color_source: "solid",
+          surface_visible: false,
+          vector_alpha: 1,
+          vector_color_mode: "orientation",
+          vector_mono_color: "#00c2ff",
+          vector_thickness: 1,
+          vectors_visible: false,
+          visible: true,
+          wireframe_color: "#94a3b8",
+          wireframe_opacity: 1,
+          wireframe_visible: true,
+        },
+        source: "airbox",
+      },
+      objects: [],
+      parts: [],
+    },
+    trim: {
+      x: { enabled: false, max_percent: 100, min_percent: 0 },
+      y: { enabled: false, max_percent: 100, min_percent: 0 },
+      z: { enabled: false, max_percent: 100, min_percent: 0 },
+    },
+    vector_density: 50,
+    vector_glyphs: false,
+    vector_style: {
+      alpha: 1,
+      color_mode: "orientation",
+      ferromagnet_visibility: "hide",
+      length_scale: 1,
+      mono_color: "#00c2ff",
+      thickness: 1,
+    },
+    view_mode: "3d",
+    x_chosen_size: 0,
+    y_chosen_size: 0,
+  };
+}
+
+function sessionCollectionFixture() {
+  return {
+    schema_version: "2.0.0",
+    sessions: [{
+      current: true,
+      name: FIXTURE_SESSION_ID,
+      session_id: FIXTURE_SESSION_ID,
+      status: "active",
+    }],
   };
 }
 

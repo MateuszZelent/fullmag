@@ -446,9 +446,16 @@ ExactRational divide_rational_integer(
     if (divisor == 0) {
         throw std::runtime_error("fraction-free Bareiss produced a zero pivot");
     }
-    const BigInteger numerator = value.numerator();
-    const BigInteger denominator = value.denominator() * divisor;
+    BigInteger numerator = value.numerator();
+    BigInteger denominator = value.denominator() * divisor;
     budget->add_work(1);
+    // Boost 1.74 rational<cpp_int> rejects negative denominators before
+    // normalization. Bareiss pivots are signed; preserve the exact quotient.
+    if (denominator < 0) {
+        budget->add_work(2);
+        numerator = -numerator;
+        denominator = -denominator;
+    }
     observe_integer_temporaries(
         budget, base, {&numerator, &denominator});
     const ExactRational result(numerator, denominator);

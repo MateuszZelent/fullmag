@@ -8,6 +8,8 @@ import type {
   StageExecutionResource,
 } from "@/kernel/api/apiTypes";
 import type { ActiveLaneCapabilitySnapshot } from "@/kernel/resources/useActiveLaneCapabilities";
+import type { ResourceStatus } from "@/kernel/resources/resourceTypes";
+import { readStudyStageSource } from "@/shared/domain/study/studyStageSource";
 import {
   apmFromTesla,
   formatScientific,
@@ -18,6 +20,8 @@ import {
 } from "@/shared/domain/physics/torqueUnits";
 
 interface StudyStageSnapshot {
+  pipelineNodeId?: string;
+  pipelineLabel?: string | null;
   algorithm: string | null;
   energyTolerance: string | null;
   index: number;
@@ -53,6 +57,97 @@ interface StudyStageTransitionModel {
   uiPresentation: string | null;
 }
 
+export type StudyStageParallelExecutionModel = NonNullable<
+  StageExecutionResource["stages"][number]["parallel_execution"]
+>;
+
+export interface StageExecutionScope {
+  expectedRunId?: string | null;
+  expectedSessionEpoch?: string | null;
+  expectedSessionId?: string | null;
+  resourceStatus?: ResourceStatus;
+  scopeReady?: boolean;
+}
+
+/**
+ * Prevent a retained resource snapshot from crossing a resource lifecycle
+ * boundary. Calls without a scope remain compatible with model-only callers;
+ * ready scoped data matches its scope. Stale and failed-refresh snapshots
+ * require the complete session, epoch, and run identity tuple.
+ */
+export function stageExecutionForCurrentScope(
+  stageExecution: StageExecutionResource | null,
+  scope: StageExecutionScope = {},
+): StageExecutionResource | null {
+  if (!stageExecution) return null;
+  const hasNoScope =
+    scope.scopeReady === undefined &&
+    scope.resourceStatus === undefined &&
+    scope.expectedRunId === undefined &&
+    scope.expectedSessionId === undefined &&
+    scope.expectedSessionEpoch === undefined;
+  if (hasNoScope) return stageExecution;
+  if (scope.scopeReady === false) return null;
+  if (
+    scope.resourceStatus !== "ready" &&
+    scope.resourceStatus !== "stale" &&
+    scope.resourceStatus !== "error"
+  ) {
+    return null;
+  }
+
+  const scoped = stageExecution;
+  if (
+    scope.scopeReady === true ||
+    scope.resourceStatus === "stale" ||
+    scope.resourceStatus === "error"
+  ) {
+    const hasRunId = Object.prototype.hasOwnProperty.call(scoped, "run_id");
+    const expectedSessionId = scope.expectedSessionId;
+    const expectedSessionEpoch = scope.expectedSessionEpoch;
+    const expectedRunId = scope.expectedRunId;
+    if (
+      !isNonEmptyIdentity(expectedSessionId) ||
+      !isNonEmptyIdentity(expectedSessionEpoch) ||
+      expectedRunId === undefined ||
+      !isNonEmptyIdentity(scoped.session_id) ||
+      !isNonEmptyIdentity(scoped.session_epoch) ||
+      !hasRunId ||
+      (scoped.run_id !== null && !isNonEmptyIdentity(scoped.run_id)) ||
+      scoped.session_id !== expectedSessionId ||
+      scoped.session_epoch !== expectedSessionEpoch ||
+      scoped.run_id !== (expectedRunId ?? null)
+    ) {
+      return null;
+    }
+    return stageExecution;
+  }
+
+  if (
+    typeof scoped.session_id === "string" &&
+    scoped.session_id !== (scope.expectedSessionId ?? null)
+  ) {
+    return null;
+  }
+  if (
+    typeof scoped.session_epoch === "string" &&
+    scoped.session_epoch !== (scope.expectedSessionEpoch ?? null)
+  ) {
+    return null;
+  }
+  if (
+    typeof scoped.run_id === "string" &&
+    scoped.run_id !== (scope.expectedRunId ?? null)
+  ) {
+    return null;
+  }
+  return stageExecution;
+}
+
+function isNonEmptyIdentity(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
 export type StudyStageModel = StudyStageSnapshot & {
   artifactRefs: readonly string[];
   checkpointRef: string | null;
@@ -69,6 +164,7 @@ export type StudyStageModel = StudyStageSnapshot & {
   progressDetail?: string | null;
   progressLabel?: string | null;
   progressPercent: number;
+  parallelExecution?: StudyStageParallelExecutionModel | null;
   runtimeMetric: StudyStageRuntimeMetricModel | null;
   stopReason: string | null;
   transition: StudyStageTransitionModel | null;
@@ -188,7 +284,7 @@ export function studySnapshotFromScene(
   scene: SceneResource | null | undefined,
 ): StudyInspectorSnapshot {
   const study = asRecord(asRecord(scene)?.study);
-  const stages = Array.isArray(study?.stages) ? study.stages : [];
+  const source = readStudyStageSource(study);
 
   return {
     boundary: {
@@ -206,7 +302,11 @@ export function studySnapshotFromScene(
       mode: stringValue(study?.requested_mode, "strict"),
       precision: stringValue(study?.requested_precision, "double"),
     },
-    stages: stages.map((stage, index) => stageSnapshot(stage, index)),
+    stages: source.entries.map((entry, index) => ({
+      ...stageSnapshot(entry.payload, index),
+      ...(entry.queueId ? { stageId: entry.queueId, pipelineNodeId: entry.queueId, pipelineLabel: entry.label, kind: entry.stageKind ?? "unsupported" } : {}),
+      ...(!entry.enabled ? { status: "disabled" } : {}),
+    })),
   };
 }
 
@@ -221,8 +321,12 @@ export function resolveStudyInspectorModel({
   solverStatus,
   stageExecution,
 }: ResolveStudyInspectorModelInput): StudyInspectorModel {
-  const activeStageIndex =
-    stageExecution?.active_stage_index ?? currentRun?.active_stage_index ?? null;
+  const runtimeActiveIndex = stageExecution?.active_stage_index ?? currentRun?.active_stage_index ?? null;
+  const activeRuntimeId = stageExecution?.stages.find((stage) => stage.index === runtimeActiveIndex)?.stage_id;
+  const authoredActiveIndex = snapshot.stages.findIndex((stage) => stage.pipelineNodeId === activeRuntimeId);
+  const activeStageIndex = snapshot.stages.some((stage) => stage.pipelineNodeId)
+    ? authoredActiveIndex >= 0 && activeRuntimeId ? authoredActiveIndex : null
+    : runtimeActiveIndex;
   const selectedStageIndex =
     selectedStageIndexFromId(
       selectedStageRef?.stageId ?? null,
@@ -238,18 +342,23 @@ export function resolveStudyInspectorModel({
     selectedStage: activeStageSnapshot,
   });
 
-  const runtimeStageByIndex = new Map(
+  const runtimeStageByIndex = new Map<
+    number,
+    StageExecutionResource["stages"][number]
+  >(
     (stageExecution?.stages ?? []).map((stage, index) => [
       typeof stage.index === "number" ? stage.index : index,
       stage,
-    ]),
+    ] as const),
   );
 
   const stages = snapshot.stages.map((stage) => {
-    const runtimeRecord = runtimeStageByIndex.get(stage.index) ?? null;
+    const runtimeRecord = stage.pipelineNodeId
+      ? stageExecution?.stages.find((entry) => entry.stage_id === stage.pipelineNodeId) ?? null
+      : runtimeStageByIndex.get(stage.index) ?? null;
     const status =
       runtimeRecord?.status ??
-      stageExecution?.stage_statuses[stage.index] ??
+      (!stage.pipelineNodeId ? stageExecution?.stage_statuses[stage.index] : null) ??
       stage.status;
     const isCompleted = status.toLowerCase() === "completed";
     const stageProgressPercent =
@@ -284,6 +393,7 @@ export function resolveStudyInspectorModel({
         : stage.index === activeStageIndex
           ? (stageProgressPercent ?? progressPercent)
           : 0,
+      parallelExecution: runtimeRecord?.parallel_execution ?? null,
       runtimeMetric: runtimeMetricModel(runtimeRecord),
       stageId: runtimeRecord?.stage_id ?? stage.stageId,
       status,
@@ -423,20 +533,23 @@ export function studyRuntimeProvenanceFromCurrentRun(
       precision: runtimeProvenanceValue(authored?.precision, unavailable),
     },
     effective: {
-      backend: runtimeProvenanceValue(effective?.backend ?? currentRun?.requested_backend, unavailable),
-      device: runtimeProvenanceValue(effective?.device ?? currentRun?.requested_device, unavailable),
-      mode: runtimeProvenanceValue(effective?.mode ?? currentRun?.requested_mode, unavailable),
+      backend: runtimeProvenanceValue(currentRun?.requested_backend ?? effective?.backend, unavailable),
+      device: runtimeProvenanceValue(currentRun?.requested_device ?? effective?.device, unavailable),
+      mode: runtimeProvenanceValue(currentRun?.requested_mode ?? effective?.mode, unavailable),
       precision: runtimeProvenanceValue(
-        effective?.precision ?? currentRun?.requested_precision,
+        currentRun?.requested_precision ?? effective?.precision,
         unavailable,
       ),
     },
     resolved: {
-      backend: runtimeProvenanceValue(resolved?.backend ?? currentRun?.resolved_backend, unresolved),
-      device: runtimeProvenanceValue(resolved?.device ?? currentRun?.resolved_device, unresolved),
-      mode: runtimeProvenanceValue(resolved?.mode ?? currentRun?.resolved_mode, unresolved),
+      backend: runtimeProvenanceValue(currentRun ? currentRun.resolved_backend : resolved?.backend, unresolved),
+      device: runtimeProvenanceValue(
+        currentRun?.resolved_device,
+        unresolved,
+      ),
+      mode: runtimeProvenanceValue(currentRun ? currentRun.resolved_mode : null, unresolved),
       precision: runtimeProvenanceValue(
-        resolved?.precision ?? currentRun?.resolved_precision,
+        currentRun ? currentRun.resolved_precision : null,
         unresolved,
       ),
       runtimeFamily: runtimeProvenanceValue(
@@ -615,6 +728,7 @@ function formatRate(value: number | null | undefined): string {
 }
 
 function stageLabel(stage: StudyStageSnapshot): string {
+  if (stage.pipelineLabel) return stage.pipelineLabel;
   const base =
     isRelaxStageKind(stage.kind)
       ? "Relax"
@@ -816,10 +930,11 @@ function selectedStageIndexFromId(
   stageExecution: StageExecutionResource | null,
 ): number | null {
   if (!stageId) return null;
-  const index = Number(stageId);
-  if (Number.isInteger(index) && index >= 0) return index;
   const snapshotIndex = stages.findIndex((stage) => stage.stageId === stageId);
   if (snapshotIndex >= 0) return snapshotIndex;
+  if (stages.some((stage) => stage.pipelineNodeId)) return null;
+  const index = Number(stageId);
+  if (Number.isInteger(index) && index >= 0) return index;
   const runtimeIndex = stageExecution?.stages.findIndex(
     (stage) => stage.stage_id === stageId,
   );

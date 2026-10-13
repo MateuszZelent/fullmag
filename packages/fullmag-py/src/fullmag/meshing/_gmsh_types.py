@@ -290,6 +290,9 @@ class MeshOptions:
     optimize: str | None = None
     optimize_iters: int = 1
     size_fields: list[dict[str, Any]] = field(default_factory=list)
+    # Scoped minimum-size floors have different eligibility from upper targets
+    # and are composed through the lower-bound branch of the Gmsh field stack.
+    lower_bound_fields: list[dict[str, Any]] = field(default_factory=list)
     compute_quality: bool = True
     per_element_quality: bool = True
     # Boundary-layer extrusion settings (None = disabled)
@@ -1311,6 +1314,45 @@ def _trusted_mesh_mutation_guard_sha256(mesh: "MeshData") -> str:
     return digest.hexdigest()
 
 
+def _owned_vertex_identity(value: object, node_count: int) -> Mapping[str, object] | None:
+    if value is None:
+        return None
+    if not isinstance(value, Mapping) or set(value) != {"schema_version", "issuer", "vertex_ids"}:
+        raise ValueError("vertex_identity requires exactly schema_version, issuer and vertex_ids")
+    if value["schema_version"] != "mesh_vertex_identity.v1" or value["issuer"] != "gmsh_node_tags.v1":
+        raise ValueError("unsupported mesh vertex identity schema or issuer")
+    raw = value["vertex_ids"]
+    if not isinstance(raw, (tuple, list, np.ndarray)) or (isinstance(raw, np.ndarray) and raw.ndim != 1):
+        raise ValueError("vertex_identity.vertex_ids must be an ordered integer sequence")
+    if len(raw) != node_count:
+        raise ValueError("vertex_identity vertex count must match mesh nodes")
+    ids: list[int] = []
+    for item in raw:
+        if isinstance(item, (bool, np.bool_)) or not isinstance(item, (int, np.integer)):
+            raise ValueError("vertex_identity IDs must be exact integers, not bool or coerced values")
+        identity = operator.index(item)
+        if not 0 < identity <= (1 << 64) - 1:
+            raise ValueError("vertex_identity IDs must be positive u64 integers")
+        ids.append(identity)
+    if len(set(ids)) != len(ids):
+        raise ValueError("vertex_identity IDs must be unique")
+    return MappingProxyType({
+        "schema_version": "mesh_vertex_identity.v1",
+        "issuer": "gmsh_node_tags.v1",
+        "vertex_ids": tuple(ids),
+    })
+
+
+def _vertex_identity_to_dict(value: Mapping[str, object] | None) -> dict[str, object] | None:
+    if value is None:
+        return None
+    return {
+        "schema_version": value["schema_version"],
+        "issuer": value["issuer"],
+        "vertex_ids": list(value["vertex_ids"]),
+    }
+
+
 @dataclass(frozen=True, slots=True)
 class MeshData:
     """Canonical typed variable-arity FEM topology in CSR layout."""
@@ -1337,9 +1379,14 @@ class MeshData:
     per_domain_quality: dict[int, MeshQualityReport] | None = None
     realization_report: MeshRealizationReport | None = None
     mixed_layer_topology_certificate: MixedLayerTopologyCertificate | None = None
+    # Retained mesh-owner labels, not authentication or a solved-field certificate.
+    vertex_identity: Mapping[str, object] | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "nodes", np.asarray(self.nodes, dtype=np.float64))
+        object.__setattr__(
+            self, "vertex_identity", _owned_vertex_identity(self.vertex_identity, len(self.nodes))
+        )
         object.__setattr__(self, "cell_types", np.asarray(self.cell_types, dtype=np.str_))
         object.__setattr__(self, "cell_offsets", np.asarray(self.cell_offsets, dtype=np.int64))
         object.__setattr__(self, "cell_nodes", np.asarray(self.cell_nodes, dtype=np.int32))
@@ -2004,6 +2051,7 @@ class MeshData:
         per_domain_quality: dict[int, MeshQualityReport] | None = None,
         realization_report: MeshRealizationReport | None = None,
         mixed_layer_topology_certificate: MixedLayerTopologyCertificate | None = None,
+        vertex_identity: Mapping[str, object] | None = None,
     ) -> "MeshData":
         """Normalize the explicit legacy tet4/tri3 boundary into canonical CSR."""
         tet = np.asarray(elements, dtype=np.int32)
@@ -2036,6 +2084,7 @@ class MeshData:
             per_domain_quality=per_domain_quality,
             realization_report=realization_report,
             mixed_layer_topology_certificate=mixed_layer_topology_certificate,
+            vertex_identity=vertex_identity,
             cell_mesh_parts=np.asarray([], dtype=np.str_),
         )
 
@@ -2176,6 +2225,7 @@ class MeshData:
         *,
         require_positive_orientation: bool = True,
         eps_volume: float | None = None,
+        _evidence_coordinate_scale_to_m: float | None = None,
     ) -> None:
         # Certified mixed meshes already carry native per-cell Jacobian
         # evidence.  Re-running this check in a Python loop is prohibitively
@@ -2218,17 +2268,123 @@ class MeshData:
                 volume_context = (
                     " (degenerate tetra volume)" if cell_type == "tet4" else ""
                 )
+                evidence = (
+                    self._tet4_strict_failure_evidence(
+                        index,
+                        coordinates,
+                        float(determinants[0]),
+                        resolved_eps,
+                        coordinate_scale_to_m=_evidence_coordinate_scale_to_m,
+                    )
+                    if cell_type == "tet4"
+                    else ""
+                )
                 raise ValueError(
                     f"mesh CSR cell {index} global ordinal {int(self.cell_global_ordinals[index])} "
                     f"has degenerate {cell_type} Jacobian{volume_context} "
-                    f"{minimum_abs:.6e} <= eps {resolved_eps:.6e}"
+                    f"{minimum_abs:.6e} <= eps {resolved_eps:.6e}{evidence}"
                 )
             if require_positive_orientation and np.any(determinants < 0.0):
+                minimum_determinant = float(np.min(determinants))
+                evidence = (
+                    self._tet4_strict_failure_evidence(
+                        index,
+                        coordinates,
+                        minimum_determinant,
+                        resolved_eps,
+                        coordinate_scale_to_m=_evidence_coordinate_scale_to_m,
+                    )
+                    if cell_type == "tet4"
+                    else ""
+                )
                 raise ValueError(
                     f"mesh CSR cell {index} global ordinal {int(self.cell_global_ordinals[index])} "
                     f"has negative {cell_type} Jacobian "
-                    f"{float(np.min(determinants)):.6e}"
+                    f"{minimum_determinant:.6e}{evidence}"
                 )
+
+    def _tet4_strict_failure_evidence(
+        self,
+        index: int,
+        coordinates: NDArray[np.float64],
+        determinant: float,
+        epsilon: float,
+        *,
+        coordinate_scale_to_m: float | None,
+    ) -> str:
+        """Format bounded evidence for one rejected tet without guessing its owner."""
+        node_indices = [int(node) for node in self.cell_node_ids(index)]
+        scale_to_m: float | None = None
+        scale_cubed = 1.0
+        if coordinate_scale_to_m is not None:
+            try:
+                candidate_scale = float(coordinate_scale_to_m)
+                candidate_scale_cubed = candidate_scale**3
+            except (OverflowError, TypeError, ValueError):
+                candidate_scale = float("nan")
+                candidate_scale_cubed = float("nan")
+            if (
+                np.isfinite(candidate_scale)
+                and candidate_scale > 0.0
+                and np.isfinite(candidate_scale_cubed)
+            ):
+                scale_to_m = candidate_scale
+                scale_cubed = candidate_scale_cubed
+
+        raw_coordinates = np.asarray(coordinates, dtype=np.float64)
+        raw_edge_lengths = np.linalg.norm(
+            raw_coordinates[:, np.newaxis, :] - raw_coordinates[np.newaxis, :, :],
+            axis=2,
+        )[np.triu_indices(4, k=1)]
+        if scale_to_m is not None:
+            scaled_coordinates = raw_coordinates * scale_to_m
+            scaled_edges = raw_edge_lengths * scale_to_m
+            scaled_determinant = determinant * scale_cubed
+            scaled_epsilon = epsilon * scale_cubed
+            if (
+                np.all(np.isfinite(scaled_coordinates))
+                and np.all(np.isfinite(scaled_edges))
+                and np.isfinite(scaled_determinant)
+                and np.isfinite(scaled_epsilon)
+            ):
+                evidence_coordinates = scaled_coordinates
+                edge_lengths = scaled_edges
+                determinant = scaled_determinant
+                epsilon = scaled_epsilon
+                coordinate_label = "coordinates_m"
+                determinant_label = "determinant_m3"
+                epsilon_label = "epsilon_m3"
+                edge_min_label = "edge_min_m"
+                edge_max_label = "edge_max_m"
+                diameter_label = "diameter_m"
+            else:
+                scale_to_m = None
+        if scale_to_m is None:
+            evidence_coordinates = raw_coordinates
+            edge_lengths = raw_edge_lengths
+            coordinate_label = "coordinates_mesh_units"
+            determinant_label = "determinant_mesh_units3"
+            epsilon_label = "epsilon_mesh_units3"
+            edge_min_label = "edge_min_mesh_units"
+            edge_max_label = "edge_max_mesh_units"
+            diameter_label = "diameter_mesh_units"
+
+        coordinates_text = "[" + ", ".join(
+            "[" + ", ".join(f"{float(value):.9e}" for value in row) + "]"
+            for row in evidence_coordinates
+        ) + "]"
+        marker = int(self.element_markers[index])
+        return (
+            "; tet4 evidence: "
+            f"node_indices={node_indices}; "
+            f"{coordinate_label}={coordinates_text}; "
+            f"{determinant_label}={determinant:.9e}; "
+            f"{epsilon_label}={epsilon:.9e}; "
+            f"{edge_min_label}={float(np.min(edge_lengths)):.9e}; "
+            f"{edge_max_label}={float(np.max(edge_lengths)):.9e}; "
+            f"{diameter_label}={float(np.max(edge_lengths)):.9e}; "
+            f"element_marker={marker}"
+        )
 
     def _native_mixed_certificate_valid(self) -> bool:
         """Return whether the native certifier accepted this exact mesh.
@@ -2308,6 +2464,7 @@ class MeshData:
             per_domain_quality=self.per_domain_quality,
             realization_report=self.realization_report,
             mixed_layer_topology_certificate=self.mixed_layer_topology_certificate,
+            vertex_identity=self.vertex_identity,
         )
 
     def save(self, path: str | Path) -> None:
@@ -2318,6 +2475,7 @@ class MeshData:
                 json.dumps(
                     {
                         "mesh_name": target.stem,
+                        "vertex_identity": _vertex_identity_to_dict(self.vertex_identity),
                         "nodes": self.nodes.tolist(),
                         "cell_types": self.cell_types.tolist(),
                         "cell_offsets": self.cell_offsets.tolist(),
@@ -2358,6 +2516,7 @@ class MeshData:
         np.savez_compressed(
             target,
             nodes=self.nodes,
+            vertex_identity_json=np.asarray(json.dumps(_vertex_identity_to_dict(self.vertex_identity))),
             cell_types=self.cell_types,
             cell_offsets=self.cell_offsets,
             cell_nodes=self.cell_nodes,
@@ -2589,6 +2748,10 @@ class MeshData:
                 )
         payload = {name: data[name] for name in data.files if not name.endswith("_json")}
         payload.update(
+            vertex_identity=(
+                json.loads(str(data["vertex_identity_json"]))
+                if "vertex_identity_json" in data.files else None
+            ),
             periodic_boundary_pairs=periodic_boundary_pairs,
             periodic_node_pairs=periodic_node_pairs,
             periodic_mesh_certificate=periodic_mesh_certificate,
@@ -2611,6 +2774,7 @@ class MeshData:
             raise ValueError("mesh payload contains both legacy and v2 topology")
         common = dict(
             nodes=payload["nodes"],
+            vertex_identity=payload.get("vertex_identity"),
             element_markers=payload["element_markers"],
             boundary_markers=payload["boundary_markers"],
             periodic_boundary_pairs=[dict(pair) for pair in payload.get("periodic_boundary_pairs", [])],

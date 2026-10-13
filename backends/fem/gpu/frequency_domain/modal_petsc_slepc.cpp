@@ -1,10 +1,18 @@
 #include "frequency_domain/modal_gpu_krylov.hpp"
+#include "core/petsc_slepc_runtime.hpp"
+#include "frequency_domain/nonfinite_json_sanitizer.hpp"
 
 #include "frequency_domain/mode_kinematics.hpp"
 #include "gpu/cuda/runtime/hypre_device_policy.hpp"
 
 #include <petscksp.h>
 #include <slepceps.h>
+#if PETSC_VERSION_LT(3, 13, 0)
+// PETSc 3.12 keeps PetscObjectGetId() in its private compatibility header,
+// although the symbol is still exported by the runtime.  Declare that stable
+// C entry point locally instead of including PETSc internals in this backend.
+extern "C" PetscErrorCode PetscObjectGetId(PetscObject, PetscObjectId *);
+#endif
 #if !PETSC_VERSION_LT(3, 16, 0)
 #include <petscdevice.h>
 #endif
@@ -57,7 +65,37 @@ namespace {
 
 using Complex = std::complex<double>;
 
-void destroy_cached_gpu_context() noexcept;
+bool destroy_cached_gpu_context_locked() noexcept;
+void destroy_cached_gpu_context_at_exit() noexcept;
+#if PETSC_VERSION_LT(3, 13, 0)
+PetscErrorCode set_mat_shell_vec_type_compat(Mat, VecType)
+{
+    // MatShellSetVecType() was introduced in PETSc 3.13.  The old managed
+    // runtime cannot safely promise CUDA-vector creation for MATSHELL, so the
+    // GPU modal lane must fail closed rather than silently use host vectors.
+    return PETSC_ERR_SUP;
+}
+#else
+PetscErrorCode set_mat_shell_vec_type_compat(Mat matrix, VecType type)
+{
+    return MatShellSetVecType(matrix, type);
+}
+#endif
+
+#if defined(SLEPC_VERSION_MAJOR) && \
+    (SLEPC_VERSION_MAJOR > 3 || \
+     (SLEPC_VERSION_MAJOR == 3 && SLEPC_VERSION_MINOR >= 15))
+PetscErrorCode set_st_preconditioner_mat_compat(ST st, Mat matrix)
+{
+    return STSetPreconditionerMat(st, matrix);
+}
+#else
+PetscErrorCode set_st_preconditioner_mat_compat(ST st, Mat matrix)
+{
+    return STPrecondSetMatForPC(st, matrix);
+}
+#endif
+
 
 void copy_message(char *destination, std::size_t size, const char *message) noexcept
 {
@@ -66,6 +104,25 @@ void copy_message(char *destination, std::size_t size, const char *message) noex
     }
     std::strncpy(destination, message != nullptr ? message : "", size - 1);
     destination[size - 1] = '\0';
+}
+
+// Caller holds the shared PETSc/SLEPc process mutex. A destroy error leaves the
+// original owner slot intact and quarantines the process so the handle cannot
+// be retried or finalized under an uncertain object graph.
+template <typename Handle, typename Destroy>
+bool destroy_petsc_handle_checked(Handle &owned, Destroy destroy) noexcept
+{
+    if (owned == nullptr) {
+        return true;
+    }
+    Handle attempted = owned;
+    const PetscErrorCode status = destroy(&attempted);
+    if (status != PETSC_SUCCESS || attempted != nullptr) {
+        fullmag::fem::runtime::mark_petsc_slepc_process_unsafe_locked();
+        return false;
+    }
+    owned = nullptr;
+    return true;
 }
 
 bool string_equals(const char *actual, const char *expected) noexcept
@@ -156,33 +213,65 @@ double inner_linear_tolerance(double certified_residual_tolerance) noexcept
             1.0e-1 * transformed_eigensolver_tolerance(certified_residual_tolerance)));
 }
 
-std::mutex &gpu_slepc_mutex()
-{
-    static std::mutex mutex;
-    return mutex;
-}
-
 bool &owns_slepc_initialization()
 {
     static bool owns_initialization = false;
     return owns_initialization;
 }
 
-void finalize_owned_slepc() noexcept
+FrequencyDomainStatus finalize_owned_slepc_locked() noexcept
 {
-    if (!owns_slepc_initialization()) {
-        return;
+    if (fullmag::fem::runtime::petsc_slepc_process_is_unsafe_locked()) {
+        return FrequencyDomainStatus::operator_error;
     }
-    destroy_cached_gpu_context();
     PetscBool finalized = PETSC_FALSE;
-    if (PetscFinalized(&finalized) == PETSC_SUCCESS && finalized == PETSC_FALSE) {
-        (void)SlepcFinalize();
+    if (PetscFinalized(&finalized) != PETSC_SUCCESS || finalized == PETSC_TRUE) {
+        return FrequencyDomainStatus::operator_error;
+    }
+    if (!owns_slepc_initialization()) {
+        return FrequencyDomainStatus::ok;
+    }
+    // Destroying the independent GPU cache is safe under this lock, but the
+    // process runtime must remain active until every borrowed CPU graph leaves.
+    if (!destroy_cached_gpu_context_locked() ||
+        !fullmag::fem::runtime::petsc_slepc_global_finalization_allowed_locked()) {
+        return FrequencyDomainStatus::operator_error;
+    }
+    if (SlepcFinalize() != PETSC_SUCCESS) {
+        return FrequencyDomainStatus::operator_error;
     }
     owns_slepc_initialization() = false;
+    return FrequencyDomainStatus::ok;
+}
+
+void finalize_owned_slepc() noexcept
+{
+    const std::lock_guard<std::mutex> lock(
+        fullmag::fem::runtime::petsc_slepc_process_mutex());
+    (void)finalize_owned_slepc_locked();
 }
 
 bool ensure_slepc_initialized(char error_message[256]) noexcept
 {
+    if (fullmag::fem::runtime::petsc_slepc_process_is_unsafe_locked()) {
+        copy_message(error_message, 256,
+                     "petsc_runtime_unsafe: PETSc/SLEPc graph is quarantined");
+        return false;
+    }
+
+    PetscBool finalized = PETSC_FALSE;
+    if (PetscFinalized(&finalized) != PETSC_SUCCESS) {
+        copy_message(error_message, 256, "GPU K0 could not query PETSc finalization state");
+        return false;
+    }
+    if (finalized == PETSC_TRUE) {
+        copy_message(
+            error_message,
+            256,
+            "GPU K0 PETSc/SLEPc runtime is finalized and cannot be reinitialized");
+        return false;
+    }
+
     PetscBool initialized = PETSC_FALSE;
     if (SlepcInitialized(&initialized) != PETSC_SUCCESS) {
         copy_message(error_message, 256, "GPU K0 could not query SLEPc initialization state");
@@ -210,8 +299,15 @@ bool ensure_slepc_initialized(char error_message[256]) noexcept
     owns_slepc_initialization() = true;
     if (std::atexit(finalize_owned_slepc) != 0) {
         copy_message(error_message, 256, "GPU K0 could not register SLEPc finalization");
-        (void)SlepcFinalize();
-        owns_slepc_initialization() = false;
+        if (!fullmag::fem::runtime::petsc_slepc_process_is_unsafe_locked()) {
+            PetscBool finalized = PETSC_FALSE;
+            if (PetscFinalized(&finalized) == PETSC_SUCCESS &&
+                finalized == PETSC_FALSE &&
+                fullmag::fem::runtime::petsc_slepc_global_finalization_allowed_locked() &&
+                SlepcFinalize() == PETSC_SUCCESS) {
+                owns_slepc_initialization() = false;
+            }
+        }
         return false;
     }
     return true;
@@ -729,39 +825,41 @@ const char *gpu_eps_reason_name(EPSConvergedReason reason, bool cancelled) noexc
     }
 }
 
-void destroy_schur_context(GpuSchurContext *context) noexcept
+bool destroy_schur_context(GpuSchurContext *context) noexcept
 {
     if (context == nullptr) {
-        return;
+        return true;
     }
-    if (context->feedback) VecDestroy(&context->feedback);
-    if (context->phi_solution) VecDestroy(&context->phi_solution);
-    if (context->phi_rhs) VecDestroy(&context->phi_rhs);
-    if (context->poisson_ksp) KSPDestroy(&context->poisson_ksp);
+    if (!destroy_petsc_handle_checked(context->feedback, VecDestroy) ||
+        !destroy_petsc_handle_checked(context->phi_solution, VecDestroy) ||
+        !destroy_petsc_handle_checked(context->phi_rhs, VecDestroy) ||
+        !destroy_petsc_handle_checked(context->poisson_ksp, KSPDestroy)) {
+        return false;
+    }
     context->convergence_callback_installed = false;
-    if (context->poisson) MatDestroy(&context->poisson);
-    if (context->a_phiq) MatDestroy(&context->a_phiq);
-    if (context->a_qphi) MatDestroy(&context->a_qphi);
-    if (context->b_qq) MatDestroy(&context->b_qq);
-    if (context->a_qq) MatDestroy(&context->a_qq);
+    return destroy_petsc_handle_checked(context->poisson, MatDestroy) &&
+        destroy_petsc_handle_checked(context->a_phiq, MatDestroy) &&
+        destroy_petsc_handle_checked(context->a_qphi, MatDestroy) &&
+        destroy_petsc_handle_checked(context->b_qq, MatDestroy) &&
+        destroy_petsc_handle_checked(context->a_qq, MatDestroy);
 }
 
-void destroy_split_context(GpuSplitContext *context) noexcept
+bool destroy_split_context(GpuSplitContext *context) noexcept
 {
     if (context == nullptr) {
-        return;
+        return true;
     }
-    if (context->imag_scatter) VecScatterDestroy(&context->imag_scatter);
-    if (context->real_scatter) VecScatterDestroy(&context->real_scatter);
-    if (context->imag_is) ISDestroy(&context->imag_is);
-    if (context->real_is) ISDestroy(&context->real_is);
-    if (context->phi_imag) VecDestroy(&context->phi_imag);
-    if (context->phi_real) VecDestroy(&context->phi_real);
-    if (context->y_imag) VecDestroy(&context->y_imag);
-    if (context->y_real) VecDestroy(&context->y_real);
-    if (context->q_imag) VecDestroy(&context->q_imag);
-    if (context->q_real) VecDestroy(&context->q_real);
-    if (context->shell_template) VecDestroy(&context->shell_template);
+    return destroy_petsc_handle_checked(context->imag_scatter, VecScatterDestroy) &&
+        destroy_petsc_handle_checked(context->real_scatter, VecScatterDestroy) &&
+        destroy_petsc_handle_checked(context->imag_is, ISDestroy) &&
+        destroy_petsc_handle_checked(context->real_is, ISDestroy) &&
+        destroy_petsc_handle_checked(context->phi_imag, VecDestroy) &&
+        destroy_petsc_handle_checked(context->phi_real, VecDestroy) &&
+        destroy_petsc_handle_checked(context->y_imag, VecDestroy) &&
+        destroy_petsc_handle_checked(context->y_real, VecDestroy) &&
+        destroy_petsc_handle_checked(context->q_imag, VecDestroy) &&
+        destroy_petsc_handle_checked(context->q_real, VecDestroy) &&
+        destroy_petsc_handle_checked(context->shell_template, VecDestroy);
 }
 
 bool configure_schur_context(
@@ -935,25 +1033,25 @@ struct DeviceModalResidualWorkspace {
     Vec phi_residual_imag = nullptr;
 };
 
-void destroy_device_modal_residual_workspace(DeviceModalResidualWorkspace *workspace) noexcept
+bool destroy_device_modal_residual_workspace(DeviceModalResidualWorkspace *workspace) noexcept
 {
     if (workspace == nullptr) {
-        return;
+        return true;
     }
-    if (workspace->phi_residual_imag) VecDestroy(&workspace->phi_residual_imag);
-    if (workspace->phi_residual_real) VecDestroy(&workspace->phi_residual_real);
-    if (workspace->a_phiphi_imag) VecDestroy(&workspace->a_phiphi_imag);
-    if (workspace->a_phiphi_real) VecDestroy(&workspace->a_phiphi_real);
-    if (workspace->a_phiq_imag) VecDestroy(&workspace->a_phiq_imag);
-    if (workspace->a_phiq_real) VecDestroy(&workspace->a_phiq_real);
-    if (workspace->q_residual_imag) VecDestroy(&workspace->q_residual_imag);
-    if (workspace->q_residual_real) VecDestroy(&workspace->q_residual_real);
-    if (workspace->b_qq_imag) VecDestroy(&workspace->b_qq_imag);
-    if (workspace->b_qq_real) VecDestroy(&workspace->b_qq_real);
-    if (workspace->a_qphi_imag) VecDestroy(&workspace->a_qphi_imag);
-    if (workspace->a_qphi_real) VecDestroy(&workspace->a_qphi_real);
-    if (workspace->a_qq_imag) VecDestroy(&workspace->a_qq_imag);
-    if (workspace->a_qq_real) VecDestroy(&workspace->a_qq_real);
+    return destroy_petsc_handle_checked(workspace->phi_residual_imag, VecDestroy) &&
+        destroy_petsc_handle_checked(workspace->phi_residual_real, VecDestroy) &&
+        destroy_petsc_handle_checked(workspace->a_phiphi_imag, VecDestroy) &&
+        destroy_petsc_handle_checked(workspace->a_phiphi_real, VecDestroy) &&
+        destroy_petsc_handle_checked(workspace->a_phiq_imag, VecDestroy) &&
+        destroy_petsc_handle_checked(workspace->a_phiq_real, VecDestroy) &&
+        destroy_petsc_handle_checked(workspace->q_residual_imag, VecDestroy) &&
+        destroy_petsc_handle_checked(workspace->q_residual_real, VecDestroy) &&
+        destroy_petsc_handle_checked(workspace->b_qq_imag, VecDestroy) &&
+        destroy_petsc_handle_checked(workspace->b_qq_real, VecDestroy) &&
+        destroy_petsc_handle_checked(workspace->a_qphi_imag, VecDestroy) &&
+        destroy_petsc_handle_checked(workspace->a_qphi_real, VecDestroy) &&
+        destroy_petsc_handle_checked(workspace->a_qq_imag, VecDestroy) &&
+        destroy_petsc_handle_checked(workspace->a_qq_real, VecDestroy);
 }
 
 bool create_device_modal_residual_workspace(
@@ -981,7 +1079,9 @@ bool create_device_modal_residual_workspace(
         create_cuda_vector(phi_count, &workspace->phi_residual_real) == PETSC_SUCCESS &&
         create_cuda_vector(phi_count, &workspace->phi_residual_imag) == PETSC_SUCCESS;
     if (!created) {
-        destroy_device_modal_residual_workspace(workspace);
+        if (!destroy_device_modal_residual_workspace(workspace)) {
+            return false;
+        }
     }
     return created;
 }
@@ -1251,23 +1351,30 @@ std::uint64_t next_solver_context_generation() noexcept
     return ++generation;
 }
 
-void destroy_gpu_solver_state(GpuSolverState *state) noexcept
+bool destroy_gpu_solver_state(GpuSolverState *state) noexcept
 {
     if (state == nullptr) {
-        return;
+        return true;
     }
+    if (!destroy_petsc_handle_checked(state->xi, VecDestroy) ||
+        !destroy_petsc_handle_checked(state->xr, VecDestroy) ||
+        !destroy_petsc_handle_checked(state->eps, EPSDestroy)) {
+        return false;
+    }
+    // These are borrowed handles owned by EPS. Clear them only after EPS has
+    // been destroyed successfully; on failure retain the whole owner graph.
     state->basis = nullptr;
     state->st_pc = nullptr;
     state->st_ksp = nullptr;
     state->st = nullptr;
-    if (state->xi) VecDestroy(&state->xi);
-    if (state->xr) VecDestroy(&state->xr);
-    if (state->eps) EPSDestroy(&state->eps);
-    if (state->materialized_operator) MatDestroy(&state->materialized_operator);
-    if (state->preconditioner) MatDestroy(&state->preconditioner);
-    if (state->mass) MatDestroy(&state->mass);
-    if (state->shell) MatDestroy(&state->shell);
+    if (!destroy_petsc_handle_checked(state->materialized_operator, MatDestroy) ||
+        !destroy_petsc_handle_checked(state->preconditioner, MatDestroy) ||
+        !destroy_petsc_handle_checked(state->mass, MatDestroy) ||
+        !destroy_petsc_handle_checked(state->shell, MatDestroy)) {
+        return false;
+    }
     *state = GpuSolverState{};
+    return true;
 }
 
 struct GpuPersistentContext {
@@ -1287,6 +1394,21 @@ struct GpuPersistentContext {
     std::uint64_t operator_signature = 0;
     std::uint64_t operator_generation = 0u;
 };
+
+bool destroy_gpu_persistent_context_resources_locked(GpuPersistentContext *context) noexcept
+{
+    if (context == nullptr) {
+        return true;
+    }
+    context->solve_control.disarm();
+    return destroy_gpu_solver_state(&context->solver) &&
+        destroy_petsc_handle_checked(context->residual_probe, VecDestroy) &&
+        destroy_petsc_handle_checked(context->mass_action_probe, VecDestroy) &&
+        destroy_petsc_handle_checked(context->action_probe, VecDestroy) &&
+        destroy_device_modal_residual_workspace(&context->residual_workspace) &&
+        destroy_split_context(&context->split) &&
+        destroy_schur_context(&context->schur);
+}
 
 bool capture_gpu_solver_object_ids(
     const GpuPersistentContext &persistent,
@@ -1628,22 +1750,37 @@ bool gpu_operator_scaling(
     return true;
 }
 
-void destroy_cached_gpu_context() noexcept
+// Caller holds the shared PETSc/SLEPc process mutex.
+bool destroy_cached_gpu_context_locked() noexcept
 {
+    if (fullmag::fem::runtime::petsc_slepc_process_is_unsafe_locked()) {
+        return false;
+    }
+    PetscBool finalized = PETSC_FALSE;
+    if (PetscFinalized(&finalized) != PETSC_SUCCESS || finalized == PETSC_TRUE) {
+        return false;
+    }
     auto *context = cached_gpu_context();
     if (context == nullptr) {
-        return;
+        return true;
     }
-    context->solve_control.disarm();
-    destroy_gpu_solver_state(&context->solver);
-    if (context->residual_probe) VecDestroy(&context->residual_probe);
-    if (context->mass_action_probe) VecDestroy(&context->mass_action_probe);
-    if (context->action_probe) VecDestroy(&context->action_probe);
-    destroy_device_modal_residual_workspace(&context->residual_workspace);
-    destroy_split_context(&context->split);
-    destroy_schur_context(&context->schur);
+    if (!destroy_gpu_persistent_context_resources_locked(context)) {
+        return false;
+    }
     delete context;
     cached_gpu_context() = nullptr;
+    return true;
+}
+
+void destroy_cached_gpu_context_at_exit() noexcept
+{
+    const std::lock_guard<std::mutex> lock(
+        fullmag::fem::runtime::petsc_slepc_process_mutex());
+    if (!destroy_cached_gpu_context_locked()) {
+        // The shared unsafe latch prevents the separately registered SLEPc
+        // finalizer from finalizing a runtime with a retained PETSc graph.
+        fullmag::fem::runtime::mark_petsc_slepc_process_unsafe_locked();
+    }
 }
 
 GpuPersistentContext *acquire_cached_gpu_context(
@@ -1673,7 +1810,9 @@ GpuPersistentContext *acquire_cached_gpu_context(
         if (invalidation_reason != nullptr) {
             *invalidation_reason = operator_invalidation_reason(cached->identity, identity);
         }
-        destroy_cached_gpu_context();
+        if (!destroy_cached_gpu_context_locked()) {
+            return nullptr;
+        }
     }
     double unused_mass_norm = 0.0;
     double unused_operator_norm = 0.0;
@@ -1703,13 +1842,14 @@ GpuPersistentContext *acquire_cached_gpu_context(
         VecDuplicate(created->split.shell_template, &created->mass_action_probe) != PETSC_SUCCESS ||
         VecDuplicate(created->split.shell_template, &created->residual_probe) != PETSC_SUCCESS) {
         if (created != nullptr) {
-            if (created->residual_probe) VecDestroy(&created->residual_probe);
-            if (created->mass_action_probe) VecDestroy(&created->mass_action_probe);
-            if (created->action_probe) VecDestroy(&created->action_probe);
-            destroy_device_modal_residual_workspace(&created->residual_workspace);
-            destroy_split_context(&created->split);
-            destroy_schur_context(&created->schur);
-            delete created;
+            if (fullmag::fem::runtime::petsc_slepc_process_is_unsafe_locked() ||
+                !destroy_gpu_persistent_context_resources_locked(created)) {
+                // Keep the partially built owner reachable.  A failed
+                // destroy quarantines the process instead of losing handles.
+                cached_gpu_context() = created;
+            } else {
+                delete created;
+            }
         }
         return nullptr;
     }
@@ -1719,7 +1859,7 @@ GpuPersistentContext *acquire_cached_gpu_context(
     cached_gpu_context() = created;
     static bool cleanup_registered = false;
     if (!cleanup_registered) {
-        cleanup_registered = std::atexit(destroy_cached_gpu_context) == 0;
+        cleanup_registered = std::atexit(destroy_cached_gpu_context_at_exit) == 0;
     }
     return created;
 }
@@ -1788,8 +1928,12 @@ bool create_materialized_shifted_operator_cuda(
     PetscInt dimension,
     double shift,
     Mat *shifted_matrix,
-    Mat *unshifted_matrix)
+    Mat *unshifted_matrix,
+    bool *cleanup_failure_was_first)
 {
+    if (cleanup_failure_was_first != nullptr) {
+        *cleanup_failure_was_first = false;
+    }
     constexpr PetscInt kMaximumMaterializedDimension = 1024;
     if (shifted_matrix == nullptr || unshifted_matrix == nullptr ||
         operator_matrix == nullptr || mass_matrix == nullptr ||
@@ -1812,7 +1956,7 @@ bool create_materialized_shifted_operator_cuda(
             dimension,
             &context,
             &shifted_shell) == PETSC_SUCCESS &&
-        MatShellSetVecType(shifted_shell, VECCUDA) == PETSC_SUCCESS &&
+        set_mat_shell_vec_type_compat(shifted_shell, VECCUDA) == PETSC_SUCCESS &&
         MatShellSetOperation(
             shifted_shell,
             MATOP_MULT,
@@ -1824,11 +1968,23 @@ bool create_materialized_shifted_operator_cuda(
             shifted_matrix) == PETSC_SUCCESS &&
         MatDuplicate(*shifted_matrix, MAT_COPY_VALUES, unshifted_matrix) == PETSC_SUCCESS &&
         MatAXPY(*unshifted_matrix, shift, mass_matrix, DIFFERENT_NONZERO_PATTERN) == PETSC_SUCCESS;
-    if (shifted_shell) MatDestroy(&shifted_shell);
-    if (context.mass_action) VecDestroy(&context.mass_action);
+    if (!destroy_petsc_handle_checked(shifted_shell, MatDestroy)) {
+        if (ok && cleanup_failure_was_first != nullptr) {
+            *cleanup_failure_was_first = true;
+        }
+        return false;
+    }
+    if (!destroy_petsc_handle_checked(context.mass_action, VecDestroy)) {
+        if (ok && cleanup_failure_was_first != nullptr) {
+            *cleanup_failure_was_first = true;
+        }
+        return false;
+    }
     if (!ok) {
-        if (*unshifted_matrix != nullptr) MatDestroy(unshifted_matrix);
-        if (*shifted_matrix != nullptr) MatDestroy(shifted_matrix);
+        if (!destroy_petsc_handle_checked(*unshifted_matrix, MatDestroy) ||
+            !destroy_petsc_handle_checked(*shifted_matrix, MatDestroy)) {
+            return false;
+        }
     }
     return ok;
 }
@@ -1855,13 +2011,22 @@ bool create_gpu_solver_state(
     double operator_scale,
     double target_omega,
     double target_eigenvalue,
-    std::uint64_t *setup_h2d_transfer_count)
+    std::uint64_t *setup_h2d_transfer_count,
+    bool *cleanup_failure_was_first)
 {
+    if (cleanup_failure_was_first != nullptr) {
+        *cleanup_failure_was_first = false;
+    }
     if (persistent == nullptr) {
         return false;
     }
     GpuSolverState &state = persistent->solver;
-    destroy_gpu_solver_state(&state);
+    if (!destroy_gpu_solver_state(&state)) {
+        if (cleanup_failure_was_first != nullptr) {
+            *cleanup_failure_was_first = true;
+        }
+        return false;
+    }
     // The Schur A-blocks are already scaled when the cached context is
     // configured.  Do not multiply the split shell a second time.
     persistent->split.operator_scale = 1.0;
@@ -1889,7 +2054,7 @@ bool create_gpu_solver_state(
             dimension,
             &persistent->split,
             &state.shell) == PETSC_SUCCESS &&
-        MatShellSetVecType(state.shell, VECCUDA) == PETSC_SUCCESS &&
+        set_mat_shell_vec_type_compat(state.shell, VECCUDA) == PETSC_SUCCESS &&
         MatShellSetOperation(
             state.shell,
             MATOP_MULT,
@@ -1901,19 +2066,31 @@ bool create_gpu_solver_state(
             &state.mass,
             setup_h2d_transfer_count);
     if (!configured) {
-        destroy_gpu_solver_state(&state);
+        if (!destroy_gpu_solver_state(&state)) {
+            return false;
+        }
         return false;
     }
 
-    state.exact_shifted_preconditioner =
-        problem.validation_only_adapter &&
+    bool materialization_cleanup_failure_was_first = false;
+    state.exact_shifted_preconditioner = problem.validation_only_adapter &&
         create_materialized_shifted_operator_cuda(
             state.shell,
             state.mass,
             dimension,
             target_eigenvalue,
             &state.preconditioner,
-            &state.materialized_operator);
+            &state.materialized_operator,
+            &materialization_cleanup_failure_was_first);
+    if (materialization_cleanup_failure_was_first) {
+        if (cleanup_failure_was_first != nullptr) {
+            *cleanup_failure_was_first = true;
+        }
+        return false;
+    }
+    if (fullmag::fem::runtime::petsc_slepc_process_is_unsafe_locked()) {
+        return false;
+    }
     state.materialized_eigensolver_operator =
         problem.validation_only_adapter && state.exact_shifted_preconditioner;
     if (!state.exact_shifted_preconditioner &&
@@ -1923,7 +2100,9 @@ bool create_gpu_solver_state(
             target_omega,
             operator_scale,
             &state.preconditioner)) {
-        destroy_gpu_solver_state(&state);
+        if (!destroy_gpu_solver_state(&state)) {
+            return false;
+        }
         return false;
     }
 
@@ -1955,7 +2134,7 @@ bool create_gpu_solver_state(
             problem.validation_only_adapter ? STSHIFT : STSINVERT) == PETSC_SUCCESS &&
         STSetShift(state.st, target_eigenvalue) == PETSC_SUCCESS &&
         (problem.validation_only_adapter ||
-         STSetPreconditionerMat(state.st, state.preconditioner) == PETSC_SUCCESS) &&
+         set_st_preconditioner_mat_compat(state.st, state.preconditioner) == PETSC_SUCCESS) &&
         STGetKSP(state.st, &state.st_ksp) == PETSC_SUCCESS &&
         KSPSetType(
             state.st_ksp,
@@ -1996,7 +2175,9 @@ bool create_gpu_solver_state(
                 PCHYPRESetType(state.st_pc, "boomeramg") == PETSC_SUCCESS;
     }
     if (!configured) {
-        destroy_gpu_solver_state(&state);
+        if (!destroy_gpu_solver_state(&state)) {
+            return false;
+        }
         return false;
     }
     state.generation = next_solver_context_generation();
@@ -2089,6 +2270,48 @@ bool copy_cuda_vector_to_host(
         ++*final_d2h_transfer_count;
     }
     return restored;
+}
+
+void fail_diagnostics_json_sanitization(
+    PoissonAirboxModalEigenResult *result) noexcept
+{
+    if (result == nullptr) {
+        return;
+    }
+    char previous_error[sizeof(result->error_message)]{};
+    copy_message(previous_error, sizeof(previous_error), result->error_message);
+    result->status = FrequencyDomainStatus::artifact_error;
+    copy_message(
+        result->stop_reason,
+        sizeof(result->stop_reason),
+        "diagnostics_json_sanitization_failed");
+    copy_message(
+        result->eps_stop_reason,
+        sizeof(result->eps_stop_reason),
+        "diagnostics_json_sanitization_failed");
+    if (previous_error[0] == '\0') {
+        copy_message(
+            result->error_message,
+            sizeof(result->error_message),
+            "GPU modal diagnostics JSON sanitization failed");
+    } else {
+        std::snprintf(
+            result->error_message,
+            sizeof(result->error_message),
+            "GPU modal diagnostics JSON sanitization failed after: %s",
+            previous_error);
+    }
+    constexpr char fallback_json[] =
+        "{\"schema_version\":\"poisson_airbox_modal_eigen_gpu_petsc.v1\","
+        "\"status\":\"artifact_error\",\"complete\":false,"
+        "\"reason\":\"diagnostics_json_sanitization_failed\","
+        "\"requested_execution\":\"production_gpu\","
+        "\"resolved_execution\":\"production_gpu\","
+        "\"fallback_used\":false}";
+    static_assert(
+        sizeof(fallback_json) <= sizeof(result->diagnostics_json),
+        "sanitization failure JSON must fit the bounded diagnostics buffer");
+    std::memcpy(result->diagnostics_json, fallback_json, sizeof(fallback_json));
 }
 
 FrequencyDomainStatus fail(
@@ -2216,7 +2439,10 @@ FrequencyDomainStatus fail(
         static_cast<unsigned long long>(result->hot_loop_d2h_bytes),
         static_cast<unsigned long long>(result->setup_h2d_transfer_count),
         static_cast<unsigned long long>(result->final_d2h_transfer_count));
-    return status;
+    if (!sanitize_nonfinite_json(result->diagnostics_json, sizeof(result->diagnostics_json))) {
+        fail_diagnostics_json_sanitization(result);
+    }
+    return result->status;
 }
 
 bool validate_problem(
@@ -2596,6 +2822,9 @@ void write_success_diagnostics(
         problem.gauge_policy != nullptr ? problem.gauge_policy : "",
         problem.gauge_reason != nullptr ? problem.gauge_reason : "",
         result.full_residual_certified ? "true" : "false");
+    if (!sanitize_nonfinite_json(out->diagnostics_json, sizeof(out->diagnostics_json))) {
+        fail_diagnostics_json_sanitization(out);
+    }
 }
 
 FrequencyDomainStatus solve_gpu_frequency_window(
@@ -3485,12 +3714,13 @@ FrequencyDomainStatus solve_gpu_frequency_window(
     aggregate.window_cancelled = window_interrupted;
     const bool mode_coverage_complete =
         base_selection.complete && refinement_selection.complete;
-    aggregate.window_complete =
+    const bool search_stability_complete =
         !window_failed && !window_interrupted &&
         base_pass_complete && refinement_pass_complete &&
         mode_coverage_complete && !refinement_disagreement &&
         coverage_margins_positive && cluster_json_complete &&
         schedule_complete;
+    aggregate.window_complete = false;
     const auto pass_state = [&](std::uint32_t pass_index) {
         if (pass_cancelled[pass_index]) {
             return "cancelled";
@@ -3506,8 +3736,8 @@ FrequencyDomainStatus solve_gpu_frequency_window(
             ? "not_run"
             : "incomplete";
     };
-    const char *window_stop_reason = aggregate.window_complete
-        ? "window_complete"
+    const char *window_stop_reason = search_stability_complete
+        ? "selected_spectrum_stable_count_unavailable"
         : (window_interrupted
                ? "cancel_requested"
                : (!schedule_complete || !cluster_json_complete
@@ -3530,14 +3760,19 @@ FrequencyDomainStatus solve_gpu_frequency_window(
         aggregate.executed_subwindows_json,
         sizeof(aggregate.executed_subwindows_json),
         executed_subwindows.data());
-    const char *certificate_status = aggregate.window_complete
-        ? "certified"
-        : (window_failed ? "failed" : "not_certified");
+    const char *certificate_status =
+        window_failed ? "failed" : "not_certified";
+    const char *search_stability_status =
+        search_stability_complete ? "stable" : "not_established";
     const int certificate_written = std::snprintf(
         aggregate.window_certificate_json,
         sizeof(aggregate.window_certificate_json),
-        "{\"schema_version\":\"poisson_airbox_frequency_window_certificate.v1\","
+        "{\"schema_version\":\"poisson_airbox_frequency_window_certificate.v2\","
         "\"status\":\"%s\","
+        "\"spectrum_scope\":\"selected\","
+        "\"window_complete\":false,"
+        "\"count_certificate\":{\"status\":\"not_performed\",\"method\":null,\"count\":null},"
+        "\"search_stability\":{\"status\":\"%s\",\"requested_cluster_limit_covered\":%s},"
         "\"method\":\"shift_nev_refinement_subspace_v1\","
         "\"requested_min_hz\":%.17g,\"requested_max_hz\":%.17g,"
         "\"requested_mode_count\":%u,\"requested_nev\":%llu,"
@@ -3560,6 +3795,8 @@ FrequencyDomainStatus solve_gpu_frequency_window(
         "\"refinement_schedule_summary_ref\":\"executed_subwindows_json#pass=refinement\","
         "\"stop_reason\":\"%s\"}",
         certificate_status,
+        search_stability_status,
+        mode_coverage_complete ? "true" : "false",
         problem.frequency_min_hz,
         problem.frequency_max_hz,
         problem.requested_mode_count,
@@ -3611,14 +3848,18 @@ FrequencyDomainStatus solve_gpu_frequency_window(
         std::snprintf(
             aggregate.window_certificate_json,
             sizeof(aggregate.window_certificate_json),
-            "{\"schema_version\":\"poisson_airbox_frequency_window_certificate.v1\","
+            "{\"schema_version\":\"poisson_airbox_frequency_window_certificate.v2\","
             "\"status\":\"failed\","
+            "\"spectrum_scope\":\"selected\","
+            "\"window_complete\":false,"
+            "\"count_certificate\":{\"status\":\"not_performed\",\"method\":null,\"count\":null},"
+            "\"search_stability\":{\"status\":\"not_established\",\"requested_cluster_limit_covered\":false},"
             "\"method\":\"shift_nev_refinement_subspace_v1\","
             "\"truncated\":true,"
             "\"perturbation_result\":\"certificate_truncated\","
             "\"stop_reason\":\"frequency_window_certificate_truncated\"}");
     }
-    aggregate.status = aggregate.window_complete
+    aggregate.status = search_stability_complete && certificate_complete
         ? FrequencyDomainStatus::ok
         : (window_interrupted
                ? FrequencyDomainStatus::interrupted
@@ -3626,7 +3867,7 @@ FrequencyDomainStatus solve_gpu_frequency_window(
     copy_message(
         aggregate.error_message,
         sizeof(aggregate.error_message),
-        aggregate.window_complete
+        aggregate.status == FrequencyDomainStatus::ok
             ? ""
             : (window_interrupted
                    ? "GPU K0 frequency window was cancelled"
@@ -3686,7 +3927,15 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_gpu_petsc_slepc(
     if (requested_frequency_window) {
         return solve_gpu_frequency_window(problem, out_result);
     }
-    const std::lock_guard<std::mutex> lock(gpu_slepc_mutex());
+    const std::lock_guard<std::mutex> lock(
+        fullmag::fem::runtime::petsc_slepc_process_mutex());
+    if (fullmag::fem::runtime::petsc_slepc_process_is_unsafe_locked()) {
+        return fail(
+            out_result,
+            FrequencyDomainStatus::operator_error,
+            "GPU K0 PETSc/SLEPc runtime is quarantined after a cleanup failure",
+            "petsc_slepc_runtime_unsafe");
+    }
     if (!ensure_slepc_initialized(out_result->error_message)) {
         return fail(
             out_result,
@@ -3737,6 +3986,25 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_gpu_petsc_slepc(
     bool materialized_shifted_operator = false;
     auto cleanup = []() noexcept {};
     GpuSolveControlArm solve_control_arm{};
+    auto fail_after_solver_cleanup = [&](
+        PoissonAirboxModalEigenResult *result,
+        FrequencyDomainStatus status,
+        const char *message,
+        const char *reason) noexcept {
+        const bool state_cleaned =
+            !fullmag::fem::runtime::petsc_slepc_process_is_unsafe_locked() &&
+            (persistent == nullptr || destroy_gpu_solver_state(&persistent->solver));
+        if (state_cleaned) {
+            return fail(result, status, message, reason);
+        }
+        char cleanup_message[512]{};
+        std::snprintf(
+            cleanup_message,
+            sizeof(cleanup_message),
+            "%s; PETSc cleanup failed and the runtime was quarantined",
+            message != nullptr ? message : "GPU K0 solver failed");
+        return fail(result, status, cleanup_message, reason);
+    };
 
     try {
         bool context_reused = false;
@@ -3748,7 +4016,9 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_gpu_petsc_slepc(
             return fail(
                 out_result,
                 FrequencyDomainStatus::operator_error,
-                "GPU K0 PETSc CUDA Schur context setup failed",
+                fullmag::fem::runtime::petsc_slepc_process_is_unsafe_locked()
+                    ? "GPU K0 PETSc CUDA Schur context setup failed; cleanup failed and runtime quarantined"
+                    : "GPU K0 PETSc CUDA Schur context setup failed",
                 "gpu_schur_context_setup_failed");
         }
         persistent->solve_control.arm(problem);
@@ -3811,7 +4081,13 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_gpu_petsc_slepc(
              persistent->solver.angular_frequency_scale != angular_frequency_scale ||
              persistent->solver.operator_scale != operator_scale ||
              target_reconfigured)) {
-            destroy_gpu_solver_state(&persistent->solver);
+            if (!destroy_gpu_solver_state(&persistent->solver)) {
+                return fail(
+                    out_result,
+                    FrequencyDomainStatus::operator_error,
+                    "GPU K0 persistent SLEPc state cleanup failed; runtime quarantined",
+                    "gpu_slepc_cleanup_failed");
+            }
             solver_reused = false;
             if (persistence.invalidation_reason == nullptr ||
                 string_equals(persistence.invalidation_reason, "none")) {
@@ -3824,6 +4100,7 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_gpu_petsc_slepc(
             solver_reused
                 ? persistent->solver.last_successful_object_ids
                 : GpuSolverObjectIds{};
+        bool solver_cleanup_failure_was_first = false;
         if (!persistent->solver.ready &&
             !create_gpu_solver_state(
                 problem,
@@ -3834,18 +4111,24 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_gpu_petsc_slepc(
                 operator_scale,
                 target_omega,
                 target_eigenvalue,
-                &out_result->setup_h2d_transfer_count)) {
+                &out_result->setup_h2d_transfer_count,
+                &solver_cleanup_failure_was_first)) {
             cleanup();
             return fail(
                 out_result,
                 FrequencyDomainStatus::solve_error,
-                "GPU K0 SLEPc CUDA solver configuration failed",
-                "gpu_slepc_configuration_failed");
+                solver_cleanup_failure_was_first
+                    ? "GPU K0 PETSc solver cleanup failed before configuration; runtime quarantined"
+                    : fullmag::fem::runtime::petsc_slepc_process_is_unsafe_locked()
+                    ? "GPU K0 SLEPc CUDA solver configuration failed; cleanup failed and runtime quarantined"
+                    : "GPU K0 SLEPc CUDA solver configuration failed",
+                solver_cleanup_failure_was_first
+                    ? "gpu_petsc_cleanup_failed"
+                    : "gpu_slepc_configuration_failed");
         }
         if (!configure_gpu_solver_request(problem, persistent)) {
-            destroy_gpu_solver_state(&persistent->solver);
             cleanup();
-            return fail(
+            return fail_after_solver_cleanup(
                 out_result,
                 FrequencyDomainStatus::solve_error,
                 "GPU K0 persistent SLEPc state reconfiguration failed",
@@ -3859,9 +4142,8 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_gpu_petsc_slepc(
             STGetKSP(configured_st, &configured_st_ksp) != PETSC_SUCCESS ||
             KSPGetPC(configured_st_ksp, &configured_st_pc) != PETSC_SUCCESS ||
             EPSGetBV(persistent->solver.eps, &configured_basis) != PETSC_SUCCESS) {
-            destroy_gpu_solver_state(&persistent->solver);
             cleanup();
-            return fail(
+            return fail_after_solver_cleanup(
                 out_result,
                 FrequencyDomainStatus::solve_error,
                 "GPU K0 persistent SLEPc object graph inspection failed",
@@ -3906,9 +4188,8 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_gpu_petsc_slepc(
         PetscInt converged = 0;
         EPSConvergedReason eps_reason = EPS_CONVERGED_ITERATING;
         if (PetscPushErrorHandler(PetscReturnErrorHandler, nullptr) != PETSC_SUCCESS) {
-            destroy_gpu_solver_state(&persistent->solver);
             cleanup();
-            return fail(
+            return fail_after_solver_cleanup(
                 out_result,
                 FrequencyDomainStatus::solve_error,
                 "GPU K0 PETSc error handler installation failed",
@@ -3959,10 +4240,9 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_gpu_petsc_slepc(
                 sizeof(out_result->eps_stop_reason),
                 "%s",
                 solve_interrupted ? "cancel_requested" : "gpu_slepc_solve_failed");
-            destroy_gpu_solver_state(&persistent->solver);
             const PetscErrorCode pop_status = PetscPopErrorHandler();
             cleanup();
-            return fail(
+            return fail_after_solver_cleanup(
                 out_result,
                 solve_interrupted
                     ? FrequencyDomainStatus::interrupted
@@ -3979,9 +4259,8 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_gpu_petsc_slepc(
                         : "gpu_slepc_solve_failed");
         }
         if (PetscPopErrorHandler() != PETSC_SUCCESS) {
-            destroy_gpu_solver_state(&persistent->solver);
             cleanup();
-            return fail(
+            return fail_after_solver_cleanup(
                 out_result,
                 FrequencyDomainStatus::solve_error,
                 "GPU K0 PETSc error handler restoration failed",
@@ -4006,9 +4285,8 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_gpu_petsc_slepc(
             (!solve_interrupted && eps_reason <= EPS_CONVERGED_ITERATING)) {
             persistence.persistence_verified = false;
             out_result->persistent_context_verified = false;
-            destroy_gpu_solver_state(&persistent->solver);
             cleanup();
-            return fail(
+            return fail_after_solver_cleanup(
                 out_result,
                 solve_interrupted
                     ? FrequencyDomainStatus::interrupted
@@ -4034,9 +4312,8 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_gpu_petsc_slepc(
             EPSGetBV(persistent->solver.eps, &configured_basis) != PETSC_SUCCESS) {
             persistence.persistence_verified = false;
             out_result->persistent_context_verified = false;
-            destroy_gpu_solver_state(&persistent->solver);
             cleanup();
-            return fail(
+            return fail_after_solver_cleanup(
                 out_result,
                 FrequencyDomainStatus::solve_error,
                 "GPU K0 post-solve SLEPc object graph inspection failed",
@@ -4050,9 +4327,8 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_gpu_petsc_slepc(
         if (!capture_gpu_solver_object_ids(*persistent, &current_object_ids)) {
             persistence.persistence_verified = false;
             out_result->persistent_context_verified = false;
-            destroy_gpu_solver_state(&persistent->solver);
             cleanup();
-            return fail(
+            return fail_after_solver_cleanup(
                 out_result,
                 FrequencyDomainStatus::solve_error,
                 "GPU K0 PETSc object identity evidence capture failed",
@@ -4264,23 +4540,25 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_gpu_petsc_slepc(
                 other.real = nullptr;
                 other.imag = nullptr;
             }
-            DeviceComplexBasisVector &operator=(DeviceComplexBasisVector &&other) noexcept
+            DeviceComplexBasisVector &operator=(DeviceComplexBasisVector &&) = delete;
+
+            bool close() noexcept
             {
-                if (this != &other) {
-                    if (real != nullptr) VecDestroy(&real);
-                    if (imag != nullptr) VecDestroy(&imag);
-                    real = other.real;
-                    imag = other.imag;
-                    frequency_hz = other.frequency_hz;
-                    other.real = nullptr;
-                    other.imag = nullptr;
+                if (!destroy_petsc_handle_checked(real, VecDestroy)) {
+                    return false;
                 }
-                return *this;
+                return destroy_petsc_handle_checked(imag, VecDestroy);
             }
+
             ~DeviceComplexBasisVector()
             {
-                if (real != nullptr) VecDestroy(&real);
-                if (imag != nullptr) VecDestroy(&imag);
+                if (!fullmag::fem::runtime::petsc_slepc_process_is_unsafe_locked()) {
+                    // A destructor cannot report cleanup status to its caller;
+                    // close() sets the shared unsafe latch on the first error.
+                    if (!close()) {
+                        // The retained handle is intentionally not retried.
+                    }
+                }
             }
         };
         std::vector<DeviceComplexBasisVector> selected_basis;
@@ -4456,6 +4734,17 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_gpu_petsc_slepc(
             }
             out_result->accepted_modes.push_back(std::move(mode));
         }
+        for (DeviceComplexBasisVector &basis : selected_basis) {
+            if (!basis.close()) {
+                out_result->accepted_modes.clear();
+                cleanup();
+                return fail(
+                    out_result,
+                    FrequencyDomainStatus::operator_error,
+                    "GPU K0 accepted-mode temporary vector cleanup failed; runtime quarantined",
+                    "gpu_petsc_cleanup_failed");
+            }
+        }
         const Candidate &selected = candidates.front();
         out_result->operator_apply_count = schur->operator_apply_count - operator_apply_before;
         out_result->poisson_solve_count = schur->poisson_solve_count - poisson_solve_before;
@@ -4551,20 +4840,17 @@ FrequencyDomainStatus finalize_poisson_airbox_modal_eigen_gpu_petsc_slepc_runtim
 #if !FULLMAG_FEM_WITH_SLEPC
     return FrequencyDomainStatus::unavailable;
 #else
-    std::lock_guard<std::mutex> lock(gpu_slepc_mutex());
-    destroy_cached_gpu_context();
+    const std::lock_guard<std::mutex> lock(
+        fullmag::fem::runtime::petsc_slepc_process_mutex());
+    if (fullmag::fem::runtime::petsc_slepc_process_is_unsafe_locked()) {
+        return FrequencyDomainStatus::operator_error;
+    }
     if (!owns_slepc_initialization()) {
-        return FrequencyDomainStatus::ok;
+        return destroy_cached_gpu_context_locked()
+            ? FrequencyDomainStatus::ok
+            : FrequencyDomainStatus::operator_error;
     }
-    PetscBool finalized = PETSC_FALSE;
-    if (PetscFinalized(&finalized) != PETSC_SUCCESS) {
-        return FrequencyDomainStatus::operator_error;
-    }
-    if (finalized == PETSC_FALSE && SlepcFinalize() != PETSC_SUCCESS) {
-        return FrequencyDomainStatus::operator_error;
-    }
-    owns_slepc_initialization() = false;
-    return FrequencyDomainStatus::ok;
+    return finalize_owned_slepc_locked();
 #endif
 }
 

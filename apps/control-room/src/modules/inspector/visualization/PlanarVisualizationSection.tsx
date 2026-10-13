@@ -16,6 +16,7 @@ import {
 import { usePlanarMonitorsResource } from "@/kernel/resources/planarMonitorResources";
 import { useDomainMetaResource } from "@/kernel/resources/geometryLifecycleResources";
 import { useFieldCatalogResource } from "@/kernel/resources/studyRuntimeResources";
+import { resolveSessionDiscretization } from "@/kernel/resources/sessionDiscretization";
 import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
 import { resolveVisualizationTargetFromSelection } from "@/kernel/visualization/ObjectVisualizationController";
 import {
@@ -120,7 +121,7 @@ export function PlanarVisualizationSection({ selection }: { selection: Selection
   const domain = useDomainMetaResource({ enabled: coverage.supported });
   const fieldCatalog = useFieldCatalogResource({ enabled: coverage.supported });
   const discretization = useSessionStatusSelector(
-    (status) => status.data?.domain.discretization ?? null,
+    (status) => resolveSessionDiscretization(status.data),
     { enabled: coverage.supported },
   );
   const planarSourceKind = planar?.source?.kind;

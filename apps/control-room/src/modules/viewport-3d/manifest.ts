@@ -1,6 +1,7 @@
 import type { ModuleManifest } from "@/kernel/types";
 import type { CommandContext } from "@/kernel/commands/commandTypes";
 import { SESSION_STATUS_RESOURCE_KEY } from "@/kernel/resources/useSessionStatus";
+import { resolveSessionDiscretization } from "@/kernel/resources/sessionDiscretization";
 import { DEFAULT_CAMERA_REGISTRY_STATE } from "@/kernel/visualization/CameraRegistryController";
 
 import { viewport3dStore } from "./viewport3dStore";
@@ -172,17 +173,18 @@ const FDM_TOPOGRAPHY_COMPONENT_COMMANDS: Array<{
 ];
 
 function fdmTopographyDisabledReason(context: CommandContext): string | null {
-  const status = context.resourceData?.[SESSION_STATUS_RESOURCE_KEY];
-  if (!status || typeof status !== "object" || Array.isArray(status)) {
+  const resource = context.resourceData?.[SESSION_STATUS_RESOURCE_KEY];
+  if (!resource || typeof resource !== "object" || Array.isArray(resource)) {
     return "Session domain capabilities are unavailable.";
   }
-  const record = status as Record<string, unknown>;
-  const domain = record.domain;
+  const resourceRecord = resource as Record<string, unknown>;
+  const record = resourceRecord.data && typeof resourceRecord.data === "object"
+    ? resourceRecord.data as Record<string, unknown>
+    : resourceRecord;
   const capabilities = record.capabilities;
-  const discretization =
-    domain && typeof domain === "object" && !Array.isArray(domain)
-      ? (domain as Record<string, unknown>).discretization
-      : null;
+  const discretization = resolveSessionDiscretization(
+    record as Parameters<typeof resolveSessionDiscretization>[0],
+  );
   const structuredGrid =
     capabilities && typeof capabilities === "object" && !Array.isArray(capabilities)
       ? (capabilities as Record<string, unknown>).structured_grid

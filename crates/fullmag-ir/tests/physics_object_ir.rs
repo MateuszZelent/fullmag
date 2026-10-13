@@ -259,6 +259,194 @@ fn v0_4_validation_rejects_reference_and_identity_errors_without_type_heuristics
     assert!(joined.contains("must reference two different object owners"));
 }
 
+fn test_object_region(region_id: &str, owner_object: &str, enabled: bool) -> ObjectRegionIR {
+    ObjectRegionIR {
+        region_id: region_id.into(),
+        owner_object: owner_object.into(),
+        name: "test region".into(),
+        shape: RegionShapeIR::Box {
+            size: [1.0, 1.0, 1.0],
+            center: [0.0, 0.0, 0.0],
+        },
+        frame: RegionFrameIR::Object,
+        enabled,
+        priority: 0,
+        mesh_policy: None,
+        material_overrides: Vec::new(),
+        texture_override: None,
+        realization_policy: RegionRealizationPolicyIR::Inherit,
+        material_transition: None,
+    }
+}
+
+#[test]
+fn v0_4_validation_rejects_empty_and_duplicate_material_names() {
+    for invalid_name in ["", " \t "] {
+        let mut problem = ProblemIRV04::bootstrap_example();
+        problem.materials[0].name = invalid_name.into();
+
+        let errors = problem
+            .validate()
+            .expect_err("empty material name must fail");
+        assert!(
+            errors
+                .iter()
+                .any(|error| error == "materials[0].name must not be empty"),
+            "{errors:?}"
+        );
+    }
+
+    let mut problem = ProblemIRV04::bootstrap_example();
+    let duplicate_name = problem.materials[0].name.clone();
+    let duplicate_material = problem.materials[0].clone();
+    problem.materials.push(duplicate_material);
+    let errors = problem
+        .validate()
+        .expect_err("duplicate exact name must fail");
+    assert!(
+        errors
+            .iter()
+            .any(|error| { error == &format!("materials[1] duplicate name '{duplicate_name}'") }),
+        "{errors:?}"
+    );
+}
+
+#[test]
+fn v0_4_validation_preserves_exact_whitespace_material_names_and_references() {
+    let mut problem = ProblemIRV04::bootstrap_example();
+    let mut leading = problem.materials[0].clone();
+    leading.name = " Py ".into();
+    let mut trailing = problem.materials[0].clone();
+    trailing.name = "Py ".into();
+    problem.materials.extend([leading, trailing]);
+    problem.material_assignments[0].material_id = " Py ".into();
+    problem.magnetization_modules[0].material_id = " Py ".into();
+
+    problem
+        .validate()
+        .expect("exact names must not be normalized");
+    assert_eq!(problem.materials[1].name, " Py ");
+    assert_eq!(problem.materials[2].name, "Py ");
+    assert_eq!(problem.material_assignments[0].material_id, " Py ");
+    assert_eq!(problem.magnetization_modules[0].material_id, " Py ");
+}
+
+#[test]
+fn v0_4_validation_rejects_empty_region_ids_and_unknown_owners() {
+    let mut problem = ProblemIRV04::bootstrap_example();
+    let display_name = problem.objects[0].name.clone();
+    let display_type = serde_json::to_value(problem.objects[0].object_type)
+        .unwrap()
+        .as_str()
+        .unwrap()
+        .to_owned();
+    problem.object_regions = vec![
+        test_object_region("", "obj_strip", true),
+        test_object_region(" \t ", "obj_strip", true),
+        test_object_region("blank-owner", "", true),
+        test_object_region("whitespace-owner", " \t ", true),
+        test_object_region("missing-owner", "missing_object_id", true),
+        test_object_region("display-name", &display_name, true),
+        test_object_region("display-type", &display_type, true),
+    ];
+
+    let errors = problem
+        .validate()
+        .expect_err("invalid registries must fail");
+    for expected in [
+        "object_regions[0].region_id must not be empty",
+        "object_regions[1].region_id must not be empty",
+        "object_regions[2].owner_object must not be empty",
+        "object_regions[3].owner_object must not be empty",
+    ] {
+        assert!(errors.iter().any(|error| error == expected), "{errors:?}");
+    }
+    for index in 4..=6 {
+        assert!(
+            errors.iter().any(|error| {
+                error == &format!(
+                    "object_regions[{index}].owner_object '{}' does not reference an existing object_id",
+                    problem.object_regions[index].owner_object
+                )
+            }),
+            "{errors:?}"
+        );
+    }
+}
+
+#[test]
+fn v0_4_validation_rejects_global_region_id_duplicates_across_owners_and_disabled_regions() {
+    let mut problem = ProblemIRV04::bootstrap_example();
+    let geometry_id = problem.objects[0].geometry_id.clone();
+    problem.objects.push(PhysicsObjectIR::new(
+        "obj_second",
+        "second",
+        PhysicsObjectTypeIR::Ferromagnet,
+        geometry_id,
+    ));
+    problem.object_regions = vec![
+        test_object_region("active-shared", "obj_strip", true),
+        test_object_region("active-shared", "obj_second", true),
+        test_object_region("disabled-shared", "obj_strip", false),
+        test_object_region("disabled-shared", "obj_second", false),
+    ];
+
+    let errors = problem
+        .validate()
+        .expect_err("global duplicate regions must fail");
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "object_regions[1] duplicate region_id 'active-shared'"),
+        "{errors:?}"
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error == "object_regions[3] duplicate region_id 'disabled-shared'"),
+        "{errors:?}"
+    );
+}
+
+#[test]
+fn v0_4_validation_accepts_multiple_exact_registry_references() {
+    let mut problem = ProblemIRV04::bootstrap_example();
+    let geometry_id = problem.objects[0].geometry_id.clone();
+    problem.objects.push(PhysicsObjectIR::new(
+        "obj_second",
+        "second",
+        PhysicsObjectTypeIR::Ferromagnet,
+        geometry_id,
+    ));
+    let mut second_material = problem.materials[0].clone();
+    second_material.name = "CoFe".into();
+    problem.materials.push(second_material);
+    problem.object_regions = vec![
+        test_object_region("region_strip", "obj_strip", true),
+        test_object_region("region_second", "obj_second", true),
+    ];
+
+    let second_target = RegionRefIR {
+        object_id: "obj_second".into(),
+        region_id: Some("region_second".into()),
+    };
+    let second_assignment =
+        ObjectMaterialAssignmentIR::new("assignment_second_region", second_target.clone(), "CoFe");
+    problem.objects[1]
+        .material_assignment_ids
+        .push(second_assignment.assignment_id.clone());
+    problem.material_assignments.push(second_assignment);
+    let mut second_module = problem.magnetization_modules[0].clone();
+    second_module.module_id = "module_second".into();
+    second_module.target = second_target;
+    second_module.material_id = "CoFe".into();
+    problem.magnetization_modules.push(second_module);
+
+    problem
+        .validate()
+        .expect("multiple valid registries must pass");
+}
+
 #[test]
 fn v0_3_migration_rejects_missing_geometry_and_identifier_collisions() {
     let fixture: serde_json::Value = serde_json::from_str(include_str!(

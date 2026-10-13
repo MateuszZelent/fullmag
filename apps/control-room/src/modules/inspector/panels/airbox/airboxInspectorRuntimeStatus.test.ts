@@ -9,6 +9,7 @@ import {
   isExplicitFdmAirboxRuntime,
   isExplicitFemAirboxRuntime,
   resolveAirboxInspectorLane,
+  resolveAirboxInspectorAuthoringLane,
   selectAirboxInspectorRuntimeStatus,
 } from "./airboxInspectorRuntimeStatus";
 
@@ -23,6 +24,7 @@ describe("airboxInspectorRuntimeStatus", () => {
         },
       } as never),
     ).toEqual({
+      authoring: { method: "fem", state: "known", reason: null },
       capabilities: { explicit_topology: true },
       domain: { discretization: "fem" },
       resources: { mesh_build_revision: 7, mesh_revision: 8 },
@@ -45,6 +47,29 @@ describe("airboxInspectorRuntimeStatus", () => {
         domain: { discretization: "fem" },
       } as never),
     ).toBe(false);
+  });
+
+  it("does not collapse absent authored identity into an explicit null identity", () => {
+    const legacy = selectAirboxInspectorRuntimeStatus({
+      data: {
+        capabilities: { explicit_topology: false, active_lane: { resolved: null } },
+        domain: { discretization: "fdm" },
+        resources: { mesh_build_revision: 0, mesh_revision: 0 },
+      } as never,
+    });
+    const explicitNull = selectAirboxInspectorRuntimeStatus({
+      data: {
+        capabilities: { explicit_topology: false, active_lane: { authored: null, resolved: null } },
+        domain: { discretization: "fdm" },
+        resources: { mesh_build_revision: 0, mesh_revision: 0 },
+      } as never,
+    });
+
+    const sameDescription = { method: null, state: "missing", reason: null } as const;
+    expect(airboxInspectorRuntimeStatusEquals(
+      { ...legacy!, authoring: sameDescription },
+      { ...explicitNull!, authoring: sameDescription },
+    )).toBe(false);
   });
 
   it("keeps summary and manifest resources disabled until runtime evidence exists", () => {
@@ -78,6 +103,7 @@ describe("airboxInspectorRuntimeStatus", () => {
     ).toBe(false);
     expect(
       isExplicitFdmAirboxRuntime({
+        authoring: { method: "fdm", state: "known", reason: null },
         capabilities: { explicit_topology: true },
         domain: { discretization: "FDM" },
         resources: { mesh_build_revision: 4, mesh_revision: 5 },
@@ -110,6 +136,7 @@ describe("airboxInspectorRuntimeStatus", () => {
         capabilities: {
           explicit_topology: false,
           active_lane: {
+            authored: { discretization: "fem" },
             requested: { discretization: "fem" },
             resolved: null,
           },
@@ -121,6 +148,7 @@ describe("airboxInspectorRuntimeStatus", () => {
 
     expect(isExplicitFdmAirboxRuntime(status)).toBe(false);
     expect(isExplicitFemAirboxRuntime(status)).toBe(false);
+    expect(resolveAirboxInspectorAuthoringLane({ kind: "universe.root" } as never, status)).toBe("fem");
   });
 
   it("fails closed when the active lane field is present but null", () => {
@@ -139,12 +167,29 @@ describe("airboxInspectorRuntimeStatus", () => {
     expect(isExplicitFemAirboxRuntime(status)).toBe(false);
   });
 
+  it("keeps a selected FDM Airbox target unresolved when live mode is unresolved", () => {
+    const selection = {
+      kind: "airbox.multilayer.target",
+      ref: { type: "airbox", visualizationTargetId: "airbox" },
+    } as never;
+    const status = selectAirboxInspectorRuntimeStatus({
+      data: {
+        capabilities: { explicit_topology: false, active_lane: null },
+        domain: { discretization: "fdm" },
+        resources: { mesh_build_revision: 0, mesh_revision: 0 },
+      } as never,
+    });
+
+    expect(resolveAirboxInspectorLane(selection, status)).toBe("unresolved");
+  });
+
   it("keeps the multilayer target on the FDM lane even though its display target is Airbox", () => {
     const selection = {
       kind: "airbox.multilayer.target",
       ref: { type: "airbox", visualizationTargetId: "airbox" },
     } as never;
     const fdmStatus = {
+      authoring: { method: "fdm", state: "known", reason: null },
       capabilities: { explicit_topology: true },
       domain: { discretization: "fdm" },
       resources: { mesh_build_revision: 4, mesh_revision: 5 },
@@ -161,6 +206,7 @@ describe("airboxInspectorRuntimeStatus", () => {
       ref: { type: "airbox", visualizationTargetId: "airbox" },
     } as never;
     const fdmStatus = {
+      authoring: { method: "fdm", state: "known", reason: null },
       capabilities: { explicit_topology: true },
       domain: { discretization: "fdm" },
       resources: { mesh_build_revision: 4, mesh_revision: 5 },

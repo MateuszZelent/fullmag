@@ -2,6 +2,7 @@ import type {
   VisualizationStatePatch,
   VisualizationStateResource,
 } from "../api/apiTypes";
+import type { AntennaFieldIntent, AntennaFieldDisplayStatus } from "./antennaFieldIntent";
 import {
   isScalarSpatialQuantityId,
   normalizeQuantityIdOrDefault,
@@ -116,6 +117,8 @@ export interface ViewportTargetRenderingPreferences {
 }
 
 export interface ObjectVisualizationSnapshot {
+  antennaFieldIntent?: AntennaFieldIntent | null;
+  antennaFieldDisplayStatus?: AntennaFieldDisplayStatus | null;
   defaults: Partial<Record<VisualizationTargetKind, VisualizationStoredTargetPatch>>;
   viewportPreferenceDefaults?: Partial<
     Record<VisualizationTargetKind, ViewportTargetRenderingPreferences>
@@ -565,6 +568,21 @@ const DEFAULT_PART_VISUALIZATION: VisualizationTargetSettings = {
 
 
 export class ObjectVisualizationController {
+  private antennaFieldIntent: AntennaFieldIntent | null = null;
+  private antennaFieldDisplayStatus: AntennaFieldDisplayStatus | null = null;
+
+  setAntennaFieldDisplayStatus(status: AntennaFieldDisplayStatus | null): void {
+    if (JSON.stringify(this.antennaFieldDisplayStatus) === JSON.stringify(status)) return;
+    this.antennaFieldDisplayStatus = status;
+    this.bump();
+  }
+
+  setAntennaFieldIntent(intent: AntennaFieldIntent | null): void {
+    if (JSON.stringify(this.antennaFieldIntent) === JSON.stringify(intent)) return;
+    this.antennaFieldIntent = intent;
+    this.antennaFieldDisplayStatus = null;
+    this.bump();
+  }
   private readonly defaults = new Map<
     VisualizationTargetKind,
     VisualizationStoredTargetPatch
@@ -900,6 +918,8 @@ export class ObjectVisualizationController {
 
   private bump(): void {
     this.snapshot = {
+      antennaFieldIntent: this.antennaFieldIntent,
+      antennaFieldDisplayStatus: this.antennaFieldDisplayStatus,
       defaults: Object.fromEntries(this.defaults),
       viewportPreferenceDefaults: Object.fromEntries(this.viewportPreferenceDefaults),
       viewportPreferences: Object.fromEntries(this.viewportPreferences),
@@ -2113,9 +2133,9 @@ export function airboxVisualizationStatePatchFromTargetPatch(
   patch: VisualizationTargetPatch,
   currentOverrides?: VisualizationStateResource["overrides"],
 ): VisualizationStatePatch {
-  const normalized = normalizePatch(
+  const normalized = normalizePatch(persistentVisualizationTargetPatch(
     visualizationTargetSupportedPatch(AIRBOX_VISUALIZATION_TARGET, patch),
-  );
+  ));
   const vectors =
     normalized.vectorsVisible === undefined && normalized.vectorBudget === undefined
       ? {}

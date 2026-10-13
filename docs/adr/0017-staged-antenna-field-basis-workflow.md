@@ -44,15 +44,43 @@ Fullmag will expose:
 
 No planner or runtime may silently replace one family with the other.
 
-### 2. Antenna precomputation is a first-class study stage
+### 2. Precompute anteny jest jawnym węzłem uporządkowanego pipeline
 
-`StudyIR::AntennaFieldSolve` owns conductor meshing, current solve,
-normalization, magnetic-field evaluation, target projection, progress,
-diagnostics, and artifact publication.
+Publiczne `study.stages.add_antenna_field_solve(id=..., definition=...)`
+rejestruje w `StudyPipelineDocument` węzeł `antenna_field_solve` i zwraca
+`AntennaStageOutputRef(stage_id, output_id)`. Definicja fizyczna pozostaje w
+`ProblemIR.antenna_field_solve_stages`; nie istnieje drugi, niezależnie
+porządkowany wariant `StudyIR::AntennaFieldSolve`. Jeden wykonywalny węzeł
+rozwiązuje jeden `port_mode_id`; wiele portów wymaga odrębnych węzłów i
+odrębnych wyników.
 
-Downstream `TimeEvolution` or `FrequencyResponse` stages reference a concrete
-stage output. They reject missing, stale, failed, or incompatible outputs. An
-LLG RHS may not start a hidden antenna solve.
+Referencja symboliczna jest intencją authoringu, a nie obietnicą istniejącego
+assetu. Dopiero po zakończeniu wcześniejszego węzła ze stanem `ready`,
+zweryfikowaniu katalogu wyjść i zgodności portu runner rozwiązuje ją na
+`AntennaFieldSolutionRefIR(asset_id, content_digest)`. Brak wyniku, odwołanie
+do przyszłego węzła, anulowanie, błąd lub niezgodny port blokują konsumenta;
+LLG nie uruchamia ukrytego solve'u. Scena i eksport skryptu zachowują
+referencję autorską, podczas gdy rozwiązana referencja należy do konkretnego
+wykonania i jego proweniencji.
+
+`study.add_antenna_spectrum_request(...)` tworzy osobny węzeł
+`antenna_source_spectrum`, który analizuje opublikowaną bazę pola bez LLG.
+`study.add_solved_antenna_drive(...)` tworzy węzeł rejestracji napędu;
+następny etap LLG konsumuje gotową bazę z zadanym przebiegiem prądu.
+Są to odrębne operacje w tym samym pipeline, nie trzy nazwy jednego solve'u.
+Obecność tych typów w kodzie nie jest jeszcze kwalifikacją produkcyjną:
+obowiązują bramki runtime, numeryczne i round-trip z planu T03/T08/T12/T18.
+
+Mapowanie źródeł tego kontraktu: `packages/fullmag-py/src/fullmag/world.py` —
+`StudyStagesBuilder.add_antenna_field_solve`,
+`StudyBuilder.add_antenna_spectrum_request` i
+`StudyBuilder.add_solved_antenna_drive`;
+`crates/fullmag-cli/src/step_utils.rs` —
+`materialize_pipeline_antenna_source_spectrum` i
+`materialize_pipeline_add_solved_antenna_drive`;
+`crates/fullmag-cli/src/orchestrator.rs` —
+`read_ready_antenna_stage_outputs`, `resolve_active_antenna_stage_outputs`
+oraz `resolve_antenna_spectrum_stage_outputs`.
 
 ### 3. The MVP field model is Tier 1 quasistatics
 
@@ -100,6 +128,25 @@ Geometry, conductivity, ports, conductor mesh, field sampling, or target
 topology invalidate the corresponding signatures. Peak current and waveform
 do not invalidate the spatial solve. Equilibrium magnetization invalidates only
 derived transverse-field and source-spectrum products.
+
+Podpis prądu haszuje wyłącznie jawne zależności statycznego solve'u: geometrię
+i siatkę przewodnika, materiały, podpisane terminale, definicję, gauge oraz
+wersję i politykę operatora charge/RT0. Nie haszuje żądanego urządzenia,
+precyzji, czasu LLG ani obwiedni prądu. Zmiana tego zestawu zależności wymaga
+nowej wersji wejścia podpisu (`antenna_current_solution_signature.v2`), więc
+istniejący asset z podpisem v1 nie jest automatycznie aktualny wobec nowego
+modelu. Stary, poprawny plik pozostaje niezmienny i dostępny dla reprodukcji
+poprzedniego runu; bieżący run wymaga przeliczenia lub jawnego wskazania
+zgodnego rozwiązania. Digest zawartości jest sprawdzany oddzielnie od
+aktualności fizycznych zależności.
+
+Podpis source-field powstaje przed wyborem docelowej siatki LLG. Wpis
+`target_projection_signatures` w manifeście solve'u nie jest certyfikatem
+projekcji na późniejszą siatkę: rzeczywisty digest jej topologii i kolejności
+wchodzi do `projection_signature` dopiero podczas materializacji targetu.
+Remesh targetu unieważnia tę projekcję, lecz nie prąd i pole źródła. Nie wolno
+uruchamiać LLG na poprzedniej projekcji tylko dlatego, że source-field asset
+nadal ma stan `ready`.
 
 ### 6. `H_ant` remains the canonical applied antenna field
 
@@ -157,9 +204,11 @@ the background.
 
 1. Complete the physics and validation gates in note 0950 before promoting a
    lane.
-2. Add typed Python and `ProblemIR` contracts for layouts, width stations,
-   port modes, field-solve stages, solution references, and the two drive
-   families.
+2. Add typed Python and `ProblemIR` composition contracts that reference the
+   existing `PhysicsObject`, geometry, material assignment and charge-only
+   `CurrentTransport` owners, plus thin port modes, field-solve stages,
+   solution/projection references, and the two drive families. Do not add a
+   parallel `AntennaLayout` owner that copies those data.
 3. Add planner capability decisions for field solve and drive consumption
    separately.
 4. Add `antenna_field_solution.v1` manifests with heavy binary child resources.

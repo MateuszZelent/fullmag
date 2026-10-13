@@ -7,6 +7,12 @@ interface ChartDiagnosticsSnapshot {
   dispatchDataZoom?: (fromValue: number, toValue: number) => void;
   dispatchPointClick?: (seriesIndex: number, dataIndex: number) => void;
   dispatchSeriesRequest?: (columnId: string) => void;
+  lastRenderedClick?: {
+    data: readonly unknown[] | null;
+    dataIndex: number | null;
+    seriesIndex: number | null;
+    sourceRowIndex: number | null;
+  };
   rangeSelectedEvents?: Array<{
     chartId: string;
     range: { fromValue: number; toValue: number } | null;
@@ -22,10 +28,24 @@ interface ChartDiagnosticsSnapshot {
   }>;
   modelBuilds: number;
   plannedPoints: number;
+  readRenderedOption?: () => unknown;
+  resolveRenderedDataPoint?: (
+    seriesIndex: number,
+    dataIndex: number,
+  ) => {
+    data: readonly (number | null)[];
+    dataIndex: number;
+    seriesIndex: number;
+    x: number;
+    y: number;
+  } | null;
   renderedPoints: number;
   resizeCalls: number;
   setOptionCalls: number;
 }
+
+let renderedOptionOwner: object | null = null;
+let renderedClickOwner: object | null = null;
 
 declare global {
   interface Window {
@@ -160,6 +180,93 @@ export function recordChartModelBuilt(
   diagnostics.modelBuilds += 1;
   diagnostics.plannedPoints += pointCount;
   diagnostics.renderedPoints = pointCount;
+}
+
+/** Observe the actual ECharts option and click event only in opt-in smoke runs. */
+export function registerRenderedChartDiagnostics(chart: ECharts): () => void {
+  const diagnostics = chartDiagnostics();
+  if (!diagnostics) return () => undefined;
+
+  const owner = {};
+  const readRenderedOption = () => chart.getOption();
+  const resolveRenderedDataPoint = (seriesIndex: number, dataIndex: number) => {
+    if (
+      !Number.isInteger(seriesIndex) || seriesIndex < 0 ||
+      !Number.isInteger(dataIndex) || dataIndex < 0
+    ) {
+      return null;
+    }
+    const option = chart.getOption() as unknown as {
+      series?: Array<{ data?: unknown[] }>;
+    };
+    const point = option.series?.[seriesIndex]?.data?.[dataIndex];
+    if (!Array.isArray(point) || point.length < 2) return null;
+    const pixel = chart.convertToPixel({ seriesIndex }, point);
+    if (
+      !Array.isArray(pixel) ||
+      typeof pixel[0] !== "number" || !Number.isFinite(pixel[0]) ||
+      typeof pixel[1] !== "number" || !Number.isFinite(pixel[1])
+    ) {
+      return null;
+    }
+    const bounds = chart.getDom().getBoundingClientRect();
+    if (!Number.isFinite(bounds.left) || !Number.isFinite(bounds.top)) return null;
+    return {
+      data: point.slice(0, 3).map((value) =>
+        typeof value === "number" || value === null ? value : null,
+      ),
+      dataIndex,
+      seriesIndex,
+      x: bounds.left + pixel[0],
+      y: bounds.top + pixel[1],
+    };
+  };
+  const onClick = (event: unknown) => {
+    const record = event && typeof event === "object"
+      ? event as Record<string, unknown>
+      : null;
+    if (!record) return;
+    const data = Array.isArray(record.data)
+      ? record.data.slice(0, 3).map((value) =>
+          typeof value === "number" || value === null ? value : null,
+        )
+      : null;
+    const sourceRowIndex = data?.[2];
+    diagnostics.lastRenderedClick = {
+      data,
+      dataIndex: diagnosticIndex(record.dataIndex),
+      seriesIndex: diagnosticIndex(record.seriesIndex),
+      sourceRowIndex:
+        typeof sourceRowIndex === "number" && Number.isInteger(sourceRowIndex)
+          ? sourceRowIndex
+          : null,
+    };
+    renderedClickOwner = owner;
+  };
+
+  chart.on("click", onClick);
+  diagnostics.readRenderedOption = readRenderedOption;
+  diagnostics.resolveRenderedDataPoint = resolveRenderedDataPoint;
+  renderedOptionOwner = owner;
+
+  return () => {
+    chart.off("click", onClick);
+    if (renderedOptionOwner === owner) {
+      delete diagnostics.readRenderedOption;
+      delete diagnostics.resolveRenderedDataPoint;
+      renderedOptionOwner = null;
+    }
+    if (renderedClickOwner === owner) {
+      delete diagnostics.lastRenderedClick;
+      renderedClickOwner = null;
+    }
+  };
+}
+
+function diagnosticIndex(value: unknown): number | null {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0
+    ? value
+    : null;
 }
 
 export function recordChartSetOption(): void {

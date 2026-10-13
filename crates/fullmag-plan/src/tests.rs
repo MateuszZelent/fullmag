@@ -4878,7 +4878,8 @@ fn fem_static_time_domain_plans_exchange_only_periodic_mesh_pairs() {
         | fullmag_ir::StudyIR::Relaxation { sampling, .. }
         | fullmag_ir::StudyIR::Eigenmodes { sampling, .. }
         | fullmag_ir::StudyIR::FrequencyResponse { sampling, .. }
-        | fullmag_ir::StudyIR::Hysteresis { sampling, .. } => sampling,
+        | fullmag_ir::StudyIR::Hysteresis { sampling, .. }
+        | fullmag_ir::StudyIR::AntennaFieldSolve { sampling, .. } => sampling,
     };
     sampling.outputs.push(fullmag_ir::OutputIR::Field {
         name: "demag_phi".to_string(),
@@ -7583,6 +7584,7 @@ fn rotated_interfacial_dmi_rejects_eigen_and_frequency_domain_execution() {
             stage_autosave: None,
             outputs: vec![fullmag_ir::OutputIR::EigenSpectrum {
                 quantity: "eigenfrequency".to_string(),
+                scope: None,
             }],
         },
         mode_tracking: None,
@@ -11089,10 +11091,14 @@ fn fem_eigen_backend_with_mesh_asset_plans_successfully() {
             outputs: vec![
                 fullmag_ir::OutputIR::EigenSpectrum {
                     quantity: "eigenfrequency".to_string(),
+                    scope: None,
                 },
                 fullmag_ir::OutputIR::EigenMode {
                     field: "mode".to_string(),
+                    all_modes: false,
                     indices: vec![0, 1],
+                    branches: vec![],
+                    sample_selector: None,
                 },
             ],
         },
@@ -11152,6 +11158,23 @@ fn fem_eigen_backend_with_mesh_asset_plans_successfully() {
         other => panic!("expected FEM eigen plan, got {other:?}"),
     }
 
+    let mut c1 = ir.clone();
+    let mut c1_validation = dispersion_validation.clone();
+    c1_validation["film_thickness_m"] = serde_json::json!(10e-9);
+    c1_validation["max_k_rad_per_m"] = serde_json::json!(std::f64::consts::PI / 200e-9);
+    c1_validation["frequency_window_hz"]["max"] = serde_json::json!(15e9);
+    c1.problem_meta
+        .runtime_metadata
+        .insert("dispersion_validation".to_string(), c1_validation.clone());
+    let c1_plan = plan(&c1).expect("C1 comparison range must not be capped by the low-k preset");
+    match c1_plan.backend_plan {
+        BackendPlanIR::FemEigen(fem) => assert_eq!(
+            serde_json::to_value(fem.dispersion_validation).unwrap(),
+            c1_validation
+        ),
+        other => panic!("expected FEM eigen plan, got {other:?}"),
+    }
+
     let mut invalid = ir;
     invalid.problem_meta.runtime_metadata.insert(
         "dispersion_validation".to_string(),
@@ -11161,7 +11184,7 @@ fn fem_eigen_backend_with_mesh_asset_plans_successfully() {
             "film_thickness_m": 80.0e-9,
             "equilibrium_magnetization": [1.0, 0.0, 0.0],
             "film_normal": [0.0, 0.0, 1.0],
-            "max_k_rad_per_m": 4.0e6,
+            "max_k_rad_per_m": -1.0,
             "frequency_window_hz": {
                 "min": 0.0,
                 "max": 5.0e9
@@ -11180,8 +11203,8 @@ fn fem_eigen_backend_with_mesh_asset_plans_successfully() {
             ]
         }),
     );
-    let err =
-        plan(&invalid).expect_err("FEM eigen dispersion validation must reject broad k range");
+    let err = plan(&invalid)
+        .expect_err("FEM eigen dispersion validation must reject nonpositive k range");
     assert!(err
         .reasons
         .iter()
@@ -11242,6 +11265,7 @@ fn fem_eigen_carries_k0_kittel_validation_from_runtime_metadata() {
             stage_autosave: None,
             outputs: vec![fullmag_ir::OutputIR::EigenSpectrum {
                 quantity: "eigenfrequency".to_string(),
+                scope: None,
             }],
         },
         mode_tracking: None,
@@ -11456,6 +11480,7 @@ fn fem_eigen_allows_k0_kittel_synthetic_demag_factor_floquet_path() {
             stage_autosave: None,
             outputs: vec![fullmag_ir::OutputIR::EigenSpectrum {
                 quantity: "eigenfrequency".to_string(),
+                scope: None,
             }],
         },
         mode_tracking: None,
@@ -11474,6 +11499,31 @@ fn fem_eigen_allows_k0_kittel_synthetic_demag_factor_floquet_path() {
         }
         other => panic!("expected FEM eigen plan, got {other:?}"),
     }
+
+    let mut mixed = ir;
+    mixed.problem_meta.runtime_metadata.insert(
+        "dispersion_validation".to_string(),
+        serde_json::json!({
+            "kind": "thin_film_de_bv_low_k",
+            "analytic_model": "kalinikos_slab_n0",
+            "film_thickness_m": 10.0e-9,
+            "equilibrium_magnetization": [1.0, 0.0, 0.0],
+            "film_normal": [0.0, 0.0, 1.0],
+            "max_k_rad_per_m": 1.0e7,
+            "max_relative_error": 0.10,
+            "frequency_window_hz": {"min": 0.0, "max": 15.0e9},
+            "scenarios": [
+                {"geometry": "backward_volume", "branch_id": "branch_0", "sample_indices": [0, 1, 2]},
+                {"geometry": "damon_eshbach", "branch_id": "branch_0", "sample_indices": [0, 1, 2]}
+            ]
+        }),
+    );
+    let err = plan(&mixed)
+        .expect_err("synthetic K0 demag and dispersion validation must not share one plan");
+    assert!(err
+        .reasons
+        .iter()
+        .any(|reason| { reason.contains("dispersion_validation cannot be combined") }), "{err:?}");
 }
 
 fn k0_periodic_airbox_fem_eigen_ir() -> ProblemIR {
@@ -11615,6 +11665,7 @@ fn k0_periodic_airbox_fem_eigen_ir() -> ProblemIR {
             stage_autosave: None,
             outputs: vec![fullmag_ir::OutputIR::EigenSpectrum {
                 quantity: "eigenfrequency".to_string(),
+                scope: None,
             }],
         },
         mode_tracking: None,
@@ -11642,6 +11693,102 @@ fn k0_periodic_airbox_fem_eigen_ir() -> ProblemIR {
     });
     *magnetostatic_bc = fullmag_ir::MagnetostaticBoundaryConditionIR::PeriodicAirboxK0;
     ir
+}
+
+fn branch_selector_fem_eigen_ir(k_sampling: Option<fullmag_ir::KSamplingIR>) -> ProblemIR {
+    let is_path = matches!(
+        k_sampling.as_ref(),
+        Some(fullmag_ir::KSamplingIR::Path { .. })
+    );
+    let mut ir = k0_periodic_airbox_fem_eigen_ir();
+    ir.problem_meta
+        .runtime_metadata
+        .remove("k0_kittel_validation");
+    ir.pbc = None;
+    ir.energy_terms = vec![fullmag_ir::EnergyTermIR::Exchange];
+    let fullmag_ir::StudyIR::Eigenmodes {
+        operator,
+        k_sampling: study_k_sampling,
+        spin_wave_bc,
+        magnetostatic_bc,
+        sampling,
+        ..
+    } = &mut ir.study
+    else {
+        unreachable!("fixture must remain an eigenmode study")
+    };
+    operator.kind = fullmag_ir::EigenOperatorIR::LinearizedLlg;
+    operator.include_demag = false;
+    *study_k_sampling = k_sampling;
+    *spin_wave_bc = if is_path {
+        fullmag_ir::SpinWaveBoundaryConditionIR::Config(fullmag_ir::SpinWaveBoundaryConfigIR {
+            kind: fullmag_ir::SpinWaveBoundaryKindIR::Floquet,
+            boundary_pair_id: Some("x_faces".to_string()),
+            pair_ids: Vec::new(),
+            phase_convention: fullmag_ir::PhaseConventionIR::default(),
+            surface_anisotropy_ks: None,
+            surface_anisotropy_axis: None,
+        })
+    } else {
+        fullmag_ir::SpinWaveBoundaryConditionIR::default()
+    };
+    *magnetostatic_bc = fullmag_ir::MagnetostaticBoundaryConditionIR::Open;
+    sampling.outputs = vec![fullmag_ir::OutputIR::EigenSpectrum {
+        quantity: "eigenfrequency".to_string(),
+        scope: None,
+    }];
+    ir
+}
+
+fn free_gamma_modal_policy_fixture(
+    operator_kind: fullmag_ir::EigenOperatorIR,
+    target: fullmag_ir::EigenTargetIR,
+    damping_policy: fullmag_ir::EigenDampingPolicyIR,
+) -> ProblemIR {
+    let mut ir = branch_selector_fem_eigen_ir(Some(fullmag_ir::KSamplingIR::Single {
+        k_vector: [0.0, 0.0, 0.0],
+    }));
+    ir.energy_terms = vec![fullmag_ir::EnergyTermIR::Exchange];
+    if let fullmag_ir::StudyIR::Eigenmodes {
+        operator,
+        target: planned_target,
+        damping_policy: planned_damping_policy,
+        spin_wave_bc,
+        magnetostatic_bc,
+        ..
+    } = &mut ir.study
+    {
+        operator.kind = operator_kind;
+        operator.include_demag = false;
+        *planned_target = target;
+        *planned_damping_policy = damping_policy;
+        *spin_wave_bc = fullmag_ir::SpinWaveBoundaryConditionIR::default();
+        *magnetostatic_bc = fullmag_ir::MagnetostaticBoundaryConditionIR::Open;
+    } else {
+        unreachable!("fixture must remain an eigenmode study");
+    }
+    ir
+}
+
+fn eigen_mode_output(indices: Vec<u32>, branches: Vec<u32>) -> fullmag_ir::OutputIR {
+    fullmag_ir::OutputIR::EigenMode {
+        field: "mode".to_string(),
+        all_modes: false,
+        indices,
+        branches,
+        sample_selector: None,
+    }
+}
+
+fn set_eigen_mode_outputs(ir: &mut ProblemIR, outputs: Vec<fullmag_ir::OutputIR>) {
+    let fullmag_ir::StudyIR::Eigenmodes { sampling, .. } = &mut ir.study else {
+        unreachable!("fixture must remain an eigenmode study")
+    };
+    sampling.outputs = vec![fullmag_ir::OutputIR::EigenSpectrum {
+        quantity: "eigenfrequency".to_string(),
+        scope: None,
+    }];
+    sampling.outputs.extend(outputs);
 }
 
 #[test]
@@ -11682,6 +11829,8 @@ fn fem_eigen_bias_field_sweep_plans_declared_samples_with_resolved_execution() {
         "continuation_seed": "previous_accepted_equilibrium"
     });
     let ir: ProblemIR = serde_json::from_value(encoded).expect("bias sweep IR deserializes");
+    let mut ir = ir;
+    set_eigen_mode_outputs(&mut ir, vec![eigen_mode_output(Vec::new(), vec![1])]);
 
     let planned = plan(&ir).expect("legal K0 bias sweep plans before CPU/GPU resolution");
     let value = serde_json::to_value(planned).expect("planned sweep serializes");
@@ -12067,6 +12216,348 @@ fn fem_eigen_k0_plan_deserializes_without_optional_execution_resolution() {
 }
 
 #[test]
+fn fem_eigen_modal_solver_policy_rejects_unknown_metadata() {
+    for (description, policy) in [
+        (
+            "unknown field alone",
+            serde_json::json!({"residual_tolerence": 1.0e-8}),
+        ),
+        (
+            "unknown field alongside a valid field",
+            serde_json::json!({
+                "residual_tolerence": 1.0e-8,
+                "max_outer_iterations": 12,
+            }),
+        ),
+    ] {
+        let mut ir = k0_periodic_airbox_fem_eigen_ir();
+        ir.problem_meta
+            .runtime_metadata
+            .insert("modal_solver_policy".to_string(), policy);
+        let error = plan(&ir).expect_err(&format!(
+            "planner must reject modal solver policy with {description}"
+        ));
+        assert!(
+            error
+                .reasons
+                .iter()
+                .any(|reason| reason.contains("modal_solver_policy")),
+            "unexpected error for {description}: {error:?}"
+        );
+    }
+}
+
+#[test]
+fn fem_eigen_modal_solver_policy_absence_and_empty_metadata_keep_native_defaults() {
+    for policy in [
+        None,
+        Some(serde_json::json!({})),
+        Some(serde_json::json!({
+            "residual_tolerance": null,
+            "max_outer_iterations": null,
+            "max_linear_iterations": null,
+        })),
+    ] {
+        let mut ir = k0_periodic_airbox_fem_eigen_ir();
+        if let Some(policy) = policy {
+            ir.problem_meta
+                .runtime_metadata
+                .insert("modal_solver_policy".to_string(), policy);
+        }
+        let planned = plan(&ir).expect("absent/empty modal policy leaves native defaults selected");
+        let BackendPlanIR::FemEigen(fem) = planned.backend_plan else {
+            panic!("expected FEM eigen plan")
+        };
+        assert!(fem.solver_policy.is_none());
+    }
+}
+
+#[test]
+fn fem_eigen_modal_solver_policy_rejects_each_control_on_reference_solver_families() {
+    let window = || fullmag_ir::EigenTargetIR::FrequencyWindow {
+        frequency_min_hz: 100.0e6,
+        frequency_max_hz: 25.0e9,
+    };
+    let variants = [
+        (
+            "full2x2 lowest",
+            fullmag_ir::EigenOperatorIR::Full2x2,
+            fullmag_ir::EigenTargetIR::Lowest,
+            fullmag_ir::EigenDampingPolicyIR::Ignore,
+        ),
+        (
+            "projected scalar",
+            fullmag_ir::EigenOperatorIR::LinearizedLlg,
+            window(),
+            fullmag_ir::EigenDampingPolicyIR::Ignore,
+        ),
+        (
+            "damping included",
+            fullmag_ir::EigenOperatorIR::Full2x2,
+            window(),
+            fullmag_ir::EigenDampingPolicyIR::Include,
+        ),
+    ];
+    let controls = [
+        serde_json::json!({"residual_tolerance": 1.0e-8}),
+        serde_json::json!({"max_outer_iterations": 24}),
+        serde_json::json!({"max_linear_iterations": 96}),
+    ];
+
+    for (variant, operator, target, damping_policy) in variants {
+        for control in &controls {
+            let mut ir =
+                free_gamma_modal_policy_fixture(operator.clone(), target.clone(), damping_policy);
+            ir.problem_meta
+                .runtime_metadata
+                .insert("modal_solver_policy".to_string(), (*control).clone());
+
+            let error = plan(&ir).expect_err(&format!(
+                "reference {variant} must reject explicit modal controls"
+            ));
+            assert!(
+                error.reasons.iter().any(|reason| {
+                    reason.contains("runtime_metadata.modal_solver_policy requires a structurally selected native PETSc/SLEPc FEM modal path")
+                }),
+                "unexpected reference-policy error for {variant}: {error:?}"
+            );
+            assert_eq!(
+                ir.problem_meta.runtime_metadata["modal_solver_policy"], *control,
+                "planning refusal must preserve the authored policy"
+            );
+        }
+    }
+}
+
+#[test]
+fn fem_eigen_modal_solver_policy_keeps_empty_reference_and_native_lane_compatibility() {
+    for policy in [
+        None,
+        Some(serde_json::json!({})),
+        Some(serde_json::json!({
+            "residual_tolerance": null,
+            "max_outer_iterations": null,
+            "max_linear_iterations": null,
+        })),
+    ] {
+        let mut ir = free_gamma_modal_policy_fixture(
+            fullmag_ir::EigenOperatorIR::Full2x2,
+            fullmag_ir::EigenTargetIR::Lowest,
+            fullmag_ir::EigenDampingPolicyIR::Ignore,
+        );
+        if let Some(policy) = policy {
+            ir.problem_meta
+                .runtime_metadata
+                .insert("modal_solver_policy".to_string(), policy);
+        }
+        let planned = plan(&ir).expect("empty policy keeps reference defaults");
+        let BackendPlanIR::FemEigen(fem) = planned.backend_plan else {
+            panic!("expected FEM eigen plan");
+        };
+        assert!(fem.solver_policy.is_none());
+    }
+
+    let mut cpu = free_gamma_modal_policy_fixture(
+        fullmag_ir::EigenOperatorIR::Full2x2,
+        fullmag_ir::EigenTargetIR::FrequencyWindow {
+            frequency_min_hz: 100.0e6,
+            frequency_max_hz: 25.0e9,
+        },
+        fullmag_ir::EigenDampingPolicyIR::Ignore,
+    );
+    cpu.problem_meta.runtime_metadata.insert(
+        "runtime_selection".to_string(),
+        serde_json::json!({"device": "cpu", "precision": "double"}),
+    );
+    cpu.problem_meta.runtime_metadata.insert(
+        "modal_solver_policy".to_string(),
+        serde_json::json!({"max_linear_iterations": 96}),
+    );
+    let cpu_plan = plan(&cpu).expect("Free Gamma native CPU window supports a partial policy");
+    assert!(
+        cpu_plan.provenance.fem_eigen_execution_resolution.is_none(),
+        "Free Gamma FrequencyWindow is structurally native even without an execution-resolution object"
+    );
+    let BackendPlanIR::FemEigen(cpu_fem) = cpu_plan.backend_plan else {
+        panic!("expected FEM eigen plan");
+    };
+    assert_eq!(
+        cpu_fem
+            .solver_policy
+            .as_ref()
+            .and_then(|policy| policy.max_linear_iterations),
+        Some(96)
+    );
+
+    let mut gpu = k0_periodic_airbox_fem_eigen_ir();
+    gpu.problem_meta.runtime_metadata.insert(
+        "runtime_selection".to_string(),
+        serde_json::json!({"device": "gpu", "precision": "double"}),
+    );
+    gpu.problem_meta.runtime_metadata.insert(
+        "modal_solver_policy".to_string(),
+        serde_json::json!({"residual_tolerance": 1.0e-8}),
+    );
+    let gpu_plan = plan(&gpu).expect("native GPU shared-domain Krylov supports partial policy");
+    assert_eq!(
+        gpu_plan
+            .provenance
+            .fem_eigen_execution_resolution
+            .as_ref()
+            .map(|resolution| resolution.resolved_engine),
+        Some(fullmag_ir::FemEigenEngineIR::GpuModalDeviceKrylov)
+    );
+    let BackendPlanIR::FemEigen(gpu_fem) = gpu_plan.backend_plan else {
+        panic!("expected FEM eigen plan");
+    };
+    assert_eq!(
+        gpu_fem
+            .solver_policy
+            .as_ref()
+            .and_then(|policy| policy.residual_tolerance),
+        Some(1.0e-8)
+    );
+
+    let mut forced_gpu_reference = free_gamma_modal_policy_fixture(
+        fullmag_ir::EigenOperatorIR::Full2x2,
+        fullmag_ir::EigenTargetIR::FrequencyWindow {
+            frequency_min_hz: 100.0e6,
+            frequency_max_hz: 25.0e9,
+        },
+        fullmag_ir::EigenDampingPolicyIR::Ignore,
+    );
+    forced_gpu_reference.problem_meta.runtime_metadata.insert(
+        "runtime_selection".to_string(),
+        serde_json::json!({"device": "gpu", "precision": "double"}),
+    );
+    forced_gpu_reference.problem_meta.runtime_metadata.insert(
+        "modal_solver_policy".to_string(),
+        serde_json::json!({"max_outer_iterations": 24}),
+    );
+    let error = plan(&forced_gpu_reference)
+        .expect_err("CPU native support must not become a forced-GPU fallback");
+    assert!(error.reasons.iter().any(|reason| {
+        reason.contains("modal_solver_policy requires a structurally selected native PETSc/SLEPc")
+    }));
+    assert_eq!(
+        forced_gpu_reference.problem_meta.runtime_metadata["runtime_selection"]["device"], "gpu",
+        "the planner must preserve forced GPU intent"
+    );
+}
+
+#[test]
+fn fem_eigen_modal_solver_policy_preserves_partial_values_through_planning() {
+    let mut ir = k0_periodic_airbox_fem_eigen_ir();
+    ir.problem_meta.runtime_metadata.insert(
+        "modal_solver_policy".to_string(),
+        serde_json::json!({
+            "residual_tolerance": 1.0e-8,
+            "max_outer_iterations": 24,
+        }),
+    );
+
+    let planned = plan(&ir).expect("valid partial modal solver policy should plan");
+    let BackendPlanIR::FemEigen(fem) = &planned.backend_plan else {
+        panic!("expected FEM eigen plan")
+    };
+    let policy = fem
+        .solver_policy
+        .as_ref()
+        .expect("explicit partial policy must be carried into the plan");
+    assert_eq!(policy.residual_tolerance, Some(1.0e-8));
+    assert_eq!(policy.max_outer_iterations, Some(24));
+    assert_eq!(policy.max_linear_iterations, None);
+
+    let encoded = serde_json::to_value(&planned).expect("planned execution serializes");
+    let decoded: fullmag_ir::ExecutionPlanIR =
+        serde_json::from_value(encoded).expect("planned execution round-trips");
+    let BackendPlanIR::FemEigen(fem) = decoded.backend_plan else {
+        panic!("round-tripped plan must remain FEM eigen")
+    };
+    assert_eq!(fem.solver_policy.as_ref(), Some(policy));
+}
+
+#[test]
+fn fem_eigen_branch_selectors_require_path_sampling() {
+    for k_sampling in [
+        None,
+        Some(fullmag_ir::KSamplingIR::Single {
+            k_vector: [0.0, 0.0, 0.0],
+        }),
+    ] {
+        let mut ir = branch_selector_fem_eigen_ir(k_sampling);
+        set_eigen_mode_outputs(&mut ir, vec![eigen_mode_output(Vec::new(), vec![0])]);
+        let error = plan(&ir).expect_err("branch selection requires a multi-k path");
+        assert_eq!(
+            error.reasons.len(),
+            1,
+            "unexpected planner errors: {error:?}"
+        );
+        assert!(error.reasons[0].contains("branch tracking requires k_sampling=Path"));
+    }
+
+    let mut mixed_single = branch_selector_fem_eigen_ir(Some(fullmag_ir::KSamplingIR::Single {
+        k_vector: [0.0, 0.0, 0.0],
+    }));
+    set_eigen_mode_outputs(&mut mixed_single, vec![eigen_mode_output(vec![0], vec![0])]);
+    let error = plan(&mixed_single)
+        .expect_err("mixed raw-index and branch selection must reject ignored branches");
+    assert!(error
+        .reasons
+        .iter()
+        .any(|reason| reason.contains("branch tracking requires k_sampling=Path")));
+}
+
+#[test]
+fn fem_eigen_raw_mode_indices_remain_valid_without_path_sampling() {
+    for k_sampling in [
+        None,
+        Some(fullmag_ir::KSamplingIR::Single {
+            k_vector: [0.0, 0.0, 0.0],
+        }),
+    ] {
+        let mut ir = branch_selector_fem_eigen_ir(k_sampling);
+        set_eigen_mode_outputs(&mut ir, vec![eigen_mode_output(vec![0], Vec::new())]);
+        let planned = plan(&ir).expect("raw mode indices remain valid for single-k studies");
+        assert!(matches!(planned.backend_plan, BackendPlanIR::FemEigen(_)));
+    }
+}
+
+#[test]
+fn fem_eigen_branch_only_and_mixed_selectors_remain_valid_for_paths() {
+    let path = fullmag_ir::KSamplingIR::Path {
+        points: vec![
+            fullmag_ir::KPointIR {
+                label: Some("Gamma".to_string()),
+                k_vector: [0.0, 0.0, 0.0],
+            },
+            fullmag_ir::KPointIR {
+                label: Some("X".to_string()),
+                k_vector: [1.0e7, 0.0, 0.0],
+            },
+        ],
+        samples_per_segment: vec![2],
+        closed: false,
+    };
+
+    for output in [
+        eigen_mode_output(Vec::new(), vec![0]),
+        eigen_mode_output(vec![0], vec![0]),
+    ] {
+        let mut ir = branch_selector_fem_eigen_ir(Some(path.clone()));
+        set_eigen_mode_outputs(&mut ir, vec![output]);
+        let planned = plan(&ir).expect("branch selectors remain valid for path sampling");
+        let BackendPlanIR::FemEigen(fem) = planned.backend_plan else {
+            panic!("expected FEM eigen plan")
+        };
+        assert!(matches!(
+            fem.k_sampling,
+            Some(fullmag_ir::KSamplingIR::Path { .. })
+        ));
+    }
+}
+
+#[test]
 fn object_object_exchange_without_coupling_defaults_none() {
     let ir = stacked_two_body_multilayer_problem();
     assert!(
@@ -12173,6 +12664,7 @@ fn fem_eigen_shared_domain_region_samples_equilibrium_once_per_object() {
             stage_autosave: None,
             outputs: vec![fullmag_ir::OutputIR::EigenSpectrum {
                 quantity: "eigenfrequency".to_string(),
+                scope: None,
             }],
         },
         mode_tracking: None,
@@ -12274,6 +12766,7 @@ fn fem_eigen_backend_interfacial_dmi_defaults_interface_normal_to_z_in_strict_mo
             stage_autosave: None,
             outputs: vec![fullmag_ir::OutputIR::EigenSpectrum {
                 quantity: "eigenfrequency".to_string(),
+                scope: None,
             }],
         },
         mode_tracking: None,
@@ -12380,6 +12873,7 @@ fn fem_eigen_auto_demag_resolves_to_poisson_robin_on_shared_domain_mesh_with_air
             stage_autosave: None,
             outputs: vec![fullmag_ir::OutputIR::EigenSpectrum {
                 quantity: "eigenfrequency".to_string(),
+                scope: None,
             }],
         },
         mode_tracking: None,
@@ -12483,6 +12977,7 @@ fn fem_eigen_periodic_bc_requires_periodic_node_pairs() {
             stage_autosave: None,
             outputs: vec![fullmag_ir::OutputIR::EigenSpectrum {
                 quantity: "eigenfrequency".to_string(),
+                scope: None,
             }],
         },
         mode_tracking: None,
@@ -12580,6 +13075,7 @@ fn fem_eigen_periodic_bc_with_pairs_plans_successfully() {
             stage_autosave: None,
             outputs: vec![fullmag_ir::OutputIR::EigenSpectrum {
                 quantity: "eigenfrequency".to_string(),
+                scope: None,
             }],
         },
         mode_tracking: None,
@@ -12674,6 +13170,7 @@ fn fem_eigen_floquet_bc_with_pairs_and_k_sampling_plans_successfully() {
             stage_autosave: None,
             outputs: vec![fullmag_ir::OutputIR::EigenSpectrum {
                 quantity: "eigenfrequency".to_string(),
+                scope: None,
             }],
         },
         mode_tracking: None,
@@ -12685,7 +13182,7 @@ fn fem_eigen_floquet_bc_with_pairs_and_k_sampling_plans_successfully() {
 }
 
 #[test]
-fn fem_eigen_floquet_dynamic_demag_is_rejected() {
+fn fem_eigen_floquet_dynamic_demag_requires_explicit_airbox_cpu_path() {
     let mut ir = ProblemIR::bootstrap_example();
     ir.backend_policy.requested_backend = BackendTarget::Fem;
     ir.backend_policy.discretization_hints = Some(fullmag_ir::DiscretizationHintsIR {
@@ -12760,6 +13257,9 @@ fn fem_eigen_floquet_dynamic_demag_is_rejected() {
             realization: fullmag_ir::RequestedFemDemagIR::Auto,
         },
     ];
+    ir.materials[0].ms_field = Some(vec![
+        760_000.0, 760_000.0, 780_000.0, 790_000.0, 800_000.0, 810_000.0, 820_000.0, 830_000.0,
+    ]);
     ir.study = fullmag_ir::StudyIR::Eigenmodes {
         dynamics: ir.study.dynamics().clone(),
         operator: fullmag_ir::EigenOperatorConfigIR {
@@ -12791,6 +13291,7 @@ fn fem_eigen_floquet_dynamic_demag_is_rejected() {
             stage_autosave: None,
             outputs: vec![fullmag_ir::OutputIR::EigenSpectrum {
                 quantity: "eigenfrequency".to_string(),
+                scope: None,
             }],
         },
         mode_tracking: None,
@@ -12798,8 +13299,264 @@ fn fem_eigen_floquet_dynamic_demag_is_rejected() {
 
     let err = plan(&ir).expect_err("Floquet FEM eigen with dynamic demag is unsupported");
     assert!(err.reasons.iter().any(|reason| {
-        reason.contains("dynamic demag for Floquet periodic FEM is not implemented yet")
+        reason.contains("dynamic demag for Floquet periodic FEM requires magnetostatic_bc")
     }));
+
+    if let fullmag_ir::StudyIR::Eigenmodes {
+        operator,
+        target,
+        magnetostatic_bc,
+        ..
+    } = &mut ir.study
+    {
+        operator.kind = fullmag_ir::EigenOperatorIR::Full2x2;
+        *target = fullmag_ir::EigenTargetIR::FrequencyWindow {
+            frequency_min_hz: 100.0e6,
+            frequency_max_hz: 25.0e9,
+        };
+        *magnetostatic_bc = fullmag_ir::MagnetostaticBoundaryConditionIR::FloquetAirbox;
+    }
+    let planned = plan(&ir)
+        .expect("explicit nonzero-k CPU Floquet airbox demag should pass the planner gate");
+    let resolution = planned
+        .provenance
+        .fem_eigen_execution_resolution
+        .as_ref()
+        .expect("nonzero-k Floquet airbox plans must publish an exact CPU execution resolution");
+    assert_eq!(
+        resolution.resolved_engine,
+        fullmag_ir::FemEigenEngineIR::FloquetAirboxCpuSchurSlepc
+    );
+    assert_eq!(resolution.resolved_device, fullmag_ir::ExecutionDevice::Cpu);
+    assert!(!resolution.fallback_used);
+
+    let mut policy_ir = ir.clone();
+    policy_ir.problem_meta.runtime_metadata.insert(
+        "modal_solver_policy".to_string(),
+        serde_json::json!({"max_linear_iterations": 4}),
+    );
+    let policy_plan = plan(&policy_ir)
+        .expect("the exact bounded Floquet-airbox SLEPc route accepts solver controls");
+    match &policy_plan.backend_plan {
+        BackendPlanIR::FemEigen(fem) => assert_eq!(
+            fem.solver_policy
+                .as_ref()
+                .and_then(|policy| policy.max_linear_iterations),
+            Some(4)
+        ),
+        other => panic!("expected FEM eigen plan, got {other:?}"),
+    }
+
+    let mut all_pairs_ir = policy_ir.clone();
+    if let fullmag_ir::StudyIR::Eigenmodes { spin_wave_bc, .. } = &mut all_pairs_ir.study {
+        if let fullmag_ir::SpinWaveBoundaryConditionIR::Config(config) = spin_wave_bc {
+            config.boundary_pair_id = None;
+            config.pair_ids.clear();
+        }
+    }
+    let all_pairs_plan = plan(&all_pairs_ir)
+        .expect("empty Floquet selector means all and must retain native solver controls");
+    let all_pairs_resolution = all_pairs_plan.provenance.fem_eigen_execution_resolution.as_ref().unwrap();
+    assert_eq!(all_pairs_resolution.resolved_engine,
+        fullmag_ir::FemEigenEngineIR::FloquetAirboxCpuSchurSlepc);
+    assert!(!all_pairs_resolution.fallback_used);
+    if let BackendPlanIR::FemEigen(fem) = &all_pairs_plan.backend_plan {
+        assert!(fem.spin_wave_bc.boundary_pair_ids().is_empty());
+        assert_eq!(fem.solver_policy.as_ref().unwrap().max_linear_iterations, Some(4));
+    } else { panic!("expected FEM eigen all-pairs plan"); }
+
+    let mut subset_ir = ir.clone();
+    let subset_mesh = subset_ir.geometry_assets.as_mut().unwrap()
+        .fem_domain_mesh_asset.as_mut().unwrap().mesh.as_mut().unwrap();
+    let mut extra_nodes = subset_mesh.periodic_node_pairs[0].clone();
+    extra_nodes.pair_id = "extra_faces".to_string();
+    subset_mesh.periodic_node_pairs.push(extra_nodes);
+    let mut extra_boundary = subset_mesh.periodic_boundary_pairs[0].clone();
+    extra_boundary.pair_id = "extra_faces".to_string();
+    subset_mesh.periodic_boundary_pairs.push(extra_boundary);
+    for controls in [false, true] {
+        if controls {
+            subset_ir.problem_meta.runtime_metadata.insert(
+                "modal_solver_policy".to_string(),
+                serde_json::json!({"max_linear_iterations": 4}),
+            );
+        }
+        let error = plan(&subset_ir)
+            .expect_err("shared-domain Floquet subset is unsupported even without solver controls");
+        assert!(error.reasons.iter().any(|reason|
+            reason.contains("floquet_airbox_dynamic_demag_pair_selection_unsupported")));
+    }
+
+    match planned.backend_plan {
+        BackendPlanIR::FemEigen(fem) => {
+            assert_eq!(fem.operator.kind, fullmag_ir::EigenOperatorIR::Full2x2);
+            assert_eq!(
+                fem.demag_realization,
+                Some(fullmag_ir::ResolvedFemDemagIR::PoissonRobin)
+            );
+            assert_eq!(
+                fem.domain_mesh_mode,
+                fullmag_ir::FemDomainMeshModeIR::SharedDomainMeshWithAir
+            );
+            assert_eq!(
+                fem.material.ms_field.as_ref().map(Vec::len),
+                Some(8),
+                "the bounded shared-domain provider must retain nodal Ms"
+            );
+        }
+        other => panic!("expected FEM eigen plan, got {other:?}"),
+    }
+
+    let mut inactive_anisotropy = ir.clone();
+    let inactive_material = &mut inactive_anisotropy.materials[0];
+    inactive_material.uniaxial_anisotropy = Some(0.0);
+    inactive_material.uniaxial_anisotropy_k2 = Some(-0.0);
+    inactive_material.anisotropy_axis = Some([0.0, 0.0, 1.0]);
+    inactive_material.cubic_anisotropy_kc1 = Some(0.0);
+    inactive_material.cubic_anisotropy_kc2 = Some(0.0);
+    inactive_material.cubic_anisotropy_kc3 = Some(0.0);
+    inactive_material.cubic_anisotropy_axis1 = Some([1.0, 0.0, 0.0]);
+    inactive_material.cubic_anisotropy_axis2 = Some([0.0, 1.0, 0.0]);
+    for field in [
+        &mut inactive_material.ku_field,
+        &mut inactive_material.ku2_field,
+        &mut inactive_material.kc1_field,
+        &mut inactive_material.kc2_field,
+        &mut inactive_material.kc3_field,
+    ] {
+        *field = Some(vec![0.0; 8]);
+    }
+    let inactive_plan = plan(&inactive_anisotropy)
+        .expect("zero coefficients and axis metadata must keep the Floquet airbox lane legal");
+    let inactive_resolution = inactive_plan.provenance.fem_eigen_execution_resolution
+        .expect("inactive anisotropy retains execution provenance");
+    assert_eq!(inactive_resolution.resolved_engine,
+        fullmag_ir::FemEigenEngineIR::FloquetAirboxCpuSchurSlepc);
+    assert!(!inactive_resolution.fallback_used);
+
+    let mut tiny_active_anisotropy = inactive_anisotropy.clone();
+    tiny_active_anisotropy.materials[0].uniaxial_anisotropy = Some(1.0e-40);
+    let tiny_error = plan(&tiny_active_anisotropy)
+        .expect_err("even a tiny nonzero anisotropy must remain unsupported");
+    assert!(tiny_error.reasons.iter().any(|reason|
+        reason.contains("floquet_airbox_dynamic_demag_unsupported_local_interaction")
+            && reason.contains("anisotropy")));
+    tiny_active_anisotropy.materials[0].uniaxial_anisotropy = Some(0.0);
+    tiny_active_anisotropy.materials[0].kc3_field.as_mut().unwrap()[7] = -1.0e-40;
+    let tiny_field_error = plan(&tiny_active_anisotropy)
+        .expect_err("even one nonzero nodal anisotropy must remain unsupported");
+    assert!(tiny_field_error.reasons.iter().any(|reason|
+        reason.contains("floquet_airbox_dynamic_demag_unsupported_local_interaction")
+            && reason.contains("anisotropy")));
+
+    let mut unsupported_anisotropy = ir.clone();
+    unsupported_anisotropy.materials[0].uniaxial_anisotropy = Some(1.0e5);
+    unsupported_anisotropy.materials[0].anisotropy_axis = Some([0.0, 0.0, 1.0]);
+    let anisotropy_error = plan(&unsupported_anisotropy)
+        .expect_err("Floquet airbox Schur lane must reject unsupported anisotropy during planning");
+    assert!(anisotropy_error.reasons.iter().any(|reason| {
+        reason.contains("floquet_airbox_dynamic_demag_unsupported_local_interaction")
+            && reason.contains("anisotropy")
+    }));
+
+    let mut unsupported_dmi = ir.clone();
+    unsupported_dmi
+        .energy_terms
+        .push(fullmag_ir::EnergyTermIR::BulkDmi { d: 1.0e-3 });
+    let dmi_error = plan(&unsupported_dmi)
+        .expect_err("Floquet airbox Schur lane must reject unsupported DMI during planning");
+    assert!(dmi_error.reasons.iter().any(|reason| {
+        reason.contains("floquet_airbox_dynamic_demag_unsupported_local_interaction")
+            && reason.contains("DMI")
+    }));
+
+    let mut zero_scalar_dmi = ir.clone();
+    zero_scalar_dmi.energy_terms.extend([
+        fullmag_ir::EnergyTermIR::InterfacialDmi {
+            d: -0.0,
+            interface_normal: None,
+        },
+        fullmag_ir::EnergyTermIR::BulkDmi { d: 0.0 },
+    ]);
+    let zero_scalar_dmi_plan = plan(&zero_scalar_dmi)
+        .expect("zero scalar DMI coefficients do not activate unsupported Floquet terms");
+    match zero_scalar_dmi_plan.backend_plan {
+        BackendPlanIR::FemEigen(fem) => {
+            assert_eq!(fem.interfacial_dmi, Some(-0.0));
+            assert_eq!(fem.bulk_dmi, Some(0.0));
+        }
+        other => panic!("expected FEM eigen plan, got {other:?}"),
+    }
+
+    let mut unsupported_interfacial_dmi = ir.clone();
+    unsupported_interfacial_dmi
+        .energy_terms
+        .push(fullmag_ir::EnergyTermIR::InterfacialDmi {
+            d: 1.0e-3,
+            interface_normal: None,
+        });
+    let interfacial_dmi_error = plan(&unsupported_interfacial_dmi)
+        .expect_err("Floquet airbox Schur lane must reject nonzero interfacial DMI");
+    assert!(interfacial_dmi_error.reasons.iter().any(|reason| {
+        reason.contains("floquet_airbox_dynamic_demag_unsupported_local_interaction")
+            && reason.contains("DMI")
+    }));
+
+    let mut nodal_interfacial_dmi = ir.clone();
+    nodal_interfacial_dmi.materials[0].dind_field = Some(vec![0.0; 8]);
+    let nodal_interfacial_dmi_error = plan(&nodal_interfacial_dmi)
+        .expect_err("Floquet airbox Schur lane must continue rejecting nodal interfacial DMI");
+    assert!(nodal_interfacial_dmi_error.reasons.iter().any(|reason| {
+        reason.contains("floquet_airbox_dynamic_demag_unsupported_local_interaction")
+            && reason.contains("DMI")
+    }));
+
+    let mut nodal_bulk_dmi = ir.clone();
+    nodal_bulk_dmi.materials[0].dbulk_field = Some(vec![0.0; 8]);
+    let nodal_bulk_dmi_error = plan(&nodal_bulk_dmi)
+        .expect_err("Floquet airbox Schur lane must continue rejecting nodal bulk DMI");
+    assert!(nodal_bulk_dmi_error.reasons.iter().any(|reason| {
+        reason.contains("floquet_airbox_dynamic_demag_unsupported_local_interaction")
+            && reason.contains("DMI")
+    }));
+
+    if let fullmag_ir::StudyIR::Eigenmodes { k_sampling, .. } = &mut ir.study {
+        *k_sampling = Some(fullmag_ir::KSamplingIR::Path {
+            points: vec![
+                fullmag_ir::KPointIR {
+                    label: Some("Γ".to_string()),
+                    k_vector: [0.0, 0.0, 0.0],
+                },
+                fullmag_ir::KPointIR {
+                    label: Some("X".to_string()),
+                    k_vector: [1.0e7, 0.0, 0.0],
+                },
+            ],
+            samples_per_segment: vec![2],
+            closed: false,
+        });
+    }
+    let path_planned =
+        plan(&ir).expect("Γ-to-X Floquet airbox path should keep Gamma on the qualified K0 lane");
+    match path_planned.backend_plan {
+        BackendPlanIR::FemEigen(fem) => assert!(matches!(
+            fem.k_sampling,
+            Some(fullmag_ir::KSamplingIR::Path { .. })
+        )),
+        other => panic!("expected FEM eigen path plan, got {other:?}"),
+    }
+
+    let mut forced_gpu = ir.clone();
+    forced_gpu.problem_meta.runtime_metadata.insert(
+        "runtime_selection".to_string(),
+        serde_json::json!({"device": "gpu", "precision": "double"}),
+    );
+    let gpu_error = plan(&forced_gpu)
+        .expect_err("forced GPU must not silently select the CPU-only Floquet provider");
+    assert!(gpu_error
+        .reasons
+        .iter()
+        .any(|reason| { reason.contains("strict double-precision CPU FEM plan") }));
 
     ir.problem_meta.runtime_metadata.insert(
         "dispersion_validation".to_string(),
@@ -12853,8 +13610,9 @@ fn fem_eigen_floquet_dynamic_demag_is_rejected() {
             closed: false,
         });
     }
-    let planned =
-        plan(&ir).expect("low-k DE/BV analytic reference should bypass Floquet-demag guard");
+    let planned = plan(&ir).expect(
+        "DE/BV analytic metadata should remain a postsolve comparison on the numeric Floquet-airbox lane",
+    );
     match planned.backend_plan {
         BackendPlanIR::FemEigen(fem) => {
             assert!(fem.operator.include_demag);
@@ -12932,6 +13690,7 @@ fn fem_eigen_surface_anisotropy_requires_positive_ks_and_axis() {
             stage_autosave: None,
             outputs: vec![fullmag_ir::OutputIR::EigenSpectrum {
                 quantity: "eigenfrequency".to_string(),
+                scope: None,
             }],
         },
         mode_tracking: None,
@@ -15458,7 +16217,8 @@ fn fdm_prescribed_zeeman_mask_antenna_plans_with_extra_geometry() {
         | StudyIR::Relaxation { sampling, .. }
         | StudyIR::Eigenmodes { sampling, .. }
         | StudyIR::FrequencyResponse { sampling, .. }
-        | StudyIR::Hysteresis { sampling, .. } => sampling.outputs.push(output),
+        | StudyIR::Hysteresis { sampling, .. }
+        | StudyIR::AntennaFieldSolve { sampling, .. } => sampling.outputs.push(output),
     }
 
     let plan = plan(&ir).expect("prescribed Zeeman antenna mask should plan");
@@ -15505,7 +16265,8 @@ fn fdm_regional_field_drive_is_carried_as_canonical_plan_input() {
         | StudyIR::Relaxation { sampling, .. }
         | StudyIR::Eigenmodes { sampling, .. }
         | StudyIR::FrequencyResponse { sampling, .. }
-        | StudyIR::Hysteresis { sampling, .. } => {
+        | StudyIR::Hysteresis { sampling, .. }
+        | StudyIR::AntennaFieldSolve { sampling, .. } => {
             sampling.outputs.push(OutputIR::Field {
                 name: "H_drive".into(),
                 every_seconds: 1e-12,
@@ -18684,4 +19445,340 @@ fn fdm_difference_preserves_translated_operand_and_finite_height() {
         box_removed, removed,
         "translated box and cylinder fixtures must share the canonical active-cell fingerprint"
     );
+}
+
+mod eigen_output_validation_tests {
+    use crate::validate::validate_eigen_outputs;
+    use fullmag_ir::{OutputIR, SampleSelectorIR};
+
+    #[test]
+    fn all_modes_is_valid_and_conflicting_or_duplicate_requests_are_rejected() {
+        let output = OutputIR::EigenMode {
+            field: "mode".into(), all_modes: true, indices: vec![], branches: vec![], sample_selector: None,
+        };
+        let mut errors = Vec::new();
+        validate_eigen_outputs(&[output.clone()], None, false, &mut errors);
+        assert!(errors.is_empty(), "{errors:?}");
+        validate_eigen_outputs(&[output.clone(), output.clone()], None, false, &mut errors);
+        assert!(errors.iter().any(|error| error.contains("all modes more than once")));
+        errors.clear();
+        let mut conflicting = output;
+        if let OutputIR::EigenMode { indices, .. } = &mut conflicting { indices.push(64); }
+        validate_eigen_outputs(&[conflicting], None, false, &mut errors);
+        assert!(errors.iter().any(|error| error.contains("all_modes cannot be combined")));
+    }
+
+    fn mode_output_with_selector(index: u32, sample_selector: SampleSelectorIR) -> OutputIR {
+        OutputIR::EigenMode {
+            field: "mode".to_string(),
+            all_modes: false,
+            indices: vec![index],
+            branches: Vec::new(),
+            sample_selector: Some(sample_selector),
+        }
+    }
+
+    fn mode_output(index: u32, sample_indices: &[u32]) -> OutputIR {
+        mode_output_with_selector(
+            index,
+            SampleSelectorIR {
+                sample_indices: sample_indices.to_vec(),
+                sample_labels: Vec::new(),
+            },
+        )
+    }
+
+    #[test]
+    fn repeated_mode_requests_for_disjoint_samples_compose_as_a_union() {
+        let outputs = [mode_output(2, &[0]), mode_output(2, &[1])];
+        let mut errors = Vec::new();
+
+        validate_eigen_outputs(&outputs, None, false, &mut errors);
+
+        assert!(
+            errors.is_empty(),
+            "unexpected validation errors: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn repeated_mode_requests_with_overlapping_samples_compose_idempotently() {
+        let outputs = [mode_output(2, &[0, 1]), mode_output(2, &[1, 2])];
+        let mut errors = Vec::new();
+
+        validate_eigen_outputs(&outputs, None, false, &mut errors);
+
+        assert!(
+            errors.is_empty(),
+            "unexpected validation errors: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn semantically_duplicate_mode_requests_remain_invalid() {
+        let outputs = [
+            mode_output_with_selector(
+                2,
+                SampleSelectorIR {
+                    sample_indices: vec![1, 0],
+                    sample_labels: vec![" X ".to_string()],
+                },
+            ),
+            mode_output_with_selector(
+                2,
+                SampleSelectorIR {
+                    sample_indices: vec![0, 1],
+                    sample_labels: vec!["X".to_string()],
+                },
+            ),
+        ];
+        let mut errors = Vec::new();
+
+        validate_eigen_outputs(&outputs, None, false, &mut errors);
+
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("requests mode 2 more than once")),
+            "expected duplicate mode error, got {errors:?}"
+        );
+    }
+}
+
+mod eigen_spectrum_quantity_validation_tests {
+    use crate::validate::validate_eigen_outputs;
+    use fullmag_ir::OutputIR;
+
+    fn spectrum(quantity: &str) -> OutputIR {
+        OutputIR::EigenSpectrum {
+            quantity: quantity.to_string(),
+            scope: None,
+        }
+    }
+
+    #[test]
+    fn canonical_spectrum_quantity_passes_without_mutating_outputs() {
+        let outputs = [spectrum("eigenfrequency")];
+        let before = outputs.clone();
+        let mut errors = Vec::new();
+
+        validate_eigen_outputs(&outputs, None, false, &mut errors);
+
+        assert!(errors.is_empty(), "{errors:?}");
+        assert_eq!(outputs, before);
+    }
+
+    #[test]
+    fn unsupported_spectrum_quantities_and_mixed_outputs_are_rejected() {
+        for quantity in ["", "eigenvalue", "amplitude", "frequency_hz"] {
+            let outputs = [spectrum(quantity)];
+            let before = outputs.clone();
+            let mut errors = Vec::new();
+
+            validate_eigen_outputs(&outputs, None, false, &mut errors);
+
+            assert!(
+                errors.iter().any(|error| {
+                    error.contains("eigen_spectrum quantity")
+                        && error.contains("unsupported")
+                }),
+                "expected unsupported quantity {quantity:?}, got {errors:?}"
+            );
+            assert_eq!(outputs, before);
+        }
+
+        let mixed = [spectrum("eigenfrequency"), spectrum("amplitude")];
+        let before = mixed.clone();
+        let mut errors = Vec::new();
+
+        validate_eigen_outputs(&mixed, None, false, &mut errors);
+
+        assert!(
+            errors.iter().any(|error| {
+                error.contains("eigen_spectrum quantity") && error.contains("unsupported")
+            }),
+            "mixed canonical and unsupported quantities must fail: {errors:?}"
+        );
+        assert_eq!(mixed, before);
+    }
+}
+
+
+#[test]
+fn eigen_spectrum_distinct_scopes_plan_without_losing_authored_intent() {
+    use fullmag_ir::EigenSpectrumScopeIR;
+    let mut ir = branch_selector_fem_eigen_ir(None);
+    let outputs = vec![
+        fullmag_ir::OutputIR::EigenSpectrum {
+            quantity: "eigenfrequency".into(), scope: Some(EigenSpectrumScopeIR::PerSample),
+        },
+        fullmag_ir::OutputIR::EigenSpectrum {
+            quantity: "eigenfrequency".into(), scope: Some(EigenSpectrumScopeIR::Global),
+        },
+    ];
+    if let fullmag_ir::StudyIR::Eigenmodes { sampling, .. } = &mut ir.study {
+        sampling.outputs = outputs.clone();
+    }
+    let planned = plan(&ir).expect("distinct publication scopes must coexist in one eigenproblem");
+    assert_eq!(planned.output_plan.outputs, outputs);
+    let roundtrip: fullmag_ir::ExecutionPlanIR = serde_json::from_value(
+        serde_json::to_value(&planned).unwrap(),
+    ).unwrap();
+    assert_eq!(roundtrip.output_plan.outputs, outputs);
+}
+
+#[test]
+fn eigen_spectrum_same_effective_scope_remains_duplicate() {
+    use fullmag_ir::EigenSpectrumScopeIR;
+    for scopes in [
+        [None, Some(EigenSpectrumScopeIR::PerSample)],
+        [Some(EigenSpectrumScopeIR::Global), Some(EigenSpectrumScopeIR::Global)],
+    ] {
+        let mut ir = branch_selector_fem_eigen_ir(None);
+        if let fullmag_ir::StudyIR::Eigenmodes { sampling, .. } = &mut ir.study {
+            sampling.outputs = scopes.into_iter().map(|scope| fullmag_ir::OutputIR::EigenSpectrum {
+                quantity: "eigenfrequency".into(), scope,
+            }).collect();
+        }
+        let errors = plan(&ir).expect_err("duplicates of the same effective scope remain invalid");
+        assert!(errors.reasons.iter().any(|error| error.contains("declared more than once")), "{errors:?}");
+    }
+}
+
+#[test]
+fn fem_eigen_branch_tracking_rejects_prism_topologies_in_planner_guard() {
+    let path = fullmag_ir::KSamplingIR::Path {
+        points: vec![
+            fullmag_ir::KPointIR {
+                label: Some("Gamma".to_string()),
+                k_vector: [0.0, 0.0, 0.0],
+            },
+            fullmag_ir::KPointIR {
+                label: Some("X".to_string()),
+                k_vector: [1.0e7, 0.0, 0.0],
+            },
+        ],
+        samples_per_segment: vec![2],
+        closed: false,
+    };
+    for include_tet in [false, true] {
+        let mut mesh = valid_mixed_certificate_asset()
+            .mesh
+            .expect("existing mixed fixture has typed connectivity");
+        // Exercise the early family-admission guard, not a physical remeshing
+        // or an execution certificate for the extracted connectivity.
+        let retained = mesh
+            .cells
+            .iter()
+            .enumerate()
+            .filter(|(_, cell)| {
+                cell.cell_type == fullmag_ir::FemCellTypeIR::Prism6
+                    || (include_tet && cell.cell_type == fullmag_ir::FemCellTypeIR::Tet4)
+            })
+            .map(|(index, cell)| {
+                (
+                    cell.cell_type,
+                    cell.nodes.to_vec(),
+                    cell.global_ordinal,
+                    mesh.cells.mesh_parts[index],
+                    mesh.element_markers[index],
+                )
+            })
+            .collect::<Vec<_>>();
+        let mut cells = fullmag_ir::FemConnectivityIR {
+            types: Vec::new(),
+            offsets: vec![0],
+            nodes: Vec::new(),
+            global_ordinals: Vec::new(),
+            mesh_parts: Vec::new(),
+        };
+        let mut markers = Vec::new();
+        for (kind, nodes, ordinal, part, marker) in retained {
+            cells.types.push(kind);
+            cells.nodes.extend(nodes);
+            cells.offsets.push(cells.nodes.len() as u32);
+            cells.global_ordinals.push(ordinal);
+            cells.mesh_parts.push(part);
+            markers.push(marker);
+        }
+        mesh.cells = cells;
+        mesh.element_markers = markers;
+        for sampling in [
+            fullmag_ir::KSamplingIR::Single {
+                k_vector: [0.0, 0.0, 0.0],
+            },
+            path.clone(),
+        ] {
+            let ir = branch_selector_fem_eigen_ir(Some(sampling));
+            let reason = crate::mesh::reject_unsupported_mixed_topology(&ir, &mesh, None)
+                .expect_err("prism6 eigen intent must fail before a tetra-only tracking consumer");
+            assert!(
+                reason.contains("fem_typed_topology_unsupported_before_backend"),
+                "{reason}"
+            );
+            assert!(reason.contains("prism6"), "{reason}");
+            let expected_families = if include_tet {
+                "actual_topology=cells=[prism6,tet4]"
+            } else {
+                "actual_topology=cells=[prism6]"
+            };
+            assert!(reason.contains(expected_families), "{reason}");
+            assert!(reason.contains("fallback=none"), "{reason}");
+        }
+    }
+}
+
+#[test]
+fn fem_eigen_branch_tracking_rejects_certified_mixed_eigen_study() {
+    let mut ir = mixed_cpu_relaxation_ir(
+        fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb,
+        fullmag_ir::RequestedFemDemagIR::PoissonRobin,
+    );
+    let asset = ir
+        .geometry_assets
+        .as_ref()
+        .expect("mixed fixture has geometry assets")
+        .fem_domain_mesh_asset
+        .as_ref()
+        .expect("mixed fixture has a certified shared-domain asset");
+    let mesh = asset.mesh.as_ref().expect("fixture has inline mixed mesh");
+    crate::mesh::reject_unsupported_mixed_topology(&ir, mesh, asset.build_report.as_ref())
+        .expect("control: certified mixed relaxation remains admitted");
+    ir.study = branch_selector_fem_eigen_ir(Some(fullmag_ir::KSamplingIR::Single {
+        k_vector: [0.0, 0.0, 0.0],
+    }))
+    .study;
+    let reason = crate::mesh::reject_unsupported_mixed_topology(&ir, mesh, asset.build_report.as_ref())
+        .expect_err("a valid topology certificate does not admit the unsupported eigen study");
+    assert!(reason.contains("fem_mixed_p1_scope_rejected"), "{reason}");
+    assert!(reason.contains("unsupported_study"), "{reason}");
+    assert!(reason.contains("fallback=none"), "{reason}");
+}
+
+#[test]
+fn fem_eigen_branch_tracking_tetra_single_and_path_remain_plannable() {
+    let path = fullmag_ir::KSamplingIR::Path {
+        points: vec![
+            fullmag_ir::KPointIR {
+                label: Some("Gamma".to_string()),
+                k_vector: [0.0, 0.0, 0.0],
+            },
+            fullmag_ir::KPointIR {
+                label: Some("X".to_string()),
+                k_vector: [1.0e7, 0.0, 0.0],
+            },
+        ],
+        samples_per_segment: vec![2],
+        closed: false,
+    };
+    for sampling in [
+        fullmag_ir::KSamplingIR::Single {
+            k_vector: [0.0, 0.0, 0.0],
+        },
+        path,
+    ] {
+        let planned = plan(&branch_selector_fem_eigen_ir(Some(sampling)))
+            .expect("existing tetra-only Single and Path eigen lanes remain legal");
+        assert!(matches!(planned.backend_plan, BackendPlanIR::FemEigen(_)));
+    }
 }

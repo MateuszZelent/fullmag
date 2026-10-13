@@ -135,14 +135,79 @@ fn malformed_explicit_source_is_rejected() {
 fn empty_scene_study_does_not_create_a_phantom_run() {
     let scene = scene_with_study(serde_json::json!({
         "study_pipeline": {"version": "study_pipeline.v1", "nodes": []},
-        "stages": []
+        "stages": [{"kind": "run", "entrypoint_kind": "flat_run", "until_seconds": 1e-12}]
     }));
 
     let plan = scene_document_to_study_plan(&scene, "empty-study", 3, &migration_defaults())
         .expect("empty authoring should project to an empty plan");
 
     assert!(plan.steps.is_empty());
+    assert_eq!(
+        plan.source_pipeline_version.as_deref(),
+        Some("study_pipeline.v1")
+    );
+}
+
+#[test]
+fn disabled_pipeline_does_not_revive_flat_stages() {
+    let scene = scene_with_study(serde_json::json!({
+        "study_pipeline": {"version": "study_pipeline.v1", "nodes": [{
+            "node_kind": "group", "id": "disabled-group", "label": "Disabled",
+            "enabled": false, "children": [{
+                "node_kind": "primitive", "id": "pipeline-relax", "label": "Relax",
+                "stage_kind": "relax", "payload": {"max_steps": 9}
+            }]
+        }]},
+        "stages": [{"kind": "run", "entrypoint_kind": "flat_run", "until_seconds": 1e-12}]
+    }));
+    let plan = scene_document_to_study_plan(&scene, "disabled-study", 3, &migration_defaults())
+        .expect("disabled pipeline should remain the authored source");
+    assert_eq!(plan.steps.len(), 2);
+    assert!(plan.steps.iter().all(|step| !step.enabled));
+    assert_eq!(plan.steps[0].step_id, "pipeline-relax");
+}
+
+#[test]
+fn defaulted_empty_pipeline_still_owns_the_study_source() {
+    let scene = scene_with_study(serde_json::json!({
+        "study_pipeline": {},
+        "stages": [{"kind": "relax", "entrypoint_kind": "flat_relax"}]
+    }));
+    let original = scene.clone();
+    let plan = scene_document_to_study_plan(&scene, "defaulted-study", 3, &migration_defaults())
+        .expect("serde-defaulted pipeline should remain the authored source");
+    assert!(plan.steps.is_empty());
+    assert_eq!(
+        plan.source_pipeline_version.as_deref(),
+        Some("study_pipeline.v1")
+    );
+    assert_eq!(scene, original);
+}
+
+#[test]
+fn null_pipeline_preserves_flat_stage_projection() {
+    let scene = scene_with_study(serde_json::json!({
+        "study_pipeline": null,
+        "stages": [{"kind": "relax", "entrypoint_kind": "flat_relax", "stage_id": "flat-relax"}]
+    }));
+    let plan = scene_document_to_study_plan(&scene, "flat-study", 3, &migration_defaults())
+        .expect("null pipeline should retain the flat authoring path");
+    assert_eq!(plan.steps.len(), 1);
+    assert_eq!(plan.steps[0].step_id, "flat-relax");
     assert_eq!(plan.source_pipeline_version, None);
+}
+
+#[test]
+fn unsupported_empty_pipeline_version_is_not_flattened() {
+    let scene = scene_with_study(serde_json::json!({
+        "study_pipeline": {"version": "study_pipeline.v99", "nodes": []},
+        "stages": [{"kind": "relax", "entrypoint_kind": "flat_relax"}]
+    }));
+    let error = scene_document_to_study_plan(&scene, "invalid-study", 3, &migration_defaults())
+        .expect_err("an unsupported explicit pipeline must not fall back to flat stages");
+    assert!(error
+        .to_string()
+        .contains("unsupported study pipeline version"));
 }
 
 #[test]
@@ -203,5 +268,58 @@ fn declared_execution_profile_must_match_the_explicit_migration_reference() {
     let error = scene_document_to_study_plan(&scene, "study-profile", 2, &migration_defaults())
         .expect_err("mismatched profile marker must not be rebound implicitly");
 
-    assert!(error.to_string().contains("does not match StudyPlan migration default"), "{error}");
+    assert!(
+        error
+            .to_string()
+            .contains("does not match StudyPlan migration default"),
+        "{error}"
+    );
+}
+
+#[test]
+fn flat_antenna_stage_declares_only_its_inspection_artifact() {
+    let scene = scene_with_study(serde_json::json!({
+        "stages": [
+            {"kind": "antenna_field_solve", "stage_id": "antenna-solve"},
+            {"kind": "relax", "stage_id": "magnetic-relax"}
+        ]
+    }));
+    let plan = scene_document_to_study_plan(&scene, "inspection-study", 1, &migration_defaults())
+        .expect("flat antenna stage should project its typed artifact output");
+    assert_eq!(
+        plan.steps[0].outputs,
+        vec![crate::StudyOutputPort {
+            port_id: crate::ANTENNA_INSPECTION_OUTPUT_PORT_ID.into(),
+            data_kind: crate::StudyPortDataKind::Artifact,
+        }]
+    );
+    assert!(plan.steps[0].inputs.is_empty());
+    assert_eq!(plan.steps[0].until_seconds, None);
+    assert!(plan.steps[1].outputs.is_empty());
+}
+
+#[test]
+fn pipeline_antenna_stage_declares_the_same_output_without_magnetic_state() {
+    let scene = scene_with_study(serde_json::json!({
+        "study_pipeline": {"version": "study_pipeline.v1", "nodes": [{
+            "node_kind": "primitive", "id": "antenna-field-solve:antenna-solve", "label": "Antenna",
+            "stage_kind": "antenna_field_solve", "payload": {"stage_id": "antenna-solve"}
+        }]}
+    }));
+    let plan = scene_document_to_study_plan(&scene, "inspection-study", 1, &migration_defaults())
+        .expect("pipeline antenna stage should project its typed artifact output");
+    assert_eq!(plan.steps[0].step_id, "antenna-field-solve:antenna-solve");
+    assert_eq!(
+        plan.steps[0].legacy_payload.as_ref().unwrap()["stage_id"],
+        "antenna-solve"
+    );
+    assert_eq!(
+        plan.steps[0].outputs,
+        vec![crate::StudyOutputPort {
+            port_id: crate::ANTENNA_INSPECTION_OUTPUT_PORT_ID.into(),
+            data_kind: crate::StudyPortDataKind::Artifact,
+        }]
+    );
+    assert!(plan.steps[0].inputs.is_empty());
+    assert_eq!(plan.steps[0].until_seconds, None);
 }

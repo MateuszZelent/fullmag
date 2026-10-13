@@ -1,12 +1,12 @@
 "use client";
 
 import { useCallback } from "react";
-import type { RibbonTabDef, RibbonTabId } from "./ribbonTypes";
+import type { RibbonStripTabDef, RibbonStripTabId } from "./ribbonTypes";
 
 interface RibbonTabStripProps {
-  tabs: RibbonTabDef[];
-  activeTabId: RibbonTabId;
-  onTabClick: (tabId: RibbonTabId) => void;
+  tabs: readonly RibbonStripTabDef[];
+  activeTabId: RibbonStripTabId;
+  onTabClick: (tabId: RibbonStripTabId) => void;
 }
 
 export function RibbonTabStrip({
@@ -53,6 +53,7 @@ export function RibbonTabStrip({
           key={tab.id}
           className="fm-ribbon__tab"
           data-active={tab.id === activeTabId}
+          data-contextual={tab.contextual || undefined}
           role="tab"
           type="button"
           id={`fm-ribbon-tab-${tab.id}`}

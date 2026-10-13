@@ -7,9 +7,11 @@ import { useAnalysisFieldOverlayContext } from "@/kernel/visualization/AnalysisF
 import { AnalysisFieldOverlayContextNotice } from "@/kernel/visualization/AnalysisFieldOverlayContextNotice";
 
 import type { InspectorPanelProps } from "../../inspectorTypes";
-import { FieldRow } from "../../primitives/FieldRow";
-import { InspectorGroup } from "../../primitives/InspectorGroup";
 import { ModeVisualizationViewControls } from "../ModeVisualizationInspectorPanel";
+import {
+  VisualizationTargetInspectorPanel,
+  type VisualizationInspectorOwner,
+} from "../ObjectVisualizationPanel";
 import { ModeVisualizationBreadcrumbs } from "./ModeVisualizationBreadcrumbs";
 
 export type ModeVisualizationSelectionRef = Extract<
@@ -61,11 +63,20 @@ export function ModeVisualizationOverviewPanel({
   const rebindDisabledReason = rebindCommand
     ? rebindCommand.disabledReason?.(commandContext) ?? null
     : "Analysis overlay rebind command is unavailable.";
+  // A mode is a quantity on the magnetic object, so the Inspector is the
+  // object's visualization Inspector (same sections, icons and edit session)
+  // with a mode owner and mode-only sections (spec 32 §12).
+  const owner: VisualizationInspectorOwner = {
+    actionSummary: "Complex representation, phase and the object's display passes, coloring and vectors",
+    capabilityDescription: target
+      ? `${modeVisualizationSourceLabel(target)} field shown as the viewport quantity on this object.`
+      : "Published frequency-domain field shown as the viewport quantity.",
+    id: "object.mode_visualization",
+    targetLabel: target ? modeVisualizationSelectionLabel(target) : "Mode field",
+    title: "Mode visualization",
+  };
   return (
-    <div
-      className="fm-inspector-panel"
-      data-inspector-owner="mode-visualization.overview"
-    >
+    <>
       <ModeVisualizationBreadcrumbs selection={selection} />
       <AnalysisFieldOverlayContextNotice
         context={overlayContext}
@@ -83,21 +94,9 @@ export function ModeVisualizationOverviewPanel({
         }}
         rebindDisabledReason={rebindDisabledReason}
       />
-      <InspectorGroup title="Mode visualization overview">
-        {target ? (
-          <>
-            <FieldRow label="Object" value={target.objectId} />
-            <FieldRow label="Mode family" value={modeVisualizationSourceLabel(target)} />
-            <FieldRow label="Selection" value={modeVisualizationSelectionLabel(target)} />
-            <FieldRow label="Provenance" value="Frequency-domain result resources" />
-          </>
-        ) : (
-          <p className="fm-inspector-empty">
-            No mode visualization target selected.
-          </p>
-        )}
-      </InspectorGroup>
-      <ModeVisualizationViewControls selection={selection} />
-    </div>
+      <VisualizationTargetInspectorPanel owner={owner} selection={selection}>
+        <ModeVisualizationViewControls selection={selection} />
+      </VisualizationTargetInspectorPanel>
+    </>
   );
 }

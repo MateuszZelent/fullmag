@@ -5,16 +5,17 @@
 //! StudyPlan, state dependencies, host allocation, or execution readiness.
 
 use crate::script_stage_contract::{
-    ResolvedScriptStage, ResolvedScriptStageAction, ScriptExecutionConfig,
-    ScriptExecutionStageAction, StageTransitionKind, StageTransitionMetadata,
+    ResolvedScriptStage, ResolvedScriptStageAction, ScriptAntennaAuthoringInventory,
+    ScriptExecutionConfig, ScriptExecutionStageAction, StageTransitionKind, StageTransitionMetadata,
     StageTransitionReason, StateTransferOperatorKind, StudyPipelineDocument, StudyPipelineNode,
+    ScriptStageProvenance,
 };
 use anyhow::{bail, Context, Result};
 use fullmag_ir::{
     OutputDataFormatIR, OutputIR, OutputStorageIR, ProblemIR, RegionalFieldDriveIR, TableAutosaveIR,
 };
 use serde_json::Value;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 pub fn resolve_script_until_seconds(
     ir: &ProblemIR,
@@ -25,6 +26,7 @@ pub fn resolve_script_until_seconds(
     }
 
     match &ir.study {
+        fullmag_ir::StudyIR::AntennaFieldSolve { .. } => Ok(0.0),
         fullmag_ir::StudyIR::Relaxation { dynamics, stop, .. } => {
             Ok(resolve_relaxation_until_seconds(dynamics, stop))
         }
@@ -97,6 +99,7 @@ mod canonical_relaxation_time_tests {
     fn pipeline_config(nodes: Vec<StudyPipelineNode>) -> ScriptExecutionConfig {
         ScriptExecutionConfig {
             ir: ProblemIR::bootstrap_example(),
+            antenna_inventory: ScriptAntennaAuthoringInventory::default(),
             shared_geometry_assets: None,
             default_until_seconds: None,
             study_pipeline: Some(StudyPipelineDocument {
@@ -117,6 +120,113 @@ mod canonical_relaxation_time_tests {
             stage_kind: "relax".to_string(),
             payload: BTreeMap::new(),
         }
+    }
+
+    fn solve_declaration(id: &str) -> fullmag_ir::AntennaFieldSolveStageIR {
+        fullmag_ir::AntennaFieldSolveStageIR {
+            id: id.into(),
+            source_object_id: "conductor".into(),
+            current_transport_id: "current".into(),
+            port_mode_ids: vec!["port".into()],
+            conservative_current_view_ref: None,
+            model: fullmag_ir::AntennaFieldModelIR::QuasistaticConductionBiotSavart3d,
+            oersted_realization: fullmag_ir::AntennaOerstedRealizationIR::DirectTetraQuadrature,
+            conductor_mesh_policy: "default".into(),
+            field_sampling_domain: fullmag_ir::FieldTargetIR::Global {},
+            target_refs: Vec::new(),
+            solver_policy: "default".into(),
+            outputs: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn solve_action_selects_only_one_inventory_definition_and_rejects_conflict() {
+        let selected = solve_declaration("selected");
+        let inventory = ScriptAntennaAuthoringInventory {
+            antenna_field_solve_stages: vec![selected.clone(), solve_declaration("inactive")],
+            ..Default::default()
+        };
+        let mut problem = ProblemIR::bootstrap_example();
+        select_antenna_solve_definition(&mut problem, &inventory, "selected").unwrap();
+        assert_eq!(problem.antenna_field_solve_stages, vec![selected]);
+        select_antenna_solve_definition(&mut problem, &inventory, "selected").unwrap();
+        assert_eq!(problem.antenna_field_solve_stages.len(), 1);
+        problem.antenna_field_solve_stages[0].solver_policy = "conflict".into();
+        let before = problem.clone();
+        assert!(select_antenna_solve_definition(&mut problem, &inventory, "selected").is_err());
+        assert_eq!(serde_json::to_value(problem).unwrap(), serde_json::to_value(before).unwrap());
+    }
+
+    #[test]
+    fn unsuccessful_solve_planning_does_not_activate_inventory_definition() {
+        let mut problem = ProblemIR::bootstrap_example();
+        let inventory = ScriptAntennaAuthoringInventory {
+            antenna_field_solve_stages: vec![solve_declaration("solve")],
+            ..Default::default()
+        };
+        let before = serde_json::to_value(&problem).unwrap();
+        let payload = BTreeMap::from([
+            ("stage_id".into(), serde_json::json!("solve")),
+            ("port_mode_id".into(), serde_json::json!("port")),
+        ]);
+        assert!(materialize_pipeline_antenna_field_solve(&mut problem, &payload, &inventory).is_err());
+        assert_eq!(serde_json::to_value(problem).unwrap(), before);
+    }
+
+    #[test]
+    fn antenna_port_reference_has_one_rule_for_flat_and_pipeline_stages() {
+        assert_eq!(select_antenna_port_reference(Some("port"), &[]).unwrap(), "port");
+        assert_eq!(select_antenna_port_reference(None, &["port".into()]).unwrap(), "port");
+        for (singular, plural) in [
+            (None, vec![]),
+            (Some(""), vec![]),
+            (None, vec![" ".into()]),
+            (Some("port"), vec!["port".into()]),
+            (Some("port"), vec!["other".into()]),
+            (None, vec!["port".into(), "other".into()]),
+        ] {
+            assert!(select_antenna_port_reference(singular, &plural).is_err());
+        }
+    }
+
+    #[test]
+    fn pipeline_rejects_ambiguous_or_malformed_ports_before_state_mutation() {
+        for plural in [serde_json::json!(["port"]), serde_json::json!(null), serde_json::json!([3])] {
+            let mut problem = ProblemIR::bootstrap_example();
+            let before = serde_json::to_value(&problem).unwrap();
+            let payload = BTreeMap::from([
+                ("stage_id".into(), serde_json::json!("solve")),
+                ("port_mode_id".into(), serde_json::json!("port")),
+                ("port_mode_ids".into(), plural),
+            ]);
+            assert!(materialize_pipeline_antenna_field_solve(
+                &mut problem, &payload, &ScriptAntennaAuthoringInventory::default()
+            ).is_err());
+            assert_eq!(serde_json::to_value(&problem).unwrap(), before);
+        }
+    }
+
+    #[test]
+    fn disabled_solve_group_does_not_activate_inventory_and_duplicate_owner_fails() {
+        let mut config = pipeline_config(vec![StudyPipelineNode::Group {
+            id: "disabled".into(), label: "disabled".into(), enabled: false,
+            notes: None, source: None, collapsed: false,
+            children: vec![StudyPipelineNode::Primitive {
+                id: "solve-node".into(), label: "solve".into(), enabled: true,
+                notes: None, source: None, stage_kind: "antenna_field_solve".into(),
+                payload: BTreeMap::from([("stage_id".into(), serde_json::json!("solve")), ("port_mode_id".into(), serde_json::json!("port"))]),
+            }],
+        }, StudyPipelineNode::Primitive {
+            id: "disabled-leaf".into(), label: "disabled solve".into(), enabled: false,
+            notes: None, source: None, stage_kind: "antenna_field_solve".into(),
+            payload: BTreeMap::from([("stage_id".into(), serde_json::json!("solve")), ("port_mode_id".into(), serde_json::json!("port"))]),
+        }, relax_primitive("relax")]);
+        config.antenna_inventory.antenna_field_solve_stages.push(solve_declaration("solve"));
+        let stages = materialize_script_stages_with_output_policy(config.clone(), fullmag_ir::configure_project_autosave_policy).unwrap();
+        assert_eq!(stages.len(), 1);
+        assert!(stages[0].ir.antenna_field_solve_stages.is_empty());
+        config.antenna_inventory.antenna_field_solve_stages.push(solve_declaration("solve"));
+        assert!(materialize_script_stages_with_output_policy(config, fullmag_ir::configure_project_autosave_policy).unwrap_err().to_string().contains("duplicate antenna_field_solve_stages declaration id"));
     }
 
     #[test]
@@ -148,6 +258,13 @@ mod canonical_relaxation_time_tests {
         )
         .unwrap();
         assert_eq!(stages.len(), 2);
+        let first = stages[0].provenance.as_ref().unwrap();
+        let second = stages[1].provenance.as_ref().unwrap();
+        assert_eq!(first.authored_step_id, "first");
+        assert_eq!(first.expansion_index, 0);
+        assert_eq!(first.ancestor_group_ids, vec!["outer"]);
+        assert_eq!(second.authored_step_id, "second");
+        assert_eq!(second.ancestor_group_ids, vec!["outer", "inner"]);
 
         let error = materialize_script_stages_with_output_policy_bounded(
             pipeline_config(nodes),
@@ -187,6 +304,178 @@ mod canonical_relaxation_time_tests {
         )
         .unwrap();
         assert_eq!(stages.len(), 1);
+        assert_eq!(stages[0].provenance.as_ref().unwrap().authored_step_id, "enabled");
+        assert!(stages[0].provenance.as_ref().unwrap().ancestor_group_ids.is_empty());
+    }
+
+    #[test]
+    fn macro_captures_distinct_expansions_and_authored_source() {
+        let config = pipeline_config(vec![StudyPipelineNode::Macro {
+            id: "macro".into(),
+            label: "Relax then Run".into(),
+            enabled: true,
+            notes: Some("Authored note".into()),
+            source: Some("script.py:12".into()),
+            macro_kind: "relax_run".into(),
+            config: BTreeMap::from([("run_until_seconds".into(), serde_json::json!(1e-12))]),
+        }]);
+        let stages = materialize_script_stages_with_output_policy_bounded(
+            config, fullmag_ir::configure_project_autosave_policy, 2,
+        ).unwrap();
+        assert_eq!(stages.len(), 2);
+        for (index, stage) in stages.iter().enumerate() {
+            let source = stage.provenance.as_ref().unwrap();
+            assert_eq!(source.authored_step_id, "macro");
+            assert_eq!(source.expansion_index, index);
+            assert_eq!(source.label, "Relax then Run");
+            assert_eq!(source.notes.as_deref(), Some("Authored note"));
+            assert_eq!(source.source.as_deref(), Some("script.py:12"));
+            assert!(source.ancestor_group_ids.is_empty());
+            assert_eq!(stage.ir.problem_meta.runtime_metadata["active_stage_id"], "macro");
+        }
+    }
+
+    #[test]
+    fn group_provenance_does_not_leak_into_siblings() {
+        let inner = StudyPipelineNode::Group {
+            id: "inner".into(), label: "inner".into(), enabled: true,
+            notes: None, source: None, collapsed: false,
+            children: vec![relax_primitive("nested")],
+        };
+        let outer = StudyPipelineNode::Group {
+            id: "outer".into(), label: "outer".into(), enabled: true,
+            notes: None, source: None, collapsed: false,
+            children: vec![inner, relax_primitive("outer-sibling")],
+        };
+        let stages = materialize_script_stages_with_output_policy_bounded(
+            pipeline_config(vec![outer, relax_primitive("root-sibling")]),
+            fullmag_ir::configure_project_autosave_policy, 3,
+        ).unwrap();
+        assert_eq!(stages.len(), 3);
+        assert_eq!(stages[0].provenance.as_ref().unwrap().ancestor_group_ids, vec!["outer", "inner"]);
+        assert_eq!(stages[1].provenance.as_ref().unwrap().ancestor_group_ids, vec!["outer"]);
+        assert!(stages[2].provenance.as_ref().unwrap().ancestor_group_ids.is_empty());
+    }
+
+    #[test]
+    fn pipeline_rejects_ambiguous_authored_ids_before_expansion() {
+        let group = |id: &str, enabled, children| StudyPipelineNode::Group {
+            id: id.into(), label: id.into(), enabled,
+            notes: None, source: None, collapsed: false, children,
+        };
+        for nodes in [
+            vec![relax_primitive("same"), relax_primitive("same")],
+            vec![group("same", true, vec![relax_primitive("same")])],
+            vec![
+                group("left", true, vec![relax_primitive("same")]),
+                group("right", true, vec![relax_primitive("same")]),
+            ],
+            vec![
+                group("disabled", false, vec![relax_primitive("same")]),
+                relax_primitive("same"),
+            ],
+        ] {
+            let error = materialize_script_stages_with_output_policy_bounded(
+                pipeline_config(nodes), fullmag_ir::configure_project_autosave_policy, 3,
+            ).unwrap_err();
+            assert!(error.to_string().contains("duplicate study pipeline node id 'same'"));
+        }
+        let error = materialize_script_stages_with_output_policy_bounded(
+            pipeline_config(vec![group("disabled", false, vec![relax_primitive(" ")])]),
+            fullmag_ir::configure_project_autosave_policy, 1,
+        ).unwrap_err();
+        assert!(error.to_string().contains("study pipeline node ids must not be empty"));
+    }
+}
+
+#[cfg(test)]
+mod antenna_stage_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn antenna_source_spectrum_pipeline_materializes_as_synthetic_stage() {
+        let mut problem = ProblemIR::bootstrap_example();
+        let payload = BTreeMap::from([("request".to_string(), json!({
+            "id": "source_k",
+            "solution_ref": {"kind": "stage_output", "stage_id": "solve_1", "output_id": "basis"},
+            "target": {"kind": "global"},
+            "transform": "spatial_fft",
+            "sampling_plane": {
+                "origin_m": [0.0, 0.0, 0.0],
+                "axis_u": [1.0, 0.0, 0.0],
+                "axis_v": [0.0, 1.0, 0.0],
+                "extent_u_m": 1.0,
+                "extent_v_m": 1.0,
+                "sample_count_u": 4,
+                "sample_count_v": 4,
+                "interpolation": "fem_element",
+                "outside_policy": "zero"
+            },
+            "window": "rectangular",
+            "normalization": "unitary_discrete",
+            "component": "x",
+            "output_id": "spectrum"
+        }))]);
+        let inventory = ScriptAntennaAuthoringInventory::default();
+        let stage = materialize_pipeline_antenna_source_spectrum(&mut problem, &payload, &inventory).unwrap();
+        assert!(matches!(stage.action, Some(ResolvedScriptStageAction::AntennaSourceSpectrum { ref request_id }) if request_id == "source_k"));
+        assert_eq!(stage.ir.antenna_spectrum_requests.len(), 1);
+        assert_eq!(problem.antenna_spectrum_requests.len(), 1);
+        materialize_pipeline_antenna_source_spectrum(&mut problem, &payload, &inventory).unwrap();
+        assert_eq!(problem.antenna_spectrum_requests.len(), 1);
+        let mut conflict = payload.clone();
+        conflict.get_mut("request").unwrap()["output_id"] = json!("other");
+        assert!(materialize_pipeline_antenna_source_spectrum(&mut problem, &conflict, &inventory)
+            .unwrap_err()
+            .to_string()
+            .contains("conflicting antenna source-spectrum request id"));
+        let mut declared = problem.antenna_spectrum_requests[0].clone();
+        declared.component = "y".into();
+        let inventory = ScriptAntennaAuthoringInventory {
+            antenna_spectrum_requests: vec![declared],
+            ..Default::default()
+        };
+        let before = serde_json::to_value(&problem).unwrap();
+        assert!(materialize_pipeline_antenna_source_spectrum(&mut problem, &payload, &inventory)
+            .unwrap_err().to_string().contains("conflicting antenna source-spectrum request declaration"));
+        assert_eq!(serde_json::to_value(problem).unwrap(), before);
+    }
+
+    #[test]
+    fn solved_antenna_drive_action_preserves_matching_base_model_without_duplicates() {
+        let mut problem = ProblemIR::bootstrap_example();
+        let projection: fullmag_ir::AntennaTargetProjectionRefIR = serde_json::from_value(json!({
+            "id": "projection_1",
+            "solution": {"kind": "stage_output", "stage_id": "solve_1", "output_id": "basis"},
+            "target": {"kind": "global"},
+            "output_id": "projected"
+        })).unwrap();
+        let drive: fullmag_ir::SolvedAntennaDriveIR = serde_json::from_value(json!({
+            "id": "drive_1",
+            "name": "Drive 1",
+            "projection_ref": "projection_1",
+            "port_mode_id": "port_1",
+            "peak_current_a": 1.0,
+            "waveform": {"kind": "constant"},
+            "time_origin": "absolute",
+            "activation": {"kind": "all_time_evolution"}
+        })).unwrap();
+        register_solved_antenna_drive(&mut problem, &projection, &drive).unwrap();
+        register_solved_antenna_drive(&mut problem, &projection, &drive).unwrap();
+        assert_eq!(problem.antenna_target_projections.len(), 1);
+        assert_eq!(problem.solved_antenna_drives.len(), 1);
+        let mut conflicting = drive.clone();
+        conflicting.peak_current_a = 2.0;
+        let inventory = ScriptAntennaAuthoringInventory {
+            antenna_target_projections: vec![projection.clone()],
+            solved_antenna_drives: vec![conflicting.clone()],
+            ..Default::default()
+        };
+        assert!(check_solved_antenna_drive_declarations(&inventory, &projection, &drive)
+            .unwrap_err().to_string().contains("conflicting antenna drive declaration"));
+        assert!(register_solved_antenna_drive(&mut problem, &projection, &conflicting)
+            .unwrap_err().to_string().contains("conflicting solved antenna drive id"));
     }
 }
 
@@ -293,11 +582,13 @@ fn materialize_script_stages_with_stage_limit(
     let mut expansion_budget = max_stages.map(StageExpansionBudget::new);
     let ScriptExecutionConfig {
         mut ir,
+        antenna_inventory,
         shared_geometry_assets,
         default_until_seconds,
         study_pipeline,
         stages,
     } = config;
+    antenna_inventory.validate().map_err(anyhow::Error::msg)?;
 
     ensure_stage_capacity(expansion_budget.as_ref(), stages.len())?;
     if stages.is_empty() {
@@ -323,15 +614,15 @@ fn materialize_script_stages_with_stage_limit(
             let mut materialized = materialize_study_pipeline(
                 &document,
                 &ir,
+                &antenna_inventory,
                 default_until_seconds,
                 &mut expansion_budget,
             )?;
-            if !materialized.is_empty() {
-                for stage in &mut materialized {
-                    configure_stage_output_storage(stage, output_storage.as_ref(), output_policy)?;
-                }
-                return Ok(annotate_stage_transitions(materialized));
+            for stage in &mut materialized {
+                configure_stage_output_storage(stage, output_storage.as_ref(), output_policy)?;
             }
+            // An authored empty/all-disabled pipeline must not start a legacy solver.
+            return Ok(annotate_stage_transitions(materialized));
         }
         ensure_stage_capacity(expansion_budget.as_ref(), 1)?;
         let entrypoint_kind = ir.problem_meta.entrypoint_kind.clone();
@@ -370,6 +661,7 @@ fn materialize_script_stages_with_stage_limit(
                 stage.ir,
                 stage.entrypoint_kind,
                 action,
+                &antenna_inventory,
             )?);
         } else {
             let until_seconds =
@@ -456,6 +748,21 @@ fn classify_stage_transition(
 
 fn classify_action_stage_transition(action: &ResolvedScriptStageAction) -> StageTransitionMetadata {
     match action {
+        ResolvedScriptStageAction::AntennaExternalLeadInspection { .. } => StageTransitionMetadata::boundary(
+            StageTransitionKind::AntennaExternalLeadInspection,
+            StageTransitionReason::AntennaExternalLeadInspection,
+            None,
+        ),
+        ResolvedScriptStageAction::AntennaFieldSolve { .. } => StageTransitionMetadata::boundary(
+            StageTransitionKind::AntennaFieldSolve,
+            StageTransitionReason::AntennaFieldSolve,
+            None,
+        ),
+        ResolvedScriptStageAction::AntennaSourceSpectrum { .. } => StageTransitionMetadata::boundary(
+            StageTransitionKind::AntennaSourceSpectrum,
+            StageTransitionReason::AntennaSourceSpectrum,
+            None,
+        ),
         ResolvedScriptStageAction::SaveState { .. } => StageTransitionMetadata::boundary(
             StageTransitionKind::SaveCheckpoint,
             StageTransitionReason::UserExport,
@@ -481,6 +788,7 @@ fn classify_action_stage_transition(action: &ResolvedScriptStageAction) -> Stage
         | ResolvedScriptStageAction::TableAutosave { .. }
         | ResolvedScriptStageAction::Autosave { .. }
         | ResolvedScriptStageAction::FftResponse { .. }
+        | ResolvedScriptStageAction::AddSolvedAntennaDrive { .. }
         | ResolvedScriptStageAction::SetTransportCurrent { .. }
         | ResolvedScriptStageAction::SetSpinTorqueEnabled { .. } => {
             StageTransitionMetadata::continue_in_place()
@@ -548,12 +856,108 @@ fn same_magnet_topology(
             })
 }
 
+fn resolve_antenna_field_solve_action(
+    ir: &ProblemIR,
+    stage_id: &str,
+    port_mode_id: &str,
+) -> Result<ResolvedScriptStageAction> {
+    let plan = fullmag_plan::plan_antenna_field_solve_execution(ir, stage_id, port_mode_id)
+        .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+    Ok(match plan {
+        fullmag_plan::AntennaFieldSolveExecutionPlan::FieldBasis(plan) => {
+            ResolvedScriptStageAction::AntennaFieldSolve {
+                stage_id: stage_id.into(),
+                port_mode_id: port_mode_id.into(),
+                plan,
+            }
+        }
+        fullmag_plan::AntennaFieldSolveExecutionPlan::ExternalLeadInspection {
+            input,
+            requested_execution,
+            output_id,
+        } => ResolvedScriptStageAction::AntennaExternalLeadInspection {
+            input,
+            requested_execution,
+            output_id,
+        },
+    })
+}
+
+fn select_antenna_port_reference(singular: Option<&str>, plural: &[String]) -> Result<String> {
+    match (singular, plural) {
+        (Some(value), []) if !value.trim().is_empty() => {
+            Ok(value.to_owned())
+        }
+        (None, [value]) if !value.trim().is_empty() => Ok(value.clone()),
+        (Some(_), []) | (None, [_]) => {
+            bail!("antenna_field_solve port reference must be a non-empty string")
+        }
+        (Some(_), _) => {
+            bail!("antenna_field_solve cannot combine port_mode_id with non-empty port_mode_ids")
+        }
+        (None, _) => {
+            bail!("antenna_field_solve requires port_mode_id or exactly one port_mode_ids entry")
+        }
+    }
+}
+
 fn resolve_explicit_stage_action(
     mut ir: ProblemIR,
     entrypoint_kind: String,
     action: ScriptExecutionStageAction,
+    antenna_inventory: &ScriptAntennaAuthoringInventory,
 ) -> Result<ResolvedScriptStage> {
     let (entrypoint_fallback, resolved_action) = match action {
+        ScriptExecutionStageAction::AntennaFieldSolve {
+            stage_id,
+            port_mode_id,
+            port_mode_ids,
+        } => {
+            let selected_port_mode_id =
+                select_antenna_port_reference(port_mode_id.as_deref(), &port_mode_ids)?;
+            select_antenna_solve_definition(&mut ir, antenna_inventory, &stage_id)?;
+            if ir.magnets.is_empty() {
+                ir.study = standalone_antenna_study(&stage_id, &selected_port_mode_id);
+            }
+            let resolved_action = resolve_antenna_field_solve_action(
+                &ir, &stage_id, &selected_port_mode_id,
+            )?;
+            (
+                "study_pipeline_antenna_field_solve",
+                resolved_action,
+            )
+        }
+        ScriptExecutionStageAction::AntennaSourceSpectrum { request } => {
+            check_antenna_declaration(
+                antenna_inventory.antenna_spectrum_requests.iter().find(|item| item.id == request.id),
+                &request,
+                "source-spectrum request",
+                &request.id,
+            )?;
+            if let Some(existing) = ir.antenna_spectrum_requests.iter().find(|item| item.id == request.id) {
+                if existing != &request {
+                    bail!("conflicting antenna source-spectrum request id '{}'", request.id);
+                }
+            } else {
+                ir.antenna_spectrum_requests.push(request.clone());
+            }
+            let request_id = request.id.clone();
+            (
+                "study_pipeline_antenna_source_spectrum",
+                ResolvedScriptStageAction::AntennaSourceSpectrum { request_id },
+            )
+        }
+        ScriptExecutionStageAction::AddSolvedAntennaDrive { projection, drive } => {
+            check_solved_antenna_drive_declarations(antenna_inventory, &projection, &drive)?;
+            register_solved_antenna_drive(&mut ir, &projection, &drive)?;
+            (
+                "study_pipeline_add_solved_antenna_drive",
+                ResolvedScriptStageAction::AddSolvedAntennaDrive {
+                    projection_id: projection.id,
+                    drive_id: drive.id,
+                },
+            )
+        }
         ScriptExecutionStageAction::SaveState {
             artifact_name,
             format,
@@ -733,6 +1137,7 @@ fn resolve_explicit_stage_action(
 fn materialize_study_pipeline(
     document: &StudyPipelineDocument,
     base_ir: &ProblemIR,
+    antenna_inventory: &ScriptAntennaAuthoringInventory,
     default_until_seconds: Option<f64>,
     expansion_budget: &mut Option<StageExpansionBudget>,
 ) -> Result<Vec<ResolvedScriptStage>> {
@@ -742,6 +1147,7 @@ fn materialize_study_pipeline(
             document.version
         );
     }
+    validate_pipeline_node_ids(&document.nodes, &mut BTreeSet::new())?;
     let mut stages = Vec::new();
     let mut current_ir = base_ir.clone();
     current_ir.problem_meta.runtime_metadata.insert(
@@ -751,19 +1157,46 @@ fn materialize_study_pipeline(
     walk_study_pipeline_nodes(
         &document.nodes,
         &mut current_ir,
+        antenna_inventory,
         default_until_seconds,
         &mut stages,
         expansion_budget,
+        &[],
     )?;
     Ok(stages)
+}
+
+fn validate_pipeline_node_ids(
+    nodes: &[StudyPipelineNode],
+    seen: &mut BTreeSet<String>,
+) -> Result<()> {
+    for node in nodes {
+        let id = match node {
+            StudyPipelineNode::Primitive { id, .. }
+            | StudyPipelineNode::Macro { id, .. }
+            | StudyPipelineNode::Group { id, .. } => id,
+        };
+        if id.trim().is_empty() {
+            bail!("study pipeline node ids must not be empty");
+        }
+        if !seen.insert(id.clone()) {
+            bail!("duplicate study pipeline node id '{id}'");
+        }
+        if let StudyPipelineNode::Group { children, .. } = node {
+            validate_pipeline_node_ids(children, seen)?;
+        }
+    }
+    Ok(())
 }
 
 fn walk_study_pipeline_nodes(
     nodes: &[StudyPipelineNode],
     current_ir: &mut ProblemIR,
+    antenna_inventory: &ScriptAntennaAuthoringInventory,
     default_until_seconds: Option<f64>,
     out: &mut Vec<ResolvedScriptStage>,
     expansion_budget: &mut Option<StageExpansionBudget>,
+    ancestor_group_ids: &[String],
 ) -> Result<()> {
     for node in nodes {
         match node {
@@ -773,19 +1206,29 @@ fn walk_study_pipeline_nodes(
                 stage_kind,
                 payload,
                 label,
-                ..
+                notes,
+                source,
             } => {
                 if !enabled {
                     continue;
                 }
                 if let Some(mut stage) = materialize_pipeline_primitive(
                     current_ir,
+                    antenna_inventory,
                     stage_kind,
                     payload,
                     default_until_seconds,
                 )
                 .with_context(|| format!("failed to materialize study pipeline node '{label}'"))?
                 {
+                    stage.provenance = Some(ScriptStageProvenance {
+                        authored_step_id: id.clone(),
+                        expansion_index: 0,
+                        ancestor_group_ids: ancestor_group_ids.to_vec(),
+                        label: label.clone(),
+                        notes: notes.clone(),
+                        source: source.clone(),
+                    });
                     stage
                         .ir
                         .problem_meta
@@ -803,7 +1246,8 @@ fn walk_study_pipeline_nodes(
                 macro_kind,
                 label,
                 config,
-                ..
+                notes,
+                source,
             } => {
                 if !enabled {
                     continue;
@@ -816,7 +1260,15 @@ fn walk_study_pipeline_nodes(
                     expansion_budget.as_ref(),
                 )
                 .with_context(|| format!("failed to materialize study pipeline node '{label}'"))?;
-                for stage in &mut stages {
+                for (expansion_index, stage) in stages.iter_mut().enumerate() {
+                    stage.provenance = Some(ScriptStageProvenance {
+                        authored_step_id: id.clone(),
+                        expansion_index,
+                        ancestor_group_ids: ancestor_group_ids.to_vec(),
+                        label: label.clone(),
+                        notes: notes.clone(),
+                        source: source.clone(),
+                    });
                     stage
                         .ir
                         .problem_meta
@@ -828,17 +1280,21 @@ fn walk_study_pipeline_nodes(
                 out.extend(stages);
             }
             StudyPipelineNode::Group {
-                enabled, children, ..
+                id, enabled, children, ..
             } => {
                 if !enabled {
                     continue;
                 }
+                let mut ancestors = ancestor_group_ids.to_vec();
+                ancestors.push(id.clone());
                 walk_study_pipeline_nodes(
                     children,
                     current_ir,
+                    antenna_inventory,
                     default_until_seconds,
                     out,
                     expansion_budget,
+                    &ancestors,
                 )?;
             }
         }
@@ -848,12 +1304,22 @@ fn walk_study_pipeline_nodes(
 
 fn materialize_pipeline_primitive(
     current_ir: &mut ProblemIR,
+    antenna_inventory: &ScriptAntennaAuthoringInventory,
     stage_kind: &str,
     payload: &BTreeMap<String, Value>,
     default_until_seconds: Option<f64>,
 ) -> Result<Option<ResolvedScriptStage>> {
     let normalized_kind = stage_kind.trim().to_ascii_lowercase();
     match normalized_kind.as_str() {
+        "antenna_field_solve" => {
+            materialize_pipeline_antenna_field_solve(current_ir, payload, antenna_inventory).map(Some)
+        }
+        "antenna_source_spectrum" => {
+            materialize_pipeline_antenna_source_spectrum(current_ir, payload, antenna_inventory).map(Some)
+        }
+        "add_solved_antenna_drive" => {
+            materialize_pipeline_add_solved_antenna_drive(current_ir, payload, antenna_inventory).map(Some)
+        }
         "run" => {
             validate_pipeline_run_primitive_payload(payload)?;
             materialize_pipeline_run(current_ir, payload, default_until_seconds).map(Some)
@@ -895,6 +1361,209 @@ fn materialize_pipeline_primitive(
             other
         ),
     }
+}
+
+fn check_antenna_declaration<T: PartialEq>(
+    declared: Option<&T>,
+    selected: &T,
+    kind: &str,
+    id: &str,
+) -> Result<()> {
+    if declared.is_some_and(|item| item != selected) {
+        bail!("conflicting antenna {kind} declaration id '{id}'");
+    }
+    Ok(())
+}
+
+fn select_antenna_solve_definition(
+    problem: &mut ProblemIR,
+    inventory: &ScriptAntennaAuthoringInventory,
+    stage_id: &str,
+) -> Result<()> {
+    let declared = inventory.antenna_field_solve_stages.iter().find(|item| item.id == stage_id);
+    let active = problem.antenna_field_solve_stages.iter()
+        .filter(|item| item.id == stage_id)
+        .collect::<Vec<_>>();
+    if active.len() > 1 {
+        bail!("duplicate active antenna solve definition id '{stage_id}'");
+    }
+    if let Some(declared) = declared {
+        check_antenna_declaration(active.first().copied(), declared, "solve", stage_id)?;
+        if active.is_empty() {
+            problem.antenna_field_solve_stages.push(declared.clone());
+        }
+    }
+    Ok(())
+}
+
+fn check_solved_antenna_drive_declarations(
+    inventory: &ScriptAntennaAuthoringInventory,
+    projection: &fullmag_ir::AntennaTargetProjectionRefIR,
+    drive: &fullmag_ir::SolvedAntennaDriveIR,
+) -> Result<()> {
+    check_antenna_declaration(
+        inventory.antenna_target_projections.iter().find(|item| item.id == projection.id),
+        projection,
+        "projection",
+        &projection.id,
+    )?;
+    check_antenna_declaration(
+        inventory.solved_antenna_drives.iter().find(|item| item.id == drive.id),
+        drive,
+        "drive",
+        &drive.id,
+    )
+}
+
+fn standalone_antenna_study(stage_id: &str, port_mode_id: &str) -> fullmag_ir::StudyIR {
+    fullmag_ir::StudyIR::AntennaFieldSolve {
+        selection: Some(fullmag_ir::AntennaFieldSolveSelectionIR {
+            stage_id: stage_id.into(), port_mode_id: port_mode_id.into(),
+        }),
+        sampling: fullmag_ir::SamplingIR {
+            outputs: vec![],
+            table_autosave: None,
+            stage_autosave: None,
+        },
+    }
+}
+
+fn materialize_pipeline_antenna_field_solve(
+    current_ir: &mut ProblemIR,
+    payload: &BTreeMap<String, Value>,
+    antenna_inventory: &ScriptAntennaAuthoringInventory,
+) -> Result<ResolvedScriptStage> {
+    let unsupported = payload
+        .keys()
+        .filter(|key| {
+            !matches!(
+                key.as_str(),
+                "kind" | "stage_id" | "port_mode_id" | "port_mode_ids" | "entrypoint_kind"
+            )
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    if !unsupported.is_empty() {
+        bail!(
+            "antenna_field_solve accepts only stage_id, port_mode_id(s), and entrypoint_kind; unsupported payload keys: {}",
+            unsupported.join(", ")
+        );
+    }
+    let stage_id = payload
+        .get("stage_id")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .filter(|value| !value.trim().is_empty())
+        .context("antenna_field_solve requires non-empty string payload.stage_id")?;
+    let singular = payload.get("port_mode_id")
+        .map(|value| value.as_str().context("antenna_field_solve payload.port_mode_id must be a string"))
+        .transpose()?;
+    let plural = payload.get("port_mode_ids")
+        .map(|value| serde_json::from_value::<Vec<String>>(value.clone())
+            .context("antenna_field_solve payload.port_mode_ids must be an array of strings"))
+        .transpose()?.unwrap_or_default();
+    let port_mode_id = select_antenna_port_reference(singular, &plural)?;
+    let mut candidate = current_ir.clone();
+    select_antenna_solve_definition(&mut candidate, antenna_inventory, &stage_id)?;
+    if candidate.magnets.is_empty() {
+        candidate.study = standalone_antenna_study(&stage_id, &port_mode_id);
+    }
+    let action = resolve_antenna_field_solve_action(&candidate, &stage_id, &port_mode_id)?;
+    let entrypoint_kind = payload_string(payload, "entrypoint_kind")
+        .unwrap_or_else(|| "study_pipeline_antenna_field_solve".to_string());
+    candidate.problem_meta.entrypoint_kind = entrypoint_kind.clone();
+    *current_ir = candidate;
+    Ok(ResolvedScriptStage::synthetic(
+        current_ir.clone(),
+        entrypoint_kind,
+        action,
+    ))
+}
+
+fn materialize_pipeline_antenna_source_spectrum(
+    current_ir: &mut ProblemIR,
+    payload: &BTreeMap<String, Value>,
+    antenna_inventory: &ScriptAntennaAuthoringInventory,
+) -> Result<ResolvedScriptStage> {
+    let request: fullmag_ir::AntennaSpectrumRequestIR = serde_json::from_value(
+        payload.get("request").cloned().context("antenna_source_spectrum requires payload.request")?,
+    )
+    .context("antenna_source_spectrum payload.request is invalid")?;
+    check_antenna_declaration(
+        antenna_inventory.antenna_spectrum_requests.iter().find(|item| item.id == request.id),
+        &request,
+        "source-spectrum request",
+        &request.id,
+    )?;
+    if let Some(existing) = current_ir.antenna_spectrum_requests.iter().find(|item| item.id == request.id) {
+        if existing != &request {
+            bail!("conflicting antenna source-spectrum request id '{}'", request.id);
+        }
+    } else {
+        current_ir.antenna_spectrum_requests.push(request.clone());
+    }
+    let request_id = request.id.clone();
+    let entrypoint_kind = payload_string(payload, "entrypoint_kind")
+        .unwrap_or_else(|| "study_pipeline_antenna_source_spectrum".to_string());
+    current_ir.problem_meta.entrypoint_kind = entrypoint_kind.clone();
+    Ok(ResolvedScriptStage::synthetic(
+        current_ir.clone(),
+        entrypoint_kind,
+        ResolvedScriptStageAction::AntennaSourceSpectrum { request_id },
+    ))
+}
+
+fn register_solved_antenna_drive(
+    problem: &mut ProblemIR,
+    projection: &fullmag_ir::AntennaTargetProjectionRefIR,
+    drive: &fullmag_ir::SolvedAntennaDriveIR,
+) -> Result<()> {
+    if drive.projection_ref != projection.id {
+        bail!("solved antenna drive '{}' must reference projection '{}'", drive.id, projection.id);
+    }
+    let existing_projection = problem.antenna_target_projections.iter().find(|item| item.id == projection.id);
+    if existing_projection.is_some_and(|item| item != projection) {
+        bail!("conflicting antenna projection id '{}'", projection.id);
+    }
+    let existing_drive = problem.solved_antenna_drives.iter().find(|item| item.id == drive.id);
+    if existing_drive.is_some_and(|item| item != drive) {
+        bail!("conflicting solved antenna drive id '{}'", drive.id);
+    }
+    if existing_projection.is_none() {
+        problem.antenna_target_projections.push(projection.clone());
+    }
+    if existing_drive.is_none() {
+        problem.solved_antenna_drives.push(drive.clone());
+    }
+    Ok(())
+}
+
+fn materialize_pipeline_add_solved_antenna_drive(
+    current_ir: &mut ProblemIR,
+    payload: &BTreeMap<String, Value>,
+    antenna_inventory: &ScriptAntennaAuthoringInventory,
+) -> Result<ResolvedScriptStage> {
+    let projection: fullmag_ir::AntennaTargetProjectionRefIR = serde_json::from_value(
+        payload.get("projection").cloned().context("add_solved_antenna_drive requires payload.projection")?,
+    )
+    .context("add_solved_antenna_drive payload.projection is invalid")?;
+    let drive: fullmag_ir::SolvedAntennaDriveIR = serde_json::from_value(
+        payload.get("drive").cloned().context("add_solved_antenna_drive requires payload.drive")?,
+    )
+    .context("add_solved_antenna_drive payload.drive is invalid")?;
+    check_solved_antenna_drive_declarations(antenna_inventory, &projection, &drive)?;
+    register_solved_antenna_drive(current_ir, &projection, &drive)?;
+    let entrypoint_kind = payload_string(payload, "entrypoint_kind")
+        .unwrap_or_else(|| "study_pipeline_add_solved_antenna_drive".to_string());
+    current_ir.problem_meta.entrypoint_kind = entrypoint_kind.clone();
+    Ok(ResolvedScriptStage::synthetic(
+        current_ir.clone(),
+        entrypoint_kind,
+        ResolvedScriptStageAction::AddSolvedAntennaDrive {
+            projection_id: projection.id,
+            drive_id: drive.id,
+        },
+    ))
 }
 
 fn materialize_pipeline_add_field_drive(
@@ -1249,14 +1918,16 @@ fn eigen_sampling_from(base: &fullmag_ir::SamplingIR, mode_count: u32) -> fullma
         .cloned()
         .collect();
     for output in &mut outputs {
-        if let fullmag_ir::OutputIR::EigenMode { indices, .. } = output {
-            indices.retain(|index| *index < mode_count);
+        if let fullmag_ir::OutputIR::EigenMode { indices, all_modes, .. } = output {
+            if !*all_modes {
+                indices.retain(|index| *index < mode_count);
+            }
         }
     }
     outputs.retain(|output| {
         !matches!(
             output,
-            fullmag_ir::OutputIR::EigenMode { indices, .. } if indices.is_empty()
+            fullmag_ir::OutputIR::EigenMode { all_modes, indices, branches, .. } if !all_modes && indices.is_empty() && branches.is_empty()
         )
     });
     if !outputs.iter().any(|output| {
@@ -1266,7 +1937,8 @@ fn eigen_sampling_from(base: &fullmag_ir::SamplingIR, mode_count: u32) -> fullma
         )
     }) {
         outputs.push(fullmag_ir::OutputIR::EigenSpectrum {
-            quantity: "spectrum".to_string(),
+            quantity: fullmag_ir::CANONICAL_EIGEN_SPECTRUM_QUANTITY.to_string(),
+            scope: None,
         });
     }
     fullmag_ir::SamplingIR {
@@ -1299,6 +1971,7 @@ fn frequency_response_sampling_from(base: &fullmag_ir::SamplingIR) -> fullmag_ir
 
 fn normalize_stage_sampling(ir: &mut ProblemIR) {
     match &mut ir.study {
+        fullmag_ir::StudyIR::AntennaFieldSolve { .. } => {}
         fullmag_ir::StudyIR::TimeEvolution { sampling, .. }
         | fullmag_ir::StudyIR::Relaxation { sampling, .. }
         | fullmag_ir::StudyIR::Hysteresis { sampling, .. } => {
@@ -1544,6 +2217,86 @@ pub fn materialize_pipeline_eigenmodes(
         } => *magnetostatic_bc,
         _ => fullmag_ir::MagnetostaticBoundaryConditionIR::default(),
     };
+    let solver_policy_keys = [
+        "eigen_solver_rtol",
+        "eigen_solver_max_outer_iterations",
+        "eigen_solver_max_linear_iterations",
+    ];
+    let has_solver_policy_overrides = solver_policy_keys
+        .iter()
+        .any(|key| payload.contains_key(*key));
+    if has_solver_policy_overrides {
+        // Missing keys inherit legacy base metadata. Present null/blank values
+        // are explicit clears, matching the script builder's stage overrides.
+        let base_solver_policy = if solver_policy_keys
+            .iter()
+            .any(|key| !payload.contains_key(*key))
+        {
+            ir.problem_meta
+                .runtime_metadata
+                .get("modal_solver_policy")
+                .cloned()
+                .map(serde_json::from_value::<fullmag_ir::FemEigenSolverPolicyIR>)
+                .transpose()
+                .context("invalid base runtime_metadata.modal_solver_policy")?
+        } else {
+            None
+        };
+        let residual_tolerance = if payload.contains_key("eigen_solver_rtol") {
+            payload_f64(payload, "eigen_solver_rtol")?
+        } else {
+            base_solver_policy
+                .as_ref()
+                .and_then(|policy| policy.residual_tolerance)
+        };
+        let max_outer_iterations = if payload.contains_key("eigen_solver_max_outer_iterations") {
+            payload_u32(payload, "eigen_solver_max_outer_iterations")?
+        } else {
+            base_solver_policy
+                .as_ref()
+                .and_then(|policy| policy.max_outer_iterations)
+        };
+        let max_linear_iterations = if payload.contains_key("eigen_solver_max_linear_iterations") {
+            payload_u32(payload, "eigen_solver_max_linear_iterations")?
+        } else {
+            base_solver_policy
+                .as_ref()
+                .and_then(|policy| policy.max_linear_iterations)
+        };
+        if residual_tolerance.is_some_and(|rtol| !rtol.is_finite() || rtol <= 0.0) {
+            bail!("eigen_solver_rtol must be finite and positive");
+        }
+        for (key, value) in [
+            ("eigen_solver_max_outer_iterations", max_outer_iterations),
+            ("eigen_solver_max_linear_iterations", max_linear_iterations),
+        ] {
+            if value == Some(0) {
+                bail!("{key} must be positive");
+            }
+            if value.is_some_and(|iterations| iterations > i32::MAX as u32) {
+                bail!("{key} must fit the native signed iteration limit");
+            }
+        }
+        let solver_policy = fullmag_ir::FemEigenSolverPolicyIR {
+            residual_tolerance,
+            max_outer_iterations,
+            max_linear_iterations,
+        };
+        if solver_policy.residual_tolerance.is_none()
+            && solver_policy.max_outer_iterations.is_none()
+            && solver_policy.max_linear_iterations.is_none()
+        {
+            ir.problem_meta
+                .runtime_metadata
+                .remove("modal_solver_policy");
+        } else {
+            let value = serde_json::to_value(solver_policy)
+                .context("failed to serialize pipeline modal solver policy")?;
+            ir.problem_meta
+                .runtime_metadata
+                .insert("modal_solver_policy".to_string(), value);
+        }
+    }
     let count = payload_u32(payload, "eigen_count")?.unwrap_or(default_count);
     let include_demag = payload_bool(payload, "eigen_include_demag")?.unwrap_or_else(|| {
         current_eigen
@@ -3463,4 +4216,308 @@ fn linear_sweep_values(start: f64, stop: f64, steps: u64) -> Result<Vec<f64>> {
             start + (stop - start) * t
         })
         .collect())
+}
+
+#[cfg(test)]
+mod eigen_sampling_selector_tests {
+    use super::*;
+
+    #[test]
+    fn preserves_all_and_branch_selectors_while_clipping_explicit_indices() {
+        let mode = |all_modes, indices, branches| fullmag_ir::OutputIR::EigenMode {
+            field: "mode".to_string(),
+            all_modes,
+            indices,
+            branches,
+            sample_selector: None,
+        };
+        let base = fullmag_ir::SamplingIR {
+            outputs: vec![
+                mode(true, vec![], vec![]),
+                mode(false, vec![], vec![8]),
+                mode(false, vec![0, 3], vec![]),
+                mode(false, vec![3], vec![]),
+                mode(false, vec![], vec![]),
+            ],
+            table_autosave: None,
+            stage_autosave: None,
+        };
+        let sampled = eigen_sampling_from(&base, 2);
+        let modes: Vec<_> = sampled.outputs.iter().filter_map(|output| match output {
+            fullmag_ir::OutputIR::EigenMode { all_modes, indices, branches, .. } =>
+                Some((*all_modes, indices.clone(), branches.clone())),
+            _ => None,
+        }).collect();
+        assert_eq!(modes, vec![
+            (true, vec![], vec![]),
+            (false, vec![], vec![8]),
+            (false, vec![0], vec![]),
+        ]);
+    }
+}
+
+#[cfg(test)]
+mod pipeline_eigen_solver_policy_tests {
+    use super::*;
+
+    fn time_evolution_base() -> ProblemIR {
+        let base = ProblemIR::bootstrap_example();
+        assert!(matches!(
+            &base.study,
+            fullmag_ir::StudyIR::TimeEvolution { .. }
+        ));
+        base
+    }
+
+    fn policy_from_stage(
+        stage: &ResolvedScriptStage,
+    ) -> Option<fullmag_ir::FemEigenSolverPolicyIR> {
+        stage
+            .ir
+            .problem_meta
+            .runtime_metadata
+            .get("modal_solver_policy")
+            .cloned()
+            .map(serde_json::from_value::<fullmag_ir::FemEigenSolverPolicyIR>)
+            .transpose()
+            .expect("materialized solver policy should match its typed IR model")
+    }
+
+    fn eigenmode_pipeline_stage(base: ProblemIR) -> ResolvedScriptStage {
+        let config = ScriptExecutionConfig {
+            ir: base,
+            shared_geometry_assets: None,
+            default_until_seconds: None,
+            study_pipeline: Some(StudyPipelineDocument {
+                version: "study_pipeline.v1".to_string(),
+                nodes: vec![StudyPipelineNode::Primitive {
+                    id: "eigenmodes".to_string(),
+                    label: "Eigenmodes".to_string(),
+                    enabled: true,
+                    notes: None,
+                    source: None,
+                    stage_kind: "eigenmodes".to_string(),
+                    payload: BTreeMap::new(),
+                }],
+            }),
+            stages: Vec::new(),
+        };
+        let mut stages = materialize_script_stages_with_output_policy_bounded(
+            config,
+            fullmag_ir::configure_project_autosave_policy,
+            1,
+        )
+        .expect("eigenmodes pipeline should materialize");
+        assert_eq!(stages.len(), 1, "expected exactly one pipeline stage");
+        stages.remove(0)
+    }
+
+    #[test]
+    fn pipeline_eigenmodes_without_prior_eigen_outputs_use_canonical_spectrum() {
+        let time_evolution = time_evolution_base();
+        let relaxation = materialize_pipeline_relax(&time_evolution, &BTreeMap::new())
+            .expect("time-evolution base should materialize a relaxation stage");
+
+        for (base_kind, base) in [
+            ("time-evolution", &time_evolution),
+            ("relaxation", &relaxation.ir),
+        ] {
+            assert!(
+                base.study.sampling().outputs.iter().all(|output| !matches!(
+                    output,
+                    fullmag_ir::OutputIR::EigenSpectrum { .. }
+                        | fullmag_ir::OutputIR::EigenMode { .. }
+                        | fullmag_ir::OutputIR::DispersionCurve { .. }
+                )),
+                "{base_kind} base should not contain prior eigen outputs"
+            );
+
+            let stage = eigenmode_pipeline_stage((*base).clone());
+            let fullmag_ir::StudyIR::Eigenmodes { sampling, .. } = &stage.ir.study else {
+                panic!("{base_kind} base should materialize an eigenmodes stage");
+            };
+            assert_eq!(
+                sampling.outputs,
+                vec![fullmag_ir::OutputIR::EigenSpectrum {
+                    quantity: fullmag_ir::CANONICAL_EIGEN_SPECTRUM_QUANTITY.to_string(),
+                    scope: None,
+                }],
+                "{base_kind} base should receive only the canonical spectrum fallback"
+            );
+            stage.ir.validate().unwrap_or_else(|errors| {
+                panic!("{base_kind} fallback should produce valid active IR: {errors:?}")
+            });
+        }
+    }
+
+    #[test]
+    fn pipeline_eigenmodes_preserve_explicit_eigen_outputs() {
+        let explicit_outputs = vec![
+            fullmag_ir::OutputIR::EigenSpectrum {
+                quantity: fullmag_ir::CANONICAL_EIGEN_SPECTRUM_QUANTITY.to_string(),
+                scope: None,
+            },
+            fullmag_ir::OutputIR::EigenMode {
+                field: "mode".to_string(),
+                all_modes: false,
+                indices: vec![1],
+                branches: Vec::new(),
+                sample_selector: None,
+            },
+        ];
+        let mut base = time_evolution_base();
+        let fullmag_ir::StudyIR::TimeEvolution { sampling, .. } = &mut base.study else {
+            unreachable!("time_evolution_base returns a time-evolution study");
+        };
+        sampling.outputs = explicit_outputs.clone();
+
+        let stage = eigenmode_pipeline_stage(base);
+        let fullmag_ir::StudyIR::Eigenmodes { sampling, .. } = &stage.ir.study else {
+            panic!("time-evolution base should materialize an eigenmodes stage");
+        };
+        assert_eq!(sampling.outputs, explicit_outputs);
+        stage.ir.validate().expect("explicit canonical eigen outputs remain valid");
+    }
+
+    #[test]
+    fn explicit_stage_policy_overrides_time_evolution_base_metadata() {
+        let mut base = time_evolution_base();
+        let base_policy = serde_json::json!({
+            "residual_tolerance": 1.0e-3,
+            "max_outer_iterations": 12,
+            "max_linear_iterations": 34,
+        });
+        base.problem_meta
+            .runtime_metadata
+            .insert("modal_solver_policy".to_string(), base_policy.clone());
+        base.problem_meta
+            .runtime_metadata
+            .insert("stage_marker".to_string(), serde_json::json!("preserve"));
+        let payload = BTreeMap::from([
+            ("eigen_count".to_string(), serde_json::json!("4")),
+            ("eigen_solver_rtol".to_string(), serde_json::json!("1e-8")),
+            (
+                "eigen_solver_max_outer_iterations".to_string(),
+                serde_json::json!("56"),
+            ),
+            (
+                "eigen_solver_max_linear_iterations".to_string(),
+                serde_json::json!("78"),
+            ),
+        ]);
+
+        let stage = materialize_pipeline_eigenmodes(&base, &payload).unwrap();
+        let policy = policy_from_stage(&stage).expect("explicit policy should be materialized");
+        assert_eq!(policy.residual_tolerance, Some(1.0e-8));
+        assert_eq!(policy.max_outer_iterations, Some(56));
+        assert_eq!(policy.max_linear_iterations, Some(78));
+        assert_eq!(
+            stage.ir.problem_meta.runtime_metadata["stage_marker"],
+            "preserve"
+        );
+        assert_eq!(
+            base.problem_meta.runtime_metadata["modal_solver_policy"],
+            base_policy
+        );
+        match &stage.ir.study {
+            fullmag_ir::StudyIR::Eigenmodes { count, .. } => assert_eq!(*count, 4),
+            other => panic!("expected materialized eigenmodes study, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn absent_policy_keys_preserve_legacy_metadata_without_inventing_defaults() {
+        let mut base = time_evolution_base();
+        base.problem_meta
+            .runtime_metadata
+            .insert("stage_marker".to_string(), serde_json::json!("preserve"));
+        let legacy_policy = serde_json::json!({
+            "residual_tolerance": 1.0e-4,
+            "max_outer_iterations": 11,
+            "max_linear_iterations": 22,
+        });
+        base.problem_meta
+            .runtime_metadata
+            .insert("modal_solver_policy".to_string(), legacy_policy.clone());
+
+        let stage = materialize_pipeline_eigenmodes(&base, &BTreeMap::new()).unwrap();
+        assert_eq!(
+            stage.ir.problem_meta.runtime_metadata["modal_solver_policy"],
+            legacy_policy
+        );
+        assert_eq!(
+            stage.ir.problem_meta.runtime_metadata["stage_marker"],
+            "preserve"
+        );
+
+        let no_policy_base = time_evolution_base();
+        let no_policy_stage =
+            materialize_pipeline_eigenmodes(&no_policy_base, &BTreeMap::new()).unwrap();
+        assert!(!no_policy_stage
+            .ir
+            .problem_meta
+            .runtime_metadata
+            .contains_key("modal_solver_policy"));
+    }
+
+    #[test]
+    fn blank_policy_fields_clear_and_absent_siblings_keep_their_base_values() {
+        let mut base = time_evolution_base();
+        base.problem_meta.runtime_metadata.insert(
+            "modal_solver_policy".to_string(),
+            serde_json::json!({
+                "residual_tolerance": 1.0e-4,
+                "max_outer_iterations": 11,
+                "max_linear_iterations": 22,
+            }),
+        );
+        let partial_clear =
+            BTreeMap::from([("eigen_solver_rtol".to_string(), serde_json::json!(""))]);
+        let stage = materialize_pipeline_eigenmodes(&base, &partial_clear).unwrap();
+        let policy = policy_from_stage(&stage).expect("remaining base fields should be retained");
+        assert_eq!(policy.residual_tolerance, None);
+        assert_eq!(policy.max_outer_iterations, Some(11));
+        assert_eq!(policy.max_linear_iterations, Some(22));
+
+        let explicit_clear = BTreeMap::from([
+            ("eigen_solver_rtol".to_string(), serde_json::json!(null)),
+            (
+                "eigen_solver_max_outer_iterations".to_string(),
+                serde_json::json!(""),
+            ),
+            (
+                "eigen_solver_max_linear_iterations".to_string(),
+                serde_json::json!(null),
+            ),
+        ]);
+        let cleared_stage = materialize_pipeline_eigenmodes(&base, &explicit_clear).unwrap();
+        assert!(!cleared_stage
+            .ir
+            .problem_meta
+            .runtime_metadata
+            .contains_key("modal_solver_policy"));
+    }
+
+    #[test]
+    fn malformed_and_nonpositive_policy_values_fail_during_materialization() {
+        let base = time_evolution_base();
+        for (key, value) in [
+            ("eigen_solver_rtol", serde_json::json!("not-a-number")),
+            ("eigen_solver_rtol", serde_json::json!(0.0)),
+            ("eigen_solver_rtol", serde_json::json!("NaN")),
+            ("eigen_solver_rtol", serde_json::json!("inf")),
+            ("eigen_solver_max_outer_iterations", serde_json::json!(1.5)),
+            (
+                "eigen_solver_max_linear_iterations",
+                serde_json::json!(u64::from(i32::MAX as u32) + 1),
+            ),
+            ("eigen_solver_max_outer_iterations", serde_json::json!("0")),
+            ("eigen_solver_max_linear_iterations", serde_json::json!(0)),
+        ] {
+            let payload = BTreeMap::from([(key.to_string(), value)]);
+            let error = materialize_pipeline_eigenmodes(&base, &payload)
+                .expect_err("invalid solver policy must fail before a stage can be solved");
+            assert!(error.to_string().contains(key), "{error}");
+        }
+    }
 }

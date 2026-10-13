@@ -16,6 +16,8 @@
 //!   - `disable_preview_3d`: Skip computing preview field vectors entirely
 //!   - `disable_preview_2d`: Skip 2D spatial preview generation
 //!   - `disable_session_state_broadcast`: Skip heavy session_state WS messages
+//!   - `disable_live_magnetization`: Skip carrying full live magnetization
+//!     vectors through the control plane after bootstrap
 
 use std::path::{Path, PathBuf};
 
@@ -36,6 +38,11 @@ pub struct FeatureFlags {
     /// When true, skip the heavy `session_state` WS text message entirely.
     #[serde(default)]
     pub disable_session_state_broadcast: bool,
+    /// When true, drop full live magnetization vectors after the initial
+    /// workspace bootstrap. Scalar progress and saved terminal states remain
+    /// available for large-grid artifact runs.
+    #[serde(default)]
+    pub disable_live_magnetization: bool,
 }
 
 impl FeatureFlags {
@@ -90,6 +97,7 @@ impl FeatureFlags {
             disable_preview_2d: env_flag("FULLMAG_DISABLE_PREVIEW_2D"),
             disable_preview_3d: env_flag("FULLMAG_DISABLE_PREVIEW_3D"),
             disable_session_state_broadcast: env_flag("FULLMAG_DISABLE_SESSION_STATE_BROADCAST"),
+            disable_live_magnetization: env_flag("FULLMAG_DISABLE_LIVE_MAGNETIZATION"),
         }
     }
 
@@ -99,6 +107,7 @@ impl FeatureFlags {
             || self.disable_preview_2d
             || self.disable_preview_3d
             || self.disable_session_state_broadcast
+            || self.disable_live_magnetization
     }
 
     /// Human-readable summary of active flags for startup log.
@@ -115,6 +124,9 @@ impl FeatureFlags {
         }
         if self.disable_session_state_broadcast {
             active.push("disable_session_state_broadcast");
+        }
+        if self.disable_live_magnetization {
+            active.push("disable_live_magnetization");
         }
         active.join(", ")
     }

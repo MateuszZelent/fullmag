@@ -22,6 +22,7 @@ fullmag-application = { path = "../fullmag-application" }
 fullmag-engine = { path = "../fullmag-engine" }
 fullmag-ir = { path = "../fullmag-ir" }
 fullmag-plan = { path = "../fullmag-plan" }
+fullmag-quantities = { path = "../fullmag-quantities" }
 fullmag-runner = { path = "../fullmag-runner" }
 fullmag-runtime-control = { path = "../fullmag-runtime-control" }
 fullmag-session = { path = "../fullmag-session" }

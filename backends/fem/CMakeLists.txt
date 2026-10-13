@@ -21,12 +21,14 @@ endif()
 option(FULLMAG_OET0_TSAN "Instrument the OE-T0 serial contract with ThreadSanitizer" OFF)
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
+include(FullmagCudaDriverLibrary)
 
 set(FEM_PUBLIC_HEADERS
     ${CMAKE_SOURCE_DIR}/include/fullmag_fem.h
 )
 
 set(FEM_SOURCES
+    core/petsc_slepc_runtime.cpp
     core/fem_field_buffers.cpp
     core/fem_context_builder.cpp
     core/demag_linear_solve_validation.cpp
@@ -174,6 +176,12 @@ set(FEM_SOURCES
     cpu/mfem/runtime/step_metrics.cpp
     cpu/frequency_domain/dense_poisson_airbox_eigen_oracle.cpp
     cpu/frequency_domain/floquet_bloch_scalar.cpp
+    cpu/frequency_domain/floquet_airbox_operator.cpp
+    cpu/frequency_domain/floquet_dynamic_demag_k.cpp
+    cpu/frequency_domain/floquet_waveguide_demag_k.cpp
+    cpu/frequency_domain/floquet_waveguide_cross_section.cpp
+    cpu/frequency_domain/modal/floquet_modal_solver.cpp
+    cpu/frequency_domain/operators/floquet_magnetic_operator.cpp
     cpu/frequency_domain/operators/poisson_airbox_shared_domain.cpp
     cpu/frequency_domain/poisson_airbox_modal_eigen.cpp
     cpu/frequency_domain/poisson_airbox_schur_matshell.cpp
@@ -252,6 +260,13 @@ if(FULLMAG_USE_MFEM_STACK)
     list(APPEND FEM_SOURCES
         src/mfem_bridge.cpp
         cpu/mfem/transport/steady_transport.cpp
+        cpu/mfem/transport/affine_rt0_element.cpp
+        cpu/mfem/workflows/antenna_field_solve/charge_trace_workspace.cpp
+        cpu/mfem/workflows/antenna_field_solve/charge_current_response.cpp
+        cpu/mfem/workflows/antenna_field_solve/charge_control_nullspace_rank.cpp
+        cpu/mfem/workflows/antenna_field_solve/charge_terminal_current_constraints.cpp
+        cpu/mfem/workflows/antenna_field_solve/accepted_terminal_charge_source.cpp
+          cpu/mfem/workflows/antenna_field_solve/accepted_external_lead_source.cpp
         cpu/mfem/interactions/oersted/direct_tetra_quadrature.cpp
         cpu/mfem/interactions/oersted/vector_potential.cpp
     )
@@ -344,7 +359,23 @@ if(FULLMAG_USE_MFEM_STACK)
     endif()
 endif()
 
+# A managed capsule is identified by content rather than preserved mtimes.
+# Changing this definition forces CMake to rebuild native objects without
+# deleting caches, even when a later snapshot has older source timestamps.
+set(FULLMAG_FEM_SOURCE_SNAPSHOT_SHA256 "" CACHE STRING
+    "Managed source snapshot bound to the native FEM build")
+if(NOT FULLMAG_FEM_SOURCE_SNAPSHOT_SHA256 STREQUAL "")
+    string(LENGTH "${FULLMAG_FEM_SOURCE_SNAPSHOT_SHA256}" snapshot_digest_length)
+    if(NOT snapshot_digest_length EQUAL 64 OR
+       FULLMAG_FEM_SOURCE_SNAPSHOT_SHA256 MATCHES "[^0-9a-f]")
+        message(FATAL_ERROR "FULLMAG_FEM_SOURCE_SNAPSHOT_SHA256 must be lowercase SHA-256")
+    endif()
+endif()
 add_library(fullmag_fem SHARED ${FEM_SOURCES})
+if(NOT FULLMAG_FEM_SOURCE_SNAPSHOT_SHA256 STREQUAL "")
+    target_compile_definitions(fullmag_fem PRIVATE
+        FULLMAG_FEM_SOURCE_SNAPSHOT_SHA256="${FULLMAG_FEM_SOURCE_SNAPSHOT_SHA256}")
+endif()
 target_compile_definitions(fullmag_fem PRIVATE FULLMAG_FEM_BUILD_SHARED=1)
 
 if(FULLMAG_ENABLE_NVTX)
@@ -424,6 +455,10 @@ set_target_properties(fullmag_fem PROPERTIES
     SOVERSION 0
     PUBLIC_HEADER "${FEM_PUBLIC_HEADERS}"
 )
+
+# Record the exact target selected by this configure, including its SONAME links.
+file(GENERATE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/fullmag-fem-library-path.txt"
+    CONTENT "$<TARGET_FILE:fullmag_fem>\n")
 
 # ── Tests ──
 enable_testing()
@@ -550,7 +585,16 @@ if(FULLMAG_USE_MFEM_STACK)
         target_sources(fullmag_fem PRIVATE
             ${FULLMAG_OET0_PRODUCTION_SOURCES})
         target_sources(fem_conservative_current_view_contract PRIVATE
-            ${FULLMAG_OET0_PRODUCTION_SOURCES})
+            ${FULLMAG_OET0_PRODUCTION_SOURCES}
+            cpu/mfem/transport/affine_rt0_element.cpp
+            cpu/mfem/workflows/antenna_field_solve/charge_trace_workspace.cpp
+            cpu/mfem/workflows/antenna_field_solve/charge_current_response.cpp
+            cpu/mfem/workflows/antenna_field_solve/charge_control_nullspace_rank.cpp
+            cpu/mfem/workflows/antenna_field_solve/charge_terminal_current_constraints.cpp
+            cpu/mfem/workflows/antenna_field_solve/accepted_terminal_charge_source.cpp
+            cpu/mfem/workflows/antenna_field_solve/accepted_external_lead_source.cpp
+            cpu/mfem/interactions/oersted/direct_tetra_quadrature.cpp
+            src/frequency_domain/canonical_digest.cpp)
     endif()
     find_package(Threads REQUIRED)
     if(TARGET MFEM::mfem)
@@ -648,6 +692,16 @@ if(FULLMAG_USE_MFEM_STACK)
         ${CMAKE_SOURCE_DIR}/include
     )
     add_test(NAME fem_steady_transport_abi_contract COMMAND fem_steady_transport_abi_contract)
+
+    add_executable(
+        fem_charge_transport_abi_contract
+        tests/charge_transport_abi_contract.cpp
+    )
+    target_link_libraries(fem_charge_transport_abi_contract PRIVATE fullmag_fem)
+    target_include_directories(fem_charge_transport_abi_contract PRIVATE
+        ${CMAKE_SOURCE_DIR}/include
+    )
+    add_test(NAME fem_charge_transport_abi_contract COMMAND fem_charge_transport_abi_contract)
 
     add_executable(
         fem_steady_transport_rt0_contract
@@ -848,6 +902,34 @@ add_test(NAME fem_transfer_audit COMMAND fem_transfer_audit)
 function(add_fem_source_facade_contract target source)
     add_executable(${target} ${source})
     target_link_libraries(${target} PRIVATE fullmag_fem)
+    if(target STREQUAL fem_poisson_airbox_modal_eigen_slepc_contract AND FULLMAG_USE_MFEM_STACK AND FULLMAG_FEM_WITH_SLEPC)
+        # The modal contract performs a compile-time PetscReal precision
+        # assertion; expose both PETSc and MPI include contracts to that test
+        # target.  The PETSc imported target supplied by the managed stack
+        # does not always carry mpi.h's include directory transitively.
+        find_package(MPI REQUIRED COMPONENTS CXX)
+        target_link_libraries(${target} PRIVATE MPI::MPI_CXX)
+        # This target uses PETSc headers only for the compile-time PetscReal
+        # precision assertion.  Linking PETSC::petsc here would pull its
+        # optional libCEED/CUDA dependency into the CPU executable; the
+        # production fullmag_fem shared library already owns the PETSc/SLEPc
+        # runtime linkage.  Add the header contract explicitly instead.
+        if(PETSc_INCLUDE_DIRS)
+            target_include_directories(${target} PRIVATE ${PETSc_INCLUDE_DIRS})
+        elseif(PETSc_INCLUDE_DIR)
+            target_include_directories(${target} PRIVATE ${PETSc_INCLUDE_DIR})
+        endif()
+    endif()
+    if(FULLMAG_ENABLE_CUDA)
+        # The managed CPU image carries libCEED with CUDA-driver symbols.
+        # Every source-facade contract links fullmag_fem, whose CUDA-enabled
+        # shared library keeps those symbols in its dependency closure. Resolve
+        # the real driver for every contract target, not only the modal target;
+        # the helper rejects toolkit stubs through both the supplied path and
+        # its canonical REALPATH, including a seeded CMake cache value.
+        fullmag_find_cuda_driver_library(FULLMAG_CUDA_DRIVER_LIBRARY)
+        target_link_libraries(${target} PRIVATE ${FULLMAG_CUDA_DRIVER_LIBRARY})
+    endif()
     target_include_directories(${target} PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}
         ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -936,6 +1018,36 @@ add_fem_source_facade_contract(
     fem_modal_eigen_contract
     tests/frequency_domain/modal_eigen_contract_test.cpp
 )
+add_executable(fem_modal_eigen_nodal_energy_hessian_contract
+    tests/frequency_domain/nodal_energy_hessian_contract_test.cpp
+)
+add_test(NAME fem_modal_eigen_nodal_energy_hessian_contract
+    COMMAND fem_modal_eigen_nodal_energy_hessian_contract
+)
+add_test(NAME fem_modal_eigen_poisson_iteration_policy_contract
+    COMMAND $<TARGET_FILE:fem_modal_eigen_contract> --poisson-iteration-policy)
+# Isolate the generic provider contract while preserving the full modal suite.
+add_custom_target(fem_modal_eigen_generic_mass_refill_contract
+    DEPENDS fem_modal_eigen_contract)
+add_test(NAME fem_modal_eigen_generic_mass_refill_contract
+    COMMAND $<TARGET_FILE:fem_modal_eigen_contract> --generic-mass-refill)
+add_custom_target(fem_modal_eigen_floquet_count_contract
+    DEPENDS fem_modal_eigen_contract)
+add_test(NAME fem_modal_eigen_floquet_count_contract
+    COMMAND $<TARGET_FILE:fem_modal_eigen_contract> --floquet-count-certificate)
+add_custom_target(fem_modal_eigen_live_shift_configuration_contract
+    DEPENDS fem_modal_eigen_contract)
+add_test(NAME fem_modal_eigen_live_shift_configuration_contract
+    COMMAND $<TARGET_FILE:fem_modal_eigen_contract> --floquet-live-shift-configuration)
+add_custom_target(fem_modal_eigen_damping_admission_contract
+    DEPENDS fem_modal_eigen_contract)
+add_test(NAME fem_modal_eigen_damping_admission_contract
+    COMMAND $<TARGET_FILE:fem_modal_eigen_contract> --modal-damping-admission)
+add_custom_target(fem_modal_eigen_phase_convention_contract
+    DEPENDS fem_modal_eigen_contract)
+add_test(NAME fem_modal_eigen_phase_convention_contract
+    COMMAND $<TARGET_FILE:fem_modal_eigen_contract> --modal-slepc-phase-convention)
+
 add_fem_source_facade_contract(
     fem_poisson_airbox_eigen_oracle_contract
     tests/frequency_domain/poisson_airbox_eigen_oracle_test.cpp
@@ -953,6 +1065,11 @@ add_fem_source_facade_contract(
     tests/frequency_domain/poisson_airbox_schur_matshell_test.cpp
 )
 if(FULLMAG_USE_MFEM_STACK AND FULLMAG_ENABLE_CUDA AND FULLMAG_FEM_WITH_SLEPC)
+    # Match the condition that adds modal_petsc_slepc.cpp to fullmag_fem.
+    target_compile_definitions(
+        fem_poisson_airbox_modal_eigen_slepc_contract
+        PRIVATE FULLMAG_POISSON_AIRBOX_MODAL_GPU_AVAILABLE=1
+    )
     if(WIN32)
         fullmag_validate_windows_modal()
     else()
@@ -1029,9 +1146,191 @@ if(FULLMAG_USE_MFEM_STACK AND FULLMAG_ENABLE_CUDA AND FULLMAG_FEM_WITH_SLEPC)
     )
 endif()
 add_fem_source_facade_contract(
+    fem_floquet_magnetic_operator_contract
+    tests/frequency_domain/floquet_magnetic_operator_test.cpp
+)
+add_fem_source_facade_contract(
     fem_floquet_bloch_scalar_contract
     tests/frequency_domain/floquet_bloch_scalar_test.cpp
 )
+add_fem_source_facade_contract(
+    fem_floquet_airbox_operator_contract
+    tests/frequency_domain/floquet_airbox_operator_test.cpp
+)
+add_fem_source_facade_contract(
+    fem_floquet_dynamic_demag_k_contract
+    tests/frequency_domain/floquet_dynamic_demag_k_test.cpp
+)
+add_fem_source_facade_contract(
+    fem_floquet_waveguide_demag_k_contract
+    tests/frequency_domain/floquet_waveguide_demag_k_test.cpp
+)
+add_fem_source_facade_contract(
+    fem_floquet_waveguide_cross_section_contract
+    tests/frequency_domain/floquet_waveguide_cross_section_test.cpp
+)
+add_fem_source_facade_contract(
+    fem_floquet_modal_solver_contract
+    tests/frequency_domain/floquet_modal_solver_test.cpp
+)
+if(FULLMAG_USE_MFEM_STACK AND FULLMAG_FEM_WITH_SLEPC)
+    add_fem_source_facade_contract(
+        fem_shifted_ksp_true_convergence_contract
+        tests/frequency_domain/shifted_ksp_true_convergence_test.cpp
+    )
+    # This regression calls PETSc directly, including the production inline
+    # convergence callback. The shared library's private linkage is insufficient.
+    find_package(MPI REQUIRED COMPONENTS CXX)
+    target_link_libraries(fem_shifted_ksp_true_convergence_contract PRIVATE
+        PETSC::petsc MPI::MPI_CXX
+    )
+    # The isolated certified-recovery selectors use the real public PETSc API;
+    # preserve the original full and mixed selectors as independent gates.
+    target_link_libraries(fem_modal_eigen_contract PRIVATE PETSC::petsc MPI::MPI_CXX)
+    add_custom_target(fem_modal_eigen_certified_recovery_mixed_contract
+        DEPENDS fem_modal_eigen_contract)
+    add_test(NAME fem_modal_eigen_certified_recovery_mixed_contract
+        COMMAND fem_modal_eigen_contract --floquet-certified-recovery-mixed)
+    add_custom_target(fem_modal_eigen_certified_recovery_budget_contract
+        DEPENDS fem_modal_eigen_contract)
+    add_test(NAME fem_modal_eigen_certified_recovery_budget_contract
+        COMMAND fem_modal_eigen_contract --floquet-certified-recovery-budget)
+    add_custom_target(fem_modal_eigen_certified_recovery_exact_threshold_contract
+        DEPENDS fem_modal_eigen_contract)
+    add_test(NAME fem_modal_eigen_certified_recovery_exact_threshold_contract
+        COMMAND fem_modal_eigen_contract --floquet-certified-recovery-exact-threshold)
+    set_tests_properties(
+        fem_modal_eigen_certified_recovery_mixed_contract
+        fem_modal_eigen_certified_recovery_budget_contract
+        fem_modal_eigen_certified_recovery_exact_threshold_contract
+        PROPERTIES TIMEOUT 120)
+    # Hard EPS errors quarantine PETSc/SLEPc for the remainder of that process.
+    # Keep each expected failure probe in its own CTest process.
+    add_custom_target(fem_modal_eigen_hard_ksp_opt_out_contract
+        DEPENDS fem_modal_eigen_contract)
+    add_test(NAME fem_modal_eigen_hard_ksp_opt_out_contract
+        COMMAND fem_modal_eigen_contract --floquet-hard-ksp-opt-out)
+    add_custom_target(fem_modal_eigen_hard_ksp_nearest_contract
+        DEPENDS fem_modal_eigen_contract)
+    add_test(NAME fem_modal_eigen_hard_ksp_nearest_contract
+        COMMAND fem_modal_eigen_contract --floquet-hard-ksp-nearest)
+    add_custom_target(fem_modal_eigen_hard_ksp_fresh_setup_fault_contract
+        DEPENDS fem_modal_eigen_contract)
+    add_test(NAME fem_modal_eigen_hard_ksp_fresh_setup_fault_contract
+        COMMAND fem_modal_eigen_contract --floquet-hard-ksp-fresh-setup-fault)
+    add_custom_target(fem_modal_eigen_hard_ksp_window_contract
+        DEPENDS fem_modal_eigen_contract)
+    add_test(NAME fem_modal_eigen_hard_ksp_window_contract
+        COMMAND fem_modal_eigen_contract --floquet-hard-ksp-window)
+    set_tests_properties(
+        fem_modal_eigen_hard_ksp_opt_out_contract
+        fem_modal_eigen_hard_ksp_nearest_contract
+        fem_modal_eigen_hard_ksp_fresh_setup_fault_contract
+        fem_modal_eigen_hard_ksp_window_contract
+        PROPERTIES TIMEOUT 120)
+    target_include_directories(fem_shifted_ksp_true_convergence_contract PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/cpu/frequency_domain/modal
+    )
+    add_fem_source_facade_contract(
+        fem_petsc_process_runtime_concurrency_contract
+        tests/frequency_domain/petsc_process_runtime_concurrency_test.cpp
+    )
+    find_package(Threads REQUIRED)
+    target_link_libraries(fem_petsc_process_runtime_concurrency_contract PRIVATE
+        PETSC::petsc SLEPC::slepc MPI::MPI_CXX Threads::Threads
+    )
+    # The fixture owns MFEM vectors; private shared-library linkage does not
+    # expose the inline MemoryManager symbols used by this executable.
+    if(TARGET MFEM::mfem)
+        target_link_libraries(fem_petsc_process_runtime_concurrency_contract PRIVATE MFEM::mfem)
+    else()
+        target_link_libraries(fem_petsc_process_runtime_concurrency_contract PRIVATE mfem)
+    endif()
+    set_tests_properties(fem_petsc_process_runtime_concurrency_contract
+        PROPERTIES TIMEOUT 120
+    )
+    add_custom_target(fem_petsc_process_runtime_quarantine_contract
+        DEPENDS fem_petsc_process_runtime_concurrency_contract)
+    add_test(NAME fem_petsc_process_runtime_quarantine_contract
+        COMMAND fem_petsc_process_runtime_concurrency_contract --quarantine-admission)
+    set_tests_properties(fem_petsc_process_runtime_quarantine_contract
+        PROPERTIES TIMEOUT 120)
+    add_custom_target(fem_floquet_forced_inner_failure_contract
+        DEPENDS fem_floquet_modal_solver_contract)
+    add_test(NAME fem_floquet_forced_inner_failure_contract
+        COMMAND fem_floquet_modal_solver_contract --forced-inner-failure)
+    set_tests_properties(fem_floquet_forced_inner_failure_contract
+        PROPERTIES TIMEOUT 120)
+    add_custom_target(modal_eigen_live_pc_apply_fault_quarantine
+        DEPENDS fem_modal_eigen_contract)
+    add_test(NAME modal_eigen_live_pc_apply_fault_quarantine
+        COMMAND fem_modal_eigen_contract --floquet-live-pc-apply-fault-quarantine-probe)
+    set_tests_properties(modal_eigen_live_pc_apply_fault_quarantine
+        PROPERTIES TIMEOUT 120)
+    # A failed row restore quarantines PETSc; exercise it in its own process.
+    add_custom_target(modal_eigen_borrowed_pmat_row_restore_fault_quarantine
+        DEPENDS fem_modal_eigen_contract)
+    add_test(NAME modal_eigen_borrowed_pmat_row_restore_fault_quarantine
+        COMMAND fem_modal_eigen_contract --floquet-borrowed-pmat-row-restore-fault-quarantine-probe)
+    set_tests_properties(modal_eigen_borrowed_pmat_row_restore_fault_quarantine
+        PROPERTIES TIMEOUT 120)
+    add_custom_target(modal_eigen_borrowed_pmat_row_primary_cleanup_fault_quarantine
+        DEPENDS fem_modal_eigen_contract)
+    add_test(NAME modal_eigen_borrowed_pmat_row_primary_cleanup_fault_quarantine
+        COMMAND fem_modal_eigen_contract --floquet-borrowed-pmat-row-primary-cleanup-fault-quarantine-probe)
+    set_tests_properties(modal_eigen_borrowed_pmat_row_primary_cleanup_fault_quarantine
+        PROPERTIES TIMEOUT 120)
+    # Genuine production backing-byte measurement runs in its own fault process.
+    add_custom_target(modal_eigen_row_restore_production_phi_backing_bytes
+        DEPENDS fem_modal_eigen_contract)
+    add_test(NAME modal_eigen_row_restore_production_phi_backing_bytes
+        COMMAND fem_modal_eigen_contract --floquet-row-restore-production-phi-backing-bytes-probe)
+    set_tests_properties(modal_eigen_row_restore_production_phi_backing_bytes
+        PROPERTIES TIMEOUT 120)
+    # Genuine production backing-byte measurement runs in its own fault process.
+    add_custom_target(modal_eigen_row_primary_cleanup_production_phi_backing_bytes
+        DEPENDS fem_modal_eigen_contract)
+    add_test(NAME modal_eigen_row_primary_cleanup_production_phi_backing_bytes
+        COMMAND fem_modal_eigen_contract --floquet-row-primary-cleanup-production-phi-backing-bytes-probe)
+    set_tests_properties(modal_eigen_row_primary_cleanup_production_phi_backing_bytes
+        PROPERTIES TIMEOUT 120)
+    add_custom_target(modal_eigen_borrowed_pmat_pattern_mismatch_fixture
+        DEPENDS fem_modal_eigen_contract)
+    add_test(NAME modal_eigen_borrowed_pmat_pattern_mismatch_fixture
+        COMMAND fem_modal_eigen_contract --floquet-borrowed-pmat-pattern-mismatch-fixture-probe)
+    set_tests_properties(modal_eigen_borrowed_pmat_pattern_mismatch_fixture
+        PROPERTIES TIMEOUT 120)
+    # Count-unavailable selected-spectrum semantics, without GPU execution.
+    add_custom_target(fem_poisson_airbox_selected_window_contract
+        DEPENDS fem_poisson_airbox_modal_eigen_slepc_contract)
+    add_test(NAME fem_poisson_airbox_selected_window_contract
+        COMMAND $<TARGET_FILE:fem_poisson_airbox_modal_eigen_slepc_contract>)
+    set_tests_properties(fem_poisson_airbox_selected_window_contract
+        PROPERTIES TIMEOUT 180
+        ENVIRONMENT "FULLMAG_N2_CW1_FOCUSED=1;FULLMAG_SKIP_GPU_TESTS=1")
+    # Isolate vector transport from unrelated full-suite Floquet failures.
+    add_custom_target(fem_modal_eigen_typed_cpu_transport_contract
+        DEPENDS fem_modal_eigen_contract)
+    add_test(NAME fem_modal_eigen_typed_cpu_transport_contract
+        COMMAND fem_modal_eigen_contract --typed-cpu-mode-transport)
+    set_tests_properties(fem_modal_eigen_typed_cpu_transport_contract
+        PROPERTIES TIMEOUT 120)
+    # Run the public Gamma boundary independently without replacing the full suite.
+    add_custom_target(fem_modal_eigen_gamma_admission_contract
+        DEPENDS fem_modal_eigen_contract)
+    add_test(NAME fem_modal_eigen_gamma_admission_contract
+        COMMAND fem_modal_eigen_contract --floquet-gamma-admission)
+    set_tests_properties(fem_modal_eigen_gamma_admission_contract
+        PROPERTIES TIMEOUT 120)
+    # Independently exercise caller-owned real-split descriptors and residual certification.
+    add_custom_target(fem_modal_eigen_mixed_dense_contract
+        DEPENDS fem_modal_eigen_contract)
+    add_test(NAME fem_modal_eigen_mixed_dense_contract
+        COMMAND fem_modal_eigen_contract --floquet-shared-domain-mixed-dense-real-split)
+    set_tests_properties(fem_modal_eigen_mixed_dense_contract
+        PROPERTIES TIMEOUT 120)
+
+endif()
 add_fem_source_facade_contract(
     fem_poisson_airbox_shared_domain_contract
     tests/frequency_domain/poisson_airbox_shared_domain_test.cpp
@@ -1049,13 +1348,22 @@ if(FULLMAG_USE_MFEM_STACK)
 endif()
 if(FULLMAG_USE_MFEM_STACK)
     if(TARGET MFEM::mfem)
+        target_link_libraries(fem_modal_eigen_contract PRIVATE MFEM::mfem)
         target_link_libraries(fem_floquet_bloch_scalar_contract PRIVATE MFEM::mfem)
+        target_link_libraries(fem_floquet_magnetic_operator_contract PRIVATE MFEM::mfem)
+        target_link_libraries(fem_floquet_airbox_operator_contract PRIVATE MFEM::mfem)
+        target_link_libraries(fem_floquet_modal_solver_contract PRIVATE MFEM::mfem)
     else()
+        target_link_libraries(fem_modal_eigen_contract PRIVATE mfem)
         target_link_libraries(fem_floquet_bloch_scalar_contract PRIVATE mfem)
+        target_link_libraries(fem_floquet_magnetic_operator_contract PRIVATE mfem)
+        target_link_libraries(fem_floquet_airbox_operator_contract PRIVATE mfem)
+        target_link_libraries(fem_floquet_modal_solver_contract PRIVATE mfem)
     endif()
 endif()
 if(FULLMAG_USE_MFEM_STACK AND FULLMAG_ENABLE_CUDA)
     target_link_libraries(fem_floquet_bloch_scalar_contract PRIVATE CUDA::cudart)
+    target_link_libraries(fem_floquet_magnetic_operator_contract PRIVATE CUDA::cudart)
 endif()
 add_fem_source_facade_contract(
     fem_driven_response_contract

@@ -1,0 +1,133 @@
+{
+  "document": {
+    "path": "docs/physics/0841-poisson-airbox-quadrature-provenance.md"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "unsupported",
+      "reason": "The provenance publisher is the FEM CPU shared-domain assembly; this page does not claim GPU execution evidence."
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "not-applicable",
+      "reason": "FDM does not consume MFEM shared-domain quadrature provenance."
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "not-applicable",
+      "reason": "FDM does not consume MFEM shared-domain quadrature provenance."
+    }
+  ],
+  "equations": [
+    {
+      "id": "eq-quadrature-provenance-record",
+      "symbols": ["R-e", "g-e", "p-e", "q-req-e", "q-res-e", "r-e", "n-e"],
+      "sources": ["quadrature-record"]
+    },
+    {
+      "id": "eq-quadrature-provenance-digest-binding",
+      "symbols": ["D-op", "R-e"],
+      "sources": ["quadrature-record", "digest-preservation"]
+    }
+  ],
+  "symbols": [
+    {
+      "id": "e",
+      "latex": "e",
+      "meaning": "indeks magnetycznego elementu FE",
+      "si_unit": "1"
+    },
+    {
+      "id": "g-e",
+      "latex": "g_e",
+      "meaning": "geometria elementu MFEM",
+      "si_unit": "1"
+    },
+    {
+      "id": "p-e",
+      "latex": "p_e",
+      "meaning": "rząd interpolacji skończenie-elementowej",
+      "si_unit": "1"
+    },
+    {
+      "id": "q-req-e",
+      "latex": "q^{\\mathrm{req}}_e",
+      "meaning": "żądany rząd kwadratury",
+      "si_unit": "1"
+    },
+    {
+      "id": "q-res-e",
+      "latex": "q^{\\mathrm{res}}_e",
+      "meaning": "rząd reguły zwróconej przez MFEM",
+      "si_unit": "1"
+    },
+    {
+      "id": "r-e",
+      "latex": "r_e",
+      "meaning": "reguła całkowania MFEM",
+      "si_unit": "1"
+    },
+    {
+      "id": "n-e",
+      "latex": "n_e",
+      "meaning": "liczba punktów reguły `GetNPoints()`",
+      "si_unit": "1"
+    },
+    {
+      "id": "D-op",
+      "latex": "D_{\\mathrm{op}}",
+      "meaning": "SHA-256 digest złożonego operatora",
+      "si_unit": "1"
+    },
+    {
+      "id": "R-e",
+      "latex": "\\mathcal{R}_e",
+      "meaning": "rekord pochodzenia kwadratury elementu",
+      "si_unit": "1"
+    }
+  ],
+  "sources": [
+    {
+      "id": "quadrature-record",
+      "path": "backends/fem/cpu/frequency_domain/operators/poisson_airbox_shared_domain.cpp",
+      "symbol": "quadrature_provenance_json",
+      "responsibility": "Formatuje deterministyczne wpisy z wartości pobranych w pętli digestu, w tym resolved order i rule npoints."
+    },
+    {
+      "id": "digest-preservation",
+      "path": "backends/fem/cpu/frequency_domain/operators/poisson_airbox_shared_domain.cpp",
+      "symbol": "quadrature_provenance_json",
+      "responsibility": "Dokumentuje addytywny eksport obok istniejącego CanonicalDigestBuilder; preimage hasha pozostaje bez zmian."
+    },
+    {
+      "id": "diagnostic-consumer",
+      "path": "backends/fem/src/frequency_domain/modal_eigen_solver.cpp",
+      "symbol": "append_json_field",
+      "responsibility": "Dołącza operator digest i kwadraturę do diagnostics_json oraz result_json bez zmiany publicznego ABI; scope rozróżnia k0, sparse Floquet i legacy dynamic-demag-k, a deduplikacja sprawdza tylko top-level JSON."
+    },
+    {
+      "id": "native-regression",
+      "path": "backends/fem/tests/frequency_domain/poisson_airbox_shared_domain_test.cpp",
+      "symbol": "main",
+      "responsibility": "Przygotowana regresja porównuje runtime JSON z GetOrder i GetNPoints dla tet4 i prism6."
+    },
+    {
+      "id": "native-modal-dedup-regression",
+      "path": "backends/fem/tests/frequency_domain/modal_eigen_contract_test.cpp",
+      "symbol": "main",
+      "responsibility": "Przygotowana regresja przechodzi przez solve_modal_eigen_contract z zagnieżdżonym polem operator_diagnostics i wymaga osobnego top-level provenance w diagnostics oraz result."
+    }
+  ],
+  "public_api": {
+    "parameters": []
+  }
+}

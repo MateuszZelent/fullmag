@@ -4,13 +4,24 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SCRIPT_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
 STORAGE_RESOLVER="${REPO_ROOT}/scripts/fullmag_storage.py"
-STORAGE_PYTHON=""
-if command -v python3 >/dev/null 2>&1; then
-  STORAGE_PYTHON="$(command -v python3)"
-elif command -v python >/dev/null 2>&1; then
-  STORAGE_PYTHON="$(command -v python)"
-else
-  echo "Python is required for the Fullmag storage resolver." >&2
+STORAGE_PYTHON="${FULLMAG_STORAGE_PYTHON:-}"
+if [[ -n "${STORAGE_PYTHON}" && "${STORAGE_PYTHON}" != /* && "${STORAGE_PYTHON}" == *\\* && -n "$(command -v cygpath || true)" ]]; then
+  STORAGE_PYTHON="$(cygpath -u "${STORAGE_PYTHON}")"
+fi
+if [[ -z "${STORAGE_PYTHON}" ]]; then
+  python_candidates=()
+  while IFS= read -r candidate_path; do
+    [[ -n "${candidate_path}" ]] && python_candidates+=("${candidate_path}")
+  done < <(type -aP python3 python 2>/dev/null || true)
+  for candidate_path in "${python_candidates[@]}"; do
+    if "${candidate_path}" -c 'import sys; assert sys.version_info.major == 3' >/dev/null 2>&1; then
+      STORAGE_PYTHON="${candidate_path}"
+      break
+    fi
+  done
+fi
+if [[ -z "${STORAGE_PYTHON}" ]]; then
+  echo "Python 3 is required for the Fullmag storage resolver." >&2
   exit 2
 fi
 if [[ ! -f "${STORAGE_RESOLVER}" ]]; then
@@ -81,11 +92,11 @@ cleanup() {
 trap cleanup EXIT
 
 port_is_bindable() {
-  python3 "${PORT_HELPER}" check "${WEB_BIND_HOST}" "$1"
+  "${STORAGE_PYTHON}" "${PORT_HELPER}" check "${WEB_BIND_HOST}" "$1"
 }
 
 pick_web_port() {
-  python3 "${PORT_HELPER}" pick "${WEB_BIND_HOST}" \
+  "${STORAGE_PYTHON}" "${PORT_HELPER}" pick "${WEB_BIND_HOST}" \
     3100 3101 3102 3103 3006 3007 3008 3009 3010
 }
 
@@ -111,7 +122,7 @@ else
   echo "Starting empty Fullmag API backend on ${API_URL} ..."
   FULLMAG_API_PORT="${API_PORT}" \
     FULLMAG_DISABLE_STATIC_CONTROL_ROOM=1 \
-    cargo +nightly run -p fullmag-api > .fullmag/logs/fullmag-api-v2.log 2>&1 &
+    cargo run -p fullmag-api > .fullmag/logs/fullmag-api-v2.log 2>&1 &
   API_PID=$!
 
   for _ in $(seq 1 600); do

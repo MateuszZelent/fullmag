@@ -9,6 +9,7 @@ on:
       - "public_docs/site/python-api/**"
       - "public_docs/fullmag_profesjonalna_dokumentacja_architektura.md"
       - "docs/physics/**"
+      - "docs/audits/**"
       - "packages/fullmag-py/**"
       - "crates/fullmag-plan/src/magnetization_textures_v2.rs"
       - "external_solvers/3"
@@ -25,6 +26,7 @@ on:
       - "public_docs/site/python-api/**"
       - "public_docs/fullmag_profesjonalna_dokumentacja_architektura.md"
       - "docs/physics/**"
+      - "docs/audits/**"
       - "packages/fullmag-py/**"
       - "crates/fullmag-plan/src/magnetization_textures_v2.rs"
       - "external_solvers/3"
@@ -113,9 +115,9 @@ jobs:
           DOCS_DIFF_BASE: ${{ steps.docs-diff.outputs.base }}
         run: |
           set -euo pipefail
-          map_files="$(git diff --name-only "$DOCS_DIFF_BASE" HEAD -- public_docs/site | grep -E '\\.source-map\\.json$' || true)"
+          map_files="$(git diff --name-only "$DOCS_DIFF_BASE" HEAD -- docs/audits public_docs/site | grep -E '\\.source-map\\.json$' || true)"
           if [[ -z "$map_files" ]]; then
-            echo "No changed public scientific source maps; changed-page validation already ran."
+            echo "No changed scientific source maps; changed-page validation already ran."
             exit 0
           fi
           while IFS= read -r manifest; do

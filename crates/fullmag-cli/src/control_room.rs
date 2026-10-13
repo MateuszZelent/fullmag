@@ -20,6 +20,14 @@ mod development_workspace_probe;
 pub(crate) const LOCALHOST_HTTP_HOST: &str = "localhost";
 pub(crate) const LOOPBACK_V4_OCTETS: [u8; 4] = [127, 0, 0, 1];
 
+// Keep the internal API target on IPv4 on Windows.  `localhost` may resolve
+// to an unrelated IPv6 listener (for example WSL or Docker port forwarding)
+// before the native Fullmag API bound to 127.0.0.1 gets a chance to answer.
+#[cfg(windows)]
+const DEFAULT_API_HOST: &str = "127.0.0.1";
+#[cfg(not(windows))]
+const DEFAULT_API_HOST: &str = LOCALHOST_HTTP_HOST;
+
 static RESOLVED_API_PORT: OnceLock<u16> = OnceLock::new();
 
 /// Private manager input is legal only for a fresh development authoring hub.
@@ -46,8 +54,20 @@ pub(crate) fn api_port() -> u16 {
     *RESOLVED_API_PORT.get().expect("API port not yet resolved")
 }
 
+fn api_host_from_configured(configured: Option<&str>) -> String {
+    configured
+        .map(str::trim)
+        .filter(|host| !host.is_empty())
+        .unwrap_or(DEFAULT_API_HOST)
+        .to_string()
+}
+
+fn api_host() -> String {
+    api_host_from_configured(std::env::var("FULLMAG_API_HOST").ok().as_deref())
+}
+
 pub(crate) fn api_base_url() -> String {
-    format!("http://localhost:{}", api_port())
+    format!("http://{}:{}", api_host(), api_port())
 }
 
 pub(crate) fn swagger_ui_url() -> String {
@@ -2004,7 +2024,7 @@ pub(crate) fn open_in_tauri(
         .env("FULLMAG_UI_URL", ui_url)
         .env(
             "FULLMAG_API_BASE",
-            format!("http://localhost:{}/", ready.api_port),
+            format!("http://{}:{}/", api_host(), ready.api_port),
         )
         .env("FULLMAG_LAUNCH_INTENT", intent)
         .stdin(Stdio::null())
@@ -2475,8 +2495,57 @@ pub(crate) fn sync_current_live_snapshot(
     session_id: &str,
     payload: &CurrentLiveSnapshotPayload,
 ) -> Result<()> {
-    current_live_snapshot_api_client()
-        .post(internal_live_api_url("snapshot"))
+    sync_current_live_snapshot_with_owner(session_id, payload, None)
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub(crate) struct TerminalSnapshotOwner {
+    pub session_id: String,
+    pub run_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_epoch: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request_scope_epoch: Option<String>,
+    pub require_empty: bool,
+}
+
+pub(crate) fn capture_terminal_snapshot_owner(session_id: &str, run_id: &str) -> Result<Option<TerminalSnapshotOwner>> {
+    let response = current_live_api_client().get(format!("{}/v2/sessions/current/status", api_base_url()))
+        .send().context("terminal owner status request failed")?;
+    if response.status() == reqwest::StatusCode::NOT_FOUND { return Ok(None); }
+    let status: serde_json::Value = response.error_for_status()
+        .context("terminal owner status unavailable")?.json().context("terminal owner status malformed")?;
+    terminal_snapshot_owner_from_status(&status, session_id, run_id).map(Some)
+}
+
+fn terminal_snapshot_owner_from_status(status: &serde_json::Value, session_id: &str, run_id: &str) -> Result<TerminalSnapshotOwner> {
+    if session_id.is_empty() || run_id.is_empty()
+        || status.pointer("/session/session_id").and_then(serde_json::Value::as_str) != Some(session_id)
+        || status.pointer("/run/run_id").and_then(serde_json::Value::as_str) != Some(run_id) {
+        bail!("terminal publication current session/run owner changed");
+    }
+    let scope = status.pointer("/session/request_scope_epoch").and_then(serde_json::Value::as_str)
+        .context("terminal request scope missing")?;
+    let (instance, counter) = scope.rsplit_once(':').context("terminal request scope malformed")?;
+    if instance.is_empty() { bail!("terminal request scope instance missing"); }
+    let epoch: u64 = counter.parse().context("terminal request scope counter malformed")?;
+    Ok(TerminalSnapshotOwner { session_id: session_id.into(), run_id: run_id.into(),
+        session_epoch: Some(epoch), request_scope_epoch: Some(scope.into()), require_empty: false })
+}
+
+pub(crate) fn sync_current_live_terminal_snapshot(session_id: &str, payload: &CurrentLiveSnapshotPayload,
+    owner: &TerminalSnapshotOwner) -> Result<()> {
+    if owner.session_id != session_id { bail!("terminal snapshot owner/session mismatch"); }
+    sync_current_live_snapshot_with_owner(session_id, payload, Some(owner))
+}
+
+fn sync_current_live_snapshot_with_owner(session_id: &str, payload: &CurrentLiveSnapshotPayload,
+    owner: Option<&TerminalSnapshotOwner>) -> Result<()> {
+    let mut request = current_live_snapshot_api_client().post(internal_live_api_url("snapshot"));
+    if let Some(owner) = owner {
+        request = request.header("x-fullmag-terminal-owner", serde_json::to_string(owner)?);
+    }
+    request
         .json(&CurrentLiveSnapshotRequest {
             session_id,
             session: payload.session.as_ref(),
@@ -2503,6 +2572,45 @@ pub(crate) fn sync_current_live_snapshot(
         .error_for_status()
         .context("current live snapshot endpoint returned error")?;
     Ok(())
+}
+
+#[cfg(test)]
+mod terminal_snapshot_owner_tests {
+    use super::*;
+
+    fn status(scope: &str) -> serde_json::Value {
+        serde_json::json!({
+            "session": { "session_id": "session", "session_epoch": "scientific-epoch",
+                "request_scope_epoch": scope },
+            "run": { "run_id": "run" }
+        })
+    }
+
+    #[test]
+    fn pins_atomic_counter_from_request_scope_not_scientific_epoch() {
+        let owner = terminal_snapshot_owner_from_status(&status("instance:17"), "session", "run").unwrap();
+        assert_eq!(owner.session_epoch, Some(17));
+        assert_eq!(owner.request_scope_epoch.as_deref(), Some("instance:17"));
+        assert!(!owner.require_empty);
+    }
+
+    #[test]
+    fn invalid_owner_or_scope_is_rejected() {
+        for scope in ["", "instance", ":17", "instance:invalid"] {
+            assert!(terminal_snapshot_owner_from_status(&status(scope), "session", "run").is_err());
+        }
+        assert!(terminal_snapshot_owner_from_status(&status("instance:17"), "other", "run").is_err());
+        assert!(terminal_snapshot_owner_from_status(&status("instance:17"), "session", "other").is_err());
+    }
+
+    #[test]
+    fn empty_admission_omits_unobserved_epoch_fields() {
+        let owner = TerminalSnapshotOwner { session_id: "session".into(), run_id: "run".into(),
+            session_epoch: None, request_scope_epoch: None, require_empty: true };
+        assert_eq!(serde_json::to_value(owner).unwrap(), serde_json::json!({
+            "session_id": "session", "run_id": "run", "require_empty": true
+        }));
+    }
 }
 
 fn sync_current_live_session_frame(
@@ -2701,6 +2809,8 @@ mod live_delta_routing_tests {
         CurrentLiveSnapshotPayload {
             session_status: Some("running".to_string()),
             latest_scalar_row: Some(CurrentLiveScalarRow {
+                kind: fullmag_quantities::StepDataKind::PhysicalObservation,
+                solver_progress: None,
                 step: 1,
                 time: 0.0,
                 solver_dt: 0.0,

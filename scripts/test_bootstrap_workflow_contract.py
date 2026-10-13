@@ -1,7 +1,10 @@
 import configparser
+import json
+import os
 from pathlib import Path
 import subprocess
 import unittest
+from unittest.mock import mock_open, patch
 
 import yaml
 
@@ -172,7 +175,24 @@ jobs:
     def test_ci_installs_native_tools_before_contract_checks(self) -> None:
         workflow = (ROOT / ".github/workflows/bootstrap.yml").read_text()
 
-        self.assertEqual(workflow.count("sudo apt-get install -y ripgrep"), 1)
+        jobs = yaml.safe_load(workflow)["jobs"]
+        for job_name, first_consumer in (
+            ("api-hygiene-rg13", "check-api-hygiene.mjs"),
+            ("control-room-contracts", "ci-resource-first-gates.sh"),
+        ):
+            with self.subTest(job=job_name):
+                steps = jobs[job_name]["steps"]
+                installations = [
+                    index for index, step in enumerate(steps)
+                    if "sudo apt-get install -y ripgrep" in step.get("run", "")
+                ]
+                consumers = [
+                    index for index, step in enumerate(steps)
+                    if first_consumer in step.get("run", "")
+                ]
+                self.assertEqual(len(installations), 1)
+                self.assertEqual(len(consumers), 1)
+                self.assertLess(installations[0], consumers[0])
         self.assertIn("sudo apt-get install -y libglu1-mesa", workflow)
         self.assertIn('test "$(/usr/bin/rg --version | head -n 1)" = "ripgrep 13.0.0"', workflow)
 
@@ -217,6 +237,36 @@ jobs:
         run = "./scripts/ci/run_frontend3d_required_gate.sh rust-quantity-api-cli-contracts"
         self.assertIn(install, rust_job)
         self.assertLess(rust_job.index(install), rust_job.index(run))
+
+    def test_rust_contracts_resolve_artifact_storage_before_running_tests(self) -> None:
+        workflow = yaml.safe_load((ROOT / ".github/workflows/bootstrap.yml").read_text())
+        steps = workflow["jobs"]["rust-contracts"]["steps"]
+        index = next(i for i, step in enumerate(steps)
+                     if step.get("name") == "Resolve storage for API artifact fixtures")
+        self.assertEqual(steps[index + 1]["name"], "Run Rust quantity, API and CLI contracts")
+        lines = steps[index]["run"].rstrip().splitlines()
+        self.assertEqual(lines[-1], "PY")
+        source = "\n".join(lines[1:-1])
+        reply = subprocess.CompletedProcess(
+            [], 0, json.dumps({"storage_root": str(ROOT.parent / "storage")}), ""
+        )
+        output = mock_open()
+        with patch.dict(os.environ, {"GITHUB_ENV": "fixture-env"}), \
+                patch("subprocess.run", return_value=reply) as resolver, \
+                patch("builtins.open", output):
+            exec(source, {})
+        self.assertIn("scripts/fullmag_storage.py", resolver.call_args.args[0])
+        self.assertIn("--create", resolver.call_args.args[0])
+        self.assertTrue(resolver.call_args.kwargs["check"])
+        output.assert_called_once_with("fixture-env", "a", encoding="utf-8")
+        output().write.assert_called_once_with(
+            f"FULLMAG_PROJECT_STORAGE_ROOT={ROOT.parent / 'storage'}\n"
+        )
+        with patch("subprocess.run", side_effect=subprocess.CalledProcessError(2, [])), \
+                patch("builtins.open", mock_open()) as output:
+            with self.assertRaises(subprocess.CalledProcessError):
+                exec(source, {})
+            output.assert_not_called()
 
     def test_texture_compatibility_regressions_run_in_required_contract_jobs(self) -> None:
         workflow = (ROOT / ".github/workflows/bootstrap.yml").read_text()

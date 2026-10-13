@@ -100,10 +100,14 @@ function mapSpectrumMode(value: unknown): ModeCompositionSpectrumMode | null {
   const branchId = modeBranchId(record.branch_id);
   const rawModeIndex = finiteInteger(record.raw_mode_index);
   const residualNorm = finiteNumber(record.residual_relative_l2);
+  const explicitModeFieldAvailable = record.mode_field_available;
   const participation = mapSpectrumParticipation(record.component_participation);
   return {
     ...(branchId ? { branchId } : {}),
-    fieldId: nonEmptyString(record.mode_field_id),
+    fieldId:
+      explicitModeFieldAvailable === false
+        ? null
+        : nonEmptyString(record.mode_field_id),
     frequencyHz,
     modeId,
     ...(participation ? { participation } : {}),

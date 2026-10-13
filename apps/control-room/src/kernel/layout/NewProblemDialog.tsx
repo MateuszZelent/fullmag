@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { Database, FolderOpen, Layers, ShieldCheck } from "lucide-react";
 
 import {
@@ -10,7 +10,15 @@ import {
 import type { OutputStorageDefaultsRequest } from "../api/apiTypes";
 import { useKernel } from "../KernelContext";
 import { createProblemWithPendingFormGuard } from "./createProblemWithPendingFormGuard";
-import { SESSION_STATUS_RESOURCE_KEY } from "../resources/useSessionStatus";
+import {
+  SESSION_STATUS_RESOURCE_KEY,
+  useSessionResourceIdentity,
+} from "../resources/useSessionStatus";
+import { useSessionCollection } from "../resources/useSessionCollection";
+import {
+  confirmedSessionResourceIdentity,
+  sessionRequestScopeKey,
+} from "../resources/sessionResourceIdentity";
 import { useOutputStorageDefaults } from "../resources/useOutputStorageDefaults";
 import { tauriInvoke } from "../persistence/ProjectDocumentController";
 import { createProjectAuthoringSessionBinding } from "../persistence/ProjectAuthoringSessionBinding";
@@ -83,7 +91,54 @@ export function NewProblemDialog({
   const [browsing, setBrowsing] = useState(false);
   const canBrowse = useSyncExternalStore(subscribeDesktopAvailability, desktopPickerAvailable, noDesktopPicker);
   const [creationAccepted, setCreationAccepted] = useState(false);
+  const [domainSetupChoice, setDomainSetupChoice] = useState<"now" | "later">("later");
+  const pendingDomainNavigationSessionIdRef = useRef<string | null>(null);
+  const createdSessionIdRef = useRef<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const sessionCollection = useSessionCollection();
+  const sessionIdentity = useSessionResourceIdentity();
+  const currentSessionIdentity = confirmedSessionResourceIdentity(
+    sessionIdentity,
+    sessionCollection.resource.data,
+  );
+  const currentSessionScopeKey = sessionRequestScopeKey(currentSessionIdentity);
+  const currentSessionId = currentSessionIdentity?.sessionId ?? null;
+
+  useEffect(() => {
+    const pendingDomainNavigationSessionId = pendingDomainNavigationSessionIdRef.current;
+    if (
+      !pendingDomainNavigationSessionId ||
+      currentSessionId !== pendingDomainNavigationSessionId ||
+      currentSessionScopeKey === null
+    ) {
+      return;
+    }
+    kernel.layout.setPanelVisible("right", true);
+    kernel.selection.set(
+      {
+        kind: "universe.root",
+        label: "Universe",
+        nodeId: "model:universe",
+        objectId: null,
+        ref: null,
+      },
+      "ribbon",
+    );
+    pendingDomainNavigationSessionIdRef.current = null;
+  }, [
+    currentSessionId,
+    currentSessionScopeKey,
+    kernel,
+    open,
+  ]);
+
+  const requestOpenChange = (nextOpen: boolean) => {
+    if (pending || browsing) return;
+    if (!nextOpen && domainSetupChoice === "now" && createdSessionIdRef.current) {
+      pendingDomainNavigationSessionIdRef.current = createdSessionIdRef.current;
+    }
+    onOpenChange(nextOpen);
+  };
 
   const base = defaults.data;
   const settings: Required<OutputStorageDefaultsRequest> = {
@@ -135,6 +190,7 @@ export function NewProblemDialog({
       // a second session create with the same form.
       setCreationAccepted(true);
       const response = outcome.response;
+      createdSessionIdRef.current = response.session_id;
       const revision = `session:${response.session_id}`;
       kernel.resources.invalidate(SESSIONS_PATH, revision);
       kernel.resources.invalidate(SESSION_STATUS_RESOURCE_KEY, revision);
@@ -164,13 +220,13 @@ export function NewProblemDialog({
         }
       }
       if (warnings.length) setError(`The simulation was created. ${warnings.join(" ")}`);
-      else onOpenChange(false);
+      else requestOpenChange(false);
     } catch (cause) { setError(message(cause)); }
     finally { setPending(false); }
   };
 
   return (
-    <Dialog open={open} onOpenChange={(nextOpen) => { if (!pending && !browsing) onOpenChange(nextOpen); }}>
+    <Dialog open={open} onOpenChange={requestOpenChange}>
       <DialogContent className="fm-new-problem">
         <DialogHeader className="fm-new-problem__header">
           <div className="fm-new-problem__heading-icon" aria-hidden="true"><Layers size={20} /></div>
@@ -178,7 +234,7 @@ export function NewProblemDialog({
             <DialogTitle>New simulation</DialogTitle>
             <DialogDescription>Set up your model and choose where its results will live.</DialogDescription>
           </div>
-          <span className="fm-new-problem__profile">CPU · Double precision</span>
+          <span className="fm-new-problem__profile">Preparation preview · CPU · Double precision</span>
         </DialogHeader>
         <form className="fm-new-problem__form" onSubmit={(event) => { event.preventDefault(); void create(); }}>
           <div className="fm-dialog__body fm-new-problem__body">
@@ -191,7 +247,27 @@ export function NewProblemDialog({
                 <div className="fm-new-problem__field">
                   <span>Discretization</span>
                   <SegmentedControl aria-label="Discretization" disabled={disabled} options={[{ label: "FDM", value: "fdm" }, { label: "FEM", value: "fem" }]} value={backend} onValueChange={setBackend} />
-                  <p className="fm-new-problem__hint">{backend === "fdm" ? "A regular grid for finite difference simulations." : "A mesh for finite element simulations."}</p>
+                  <p className="fm-new-problem__hint">{backend === "fdm"
+                    ? "A regular grid for finite difference simulations. Configure Universe bounds and grid settings now or later; automatic bounds are derived after geometry is added."
+                    : "A mesh for finite element simulations. Configure Universe domain policy now or later; automatic bounds are derived after geometry is added."}</p>
+                </div>
+                <div className="fm-new-problem__field">
+                  <span>Domain setup</span>
+                  <SegmentedControl
+                    aria-label="Domain setup timing"
+                    disabled={disabled}
+                    options={[
+                      { label: "Configure later", value: "later" },
+                      { label: "Configure now", value: "now" },
+                    ]}
+                    value={domainSetupChoice}
+                    onValueChange={(value) =>
+                      setDomainSetupChoice(value as "now" | "later")
+                    }
+                  />
+                  <p className="fm-new-problem__hint">
+                    Configure now opens the existing Universe Inspector after this simulation is created. You can keep automatic bounds until geometry is added.
+                  </p>
                 </div>
               </section>
               <section className="fm-new-problem__section" aria-label="Results storage">
@@ -241,6 +317,7 @@ export function NewProblemDialog({
               <div className="fm-new-problem__section-heading"><Database size={16} aria-hidden="true" /><h3>Your simulation</h3></div>
               <strong className="fm-new-problem__preview-name">{name.trim() || "Untitled simulation"}</strong>
               <p className="fm-new-problem__hint">{backend.toUpperCase()} · CPU · Double precision</p>
+              <p className="fm-new-problem__hint">CPU and double precision are preparation defaults. Choose the device per run in Study &gt; Execution.</p>
               <div className="fm-new-problem__destination"><span>Results</span><code>{settings.output_parent ? storage.output_dir : "Choose a results directory"}</code><span className="fm-new-problem__format-badge">{settings.data_format === "zarr" ? "Zarr arrays" : "HDF5 datasets"}</span></div>
               <div className="fm-new-problem__destination"><span>Temporary files</span><code>{tempParent || "Choose a temporary directory"}</code><p className="fm-new-problem__hint">{settings.cleanup === "on_success" ? "Removed after success. Kept if a run fails." : settings.cleanup === "always" ? "Removed after a run finishes, including failures." : "Kept until you remove them."}</p></div>
               <div className="fm-new-problem__assurance"><ShieldCheck size={16} aria-hidden="true" /><p>Results are kept. Cleanup removes only temporary folders created by Fullmag.</p></div>
@@ -248,7 +325,7 @@ export function NewProblemDialog({
             {defaults.status === "loading" && !base ? <p className="fm-new-problem__notice" role="status">Loading your storage settings…</p> : null}
             {defaults.status === "error" ? <div className="fm-new-problem__notice" role="alert">Unable to load storage settings. <Button size="sm" type="button" variant="ghost" disabled={disabled} onClick={() => defaults.refetch()}>Try again</Button></div> : null}
             {!formatAvailable && base ? <p className="fm-new-problem__notice" role="alert">The selected data format is unavailable in this runtime. Choose a supported format.</p> : null}
-            {mustConfirmReplacement ? <label className="fm-new-problem__check fm-new-problem__replacement"><Checkbox checked={replaceConfirmed} disabled={disabled} onChange={(event) => setReplaceConfirmed(event.target.checked)} /><span>Replace the active simulation and its unsaved project changes.</span></label> : null}
+            {mustConfirmReplacement && !creationAccepted ? <label className="fm-new-problem__check fm-new-problem__replacement"><Checkbox checked={replaceConfirmed} disabled={disabled} onChange={(event) => setReplaceConfirmed(event.target.checked)} /><span>Replace the active simulation and its unsaved project changes.</span></label> : null}
             {error ? <p className="fm-new-problem__error" role="alert">{error}</p> : null}
           </div>
           <DialogFooter className="fm-new-problem__footer">

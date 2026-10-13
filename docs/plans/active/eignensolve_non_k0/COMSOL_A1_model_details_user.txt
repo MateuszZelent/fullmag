@@ -1,0 +1,1021 @@
+COMSOL A1 ANTIDOT MAGNONIC-CRYSTAL DISPERSION MODEL
+=====================================================
+
+Purpose
+-------
+This README documents the COMSOL model and the exported eigenfrequency
+dataset used to calculate the magnonic band structure of a square antidot
+lattice along the high-symmetry path
+
+    Gamma -> X -> M -> Gamma
+
+The accompanying CSV file contains the eigenfrequencies for 61 sampled
+Bloch wave vectors, with 24 eigenfrequencies calculated at each k point.
+
+Software
+--------
+COMSOL Multiphysics version:
+    6.1
+
+Physics / modules used:
+    - Micromagnetics Module
+      * Micromagnetics, Time Domain
+      * Micromagnetics, Frequency Domain
+    - Mathematics / Weak Form PDE interfaces
+      * static magnetostatic scalar potential phi0
+      * dynamic magnetostatic scalar potential psi
+
+The model also uses standard COMSOL study steps and solvers for:
+    - Stationary
+    - Time Dependent
+    - Eigenfrequency
+    - Parametric Sweep
+
+NOTE:
+The magnetostatic scalar-potential equations were implemented explicitly
+with Weak Form PDE interfaces rather than relying only on a built-in
+magnetostatic formulation.
+
+
+======================================================================
+1. GLOBAL PARAMETERS
+======================================================================
+
+Parameter       Expression                                              Value / unit
+-------------------------------------------------------------------------------------------
+a_lat           200[nm]                                                 2.0e-7 m
+t_film          10[nm]                                                  1.0e-8 m
+r_hole          50[nm]                                                  5.0e-8 m
+d_air           2[um]                                                   2.0e-6 m
+
+Ms_ref          8e5[A/m]                                                8.0e5 A/m
+Aex_ref         13e-12[J/m]                                             1.3e-11 J/m
+mu0_ref         4*pi*1e-7[H/m]                                         1.25663706e-6 H/m
+
+Bbias           0.1[T]                                                  0.1 T
+Hbias           Bbias/mu0_ref                                           7.957747e4 A/m
+
+gamma_ref       2.211e5[m/(A*s)]                                       2.211e5 m/(A s)
+
+A_field         2*Aex_ref/(mu0_ref*Ms_ref)                              2.5863e-11 A m
+
+alpha_relax     0.5                                                     dimensionless
+alpha_eig       0                                                       dimensionless
+
+jpath           0                                                       dimensionless
+k_sign          1                                                       dimensionless
+
+kx_b            k_sign*pi/a_lat*
+                if(jpath<=20,
+                   jpath/20,
+                   if(jpath<=40,
+                      1,
+                      (60-jpath)/20))                                   1/m
+
+ky_b            k_sign*pi/a_lat*
+                if(jpath<=20,
+                   0,
+                   if(jpath<=40,
+                      (jpath-20)/20,
+                      (60-jpath)/20))                                   1/m
+
+kz_b            0[1/m]                                                  1/m
+
+
+======================================================================
+2. GEOMETRY
+======================================================================
+
+Lattice
+-------
+Square 2D antidot lattice.
+
+Lattice constant:
+    a = a_lat = 200 nm
+
+Unit cell lateral size:
+    200 nm x 200 nm
+
+Ferromagnetic film
+------------------
+Film dimensions:
+    x: 200 nm
+    y: 200 nm
+    z: 10 nm
+
+Film center:
+    x = 0
+    y = 0
+    z = 0
+
+Film z range:
+    -5 nm <= z <= +5 nm
+
+Antidot
+-------
+Circular cylindrical hole centered in the unit cell.
+
+Hole radius:
+    r_hole = 50 nm
+
+Hole diameter:
+    100 nm
+
+Hole axis:
+    z
+
+Hole height:
+    t_film = 10 nm
+
+Hole center in x-y:
+    x = 0
+    y = 0
+
+The antidot is subtracted from the ferromagnetic film.
+
+Air box
+-------
+The magnetic structure is embedded in an air domain.
+
+Air padding above the film:
+    d_air = 2 um
+
+Air padding below the film:
+    d_air = 2 um
+
+Total air-box height:
+    2*d_air + t_film
+    = 4.01 um
+
+Air-box dimensions:
+    x: 200 nm
+    y: 200 nm
+    z: 4.01 um
+
+Air-box center:
+    x = 0
+    y = 0
+    z = 0
+
+Air-box z range:
+    -2.005 um <= z <= +2.005 um
+
+Geometry construction
+---------------------
+- Air box: centered block
+- Magnetic film: centered block
+- Antidot: centered cylinder
+- Magnetic domain: film minus cylinder
+- Final geometry: Form Union
+- Interior boundaries kept
+
+The cylindrical hole remains part of the nonmagnetic / air domain.
+
+
+======================================================================
+3. DOMAIN AND BOUNDARY SELECTIONS
+======================================================================
+
+mag
+---
+Magnetic film excluding the antidot volume.
+
+air
+---
+Nonmagnetic domain including:
+    - air above the film
+    - air below the film
+    - cylindrical antidot interior
+
+all_phi
+-------
+Entire scalar-potential computational domain:
+    - magnetic material
+    - surrounding air
+    - antidot air volume
+
+Periodic side boundaries
+------------------------
+xminus:
+    external boundary at x = -a_lat/2
+
+xplus:
+    external boundary at x = +a_lat/2
+
+yminus:
+    external boundary at y = -a_lat/2
+
+yplus:
+    external boundary at y = +a_lat/2
+
+Outer z boundaries
+------------------
+ztop:
+    z = +(d_air + t_film/2)
+
+zbottom:
+    z = -(d_air + t_film/2)
+
+
+======================================================================
+4. STATIC MICROMAGNETIC EQUILIBRIUM
+======================================================================
+
+Physics
+-------
+Micromagnetics, Time Domain
+
+Dependent magnetization variables
+---------------------------------
+The equilibrium magnetization is represented by the unit magnetic-moment
+components:
+
+    mX
+    mY
+    mZ
+
+The local magnetization is
+
+    M = Ms_ref * m
+
+that is,
+
+    Mx = Ms_ref*mX
+    My = Ms_ref*mY
+    Mz = Ms_ref*mZ
+
+
+Material / micromagnetic parameters
+-----------------------------------
+Saturation magnetization:
+    Ms = Ms_ref = 8e5 A/m
+
+Exchange constant:
+    Aex = 13 pJ/m
+
+Micromagnetics exchange parameter used in the COMSOL interface:
+    A = A_field
+
+with
+
+    A_field = 2*Aex_ref/(mu0_ref*Ms_ref)
+
+Gyromagnetic coefficient:
+    gamma = gamma_ref = 2.211e5 m/(A s)
+
+Gilbert damping during relaxation:
+    alpha = alpha_relax = 0.5
+
+External bias field:
+    +x direction
+
+    Hbias = Bbias/mu0_ref
+
+    Bbias = 0.1 T
+    Hbias = 7.957747e4 A/m
+
+
+======================================================================
+5. STATIC MAGNETOSTATIC SCALAR POTENTIAL phi0
+======================================================================
+
+Physics
+-------
+Weak Form PDE
+
+Dependent variable:
+    phi0
+
+Dependent-variable unit:
+    A
+
+Source-term unit:
+    A/m^2
+
+Shape functions:
+    Linear Lagrange
+
+The static demagnetizing field is
+
+    H_demag,0 = -grad(phi0)
+
+
+Domain variables in magnetic region
+-----------------------------------
+M0x = Ms_ref*mX
+M0y = Ms_ref*mY
+M0z = Ms_ref*mZ
+
+Units:
+    A/m
+
+
+Domain variables in air
+-----------------------
+M0x = 0[A/m]
+M0y = 0[A/m]
+M0z = 0[A/m]
+
+
+Static magnetostatic equation
+-----------------------------
+The scalar-potential form corresponds to
+
+    div(grad(phi0) - M0) = 0
+
+or equivalently
+
+    nabla^2(phi0) = div(M0)
+
+with
+
+    M0 = (M0x, M0y, M0z)
+
+
+Weak expression used in COMSOL
+------------------------------
+    -test(phi0x)*(phi0x-M0x)
+    -test(phi0y)*(phi0y-M0y)
+    -test(phi0z)*(phi0z-M0z)
+
+written in one line:
+
+    -test(phi0x)*(phi0x-M0x)-test(phi0y)*(phi0y-M0y)-test(phi0z)*(phi0z-M0z)
+
+
+Boundary conditions for phi0
+----------------------------
+x direction:
+    Periodic Condition
+    xminus <-> xplus
+
+y direction:
+    Periodic Condition
+    yminus <-> yplus
+
+The periodic conditions are ordinary continuity conditions.
+No explicit Bloch phase is applied to phi0.
+
+Top and bottom:
+    phi0 = 0[A]
+
+on:
+    ztop
+    zbottom
+
+No explicit boundary condition is applied at the internal magnetic/air
+interfaces; the weak formulation and material-domain source term provide
+the appropriate interface behavior.
+
+
+Static effective field used by Micromagnetics, Time Domain
+----------------------------------------------------------
+H1 = Hbias - phi0x
+H2 =        - phi0y
+H3 =        - phi0z
+
+
+======================================================================
+6. RELAXATION PROCEDURE
+======================================================================
+
+Initial magnetization
+---------------------
+mX = 1
+mY = 0
+mZ = 0
+
+The initial magnetization therefore points along +x.
+
+The magnetization is subsequently relaxed self-consistently in the
+presence of:
+    - the external bias field
+    - exchange field
+    - magnetostatic / demagnetizing field
+
+
+Initial phi0 solution
+---------------------
+For the first standalone stationary phi0 solve, the magnetization source
+may be initialized as
+
+    M0x = Ms_ref
+    M0y = 0[A/m]
+    M0z = 0[A/m]
+
+After obtaining the initial scalar-potential solution, the full coupled
+definitions are restored:
+
+    M0x = Ms_ref*mX
+    M0y = Ms_ref*mY
+    M0z = Ms_ref*mZ
+
+
+Time-dependent relaxation
+-------------------------
+Time range:
+    range(0,10[ps],5[ns])
+
+Gilbert damping:
+    alpha = 0.5
+
+The coupled relaxation solves:
+    - Micromagnetics, Time Domain
+    - static scalar-potential Weak Form PDE phi0
+
+Typical time solver settings used:
+    BDF
+    maximum BDF order = 2
+    relative tolerance = 1e-7
+    maximum time step = 5 ps
+    initial time step = 0.1 ps
+
+Nonlinear / linear solution:
+    Fully Coupled
+    PARDISO direct solver
+
+The final time step is used as the magnetic equilibrium / linearization
+point for the eigenfrequency calculation.
+
+
+======================================================================
+7. BLOCH-WAVE PARAMETRIZATION
+======================================================================
+
+Bloch wave vector
+-----------------
+k = (kx_b, ky_b, kz_b)
+
+with
+    kz_b = 0
+
+
+Bloch phase factor
+------------------
+Defined over the full scalar-potential domain:
+
+    phase_b = exp(i*(kx_b*x + ky_b*y + kz_b*z))
+
+
+High-symmetry path
+------------------
+Gamma = (0, 0)
+X     = (pi/a, 0)
+M     = (pi/a, pi/a)
+
+Path:
+    Gamma -> X -> M -> Gamma
+
+For a_lat = 200 nm:
+
+    pi/a = 1.570796327e7 1/m
+         = 15.70796327 rad/um
+
+
+Segment 1: Gamma -> X
+---------------------
+jpath = 0...20
+
+kx = (pi/a)*(jpath/20)
+ky = 0
+
+
+Segment 2: X -> M
+-----------------
+jpath = 20...40
+
+kx = pi/a
+ky = (pi/a)*((jpath-20)/20)
+
+
+Segment 3: M -> Gamma
+---------------------
+jpath = 40...60
+
+kx = ky = (pi/a)*((60-jpath)/20)
+
+
+The implementation in COMSOL is:
+
+kx_b =
+    k_sign*pi/a_lat*
+    if(jpath<=20,
+       jpath/20,
+       if(jpath<=40,
+          1,
+          (60-jpath)/20))
+
+ky_b =
+    k_sign*pi/a_lat*
+    if(jpath<=20,
+       0,
+       if(jpath<=40,
+          (jpath-20)/20,
+          (60-jpath)/20))
+
+kz_b =
+    0[1/m]
+
+For the present dataset:
+
+    k_sign = +1
+
+
+======================================================================
+8. DYNAMIC MAGNETIZATION VARIABLES
+======================================================================
+
+The frequency-domain linearized magnetization components are
+
+    dmX
+    dmY
+    dmZ
+
+The physical Bloch-form dynamic magnetization is represented using the
+periodic-envelope variables multiplied by the explicit Bloch phase.
+
+
+Dynamic magnetization source in magnetic domain
+-----------------------------------------------
+Menvx = Ms_ref*phase_b*dmX
+Menvy = Ms_ref*phase_b*dmY
+Menvz = Ms_ref*phase_b*dmZ
+
+Units:
+    A/m
+
+
+Dynamic magnetization source in air
+-----------------------------------
+Menvx = 0[A/m]
+Menvy = 0[A/m]
+Menvz = 0[A/m]
+
+
+======================================================================
+9. DYNAMIC MAGNETOSTATIC SCALAR POTENTIAL psi
+======================================================================
+
+Physics
+-------
+Weak Form PDE
+
+Dependent variable:
+    psi
+
+Dependent-variable unit:
+    A
+
+Source-term unit:
+    A/m^2
+
+Shape functions:
+    Linear Lagrange
+
+
+Bloch-envelope formulation
+--------------------------
+The physical dynamic scalar potential is represented as
+
+    phi_dyn(r) = exp(-i*k.r) * psi(r)
+
+while the source magnetization is represented through
+
+    Menv = Ms_ref * exp(+i*k.r) * dm
+
+according to the implemented envelope convention.
+
+
+Auxiliary quantities
+--------------------
+Defined over the complete scalar-potential domain:
+
+    Fx = psix - i*kx_b*psi - Menvx
+    Fy = psiy - i*ky_b*psi - Menvy
+    Fz = psiz - i*kz_b*psi - Menvz
+
+
+Dynamic magnetostatic weak form
+-------------------------------
+Weak expression:
+
+    -(test(psix)+i*kx_b*test(psi))*Fx
+    -(test(psiy)+i*ky_b*test(psi))*Fy
+    -(test(psiz)+i*kz_b*test(psi))*Fz
+
+written in one line:
+
+    -(test(psix)+i*kx_b*test(psi))*Fx-(test(psiy)+i*ky_b*test(psi))*Fy-(test(psiz)+i*kz_b*test(psi))*Fz
+
+
+Equivalent strong-form interpretation
+-------------------------------------
+The implemented operator corresponds to the Bloch-envelope form of the
+magnetostatic scalar-potential equation, using the shifted gradient
+
+    grad -> grad - i*k
+
+for the trial field and the corresponding adjoint operator
+
+    grad -> grad + i*k
+
+for the test function.
+
+
+Boundary conditions for psi
+---------------------------
+x direction:
+    Periodic Condition
+    xminus <-> xplus
+
+y direction:
+    Periodic Condition
+    yminus <-> yplus
+
+These are ordinary periodic continuity conditions.
+
+IMPORTANT:
+No separate Floquet phase factor is imposed in the periodic boundary
+condition because the Bloch phase is included explicitly in the field
+definitions and weak formulation.
+
+Top and bottom:
+    psi = 0[A]
+
+on:
+    ztop
+    zbottom
+
+No explicit internal boundary condition is applied at magnetic/air
+interfaces.
+
+
+======================================================================
+10. DYNAMIC DEMAGNETIZING FIELD
+======================================================================
+
+The dynamic demagnetizing field supplied to the frequency-domain
+micromagnetic problem is
+
+dh1 =
+    -exp(-i*(kx_b*x+ky_b*y+kz_b*z))
+     *(psix - i*kx_b*psi)
+
+dh2 =
+    -exp(-i*(kx_b*x+ky_b*y+kz_b*z))
+     *(psiy - i*ky_b*psi)
+
+dh3 =
+    -exp(-i*(kx_b*x+ky_b*y+kz_b*z))
+     *(psiz - i*kz_b*psi)
+
+
+At Gamma, where k = 0, this reduces to
+
+    dh = -grad(psi)
+
+
+======================================================================
+11. FREQUENCY-DOMAIN MICROMAGNETICS
+======================================================================
+
+Physics
+-------
+Micromagnetics, Frequency Domain
+
+Material / micromagnetic parameters
+-----------------------------------
+Ms:
+    Ms_ref
+
+gamma:
+    gamma_ref
+
+exchange parameter:
+    A_field
+
+Gilbert damping:
+    alpha = alpha_eig = 0
+
+
+Static field used for linearization
+-----------------------------------
+h01 = Hbias - phi0x
+h02 =        - phi0y
+h03 =        - phi0z
+
+
+Dynamic field
+-------------
+dh1, dh2, dh3
+
+as defined in Section 10.
+
+
+Equilibrium magnetization
+-------------------------
+The equilibrium magnetization is taken from the final solution of the
+time-dependent relaxation.
+
+The linearization point is therefore the numerically relaxed magnetic
+state around the antidot, not an imposed uniform magnetization.
+
+
+Linearization-point setting
+---------------------------
+Values of linearization point:
+    User controlled
+
+Method:
+    Solution
+
+Study:
+    time-dependent relaxation study
+
+Time:
+    Last
+
+
+RF excitation
+-------------
+No RF driving field is applied.
+
+The calculation is a free eigenmode / eigenfrequency calculation.
+
+
+======================================================================
+12. EIGENFREQUENCY STUDY
+======================================================================
+
+Study type
+----------
+Eigenfrequency
+
+Physics solved:
+    - Micromagnetics, Frequency Domain
+    - dynamic scalar-potential Weak Form PDE psi
+
+The time-domain micromagnetic interface and static phi0 equation are not
+re-solved inside the eigenfrequency step. Their relaxed solution is used
+as the linearization point / background state.
+
+
+Eigenfrequency settings
+-----------------------
+Number of requested eigenfrequencies:
+    24
+
+Eigenfrequency search shift:
+    approximately 1 GHz
+
+Search strategy used:
+    eigenfrequencies around the specified shift
+    with preference toward larger real part
+
+Relative tolerance:
+    1e-8
+
+Complex arithmetic:
+    enabled
+
+Gilbert damping:
+    alpha = 0
+
+Therefore the physical eigenfrequencies are expected to be real; any
+very small imaginary component should be interpreted as numerical unless
+otherwise investigated.
+
+
+Parametric sweep
+----------------
+Parameter:
+    jpath
+
+Values:
+    range(0,1,60)
+
+Number of k points:
+    61
+
+Number of eigenfrequencies per k point:
+    24
+
+Total exported eigenfrequencies:
+    61 * 24 = 1464
+
+
+======================================================================
+13. MESH
+======================================================================
+
+The model uses a substantially finer mesh in and close to the magnetic
+film than in the remote air region.
+
+Target magnetic-domain resolution
+---------------------------------
+In-plane maximum element size:
+    approximately 5 nm
+
+Through-thickness resolution:
+    3 elements / layers across the 10 nm film thickness
+
+Antidot boundary:
+    approximately <= 5 nm characteristic resolution
+
+
+Near-field air region
+---------------------
+Within approximately 20 nm above and below the film:
+
+    maximum element size approximately <= 5 nm
+
+Typical mesh growth:
+    <= 1.3
+
+
+Remote air region
+-----------------
+Far from the film:
+
+    maximum element size approximately 100 nm
+
+The purpose of the graded mesh is to resolve the rapidly varying
+magnetostatic field near the film and antidot without meshing the full
+4.01 um air-box height at nanometer resolution.
+
+
+======================================================================
+14. DATASET AND CSV FORMAT
+======================================================================
+
+Output file:
+    COMSOL_A1_dispersion.csv
+
+Columns
+-------
+jpath
+    Integer path coordinate:
+        0 ... 60
+
+kx_rad_per_um
+    x component of Bloch wave vector in rad/um
+
+ky_rad_per_um
+    y component of Bloch wave vector in rad/um
+
+frequency_order
+    Eigenfrequencies sorted in ascending order independently at each
+    k point.
+
+    IMPORTANT:
+    This is only a local frequency-order index.
+
+    It is NOT a tracked band number.
+
+frequency_GHz
+    Eigenfrequency in GHz
+
+
+Band tracking
+-------------
+Because modes can cross or hybridize, simply connecting the nth-lowest
+frequency at neighboring k points does not necessarily follow the same
+physical eigenmode.
+
+Proper branch tracking should be performed using mode-profile overlap,
+eigenvector overlap, symmetry information, or another physically
+motivated mode-identification procedure.
+
+
+======================================================================
+15. BASIC VALIDATION TESTS
+======================================================================
+
+Uniform / benchmark checks performed before the final antidot sweep
+-------------------------------------------------------------------
+C0:
+    uniform film
+    no dynamic demagnetizing contribution
+
+Calculated frequency:
+    approximately 2.8003 GHz
+
+Reference value:
+    2.8002642 GHz
+
+
+C1:
+    full film
+    static and dynamic demagnetizing fields included
+    finite air box with d_air = 2 um
+
+Calculated frequency:
+    approximately 9.2992 GHz
+
+Reference value:
+    9.299249697 GHz
+
+
+These checks validate:
+    - gyromagnetic coefficient convention
+    - field-unit convention
+    - frequency-unit convention
+    - static demagnetizing implementation
+    - dynamic scalar-potential implementation at Gamma
+
+
+Gamma-path closure test
+-----------------------
+The final antidot dispersion calculation evaluates Gamma twice:
+
+    jpath = 0
+    jpath = 60
+
+These correspond to exactly the same wave vector:
+
+    k = (0,0)
+
+For the exported dataset, the two sets of 24 eigenfrequencies are
+identical within the exported numerical precision.
+
+This verifies the consistency of the implemented
+Gamma-X-M-Gamma parameterization and Bloch-phase formulation.
+
+
+======================================================================
+16. IMPORTANT IMPLEMENTATION NOTES
+======================================================================
+
+1. The Bloch phase is handled explicitly through:
+
+       phase_b = exp(i*k.r)
+
+   and through the shifted-gradient weak form.
+
+   Therefore ordinary periodic continuity conditions are used on x and y
+   boundaries for psi. A second Floquet phase must NOT be added there.
+
+2. Static magnetostatic potential phi0 uses ordinary periodicity because
+   the equilibrium state is periodic from cell to cell.
+
+3. The dynamic magnetostatic problem is solved over the entire air-box
+   domain, not only inside the magnetic material.
+
+4. Magnetization sources are zero in the air and inside the antidot.
+
+5. The antidot is a true nonmagnetic hole in the film, occupied by the
+   scalar-potential air domain.
+
+6. The eigenfrequency calculation is linearized around the relaxed,
+   nonuniform equilibrium magnetization.
+
+7. alpha_eig = 0 is used for the band-structure calculation.
+
+8. frequency_order in the CSV must not be interpreted as a global band
+   identifier.
+
+
+======================================================================
+17. SUMMARY OF PHYSICAL MODEL
+======================================================================
+
+Structure:
+    square antidot lattice
+
+Unit-cell period:
+    200 nm
+
+Film thickness:
+    10 nm
+
+Antidot radius:
+    50 nm
+
+Material:
+    Ms = 800 kA/m
+    Aex = 13 pJ/m
+
+Bias:
+    B = 0.1 T along +x
+
+Air padding:
+    2 um above
+    2 um below
+
+Total scalar-potential domain height:
+    4.01 um
+
+Band path:
+    Gamma -> X -> M -> Gamma
+
+k sampling:
+    61 points
+
+Eigenmodes:
+    24 per k point
+
+Total exported eigenfrequencies:
+    1464
+
+COMSOL version:
+    6.1

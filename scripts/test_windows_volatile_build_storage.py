@@ -89,6 +89,7 @@ $oldTemp=$env:TEMP; $oldTmp=$env:TMP
 $oldTmpdir=[Environment]::GetEnvironmentVariable('TMPDIR','Process')
 $VolatileBuild=[pscustomobject]@{enabled=$true;temp_root='TEMP_PATH'}
 $CompilerSourceRoot=$VolatileBuild.temp_root
+$RepoRoot=$CompilerSourceRoot
 $cargoArguments=@('build'); $needsControlRoomToolchain=$false
 $script:observed=$false
 function Invoke-External {

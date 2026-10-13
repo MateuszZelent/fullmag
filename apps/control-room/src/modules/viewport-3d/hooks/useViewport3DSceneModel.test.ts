@@ -33,6 +33,7 @@ import {
   resolveViewport3DActiveQuantityId,
   resolveViewport3DAnalysisComplexFieldQuery,
   resolveViewport3DAnalysisComplexProjectionEnabled,
+  resolveViewport3DModeFieldOverlaySourceIdentity,
   resolveViewport3DDisplayedLiveValue,
   resolvePrimaryFieldDisplayedEnvelope,
   type Viewport3DPrimaryFieldRetainedState,
@@ -43,6 +44,7 @@ import {
   resolveViewport3DPrimaryFieldVectorEnabled,
   resolveViewport3DPrimaryFieldQuery,
   resolveViewport3DDomainRenderLane,
+  hasActiveViewport3DTargetQuantityDemand,
   resolveViewport3DFdmFieldIdentityCompatible,
   resolveViewport3DFieldRenderModelBuildOptions,
   resolveViewport3DSelectedSnapshotId,
@@ -502,7 +504,7 @@ describe("FDM Airbox mesh demand", () => {
     );
 
     expect(settingsBlock).toContain(
-      "visualizationState: fdmLaneActive ? null : renderingState",
+      "visualizationState: femLaneActive ? renderingState : null",
     );
   });
 
@@ -749,6 +751,13 @@ function fieldVectorFixture(
 }
 
 describe("useViewport3DSceneModel", () => {
+  it("surfaces target-vector status only for current resolved-lane demand", () => {
+    expect(hasActiveViewport3DTargetQuantityDemand("fdm", 1)).toBe(true);
+    expect(hasActiveViewport3DTargetQuantityDemand("fem", 1)).toBe(true);
+    expect(hasActiveViewport3DTargetQuantityDemand(null, 1)).toBe(false);
+    expect(hasActiveViewport3DTargetQuantityDemand("fdm", 0)).toBe(false);
+  });
+
   it("propagates FEM Airbox per-carrier field states into scene and debug models", () => {
     const source = readFileSync(sceneModelSourceUrl, "utf8");
 
@@ -769,7 +778,7 @@ describe("useViewport3DSceneModel", () => {
     ).toHaveLength(2);
   });
 
-  it("keeps FDM native-layer visibility on the local structured-grid target state", () => {
+  it("resolves FDM native layers from canonical state and pending local target edits", () => {
     const source = readFileSync(sceneModelSourceUrl, "utf8");
     const nativeLayerSettingsBlock = source.slice(
       source.indexOf("const fdmNativeLayerSettingsById = useMemo"),
@@ -779,7 +788,8 @@ describe("useViewport3DSceneModel", () => {
     expect(nativeLayerSettingsBlock).toContain(
       "resolveViewport3DFdmTargetVisualization({",
     );
-    expect(nativeLayerSettingsBlock).not.toContain(
+    expect(nativeLayerSettingsBlock).toContain("snapshot: objectVisualizationSnapshot");
+    expect(nativeLayerSettingsBlock).toContain(
       "visualizationState: renderingState",
     );
   });
@@ -787,7 +797,7 @@ describe("useViewport3DSceneModel", () => {
   it("uses canonical local Airbox settings for both FDM Airbox carriers", () => {
     const source = readFileSync(sceneModelSourceUrl, "utf8");
     expect(source).toContain(
-      "target: AIRBOX_VISUALIZATION_TARGET,\n        visualizationState: fdmLaneActive ? null : renderingState,",
+      "target: AIRBOX_VISUALIZATION_TARGET,\n        visualizationState: femLaneActive ? renderingState : null,",
     );
     const fdmSingleGridAirboxBlock = source.slice(
       source.indexOf("const fdmSingleGridAirboxSettings ="),
@@ -808,7 +818,7 @@ describe("useViewport3DSceneModel", () => {
     expect(airboxSettingsBlock).toContain("resolveTargetVisualization({");
     expect(airboxSettingsBlock).toContain("target: AIRBOX_VISUALIZATION_TARGET");
     expect(airboxSettingsBlock).toContain(
-      "visualizationState: fdmLaneActive ? null : renderingState",
+      "visualizationState: femLaneActive ? renderingState : null",
     );
     expect(airboxSettingsBlock).not.toContain("resolveViewport3DFdmTargetVisualization({");
 
@@ -839,7 +849,7 @@ describe("useViewport3DSceneModel", () => {
   it("reports FDM field mismatches only while the FDM lane is active", () => {
     const source = readFileSync(sceneModelSourceUrl, "utf8");
     const expression = source.match(
-      /fieldVector\.error\?\.message \?\?\s*([\s\S]*?)\s*\?\?\s*magneticPartFieldVectors/,
+      /fieldVector\.error\?\.message \?\?\s*([\s\S]*?)\s*\?\?\s*\(femLaneActive \? magneticPartFieldVectors/,
     )?.[1];
     expect(expression).toBeDefined();
     const resolveWarning = new Function(
@@ -880,7 +890,7 @@ describe("useViewport3DSceneModel", () => {
 
     for (const topologyFreshness of ["current", "stale", "unknown"] as const) {
       const lane = resolveViewport3DDomainRenderLane({
-        fdmActive: true,
+        discretization: "fdm",
         femDomain,
         topologyFreshness,
       });
@@ -902,7 +912,7 @@ describe("useViewport3DSceneModel", () => {
     } as never;
 
     const lane = resolveViewport3DDomainRenderLane({
-      fdmActive: false,
+      discretization: "fem",
       femDomain,
       topologyFreshness: "current",
     });
@@ -912,16 +922,45 @@ describe("useViewport3DSceneModel", () => {
     expect(lane.topologyRenderable).toBe(true);
   });
 
+  it("keeps unresolved session mode from opening a stale FEM renderer", () => {
+    const femDomain = {
+      airboxParts: [{ id: "airbox" }],
+      magneticParts: [{ id: "film" }],
+      magneticSurfacePartsByPartId: new Map(),
+      objectPartIds: new Map([["film", ["film"]]]),
+      partsById: new Map([["film", { id: "film" }]]),
+    } as never;
+
+    const lane = resolveViewport3DDomainRenderLane({
+      discretization: null,
+      femDomain,
+      topologyFreshness: "current",
+    });
+
+    expect(lane.femDomain.magneticParts).toEqual([]);
+    expect(lane.topologyCurrent).toBe(false);
+    expect(lane.topologyRenderable).toBe(false);
+  });
+
   it("does not surface FEM topology freshness labels in the FDM lane", () => {
     const source = readFileSync(sceneModelSourceUrl, "utf8");
 
     expect(source).toContain(
-      'const fdmLaneActive = domainMeta.data?.discretization === "fdm";',
+      'const fdmLaneActive = sessionDiscretization === "fdm";',
     );
     expect(source).toContain(
-      "const topologyFreshnessStatus = fdmLaneActive\n    ? null\n    : resolveViewport3DTopologyFreshnessLabel(topologyFreshness);",
+      "const topologyFreshnessStatus = femLaneActive\n    ? resolveViewport3DTopologyFreshnessLabel(topologyFreshness)\n    : null;",
     );
-    expect(source).toContain("topologyFreshnessStatus ??\n    topology.status");
+    expect(source).toContain(
+      "(femLaneActive ? topologyFreshnessStatus ?? topology.status : null)",
+    );
+    expect(source).toContain("(femLaneActive ? topology.error?.message : null)");
+    expect(source).toContain(
+      "(fdmLaneActive ? fdmBuildState?.error?.message : null)",
+    );
+    expect(source).toContain(
+      "[femLaneActive, objectVisualizationSnapshot, renderingState]",
+    );
   });
 
   it("uses full metadata component for scalar spatial quantities", () => {
@@ -2496,6 +2535,49 @@ describe("useViewport3DSceneModel", () => {
     expect(source).toContain("resolveViewport3DAnalysisComplexFieldQuery");
     expect(source).toContain("asDecodedComplexFieldVector");
     expect(source).toContain("Boolean(analysisOverlay) ||");
+  });
+
+  it("binds modal surface provenance to the active owner and validated binary revision", () => {
+    const metadata = {
+      binaryQuery: {
+        component: "full" as const,
+        scope_kind: "full" as const,
+        view: "complex" as const,
+      },
+      fieldId: "eigen-field-a",
+      intent: {
+        analysisRunId: "run a",
+        analysisStageId: "stage/1",
+        artifactRevision: "artifact-4",
+        modeId: "mode:2",
+        sampleId: "sample/3",
+      },
+      resourceRevision: "field-r9",
+    };
+    const canonicalResourceKey = resolveViewport3DFieldVectorResourceKey(
+      metadata.fieldId,
+      metadata.binaryQuery,
+    );
+    expect(
+      resolveViewport3DModeFieldOverlaySourceIdentity({ metadata }),
+    ).toEqual({
+      fieldBufferId:
+        "analysis-mode-field:run%20a:stage%2F1:artifact-4:sample%2F3:mode%3A2:eigen-field-a:field-r9",
+      resourceKey: canonicalResourceKey,
+    });
+    expect(
+      resolveViewport3DModeFieldOverlaySourceIdentity({ metadata: null }),
+    ).toBeNull();
+
+    const source = readFileSync(sceneModelSourceUrl, "utf8");
+    expect(source).toContain("analysisFieldIntentActive: Boolean(analysisFieldIntent)");
+    expect(source).toContain("analysisOverlaySourceIdentity,");
+    expect(source).toContain("metadata.binaryQuery,");
+    const chunkedColorBlock = source.slice(
+      source.indexOf("const chunkedScalarColors = useViewport3DChunkedScalarColors({"),
+      source.indexOf("const fieldRenderModelBuildOptions = useMemo(", source.indexOf("const chunkedScalarColors = useViewport3DChunkedScalarColors({")),
+    );
+    expect(chunkedColorBlock).toContain("!analysisFieldIntent");
   });
 
   it("requests analysis complex field data without making phase part of the resource key", () => {
@@ -5391,7 +5473,10 @@ describe("useViewport3DSceneModel", () => {
     const source = readFileSync(sceneModelSourceUrl, "utf8");
 
     expect(source).toContain(
-      "domainMeta.data?.discretization === \"fem\"",
+      "const sessionDiscretization = useSessionStatusSelector((status) =>\n    resolveSessionDiscretization(status.data),\n  );",
+    );
+    expect(source).not.toContain(
+      'domainMeta.data?.discretization === "fem"',
     );
     expect(source).toContain(
       "const availableQuantityIdsForPlanning = fdmLaneActive",

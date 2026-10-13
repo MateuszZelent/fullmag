@@ -32,6 +32,8 @@ Render controls can affect what is displayed in viewport only; they are not allo
 - `universe_mesh_config` is the source of truth for universe/airbox policy.
 - `per_object_mesh_config` is the source of truth for object-level mesh overrides.
 
+Manual outer-domain policy must contain finite positive size; optional center retains the existing origin convention. Accepted `study.universe_mesh` takes precedence over a retained `scene.universe` projection. An authored body outside manual bounds blocks mesh build and solver run until bounds or placement are corrected; authoring edits remain allowed. Automatic policy may remain geometry-dependent before the first object. It does not require an executing engine. See [ADR 0053](../adr/0053-authoring-method-and-first-run-domain.md) for model method versus run resolution and readiness ownership.
+
 ### 3.2 Derived solver level
 
 - `solver_mesh` is a derived artifact/reference, not a replacement for authoring intent.

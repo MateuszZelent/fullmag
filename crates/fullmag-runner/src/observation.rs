@@ -243,7 +243,9 @@ impl ObservationProviderResolver {
                 Some(ObservationLane::FemSharedAir)
             }
             BackendPlanIR::Fem(_) => Some(ObservationLane::FemMagneticOnly),
-            BackendPlanIR::FemEigen(_) | BackendPlanIR::FemFrequencyResponse(_) => None,
+            BackendPlanIR::FemEigen(_)
+            | BackendPlanIR::FemFrequencyResponse(_)
+            | BackendPlanIR::AntennaExternalLeadInspection(_) => None,
         };
         Self { lane }
     }

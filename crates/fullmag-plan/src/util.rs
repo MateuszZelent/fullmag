@@ -1,4 +1,4 @@
-use fullmag_ir::{DeclaredUniverseIR, DomainFrameIR, ProblemIR, StudyIR};
+use fullmag_ir::{DeclaredUniverseIR, DomainFrameIR, ProblemIR};
 use serde_json::Value;
 
 pub(crate) fn active_stage_id(problem: &ProblemIR) -> Option<&str> {
@@ -40,7 +40,20 @@ pub(crate) fn time_stage_context(problem: &ProblemIR) -> fullmag_ir::TimeStageCo
             .get("stage_start_time_s")
             .and_then(Value::as_f64)
             .unwrap_or(0.0),
+        waveform_origin_time_s: problem
+            .problem_meta
+            .runtime_metadata
+            .get("stage_waveform_origin_time_s")
+            .and_then(Value::as_f64),
+        study_kind: problem.study.kind(),
     }
+}
+
+pub(crate) fn drive_activation_is_active(
+    activation: &fullmag_ir::DriveActivationIR,
+    problem: &ProblemIR,
+) -> bool {
+    activation.is_active_for(problem.study.kind(), active_stage_id(problem))
 }
 
 pub(crate) fn field_drive_is_active(
@@ -50,13 +63,7 @@ pub(crate) fn field_drive_is_active(
     if !drive.enabled {
         return false;
     }
-    match &drive.activation {
-        fullmag_ir::DriveActivationIR::AllTimeEvolution {} => {
-            matches!(problem.study, StudyIR::TimeEvolution { .. })
-        }
-        fullmag_ir::DriveActivationIR::StageIds { stage_ids } => active_stage_id(problem)
-            .is_some_and(|active| stage_ids.iter().any(|stage_id| stage_id == active)),
-    }
+    drive_activation_is_active(&drive.activation, problem)
 }
 
 pub(crate) const MU0: f64 = 4.0 * std::f64::consts::PI * 1e-7;

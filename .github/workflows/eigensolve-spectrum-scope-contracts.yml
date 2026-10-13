@@ -1,0 +1,60 @@
+name: eigensolve-spectrum-scope-contracts
+on:
+  workflow_dispatch:
+  push:
+    branches: ['codex/eigensolve-dispersion-plan-20260912']
+    paths:
+      - 'crates/fullmag-ir/**'
+      - 'crates/fullmag-plan/**'
+      - 'crates/fullmag-application/**'
+      - 'crates/fullmag-runner/**'
+      - 'crates/fullmag-cli/**'
+      - '.github/workflows/eigensolve-spectrum-scope-contracts.yml'
+permissions:
+  contents: read
+jobs:
+  scope-source-contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      RUST_MIN_STACK: 16777216
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Preserve exact source identity
+        run: git rev-parse HEAD
+      - name: Verify authored scopes and unchanged legacy ProblemIR wire format
+        run: |
+          set -o pipefail
+          cargo test --locked -p fullmag-ir --test ir_tests eigen_spectrum_scope_is_typed_and_legacy_wire_defaults_to_per_sample -- --exact --nocapture | tee "$RUNNER_TEMP/eigen-spectrum-scope.log"
+          grep -F "eigen_spectrum_scope_is_typed_and_legacy_wire_defaults_to_per_sample ... ok" "$RUNNER_TEMP/eigen-spectrum-scope.log"
+      - name: Verify strict public v0.4 root and standalone scope wire adapters
+        run: |
+          set -o pipefail
+          cargo test --locked -p fullmag-ir --test study_v04 spectrum_scope_v04_root_and_standalone_preserve_authoring_intent -- --exact --nocapture | tee "$RUNNER_TEMP/eigen-spectrum-v04.log"
+          grep -F "spectrum_scope_v04_root_and_standalone_preserve_authoring_intent ... ok" "$RUNNER_TEMP/eigen-spectrum-v04.log"
+      - name: Run complete IR and planner contracts
+        run: cargo test --locked -p fullmag-ir -p fullmag-plan --no-fail-fast
+      - name: Run complete application materialization contracts
+        run: cargo test --locked -p fullmag-application --lib --no-fail-fast
+      - name: Verify scope metadata at actual generic single-k and path producers
+        run: |
+          set -o pipefail
+          for test_name in spectrum_output_scope_union_preserves_authored_and_legacy_requests generic_manifest_reports_the_union_of_requested_spectrum_scopes native_eigen_v2_mode_metadata_preserves_operator_provenance relaxed_path_source_fixture_handoff_is_reused_for_each_nonzero_k_sample_without_per_sample_relaxation; do
+            cargo test --locked -p fullmag-runner --lib "$test_name" -- --nocapture | tee "$RUNNER_TEMP/$test_name.log"
+            grep -F "$test_name ... ok" "$RUNNER_TEMP/$test_name.log"
+          done
+      - name: Verify immutable FEM eigen producer and legacy protection
+        run: |
+          set -o pipefail
+          for test_name in fem_eigen_writer_publishes_two_immutable_generations_and_preserves_legacy_root write_artifacts_refuses_eigen_auxiliary_when_immutable_generation_marker_exists all_active_planned_entrypoints_preserve_exact_k0_dispatch_and_persisted_provenance; do
+            cargo test --locked -p fullmag-runner --lib "$test_name" -- --nocapture | tee "$RUNNER_TEMP/$test_name.log"
+            grep -F "$test_name ... ok" "$RUNNER_TEMP/$test_name.log"
+          done
+      - name: Run complete runner contracts
+        run: cargo test --locked -p fullmag-runner --lib --no-fail-fast
+      - name: Compile integration callers and API CLI binaries
+        run: |
+          cargo check --locked -p fullmag-runner --tests
+          cargo check --locked -p fullmag-cli -p fullmag-api --bins

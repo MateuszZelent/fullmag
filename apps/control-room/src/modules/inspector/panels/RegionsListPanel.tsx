@@ -17,6 +17,7 @@ import {
   useSessionResourceIdentity,
   useSessionStatusSelector,
 } from "@/kernel/resources/useSessionStatus";
+import { resolveSessionDiscretization } from "@/kernel/resources/sessionDiscretization";
 import { visualizationTargetIdForSceneObject } from "@/kernel/selection/selectionTypes";
 import { Button } from "@/shared/ui/Button";
 
@@ -94,7 +95,7 @@ export function RegionsListPanel({ selection }: InspectorPanelProps) {
   const regions = useModelRegionsResource();
   const regionDiagnostics = useModelRegionDiagnosticsResource();
   const sessionDiscretization = useSessionStatusSelector(
-    (status) => status.data?.domain.discretization ?? null,
+    (status) => resolveSessionDiscretization(status.data),
   );
   const meshLane = resolveMeshInspectorLane(sessionDiscretization);
   const model = useMemo(

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  assignedMaterialParametersDraft,
   buildCreateMaterialDraft,
   buildMaterialAssignmentPatch,
   buildMaterialParametersPatch,
@@ -15,6 +16,28 @@ import {
 } from "./ObjectMaterialPanelModel";
 
 describe("ObjectMaterialPanelModel", () => {
+  it("uses all parameters from the assignment ACK, not an empty pre-assignment draft", () => {
+    const acknowledged = {
+      revision: 23,
+      materials: [{
+        id: "mat:waveguide",
+        name: "Waveguide",
+        properties: { Aex: 1.3e-11, Ms: 8e5, alpha: 0.02, Dind: null, Dbulk: null },
+      }],
+    };
+    const draft = assignedMaterialParametersDraft("mat:waveguide", acknowledged);
+    expect(buildMaterialParametersPatch(draft)).toEqual({
+      patch: { name: "Waveguide", properties: acknowledged.materials[0].properties },
+    });
+    expect(assignedMaterialParametersDraft("mat:waveguide", {
+      ...acknowledged,
+      revision: 25,
+      materials: [{ ...acknowledged.materials[0], properties: { Aex: 2e-11, Ms: 9e5, alpha: 0.03 } }],
+    })).toMatchObject({ aex: "2e-11", ms: "900000", alpha: "0.03" });
+    expect(() => assignedMaterialParametersDraft("mat:waveguide", { materials: [] }))
+      .toThrow("missing from the acknowledged scene");
+  });
+
   it("validates canonical SI values for a new material and optional anisotropy", () => {
     expect(buildCreateMaterialDraft({
       aex: "1.3e-11",

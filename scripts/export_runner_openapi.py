@@ -4,7 +4,7 @@
 This is a diagnostic artifact route.  It never builds, initializes storage,
 starts the runner, or changes the retained package.  The package is accepted
 only after the existing queue, coordinator receipt, source capsule, and build
-receipt validators agree on one clean source identity.
+receipt validators agree on one clean commit or explicitly pinned snapshot.
 """
 
 from __future__ import annotations
@@ -33,7 +33,7 @@ if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
 import fullmag_storage as storage  # noqa: E402
-from local_runner.build_entrypoint import required_outputs_for_profile  # noqa: E402
+from local_runner.build_entrypoint import PROFILES, required_outputs_for_profile  # noqa: E402
 from local_runner.build_executor import (  # noqa: E402
     capsule_path,
     trusted_identity,
@@ -301,22 +301,28 @@ def _source_mount(journal: Mapping[str, Any]) -> Path:
     return matches[0]
 
 
-def _validate_native_identity(native: Any, expected_commit: str) -> dict[str, Any]:
+def _validate_native_identity(native: Any, expected_commit: str,
+                              expected_snapshot: str | None = None) -> dict[str, Any]:
     if not isinstance(native, dict):
         _fail("Managed build has no native source identity")
     if native.get("schema") != "fullmag.source-snapshot.v2":
         _fail("Managed build native source identity schema is unsupported")
     if native.get("head_commit_full") != expected_commit:
         _fail("Managed build source commit differs from the requested commit")
-    if native.get("source_snapshot_dirty") is not False:
+    if type(native.get("source_snapshot_dirty")) is not bool:
+        _fail("Managed build source dirty state is invalid")
+    if expected_snapshot is None and native["source_snapshot_dirty"] is not False:
         _fail("Managed build source identity is dirty")
     snapshot = native.get("source_snapshot_sha256")
     if not isinstance(snapshot, str) or not SHA256_RE.fullmatch(snapshot):
         _fail("Managed build source snapshot identity is invalid")
+    if expected_snapshot is not None and snapshot != expected_snapshot:
+        _fail("Managed build native snapshot differs from the requested snapshot")
     return native
 
 
-def _validate_openapi_document(raw: bytes, expected_commit: str, expected_snapshot: str) -> dict[str, Any]:
+def _validate_openapi_document(raw: bytes, expected_commit: str, expected_snapshot: str,
+                               *, expected_dirty: bool = False) -> dict[str, Any]:
     if len(raw) == 0 or len(raw) > MAX_DOCUMENT_BYTES:
         _fail("Managed OpenAPI stdout is empty or exceeds the 64 MiB limit")
     try:
@@ -328,10 +334,11 @@ def _validate_openapi_document(raw: bytes, expected_commit: str, expected_snapsh
     identity = document.get("x-fullmag-build-identity")
     if not isinstance(identity, dict):
         _fail("Managed OpenAPI export is missing build identity")
+    expected_state = "dirty" if expected_dirty else "clean"
     if identity.get("git_commit") != expected_commit \
             or identity.get("source_snapshot_sha256") != expected_snapshot \
-            or identity.get("worktree_state") != "clean":
-        _fail("Managed OpenAPI export does not match the expected clean source identity")
+            or identity.get("worktree_state") != expected_state:
+        _fail(f"Managed OpenAPI export does not match the expected {expected_state} source identity")
     built_at = identity.get("built_at_utc")
     if not isinstance(built_at, str) or not built_at.strip():
         _fail("Managed OpenAPI export has no build timestamp")
@@ -345,11 +352,18 @@ def _validate_openapi_document(raw: bytes, expected_commit: str, expected_snapsh
     return document
 
 
-def _validate_managed_build(layout: Mapping[str, Any], job_id: str, expected_commit: str) -> ManagedBuild:
+def _validate_managed_build(layout: Mapping[str, Any], job_id: str, expected_commit: str,
+                            *, source_digest: str | None = None,
+                            native_snapshot_sha256: str | None = None) -> ManagedBuild:
     if not JOB_ID_RE.fullmatch(job_id):
         _fail("A managed BuildRunner job ID must be exactly 32 lowercase hexadecimal characters")
     if not COMMIT_RE.fullmatch(expected_commit):
         _fail("Expected commit must be exactly 40 lowercase hexadecimal characters")
+    snapshot_mode = source_digest is not None or native_snapshot_sha256 is not None
+    if snapshot_mode and (not isinstance(source_digest, str) or not SHA256_RE.fullmatch(source_digest)
+                          or not isinstance(native_snapshot_sha256, str)
+                          or not SHA256_RE.fullmatch(native_snapshot_sha256)):
+        _fail("Explicit snapshot requires both full source and native snapshot digests")
     storage_root = _safe_validate(Path(layout["storage_root"]), Path(layout["storage_root"]), "storage root")
     queue_path = _safe_validate(storage_root / "index" / "runner-jobs.sqlite", storage_root, "runner queue")
     job = _read_queue_job(queue_path, job_id)
@@ -359,7 +373,10 @@ def _validate_managed_build(layout: Mapping[str, Any], job_id: str, expected_com
         _fail("Runner queue job is not a terminal successful build")
     if not isinstance(job.get("source_digest"), str) or not SHA256_RE.fullmatch(job["source_digest"]):
         _fail("Runner queue source digest is invalid")
-    native_from_job = _validate_native_identity(job.get("payload", {}).get("native_source_identity"), expected_commit)
+    if snapshot_mode and job["source_digest"] != source_digest:
+        _fail("Runner queue source digest differs from the requested snapshot")
+    native_from_job = _validate_native_identity(
+        job.get("payload", {}).get("native_source_identity"), expected_commit, native_snapshot_sha256)
     # resolve_layout().runs_root already includes this checkout's worktree ID;
     # the coordinator uses the same canonical root/runs/<worktree>/<job> path.
     run_root = _safe_validate(Path(layout["runs_root"]) / job_id, storage_root, "managed build run")
@@ -386,7 +403,7 @@ def _validate_managed_build(layout: Mapping[str, Any], job_id: str, expected_com
     context = load_context(context_path, job_id=job_id, source_digest=job["source_digest"], profile=job["profile"])
     if context.get("image_digest") != image or context.get("native_source_identity") != native_from_job:
         _fail("Trusted execution context does not match the queue/coordinator identity")
-    native = _validate_native_identity(context.get("native_source_identity"), expected_commit)
+    native = _validate_native_identity(context.get("native_source_identity"), expected_commit, native_snapshot_sha256)
     job_for_receipt = dict(job)
     job_for_receipt["payload"] = dict(job["payload"])
     job_for_receipt["payload"]["native_source_identity"] = native
@@ -396,8 +413,10 @@ def _validate_managed_build(layout: Mapping[str, Any], job_id: str, expected_com
     _preflight_tree(artifacts, "managed build artifacts")
     build_receipt = validate_build_receipt(artifacts, job_for_receipt, journal)
     required = required_outputs_for_profile(job["profile"])
-    if len(required) < 15:
-        _fail("The selected BuildRunner profile does not expose the complete 15-output release contract")
+    # The receipt validator enforces the complete contract of this profile;
+    # exporting its API does not require frontend or release-only outputs.
+    if "bin/fullmag-api" not in required:
+        _fail("The selected BuildRunner profile does not declare the fullmag-api output")
     source_mount = _safe_validate(_source_mount(journal), storage_root, "source capsule mount")
     expected_capsule = capsule_path(storage_root, job_for_receipt)
     if source_mount.resolve() != expected_capsule.resolve():
@@ -406,8 +425,9 @@ def _validate_managed_build(layout: Mapping[str, Any], job_id: str, expected_com
     _preflight_tree(expected_capsule, "source capsule")
     source_manifest_path = _safe_validate(expected_capsule / "manifest.json", expected_capsule, "source capsule manifest")
     source_manifest = verify_source(expected_capsule, job["source_digest"])
-    if source_manifest.get("source_mode") != "commit" or source_manifest.get("resolved_commit") != expected_commit:
-        _fail("Source capsule does not match the requested clean commit")
+    expected_mode = "snapshot" if snapshot_mode else "commit"
+    if source_manifest.get("source_mode") != expected_mode or source_manifest.get("resolved_commit") != expected_commit:
+        _fail(f"Source capsule does not match the requested {expected_mode}")
     bind_identity(native, source_manifest)
     package = _safe_validate(run_root / "artifacts" / "outputs" / ".fullmag" / "local", run_root, "runtime package")
     _regular(package, "runtime package", directory=True)
@@ -585,6 +605,14 @@ def docker_run_argv(build: ManagedBuild, export_id: str) -> list[str]:
     _require(re.fullmatch(r"[a-f0-9]{32}", export_id) is not None, "Invalid managed export ID")
     container_name = f"fullmag-openapi-{export_id}"
     package = str(build.package.resolve())
+    profile = PROFILES.get(build.job["profile"])
+    if profile is None:
+        _fail("Managed build profile is not recognized by the trusted registry")
+    # Use the declared image-owned ABI paths of the validated profile.
+    # Runtime-v2 MFEM/PETSc/SLEPc live outside the legacy dependency prefix.
+    library_paths = ["/package/lib"]
+    library_paths.extend(path for path in profile.environment.get("LD_LIBRARY_PATH", "").split(":") if path)
+    library_paths.append("/opt/fullmag-deps/lib")
     return [
         *_docker_base(), "run", "--rm", "--pull=never",
         "--name", container_name,
@@ -599,7 +627,7 @@ def docker_run_argv(build: ManagedBuild, export_id: str) -> list[str]:
         "--env", "FULLMAG_WEB_STATIC_DIR=/package/web",
         "--env", "HOME=/tmp", "--env", "TMPDIR=/tmp",
         "--env", "PATH=/package/bin:/usr/local/bin:/usr/bin:/bin",
-        "--env", "LD_LIBRARY_PATH=/package/lib:/opt/fullmag-deps/lib",
+        "--env", f"LD_LIBRARY_PATH={':'.join(library_paths)}",
         "--entrypoint", "/package/bin/fullmag-api", image, "--print-openapi-v2",
     ]
 
@@ -778,6 +806,8 @@ def _record_evidence(root: Path, *, build: ManagedBuild, capture: ProcessCapture
         "source_commit": build.context["native_source_identity"]["head_commit_full"],
         "source_snapshot_sha256": build.context["native_source_identity"]["source_snapshot_sha256"],
         "source_digest": build.job["source_digest"],
+        "source_mode": build.source_manifest["source_mode"],
+        "source_worktree_state": "dirty" if build.context["native_source_identity"]["source_snapshot_dirty"] else "clean",
         "image_digest": build.journal["image_digest"],
         "api_binary_sha256": binary_hash,
         "build_receipt_sha256": build.validated_build_receipt_sha256,
@@ -832,7 +862,7 @@ def _record_evidence(root: Path, *, build: ManagedBuild, capture: ProcessCapture
         "source_identity": {
             "git_commit": receipt["source_commit"],
             "source_snapshot_sha256": receipt["source_snapshot_sha256"],
-            "worktree_state": "clean",
+            "worktree_state": receipt["source_worktree_state"],
         },
         "image_digest": receipt["image_digest"],
         "job_id": receipt["job_id"],
@@ -845,6 +875,7 @@ def _record_evidence(root: Path, *, build: ManagedBuild, capture: ProcessCapture
 
 def export_openapi(repo_root: Path, job_id: str, expected_commit: str,
                    *, layout: Mapping[str, Any] | None = None,
+                   source_digest: str | None = None, native_snapshot_sha256: str | None = None,
                    image_inspect: Callable[[str], Mapping[str, Any]] | None = None,
                    capture: Callable[[Sequence[str]], ProcessCapture] | None = None) -> Path:
     if layout is None:
@@ -852,7 +883,21 @@ def export_openapi(repo_root: Path, job_id: str, expected_commit: str,
             layout = storage.resolve_layout(repo_root)
         except (OSError, ValueError, storage.StorageError) as error:
             raise ExportError("Cannot resolve the configured canonical Fullmag storage") from error
-    build = _validate_managed_build(layout, job_id, expected_commit)
+    from local_runner.runtime_use import runtime_package_use
+    try:
+        with runtime_package_use(layout):
+            return _export_protected(
+                layout, job_id, expected_commit, image_inspect, capture,
+                source_digest=source_digest, native_snapshot_sha256=native_snapshot_sha256,
+            )
+    except storage.StorageError as error:
+        raise ExportError('Runtime package use is blocked by storage retention') from error
+
+
+def _export_protected(layout, job_id, expected_commit, image_inspect, capture,
+                      *, source_digest=None, native_snapshot_sha256=None):
+    build = _validate_managed_build(layout, job_id, expected_commit,
+                                   source_digest=source_digest, native_snapshot_sha256=native_snapshot_sha256)
     evidence = _new_evidence_root(layout)
     export_id = evidence.name
     command: Sequence[str] = []
@@ -922,6 +967,7 @@ def export_openapi(repo_root: Path, job_id: str, expected_commit: str,
                 result.stdout,
                 build.context["native_source_identity"]["head_commit_full"],
                 build.context["native_source_identity"]["source_snapshot_sha256"],
+                expected_dirty=build.context["native_source_identity"]["source_snapshot_dirty"],
             )
         except ExportError as error:
             failure = str(error)
@@ -940,9 +986,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--repo-root", type=Path, default=Path.cwd())
     parser.add_argument("--job-id", required=True)
     parser.add_argument("--expected-commit", required=True)
+    parser.add_argument("--source-digest")
+    parser.add_argument("--native-snapshot-sha256")
     args = parser.parse_args(argv)
     try:
-        evidence = export_openapi(args.repo_root, args.job_id, args.expected_commit)
+        evidence = export_openapi(args.repo_root, args.job_id, args.expected_commit,
+                                 source_digest=args.source_digest, native_snapshot_sha256=args.native_snapshot_sha256)
     except ExportError as error:
         print(f"export_runner_openapi: {error}", file=sys.stderr)
         return 2

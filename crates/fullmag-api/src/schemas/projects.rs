@@ -529,3 +529,29 @@ pub(crate) struct ProjectFromScriptResource {
     pub project: ProjectDocumentResource,
     pub script_import: ProjectScriptImportResource,
 }
+
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ProjectRunIntentRequest {
+    pub archive_base64: String,
+    /// Revision of the exact archived definition observed by the author.
+    pub expected_revision: u64,
+    /// Explicit RunIntentAuthoring: run_id, idempotency_key, parameters, seeds,
+    /// dependencies, scheduling_priority and requested_execution. No defaults
+    /// or identities are inferred from a live session.
+    pub run_authoring: BTreeMap<String, serde_json::Value>,
+    pub study_plan: BTreeMap<String, serde_json::Value>,
+    pub study_problem_catalog: BTreeMap<String, serde_json::Value>,
+    pub asset_paths: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub(crate) struct ProjectRunIntentResource {
+    pub project_id: String,
+    pub definition_revision: u64,
+    pub payload_fingerprint: String,
+    /// Canonical run_intent.v1 for the existing Submit operation. Submit must
+    /// receive the same archive, Study, catalog and asset bindings. It repeats
+    /// validation and checks published profiles before durable acceptance.
+    pub run_intent: BTreeMap<String, serde_json::Value>,
+}

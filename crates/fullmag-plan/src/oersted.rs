@@ -4,7 +4,8 @@ use std::f64::consts::PI;
 use fullmag_ir::{
     CurrentModuleIR, CurrentTransportModelIR, EnergyTermIR, FemMeshPartIR, FemMeshPartSelector,
     FemObjectSegmentIR, GeometryEntryIR, MeshIR, OerstedFieldModelIR, ProblemIR,
-    SpinTransportModeIR, TimeDependenceIR, TimeEnvelopeIR, TransportCouplingIR,
+    ResolvedChargeTransportPlanIR, SpinTransportModeIR, TimeDependenceIR, TimeEnvelopeIR,
+    TransportCouplingIR,
 };
 
 use crate::current_transport::ResolvedCurrentTransport;
@@ -84,6 +85,7 @@ pub(crate) fn resolve_fem_oersted_term(
     term_index: usize,
     term: &EnergyTermIR,
     current_transports: &[ResolvedCurrentTransport],
+    charge_transport_plans: &[ResolvedChargeTransportPlanIR],
     mesh: &MeshIR,
     object_segments: &[FemObjectSegmentIR],
     mesh_parts: &[FemMeshPartIR],
@@ -113,8 +115,13 @@ pub(crate) fn resolve_fem_oersted_term(
             source,
             ..
         } => {
-            if let Some(dynamic) = resolve_solved_current_source(problem, term_index, source, true)?
-            {
+            if let Some(dynamic) = resolve_solved_current_source(
+                problem,
+                term_index,
+                source,
+                true,
+                charge_transport_plans,
+            )? {
                 return Ok(Some(dynamic));
             }
             resolve_fem_oersted_from_current_solution(
@@ -167,7 +174,7 @@ pub(crate) fn resolve_fdm_oersted_term(
             ..
         } => {
             if let Some(dynamic) =
-                resolve_solved_current_source(problem, term_index, source, false)?
+                resolve_solved_current_source(problem, term_index, source, false, &[])?
             {
                 return Ok(Some(dynamic));
             }
@@ -228,6 +235,7 @@ fn resolve_solved_current_source(
     term_index: usize,
     source: &str,
     fem: bool,
+    charge_transport_plans: &[ResolvedChargeTransportPlanIR],
 ) -> Result<Option<ResolvedOerstedTerm>, PlanError> {
     let Some((model, coupling)) = problem.current_modules.iter().find_map(|module| {
         let CurrentModuleIR::CurrentTransport {
@@ -248,17 +256,31 @@ fn resolve_solved_current_source(
         return Ok(None);
     }
 
-    let Some(spin_module) = problem
+    let spin_module = problem
         .spin_transport_modules
         .iter()
-        .find(|module| module.current_source_id == source)
-    else {
+        .find(|module| module.current_source_id == source);
+    if spin_module.is_none() {
+        let charge_only_bound = fem
+            && charge_transport_plans.iter().any(|plan| {
+                plan.module_id == source
+                    && plan
+                        .fem_cpu_double
+                        .as_ref()
+                        .is_some_and(|descriptor| descriptor.oersted_source_bound)
+            });
+        if charge_only_bound {
+            return Ok(Some(ResolvedOerstedTerm::SolvedCurrent {
+                source: source.to_string(),
+            }));
+        }
         return Err(PlanError {
             reasons: vec![format!(
-                "energy_terms[{term_index}] oersted_field source '{source}' uses a solved current but has no bound SpinDriftDiffusion transport module"
+                "energy_terms[{term_index}] oersted_field source '{source}' uses a solved current but has neither a resolved FEM charge-only plan nor a bound SpinDriftDiffusion transport module"
             )],
         });
-    };
+    }
+    let spin_module = spin_module.expect("checked above");
 
     let expected_model = if coupling == TransportCouplingIR::Bidirectional {
         CurrentTransportModelIR::MagnetoresistivePoisson
@@ -1176,6 +1198,7 @@ mod tests {
                 solve_region: Some("wire".to_string()),
                 time_envelope: None,
             }],
+            &[],
             &mesh,
             &[],
             &mesh_parts,

@@ -1,0 +1,26 @@
+name: eigensolve-scientific-source-maps
+on:
+  workflow_dispatch:
+  push:
+    branches: ['codex/eigensolve-dispersion-plan-20260912']
+    paths:
+      - 'docs/physics/poisson-airbox-schur-execution-observability*'
+      - 'docs/physics/r4-linearization-identity-v2*'
+      - '.github/workflows/eigensolve-scientific-source-maps.yml'
+permissions:
+  contents: read
+jobs:
+  scientific-source-maps:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+      - name: Preserve exact source identity
+        run: git rev-parse HEAD
+      - name: Validate Schur observability and R4 source contracts
+        run: |
+          python -B .agents/skills/scientific-documentation-contract/scripts/validate_scientific_docs.py docs/physics/poisson-airbox-schur-execution-observability.source-map.json --repo-root .
+          python -B .agents/skills/scientific-documentation-contract/scripts/validate_scientific_docs.py docs/physics/r4-linearization-identity-v2.source-map.json --repo-root .

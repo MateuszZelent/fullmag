@@ -266,3 +266,31 @@ def test_png_validator_rejects_blank_dispersion_image(tmp_path: Path) -> None:
         assert "appears blank" in str(exc)
     else:
         raise AssertionError("blank PNG unexpectedly passed validation")
+
+
+def test_dispersion_segments_keep_crossing_branches_and_missing_samples_separate():
+    module = load_plotter_module()
+    rows = [
+        {"sample_index": str(i), "branch_id": branch, "raw_mode_index": str(raw),
+         "path_s_rad_per_m": str(i * 1e6), "frequency_hz": str(f * 1e9)}
+        for i, branch, raw, f in [
+            (0, "a", 0, 2), (0, "b", 1, 4),
+            (1, "a", 1, 4), (1, "b", 0, 2),
+            (3, "a", 0, 5),
+        ]
+    ]
+    segments = module.dispersion_segments(rows)
+    assert [(name, [(r["sample_index"], r["frequency_hz"]) for r in segment])
+            for name, segment in segments] == [
+        ("a", [("0", "2000000000.0"), ("1", "4000000000.0")]),
+        ("a", [("3", "5000000000.0")]),
+        ("b", [("0", "4000000000.0"), ("1", "2000000000.0")]),
+    ]
+
+
+def test_dispersion_without_tracking_is_not_connected_across_k():
+    module = load_plotter_module()
+    rows = [{"sample_index": str(i), "branch_id": "", "raw_mode_index": "0",
+             "path_s_rad_per_m": str(i), "frequency_hz": "1000000000"}
+            for i in range(2)]
+    assert all(len(segment) == 1 for _, segment in module.dispersion_segments(rows))

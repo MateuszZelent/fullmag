@@ -155,7 +155,9 @@ fn fdm_plan_enables_quantity(plan: &FdmPlanIR, id: QuantityId) -> bool {
         QuantityId::EdenRotatedDmi => plan.rotated_interfacial_dmi.is_some(),
         QuantityId::EdenTotal => true,
         QuantityId::MatMs | QuantityId::MatAex | QuantityId::MatAlpha => true,
-        QuantityId::HAnt => !plan.antenna_zeeman_masks.is_empty(),
+        QuantityId::HAnt => {
+            !plan.antenna_zeeman_masks.is_empty() || !plan.solved_antenna_drive_bases.is_empty()
+        }
         QuantityId::VElectric | QuantityId::JCharge => !plan.fdm_gpu_charge_transports.is_empty(),
         QuantityId::U
         | QuantityId::DemagPhi
@@ -257,8 +259,30 @@ fn fdm_multilayer_quantity_is_active(plan: &FdmMultilayerPlanIR, id: QuantityId)
     }
 }
 
+fn fem_plan_has_antenna_field(plan: &FemPlanIR) -> bool {
+    !plan.antenna_zeeman_masks.is_empty()
+        || !plan.solved_antenna_drive_bases.is_empty()
+        || plan.current_modules.iter().any(|module| {
+            matches!(
+                module,
+                fullmag_ir::CurrentModuleIR::AntennaFieldSource {
+                    model: fullmag_ir::AntennaFieldSourceModelIR::Mqs2p5dAz,
+                    antenna: Some(_),
+                    drive: Some(_),
+                    ..
+                }
+            )
+        })
+}
+
 fn fem_quantity_is_active(engine: FemEngine, plan: &FemPlanIR, id: QuantityId) -> bool {
     let engine_exposes = match engine {
+        // The CPU reference FEM observables already carry the resolved
+        // antenna field, while the native GPU ABI has no H_ant observable.
+        // Keep the GPU lane fail-closed until its device snapshot contract is
+        // qualified; the interactive GPU path must not inherit this preview
+        // capability by accident.
+        FemEngine::CpuNative if id == QuantityId::HAnt => fem_plan_has_antenna_field(plan),
         FemEngine::CpuNative | FemEngine::NativeGpu => {
             crate::native_fem::can_materialize_preview_quantity(plan, id)
         }
@@ -274,7 +298,7 @@ fn fem_plan_enables_quantity(plan: &FemPlanIR, id: QuantityId) -> bool {
         QuantityId::HDemag => plan.enable_demag,
         QuantityId::DemagPhi => plan.enable_demag,
         QuantityId::HExt => has_nonzero_external_field(plan.external_field),
-        QuantityId::HAnt => !plan.current_modules.is_empty(),
+        QuantityId::HAnt => fem_plan_has_antenna_field(plan),
         QuantityId::HDrive => plan.field_drives.iter().any(|drive| drive.enabled),
         QuantityId::HAni => material_has_uniaxial_anisotropy(&plan.material),
         QuantityId::HAniCubic => material_has_cubic_anisotropy(&plan.material),
@@ -309,11 +333,12 @@ fn fem_plan_enables_quantity(plan: &FemPlanIR, id: QuantityId) -> bool {
         // DMI observable; it has no separate rotated energy-density field.
         QuantityId::EdenRotatedDmi => false,
         QuantityId::EdenTotal => true,
-        QuantityId::VElectric
-        | QuantityId::JCharge
-        | QuantityId::SpinPotential
-        | QuantityId::SpinCurrentTensor
-        | QuantityId::TorqueStt => !plan.spin_transport_plans.is_empty(),
+        QuantityId::VElectric | QuantityId::JCharge => {
+            !plan.charge_transport_plans.is_empty() || !plan.spin_transport_plans.is_empty()
+        }
+        QuantityId::SpinPotential | QuantityId::SpinCurrentTensor | QuantityId::TorqueStt => {
+            !plan.spin_transport_plans.is_empty()
+        }
         QuantityId::EEx
         | QuantityId::U
         | QuantityId::Eps
@@ -381,6 +406,26 @@ mod tests {
             enable_demag: false,
             ..FdmPlanIR::default()
         }
+    }
+
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn cuda_preview_exposes_resolved_antenna_field() {
+        let mut plan = fdm_plan();
+        plan.antenna_zeeman_masks = vec![fullmag_ir::ResolvedAntennaZeemanMaskIR {
+            source: "antenna_1".into(),
+            object: "free".into(),
+            amplitude_b_t: 1.0e-3,
+            direction: [0.0, 1.0, 0.0],
+            spatial_profile: None,
+            waveform: None,
+            field_xyz: vec![[0.0, 1.0, 0.0]; plan.initial_magnetization.len()],
+        }];
+
+        assert_eq!(
+            active_fdm_preview_quantities(FdmEngine::CudaFdm, &plan, &["H_ant"]),
+            vec!["H_ant"]
+        );
     }
 
     fn fdm_multilayer_plan() -> FdmMultilayerPlanIR {
@@ -547,10 +592,12 @@ mod tests {
             region_materials: Vec::new(),
             external_field: None,
             antenna_zeeman_masks: Vec::new(),
+            solved_antenna_drive_bases: Vec::new(),
             field_drives: Vec::new(),
             field_drive_geometry_masks: Vec::new(),
             time_stage: Default::default(),
             current_modules: Vec::new(),
+            charge_transport_plans: Vec::new(),
             spin_transport_plans: Vec::new(),
             gyromagnetic_ratio: 2.211e5,
             precision: ExecutionPrecision::Double,
@@ -745,6 +792,28 @@ mod tests {
             active_fem_preview_quantities(FemEngine::CpuNative, &plan, &quantities),
             vec!["m", "H_ex", "H_demag", "H_ext", "torque", "H_ani", "H_eff"]
         );
+    }
+
+    #[test]
+    fn fem_cpu_preview_exposes_resolved_antenna_field_only_when_configured() {
+        let mut plan = fem_plan();
+        assert!(active_fem_preview_quantities(FemEngine::CpuNative, &plan, &["H_ant"],).is_empty());
+
+        plan.antenna_zeeman_masks = vec![fullmag_ir::ResolvedAntennaZeemanMaskIR {
+            source: "antenna_1".into(),
+            object: "magnet_1".into(),
+            amplitude_b_t: 1.0e-3,
+            direction: [0.0, 1.0, 0.0],
+            spatial_profile: None,
+            waveform: None,
+            field_xyz: vec![[0.0, 1.0, 0.0]; plan.initial_magnetization.len()],
+        }];
+
+        assert_eq!(
+            active_fem_preview_quantities(FemEngine::CpuNative, &plan, &["H_ant"]),
+            vec!["H_ant"]
+        );
+        assert!(active_fem_preview_quantities(FemEngine::NativeGpu, &plan, &["H_ant"]).is_empty());
     }
 
     #[test]

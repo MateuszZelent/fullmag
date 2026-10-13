@@ -2,7 +2,7 @@ import { chartColorNameForIndex, type ChartLegendItem } from "@/shared/analysis-
 import { createChartDisplayTransform, formatChartDisplayValue } from "@/shared/analysis-charts/chartScalePolicy";
 import type { ChartSeries } from "@/shared/domain/analysis/chartSeries";
 import { compatibleLiveChartPanes, isLiveChartServerXAxisId } from "./liveChartsModel";
-import { chartSeriesRenderModel } from "@/shared/analysis-charts/InteractiveChartSurface";
+import { chartSeriesRenderModel } from "@/shared/analysis-charts/interactiveChartModel";
 import type { ChartDataPresentationState } from "@/shared/analysis-charts/chartPresentationState";
 
 export function liveChartExportModel(series: readonly ChartSeries[], title: string, xAxisLabel: string, presentation: ChartDataPresentationState) {

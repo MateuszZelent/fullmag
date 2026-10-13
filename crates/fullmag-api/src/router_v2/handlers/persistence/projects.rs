@@ -52,6 +52,9 @@ const AUTHORING_SOURCE_MAX_BYTES: u64 = 8 * 1024 * 1024;
 #[path = "execution_profile_submission.rs"]
 mod execution_profile_submission;
 
+#[path = "run_intent_preparation.rs"]
+pub(crate) mod run_intent_preparation;
+
 /// Removes only the known generated source file.  The helper owns its
 /// `scene-export-*.json` lifecycle; any unexpected file left in the private
 /// directory is intentionally retained for diagnosis instead of being

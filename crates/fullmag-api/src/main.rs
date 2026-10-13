@@ -1,7 +1,7 @@
 use axum::extract::ws::{Message, WebSocket};
 use axum::extract::{DefaultBodyLimit, Query, State};
 use axum::http::header::CONTENT_TYPE;
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
 #[cfg(not(feature = "swagger-ui"))]
 use axum::response::Html;
 use axum::response::{IntoResponse, Response};
@@ -36,6 +36,7 @@ use fullmag_runner::LivePreviewField;
 mod accepted_fem_state;
 #[path = "accepted_fem_study_worker.rs"]
 mod accepted_fem_study_worker;
+mod accepted_antenna_inspection_worker;
 mod accepted_study_worker;
 mod accepted_project_storage;
 mod analysis;
@@ -1265,6 +1266,8 @@ mod realtime_change_tests {
             run_id: Some(run_id.to_string()),
             revision,
             row: ScalarRow {
+                kind: fullmag_quantities::StepDataKind::PhysicalObservation,
+                solver_progress: None,
                 observation_frame: None,
                 step,
                 time: step as f64,
@@ -2523,11 +2526,11 @@ async fn main() {
         )
         .route(
             "/v1/internal/live/current/snapshot",
-            post(sync_current_live_snapshot),
+            post(sync_current_live_snapshot_with_owner),
         )
         .route(
             "/v2/sessions/current/internal/live/snapshot",
-            post(sync_current_live_snapshot),
+            post(sync_current_live_snapshot_with_owner),
         )
         .route(
             "/v2/sessions/current/internal/live/preparation-receipt",
@@ -3120,9 +3123,112 @@ mod current_control_queue_selection_tests {
     }
 }
 
+#[cfg(test)]
 async fn sync_current_live_snapshot(
     State(state): State<Arc<AppState>>,
     Json(req): Json<CurrentLiveSnapshotRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    sync_current_live_snapshot_impl(state, req, None).await
+}
+
+/// Private runner precondition; it is not a browser resource or a new route.
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TerminalSnapshotOwner {
+    session_id: String,
+    run_id: String,
+    #[serde(default)]
+    require_empty: bool,
+    session_epoch: Option<u64>,
+    request_scope_epoch: Option<String>,
+}
+
+async fn sync_current_live_snapshot_with_owner(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(req): Json<CurrentLiveSnapshotRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let owner = headers
+        .get("x-fullmag-terminal-owner")
+        .map(|value| {
+            let text = value.to_str().map_err(|_| {
+                ApiError::bad_request("invalid terminal snapshot owner header")
+            })?;
+            serde_json::from_str::<TerminalSnapshotOwner>(text).map_err(|_| {
+                ApiError::bad_request("invalid terminal snapshot owner header")
+            })
+        })
+        .transpose()?;
+    sync_current_live_snapshot_impl(state, req, owner).await
+}
+
+fn validate_terminal_snapshot_owner(
+    state: &AppState,
+    snapshot: &SessionStateResponse,
+    req: &CurrentLiveSnapshotRequest,
+    owner: &TerminalSnapshotOwner,
+) -> Result<(), ApiError> {
+    // Called by the frame apply closure under current_live_session_transition.
+    // Checking GET status before/after POST cannot provide this guarantee.
+    let epoch = state.current_live_session_epoch.load(Ordering::Acquire);
+    let request_scope_epoch = format!("{}:{epoch}", state.request_scope_instance_id);
+    let payload_matches = req.session_id == owner.session_id
+        && req.session.as_ref().is_some_and(|session| {
+            session.session_id == owner.session_id && session.run_id == owner.run_id
+        })
+        && req.run.as_ref().is_some_and(|run| {
+            run.session_id == owner.session_id && run.run_id == owner.run_id
+        });
+    if owner.require_empty {
+        // Only the initial full frame may create an empty workspace. Inspect
+        // actual state, not the default clone synthesized for a first frame.
+        let current = state
+            .current_live_state
+            .try_read()
+            .map_err(|_| ApiError::conflict_with_code(
+                "terminal_snapshot_owner_busy", "terminal_snapshot_owner_busy"
+            ))?;
+        if current.is_none()
+            && !owner.session_id.is_empty()
+            && !owner.run_id.is_empty()
+            && payload_matches
+            && owner.session_epoch.is_none()
+            && owner.request_scope_epoch.is_none()
+        {
+            return Ok(());
+        }
+        return Err(ApiError::conflict_with_code(
+            "terminal_snapshot_owner_stale", "terminal_snapshot_owner_stale"
+        ));
+    }
+    if owner.session_id.is_empty()
+        || owner.run_id.is_empty()
+        || owner.session_epoch != Some(epoch)
+        || owner.request_scope_epoch.as_deref() != Some(request_scope_epoch.as_str())
+        || snapshot.session.session_id != owner.session_id
+        || snapshot.session.run_id != owner.run_id
+        || !snapshot.run.as_ref().is_some_and(|run| {
+            run.session_id == owner.session_id && run.run_id == owner.run_id
+        })
+        || req.session_id != owner.session_id
+        || req.session.as_ref().is_some_and(|session| {
+            session.session_id != owner.session_id || session.run_id != owner.run_id
+        })
+        || req.run.as_ref().is_some_and(|run| {
+            run.session_id != owner.session_id || run.run_id != owner.run_id
+        })
+    {
+        return Err(ApiError::conflict_with_code(
+            "terminal_snapshot_owner_stale", "terminal_snapshot_owner_stale"
+        ));
+    }
+    Ok(())
+}
+
+async fn sync_current_live_snapshot_impl(
+    state: Arc<AppState>,
+    req: CurrentLiveSnapshotRequest,
+    owner: Option<TerminalSnapshotOwner>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let kind = if is_authoring_grid_snapshot(&req) {
         CurrentLiveSyncKind::AuthoringGridSnapshot
@@ -3136,7 +3242,18 @@ async fn sync_current_live_snapshot(
     let preview_fields = req.preview_fields.clone();
     let clear_preview_cache = req.clear_preview_cache;
     let atomic_terminal_field_publish = req.replace_latest_fields;
+    // Preserve only a genuinely finished terminal replacement payload so the
+    // completed run remains inspectable. Initial replacement frames can still
+    // carry bootstrap fields and must use the large-grid filter.
+    let terminal_replacement = req.replace_latest_fields
+        && req
+            .live_state
+            .as_ref()
+            .is_some_and(|state| state.latest_step.finished);
+    let drop_live_magnetization =
+        state.feature_flags.disable_live_magnetization && !terminal_replacement;
     let session_id = req.session_id.clone();
+    let owner_state = state.clone();
     sync_current_live_frame_update(
         &state,
         kind,
@@ -3148,9 +3265,104 @@ async fn sync_current_live_snapshot(
         preview_fields,
         clear_preview_cache,
         atomic_terminal_field_publish,
-        move |next| apply_current_live_snapshot(next, req),
+        move |next| {
+            if let Some(owner) = owner.as_ref() {
+                validate_terminal_snapshot_owner(&owner_state, next, &req, owner)?;
+            }
+            apply_current_live_snapshot_with_options(next, req, drop_live_magnetization)
+        },
     )
     .await
+}
+
+#[cfg(test)]
+mod terminal_snapshot_owner_tests {
+    use super::*;
+
+    fn fixture() -> (CurrentLiveSnapshotRequest, SessionStateResponse) {
+        let mut req: CurrentLiveSnapshotRequest = serde_json::from_value(json!({
+            "session_id": "terminal-session",
+            "run": {"session_id": "terminal-session", "run_id": "terminal-run",
+                "status": "completed", "total_steps": 0, "artifact_dir": "results"}
+        })).unwrap();
+        let mut snapshot = default_current_live_state(&req);
+        snapshot.run = req.run.clone();
+        req.session = Some(snapshot.session.clone());
+        (req, snapshot)
+    }
+
+    fn owner(state: &AppState) -> TerminalSnapshotOwner {
+        TerminalSnapshotOwner {
+            session_id: "terminal-session".into(),
+            run_id: "terminal-run".into(),
+            require_empty: false,
+            session_epoch: Some(0),
+            request_scope_epoch: Some(format!("{}:0", state.request_scope_instance_id)),
+        }
+    }
+
+    #[test]
+    fn current_owner_accepts_but_new_run_and_api_incarnation_reject() {
+        let state = crate::router_v2::tests::test_app_state();
+        let (req, mut snapshot) = fixture();
+        let mut expected = owner(&state);
+        assert!(validate_terminal_snapshot_owner(&state, &snapshot, &req, &expected).is_ok());
+        snapshot.session.run_id = "new-run".into();
+        snapshot.run.as_mut().unwrap().run_id = "new-run".into();
+        assert!(validate_terminal_snapshot_owner(&state, &snapshot, &req, &expected).is_err());
+        let (_, snapshot) = fixture();
+        expected.request_scope_epoch = Some("other-api:0".into());
+        assert!(validate_terminal_snapshot_owner(&state, &snapshot, &req, &expected).is_err());
+        expected = owner(&state);
+        state.current_live_session_epoch.store(1, Ordering::Release);
+        assert!(validate_terminal_snapshot_owner(&state, &snapshot, &req, &expected).is_err());
+    }
+
+    #[tokio::test]
+    async fn initial_admission_requires_empty_workspace_and_explicit_payload_owner() {
+        let state = crate::router_v2::tests::test_app_state();
+        let (mut req, snapshot) = fixture();
+        let expected = TerminalSnapshotOwner {
+            session_id: "terminal-session".into(), run_id: "terminal-run".into(),
+            require_empty: true, session_epoch: None, request_scope_epoch: None,
+        };
+        *state.current_live_state.write().await = None;
+        assert!(validate_terminal_snapshot_owner(&state, &snapshot, &req, &expected).is_ok());
+        req.run.as_mut().unwrap().run_id = "wrong-run".into();
+        assert!(validate_terminal_snapshot_owner(&state, &snapshot, &req, &expected).is_err());
+        let (req, snapshot) = fixture();
+        *state.current_live_state.write().await = Some(snapshot.clone());
+        assert!(validate_terminal_snapshot_owner(&state, &snapshot, &req, &expected).is_err());
+    }
+
+    #[test]
+    fn malformed_private_owner_header_is_not_an_unconditional_publication() {
+        assert!(serde_json::from_str::<TerminalSnapshotOwner>(
+            r#"{"session_id":"s","run_id":"r","unexpected":true}"#
+        ).is_err());
+    }
+
+    #[tokio::test]
+    async fn rejected_old_owner_preserves_new_owner_connectivity_and_snapshot() {
+        let state = crate::router_v2::tests::test_app_state();
+        let (req, mut snapshot) = fixture();
+        let expected = owner(&state);
+        snapshot.session.run_id = "new-run".into();
+        snapshot.run.as_mut().unwrap().run_id = "new-run".into();
+        let version = snapshot.state_version;
+        *state.current_live_state.write().await = Some(snapshot);
+        *state.current_live_connectivity.write().await =
+            crate::schemas::status::SessionConnectivity::Connected;
+        let error = sync_current_live_snapshot_impl(state.clone(), req, Some(expected))
+            .await.unwrap_err();
+        assert_eq!(error.code.as_deref(), Some("terminal_snapshot_owner_stale"));
+        assert!(matches!(*state.current_live_connectivity.read().await,
+            crate::schemas::status::SessionConnectivity::Connected));
+        let current = state.current_live_state.read().await;
+        let current = current.as_ref().unwrap();
+        assert_eq!(current.session.run_id, "new-run");
+        assert_eq!(current.state_version, version);
+    }
 }
 
 async fn sync_current_live_heartbeat(
@@ -3198,6 +3410,7 @@ async fn sync_current_live_runtime_frame(
     Json(frame): Json<CurrentLiveRuntimeFrameRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let session_id = frame.session_id.clone();
+    let drop_live_magnetization = state.feature_flags.disable_live_magnetization;
     sync_current_live_frame_update(
         &state,
         CurrentLiveSyncKind::Runtime,
@@ -3209,7 +3422,9 @@ async fn sync_current_live_runtime_frame(
         None,
         false,
         false,
-        move |next| apply_current_live_runtime_frame(next, frame),
+        move |next| {
+            apply_current_live_runtime_frame_with_options(next, frame, drop_live_magnetization)
+        },
     )
     .await
 }
@@ -4043,8 +4258,13 @@ where
     };
     let apply_start = std::time::Instant::now();
     if let Err(error) = apply(&mut next) {
-        *state.current_live_connectivity.write().await =
-            crate::schemas::status::SessionConnectivity::Degraded;
+        // Rejected stale ownership is an admission failure, not a failure of
+        // the current publisher. An old sender must not degrade a new owner.
+        if !matches!(error.code.as_deref(),
+            Some("terminal_snapshot_owner_stale" | "terminal_snapshot_owner_busy")) {
+            *state.current_live_connectivity.write().await =
+                crate::schemas::status::SessionConnectivity::Degraded;
+        }
         return Err(error);
     }
     let apply_ms = apply_start.elapsed().as_micros();
@@ -4142,7 +4362,13 @@ where
     let realtime_state =
         current_live_realtime_state_from_snapshot(&state, &next, display_selection.revision).await;
     let scalar_sample =
-        if has_scalar_row_update {
+        if has_scalar_row_update
+            && !has_nonphysical_latest_step(&next)
+            && next.scalar_revision
+                > previous_snapshot
+                    .as_ref()
+                    .map_or(0, |snapshot| snapshot.scalar_revision)
+        {
             next.scalar_rows
                 .last()
                 .cloned()
@@ -4164,10 +4390,21 @@ where
     if state.current_live_session_epoch.load(Ordering::Relaxed) != admission_epoch {
         return Err(ApiError::conflict("current_live_session_transitioned"));
     }
+    if has_nonphysical_latest_step(&next) {
+        // The transition lock also serializes delayed scalar flushes. Cancel
+        // a pending physical sample before admitting diagnostic-only state.
+        state
+            .current_live_realtime_scalar_sample_qos
+            .lock()
+            .await
+            .clear();
+    }
     {
         let mut current = state.current_live_state.write().await;
         if let Some(epoch) = first_session_epoch {
-            state.current_live_session_epoch.store(epoch, Ordering::Release);
+            state
+                .current_live_session_epoch
+                .store(epoch, Ordering::Release);
         }
         *current = Some(next);
     }
@@ -6501,10 +6738,19 @@ fn resolve_global_scalar_quantity(
 }
 
 fn current_preview_source(current: &SessionStateResponse) -> (u64, f64) {
-    if let Some(live_state) = current.live_state.as_ref() {
+    if let Some(live_state) = current
+        .live_state
+        .as_ref()
+        .filter(|state| state.latest_step.is_physical_observation())
+    {
         return (live_state.latest_step.step, live_state.latest_step.time);
     }
-    if let Some(row) = current.scalar_rows.last() {
+    if let Some(row) = current
+        .scalar_rows
+        .iter()
+        .rev()
+        .find(|row| row.is_physical_observation())
+    {
         return (row.step, row.time);
     }
     if let Some(run) = current.run.as_ref() {
@@ -6514,15 +6760,21 @@ fn current_preview_source(current: &SessionStateResponse) -> (u64, f64) {
 }
 
 fn current_global_scalar_value(current: &SessionStateResponse, quantity: &str) -> Option<f64> {
+    if has_nonphysical_latest_step(current) {
+        return None;
+    }
     let metric_key = quantity_spec(quantity)?.scalar_metric_key?;
     current
         .scalar_rows
-        .last()
+        .iter()
+        .rev()
+        .find(|row| row.is_physical_observation())
         .and_then(|row| scalar_row_metric_value(row, metric_key))
         .or_else(|| {
             current
                 .live_state
                 .as_ref()
+                .filter(|state| state.latest_step.is_physical_observation())
                 .and_then(|state| live_step_metric_value(&state.latest_step, metric_key))
         })
         .or_else(|| {

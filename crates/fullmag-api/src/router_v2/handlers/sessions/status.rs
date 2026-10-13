@@ -257,7 +257,9 @@ pub(crate) fn build_live_status(
     });
 
     let ls = snapshot.live_state.as_ref();
-    let latest = ls.map(|l| &l.latest_step);
+    let latest = ls
+        .map(|l| &l.latest_step)
+        .filter(|step| step.is_physical_observation());
     let max_torque_apm = latest.and_then(|step| canonical_torque_apm(step.max_torque_Apm));
     let completion = snapshot
         .stage_execution
@@ -280,7 +282,7 @@ pub(crate) fn build_live_status(
 
     let display = build_display_selection_response(&display_sel, &display_presentation);
 
-    let is_fem = snapshot.fem_mesh.is_some() && !is_fdm_snapshot(snapshot);
+    let is_fem = is_fem_snapshot(snapshot);
     let fdm_grid_shape = (!is_fem).then(|| fdm_grid_shape(snapshot, latest.map(|step| step.grid)));
     let cell_count = if is_fem {
         snapshot
@@ -419,7 +421,7 @@ pub(crate) fn lifecycle_contract(
     runtime_accepts_commands: bool,
     connectivity: SessionConnectivity,
 ) -> crate::schemas::status::SessionLifecycleSummary {
-    let terminal = matches!(solver, "completed" | "failed" | "cancelled" | "closed");
+    let terminal = terminal_solver_lifecycle(solver);
     crate::schemas::status::SessionLifecycleSummary {
         solver: solver.to_string(),
         session_resource: if terminal {
@@ -436,6 +438,20 @@ pub(crate) fn lifecycle_contract(
             crate::schemas::status::SessionCommandability::Forbidden
         },
     }
+}
+
+fn terminal_solver_lifecycle(solver: &str) -> bool {
+    matches!(solver, "completed" | "failed" | "cancelled" | "closed")
+}
+
+pub(crate) fn snapshot_session_epoch(snapshot: &SessionStateResponse) -> String {
+    let solver = crate::session::effective_runtime_status_code(snapshot);
+    session_epoch(
+        &snapshot.session.session_id,
+        snapshot.session.started_at_unix_ms,
+        snapshot.session.finished_at_unix_ms,
+        terminal_solver_lifecycle(&solver),
+    )
 }
 
 pub(crate) fn session_epoch(
@@ -515,15 +531,29 @@ fn active_lane_capability_snapshot(
     snapshot: &SessionStateResponse,
     is_fem: bool,
 ) -> ActiveLaneCapabilitySnapshot {
+    // Authoring identity belongs to the accepted scene, not the last run.
+    // A missing runtime/capability resolution must not hide the model method.
+    let scene_study = snapshot.scene_document.as_ref().map(|scene| &scene.study);
+    let authored_intent_source = if scene_study.is_some() {
+        "scene.study.requested_execution"
+    } else {
+        "problem_ir.runtime_selection"
+    };
+    let authored_backend = scene_study
+        .map(|study| study.requested_backend.as_str())
+        .unwrap_or(snapshot.session.requested_backend.as_str());
     let authored = ActiveLaneIdentity {
-        backend: snapshot.session.requested_backend.clone(),
-        discretization: normalize_lane_discretization(
-            &snapshot.session.requested_backend,
-            if is_fem { "fem" } else { "fdm" },
-        ),
-        device: snapshot.session.authored_requested_device.clone(),
-        precision: snapshot.session.requested_precision.clone(),
-        mode: snapshot.session.requested_mode.clone(),
+        backend: authored_backend.to_string(),
+        discretization: normalize_lane_discretization(authored_backend, "unknown"),
+        device: scene_study
+            .map(|study| study.requested_device.clone())
+            .unwrap_or_else(|| snapshot.session.authored_requested_device.clone()),
+        precision: scene_study
+            .map(|study| study.requested_precision.clone())
+            .unwrap_or_else(|| snapshot.session.requested_precision.clone()),
+        mode: scene_study
+            .map(|study| study.requested_mode.clone())
+            .unwrap_or_else(|| snapshot.session.requested_mode.clone()),
     };
     let requested = ActiveLaneIdentity {
         backend: snapshot.session.requested_backend.clone(),
@@ -607,7 +637,7 @@ fn active_lane_capability_snapshot(
                 kind: "unavailable".into(),
                 capability_profile_version: None,
                 engine_id: None,
-                authored_intent: "problem_ir.runtime_selection".into(),
+                authored_intent: authored_intent_source.into(),
                 effective_request: "session.runtime_resolution".into(),
             },
             qualification: ActiveLaneQualification {
@@ -632,7 +662,7 @@ fn active_lane_capability_snapshot(
                 kind: "planner".into(),
                 capability_profile_version: Some(planner.capability_profile_version.clone()),
                 engine_id: Some(planner.engine_id.as_str().to_string()),
-                authored_intent: "problem_ir.runtime_selection".into(),
+                authored_intent: authored_intent_source.into(),
                 effective_request: "session.runtime_resolution".into(),
             },
             qualification: ActiveLaneQualification {
@@ -662,7 +692,7 @@ fn active_lane_capability_snapshot(
             kind: "planner".into(),
             capability_profile_version: Some(planner.capability_profile_version.clone()),
             engine_id: Some(planner.engine_id.as_str().to_string()),
-            authored_intent: "problem_ir.runtime_selection".into(),
+            authored_intent: authored_intent_source.into(),
             effective_request: "session.runtime_resolution".into(),
         },
         qualification: ActiveLaneQualification {
@@ -1127,15 +1157,56 @@ fn relaxation_algorithm_from_metadata(metadata: Option<&Value>) -> Option<Relaxa
         .and_then(RelaxationAlgorithm::parse)
 }
 
+/// Classify the domain resource representation using the existing
+/// `is_fdm_snapshot` precedence for explicit FDM plans and artifact layouts.
+/// This does not resolve or change the active runtime lane. If no mesh exists,
+/// explicit FEM backend metadata can still classify the domain as FEM.
+pub(crate) fn is_fem_snapshot(snapshot: &SessionStateResponse) -> bool {
+    if is_fdm_snapshot(snapshot) {
+        return false;
+    }
+    if snapshot.fem_mesh.is_some() {
+        return true;
+    }
+
+    let metadata_backend = snapshot.metadata.as_ref().and_then(|metadata| {
+        metadata
+            .get("execution_plan")
+            .and_then(|plan| plan.get("backend_plan"))
+            .and_then(|plan| plan.get("kind"))
+            .and_then(Value::as_str)
+            .or_else(|| {
+                metadata
+                    .get("artifact_layout")
+                    .and_then(|layout| layout.get("backend"))
+                    .and_then(Value::as_str)
+            })
+    });
+    metadata_backend
+        .or(snapshot.session.resolved_backend.as_deref())
+        .is_some_and(|backend| backend.to_ascii_lowercase().contains("fem"))
+}
+
 pub(crate) fn topology_revision(snapshot: &SessionStateResponse, domain_generation_id: u64) -> u64 {
-    if snapshot.fem_mesh.is_some() && !is_fdm_snapshot(snapshot) {
-        snapshot.mesh_revision
+    if is_fem_snapshot(snapshot) {
+        if snapshot.fem_mesh.is_some() {
+            snapshot.mesh_revision
+        } else {
+            0
+        }
     } else {
         domain_generation_id
     }
 }
 
+/// Stable, non-numeric identity for a selected FEM lane without a mesh. The
+/// resource loader only treats positive numeric revisions as materialized.
+const FEM_UNMATERIALIZED_DOMAIN_GENERATION_ID: &str = "fem:unmaterialized";
+
 pub(crate) fn domain_generation_id(snapshot: &SessionStateResponse) -> String {
+    if is_fem_snapshot(snapshot) && snapshot.fem_mesh.is_none() {
+        return FEM_UNMATERIALIZED_DOMAIN_GENERATION_ID.to_string();
+    }
     if !is_fdm_snapshot(snapshot) {
         if let Some(generation_id) = snapshot
             .fem_mesh
@@ -1152,6 +1223,9 @@ pub(crate) fn domain_generation_id(snapshot: &SessionStateResponse) -> String {
 }
 
 pub(crate) fn domain_generation_revision(snapshot: &SessionStateResponse) -> u64 {
+    if is_fem_snapshot(snapshot) && snapshot.fem_mesh.is_none() {
+        return 0;
+    }
     if !is_fdm_snapshot(snapshot) {
         if let Some(generation_id) = snapshot
             .fem_mesh

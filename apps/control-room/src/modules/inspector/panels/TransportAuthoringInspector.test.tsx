@@ -207,7 +207,9 @@ describe("TransportAuthoringInspector", () => {
     expect(source).toContain("validateTransport(request, { sessionScopeKey, signal: controller.signal })");
     expect(source).toContain("request, requestOptions");
     expect(source).toContain("mutationContext.isCurrentSessionScope?.() !== true");
-    expect(source).toContain("baseRevision ?? active.data!.scene_revision");
+    expect(source).toContain("baseRevision !== null && baseRevision !== submittedRevision");
+    expect(source).toContain("const request = { base_revision: submittedRevision }");
+    expect(source).not.toContain("baseRevision ?? active.data!.scene_revision");
     expect(source).toContain("api.model.replaceCurrentTransport");
     expect(source).toContain("api.model.replaceSpinTransport");
   });

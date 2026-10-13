@@ -1,0 +1,779 @@
+{
+  "schema": "fullmag.waveguide-cross-section-mesh.v1",
+  "nodes_uv_m": [
+    [
+      0.0,
+      0.0
+    ],
+    [
+      1e-08,
+      0.0
+    ],
+    [
+      1e-08,
+      1e-08
+    ],
+    [
+      0.0,
+      1e-08
+    ],
+    [
+      3.0000000000000004e-09,
+      3.0000000000000004e-09
+    ],
+    [
+      7.000000000000001e-09,
+      3.0000000000000004e-09
+    ],
+    [
+      7.000000000000001e-09,
+      7.000000000000001e-09
+    ],
+    [
+      3.0000000000000004e-09,
+      7.000000000000001e-09
+    ],
+    [
+      4e-09,
+      4e-09
+    ],
+    [
+      6.000000000000001e-09,
+      4e-09
+    ],
+    [
+      6.000000000000001e-09,
+      6.000000000000001e-09
+    ],
+    [
+      4e-09,
+      6.000000000000001e-09
+    ]
+  ],
+  "triangles": [
+    {
+      "nodes": [
+        0,
+        1,
+        5
+      ],
+      "region_id": "nested-r"
+    },
+    {
+      "nodes": [
+        0,
+        5,
+        4
+      ],
+      "region_id": "nested-r"
+    },
+    {
+      "nodes": [
+        1,
+        2,
+        6
+      ],
+      "region_id": "nested-r"
+    },
+    {
+      "nodes": [
+        1,
+        6,
+        5
+      ],
+      "region_id": "nested-r"
+    },
+    {
+      "nodes": [
+        2,
+        3,
+        7
+      ],
+      "region_id": "nested-r"
+    },
+    {
+      "nodes": [
+        2,
+        7,
+        6
+      ],
+      "region_id": "nested-r"
+    },
+    {
+      "nodes": [
+        3,
+        0,
+        4
+      ],
+      "region_id": "nested-r"
+    },
+    {
+      "nodes": [
+        3,
+        4,
+        7
+      ],
+      "region_id": "nested-r"
+    },
+    {
+      "nodes": [
+        4,
+        5,
+        9
+      ],
+      "region_id": "nested-s"
+    },
+    {
+      "nodes": [
+        4,
+        9,
+        8
+      ],
+      "region_id": "nested-s"
+    },
+    {
+      "nodes": [
+        5,
+        6,
+        10
+      ],
+      "region_id": "nested-s"
+    },
+    {
+      "nodes": [
+        5,
+        10,
+        9
+      ],
+      "region_id": "nested-s"
+    },
+    {
+      "nodes": [
+        6,
+        7,
+        11
+      ],
+      "region_id": "nested-s"
+    },
+    {
+      "nodes": [
+        6,
+        11,
+        10
+      ],
+      "region_id": "nested-s"
+    },
+    {
+      "nodes": [
+        7,
+        4,
+        8
+      ],
+      "region_id": "nested-s"
+    },
+    {
+      "nodes": [
+        7,
+        8,
+        11
+      ],
+      "region_id": "nested-s"
+    },
+    {
+      "nodes": [
+        8,
+        9,
+        10
+      ],
+      "region_id": "nested-r"
+    },
+    {
+      "nodes": [
+        8,
+        10,
+        11
+      ],
+      "region_id": "nested-r"
+    }
+  ],
+  "edges": [
+    {
+      "nodes": [
+        0,
+        1
+      ],
+      "incidences": [
+        {
+          "triangle_index": 0,
+          "local_edge_index": 0
+        }
+      ]
+    },
+    {
+      "nodes": [
+        0,
+        3
+      ],
+      "incidences": [
+        {
+          "triangle_index": 6,
+          "local_edge_index": 0
+        }
+      ]
+    },
+    {
+      "nodes": [
+        0,
+        4
+      ],
+      "incidences": [
+        {
+          "triangle_index": 1,
+          "local_edge_index": 2
+        },
+        {
+          "triangle_index": 6,
+          "local_edge_index": 1
+        }
+      ]
+    },
+    {
+      "nodes": [
+        0,
+        5
+      ],
+      "incidences": [
+        {
+          "triangle_index": 0,
+          "local_edge_index": 2
+        },
+        {
+          "triangle_index": 1,
+          "local_edge_index": 0
+        }
+      ]
+    },
+    {
+      "nodes": [
+        1,
+        2
+      ],
+      "incidences": [
+        {
+          "triangle_index": 2,
+          "local_edge_index": 0
+        }
+      ]
+    },
+    {
+      "nodes": [
+        1,
+        5
+      ],
+      "incidences": [
+        {
+          "triangle_index": 0,
+          "local_edge_index": 1
+        },
+        {
+          "triangle_index": 3,
+          "local_edge_index": 2
+        }
+      ]
+    },
+    {
+      "nodes": [
+        1,
+        6
+      ],
+      "incidences": [
+        {
+          "triangle_index": 2,
+          "local_edge_index": 2
+        },
+        {
+          "triangle_index": 3,
+          "local_edge_index": 0
+        }
+      ]
+    },
+    {
+      "nodes": [
+        2,
+        3
+      ],
+      "incidences": [
+        {
+          "triangle_index": 4,
+          "local_edge_index": 0
+        }
+      ]
+    },
+    {
+      "nodes": [
+        2,
+        6
+      ],
+      "incidences": [
+        {
+          "triangle_index": 2,
+          "local_edge_index": 1
+        },
+        {
+          "triangle_index": 5,
+          "local_edge_index": 2
+        }
+      ]
+    },
+    {
+      "nodes": [
+        2,
+        7
+      ],
+      "incidences": [
+        {
+          "triangle_index": 4,
+          "local_edge_index": 2
+        },
+        {
+          "triangle_index": 5,
+          "local_edge_index": 0
+        }
+      ]
+    },
+    {
+      "nodes": [
+        3,
+        4
+      ],
+      "incidences": [
+        {
+          "triangle_index": 6,
+          "local_edge_index": 2
+        },
+        {
+          "triangle_index": 7,
+          "local_edge_index": 0
+        }
+      ]
+    },
+    {
+      "nodes": [
+        3,
+        7
+      ],
+      "incidences": [
+        {
+          "triangle_index": 4,
+          "local_edge_index": 1
+        },
+        {
+          "triangle_index": 7,
+          "local_edge_index": 2
+        }
+      ]
+    },
+    {
+      "nodes": [
+        4,
+        5
+      ],
+      "incidences": [
+        {
+          "triangle_index": 1,
+          "local_edge_index": 1
+        },
+        {
+          "triangle_index": 8,
+          "local_edge_index": 0
+        }
+      ]
+    },
+    {
+      "nodes": [
+        4,
+        7
+      ],
+      "incidences": [
+        {
+          "triangle_index": 7,
+          "local_edge_index": 1
+        },
+        {
+          "triangle_index": 14,
+          "local_edge_index": 0
+        }
+      ]
+    },
+    {
+      "nodes": [
+        4,
+        8
+      ],
+      "incidences": [
+        {
+          "triangle_index": 9,
+          "local_edge_index": 2
+        },
+        {
+          "triangle_index": 14,
+          "local_edge_index": 1
+        }
+      ]
+    },
+    {
+      "nodes": [
+        4,
+        9
+      ],
+      "incidences": [
+        {
+          "triangle_index": 8,
+          "local_edge_index": 2
+        },
+        {
+          "triangle_index": 9,
+          "local_edge_index": 0
+        }
+      ]
+    },
+    {
+      "nodes": [
+        5,
+        6
+      ],
+      "incidences": [
+        {
+          "triangle_index": 3,
+          "local_edge_index": 1
+        },
+        {
+          "triangle_index": 10,
+          "local_edge_index": 0
+        }
+      ]
+    },
+    {
+      "nodes": [
+        5,
+        9
+      ],
+      "incidences": [
+        {
+          "triangle_index": 8,
+          "local_edge_index": 1
+        },
+        {
+          "triangle_index": 11,
+          "local_edge_index": 2
+        }
+      ]
+    },
+    {
+      "nodes": [
+        5,
+        10
+      ],
+      "incidences": [
+        {
+          "triangle_index": 10,
+          "local_edge_index": 2
+        },
+        {
+          "triangle_index": 11,
+          "local_edge_index": 0
+        }
+      ]
+    },
+    {
+      "nodes": [
+        6,
+        7
+      ],
+      "incidences": [
+        {
+          "triangle_index": 5,
+          "local_edge_index": 1
+        },
+        {
+          "triangle_index": 12,
+          "local_edge_index": 0
+        }
+      ]
+    },
+    {
+      "nodes": [
+        6,
+        10
+      ],
+      "incidences": [
+        {
+          "triangle_index": 10,
+          "local_edge_index": 1
+        },
+        {
+          "triangle_index": 13,
+          "local_edge_index": 2
+        }
+      ]
+    },
+    {
+      "nodes": [
+        6,
+        11
+      ],
+      "incidences": [
+        {
+          "triangle_index": 12,
+          "local_edge_index": 2
+        },
+        {
+          "triangle_index": 13,
+          "local_edge_index": 0
+        }
+      ]
+    },
+    {
+      "nodes": [
+        7,
+        8
+      ],
+      "incidences": [
+        {
+          "triangle_index": 14,
+          "local_edge_index": 2
+        },
+        {
+          "triangle_index": 15,
+          "local_edge_index": 0
+        }
+      ]
+    },
+    {
+      "nodes": [
+        7,
+        11
+      ],
+      "incidences": [
+        {
+          "triangle_index": 12,
+          "local_edge_index": 1
+        },
+        {
+          "triangle_index": 15,
+          "local_edge_index": 2
+        }
+      ]
+    },
+    {
+      "nodes": [
+        8,
+        9
+      ],
+      "incidences": [
+        {
+          "triangle_index": 9,
+          "local_edge_index": 1
+        },
+        {
+          "triangle_index": 16,
+          "local_edge_index": 0
+        }
+      ]
+    },
+    {
+      "nodes": [
+        8,
+        10
+      ],
+      "incidences": [
+        {
+          "triangle_index": 16,
+          "local_edge_index": 2
+        },
+        {
+          "triangle_index": 17,
+          "local_edge_index": 0
+        }
+      ]
+    },
+    {
+      "nodes": [
+        8,
+        11
+      ],
+      "incidences": [
+        {
+          "triangle_index": 15,
+          "local_edge_index": 1
+        },
+        {
+          "triangle_index": 17,
+          "local_edge_index": 2
+        }
+      ]
+    },
+    {
+      "nodes": [
+        9,
+        10
+      ],
+      "incidences": [
+        {
+          "triangle_index": 11,
+          "local_edge_index": 1
+        },
+        {
+          "triangle_index": 16,
+          "local_edge_index": 1
+        }
+      ]
+    },
+    {
+      "nodes": [
+        10,
+        11
+      ],
+      "incidences": [
+        {
+          "triangle_index": 13,
+          "local_edge_index": 1
+        },
+        {
+          "triangle_index": 17,
+          "local_edge_index": 1
+        }
+      ]
+    }
+  ],
+  "regions": [
+    {
+      "kind": "magnetic",
+      "region_id": "nested-r",
+      "object_id": "object-r",
+      "material_id": "material-r"
+    },
+    {
+      "kind": "air",
+      "region_id": "nested-s",
+      "object_id": "object-s"
+    }
+  ],
+  "boundary_components": [
+    {
+      "boundary_component_id": "r-outer",
+      "region_id": "nested-r",
+      "loop_kind": "outer",
+      "half_edges": [
+        {
+          "triangle_index": 0,
+          "local_edge_index": 0
+        },
+        {
+          "triangle_index": 2,
+          "local_edge_index": 0
+        },
+        {
+          "triangle_index": 4,
+          "local_edge_index": 0
+        },
+        {
+          "triangle_index": 6,
+          "local_edge_index": 0
+        }
+      ]
+    },
+    {
+      "boundary_component_id": "r-hole",
+      "region_id": "nested-r",
+      "loop_kind": "hole",
+      "half_edges": [
+        {
+          "triangle_index": 7,
+          "local_edge_index": 1
+        },
+        {
+          "triangle_index": 5,
+          "local_edge_index": 1
+        },
+        {
+          "triangle_index": 3,
+          "local_edge_index": 1
+        },
+        {
+          "triangle_index": 1,
+          "local_edge_index": 1
+        }
+      ]
+    },
+    {
+      "boundary_component_id": "r-island",
+      "region_id": "nested-r",
+      "loop_kind": "outer",
+      "half_edges": [
+        {
+          "triangle_index": 16,
+          "local_edge_index": 0
+        },
+        {
+          "triangle_index": 16,
+          "local_edge_index": 1
+        },
+        {
+          "triangle_index": 17,
+          "local_edge_index": 1
+        },
+        {
+          "triangle_index": 17,
+          "local_edge_index": 2
+        }
+      ]
+    },
+    {
+      "boundary_component_id": "s-outer",
+      "region_id": "nested-s",
+      "loop_kind": "outer",
+      "half_edges": [
+        {
+          "triangle_index": 8,
+          "local_edge_index": 0
+        },
+        {
+          "triangle_index": 10,
+          "local_edge_index": 0
+        },
+        {
+          "triangle_index": 12,
+          "local_edge_index": 0
+        },
+        {
+          "triangle_index": 14,
+          "local_edge_index": 0
+        }
+      ]
+    },
+    {
+      "boundary_component_id": "s-hole",
+      "region_id": "nested-s",
+      "loop_kind": "hole",
+      "half_edges": [
+        {
+          "triangle_index": 15,
+          "local_edge_index": 1
+        },
+        {
+          "triangle_index": 13,
+          "local_edge_index": 1
+        },
+        {
+          "triangle_index": 11,
+          "local_edge_index": 1
+        },
+        {
+          "triangle_index": 9,
+          "local_edge_index": 1
+        }
+      ]
+    }
+  ]
+}

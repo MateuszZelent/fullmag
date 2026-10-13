@@ -1,5 +1,8 @@
-import type { ReactNode } from "react";
+import { useMemo, type ReactNode } from "react";
 
+import { createCommandContext } from "@/kernel/commands/commandContext";
+import { useKernel } from "@/kernel/KernelContext";
+import { Button } from "@/shared/ui/Button";
 import type { InspectorPanelProps } from "../inspectorTypes";
 import { ScientificInspectorTemplate } from "../components/ScientificInspectorTemplate";
 import { CrossSectionInspectorPanel } from "./CrossSectionInspectorPanel";
@@ -7,10 +10,11 @@ import { MeshPartVisualizationPanel } from "./MeshPartVisualizationPanel";
 import { InspectorGroup } from "../primitives/InspectorGroup";
 import { AirboxMeshParametersPanel } from "./airbox/AirboxMeshParametersPanel";
 import {
-  isExplicitFdmAirboxRuntime,
-  isExplicitFemAirboxRuntime,
+  resolveAirboxInspectorAuthoringLane,
+  resolveAirboxInspectorLane,
   useAirboxInspectorRuntimeStatus,
 } from "./airbox/airboxInspectorRuntimeStatus";
+import { navigateToStudyRoot } from "./airbox/airboxNavigation";
 
 function ContextInspector({
   breadcrumbs,
@@ -63,36 +67,93 @@ export function SessionRootInspectorPanel({}: InspectorPanelProps) {
 
 export function UniverseRootInspectorPanel({ selection }: InspectorPanelProps) {
   const runtimeStatus = useAirboxInspectorRuntimeStatus();
-  const showFemAirboxSetup = isExplicitFemAirboxRuntime(runtimeStatus);
-  const showFdmAirboxExplanation = isExplicitFdmAirboxRuntime(runtimeStatus);
+  const authoringLane = resolveAirboxInspectorAuthoringLane(selection, runtimeStatus);
+  const runtimeLane = resolveAirboxInspectorLane(selection, runtimeStatus);
+  const knownMethod = authoringLane === "fdm" || authoringLane === "fem";
+  const runtimeLaneForAuthoring = runtimeLane === "fdm" && authoringLane === "fdm"
+    ? "fdm"
+    : runtimeLane === "fem" && authoringLane === "fem"
+      ? "fem"
+      : null;
+  const runtimeMatchesAuthoring = runtimeLaneForAuthoring !== null;
+  const availabilityMessage = knownMethod
+    ? runtimeMatchesAuthoring
+      ? `The accepted ${authoringLane.toUpperCase()} method is available for policy authoring.`
+      : `The accepted ${authoringLane.toUpperCase()} method is known. Runtime realization remains unresolved, so mesh facts and runtime actions are unavailable.`
+    : runtimeStatus?.authoring.reason ?? "Choose an explicit FEM or FDM method before configuring the domain.";
   return (
     <ContextInspector
       breadcrumbs={["Model", "Universe"]}
-      diagnostics={
-        runtimeStatus === null || (!showFemAirboxSetup && !showFdmAirboxExplanation)
-          ? ["Loading the resolved execution lane before exposing mesh authoring controls."]
-          : showFemAirboxSetup
-            ? [
-                "The FEM Airbox policy is authored here before the Airbox child is materialized in Explorer.",
-              ]
-            : [
-                "FDM uses the structured-grid policy in Study; FEM Airbox controls are not applicable to this lane.",
-              ]
-      }
+      diagnostics={[availabilityMessage, "Airbox generation follows the selected demagnetization settings and planner."]}
       methodLabel="Physical domain navigator"
       physicalLabel="Simulation universe"
       title="Universe"
     >
-      {showFemAirboxSetup ? (
-        <InspectorGroup title="FEM Airbox setup" badge="authoring">
-          <p>
-            Start with a canonical Airbox policy, then build the shared-domain mesh.
-            The Explorer Airbox node appears after the policy is committed.
-          </p>
-          <AirboxMeshParametersPanel lane="fem" selection={selection} />
+      {knownMethod ? (
+        <InspectorGroup title="Outer-domain policy" badge="authoring">
+          <p>Use Auto or Manual to author the universe bounds. Values remain editable before runtime realization.</p>
+          <UniverseMethodActions
+            showDiagnostics={!runtimeMatchesAuthoring}
+            showNewProblem={false}
+            showStudySettings
+            studyLabel={authoringLane === "fdm" ? "Open FDM grid settings" : "Open Study settings"}
+          />
+          {!runtimeMatchesAuthoring ? <p role="status">{availabilityMessage}</p> : null}
+          <AirboxMeshParametersPanel
+            lane={authoringLane}
+            runtimeLane={runtimeLaneForAuthoring}
+            selection={selection}
+          />
         </InspectorGroup>
-      ) : null}
+      ) : (
+        <InspectorGroup title="Domain authoring unavailable" badge={runtimeStatus?.authoring.state ?? "loading"}>
+          <p role="status">{availabilityMessage}</p>
+          <UniverseMethodActions
+            showDiagnostics
+            showNewProblem={runtimeStatus?.authoring.state === "missing"}
+            showStudySettings
+            studyLabel="Open Study settings"
+          />
+        </InspectorGroup>
+      )}
     </ContextInspector>
+  );
+}
+
+function UniverseMethodActions({
+  showDiagnostics,
+  showNewProblem,
+  showStudySettings,
+  studyLabel,
+}: {
+  showDiagnostics: boolean;
+  showNewProblem: boolean;
+  showStudySettings: boolean;
+  studyLabel: string;
+}) {
+  const kernel = useKernel();
+  const commandContext = useMemo(
+    () => createCommandContext("inspector", kernel, { sourceDetail: "universe-authoring-availability" }),
+    [kernel],
+  );
+  return (
+    <div className="fm-inspector-toolbar" aria-label="Universe navigation">
+      {showStudySettings ? (
+        <Button size="sm" type="button" variant="secondary" onClick={() => navigateToStudyRoot(kernel.selection)}>
+          {studyLabel}
+        </Button>
+      ) : null}
+      {showNewProblem ? (
+        <Button size="sm" type="button" variant="primary" onClick={() => void kernel.commands.execute("workspace.new-problem", commandContext)}>
+          Choose method in New Problem
+        </Button>
+      ) : null}
+      {showDiagnostics ? (
+        <Button size="sm" type="button" variant="ghost" onClick={() => kernel.layout.openBottomPanel("diagnostics")}>
+          Open diagnostics
+        </Button>
+      ) : null}
+    </div>
   );
 }
 

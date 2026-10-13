@@ -5,14 +5,23 @@ import math
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from fullmag.model.study import _MAX_FEM_EIGEN_SOLVER_ITERATIONS
 from fullmag.model.compute_resources import ComputeResources
 from fullmag.model.output_storage import OutputStorage
-from fullmag.model.execution_profile import ExecutionProfile, ExecutionRequestLayer
+from fullmag.model.execution_profile import ExecutionProfile, ExecutionRequestLayer, _parallel_execution_lane
 from fullmag.runtime.output_storage_lowering import (
     configure_scene_stage_autosaves,
     configure_study_pipeline_autosaves,
 )
 from fullmag.model.current_transport import (
+    ExternalLeadCurrentSource,
+    ExternalLeadPreparation,
+    TerminalLeadExtension,
+    _CURRENT_SOURCE_MAX_ITEMS,
+    CurrentSourceInterfacePair,
+    CurrentSourceOuterTerminal,
+    CurrentSourceTerminalObservation,
+    CurrentSourceDrive,
     ConservativeCurrentBoundaryFace,
     ConservativeCurrentClosedGeometry,
     ConservativeCurrentExternalLead,
@@ -30,6 +39,7 @@ from fullmag.model.current_transport import (
     ChargeTransportMaterialAssignment,
     CurrentTransport,
     NormalCurrentElectrode,
+    EquipotentialCurrentTerminal,
     StructuredCurrentClosure,
     StructuredCurrentSourceCut,
     StructuredCutPlane,
@@ -63,6 +73,7 @@ from fullmag.model.spin_transport import (
     DriftDiffusionSpinTorque as CanonicalDriftDiffusionSpinTorque,
     SurfaceRef,
 )
+from fullmag.model.problem import FdmPbc, ParallelExecutionPolicy
 
 
 _SCENE_CURRENT_MODULE_FIELDS = frozenset(
@@ -98,9 +109,84 @@ _CURRENT_TRANSPORT_FIELDS = frozenset(
         "solver",
         "time_envelope",
         "conservative_current_view",
+        "conservative_current_source",
+        "external_lead_preparation",
         "structured_current_closure",
     }
 )
+
+
+def _scene_pbc_from_ir(value: object) -> FdmPbc | None:
+    """Decode the canonical PBC object without lossy Python coercions."""
+    if value is None:
+        return None
+    if isinstance(value, FdmPbc):
+        return value
+    if not isinstance(value, Mapping):
+        raise TypeError("SceneDocument.study.pbc must be an object or null")
+
+    unknown = set(value) - {"axes", "demag", "image_counts"}
+    if unknown:
+        names = ", ".join(sorted(str(name) for name in unknown))
+        raise ValueError(f"SceneDocument.study.pbc has unsupported fields: {names}")
+
+    raw_axes = value.get("axes")
+    if (
+        isinstance(raw_axes, (str, bytes))
+        or not isinstance(raw_axes, Sequence)
+        or len(raw_axes) != 3
+    ):
+        raise ValueError("SceneDocument.study.pbc.axes must contain three axis values")
+    if any(
+        type(axis) is not str or axis not in {"open", "periodic"}
+        for axis in raw_axes
+    ):
+        raise ValueError(
+            "SceneDocument.study.pbc.axes values must be 'open' or 'periodic'"
+        )
+
+    demag = value.get("demag")
+    if type(demag) is not str or demag not in {
+        "open",
+        "truncated_images",
+        "periodic_airbox_k0",
+    }:
+        raise ValueError(
+            "SceneDocument.study.pbc.demag must be 'open', 'truncated_images', "
+            "or 'periodic_airbox_k0'"
+        )
+
+    image_counts: tuple[int, int, int] | None = None
+    if "image_counts" in value and value["image_counts"] is not None:
+        raw_counts = value["image_counts"]
+        if (
+            isinstance(raw_counts, (str, bytes))
+            or not isinstance(raw_counts, Sequence)
+            or len(raw_counts) != 3
+        ):
+            raise ValueError(
+                "SceneDocument.study.pbc.image_counts must contain three integers or null"
+            )
+        maximum = (1 << 32) - 1
+        if any(
+            type(count) is not int or count < 0 or count > maximum
+            for count in raw_counts
+        ):
+            raise ValueError(
+                "SceneDocument.study.pbc.image_counts values must be u32 integers"
+            )
+        image_counts = tuple(raw_counts)
+
+    return FdmPbc(
+        axes=tuple(axis == "periodic" for axis in raw_axes),
+        demag=demag,
+        image_counts=image_counts,
+    )
+
+
+def _scene_pbc_to_ir(value: object) -> dict[str, object] | None:
+    pbc = _scene_pbc_from_ir(value)
+    return pbc.to_ir() if pbc is not None else None
 
 
 def _material_id(name: str) -> str:
@@ -362,6 +448,9 @@ def _decode_current_transport(value: object) -> CurrentTransport:
         kind = boundary.get("kind")
         boundary_fields = (
             {
+                "equipotential_current_terminal": frozenset(
+                    {"id", "kind", "surfaces"}
+                ),
                 "voltage_electrode": frozenset(
                     {"id", "kind", "surfaces", "potential_V"}
                 ),
@@ -377,7 +466,9 @@ def _decode_current_transport(value: object) -> CurrentTransport:
             raise ValueError(f"unsupported charge boundary kind {kind!r}")
         _reject_unknown_fields(boundary, boundary_fields, boundary_context)
         boundary_id = _nonempty_string(boundary.get("id"), f"{boundary_context}.id")
-        if kind == "voltage_electrode":
+        if kind == "equipotential_current_terminal":
+            boundaries.append(EquipotentialCurrentTerminal(boundary_id, surfaces))
+        elif kind == "voltage_electrode":
             boundaries.append(
                 VoltageElectrode(
                     boundary_id,
@@ -491,12 +582,89 @@ def _decode_current_transport(value: object) -> CurrentTransport:
             if conservative_view_value is not None
             else None
         ),
+        conservative_current_source=(
+            _decode_conservative_current_source(entry["conservative_current_source"])
+            if entry.get("conservative_current_source") is not None
+            else None
+        ),
+        external_lead_preparation=(
+            _decode_external_lead_preparation(entry["external_lead_preparation"])
+            if entry.get("external_lead_preparation") is not None
+            else None
+        ),
         structured_current_closure=(
             _decode_structured_current_closure(structured_closure_value)
             if structured_closure_value is not None
             else None
         ),
     )
+
+
+def _decode_external_lead_preparation(value: object) -> ExternalLeadPreparation:
+    entry = dict(_mapping(value, "external_lead_preparation"))
+    if set(entry) != {"schema_version", "kind", "revision", "extensions", "drives"}:
+        raise ValueError("external_lead_preparation has unknown or missing fields")
+    if entry.pop("kind") != "isolated_branch_straight_stubs":
+        raise ValueError("unsupported external_lead_preparation kind")
+    extensions, drives = entry["extensions"], entry["drives"]
+    if not isinstance(extensions, list) or not isinstance(drives, list):
+        raise ValueError("external_lead_preparation extensions and drives must be lists")
+    if not 2 <= len(extensions) <= 128 or not drives or len(drives) * len(extensions) > _CURRENT_SOURCE_MAX_ITEMS:
+        raise ValueError("external_lead_preparation exceeds bounded input support before construction")
+    for values, key in ((extensions, "boundary_markers"), (drives, "outer_terminal_currents_a")):
+        count = 0
+        for raw in values:
+            item = _mapping(raw, "external_lead_preparation entry")
+            controls = item.get(key)
+            expected_type = list if key == "boundary_markers" else Mapping
+            if not isinstance(controls, expected_type):
+                raise ValueError(f"external_lead_preparation.{key} has an invalid shape")
+            count += len(controls)
+            if count > _CURRENT_SOURCE_MAX_ITEMS:
+                raise ValueError("external_lead_preparation exceeds bounded input support before construction")
+    groups = (
+        ("extensions", TerminalLeadExtension, {"id", "observation_id", "object_id", "boundary_markers",
+                                              "length_m", "outward_direction_xyz", "conductivity_spm", "layers"}),
+        ("drives", CurrentSourceDrive, {"id", "port_mode_ref", "outer_terminal_currents_a"}),
+    )
+    for name, cls, fields in groups:
+        values = []
+        for raw in entry[name]:
+            item = _mapping(raw, f"external_lead_preparation.{name}")
+            required = fields - {"layers"} if name == "extensions" else fields
+            if not required <= item.keys() or not item.keys() <= fields:
+                raise ValueError(f"external_lead_preparation.{name} has unknown or missing fields")
+            values.append(cls(**item))
+        entry[name] = values
+    return ExternalLeadPreparation(**entry)
+
+
+def _decode_conservative_current_source(value: object) -> ExternalLeadCurrentSource:
+    entry = dict(_mapping(value, "conservative_current_source"))
+    fields = {"schema_version", "kind", "revision", "device_stable_vertex_ids", "lead_mesh",
+              "lead_stable_vertex_ids", "lead_conductivity_spm_per_element", "interface_pairs",
+              "outer_terminals", "terminal_observations", "drives"}
+    if set(entry) != fields:
+        raise ValueError("conservative_current_source has unknown or missing fields")
+    if entry.pop("kind") != "external_lead_current":
+        raise ValueError("unsupported conservative_current_source kind")
+    groups = (
+        ("interface_pairs", CurrentSourceInterfacePair, {"id", "device_face_vertex_ids", "lead_face_vertex_ids", "vertex_pairs"}),
+        ("outer_terminals", CurrentSourceOuterTerminal, {"id", "boundary_face_vertex_ids"}),
+        ("terminal_observations", CurrentSourceTerminalObservation, {"id", "object_id", "interface_pair_ids"}),
+        ("drives", CurrentSourceDrive, {"id", "port_mode_ref", "outer_terminal_currents_a"}),
+    )
+    for name, cls, keys in groups:
+        if not isinstance(entry[name], list):
+            raise ValueError(f"conservative_current_source.{name} must be a list")
+        values = []
+        for raw in entry[name]:
+            item = _mapping(raw, f"conservative_current_source.{name}")
+            if set(item) != keys:
+                raise ValueError(f"conservative_current_source.{name} has unknown or missing fields")
+            values.append(cls(**item))
+        entry[name] = values
+    return ExternalLeadCurrentSource(**entry)
 
 
 def _decode_structured_current_closure(value: object) -> StructuredCurrentClosure:
@@ -1400,13 +1568,14 @@ def _validate_dmi_scope_exclusivity(
 def _validate_rotated_dmi_exchange_requirement(
     rotated_interfacial_dmi: object,
     exchange_enabled: object,
+    *,
+    pbc: object = None,
 ) -> None:
-    """Reject a nonzero open-boundary rotated DMI term without study Exchange.
+    """Require Exchange for nonzero rotated DMI when a magnetic axis is open.
 
-    SceneDocument does not yet carry an explicit PBC declaration, therefore a
-    missing/false study switch is treated as an open-boundary authoring state.
-    The planner remains responsible for the fully-periodic exception once it
-    is represented in ProblemIR.
+    An explicitly fully periodic 3D problem has no open magnetic boundary, so
+    the coupled natural-boundary condition does not require study Exchange.
+    The planner remains responsible for validating overall PBC legality.
     """
     d = _number_or_none(rotated_interfacial_dmi)
     if d is None or d == 0.0:
@@ -1416,10 +1585,15 @@ def _validate_rotated_dmi_exchange_requirement(
         and exchange_enabled.strip().lower() == "false"
     )
     if disabled:
-        raise ValueError(
-            "RotatedInterfacialDmi with open magnetic boundaries requires Exchange "
-            "for the coupled natural boundary condition"
+        pbc_config = _scene_pbc_from_ir(pbc)
+        has_open_magnetic_boundary = (
+            pbc_config is None or not all(pbc_config.axes)
         )
+        if has_open_magnetic_boundary:
+            raise ValueError(
+                "RotatedInterfacialDmi with open magnetic boundaries requires Exchange "
+                "for the coupled natural boundary condition"
+            )
 
 
 def build_scene_document_from_builder(builder: dict[str, Any]) -> dict[str, Any]:
@@ -1527,6 +1701,7 @@ def build_scene_document_from_builder(builder: dict[str, Any]) -> dict[str, Any]
     _validate_rotated_dmi_exchange_requirement(
         builder.get("rotated_interfacial_dmi"),
         builder.get("exchange_enabled", True),
+        pbc=builder.get("pbc"),
     )
 
     raw_current_modules = builder.get("current_modules") or []
@@ -1549,6 +1724,13 @@ def build_scene_document_from_builder(builder: dict[str, Any]) -> dict[str, Any]
         or builder.get("execution_precision")
         or "double"
     )
+    parallel_execution_policy = ParallelExecutionPolicy.from_ir(
+        builder.get("parallel_execution")
+    )
+    parallel_execution_policy.validate_for_runtime(
+        *_parallel_execution_lane(builder, requested_backend, requested_device)
+    )
+    parallel_execution = parallel_execution_policy.to_ir()
 
     document = {
         "version": "scene.v2",
@@ -1578,6 +1760,7 @@ def build_scene_document_from_builder(builder: dict[str, Any]) -> dict[str, Any]
             "requested_precision": requested_precision,
             "requested_mode": builder.get("requested_mode", "strict"),
             "requested_cpu_threads": builder.get("cpu_threads"),
+            "parallel_execution": copy.deepcopy(parallel_execution),
             "fem_demag_solver_policy": builder.get("fem_demag_solver_policy"),
             "exchange_enabled": bool(builder.get("exchange_enabled", True)),
             "demag_enabled": bool(builder.get("demag_enabled", True)),
@@ -1619,6 +1802,20 @@ def build_scene_document_from_builder(builder: dict[str, Any]) -> dict[str, Any]
             "active_transform_scope": None,
         },
     }
+    if "pbc" in builder:
+        document["study"]["pbc"] = _scene_pbc_to_ir(builder["pbc"])
+    for collection in (
+        "antenna_port_modes",
+        "antenna_field_solve_stages",
+        "antenna_target_projections",
+        "solved_antenna_drives",
+        "antenna_spectrum_requests",
+    ):
+        if collection in builder:
+            value = builder[collection]
+            if not isinstance(value, list):
+                raise ValueError(f"{collection} must be a list when present")
+            document[collection] = copy.deepcopy(value)
     if "fdm" in builder:
         document["study"]["fdm"] = copy.deepcopy(builder.get("fdm"))
     document["study"].update(_execution_profile_fields(builder, "builder"))
@@ -1658,6 +1855,7 @@ def build_builder_from_scene_document(scene: dict[str, Any]) -> dict[str, Any]:
         raw_study.get("exchange_enabled", True)
         if isinstance(raw_study, Mapping)
         else True,
+        pbc=raw_study.get("pbc") if isinstance(raw_study, Mapping) else None,
     )
     magnetization_assets = {
         str(asset.get("id", "")): dict(asset)
@@ -1665,9 +1863,35 @@ def build_builder_from_scene_document(scene: dict[str, Any]) -> dict[str, Any]:
     }
     geometries: list[dict[str, Any]] = []
 
+    object_ids: set[str] = set()
+    geometry_names: set[str] = set()
+    magnetic_aliases = {
+        str(obj.get("name") or "").strip() or str(obj.get("id") or "")
+        for obj in scene.get("objects") or []
+        if obj.get("role", "magnet") == "magnet"
+    }
     for obj in scene.get("objects") or []:
-        role = str(obj.get("role") or "magnet")
+        role = str(obj.get("role", "magnet"))
+        if role not in {"magnet", "geometry", "conductor", "electrode", "antenna"}:
+            raise ValueError(f"unsupported scene presentation type '{role}'")
+        object_id = obj.get("id")
+        if not isinstance(object_id, str):
+            raise ValueError("immutable object ID must be a string")
+        if not object_id or object_id.strip() != object_id:
+            raise ValueError("immutable object ID must be nonempty without surrounding whitespace")
+        raw_name = obj.get("name", "")
+        if not isinstance(raw_name, str):
+            raise ValueError("geometry name must be a string")
+        name = raw_name.strip() or object_id
         is_auxiliary = role != "magnet"
+        if object_id in object_ids:
+            raise ValueError(f"duplicate immutable object ID '{object_id}'")
+        if name in geometry_names:
+            raise ValueError(f"ambiguous geometry name '{name}'")
+        if is_auxiliary and object_id in magnetic_aliases:
+            raise ValueError("auxiliary ID conflicts with a magnetic name alias")
+        object_ids.add(object_id)
+        geometry_names.add(name)
         material_ref = str(obj.get("material_ref") or "")
         if not is_auxiliary and (not material_ref or material_ref not in materials):
             raise ValueError(
@@ -1682,13 +1906,6 @@ def build_builder_from_scene_document(scene: dict[str, Any]) -> dict[str, Any]:
             )
         geometry = dict(obj.get("geometry") or {})
         geometry_params = dict(geometry.get("geometry_params") or {})
-        object_id = str(obj.get("id") or obj.get("name") or "")
-        name = str(obj.get("name") or obj.get("id") or "")
-        if is_auxiliary and object_id != name:
-            raise ValueError(
-                "scene_document_auxiliary_object_id_unsupported: "
-                f"object '{object_id}' has a name that cannot preserve its identity"
-            )
         transform = dict(obj.get("transform") or {})
         translation = _owner_frame_translation(transform, object_id)
         if any(abs(value) > 0 for value in translation):
@@ -1732,8 +1949,8 @@ def build_builder_from_scene_document(scene: dict[str, Any]) -> dict[str, Any]:
         )
 
         entry: dict[str, Any] = {
-            "object_id": str(obj.get("id") or obj.get("name") or ""),
-            "name": str(obj.get("name") or obj.get("id") or ""),
+            "object_id": object_id,
+            "name": name,
             "role": role,
             "region_name": obj.get("region_name"),
             "geometry_kind": str(geometry.get("geometry_kind", "")),
@@ -1866,6 +2083,12 @@ def build_builder_from_scene_document(scene: dict[str, Any]) -> dict[str, Any]:
     transport_names = [str(entry["name"]) for entry in transports]
     if len(transport_names) != len(set(transport_names)):
         raise ValueError("current_transports contains duplicate names")
+    parallel_execution_policy = ParallelExecutionPolicy.from_ir(
+        study.get("parallel_execution")
+    )
+    parallel_execution_policy.validate_for_runtime(
+        *_parallel_execution_lane(study, study.get("requested_backend", "auto"), study.get("requested_device", "auto"))
+    )
     builder = {
         "revision": int(scene.get("revision", 0)),
         "study_name": (
@@ -1879,6 +2102,7 @@ def build_builder_from_scene_document(scene: dict[str, Any]) -> dict[str, Any]:
         "requested_precision": study.get("requested_precision", "double"),
         "requested_mode": study.get("requested_mode", "strict"),
         "cpu_threads": study.get("requested_cpu_threads"),
+        "parallel_execution": parallel_execution_policy.to_ir(),
         **_execution_profile_fields(study, "SceneDocument.study"),
         **_compute_resources_fields(study, "SceneDocument.study"),
         "fem_demag_solver_policy": study.get("fem_demag_solver_policy"),
@@ -1900,6 +2124,8 @@ def build_builder_from_scene_document(scene: dict[str, Any]) -> dict[str, Any]:
         "current_modules": [*antenna_modules, *transports],
         "excitation_analysis": excitation_analysis,
     }
+    if "pbc" in study:
+        builder["pbc"] = _scene_pbc_to_ir(study["pbc"])
     if "fdm" in study:
         builder["fdm"] = copy.deepcopy(study.get("fdm"))
     if "field_drives" in scene:
@@ -1959,6 +2185,18 @@ def build_builder_from_scene_document(scene: dict[str, Any]) -> dict[str, Any]:
         builder["oersted_terms"] = _canonical_oersted_fields(
             scene["oersted_terms"], scene_ids=False
         )
+    for collection in (
+        "antenna_port_modes",
+        "antenna_field_solve_stages",
+        "antenna_target_projections",
+        "solved_antenna_drives",
+        "antenna_spectrum_requests",
+    ):
+        if collection in scene:
+            value = scene[collection]
+            if not isinstance(value, list):
+                raise ValueError(f"{collection} must be a list when present")
+            builder[collection] = copy.deepcopy(value)
     return builder
 
 
@@ -2046,11 +2284,19 @@ def builder_overrides_from_scene_document(scene: dict[str, Any]) -> dict[str, An
         "max_steps": _int_or_none(solver.get("max_relax_steps")),
     }
     mesh = dict(builder.get("mesh") or {})
+    parallel_execution_policy = ParallelExecutionPolicy.from_ir(
+        builder.get("parallel_execution")
+    )
+    parallel_execution_policy.validate_for_runtime(
+        *_parallel_execution_lane(builder, builder.get("backend") or builder.get("requested_backend") or "auto", builder.get("requested_device") or "auto")
+    )
+    parallel_execution = parallel_execution_policy.to_ir()
     overrides = {
         "runtime_selection": {
             "cpu_threads": _int_or_none(builder.get("cpu_threads")),
             "device": builder.get("requested_device", "auto"),
             "precision": builder.get("requested_precision", "double"),
+            "parallel_execution": parallel_execution,
         },
         "fem_demag_solver_policy": (
             dict(builder.get("fem_demag_solver_policy"))
@@ -2134,7 +2380,7 @@ def builder_overrides_from_scene_document(scene: dict[str, Any]) -> dict[str, An
                 "torque_tolerance": _number_or_none(stage.get("torque_tolerance")),
                 "energy_tolerance": _number_or_none(stage.get("energy_tolerance")),
                 "max_steps": _int_or_none(stage.get("max_steps")),
-                "eigen_count": _int_or_none(stage.get("eigen_count")),
+                "eigen_count": _eigen_count_override(stage),
                 "eigen_target": stage.get("eigen_target") or None,
                 "eigen_operator": stage.get("eigen_operator") or None,
                 "eigen_include_demag": (
@@ -2160,6 +2406,20 @@ def builder_overrides_from_scene_document(scene: dict[str, Any]) -> dict[str, An
                     else None
                 ),
                 "eigen_magnetostatic_bc": stage.get("eigen_magnetostatic_bc") or None,
+                "eigen_solver_rtol": _eigen_solver_rtol_or_none(
+                    stage.get("eigen_solver_rtol")
+                    if stage.get("eigen_solver_rtol") not in (None, "")
+                    else stage.get("eigen_solver_residual_tolerance"),
+                    "SceneDocument.study.stages.eigen_solver_rtol",
+                ),
+                "eigen_solver_max_outer_iterations": _positive_fem_eigen_iterations_or_none(
+                    stage.get("eigen_solver_max_outer_iterations"),
+                    "SceneDocument.study.stages.eigen_solver_max_outer_iterations",
+                ),
+                "eigen_solver_max_linear_iterations": _positive_fem_eigen_iterations_or_none(
+                    stage.get("eigen_solver_max_linear_iterations"),
+                    "SceneDocument.study.stages.eigen_solver_max_linear_iterations",
+                ),
             }
             for stage in (builder.get("stages") or [])
         ],
@@ -2174,9 +2434,19 @@ def builder_overrides_from_scene_document(scene: dict[str, Any]) -> dict[str, An
         "current_modules": builder.get("current_modules") or [],
         "excitation_analysis": builder.get("excitation_analysis"),
     }
+    raw_study = scene.get("study")
+    if isinstance(raw_study, Mapping) and "pbc" in raw_study:
+        # Missing is no override; explicit null intentionally clears PBC.
+        overrides["pbc"] = copy.deepcopy(builder["pbc"])
     _copy_present_collection(builder, overrides, "spin_torques")
     _copy_present_collection(builder, overrides, "spin_transports")
     _copy_present_collection(builder, overrides, "oersted_terms")
+    _copy_present_collection(builder, overrides, "field_drives")
+    _copy_present_collection(builder, overrides, "antenna_port_modes")
+    _copy_present_collection(builder, overrides, "antenna_field_solve_stages")
+    _copy_present_collection(builder, overrides, "antenna_target_projections")
+    _copy_present_collection(builder, overrides, "solved_antenna_drives")
+    _copy_present_collection(builder, overrides, "antenna_spectrum_requests")
     if "fdm" in builder:
         fdm = copy.deepcopy(builder.get("fdm"))
         if isinstance(fdm, dict):
@@ -2253,6 +2523,51 @@ def _number_or_auto(value: Any) -> float | str | None:
     return _number_or_none(value)
 
 
+def _positive_integer_or_none(value: object, context: str) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            return None
+        try:
+            value = int(stripped)
+        except ValueError as error:
+            raise ValueError(f"{context} must be a positive integer") from error
+    return _positive_integer(value, context)
+
+
+def _positive_fem_eigen_iterations_or_none(value: object, context: str) -> int | None:
+    if value is None or (isinstance(value, str) and value == ""):
+        return None
+    if isinstance(value, str):
+        try:
+            value = int(value)
+        except ValueError as error:
+            raise ValueError(f"{context} must be a positive integer") from error
+    result = _positive_integer(value, context)
+    if result > _MAX_FEM_EIGEN_SOLVER_ITERATIONS:
+        raise ValueError(
+            f"{context} must fit the native signed iteration limit "
+            f"(<= {_MAX_FEM_EIGEN_SOLVER_ITERATIONS})"
+        )
+    return result
+
+
+def _eigen_solver_rtol_or_none(value: object, context: str) -> float | None:
+    if value is None or (isinstance(value, str) and value == ""):
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+        raise ValueError(f"{context} must be a finite positive number")
+    try:
+        result = float(value)
+    except (OverflowError, TypeError, ValueError) as error:
+        raise ValueError(f"{context} must be a finite positive number") from error
+    if not math.isfinite(result) or result <= 0.0:
+        raise ValueError(f"{context} must be a finite positive number")
+    return result
+
+
 def _int_or_none(value: Any) -> int | None:
     if value is None:
         return None
@@ -2267,3 +2582,18 @@ def _int_or_none(value: Any) -> int | None:
     if isinstance(value, (int, float)):
         return int(value)
     return None
+
+
+def _eigen_count_override(stage: Mapping[str, Any]) -> int | None:
+    value = stage.get("eigen_count")
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return None
+    if isinstance(value, bool):
+        raise ValueError("eigen_count must be a positive integer")
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("eigen_count must be a positive integer") from exc
+    if not math.isfinite(numeric) or numeric < 1 or int(numeric) != numeric:
+        raise ValueError("eigen_count must be a positive integer")
+    return int(numeric)

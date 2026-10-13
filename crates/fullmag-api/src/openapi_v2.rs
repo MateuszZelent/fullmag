@@ -214,6 +214,12 @@ use utoipa::OpenApi;
         crate::router_v2::handlers::model::planar_monitors::patch_planar_monitor,
         crate::router_v2::handlers::model::planar_monitors::delete_planar_monitor,
         crate::router_v2::handlers::model::planar_monitors::duplicate_planar_monitor,
+        crate::router_v2::handlers::analysis::analytic_references::list_analytic_reference_models,
+        crate::router_v2::handlers::analysis::postprocessing::list_postprocessing_definitions,
+        crate::router_v2::handlers::analysis::postprocessing::create_postprocessing_definition,
+        crate::router_v2::handlers::analysis::postprocessing::get_postprocessing_definition,
+        crate::router_v2::handlers::analysis::postprocessing::patch_postprocessing_definition,
+        crate::router_v2::handlers::analysis::postprocessing::delete_postprocessing_definition,
         crate::router_v2::handlers::model::frozen_spins::list_frozen_spins,
         crate::router_v2::handlers::model::frozen_spins::create_frozen_spins,
         crate::router_v2::handlers::model::frozen_spins::get_frozen_spins,
@@ -232,6 +238,7 @@ use utoipa::OpenApi;
         crate::router_v2::handlers::persistence::projects::authoring_update,
         crate::router_v2::handlers::persistence::script_project::from_script,
         crate::router_v2::handlers::persistence::projects::submit_run,
+        crate::router_v2::handlers::persistence::projects::run_intent_preparation::prepare,
         crate::router_v2::handlers::persistence::projects::submit_batch,
         crate::router_v2::handlers::persistence::projects::list_batches,
         crate::router_v2::handlers::persistence::projects::list_batch_cases,
@@ -258,6 +265,17 @@ use utoipa::OpenApi;
         crate::router_v2::handlers::simulation::runtime::get_object_metrics,
         crate::router_v2::handlers::data::artifacts::list_artifacts,
         crate::router_v2::handlers::data::artifacts::get_artifact,
+        crate::router_v2::handlers::data::antenna::get_antenna_field_solution,
+        crate::router_v2::handlers::data::antenna::get_antenna_field_solution_payload,
+        crate::router_v2::handlers::data::antenna::get_antenna_stage_output_catalog,
+        crate::router_v2::handlers::data::antenna_inspection::get_antenna_external_lead_inspection,
+        crate::router_v2::handlers::data::antenna_inspection::get_antenna_external_lead_inspection_display,
+        crate::router_v2::handlers::data::antenna_inspection::get_antenna_external_lead_inspection_payload,
+        crate::router_v2::handlers::data::accepted_antenna_payload::get_accepted_antenna_payload,
+        crate::router_v2::handlers::data::accepted_antenna_resource::get_accepted_antenna_inspection,
+        crate::router_v2::handlers::data::accepted_antenna_resource::get_accepted_antenna_catalog,
+        crate::router_v2::handlers::data::antenna::get_antenna_source_spectrum,
+        crate::router_v2::handlers::data::antenna::get_antenna_source_spectrum_payload,
         crate::router_v2::handlers::analysis::eigen::get_spectrum,
         crate::router_v2::handlers::analysis::eigen::get_spectrum_v2,
         crate::router_v2::handlers::analysis::eigen::get_mode,
@@ -588,6 +606,16 @@ use utoipa::OpenApi;
         crate::schemas::planar_monitors::PlanarSurfaceBoundarySelectorSchema,
         crate::schemas::planar_monitors::PlanarSurfaceVisibilityPolicySchema,
         crate::schemas::planar_monitors::PlanarMonitorCollectionResource,
+        crate::schemas::postprocessing_definitions::PostprocessingDataRef,
+        crate::schemas::postprocessing_definitions::PostprocessingDefinition,
+        crate::router_v2::handlers::analysis::analytic_references::AnalyticReferenceModelCollectionResource,
+        crate::router_v2::handlers::analysis::analytic_references::AnalyticReferenceModelResource,
+        crate::router_v2::handlers::analysis::analytic_references::AnalyticReferenceValidity,
+        crate::schemas::postprocessing_definitions::PostprocessingDefinitionCollectionResource,
+        crate::schemas::postprocessing_definitions::PostprocessingDefinitionResource,
+        crate::schemas::postprocessing_definitions::PostprocessingDefinitionCreateRequest,
+        crate::schemas::postprocessing_definitions::PostprocessingDefinitionPatchRequest,
+        crate::schemas::postprocessing_definitions::PostprocessingDefinitionDeleteRequest,
         crate::schemas::planar_monitors::PlanarMonitorResource,
         crate::schemas::planar_monitors::PlanarMonitorCreateRequest,
         crate::schemas::planar_monitors::PlanarMonitorPatchRequest,
@@ -711,6 +739,8 @@ use utoipa::OpenApi;
         crate::schemas::projects::ProjectArchiveDurability,
         crate::schemas::projects::ProjectDocumentResource,
         crate::schemas::projects::ProjectRunSubmitRequest,
+        crate::schemas::projects::ProjectRunIntentRequest,
+        crate::schemas::projects::ProjectRunIntentResource,
         crate::schemas::projects::ProjectBatchSubmitRequest,
         crate::schemas::projects::ProjectBatchSubmitResource,
         crate::schemas::projects::ProjectBatchListQuery,
@@ -811,6 +841,8 @@ use utoipa::OpenApi;
         crate::schemas::authoring::SceneMaterialResource,
         crate::schemas::authoring::ScenePatchRequest,
         crate::schemas::authoring::PhysicsGraphResource,
+        crate::schemas::authoring::PhysicsGraphObjectResource,
+        crate::schemas::authoring::PhysicsGraphObjectTypeResource,
         crate::schemas::authoring::PhysicsGraphModuleResource,
         crate::schemas::authoring::PhysicsGraphScopeResource,
         crate::schemas::authoring::PhysicsGraphEdgeResource,
@@ -886,6 +918,8 @@ use utoipa::OpenApi;
         crate::schemas::authoring::AuthoringTransactionResponse,
         crate::schemas::authoring::StudyRuntimeResource,
         crate::schemas::authoring::StudyRuntimePatchRequest,
+        crate::schemas::authoring::ParallelExecutionResource,
+        crate::schemas::authoring::ParallelExecutionModeResource,
         crate::schemas::authoring::SamplingPeriodPolicyResource,
         crate::schemas::authoring::AutomaticOutputSamplingResource,
         crate::schemas::authoring::AutomaticTableAutosaveResource,
@@ -964,6 +998,7 @@ use utoipa::OpenApi;
         crate::schemas::preparation::PreparationFailureResource,
         crate::schemas::runtime::StageExecutionResource,
         crate::schemas::runtime::StageExecutionRecordResource,
+        crate::schemas::runtime::ParallelExecutionTelemetryResource,
         crate::schemas::hysteresis::HysteresisStagePlanSchema,
         crate::schemas::hysteresis::HysteresisStorageEstimateSchema,
         crate::schemas::hysteresis::HysteresisProtocolSchema,
@@ -1419,6 +1454,70 @@ mod tests {
     }
 
     #[test]
+    fn openapi_exposes_typed_antenna_composition_contract() {
+        let document = openapi_json();
+        let schemas = &document["components"]["schemas"];
+        let scene = &schemas["SceneResource"]["properties"];
+        for (property, schema) in [
+            ("antenna_port_modes", "AntennaPortModeResource"),
+            ("antenna_field_solve_stages", "AntennaFieldSolveStageResource"),
+            ("antenna_target_projections", "AntennaTargetProjectionResource"),
+            ("solved_antenna_drives", "SolvedAntennaDriveResource"),
+            ("antenna_spectrum_requests", "AntennaSpectrumRequestResource"),
+        ] {
+            assert_eq!(
+                scene[property]["items"]["$ref"],
+                serde_json::json!(format!("#/components/schemas/{schema}")),
+                "SceneResource.{property} must remain semantically typed"
+            );
+        }
+        assert!(schemas["AntennaPortModeResource"]["properties"]["branches"]
+            .to_string()
+            .contains("AntennaPortBranchResource"));
+        assert!(schemas["AntennaFieldSolveStageResource"]["properties"]["target_refs"]
+            .to_string()
+            .contains("FieldTargetResource"));
+        let field_solve = &schemas["AntennaFieldSolveStageResource"];
+        assert!(field_solve["properties"]
+            .get("conservative_current_view_ref")
+            .is_some());
+        assert!(!field_solve["required"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .any(|field| field == "conservative_current_view_ref"));
+        assert!(schemas["AntennaSpectrumRequestResource"]["properties"]["sampling_plane"]
+            .to_string()
+            .contains("AntennaSpectrumSamplingPlaneResource"));
+    }
+
+    #[test]
+    fn openapi_types_antenna_spectrum_payload_and_topology_errors() {
+        let document = openapi_json();
+        for path in [
+            "/v2/sessions/current/data/antenna/source-spectra/{output_id}",
+            "/v2/sessions/current/data/antenna/source-spectra/{output_id}/payloads/{payload_kind}",
+        ] {
+            let responses = &document["paths"][path]["get"]["responses"];
+            for status in ["404", "422"] {
+                assert_eq!(
+                    responses[status]["content"]["application/json"]["schema"]["$ref"],
+                    "#/components/schemas/ApiErrorResponse",
+                    "{path} status {status} must expose the typed error body"
+                );
+            }
+            assert!(responses["404"]["description"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("missing_payload"));
+            assert!(responses["422"]["description"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("unsupported_topology"));
+        }
+    }
+
+    #[test]
     fn openapi_current_transport_preserves_conservative_current_view_payload() {
         let document = openapi_json();
         let property = &document["components"]["schemas"]["KnownSceneCurrentTransport"]
@@ -1429,6 +1528,14 @@ mod tests {
             serde_json::json!(true),
             "the scene boundary must accept every validated RT0/H(div) descriptor field"
         );
+    }
+
+    #[test]
+    fn openapi_current_transport_preserves_current_driven_source_payload() {
+        let document = openapi_json();
+        let property = &document["components"]["schemas"]["KnownSceneCurrentTransport"]
+            ["properties"]["conservative_current_source"];
+        assert_eq!(property["additionalProperties"], serde_json::json!(true));
     }
 
     #[test]

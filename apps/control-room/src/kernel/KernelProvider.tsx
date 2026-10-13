@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useLayoutEffect, useMemo, useRef, useSyncExternalStore, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 
 import { SESSION_EVENTS_WS_PATH, VISUALIZATION_STATE_PATH } from "./api/apiPaths";
 import { planarMonitorFramePreviewStore } from "./workspace/planarMonitorFramePreview";
@@ -78,6 +78,7 @@ import { CameraRegistryController } from "./visualization/CameraRegistryControll
 import { AnalysisFieldOverlayController } from "./visualization/AnalysisFieldOverlayController";
 import { ModeCompositionController } from "./visualization/ModeCompositionController";
 import { ANALYSIS_FIELD_OVERLAY_COMMANDS } from "./visualization/analysisFieldOverlayCommandContributions";
+import { POSTPROCESSING_DEFINITION_COMMANDS } from "./analysis-modules/postprocessingCommandContributions";
 import {
   ObjectVisualizationController,
   type VisualizationTargetPatch,
@@ -213,6 +214,9 @@ function createKernel(options: DevelopmentKernelFactoryOptions, developmentWorks
     commands.register(cmd);
   }
   for (const cmd of ANALYSIS_FIELD_OVERLAY_COMMANDS) {
+    commands.register(cmd);
+  }
+  for (const cmd of POSTPROCESSING_DEFINITION_COMMANDS) {
     commands.register(cmd);
   }
 
@@ -823,7 +827,7 @@ function Viewport3DResourceLifecycleConnector({
 }
 
 export function KernelProvider({ children }: KernelProviderProps) {
-  const host = useMemo(() => new DevelopmentKernelHost(createKernel), []);
+  const [host] = useState(() => new DevelopmentKernelHost(createKernel));
   const { kernel, generation, paused } = useSyncExternalStore(host.subscribe, host.getSnapshot, host.getSnapshot);
   useEffect(() => {
     host.confirmMounted(kernel, (previous, replacement) => {

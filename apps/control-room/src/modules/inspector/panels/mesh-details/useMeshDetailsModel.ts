@@ -28,7 +28,12 @@ import {
   shouldLoadRuntimeMeshManifest,
   shouldLoadRuntimeMeshSummary,
 } from "@/kernel/resources/studyRuntimeResources";
+import {
+  projectFlatActiveLaneDiscretization,
+  resolveSessionDiscretization,
+} from "@/kernel/resources/sessionDiscretization";
 import { useKernel } from "@/kernel/KernelContext";
+import type { SessionDiscretizationCapabilitiesProjection } from "@/kernel/resources/sessionDiscretization";
 import {
   SESSION_STATUS_RESOURCE_KEY,
   useSessionStatusSelector,
@@ -93,7 +98,8 @@ export function shouldLoadMeshDetailsFemResources(
 }
 
 type MeshDetailsRuntimeStatus = {
-  capabilities: Pick<LiveStatusResource["capabilities"], "explicit_topology">;
+  capabilities: Pick<LiveStatusResource["capabilities"], "explicit_topology"> &
+    SessionDiscretizationCapabilitiesProjection;
   domain: Pick<LiveStatusResource["domain"], "discretization">;
   resources: Pick<
     LiveStatusResource["resources"],
@@ -171,9 +177,19 @@ function selectMeshDetailsRuntimeStatus(status: {
   data: LiveStatusResource | null;
 }): MeshDetailsRuntimeStatus | null {
   if (!status.data) return null;
+  const sourceCapabilities = status.data.capabilities;
+  const flatLane = projectFlatActiveLaneDiscretization(sourceCapabilities);
+  const hasActiveLane = Object.prototype.hasOwnProperty.call(
+    sourceCapabilities ?? {},
+    "active_lane",
+  );
   return {
     capabilities: {
-      explicit_topology: status.data.capabilities.explicit_topology,
+      explicit_topology: status.data.capabilities?.explicit_topology ?? false,
+      ...(hasActiveLane
+        ? { active_lane: sourceCapabilities?.active_lane ?? null }
+        : {}),
+      ...(flatLane ? { active_lane_discretization: flatLane.value } : {}),
     },
     domain: {
       discretization: status.data.domain.discretization,
@@ -192,6 +208,22 @@ function meshDetailsRuntimeStatusEquals(
   if (previous === next) return true;
   if (!previous || !next) return previous === next;
   return (
+    Object.prototype.hasOwnProperty.call(
+      previous.capabilities,
+      "active_lane",
+    ) === Object.prototype.hasOwnProperty.call(next.capabilities, "active_lane") &&
+    previous.capabilities.active_lane?.resolved?.discretization ===
+      next.capabilities.active_lane?.resolved?.discretization &&
+    Object.prototype.hasOwnProperty.call(
+      previous.capabilities,
+      "active_lane_discretization",
+    ) ===
+      Object.prototype.hasOwnProperty.call(
+        next.capabilities,
+        "active_lane_discretization",
+      ) &&
+    previous.capabilities.active_lane_discretization ===
+      next.capabilities.active_lane_discretization &&
     previous.capabilities.explicit_topology ===
       next.capabilities.explicit_topology &&
     previous.domain.discretization === next.domain.discretization &&
@@ -391,7 +423,7 @@ export function useMeshDetailsModel(
     selectMeshDetailsRuntimeStatus,
     { isEqual: meshDetailsRuntimeStatusEquals },
   );
-  const lane = resolveMeshDetailsLane(runtimeStatus?.domain.discretization);
+  const lane = resolveMeshDetailsLane(resolveSessionDiscretization(runtimeStatus));
   const femLane = lane === "fem";
   const loadMeshSummary = shouldLoadMeshDetailsFemResources(
     lane,

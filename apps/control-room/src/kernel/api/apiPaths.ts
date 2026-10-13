@@ -401,6 +401,38 @@ export const DATA_ARTIFACTS_PATH = openApiV2Path(
   "/v2/sessions/current/data/artifacts",
 );
 
+export const DATA_ANTENNA_FIELD_SOLUTION_PATH = openApiV2Path(
+  "/v2/sessions/current/data/antenna/field-solutions/{solution_id}",
+);
+
+export const DATA_ANTENNA_FIELD_SOLUTION_PAYLOAD_PATH = openApiV2Path(
+  "/v2/sessions/current/data/antenna/field-solutions/{solution_id}/payloads/{payload_kind}",
+);
+
+export const DATA_ANTENNA_STAGE_OUTPUT_CATALOG_PATH = openApiV2Path(
+  "/v2/sessions/current/data/antenna/stages/{stage_id}/output-catalog",
+);
+
+export const DATA_ANTENNA_EXTERNAL_LEAD_INSPECTION_PATH = openApiV2Path(
+  "/v2/sessions/current/data/antenna/stages/{stage_id}/external-lead-inspection",
+);
+
+export const DATA_ANTENNA_EXTERNAL_LEAD_INSPECTION_DISPLAY_PATH = openApiV2Path(
+  "/v2/sessions/current/data/antenna/stages/{stage_id}/external-lead-inspection/display",
+);
+
+export const DATA_ANTENNA_EXTERNAL_LEAD_INSPECTION_PAYLOAD_PATH = openApiV2Path(
+  "/v2/sessions/current/data/antenna/stages/{stage_id}/external-lead-inspection/payloads/{payload_kind}",
+);
+
+export const DATA_ANTENNA_SOURCE_SPECTRUM_PATH = openApiV2Path(
+  "/v2/sessions/current/data/antenna/source-spectra/{output_id}",
+);
+
+export const DATA_ANTENNA_SOURCE_SPECTRUM_PAYLOAD_PATH = openApiV2Path(
+  "/v2/sessions/current/data/antenna/source-spectra/{output_id}/payloads/{payload_kind}",
+);
+
 export const DATA_ARTIFACT_PATH = openApiV2Path(
   "/v2/sessions/current/data/artifacts/{artifact_id}",
 );
@@ -795,6 +827,18 @@ export const MODEL_PLANAR_MONITOR_PATH = openApiV2Path(
   "/v2/sessions/current/model/planar-monitors/{monitor_id}",
 );
 
+export const ANALYSIS_ANALYTIC_REFERENCE_MODELS_PATH = openApiV2Path(
+  "/v2/sessions/current/analysis/references/analytic-models",
+);
+
+export const ANALYSIS_POSTPROCESSING_DEFINITIONS_PATH = openApiV2Path(
+  "/v2/sessions/current/analysis/postprocessing/definitions",
+);
+
+export const ANALYSIS_POSTPROCESSING_DEFINITION_PATH = openApiV2Path(
+  "/v2/sessions/current/analysis/postprocessing/definitions/{definition_id}",
+);
+
 export const MODEL_PLANAR_MONITOR_DUPLICATE_PATH = openApiV2Path(
   "/v2/sessions/current/model/planar-monitors/{monitor_id}/duplicate",
 );
@@ -1067,6 +1111,22 @@ export const PERSISTENCE_PROJECT_AUTHORING_PATH = openApiV2Path(
 );
 export const PERSISTENCE_PROJECT_FROM_SCRIPT_PATH = openApiV2Path(
   "/v2/persistence/projects/from-script",
+);
+
+export const PROJECT_RUN_INTENT_PATH = openApiV2Path(
+  "/v2/persistence/projects/{project_id}/run-intent",
+);
+
+export const PROJECT_RUN_ANTENNA_INSPECTIONS_PATH = openApiV2Path(
+  "/v2/persistence/projects/{project_id}/runs/{run_id}/antenna-inspections",
+);
+
+export const PROJECT_RUN_ANTENNA_INSPECTION_PATH = openApiV2Path(
+  "/v2/persistence/projects/{project_id}/runs/{run_id}/antenna-inspections/{step_id}",
+);
+
+export const PROJECT_RUN_ANTENNA_INSPECTION_PAYLOAD_PATH = openApiV2Path(
+  "/v2/persistence/projects/{project_id}/runs/{run_id}/antenna-inspections/{step_id}/payloads/{payload_kind}",
 );
 
 export const PROJECT_RUN_SUBMIT_PATH = openApiV2Path(

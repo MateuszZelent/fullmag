@@ -1,8 +1,8 @@
 use fullmag_ir::{
     BackendTarget, CouplingCapabilityPolicyIR, CouplingEndpointIR, CouplingKindIR,
     CouplingParametersIR, ExchangeCouplingModeIR, FdmGridAssetIR, FieldRefreshPolicyIR,
-    IntegratorChoice, OutputIR, ProblemIR, RegionRealizationPolicyIR, RelaxationAlgorithmIR,
-    RelaxationControlIR,
+    IntegratorChoice, KSamplingIR, OutputIR, ProblemIR, RegionRealizationPolicyIR,
+    RelaxationAlgorithmIR, RelaxationControlIR, SampleSelectorIR,
 };
 use std::collections::BTreeSet;
 
@@ -447,6 +447,7 @@ pub(crate) fn planned_study_controls(
                 "frequency response is a direct harmonic solve and has no time integrator"
             ),
             fullmag_ir::StudyIR::Hysteresis { .. } => Some(IntegratorChoice::Heun),
+            fullmag_ir::StudyIR::AntennaFieldSolve { .. } => None,
         })
     } else {
         None
@@ -930,12 +931,44 @@ pub(crate) fn validate_executable_outputs(
     }
 }
 
-pub(crate) fn validate_eigen_outputs(outputs: &[OutputIR], errors: &mut Vec<String>) {
+fn canonical_sample_selector(
+    selector: Option<&SampleSelectorIR>,
+) -> Option<(Vec<u32>, Vec<String>)> {
+    selector.map(|selector| {
+        let mut sample_indices = selector.sample_indices.clone();
+        sample_indices.sort_unstable();
+        let mut sample_labels = selector
+            .sample_labels
+            .iter()
+            .map(|label| label.trim().to_string())
+            .collect::<Vec<_>>();
+        sample_labels.sort();
+        (sample_indices, sample_labels)
+    })
+}
+
+pub(crate) fn validate_eigen_outputs(
+    outputs: &[OutputIR],
+    k_sampling: Option<&KSamplingIR>,
+    gamma_bias_field_sweep: bool,
+    errors: &mut Vec<String>,
+) {
     let mut seen = BTreeSet::new();
+    let mut seen_eigen_modes = BTreeSet::new();
+    let mut seen_eigen_branches = BTreeSet::new();
+    let branch_tracking_supported =
+        matches!(k_sampling, Some(KSamplingIR::Path { .. })) || gamma_bias_field_sweep;
     for output in outputs {
         match output {
-            OutputIR::EigenSpectrum { quantity } => {
-                let key = format!("eigen_spectrum:{quantity}");
+            OutputIR::EigenSpectrum { quantity, scope } => {
+                if !fullmag_ir::is_supported_eigen_spectrum_quantity(quantity) {
+                    errors.push(format!(
+                        "eigen_spectrum quantity '{quantity}' is unsupported; supported quantity is '{}'",
+                        fullmag_ir::CANONICAL_EIGEN_SPECTRUM_QUANTITY
+                    ));
+                    continue;
+                }
+                let key = format!("eigen_spectrum:{}:{:?}", quantity.trim(), scope.unwrap_or_default());
                 if !seen.insert(key) {
                     errors.push(format!(
                         "eigen spectrum output '{}' is declared more than once",
@@ -943,24 +976,58 @@ pub(crate) fn validate_eigen_outputs(outputs: &[OutputIR], errors: &mut Vec<Stri
                     ));
                 }
             }
-            OutputIR::EigenMode { field, indices } => {
-                if indices.is_empty() {
+            OutputIR::EigenMode {
+                field,
+                all_modes,
+                indices,
+                branches,
+                sample_selector,
+            } => {
+                if !all_modes && indices.is_empty() && branches.is_empty() {
                     errors.push(format!(
-                        "eigen mode output '{}' must request at least one index",
+                        "eigen mode output '{}' must request at least one mode or branch index",
                         field
                     ));
                 }
+                if !branches.is_empty() && !branch_tracking_supported {
+                    errors.push(format!(
+                        "eigen mode output '{}' requests branches but branch tracking requires k_sampling=Path or a Gamma bias_field_sweep",
+                        field
+                    ));
+                }
+                if *all_modes && (!indices.is_empty() || !branches.is_empty()) {
+                    errors.push(format!("eigen mode output '{}' all_modes cannot be combined with indices or branches", field));
+                }
+                let selector_key = canonical_sample_selector(sample_selector.as_ref());
+                if *all_modes && !seen.insert(format!("eigen_mode_all:{field}:{selector_key:?}")) {
+                    errors.push(format!("eigen mode output '{}' requests all modes more than once", field));
+                }
                 for index in indices {
-                    let key = format!("eigen_mode:{field}:{index}");
-                    if !seen.insert(key) {
+                    let key = (field.clone(), *index, selector_key.clone());
+                    if !seen_eigen_modes.insert(key) {
                         errors.push(format!(
                             "eigen mode output '{}' requests mode {} more than once",
                             field, index
                         ));
                     }
                 }
+                for branch in branches {
+                    let key = (field.clone(), *branch, selector_key.clone());
+                    if !seen_eigen_branches.insert(key) {
+                        errors.push(format!(
+                            "eigen mode output '{}' requests branch {} more than once",
+                            field, branch
+                        ));
+                    }
+                }
+                if let Some(selector) = sample_selector {
+                    errors.extend(selector.validation_errors("eigen_mode.sample_selector"));
+                }
             }
-            OutputIR::DispersionCurve { name } => {
+            OutputIR::DispersionCurve {
+                name,
+                include_branch_table: _,
+            } => {
                 let key = format!("dispersion:{name}");
                 if !seen.insert(key) {
                     errors.push(format!(
@@ -985,7 +1052,7 @@ pub(crate) fn validate_eigen_outputs(outputs: &[OutputIR], errors: &mut Vec<Stri
             | OutputIR::Snapshot { .. }
             | OutputIR::SaveQuantity { .. } => {
                 errors.push(
-                    "StudyIR::Eigenmodes supports only eigen_spectrum, eigen_mode, dispersion_curve, and eigen_diagnostics outputs"
+                    "StudyIR::Eigenmodes supports only eigen_spectrum, eigen_mode, dispersion_curve, or eigen_diagnostics outputs"
                         .to_string(),
                 );
             }

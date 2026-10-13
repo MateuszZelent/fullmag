@@ -1,0 +1,218 @@
+name: eigensolve-ui-method-contracts
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ['codex/**']
+    paths:
+      - 'apps/control-room/src/shared/analysis-charts/frequencyRenderModels*'
+      - 'apps/control-room/src/shared/analysis-charts/chartRenderer*'
+      - 'apps/control-room/src/shared/analysis-charts/InteractiveChartSurface*'
+      - 'apps/control-room/src/shared/analysis-charts/interactiveChartModel.ts'
+      - 'apps/control-room/src/modules/analysis-plots/components/EChartsSurface*'
+      - 'apps/control-room/src/modules/analysis-plots/components/AnalysisResultProjectionSurface*'
+      - 'apps/control-room/src/modules/analysis-plots/useAnalysisResultProjectionController*'
+      - 'apps/control-room/src/shared/domain/analysis/results/projectionModels*'
+      - 'apps/control-room/src/modules/live-charts/liveChartsPresentation*'
+      - 'apps/control-room/src/modules/inspector/panels/FrequencyDomainCharts*'
+      - 'apps/control-room/src/modules/inspector/panels/frequency-domain/FrequencyDomainResultInspectors*'
+      - 'apps/control-room/src/modules/inspector/panels/analysis-results/AnalysisResultInspectorPanel*'
+      - 'apps/control-room/src/modules/ribbon/RibbonModule*'
+      - 'apps/control-room/src/modules/ribbon/ribbonCommands*'
+      - 'apps/control-room/src/kernel/analysis-modules/postprocessingCommandContributions*'
+      - 'apps/control-room/src/kernel/analysis-modules/postprocessingDefinitions*'
+      - 'apps/control-room/src/kernel/resources/postprocessingDefinitionResources*'
+      - 'apps/control-room/src/kernel/resources/studyRuntimeResources*'
+      - 'apps/control-room/src/kernel/api/generated/openapi-v2*'
+      - 'apps/control-room/src/kernel/api/apiTypes.ts'
+      - 'apps/control-room/src/kernel/api/ControlRoomApi*'
+      - 'apps/control-room/src/kernel/api/fieldQueryIdentity*'
+      - 'apps/control-room/src/kernel/resources/frequencyDomainResourceKeys*'
+      - 'apps/control-room/src/kernel/resources/modeCompositionFieldLayerResources*'
+      - 'apps/control-room/src/kernel/visualization/ModeCompositionFieldLayerController*'
+      - 'apps/control-room/src/kernel/visualization/ModeFieldOverlayIntent*'
+      - 'apps/control-room/src/kernel/resources/modeFieldOverlayResources*'
+      - 'apps/control-room/src/modules/viewport-3d/viewport3dResources*'
+      - 'apps/control-room/src/modules/viewport-3d/model/modeCompositionViewportProjection*'
+      - 'apps/control-room/src/modules/viewport-3d/layers/MeshPartLayer*'
+      - 'apps/control-room/src/modules/analysis-plots/referenceOverlaySeries.test.ts'
+      - 'apps/control-room/src/modules/analysis-plots/useAnalysisPlotsController.ts'
+      - 'apps/control-room/src/modules/analysis-plots/referenceChartQuantity.test.ts'
+      - 'apps/control-room/src/shared/domain/analysis/modalDampingObservables*'
+      - 'apps/control-room/src/shared/domain/analysis/phasorConventionAdapter*'
+      - 'apps/control-room/src/shared/domain/analysis/referenceImport*'
+      - 'apps/control-room/src/kernel/visualization/AnalysisResultFieldOverlayIntent*'
+      - 'apps/control-room/src/modules/inspector/panels/StudyInspectorPanel*'
+      - 'apps/control-room/src/shared/domain/analysis/frequencyDomainChartModels*'
+      - 'apps/control-room/src/modules/inspector/panels/frequency-domain/EigenModeInspectorPanel*'
+      - 'apps/control-room/src/modules/inspector/panels/frequency-domain/EigenBranchInspectorPanel*'
+      - 'apps/control-room/src/modules/inspector/panels/frequency-domain/EigenDispersionInspectorPanel*'
+      - 'apps/control-room/src/modules/explorer/**'
+      - 'apps/control-room/src/kernel/selection/selectionTypes*'
+      - 'apps/control-room/src/kernel/analysis-modules/analysisNodeKindAliases*'
+      - 'apps/control-room/src/kernel/analysis-modules/analysisSurfaceRouting*'
+      - 'apps/control-room/src/modules/inspector/inspectorRouteCatalog*'
+      - 'apps/control-room/src/modules/inspector/inspectorRegistry*'
+      - '.github/workflows/eigensolve-ui-method-contracts.yml'
+      - 'scripts/ci/prepare_eigensolve_ui_workspace.py'
+      - 'scripts/ci/test_prepare_eigensolve_ui_workspace.py'
+  pull_request:
+    paths:
+      - 'apps/control-room/src/shared/analysis-charts/frequencyRenderModels*'
+      - 'apps/control-room/src/shared/analysis-charts/chartRenderer*'
+      - 'apps/control-room/src/shared/analysis-charts/InteractiveChartSurface*'
+      - 'apps/control-room/src/shared/analysis-charts/interactiveChartModel.ts'
+      - 'apps/control-room/src/modules/analysis-plots/components/EChartsSurface*'
+      - 'apps/control-room/src/modules/analysis-plots/components/AnalysisResultProjectionSurface*'
+      - 'apps/control-room/src/modules/analysis-plots/useAnalysisResultProjectionController*'
+      - 'apps/control-room/src/shared/domain/analysis/results/projectionModels*'
+      - 'apps/control-room/src/modules/live-charts/liveChartsPresentation*'
+      - 'apps/control-room/src/modules/inspector/panels/FrequencyDomainCharts*'
+      - 'apps/control-room/src/modules/inspector/panels/frequency-domain/FrequencyDomainResultInspectors*'
+      - 'apps/control-room/src/modules/inspector/panels/analysis-results/AnalysisResultInspectorPanel*'
+      - 'apps/control-room/src/modules/ribbon/RibbonModule*'
+      - 'apps/control-room/src/modules/ribbon/ribbonCommands*'
+      - 'apps/control-room/src/kernel/analysis-modules/postprocessingCommandContributions*'
+      - 'apps/control-room/src/kernel/analysis-modules/postprocessingDefinitions*'
+      - 'apps/control-room/src/kernel/resources/postprocessingDefinitionResources*'
+      - 'apps/control-room/src/kernel/resources/studyRuntimeResources*'
+      - 'apps/control-room/src/kernel/api/generated/openapi-v2*'
+      - 'apps/control-room/src/kernel/api/apiTypes.ts'
+      - 'apps/control-room/src/kernel/api/ControlRoomApi*'
+      - 'apps/control-room/src/kernel/api/fieldQueryIdentity*'
+      - 'apps/control-room/src/kernel/resources/frequencyDomainResourceKeys*'
+      - 'apps/control-room/src/kernel/resources/modeCompositionFieldLayerResources*'
+      - 'apps/control-room/src/kernel/visualization/ModeCompositionFieldLayerController*'
+      - 'apps/control-room/src/kernel/visualization/ModeFieldOverlayIntent*'
+      - 'apps/control-room/src/kernel/resources/modeFieldOverlayResources*'
+      - 'apps/control-room/src/modules/viewport-3d/viewport3dResources*'
+      - 'apps/control-room/src/modules/viewport-3d/model/modeCompositionViewportProjection*'
+      - 'apps/control-room/src/modules/viewport-3d/layers/MeshPartLayer*'
+      - 'apps/control-room/src/modules/analysis-plots/referenceOverlaySeries.test.ts'
+      - 'apps/control-room/src/modules/analysis-plots/useAnalysisPlotsController.ts'
+      - 'apps/control-room/src/modules/analysis-plots/referenceChartQuantity.test.ts'
+      - 'apps/control-room/src/shared/domain/analysis/modalDampingObservables*'
+      - 'apps/control-room/src/shared/domain/analysis/phasorConventionAdapter*'
+      - 'apps/control-room/src/shared/domain/analysis/referenceImport*'
+      - 'apps/control-room/src/kernel/visualization/AnalysisResultFieldOverlayIntent*'
+      - 'apps/control-room/src/modules/inspector/panels/StudyInspectorPanel*'
+      - 'apps/control-room/src/shared/domain/analysis/frequencyDomainChartModels*'
+      - 'apps/control-room/src/modules/inspector/panels/frequency-domain/EigenModeInspectorPanel*'
+      - 'apps/control-room/src/modules/inspector/panels/frequency-domain/EigenBranchInspectorPanel*'
+      - 'apps/control-room/src/modules/inspector/panels/frequency-domain/EigenDispersionInspectorPanel*'
+      - 'apps/control-room/src/modules/explorer/**'
+      - 'apps/control-room/src/kernel/selection/selectionTypes*'
+      - 'apps/control-room/src/kernel/analysis-modules/analysisNodeKindAliases*'
+      - 'apps/control-room/src/kernel/analysis-modules/analysisSurfaceRouting*'
+      - 'apps/control-room/src/modules/inspector/inspectorRouteCatalog*'
+      - 'apps/control-room/src/modules/inspector/inspectorRegistry*'
+      - '.github/workflows/eigensolve-ui-method-contracts.yml'
+      - 'scripts/ci/prepare_eigensolve_ui_workspace.py'
+      - 'scripts/ci/test_prepare_eigensolve_ui_workspace.py'
+
+permissions:
+  contents: read
+
+jobs:
+  modal-observables:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      FULLMAG_PROJECT_STORAGE_ROOT: ${{ github.workspace }}/../storage
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10.8.1
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24.18.0
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+      - name: Prepare managed frontend paths
+        run: python -B scripts/fullmag_storage.py prepare-links --profile linux-host --frontend
+      - name: Check pnpm manifest admission regression
+        run: python -B scripts/ci/test_prepare_eigensolve_ui_workspace.py
+      - name: Stage pinned pnpm manifests in managed storage
+        run: python -B scripts/ci/prepare_eigensolve_ui_workspace.py
+      - name: Install pinned workspace dependencies
+        run: >-
+          python -B scripts/fullmag_storage.py run --profile linux-host --
+          pnpm --dir "$FULLMAG_CI_FRONTEND_WORKSPACE_ROOT" install --frozen-lockfile
+      - name: Run signed modal observables and inspector contracts
+        run: >-
+          python -B scripts/fullmag_storage.py run --profile linux-host --
+          pnpm --dir apps/control-room exec vitest run
+          src/shared/analysis-charts/frequencyRenderModels.test.ts
+          src/shared/analysis-charts/chartRenderer.test.ts
+          src/shared/analysis-charts/InteractiveChartSurface.test.tsx
+          src/shared/analysis-charts/InteractiveChartSurface.export.test.tsx
+          src/modules/analysis-plots/components/EChartsSurface.test.tsx
+          src/modules/analysis-plots/components/EChartsSurface.export.test.tsx
+          src/modules/analysis-plots/components/AnalysisResultProjectionSurface.test.tsx
+          src/modules/analysis-plots/useAnalysisResultProjectionController.test.ts
+          src/shared/domain/analysis/results/projectionModels.test.ts
+          src/modules/live-charts/liveChartsPresentation.test.ts
+          src/modules/inspector/panels/FrequencyDomainCharts.test.tsx
+          src/modules/inspector/panels/frequency-domain/FrequencyDomainResultInspectors.selection.test.tsx
+          src/modules/inspector/panels/analysis-results/AnalysisResultInspectorPanel.test.tsx
+          src/modules/ribbon/RibbonModule.contextualTab.test.ts
+          src/modules/ribbon/RibbonModule.layout.test.tsx
+          src/modules/ribbon/ribbonCommands.test.ts
+          src/kernel/analysis-modules/postprocessingCommandContributions.test.ts
+          src/kernel/analysis-modules/postprocessingDefinitions.test.ts
+          src/kernel/resources/postprocessingDefinitionResources.test.tsx
+          src/kernel/resources/studyRuntimeResources.test.ts
+          src/kernel/api/ControlRoomApi.test.ts
+          src/kernel/api/fieldQueryIdentity.test.ts
+          src/kernel/resources/frequencyDomainResourceKeys.test.ts
+          src/kernel/visualization/ModeCompositionFieldLayerController.test.ts
+          src/kernel/visualization/ModeFieldOverlayIntent.test.ts
+          src/kernel/visualization/ModeFieldOverlayIntentController.test.ts
+          src/kernel/resources/modeFieldOverlayResources.test.ts
+          src/modules/viewport-3d/viewport3dResources.test.ts src/modules/viewport-3d/model/modeCompositionViewportProjection.test.ts src/modules/viewport-3d/layers/MeshPartLayer.test.ts
+          src/modules/analysis-plots/referenceOverlaySeries.test.ts
+          src/modules/analysis-plots/referenceChartQuantity.test.ts
+          src/shared/domain/analysis/modalDampingObservables.test.ts
+          src/shared/domain/analysis/phasorConventionAdapter.test.ts
+          src/shared/domain/analysis/referenceImport.test.ts
+          src/kernel/visualization/AnalysisResultFieldOverlayIntent.test.ts
+          src/modules/inspector/panels/StudyInspectorPanelModel.test.ts
+          src/modules/inspector/panels/StudyInspectorPanel.test.tsx
+          src/shared/domain/analysis/frequencyDomainChartModels.test.ts
+          src/modules/inspector/panels/frequency-domain/EigenModeInspectorPanel.test.tsx
+          src/modules/inspector/panels/frequency-domain/EigenBranchInspectorPanel.test.tsx
+          src/modules/inspector/panels/frequency-domain/EigenDispersionInspectorPanel.test.tsx
+          src/modules/explorer/builders/catalogAnalysisFamilies.test.ts
+          src/modules/explorer/builders/resultsExplorerNodes.test.ts
+          src/modules/explorer/explorerSelection.test.ts
+          src/kernel/selection/selectionTypes.modeVisualization.test.ts
+          src/kernel/analysis-modules/analysisSurfaceRouting.test.ts
+          src/modules/inspector/inspectorRegistry.test.tsx
+      - name: Check module architecture
+        if: always()
+        run: python -B scripts/fullmag_storage.py run --profile linux-host -- pnpm --dir apps/control-room check:architecture-hygiene
+      - name: Check complete frontend types
+        if: always()
+        run: python -B scripts/fullmag_storage.py run --profile linux-host -- pnpm --dir apps/control-room typecheck
+      - name: Scan changed React surface with pinned doctor
+        if: always()
+        env:
+          FULLMAG_REVIEW_BASE: ${{ github.event.pull_request.base.sha || format('origin/{0}', github.event.repository.default_branch) }}
+        run: |
+          set -o pipefail
+          git rev-parse --verify "${FULLMAG_REVIEW_BASE}^{commit}"
+          python -B scripts/fullmag_storage.py run --profile linux-host -- pnpm exec react-doctor --verbose --scope changed --base "$FULLMAG_REVIEW_BASE"
+      - name: Preserve final managed terminal status
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: eigensolve-ui-managed-status-${{ github.run_id }}
+          path: |
+            ${{ env.FULLMAG_CI_BUILD_STORAGE_ROOT }}/builds/**/build-status.json
+            ${{ env.FULLMAG_CI_FRONTEND_WORKSPACE_ROOT }}/pnpm-workspace-manifests.json
+            ${{ env.FULLMAG_CI_BUILD_STORAGE_ROOT }}/tmp/**/react-doctor-*/**
+          if-no-files-found: error

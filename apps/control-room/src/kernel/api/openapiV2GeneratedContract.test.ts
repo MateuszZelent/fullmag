@@ -20,6 +20,7 @@ describe("generated OpenAPI v2 transport", () => {
         "/v2/sessions/current/data/fields/{quantity_id}/samples/vector"
       ].get.responses["200"].headers;
     const expected = {
+      "x-fullmag-artifact-generation-id": "string",
       "x-fullmag-component": "string",
       "x-fullmag-domain-generation-id": "string",
       "x-fullmag-encoding": "string",

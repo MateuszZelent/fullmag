@@ -318,3 +318,54 @@ def test_cpu_gpu_parity_rejects_state_outside_tolerance(tmp_path: Path) -> None:
     state_path.write_text(json.dumps(state), encoding="utf-8")
     with pytest.raises(ParityError, match="accepted equilibrium state"):
         compare_bundles(cpu, gpu)
+
+
+@pytest.mark.parametrize("equilibrium_version", ["v7", "v8"])
+def test_cpu_gpu_parity_rejects_ambiguous_equilibrium_families(tmp_path: Path, equilibrium_version: str) -> None:
+    cpu, gpu = tmp_path / "cpu", tmp_path / "gpu"
+    _write_bundle(cpu, "cpu", [5.0e9])
+    _write_bundle(gpu, "gpu", [5.0e9])
+    metadata = gpu / "eigen" / "metadata" / "sample_0000"
+    (metadata / f"equilibrium_artifact.{equilibrium_version}.json").write_text("{}", encoding="utf-8")
+    with pytest.raises(ParityError, match="exactly one equilibrium schema family"):
+        compare_bundles(cpu, gpu)
+
+
+def test_cpu_gpu_parity_accepts_legacy_v7_sidecar_names(tmp_path: Path) -> None:
+    cpu, gpu = tmp_path / "cpu", tmp_path / "gpu"
+    for root, device in [(cpu, "cpu"), (gpu, "gpu")]:
+        _write_bundle(root, device, [5.0e9])
+        metadata = root / "eigen" / "metadata" / "sample_0000"
+        old = metadata / "equilibrium_artifact.v6.json"
+        payload = json.loads(old.read_text())
+        payload["schema_version"] = "equilibrium_artifact.v7"
+        (metadata / "equilibrium_artifact.v7.json").write_text(json.dumps(payload), encoding="utf-8")
+        old.unlink()
+    compare_bundles(cpu, gpu)
+
+
+@pytest.mark.parametrize("defect", [None, "material", "scope", "source", "mixed_state"])
+def test_parity_v8_state_sidecars_validate_canonical_binding(tmp_path: Path, defect: str | None) -> None:
+    from test_equilibrium_material_artifact_v8 import _make_v8_pair, _seal_state
+    from verify_fem_eigen_k0_periodic_airbox_cpu_gpu_parity import _validate_state_sidecars
+    equilibrium, state = _make_v8_pair(tmp_path)
+    metadata = tmp_path / "eigen" / "metadata"
+    (metadata / "equilibrium_artifact.v7.json").unlink()
+    if defect == "material":
+        state["material_signature"] = "sha256:" + "a" * 64
+    elif defect == "scope":
+        state["material_provenance_scope"] = "original_authored_relaxation"
+    elif defect == "source":
+        state["source_equilibrium_artifact"] = "sha256:" + "a" * 64
+    elif defect == "mixed_state":
+        (metadata / "linearization_state.v6.json").write_text("{}", encoding="utf-8")
+    _seal_state(state)
+    (metadata / "linearization_state.v7.json").write_text(json.dumps(state), encoding="utf-8")
+    diagnostics = {"equilibrium_artifact_sha256": equilibrium["content_sha256"],
+                   "linearization_state_sha256": state["content_sha256"]}
+    if defect is None:
+        result = _validate_state_sidecars(tmp_path, 0, diagnostics, 1)
+        assert result["linearization_state_sha256"].endswith("linearization_state.v7.json")
+    else:
+        with pytest.raises(ParityError):
+            _validate_state_sidecars(tmp_path, 0, diagnostics, 1)

@@ -1,0 +1,1714 @@
+use crate::eigen::types::{KSampleDescriptor, PathSolveResult};
+use fullmag_ir::{
+    is_supported_eigen_spectrum_quantity, EigenSpectrumScopeIR, OutputIR, SampleSelectorIR,
+    CANONICAL_EIGEN_SPECTRUM_QUANTITY,
+};
+use std::collections::{BTreeMap, BTreeSet};
+use std::fmt;
+
+/// Stable identity of one mode in a sampled eigenproblem.
+///
+/// The two values are copied from the solve result.  They are deliberately not
+/// re-numbered when a selector removes samples or modes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(crate) struct SampleModeId {
+    pub(crate) sample_index: usize,
+    pub(crate) raw_mode_index: usize,
+}
+
+impl SampleModeId {
+    pub(crate) const fn new(sample_index: usize, raw_mode_index: usize) -> Self {
+        Self {
+            sample_index,
+            raw_mode_index,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct EigenDiagnosticsRequest {
+    pub(crate) include_tracking: bool,
+    pub(crate) include_residuals: bool,
+    pub(crate) include_overlaps: bool,
+    pub(crate) include_tangent_leakage: bool,
+    pub(crate) include_orthogonality: bool,
+}
+
+impl EigenDiagnosticsRequest {
+    fn merge(self, other: Self) -> Self {
+        Self {
+            include_tracking: self.include_tracking || other.include_tracking,
+            include_residuals: self.include_residuals || other.include_residuals,
+            include_overlaps: self.include_overlaps || other.include_overlaps,
+            include_tangent_leakage: self.include_tangent_leakage || other.include_tangent_leakage,
+            include_orthogonality: self.include_orthogonality || other.include_orthogonality,
+        }
+    }
+
+    pub(crate) fn any_enabled(self) -> bool {
+        self.include_tracking
+            || self.include_residuals
+            || self.include_overlaps
+            || self.include_tangent_leakage
+            || self.include_orthogonality
+    }
+}
+
+pub(crate) fn eigen_diagnostics_request(outputs: &[OutputIR]) -> Option<EigenDiagnosticsRequest> {
+    outputs.iter().filter_map(|output| match output {
+        OutputIR::EigenDiagnostics {
+            include_tracking,
+            include_residuals,
+            include_overlaps,
+            include_tangent_leakage,
+            include_orthogonality,
+        } => Some(EigenDiagnosticsRequest {
+            include_tracking: *include_tracking,
+            include_residuals: *include_residuals,
+            include_overlaps: *include_overlaps,
+            include_tangent_leakage: *include_tangent_leakage,
+            include_orthogonality: *include_orthogonality,
+        }),
+        _ => None,
+    })
+    .reduce(EigenDiagnosticsRequest::merge)
+}
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DispersionCurveSelection {
+    name: String,
+    include_branch_table: bool,
+}
+
+impl DispersionCurveSelection {
+    pub(crate) fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub(crate) fn include_branch_table(&self) -> bool {
+        self.include_branch_table
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum OutputSelectionError {
+    EmptyEigenModeField,
+    UnsupportedEigenModeField(String),
+    UnsupportedSpectrumQuantity(String),
+    EmptyEigenModeSelector,
+    ConflictingAllModeSelector,
+    EmptySampleSelector,
+    EmptySampleLabel,
+    EmptyDispersionCurveName,
+    DuplicateModeIndex(u32),
+    DuplicateBranchIndex(u32),
+    DuplicateSampleIndex(u32),
+    DuplicateSampleLabel(String),
+    UnknownRawModeIndex(u32),
+    UnknownBranch(u32),
+    UnknownSampleIndex(u32),
+    UnknownSampleLabel(String),
+    IndexOutOfRange {
+        kind: &'static str,
+        value: u32,
+    },
+    DuplicateResultSampleId(usize),
+    DuplicateResultModeId {
+        sample_index: usize,
+        raw_mode_index: usize,
+    },
+    DuplicateResultBranchId(usize),
+    DuplicateResultBranchPoint {
+        branch_id: usize,
+        sample_index: usize,
+        raw_mode_index: usize,
+    },
+    UnknownBranchPointSample {
+        branch_id: usize,
+        sample_index: usize,
+    },
+    UnknownBranchPointMode {
+        branch_id: usize,
+        sample_index: usize,
+        raw_mode_index: usize,
+    },
+    BranchPointIdentityMismatch {
+        branch_id: usize,
+        sample_index: usize,
+        raw_mode_index: usize,
+        mode_branch_id: Option<usize>,
+    },
+}
+
+impl fmt::Display for OutputSelectionError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::EmptyEigenModeField => formatter.write_str("eigen_mode field must not be empty"),
+            Self::UnsupportedEigenModeField(field) => write!(
+                formatter,
+                "eigen_mode field {field:?} is unsupported; supported fields are 'mode' and 'mode_complex'"
+            ),
+            Self::UnsupportedSpectrumQuantity(quantity) => write!(
+                formatter,
+                "eigen_spectrum quantity {quantity:?} is unsupported; supported quantity is '{CANONICAL_EIGEN_SPECTRUM_QUANTITY}'"
+            ),
+            Self::ConflictingAllModeSelector => formatter.write_str("eigen_mode all_modes cannot be combined with indices or branches"),
+            Self::EmptyEigenModeSelector => formatter.write_str(
+                "eigen_mode must contain at least one raw mode index or tracked branch index",
+            ),
+            Self::EmptySampleSelector => formatter.write_str(
+                "eigen_mode sample_selector must contain sample_indices or sample_labels",
+            ),
+            Self::EmptySampleLabel => {
+                formatter.write_str("eigen_mode sample_selector labels must not be empty")
+            },
+            Self::EmptyDispersionCurveName => {
+                formatter.write_str("dispersion_curve name must not be empty")
+            },
+            Self::DuplicateModeIndex(index) => {
+                write!(formatter, "eigen_mode indices contains duplicate {index}")
+            }
+            Self::DuplicateBranchIndex(index) => {
+                write!(formatter, "eigen_mode branches contains duplicate {index}")
+            }
+            Self::DuplicateSampleIndex(index) => {
+                write!(formatter, "eigen_mode sample_indices contains duplicate {index}")
+            }
+            Self::DuplicateSampleLabel(label) => {
+                write!(formatter, "eigen_mode sample_labels contains duplicate {label:?}")
+            }
+            Self::UnknownRawModeIndex(index) => {
+                write!(formatter, "eigen_mode references unknown raw mode index {index}")
+            }
+            Self::UnknownBranch(branch_id) => {
+                write!(formatter, "eigen_mode references unknown branch {branch_id}")
+            }
+            Self::UnknownSampleIndex(index) => {
+                write!(formatter, "eigen_mode references unknown sample index {index}")
+            }
+            Self::UnknownSampleLabel(label) => {
+                write!(formatter, "eigen_mode references unknown sample label {label:?}")
+            }
+            Self::IndexOutOfRange { kind, value } => {
+                write!(formatter, "eigen_mode {kind} value {value} does not fit this platform")
+            }
+            Self::DuplicateResultSampleId(sample_index) => {
+                write!(formatter, "solve result contains duplicate sample index {sample_index}")
+            }
+            Self::DuplicateResultModeId {
+                sample_index,
+                raw_mode_index,
+            } => write!(
+                formatter,
+                "solve result contains duplicate mode ({sample_index}, {raw_mode_index})"
+            ),
+            Self::DuplicateResultBranchId(branch_id) => {
+                write!(formatter, "solve result contains duplicate branch {branch_id}")
+            },
+            Self::DuplicateResultBranchPoint {
+                branch_id,
+                sample_index,
+                raw_mode_index,
+            } => write!(
+                formatter,
+                "branch {branch_id} contains duplicate point ({sample_index}, {raw_mode_index})"
+            ),
+            Self::UnknownBranchPointSample {
+                branch_id,
+                sample_index,
+            } => write!(
+                formatter,
+                "branch {branch_id} references unknown sample index {sample_index}"
+            ),
+            Self::UnknownBranchPointMode {
+                branch_id,
+                sample_index,
+                raw_mode_index,
+            } => write!(
+                formatter,
+                "branch {branch_id} references unknown mode ({sample_index}, {raw_mode_index})"
+            ),
+            Self::BranchPointIdentityMismatch {
+                branch_id,
+                sample_index,
+                raw_mode_index,
+                mode_branch_id,
+            } => write!(
+                formatter,
+                "branch {branch_id} point ({sample_index}, {raw_mode_index}) maps to mode branch {mode_branch_id:?}"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for OutputSelectionError {}
+
+/// Output routing resolved against one concrete path result.
+///
+/// Spectrum and dispersion sets contain every mode only when the matching
+/// public output was requested.  Field sets contain only `EigenMode` requests.
+/// The tracking set is independent from `include_branch_table`: a dispersion
+/// request needs all modes and branches retained internally even when the
+/// branch table is not exported.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct EigenOutputSelection {
+    spectrum_mode_ids: BTreeSet<SampleModeId>,
+    field_mode_ids: BTreeSet<SampleModeId>,
+    tracking_mode_ids: BTreeSet<SampleModeId>,
+    diagnostic_mode_ids: BTreeSet<SampleModeId>,
+    diagnostics_request: Option<EigenDiagnosticsRequest>,
+    field_mode_ids_by_field: BTreeMap<String, BTreeSet<SampleModeId>>,
+    field_sample_ids_by_field: BTreeMap<String, BTreeSet<usize>>,
+    selected_sample_ids: BTreeSet<usize>,
+    tracked_branch_ids: BTreeSet<usize>,
+    dispersion_curves: Vec<DispersionCurveSelection>,
+    has_spectrum_output: bool,
+    requires_branch_tracking: bool,
+}
+
+impl EigenOutputSelection {
+    pub(crate) fn spectrum_mode_ids(&self) -> &BTreeSet<SampleModeId> {
+        &self.spectrum_mode_ids
+    }
+
+    pub(crate) fn field_mode_ids(&self) -> &BTreeSet<SampleModeId> {
+        &self.field_mode_ids
+    }
+
+    pub(crate) fn tracking_mode_ids(&self) -> &BTreeSet<SampleModeId> {
+        &self.tracking_mode_ids
+    }
+
+    pub(crate) fn diagnostic_mode_ids(&self) -> &BTreeSet<SampleModeId> {
+        &self.diagnostic_mode_ids
+    }
+
+    pub(crate) fn diagnostics_request(&self) -> Option<EigenDiagnosticsRequest> {
+        self.diagnostics_request
+    }
+
+    pub(crate) fn field_mode_ids_for_field(&self, field: &str) -> Option<&BTreeSet<SampleModeId>> {
+        self.field_mode_ids_by_field.get(field)
+    }
+
+    pub(crate) fn field_mode_ids_by_field(&self) -> &BTreeMap<String, BTreeSet<SampleModeId>> {
+        &self.field_mode_ids_by_field
+    }
+
+    pub(crate) fn field_sample_ids_by_field(&self) -> &BTreeMap<String, BTreeSet<usize>> {
+        &self.field_sample_ids_by_field
+    }
+
+    pub(crate) fn selected_sample_ids(&self) -> &BTreeSet<usize> {
+        &self.selected_sample_ids
+    }
+
+    pub(crate) fn tracked_branch_ids(&self) -> &BTreeSet<usize> {
+        &self.tracked_branch_ids
+    }
+
+    pub(crate) fn dispersion_curves(&self) -> &[DispersionCurveSelection] {
+        &self.dispersion_curves
+    }
+
+    pub(crate) fn has_spectrum_output(&self) -> bool {
+        self.has_spectrum_output
+    }
+
+    pub(crate) fn has_dispersion_output(&self) -> bool {
+        !self.dispersion_curves.is_empty()
+    }
+
+    pub(crate) fn branch_table_requested(&self) -> bool {
+        self.dispersion_curves
+            .iter()
+            .any(|curve| curve.include_branch_table)
+    }
+
+    pub(crate) fn requires_branch_tracking(&self) -> bool {
+        self.requires_branch_tracking
+    }
+
+    pub(crate) fn contains_spectrum_mode(
+        &self,
+        sample_index: usize,
+        raw_mode_index: usize,
+    ) -> bool {
+        self.spectrum_mode_ids
+            .contains(&SampleModeId::new(sample_index, raw_mode_index))
+    }
+
+    pub(crate) fn contains_field_mode(&self, sample_index: usize, raw_mode_index: usize) -> bool {
+        self.field_mode_ids
+            .contains(&SampleModeId::new(sample_index, raw_mode_index))
+    }
+
+    pub(crate) fn contains_field_mode_for_field(
+        &self,
+        field: &str,
+        sample_index: usize,
+        raw_mode_index: usize,
+    ) -> bool {
+        self.field_mode_ids_by_field
+            .get(field)
+            .is_some_and(|mode_ids| {
+                mode_ids.contains(&SampleModeId::new(sample_index, raw_mode_index))
+            })
+    }
+
+    pub(crate) fn contains_tracking_mode(
+        &self,
+        sample_index: usize,
+        raw_mode_index: usize,
+    ) -> bool {
+        self.tracking_mode_ids
+            .contains(&SampleModeId::new(sample_index, raw_mode_index))
+    }
+
+    pub(crate) fn spectrum_modes_for_sample(
+        &self,
+        sample_index: usize,
+    ) -> impl Iterator<Item = usize> + '_ {
+        self.spectrum_mode_ids
+            .iter()
+            .filter(move |mode_id| mode_id.sample_index == sample_index)
+            .map(|mode_id| mode_id.raw_mode_index)
+    }
+
+    pub(crate) fn field_modes_for_sample(
+        &self,
+        sample_index: usize,
+    ) -> impl Iterator<Item = usize> + '_ {
+        self.field_mode_ids
+            .iter()
+            .filter(move |mode_id| mode_id.sample_index == sample_index)
+            .map(|mode_id| mode_id.raw_mode_index)
+    }
+
+    pub(crate) fn tracking_modes_for_sample(
+        &self,
+        sample_index: usize,
+    ) -> impl Iterator<Item = usize> + '_ {
+        self.tracking_mode_ids
+            .iter()
+            .filter(move |mode_id| mode_id.sample_index == sample_index)
+            .map(|mode_id| mode_id.raw_mode_index)
+    }
+}
+
+/// Reject mode field identifiers without a published modal payload contract.
+pub(crate) fn validate_eigen_mode_fields(
+    outputs: &[OutputIR],
+) -> Result<(), OutputSelectionError> {
+    for output in outputs {
+        if let OutputIR::EigenMode { field, .. } = output {
+            let normalized = field.trim();
+            if normalized.is_empty() {
+                return Err(OutputSelectionError::EmptyEigenModeField);
+            }
+            if !matches!(normalized, "mode" | "mode_complex") {
+                return Err(OutputSelectionError::UnsupportedEigenModeField(
+                    field.clone(),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Reject unsupported spectrum quantities before solving or selecting outputs.
+pub(crate) fn validate_eigen_spectrum_quantities(
+    outputs: &[OutputIR],
+) -> Result<(), OutputSelectionError> {
+    for output in outputs {
+        if let OutputIR::EigenSpectrum { quantity, .. } = output {
+            if !is_supported_eigen_spectrum_quantity(quantity) {
+                return Err(OutputSelectionError::UnsupportedSpectrumQuantity(
+                    quantity.clone(),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Collects the authored spectrum scopes represented by the requested outputs.
+///
+/// Legacy requests with no explicit scope retain their effective per-sample
+/// behavior. Multiple distinct requests are represented as a deterministic
+/// union; non-spectrum outputs do not imply a spectrum request.
+pub(crate) fn eigen_spectrum_output_scopes(outputs: &[OutputIR]) -> Vec<&'static str> {
+    let mut has_per_sample = false;
+    let mut has_global = false;
+    for output in outputs {
+        match output.effective_eigen_spectrum_scope() {
+            Some(EigenSpectrumScopeIR::PerSample) => has_per_sample = true,
+            Some(EigenSpectrumScopeIR::Global) => has_global = true,
+            None => {}
+        }
+    }
+
+    let mut scopes = Vec::new();
+    if has_per_sample {
+        scopes.push("per_sample");
+    }
+    if has_global {
+        scopes.push("global");
+    }
+    scopes
+}
+
+/// Resolve all eigen-related outputs against the supplied path result.
+pub(crate) fn select_eigen_outputs(
+    path_result: &PathSolveResult,
+    outputs: &[OutputIR],
+) -> Result<EigenOutputSelection, OutputSelectionError> {
+    select_eigen_outputs_with_planned_samples(path_result, outputs, &BTreeSet::new())
+}
+
+/// Resolve outputs against a concrete path result while retaining sample
+/// selectors that belong to its declared plan but have not reached the
+/// accepted result prefix yet.
+pub(crate) fn select_eigen_outputs_with_planned_samples(
+    path_result: &PathSolveResult,
+    outputs: &[OutputIR],
+    planned_sample_ids: &BTreeSet<usize>,
+) -> Result<EigenOutputSelection, OutputSelectionError> {
+    select_eigen_outputs_with_planned_scope(
+        path_result,
+        outputs,
+        planned_sample_ids,
+        &BTreeMap::new(),
+    )
+}
+
+/// Resolve outputs against actual results while retaining exact sample labels
+/// declared by the full k-sampling plan for selectors that target pending work.
+pub(crate) fn select_eigen_outputs_with_planned_sample_descriptors(
+    path_result: &PathSolveResult,
+    outputs: &[OutputIR],
+    planned_samples: &[KSampleDescriptor],
+) -> Result<EigenOutputSelection, OutputSelectionError> {
+    let planned_sample_ids = planned_samples
+        .iter()
+        .map(|sample| sample.sample_index)
+        .collect::<BTreeSet<_>>();
+    let mut planned_sample_labels = BTreeMap::<String, BTreeSet<usize>>::new();
+    for sample in planned_samples {
+        if let Some(label) = sample.label.as_deref() {
+            let label = label.trim();
+            if !label.is_empty() {
+                planned_sample_labels
+                    .entry(label.to_string())
+                    .or_default()
+                    .insert(sample.sample_index);
+            }
+        }
+    }
+    select_eigen_outputs_with_planned_scope(
+        path_result,
+        outputs,
+        &planned_sample_ids,
+        &planned_sample_labels,
+    )
+}
+
+fn select_eigen_outputs_with_planned_scope(
+    path_result: &PathSolveResult,
+    outputs: &[OutputIR],
+    planned_sample_ids: &BTreeSet<usize>,
+    planned_sample_labels: &BTreeMap<String, BTreeSet<usize>>,
+) -> Result<EigenOutputSelection, OutputSelectionError> {
+    validate_eigen_mode_fields(outputs)?;
+    validate_eigen_spectrum_quantities(outputs)?;
+    let available = AvailableModes::from_result(
+        path_result,
+        planned_sample_ids,
+        planned_sample_labels,
+    )?;
+    let mut selection = EigenOutputSelection::default();
+    selection.diagnostics_request = eigen_diagnostics_request(outputs);
+    let mut mode_requests = Vec::new();
+
+    for output in outputs {
+        match output {
+            OutputIR::EigenSpectrum { .. } => {
+                selection.has_spectrum_output = true;
+            }
+            OutputIR::DispersionCurve {
+                name,
+                include_branch_table,
+            } => {
+                if name.trim().is_empty() {
+                    return Err(OutputSelectionError::EmptyDispersionCurveName);
+                }
+                selection.has_spectrum_output = true;
+                selection.dispersion_curves.push(DispersionCurveSelection {
+                    name: name.trim().to_string(),
+                    include_branch_table: *include_branch_table,
+                });
+            }
+            OutputIR::EigenDiagnostics { .. } => {}
+            OutputIR::EigenMode {
+                field,
+                all_modes,
+                indices,
+                branches,
+                sample_selector,
+            } => {
+                if field.trim().is_empty() {
+                    return Err(OutputSelectionError::EmptyEigenModeField);
+                }
+                if !all_modes && indices.is_empty() && branches.is_empty() {
+                    return Err(OutputSelectionError::EmptyEigenModeSelector);
+                }
+                if *all_modes && (!indices.is_empty() || !branches.is_empty()) {
+                    return Err(OutputSelectionError::ConflictingAllModeSelector);
+                }
+                mode_requests.push(ModeRequest {
+                    field: field.trim(),
+                    all_modes: *all_modes,
+                    indices,
+                    branches,
+                    sample_selector: sample_selector.as_ref(),
+                });
+            }
+            _ => {}
+        }
+    }
+
+    for request in mode_requests {
+        let requested_indices = unique_platform_indices(
+            &request.indices,
+            "indices",
+            OutputSelectionError::DuplicateModeIndex,
+        )?;
+        let requested_branches = unique_platform_indices(
+            &request.branches,
+            "branches",
+            OutputSelectionError::DuplicateBranchIndex,
+        )?;
+
+        let sample_ids = available.resolve_sample_selector(request.sample_selector)?;
+        let targets_uncomputed_planned_sample = sample_ids
+            .iter()
+            .any(|sample_index| !available.actual_sample_ids.contains(sample_index));
+        if !targets_uncomputed_planned_sample {
+            for requested_index in &requested_indices {
+                if !available.mode_ids.iter().any(|mode_id| {
+                    sample_ids.contains(&mode_id.sample_index)
+                        && mode_id.raw_mode_index == *requested_index
+                }) {
+                    return Err(OutputSelectionError::UnknownRawModeIndex(
+                        u32::try_from(*requested_index).unwrap_or(u32::MAX),
+                    ));
+                }
+            }
+            for requested_branch in &requested_branches {
+                if !available.branch_ids.contains(requested_branch) {
+                    return Err(OutputSelectionError::UnknownBranch(
+                        u32::try_from(*requested_branch).unwrap_or(u32::MAX),
+                    ));
+                }
+            }
+        }
+
+        selection
+            .selected_sample_ids
+            .extend(sample_ids.iter().copied());
+        selection
+            .field_sample_ids_by_field
+            .entry(request.field.to_string())
+            .or_default()
+            .extend(sample_ids.iter().copied());
+        let mut request_mode_ids = BTreeSet::new();
+
+        for sample in &available.samples {
+            let sample_index = sample.sample.sample_index;
+            if !sample_ids.contains(&sample_index) {
+                continue;
+            }
+            for mode in &sample.modes {
+                let branch_matches = mode
+                    .branch_id
+                    .is_some_and(|branch_id| requested_branches.contains(&branch_id));
+                if request.all_modes || requested_indices.contains(&mode.raw_mode_index) || branch_matches {
+                    let mode_id = SampleModeId::new(sample_index, mode.raw_mode_index);
+                    request_mode_ids.insert(mode_id);
+                }
+            }
+        }
+
+        selection
+            .field_mode_ids_by_field
+            .entry(request.field.to_string())
+            .or_default()
+            .extend(request_mode_ids.iter().copied());
+        selection
+            .field_mode_ids
+            .extend(request_mode_ids.iter().copied());
+
+        if !requested_branches.is_empty() {
+            selection.requires_branch_tracking = true;
+        }
+    }
+
+    if let Some(request) = selection.diagnostics_request {
+        if request.include_tracking || request.include_overlaps {
+            selection.requires_branch_tracking = true;
+        }
+        if request.any_enabled() {
+            selection.diagnostic_mode_ids = available.mode_ids.clone();
+        }
+    }
+    if selection.has_spectrum_output {
+        selection.spectrum_mode_ids = available.mode_ids.clone();
+    }
+    if !selection.dispersion_curves.is_empty() {
+        selection.requires_branch_tracking = true;
+    }
+    if selection.requires_branch_tracking {
+        selection.tracking_mode_ids = available.mode_ids.clone();
+        selection.tracked_branch_ids = available.branch_ids.clone();
+    }
+
+    Ok(selection)
+}
+
+struct ModeRequest<'a> {
+    field: &'a str,
+    all_modes: bool,
+    indices: &'a [u32],
+    branches: &'a [u32],
+    sample_selector: Option<&'a SampleSelectorIR>,
+}
+
+struct AvailableModes<'a> {
+    samples: Vec<&'a crate::eigen::types::SingleKSolveResult>,
+    actual_sample_ids: BTreeSet<usize>,
+    selectable_sample_ids: BTreeSet<usize>,
+    sample_labels: BTreeMap<String, BTreeSet<usize>>,
+    mode_ids: BTreeSet<SampleModeId>,
+    branch_ids: BTreeSet<usize>,
+}
+
+impl<'a> AvailableModes<'a> {
+    fn from_result(
+        path_result: &'a PathSolveResult,
+        planned_sample_ids: &BTreeSet<usize>,
+        planned_sample_labels: &BTreeMap<String, BTreeSet<usize>>,
+    ) -> Result<Self, OutputSelectionError> {
+        let mut samples = Vec::with_capacity(path_result.samples.len());
+        let mut actual_sample_ids = BTreeSet::new();
+        let mut sample_labels = BTreeMap::<String, BTreeSet<usize>>::new();
+        let mut mode_ids = BTreeSet::new();
+        let mut branch_ids = BTreeSet::new();
+
+        for sample in &path_result.samples {
+            let sample_index = sample.sample.sample_index;
+            if !actual_sample_ids.insert(sample_index) {
+                return Err(OutputSelectionError::DuplicateResultSampleId(sample_index));
+            }
+            if let Some(label) = sample.sample.label.as_ref() {
+                let label = label.trim();
+                if !label.is_empty() {
+                    sample_labels
+                        .entry(label.to_string())
+                        .or_default()
+                        .insert(sample_index);
+                }
+            }
+            for mode in &sample.modes {
+                let mode_id = SampleModeId::new(sample_index, mode.raw_mode_index);
+                if !mode_ids.insert(mode_id) {
+                    return Err(OutputSelectionError::DuplicateResultModeId {
+                        sample_index,
+                        raw_mode_index: mode.raw_mode_index,
+                    });
+                }
+                if let Some(branch_id) = mode.branch_id {
+                    branch_ids.insert(branch_id);
+                }
+            }
+            samples.push(sample);
+        }
+        for (label, sample_ids) in planned_sample_labels {
+            sample_labels
+                .entry(label.clone())
+                .or_default()
+                .extend(sample_ids.iter().copied());
+        }
+
+        let mut branch_table_ids = BTreeSet::new();
+        for branch in &path_result.branches {
+            if !branch_table_ids.insert(branch.branch_id) {
+                return Err(OutputSelectionError::DuplicateResultBranchId(
+                    branch.branch_id,
+                ));
+            }
+        }
+        branch_ids.extend(branch_table_ids.iter().copied());
+
+        let mut selectable_sample_ids = actual_sample_ids.clone();
+        selectable_sample_ids.extend(planned_sample_ids.iter().copied());
+
+        for branch in &path_result.branches {
+            let mut point_ids = BTreeSet::new();
+            for point in &branch.points {
+                let point_id = (point.sample_index, point.raw_mode_index);
+                if !point_ids.insert(point_id) {
+                    return Err(OutputSelectionError::DuplicateResultBranchPoint {
+                        branch_id: branch.branch_id,
+                        sample_index: point.sample_index,
+                        raw_mode_index: point.raw_mode_index,
+                    });
+                }
+                let Some(sample) = samples
+                    .iter()
+                    .find(|sample| sample.sample.sample_index == point.sample_index)
+                    .copied()
+                else {
+                    return Err(OutputSelectionError::UnknownBranchPointSample {
+                        branch_id: branch.branch_id,
+                        sample_index: point.sample_index,
+                    });
+                };
+                let Some(mode) = sample
+                    .modes
+                    .iter()
+                    .find(|mode| mode.raw_mode_index == point.raw_mode_index)
+                else {
+                    return Err(OutputSelectionError::UnknownBranchPointMode {
+                        branch_id: branch.branch_id,
+                        sample_index: point.sample_index,
+                        raw_mode_index: point.raw_mode_index,
+                    });
+                };
+                if mode.branch_id != Some(branch.branch_id) {
+                    return Err(OutputSelectionError::BranchPointIdentityMismatch {
+                        branch_id: branch.branch_id,
+                        sample_index: point.sample_index,
+                        raw_mode_index: point.raw_mode_index,
+                        mode_branch_id: mode.branch_id,
+                    });
+                }
+            }
+        }
+
+        Ok(Self {
+            samples,
+            actual_sample_ids,
+            selectable_sample_ids,
+            sample_labels,
+            mode_ids,
+            branch_ids,
+        })
+    }
+
+    fn resolve_sample_selector(
+        &self,
+        selector: Option<&SampleSelectorIR>,
+    ) -> Result<BTreeSet<usize>, OutputSelectionError> {
+        let Some(selector) = selector else {
+            return Ok(self.selectable_sample_ids.clone());
+        };
+        if selector.is_empty() {
+            return Err(OutputSelectionError::EmptySampleSelector);
+        }
+
+        let mut selected = BTreeSet::new();
+        let mut seen_indices = BTreeSet::new();
+        for sample_index in &selector.sample_indices {
+            let sample_index = platform_index(*sample_index, "sample_indices")?;
+            if !seen_indices.insert(sample_index) {
+                return Err(OutputSelectionError::DuplicateSampleIndex(
+                    sample_index as u32,
+                ));
+            }
+            if !self.selectable_sample_ids.contains(&sample_index) {
+                return Err(OutputSelectionError::UnknownSampleIndex(
+                    u32::try_from(sample_index).unwrap_or(u32::MAX),
+                ));
+            }
+            selected.insert(sample_index);
+        }
+
+        let mut seen_labels = BTreeSet::new();
+        for label in &selector.sample_labels {
+            let label = label.trim();
+            if label.is_empty() {
+                return Err(OutputSelectionError::EmptySampleLabel);
+            }
+            if !seen_labels.insert(label) {
+                return Err(OutputSelectionError::DuplicateSampleLabel(
+                    label.to_string(),
+                ));
+            }
+            let Some(sample_ids) = self.sample_labels.get(label) else {
+                return Err(OutputSelectionError::UnknownSampleLabel(label.to_string()));
+            };
+            selected.extend(sample_ids.iter().copied());
+        }
+        Ok(selected)
+    }
+}
+
+fn platform_index(value: u32, kind: &'static str) -> Result<usize, OutputSelectionError> {
+    usize::try_from(value).map_err(|_| OutputSelectionError::IndexOutOfRange { kind, value })
+}
+
+fn unique_platform_indices<F>(
+    values: &[u32],
+    kind: &'static str,
+    duplicate: F,
+) -> Result<BTreeSet<usize>, OutputSelectionError>
+where
+    F: Fn(u32) -> OutputSelectionError,
+{
+    let mut result = BTreeSet::new();
+    for value in values {
+        let platform_value = platform_index(*value, kind)?;
+        if !result.insert(platform_value) {
+            return Err(duplicate(*value));
+        }
+    }
+    Ok(result)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        eigen_spectrum_output_scopes, select_eigen_outputs, select_eigen_outputs_with_planned_samples,
+        select_eigen_outputs_with_planned_sample_descriptors, EigenDiagnosticsRequest,
+        OutputSelectionError, SampleModeId,
+    };
+    use crate::eigen::types::{
+        EigenSolverModel, KSampleDescriptor, PathSolveResult, SingleKModeResult,
+        SingleKSolveResult, TrackedBranch, TrackedBranchPoint,
+    };
+    use fullmag_ir::{EigenSpectrumScopeIR, OutputIR, SampleSelectorIR};
+
+    #[test]
+    fn spectrum_output_scope_union_preserves_authored_and_legacy_requests() {
+        let spectrum = |scope| OutputIR::EigenSpectrum {
+            quantity: "eigenfrequency".to_string(),
+            scope,
+        };
+
+        assert_eq!(
+            eigen_spectrum_output_scopes(&[spectrum(Some(
+                EigenSpectrumScopeIR::PerSample
+            ))]),
+            vec!["per_sample"]
+        );
+        assert_eq!(
+            eigen_spectrum_output_scopes(&[spectrum(Some(EigenSpectrumScopeIR::Global))]),
+            vec!["global"]
+        );
+        assert_eq!(
+            eigen_spectrum_output_scopes(&[spectrum(None)]),
+            vec!["per_sample"],
+            "legacy output omission should retain effective per-sample scope"
+        );
+        assert_eq!(
+            eigen_spectrum_output_scopes(&[
+                spectrum(Some(EigenSpectrumScopeIR::Global)),
+                spectrum(Some(EigenSpectrumScopeIR::PerSample)),
+            ]),
+            vec!["per_sample", "global"],
+            "distinct authored scopes should be represented together"
+        );
+
+        let dispersion_only = [OutputIR::DispersionCurve {
+            name: "dispersion".to_string(),
+            include_branch_table: true,
+        }];
+        assert!(
+            eigen_spectrum_output_scopes(&dispersion_only).is_empty(),
+            "a dispersion request may publish spectrum support artifacts without requesting a spectrum"
+        );
+
+        let mode = OutputIR::EigenMode {
+            field: "mode".to_string(),
+            all_modes: false,
+            indices: vec![2],
+            branches: vec![],
+            sample_selector: Some(SampleSelectorIR {
+                sample_indices: vec![10],
+                sample_labels: vec![],
+            }),
+        };
+        let baseline = select_eigen_outputs(
+            &result(),
+            &[spectrum(None), mode.clone()],
+        )
+        .expect("legacy spectrum request should select outputs");
+        let with_both_scopes = select_eigen_outputs(
+            &result(),
+            &[
+                spectrum(Some(EigenSpectrumScopeIR::Global)),
+                spectrum(Some(EigenSpectrumScopeIR::PerSample)),
+                mode,
+            ],
+        )
+        .expect("both scope requests should preserve output selection");
+        assert_eq!(with_both_scopes, baseline);
+    }
+
+    fn mode(raw_mode_index: usize, branch_id: Option<usize>) -> SingleKModeResult {
+        SingleKModeResult {
+            raw_mode_index,
+            branch_id,
+            frequency_real_hz: raw_mode_index as f64 + 1.0,
+            frequency_imag_hz: 0.0,
+            angular_frequency_rad_per_s: raw_mode_index as f64 + 1.0,
+            eigenvalue_real: 0.0,
+            eigenvalue_imag: raw_mode_index as f64 + 1.0,
+            norm: 1.0,
+            mass_norm: Some(1.0),
+            max_amplitude: 1.0,
+            residual_relative_l2: Some(0.0),
+            residual_norm: Some(0.0),
+            residual_linf: Some(0.0),
+            tangent_leakage_mean_abs: None,
+            tangent_leakage_max_abs: None,
+            tangent_leakage_weighted_relative_l2: None,
+            dominant_polarization: "x".to_string(),
+            reduced_vector: None,
+            lifted_real: None,
+            lifted_imag: None,
+            amplitude: None,
+            phase: None,
+            node_mass_weights: None,
+            consistent_p1_metric: None,
+            component_participation:
+                crate::eigen::ModalParticipationObservable::unavailable_without_context("test"),
+        }
+    }
+
+    fn sample(
+        sample_index: usize,
+        label: Option<&str>,
+        modes: Vec<SingleKModeResult>,
+    ) -> SingleKSolveResult {
+        SingleKSolveResult {
+            sample: KSampleDescriptor {
+                sample_index,
+                label: label.map(str::to_string),
+                segment_index: None,
+                path_s: sample_index as f64,
+                t_in_segment: 0.0,
+                k_vector: [sample_index as f64, 0.0, 0.0],
+            },
+            modes,
+            relaxation_steps: 0,
+            solver_model: EigenSolverModel::ReferenceFull2x2Tangent,
+            solver_notes: Vec::new(),
+            solver_diagnostics: None,
+        }
+    }
+
+    fn branch(branch_id: usize, sample_index: usize, raw_mode_index: usize) -> TrackedBranch {
+        TrackedBranch {
+            branch_id,
+            label: Some(format!("B{branch_id}")),
+            points: vec![TrackedBranchPoint {
+                sample_index,
+                raw_mode_index,
+                frequency_real_hz: 1.0,
+                frequency_imag_hz: 0.0,
+                tracking_confidence: 1.0,
+                overlap_prev: None,
+                tracking_edge: None,
+            }],
+        }
+    }
+
+    fn result() -> PathSolveResult {
+        PathSolveResult {
+            gamma0_rad_s_per_a_m: 2.211e5, // Explicit fixture parameter.
+            samples: vec![
+                sample(10, Some("Gamma"), vec![mode(2, Some(7)), mode(9, Some(12))]),
+                sample(20, Some("X"), vec![mode(2, Some(12)), mode(15, None)]),
+            ],
+            branches: vec![branch(7, 10, 2), branch(12, 10, 9)],
+            solver_model: EigenSolverModel::ReferenceFull2x2Tangent,
+            notes: Vec::new(),
+            include_demag: false,
+            dispersion_validation: None,
+            k0_kittel_validation: None,
+            solver_policy: None,
+            dispersion_analytic_reference: None,
+            k0_kittel_periodic_airbox_demag: None,
+        }
+    }
+
+    #[test]
+    fn spectrum_quantity_validation_fails_closed_for_manual_outputs() {
+        let path_result = result();
+        for quantity in ["", "eigenvalue", "amplitude", "frequency_hz"] {
+            let outputs = [OutputIR::EigenSpectrum {
+                quantity: quantity.to_string(),
+                scope: None,
+            }];
+            let before = outputs.clone();
+
+            assert_eq!(
+                select_eigen_outputs(&path_result, &outputs),
+                Err(OutputSelectionError::UnsupportedSpectrumQuantity(
+                    quantity.to_string()
+                ))
+            );
+            assert_eq!(outputs, before);
+        }
+
+        let outputs = [OutputIR::EigenSpectrum {
+            quantity: " eigenfrequency ".to_string(),
+            scope: None,
+        }];
+        let selection = select_eigen_outputs(&path_result, &outputs).unwrap();
+        assert!(selection.has_spectrum_output());
+    }
+
+    #[test]
+    fn spectrum_and_dispersion_keep_all_original_ids_and_track_without_branch_export() {
+        let selection = select_eigen_outputs(
+            &result(),
+            &[
+                OutputIR::EigenSpectrum {
+                    quantity: "eigenfrequency".to_string(),
+                    scope: None,
+                },
+                OutputIR::DispersionCurve {
+                    name: " bands ".to_string(),
+                    include_branch_table: false,
+                },
+            ],
+        )
+        .expect("valid spectrum and dispersion outputs");
+
+        let expected = [
+            SampleModeId::new(10, 2),
+            SampleModeId::new(10, 9),
+            SampleModeId::new(20, 2),
+            SampleModeId::new(20, 15),
+        ]
+        .into_iter()
+        .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(selection.spectrum_mode_ids(), &expected);
+        assert_eq!(selection.tracking_mode_ids(), &expected);
+        assert_eq!(
+            selection
+                .tracked_branch_ids()
+                .iter()
+                .copied()
+                .collect::<Vec<_>>(),
+            vec![7, 12]
+        );
+        assert!(selection.requires_branch_tracking());
+        assert!(!selection.branch_table_requested());
+        assert_eq!(selection.dispersion_curves()[0].name(), "bands");
+        assert!(selection.contains_spectrum_mode(20, 15));
+        assert!(!selection.contains_field_mode(10, 2));
+        assert_eq!(
+            selection.spectrum_modes_for_sample(10).collect::<Vec<_>>(),
+            vec![2, 9]
+        );
+    }
+
+    #[test]
+    fn indices_or_branches_and_sample_indices_or_labels_form_unions() {
+        let selection = select_eigen_outputs(
+            &result(),
+            &[OutputIR::EigenMode {
+                field: " mode ".to_string(),
+                all_modes: false,
+                indices: vec![15],
+                branches: vec![7],
+                sample_selector: Some(SampleSelectorIR {
+                    sample_indices: vec![20],
+                    sample_labels: vec!["Gamma".to_string()],
+                }),
+            }],
+        )
+        .expect("valid union selector");
+
+        let expected = [SampleModeId::new(10, 2), SampleModeId::new(20, 15)]
+            .into_iter()
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(selection.field_mode_ids(), &expected);
+        assert_eq!(
+            selection
+                .selected_sample_ids()
+                .iter()
+                .copied()
+                .collect::<Vec<_>>(),
+            vec![10, 20]
+        );
+        assert!(selection.contains_field_mode_for_field("mode", 10, 2));
+        assert!(!selection.contains_field_mode_for_field("mode", 20, 2));
+        assert!(selection.requires_branch_tracking());
+    }
+
+    #[test]
+    fn mode_fields_keep_disjoint_sample_and_raw_mode_selections() {
+        let selection = select_eigen_outputs(
+            &result(),
+            &[
+                OutputIR::EigenMode {
+                    field: "mode".to_string(),
+                    all_modes: false,
+                    indices: vec![2],
+                    branches: vec![],
+                    sample_selector: Some(SampleSelectorIR {
+                        sample_indices: vec![10],
+                        sample_labels: vec![],
+                    }),
+                },
+                OutputIR::EigenMode {
+                    field: "mode_complex".to_string(),
+                    all_modes: false,
+                    indices: vec![15],
+                    branches: vec![],
+                    sample_selector: Some(SampleSelectorIR {
+                        sample_indices: vec![20],
+                        sample_labels: vec![],
+                    }),
+                },
+            ],
+        )
+        .expect("both declared mode fields are supported");
+
+        let mode = [SampleModeId::new(10, 2)].into_iter().collect();
+        let mode_complex = [SampleModeId::new(20, 15)].into_iter().collect();
+        assert_eq!(selection.field_mode_ids_for_field("mode"), Some(&mode));
+        assert_eq!(
+            selection.field_mode_ids_for_field("mode_complex"),
+            Some(&mode_complex)
+        );
+        assert_eq!(
+            selection.field_sample_ids_by_field()["mode"],
+            [10].into_iter().collect()
+        );
+        assert_eq!(
+            selection.field_sample_ids_by_field()["mode_complex"],
+            [20].into_iter().collect()
+        );
+        assert_eq!(
+            selection.field_mode_ids().iter().copied().collect::<Vec<_>>(),
+            vec![SampleModeId::new(10, 2), SampleModeId::new(20, 15)]
+        );
+    }
+
+    #[test]
+    fn planned_samples_preserve_partial_prefix_intent_without_fabricating_modes() {
+        let planned_sample_ids = [10, 20, 30].into_iter().collect();
+        let output = |indices, branches, sample_indices| OutputIR::EigenMode {
+            field: "mode".to_string(),
+            all_modes: false,
+            indices,
+            branches,
+            sample_selector: Some(SampleSelectorIR {
+                sample_indices,
+                sample_labels: vec![],
+            }),
+        };
+        let planned_mode = output(vec![99], vec![], vec![30]);
+        let planned_selection = select_eigen_outputs_with_planned_samples(
+            &result(),
+            &[planned_mode.clone()],
+            &planned_sample_ids,
+        )
+        .expect("a future raw mode is unresolved until its planned sample is computed");
+        assert_eq!(
+            planned_selection.field_sample_ids_by_field()["mode"],
+            [30].into_iter().collect()
+        );
+        assert!(planned_selection.field_mode_ids().is_empty());
+        assert_eq!(
+            planned_selection
+                .selected_sample_ids()
+                .iter()
+                .copied()
+                .collect::<Vec<_>>(),
+            vec![30]
+        );
+
+        let mixed_selection = select_eigen_outputs_with_planned_samples(
+            &result(),
+            &[output(vec![99], vec![], vec![10, 30])],
+            &planned_sample_ids,
+        )
+        .expect("a future target keeps a mixed accepted/pending selector unresolved");
+        assert_eq!(
+            mixed_selection.field_sample_ids_by_field()["mode"],
+            [10, 30].into_iter().collect()
+        );
+        assert!(mixed_selection.field_mode_ids().is_empty());
+
+        let future_branch = select_eigen_outputs_with_planned_samples(
+            &result(),
+            &[output(vec![], vec![99], vec![30])],
+            &planned_sample_ids,
+        )
+        .expect("a future branch is unresolved until its planned sample is computed");
+        assert!(future_branch.field_mode_ids().is_empty());
+
+        let mut empty_prefix = result();
+        empty_prefix.samples.clear();
+        empty_prefix.branches.clear();
+        let empty_prefix_selection = select_eigen_outputs_with_planned_samples(
+            &empty_prefix,
+            &[planned_mode.clone()],
+            &[30].into_iter().collect(),
+        )
+        .expect("an empty accepted prefix can retain the planned sample request");
+        assert!(empty_prefix_selection.field_mode_ids().is_empty());
+        assert_eq!(
+            empty_prefix_selection.field_sample_ids_by_field()["mode"],
+            [30].into_iter().collect()
+        );
+
+        let default_selection = select_eigen_outputs_with_planned_samples(
+            &result(),
+            &[OutputIR::EigenMode {
+                field: "mode".to_string(),
+                all_modes: false,
+                indices: vec![2],
+                branches: vec![],
+                sample_selector: None,
+            }],
+            &planned_sample_ids,
+        )
+        .expect("default selection covers the declared plan");
+        assert_eq!(
+            default_selection
+                .selected_sample_ids()
+                .iter()
+                .copied()
+                .collect::<Vec<_>>(),
+            vec![10, 20, 30]
+        );
+        assert!(!default_selection
+            .field_mode_ids()
+            .contains(&SampleModeId::new(30, 2)));
+
+        assert_eq!(
+            select_eigen_outputs_with_planned_samples(
+                &result(),
+                &[output(vec![99], vec![], vec![10])],
+                &planned_sample_ids,
+            )
+            .unwrap_err(),
+            OutputSelectionError::UnknownRawModeIndex(99)
+        );
+        assert_eq!(
+            select_eigen_outputs(
+                &result(),
+                &[output(vec![99], vec![], vec![10])],
+            )
+            .unwrap_err(),
+            OutputSelectionError::UnknownRawModeIndex(99)
+        );
+
+        assert_eq!(
+            select_eigen_outputs_with_planned_samples(
+                &result(),
+                &[output(vec![], vec![99], vec![10])],
+                &planned_sample_ids,
+            )
+            .unwrap_err(),
+            OutputSelectionError::UnknownBranch(99)
+        );
+        assert_eq!(
+            select_eigen_outputs(
+                &result(),
+                &[output(vec![], vec![99], vec![10])],
+            )
+            .unwrap_err(),
+            OutputSelectionError::UnknownBranch(99)
+        );
+
+        let unknown_sample = OutputIR::EigenMode {
+            field: "mode".to_string(),
+            all_modes: false,
+            indices: vec![2],
+            branches: vec![],
+            sample_selector: Some(SampleSelectorIR {
+                sample_indices: vec![99],
+                sample_labels: vec![],
+            }),
+        };
+        assert_eq!(
+            select_eigen_outputs_with_planned_samples(
+                &result(),
+                &[unknown_sample],
+                &planned_sample_ids,
+            )
+            .unwrap_err(),
+            OutputSelectionError::UnknownSampleIndex(99)
+        );
+
+        let mut completed_result = result();
+        completed_result
+            .samples
+            .push(sample(30, Some("Y"), vec![mode(2, None)]));
+        let completed_unknown_mode = select_eigen_outputs_with_planned_samples(
+            &completed_result,
+            &[output(vec![99], vec![], vec![30])],
+            &planned_sample_ids,
+        )
+        .unwrap_err();
+        assert_eq!(
+            completed_unknown_mode,
+            OutputSelectionError::UnknownRawModeIndex(99)
+        );
+        assert_eq!(
+            select_eigen_outputs_with_planned_samples(
+                &completed_result,
+                &[output(vec![], vec![99], vec![30])],
+                &planned_sample_ids,
+            )
+            .unwrap_err(),
+            OutputSelectionError::UnknownBranch(99)
+        );
+    }
+
+    #[test]
+    fn planned_sample_labels_preserve_pending_intent_without_creating_payloads() {
+        let planned_samples = vec![
+            sample(10, Some("Gamma"), Vec::new()).sample,
+            sample(20, Some("X"), Vec::new()).sample,
+            sample(30, Some("Y"), Vec::new()).sample,
+            sample(40, Some("Y"), Vec::new()).sample,
+        ];
+        let output = |label: &str| OutputIR::EigenMode {
+            field: "mode".to_string(),
+            all_modes: false,
+            indices: vec![99],
+            branches: vec![],
+            sample_selector: Some(SampleSelectorIR {
+                sample_indices: vec![],
+                sample_labels: vec![label.to_string()],
+            }),
+        };
+
+        let pending = select_eigen_outputs_with_planned_sample_descriptors(
+            &result(),
+            &[output("Y")],
+            &planned_samples,
+        )
+        .expect("declared pending labels retain selector intent");
+        assert_eq!(
+            pending.field_sample_ids_by_field()["mode"],
+            [30, 40].into_iter().collect()
+        );
+        assert!(pending.field_mode_ids().is_empty());
+
+        assert_eq!(
+            select_eigen_outputs_with_planned_sample_descriptors(
+                &result(),
+                &[output("not-declared")],
+                &planned_samples,
+            )
+            .unwrap_err(),
+            OutputSelectionError::UnknownSampleLabel("not-declared".to_string())
+        );
+    }
+
+    #[test]
+    fn unsupported_mode_field_is_rejected_before_mode_selection() {
+        let error = select_eigen_outputs(
+            &result(),
+            &[OutputIR::EigenMode {
+                field: "mode_real".to_string(),
+                all_modes: false,
+                indices: vec![2],
+                branches: vec![],
+                sample_selector: None,
+            }],
+        )
+        .expect_err("unpublished mode field identifiers must fail closed");
+        assert_eq!(
+            error,
+            OutputSelectionError::UnsupportedEigenModeField("mode_real".to_string())
+        );
+    }
+
+    #[test]
+    fn all_modes_uses_returned_sparse_ids_and_preserves_sample_selection() {
+        let output = OutputIR::EigenMode {
+            field: "mode".to_string(), all_modes: true, indices: vec![], branches: vec![],
+            sample_selector: Some(SampleSelectorIR { sample_indices: vec![10], sample_labels: vec![] }),
+        };
+        let selection = select_eigen_outputs(&result(), &[output.clone()]).unwrap();
+        assert_eq!(selection.field_modes_for_sample(10).collect::<Vec<_>>(), vec![2, 9]);
+        assert!(selection.field_modes_for_sample(20).next().is_none());
+        let mut conflicting = output;
+        if let OutputIR::EigenMode { indices, .. } = &mut conflicting { indices.push(64); }
+        assert_eq!(select_eigen_outputs(&result(), &[conflicting]).unwrap_err(),
+                   OutputSelectionError::ConflictingAllModeSelector);
+    }
+
+    #[test]
+    fn repeated_sample_label_selects_all_matching_path_samples() {
+        let mut path_result = result();
+        path_result
+            .samples
+            .push(sample(30, Some("Gamma"), vec![mode(2, None)]));
+
+        let selection = select_eigen_outputs(
+            &path_result,
+            &[OutputIR::EigenMode {
+                field: "mode".to_string(),
+                all_modes: false,
+                indices: vec![2],
+                branches: vec![],
+                sample_selector: Some(SampleSelectorIR {
+                    sample_indices: vec![],
+                    sample_labels: vec![" Gamma ".to_string()],
+                }),
+            }],
+        )
+        .expect("repeated path labels are valid");
+
+        let expected = [SampleModeId::new(10, 2), SampleModeId::new(30, 2)]
+            .into_iter()
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(selection.field_mode_ids(), &expected);
+        assert_eq!(
+            selection
+                .selected_sample_ids()
+                .iter()
+                .copied()
+                .collect::<Vec<_>>(),
+            vec![10, 30]
+        );
+    }
+
+    #[test]
+    fn diagnostics_tracking_requests_all_modes_without_publishing_spectrum() {
+        let selection = select_eigen_outputs(
+            &result(),
+            &[OutputIR::EigenDiagnostics {
+                include_tracking: true,
+                include_residuals: false,
+                include_overlaps: false,
+                include_tangent_leakage: false,
+                include_orthogonality: false,
+            }],
+        )
+        .expect("tracking diagnostics output is valid");
+
+        assert!(selection.requires_branch_tracking());
+        assert_eq!(selection.tracking_mode_ids().len(), 4);
+        assert_eq!(selection.tracked_branch_ids().len(), 2);
+        assert!(selection.spectrum_mode_ids().is_empty());
+        assert!(!selection.has_spectrum_output());
+        assert_eq!(selection.diagnostic_mode_ids().len(), 4);
+        assert_eq!(selection.diagnostics_request().unwrap().include_tracking, true);
+    }
+
+    #[test]
+    fn diagnostic_requests_merge_flags_and_keep_internal_overlap_tracking_private() {
+        let outputs = [
+            OutputIR::EigenDiagnostics {
+                include_tracking: false,
+                include_residuals: true,
+                include_overlaps: false,
+                include_tangent_leakage: false,
+                include_orthogonality: false,
+            },
+            OutputIR::EigenDiagnostics {
+                include_tracking: false,
+                include_residuals: false,
+                include_overlaps: true,
+                include_tangent_leakage: false,
+                include_orthogonality: false,
+            },
+        ];
+        let selection = select_eigen_outputs(&result(), &outputs)
+            .expect("diagnostic requests merge independently");
+        let request = selection.diagnostics_request().expect("request is retained");
+
+        assert!(!request.include_tracking);
+        assert!(request.include_residuals);
+        assert!(request.include_overlaps);
+        assert!(selection.requires_branch_tracking());
+        assert_eq!(selection.diagnostic_mode_ids().len(), 4);
+        assert_eq!(selection.tracking_mode_ids().len(), 4);
+        assert!(selection.spectrum_mode_ids().is_empty());
+        assert!(selection.field_mode_ids().is_empty());
+    }
+
+    #[test]
+    fn all_disabled_diagnostic_request_is_retained_without_selecting_modes() {
+        let selection = select_eigen_outputs(
+            &result(),
+            &[OutputIR::EigenDiagnostics {
+                include_tracking: false,
+                include_residuals: false,
+                include_overlaps: false,
+                include_tangent_leakage: false,
+                include_orthogonality: false,
+            }],
+        )
+        .expect("disabled diagnostics request is valid");
+
+        assert_eq!(selection.diagnostics_request(), Some(EigenDiagnosticsRequest::default()));
+        assert!(selection.diagnostic_mode_ids().is_empty());
+        assert!(!selection.requires_branch_tracking());
+        assert!(selection.tracking_mode_ids().is_empty());
+        assert!(selection.spectrum_mode_ids().is_empty());
+        assert!(selection.field_mode_ids().is_empty());
+    }
+
+    #[test]
+    fn missing_diagnostic_output_does_not_create_a_request() {
+        let selection = select_eigen_outputs(&result(), &[])
+            .expect("an empty public output list remains valid");
+        assert_eq!(selection.diagnostics_request(), None);
+        assert!(selection.diagnostic_mode_ids().is_empty());
+    }
+
+    #[test]
+    fn branch_table_rejects_duplicate_ids_and_invalid_point_identity() {
+        let mut duplicate_branch_result = result();
+        duplicate_branch_result.branches.push(branch(7, 10, 2));
+        assert_eq!(
+            select_eigen_outputs(
+                &duplicate_branch_result,
+                &[OutputIR::DispersionCurve {
+                    name: "bands".to_string(),
+                    include_branch_table: true,
+                }],
+            ),
+            Err(OutputSelectionError::DuplicateResultBranchId(7))
+        );
+
+        let mut invalid_point_result = result();
+        invalid_point_result.branches[0].points[0].raw_mode_index = 9;
+        assert_eq!(
+            select_eigen_outputs(
+                &invalid_point_result,
+                &[OutputIR::DispersionCurve {
+                    name: "bands".to_string(),
+                    include_branch_table: true,
+                }],
+            ),
+            Err(OutputSelectionError::BranchPointIdentityMismatch {
+                branch_id: 7,
+                sample_index: 10,
+                raw_mode_index: 9,
+                mode_branch_id: Some(12),
+            })
+        );
+    }
+
+    #[test]
+    fn raw_mode_index_must_exist_in_selected_samples() {
+        for sample_selector in [
+            SampleSelectorIR { sample_indices: vec![20], sample_labels: vec![] },
+            SampleSelectorIR { sample_indices: vec![], sample_labels: vec!["X".into()] },
+        ] {
+            let request = OutputIR::EigenMode {
+                field: "mode".into(), all_modes: false, indices: vec![9],
+                branches: vec![], sample_selector: Some(sample_selector),
+            };
+            assert_eq!(select_eigen_outputs(&result(), &[request]),
+                Err(OutputSelectionError::UnknownRawModeIndex(9)));
+        }
+        // Multiple selected samples form a union, including sparse returned IDs.
+        // A mode need not occur at every k; absent points are not fabricated.
+        let selection = select_eigen_outputs(&result(), &[OutputIR::EigenMode {
+            field: "mode".into(), all_modes: false, indices: vec![9], branches: vec![],
+            sample_selector: Some(SampleSelectorIR {
+                sample_indices: vec![10, 20], sample_labels: vec![],
+            }),
+        }]).unwrap();
+        assert_eq!(selection.field_mode_ids(), &[SampleModeId::new(10, 9)].into_iter().collect());
+        assert!(!selection.contains_field_mode(20, 9));
+    }
+
+    #[test]
+    fn unknown_labels_sample_indices_branches_and_modes_are_rejected() {
+        let cases = [
+            (
+                OutputIR::EigenMode {
+                    field: "mode".to_string(),
+                    all_modes: false,
+                    indices: vec![2],
+                    branches: vec![],
+                    sample_selector: Some(SampleSelectorIR {
+                        sample_indices: vec![],
+                        sample_labels: vec!["Y".to_string()],
+                    }),
+                },
+                OutputSelectionError::UnknownSampleLabel("Y".to_string()),
+            ),
+            (
+                OutputIR::EigenMode {
+                    field: "mode".to_string(),
+                    all_modes: false,
+                    indices: vec![2],
+                    branches: vec![],
+                    sample_selector: Some(SampleSelectorIR {
+                        sample_indices: vec![99],
+                        sample_labels: vec![],
+                    }),
+                },
+                OutputSelectionError::UnknownSampleIndex(99),
+            ),
+            (
+                OutputIR::EigenMode {
+                    field: "mode".to_string(),
+                    all_modes: false,
+                    indices: vec![],
+                    branches: vec![99],
+                    sample_selector: None,
+                },
+                OutputSelectionError::UnknownBranch(99),
+            ),
+            (
+                OutputIR::EigenMode {
+                    field: "mode".to_string(),
+                    all_modes: false,
+                    indices: vec![99],
+                    branches: vec![],
+                    sample_selector: None,
+                },
+                OutputSelectionError::UnknownRawModeIndex(99),
+            ),
+        ];
+
+        for (output, expected) in cases {
+            assert_eq!(select_eigen_outputs(&result(), &[output]), Err(expected));
+        }
+    }
+
+    #[test]
+    fn malformed_empty_selectors_are_rejected() {
+        let empty_mode = OutputIR::EigenMode {
+            field: "mode".to_string(),
+            all_modes: false,
+            indices: vec![],
+            branches: vec![],
+            sample_selector: None,
+        };
+        assert_eq!(
+            select_eigen_outputs(&result(), &[empty_mode]),
+            Err(OutputSelectionError::EmptyEigenModeSelector)
+        );
+
+        let empty_samples = OutputIR::EigenMode {
+            field: "mode".to_string(),
+            all_modes: false,
+            indices: vec![2],
+            branches: vec![],
+            sample_selector: Some(SampleSelectorIR::default()),
+        };
+        assert_eq!(
+            select_eigen_outputs(&result(), &[empty_samples]),
+            Err(OutputSelectionError::EmptySampleSelector)
+        );
+    }
+}

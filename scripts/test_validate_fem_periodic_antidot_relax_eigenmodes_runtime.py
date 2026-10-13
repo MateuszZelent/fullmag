@@ -202,11 +202,11 @@ def write_runtime_fixture(
     )
     write_json(
         artifacts / "eigen/metadata/equilibrium_artifact.v7.json",
-        {"accepted_for_linearization": True},
+        {"schema_version": "equilibrium_artifact.v7", "accepted_for_linearization": True},
     )
     write_json(
         artifacts / "eigen/metadata/linearization_state.v6.json",
-        {"accepted_for_frequency_operator": True},
+        {"schema_version": "LinearizationState.v6", "accepted_for_frequency_operator": True},
     )
     source_mesh_identity = {
         "mesh_id": "periodic-antidot",
@@ -404,6 +404,14 @@ def test_validator_accepts_current_v3_relax_to_eigen_handoff(tmp_path: Path) -> 
             },
         }
     )
+    import hashlib
+    import struct
+    preimage = b"CertifiedFemEquilibriumFields.v1\0"
+    preimage += (struct.pack("<Q", 2) + struct.pack("<6d", *([0.0] * 6))) * 4
+    preimage += struct.pack("<Q", 2) + struct.pack("<2d", 0.0, 0.0)
+    field_digest = "sha256:" + hashlib.sha256(preimage).hexdigest()
+    handoff["certified_fields"]["content_sha256"] = field_digest
+    handoff["certified_fields_content_sha256"] = field_digest
     write_json(summary_path, summary)
 
     result = run_validator(report_root, "cpu")
@@ -709,3 +717,25 @@ def test_validator_rejects_actual_producer_mesh_identity_drift(
 
     assert result.returncode != 0
     assert "source_mesh_identity" in result.stderr
+
+
+@pytest.mark.parametrize("defect", [None, "material", "mixed_state"])
+def test_runtime_validator_v8_requires_one_canonical_state_family(tmp_path: Path, defect: str | None) -> None:
+    from test_equilibrium_material_artifact_v8 import _make_v8_pair, _seal_state
+    report_root = write_runtime_fixture(tmp_path, "cpu")
+    artifacts = report_root / "artifacts"
+    equilibrium, state = _make_v8_pair(tmp_path / "seed")
+    metadata = artifacts / "eigen" / "metadata"
+    (metadata / "equilibrium_artifact.v7.json").unlink()
+    if defect != "mixed_state":
+        (metadata / "linearization_state.v6.json").unlink()
+    if defect == "material":
+        state["material_signature"] = "sha256:" + "a" * 64
+    _seal_state(state)
+    (metadata / "equilibrium_artifact.v8.json").write_text(json.dumps(equilibrium), encoding="utf-8")
+    (metadata / "linearization_state.v7.json").write_text(json.dumps(state), encoding="utf-8")
+    result = run_validator(report_root, "cpu")
+    if defect is None:
+        assert result.returncode == 0, result.stderr
+    else:
+        assert result.returncode != 0

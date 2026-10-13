@@ -11,10 +11,12 @@ import fullmag as fm
 from fullmag.runtime.scene_document import (
     build_builder_from_scene_document,
     build_scene_document_from_builder,
+    builder_overrides_from_scene_document,
 )
 from fullmag.runtime.script_builder import (
     _requested_sampling_period_from_ir,
     export_builder_draft,
+    render_loaded_problem_as_script,
     render_scene_document_as_script,
     rewrite_loaded_problem_script,
 )
@@ -528,7 +530,334 @@ class LayeredMeshAuthoringRoundTripTests(unittest.TestCase):
         self.assertEqual(_requested_layered_mesh(rewritten), before)
 
 
+class ScriptBuilderEigenOutputRoundTripTests(unittest.TestCase):
+    @staticmethod
+    def _study_ir_by_stage(loaded):
+        return [
+            stage.problem.to_ir(include_geometry_assets=False)["study"]
+            for stage in loaded.stages
+        ]
+
+    def test_eigen_stage_output_selectors_do_not_leak_across_stages(self) -> None:
+        script = """
+        import fullmag as fm
+
+        study = fm.study("eigen-stage-output-snapshots")
+        study.engine("fem")
+        film = study.geometry(fm.Box(100e-9, 20e-9, 5e-9), name="film")
+        film.Ms = 800e3
+        film.Aex = 13e-12
+        film.alpha = 0.01
+        film.m = fm.texture.uniform(1, 0, 0)
+        study.save("spectrum", spectrum_scope="global")
+        study.save(
+            "mode",
+            field="mode_complex",
+            indices=[0, 2],
+            branches=[4],
+            sample_indices=[0, 2],
+            sample_labels=["Gamma", "X"],
+        )
+        study.stages.add_eigenmodes(
+            stage_id="spectrum-and-mode",
+            count=5,
+            include_demag=False,
+        )
+        study.clear_outputs()
+        study.save("dispersion", name="bands", include_branch_table=False)
+        study.save(
+            "diagnostics",
+            include_tracking=False,
+            include_overlaps=False,
+        )
+        study.stages.add_eigenmodes(
+            stage_id="dispersion-and-diagnostics",
+            count=4,
+            include_demag=False,
+        )
+        """
+
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            loaded = _load_text(script, root, "eigen_stages.py")
+            rendered = rewrite_loaded_problem_script(loaded)["rendered_source"]
+            rewritten = _load_text(rendered, root, "eigen_stages_rewritten.py")
+
+        self.assertEqual(
+            self._study_ir_by_stage(rewritten),
+            self._study_ir_by_stage(loaded),
+        )
+        first_stage = rendered.index(
+            'study.stages.add_eigenmodes(stage_id="spectrum-and-mode"'
+        )
+        clear_before_second = rendered.index("study.clear_outputs()", first_stage)
+        second_dispersion = rendered.index(
+            'study.save("dispersion", name="bands", include_branch_table=False)',
+            clear_before_second,
+        )
+        second_stage = rendered.index(
+            'study.stages.add_eigenmodes(stage_id="dispersion-and-diagnostics"',
+            second_dispersion,
+        )
+        self.assertLess(first_stage, clear_before_second)
+        self.assertLess(clear_before_second, second_dispersion)
+        self.assertLess(second_dispersion, second_stage)
+
+    def test_stage_output_snapshots_preserve_time_eigen_time_and_autosave_order(self) -> None:
+        script = """
+        import fullmag as fm
+
+        study = fm.study("mixed-stage-output-snapshots")
+        study.engine("fem")
+        film = study.geometry(fm.Box(100e-9, 20e-9, 5e-9), name="film")
+        film.Ms = 800e3
+        film.Aex = 13e-12
+        film.alpha = 0.01
+        film.m = fm.texture.uniform(1, 0, 0)
+        study.save("m", every=1e-12)
+        study.save("E_total", every=1e-12)
+        study.stages.add_run(stage_id="initial-run", until=2e-12)
+        study.save("spectrum", spectrum_scope="global")
+        study.stages.add_eigenmodes(
+            stage_id="modal-output",
+            count=5,
+            include_demag=False,
+        )
+        study.stages.autosave("m", every=2e-12, stage_id="resume-m-autosave")
+        study.stages.add_run(stage_id="follow-up-run", until=2e-12)
+        """
+
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            loaded = _load_text(script, root, "mixed_stages.py")
+            rendered = rewrite_loaded_problem_script(loaded)["rendered_source"]
+            rewritten = _load_text(rendered, root, "mixed_stages_rewritten.py")
+
+        self.assertEqual(
+            self._study_ir_by_stage(rewritten),
+            self._study_ir_by_stage(loaded),
+        )
+        initial_output = rendered.index('study.save("m", every=1e-12)')
+        initial_run = rendered.index('study.stages.add_run(stage_id="initial-run"')
+        eigen_output = rendered.index(
+            'study.save("spectrum", spectrum_scope="global")'
+        )
+        eigen_stage = rendered.index(
+            'study.stages.add_eigenmodes(stage_id="modal-output"'
+        )
+        autosave_action = rendered.index(
+            'study.stages.autosave("m", every=2e-12, stage_id="resume-m-autosave")'
+        )
+        follow_up = rendered.index(
+            'study.stages.add_run(stage_id="follow-up-run"'
+        )
+        self.assertLess(initial_output, initial_run)
+        self.assertLess(initial_run, eigen_output)
+        self.assertLess(eigen_output, eigen_stage)
+        self.assertLess(eigen_stage, autosave_action)
+        self.assertLess(autosave_action, follow_up)
+        self.assertNotIn('study.save("m", every=2e-12)', rendered)
+
+    def test_disabling_all_autosave_outputs_resets_between_eigen_stages(self) -> None:
+        script = """
+        import fullmag as fm
+
+        study = fm.study("eigen-stage-autosave-reset")
+        study.engine("fem")
+        film = study.geometry(fm.Box(100e-9, 20e-9, 5e-9), name="film")
+        film.Ms = 800e3
+        film.Aex = 13e-12
+        film.alpha = 0.01
+        film.m = fm.texture.uniform(1, 0, 0)
+        study.save("spectrum", spectrum_scope="global")
+        study.stages.add_eigenmodes(
+            stage_id="spectrum-before-reset",
+            count=5,
+            include_demag=False,
+        )
+        study.stages.autosave(enabled=False, stage_id="disable-all-outputs")
+        study.save("mode", field="mode_complex", indices=[1])
+        study.stages.add_eigenmodes(
+            stage_id="mode-after-reset",
+            count=4,
+            include_demag=False,
+        )
+        """
+
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            loaded = _load_text(script, root, "eigen_autosave_reset.py")
+            rendered = rewrite_loaded_problem_script(loaded)["rendered_source"]
+            rewritten = _load_text(
+                rendered,
+                root,
+                "eigen_autosave_reset_rewritten.py",
+            )
+
+        self.assertEqual(
+            self._study_ir_by_stage(rewritten),
+            self._study_ir_by_stage(loaded),
+        )
+        first_stage = rendered.index(
+            'study.stages.add_eigenmodes(stage_id="spectrum-before-reset"'
+        )
+        disabled_action = rendered.index(
+            'study.stages.autosave(enabled=False, stage_id="disable-all-outputs")'
+        )
+        second_output = rendered.index(
+            'study.save("mode", field="mode_complex", indices=[1])',
+            disabled_action,
+        )
+        second_stage = rendered.index(
+            'study.stages.add_eigenmodes(stage_id="mode-after-reset"',
+            second_output,
+        )
+        self.assertLess(first_stage, disabled_action)
+        self.assertLess(disabled_action, second_output)
+        self.assertLess(second_output, second_stage)
+        self.assertEqual(
+            rendered.count('study.save("spectrum", spectrum_scope="global")'),
+            1,
+        )
+        self.assertEqual(
+            rendered.count('study.save("mode", field="mode_complex", indices=[1])'),
+            1,
+        )
+        self.assertNotIn("study.clear_outputs()", rendered)
+
+    def test_frequency_response_and_eigen_outputs_roundtrip_across_stages(self) -> None:
+        script = """
+        import fullmag as fm
+
+        study = fm.study("frequency-and-eigen-output-families")
+        study.engine("fem")
+        film = study.geometry(fm.Box(100e-9, 20e-9, 5e-9), name="film")
+        film.Ms = 800e3
+        film.Aex = 13e-12
+        film.alpha = 0.01
+        film.m = fm.texture.uniform(1, 0, 0)
+        study.save_response("susceptibility_tensor")
+        study.save("spectrum", spectrum_scope="global")
+        study.stages.add_frequency_response(
+            frequencies_hz=[1e9, 2e9],
+            excitation_field_au_per_m=(0.0, 1.0, 0.0),
+            include_demag=False,
+        )
+        study.save("mode", field="mode_complex", indices=[0, 2])
+        study.stages.add_eigenmodes(
+            stage_id="spectrum-and-mode",
+            count=5,
+            include_demag=False,
+        )
+        """
+
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            loaded = _load_text(script, root, "frequency_eigen_outputs.py")
+            rendered = rewrite_loaded_problem_script(loaded)["rendered_source"]
+            rewritten = _load_text(
+                rendered,
+                root,
+                "frequency_eigen_outputs_rewritten.py",
+            )
+
+        self.assertEqual(
+            self._study_ir_by_stage(rewritten),
+            self._study_ir_by_stage(loaded),
+        )
+        self.assertEqual(
+            [
+                output["kind"]
+                for output in loaded.stages[0].problem.study.to_ir()["sampling"]["outputs"]
+            ],
+            ["frequency_response_output", "eigen_spectrum"],
+        )
+        self.assertEqual(
+            [
+                output["kind"]
+                for output in loaded.stages[1].problem.study.to_ir()["sampling"]["outputs"]
+            ],
+            ["eigen_spectrum", "eigen_mode"],
+        )
+        response_output = rendered.index(
+            'study.save_response("susceptibility_tensor")'
+        )
+        spectrum_output = rendered.index(
+            'study.save("spectrum", spectrum_scope="global")'
+        )
+        response_stage = rendered.index(
+            'study.stages.add_frequency_response(frequencies_hz=[1000000000, 2000000000]'
+        )
+        mode_output = rendered.index(
+            'study.save("mode", field="mode_complex", indices=[0, 2])'
+        )
+        eigen_stage = rendered.index(
+            'study.stages.add_eigenmodes(stage_id="spectrum-and-mode"'
+        )
+        self.assertLess(response_output, spectrum_output)
+        self.assertLess(spectrum_output, response_stage)
+        self.assertLess(response_stage, mode_output)
+        self.assertLess(mode_output, eigen_stage)
+        self.assertEqual(
+            rendered.count('study.save_response("susceptibility_tensor")'),
+            1,
+        )
+        self.assertEqual(
+            rendered.count('study.save("spectrum", spectrum_scope="global")'),
+            1,
+        )
+        self.assertEqual(
+            rendered.count('study.save("mode", field="mode_complex", indices=[0, 2])'),
+            1,
+        )
+        self.assertNotIn("study.clear_outputs()", rendered)
+
+
 class ScriptBuilderRegionalDriveRoundTripTests(unittest.TestCase):
+    def test_stage_autosave_does_not_leak_into_earlier_stage_outputs(self) -> None:
+        script = """
+        import fullmag as fm
+        study = fm.study("ordered-stage-autosave")
+        film = study.geometry(fm.Box(100e-9, 40e-9, 5e-9), name="film")
+        film.Ms = 800e3
+        film.Aex = 13e-12
+        film.alpha = 0.01
+        study.stages.add_relax(
+            stage_id="initial-relax",
+            algorithm="projected_gradient_bb",
+            max_steps=2,
+        )
+        study.stages.autosave("m", every=1e-12, stage_id="enable-m-output")
+        study.stages.add_run(stage_id="sampled-run", until=2e-12)
+        """
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            loaded = _load_text(script, root, "source.py")
+            rendered = rewrite_loaded_problem_script(loaded)["rendered_source"]
+            rewritten = _load_text(str(rendered), root, "rewritten.py")
+
+        self.assertNotIn('study.save("m", every=1e-12)', rendered)
+        initial_stage = rendered.index("study.stages.add_relax(")
+        autosave_action = rendered.index(
+            'study.stages.autosave("m", every=1e-12, stage_id="enable-m-output")'
+        )
+        sampled_stage = rendered.index("study.stages.add_run(")
+        self.assertLess(initial_stage, autosave_action)
+        self.assertLess(autosave_action, sampled_stage)
+
+        expected_later_outputs = [
+            {"kind": "field", "name": "m", "every_seconds": 1e-12}
+        ]
+        expected_outputs_by_stage = [[], [], expected_later_outputs]
+        for candidate in (loaded, rewritten):
+            self.assertEqual(
+                [
+                    stage.problem.study.to_ir()["sampling"]["outputs"]
+                    for stage in candidate.stages
+                ],
+                expected_outputs_by_stage,
+            )
+
     def test_stage_autosave_roundtrips_for_relax_and_run(self) -> None:
         script = """
         import fullmag as fm
@@ -1189,6 +1518,7 @@ class ScriptBuilderRegionalDriveRoundTripTests(unittest.TestCase):
             loaded = _load_text(_SCRIPT, root, "source.py")
             source_path = root / "source.py"
             before = source_path.read_bytes()
+            before_entries = {path.name for path in root.iterdir()}
             copy_path = root / "exports" / "source.canonical.py"
             result = rewrite_loaded_problem_script(loaded, output_path=copy_path)
 
@@ -1197,10 +1527,64 @@ class ScriptBuilderRegionalDriveRoundTripTests(unittest.TestCase):
             self.assertNotIn("rendered_source", result)
             self.assertIn("study.field_drives.add(", copy_path.read_text(encoding="utf-8"))
             self.assertEqual(source_path.read_bytes(), before)
-            self.assertEqual(sorted(path.name for path in root.iterdir()), ["exports", "source.py"])
+            self.assertEqual({path.name for path in root.iterdir()}, before_entries | {"exports"})
             with self.assertRaises(ValueError):
                 rewrite_loaded_problem_script(loaded, write=True, output_path=copy_path)
             self.assertEqual(source_path.read_bytes(), before)
+
+
+class AuxiliaryScriptOverrideRoundTripTests(unittest.TestCase):
+    def test_layout_overrides_preserve_renamed_owner_without_magnetic_assignments(self) -> None:
+        layouts = (
+            "fm.CPWAntennaLayout(name='layout', length=2e-6, thickness=10e-9, "
+            "conductivity=58e6, stations=("
+            "fm.CPWWidthStation.symmetric(s=0, signal_width=200e-9, gap=50e-9, ground_width=300e-9), "
+            "fm.CPWWidthStation(s=0.5, signal_width_m=80e-9, left_gap_m=40e-9, right_gap_m=60e-9, "
+            "left_ground_width_m=200e-9, right_ground_width_m=400e-9), "
+            "fm.CPWWidthStation.symmetric(s=1, signal_width=200e-9, gap=50e-9, ground_width=300e-9)), "
+            "signal_part_id='trace', left_ground_part_id='left', right_ground_part_id='right', "
+            "transform=fm.RigidTransform(translation=(1e-6, 0, 0)))",
+            "fm.MicrostripAntennaLayout(name='layout', length=2e-6, thickness=10e-9, "
+            "conductivity=58e6, return_width=500e-9, return_offset_m=30e-9, stations=("
+            "fm.MicrostripWidthStation(s=0, signal_width=200e-9), "
+            "fm.MicrostripWidthStation(s=0.5, signal_width=80e-9), "
+            "fm.MicrostripWidthStation(s=1, signal_width=200e-9)), "
+            "signal_part_id='trace', return_part_id='plane', "
+            "transform=fm.RigidTransform(translation=(1e-6, 0, 0)))",
+        )
+        for layout in layouts:
+            with self.subTest(layout=layout), TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                loaded = _load_text(
+                    "import fullmag as fm\nstudy = fm.study('auxiliary-export')\n"
+                    "study.engine('fem')\n"
+                    "film = study.geometry(fm.Box(100e-9, 40e-9, 5e-9), name='film', object_id='film-id')\n"
+                    "film.Ms = 800e3\nfilm.Aex = 13e-12\nfilm.alpha = 0.01\n"
+                    f"study.antenna_object({layout}, name='antenna', object_id='immutable-owner')\n"
+                    "study.stages.add_run(stage_id='run', until=1e-12)\n",
+                    root,
+                )
+                scene = build_scene_document_from_builder(export_builder_draft(loaded))
+                antenna = next(obj for obj in scene["objects"] if obj["id"] == "immutable-owner")
+                antenna["name"] = "Renamed antenna"
+                antenna["transform"]["translation"] = [0.0, 0.0, 50e-9]
+                overrides = builder_overrides_from_scene_document(scene)
+                expected = next(g for g in overrides["geometries"] if g["object_id"] == "immutable-owner")
+                self.assertNotIn("material", expected)
+                self.assertNotIn("magnetization", expected)
+                source = render_loaded_problem_as_script(loaded, overrides=overrides)
+                reloaded = _load_text(source, root, "exported.py")
+                rebuilt = build_builder_from_scene_document(
+                    build_scene_document_from_builder(export_builder_draft(reloaded))
+                )
+                actual = next(g for g in rebuilt["geometries"] if g["object_id"] == "immutable-owner")
+                for key in ("object_id", "name", "role", "geometry_kind", "geometry_params"):
+                    self.assertEqual(actual[key], expected[key], key)
+                self.assertNotIn("material", actual)
+                self.assertNotIn("magnetization", actual)
+                self.assertNotIn("physics_stack", actual)
+                self.assertEqual(len(reloaded.problem.magnets), 1)
+                self.assertEqual(rebuilt["geometries"][0]["object_id"], "film-id")
 
 
 _SCENE_BODY = """
@@ -1457,11 +1841,12 @@ class SceneRoundTripFidelityTests(unittest.TestCase):
         )
         """
         with TemporaryDirectory() as tmp_dir:
-            loaded, rendered, source = _scene_round_trip(script, Path(tmp_dir), drop_sampling=True)
+            loaded, rendered, source = _scene_round_trip(script, Path(tmp_dir))
         self.assertIn("study.cell(", source)
         self.assertNotIn("cell_size=(2e-09, 2e-09, 1e-09)", source)
         before = loaded.problem.to_ir(include_geometry_assets=False)
         after = rendered.problem.to_ir(include_geometry_assets=False)
+        self.assertEqual(before["study"]["sampling"], after["study"]["sampling"])
         self.assertEqual(
             after["backend_policy"]["discretization_hints"],
             before["backend_policy"]["discretization_hints"],
@@ -1526,9 +1911,74 @@ class SceneRoundTripFidelityTests(unittest.TestCase):
             scene = json.loads(
                 json.dumps(build_scene_document_from_builder(export_builder_draft(loaded)))
             )
-        scene["study"]["stages"][0]["kind"] = "teleport"
-        with self.assertRaisesRegex(ValueError, "stage kind 'teleport' cannot be captured"):
-            render_scene_document_as_script(scene)
+        for canonical in (False, True):
+            with self.subTest(canonical=canonical):
+                invalid = json.loads(json.dumps(scene))
+                if canonical:
+                    invalid["study"]["study_pipeline"]["nodes"][0]["stage_kind"] = "teleport"
+                else:
+                    invalid["study"]["study_pipeline"] = None
+                    invalid["study"]["stages"][0]["kind"] = "teleport"
+                with self.assertRaisesRegex(ValueError, "stage kind 'teleport' cannot be captured"):
+                    render_scene_document_as_script(invalid)
+
+    def test_run_sampling_changes_preserve_outputs_without_extra_stages(self) -> None:
+        script = "import fullmag as fm\nstudy=fm.study('sampling')\nstudy.engine('fdm')\nstudy.cell(5e-9,5e-9,5e-9)\n"
+        script += textwrap.dedent(_SCENE_BODY)
+        script += """
+study.save('m', every=2e-12)
+study.save('E_total', every=3e-12)
+study.snapshot(f, 'mz', every=4e-12)
+study.stages.add_run(stage_id='first', until=1e-11)
+study.clear_outputs()
+study.save('H_ant', every='auto')
+study.stages.add_run(stage_id='second', until=2e-11)
+study.clear_outputs()
+study.stages.add_run(stage_id='third', until=1e-11)
+"""
+        with TemporaryDirectory() as tmp_dir:
+            loaded, rendered, source = _scene_round_trip(script, Path(tmp_dir))
+        self.assertEqual([stage.stage_id for stage in rendered.stages], ['first', 'second', 'third'])
+        self.assertEqual(
+            [stage.problem.study.to_ir()['sampling'] for stage in loaded.stages],
+            [stage.problem.study.to_ir()['sampling'] for stage in rendered.stages],
+        )
+        self.assertIn('every="auto"', source)
+
+    def test_canonical_grouped_run_sampling_rejects_unknown_fields(self) -> None:
+        script = "import fullmag as fm\nstudy=fm.study('sampling')\nstudy.engine('fdm')\nstudy.cell(5e-9,5e-9,5e-9)\n"
+        script += textwrap.dedent(_SCENE_BODY)
+        script += "study.save('m', every=2e-12)\nstudy.stages.add_run(stage_id='run', until=1e-11)\n"
+        with TemporaryDirectory() as tmp_dir:
+            loaded = _load_text(script, Path(tmp_dir))
+            scene = build_scene_document_from_builder(export_builder_draft(loaded))
+            node = scene['study']['study_pipeline']['nodes'][0]
+            scene['study']['study_pipeline']['nodes'] = [dict(id='group', node_kind='group', enabled=True, children=[node])]
+            scene['study']['stages'] = []
+            source = render_scene_document_as_script(scene)
+            rendered = _load_text(source, Path(tmp_dir), 'group.py')
+            self.assertEqual(loaded.stages[0].problem.study.to_ir()['sampling'], rendered.stages[0].problem.study.to_ir()['sampling'])
+            node['payload']['sampling']['unsupported'] = 1
+            with self.assertRaisesRegex(ValueError, 'run_sampling_unrendered_fields: unsupported'):
+                render_scene_document_as_script(scene)
+
+    def test_canonical_run_resolved_sampling_preserves_requested_auto(self) -> None:
+        script = "import fullmag as fm\nstudy=fm.study('sampling')\nstudy.engine('fdm')\nstudy.cell(5e-9,5e-9,5e-9)\n"
+        script += textwrap.dedent(_SCENE_BODY)
+        script += "study.stages.add_run(stage_id='run', until=1e-11)\n"
+        with TemporaryDirectory() as tmp_dir:
+            loaded = _load_text(script, Path(tmp_dir))
+            scene = build_scene_document_from_builder(export_builder_draft(loaded))
+            node = scene['study']['study_pipeline']['nodes'][0]
+            node['payload']['sampling'] = {'outputs': [
+                dict(kind=kind, name=name, every_seconds=7.6923e-11, requested_policy=dict(kind='auto_sinc_cutoff', nyquist_guard_factor=1.3))
+                for kind, name in [('field_resolved_auto', 'm'), ('scalar_resolved_auto', 'mx')]
+            ]}
+            source = render_scene_document_as_script(scene)
+            rendered = _load_text(source, Path(tmp_dir), 'resolved.py')
+        self.assertEqual([output['kind'] for output in rendered.stages[0].problem.study.to_ir()['sampling']['outputs']], ['field_auto', 'scalar_auto'])
+        self.assertIn('study.save("m", every="auto")', source)
+        self.assertIn('study.save("mx", every="auto")', source)
 
 
 if __name__ == "__main__":

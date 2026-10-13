@@ -8,6 +8,12 @@ import type {
   FieldVectorQuery,
   FieldVectorResponseMetadata,
 } from "../api/apiTypes";
+import {
+  canonicalFieldVectorQuery,
+  parseCanonicalFieldVectorResourceKey,
+  serializeCanonicalFieldVectorResourceKey,
+  type CanonicalFieldVectorQuery,
+} from "../api/fieldQueryIdentity";
 import type { AnalysisResultItemKind } from "@/shared/domain/analysis/results";
 import type { AnalysisResultSelectionRef } from "@/shared/domain/analysis/results";
 
@@ -107,6 +113,11 @@ const AVAILABLE_ANALYSIS_RESULT_FIELD_VIEWS = Object.freeze([
   "phase_rotated_real",
 ]);
 
+const SUPPORTED_ANALYSIS_FIELD_QUERY_VIEWS = new Set([
+  ...AVAILABLE_ANALYSIS_RESULT_FIELD_VIEWS,
+  "full",
+]);
+
 export function analysisResultFieldOverlaySource(
   itemKind: AnalysisResultItemKind,
 ): AnalysisResultFieldOverlaySource {
@@ -195,11 +206,13 @@ export function resolveAnalysisResultFieldOverlayMetadata(
   intent: AnalysisResultFieldOverlayIntent,
 ): AnalysisResultFieldOverlayMetadata | null {
   const fieldRef = intent.fieldRef;
+  const binaryQuery = analysisResultFieldVectorQuery(fieldRef);
   if (
     fieldRef.status !== "ready" ||
     fieldRef.field_id !== intent.fieldId ||
     fieldRef.representation !== "complex-vector-xyz" ||
     !nonEmpty(fieldRef.resource_key) ||
+    !binaryQuery ||
     !fieldRef.mesh_ref ||
     !nonEmpty(fieldRef.mesh_ref.mesh_id) ||
     !nonEmpty(fieldRef.mesh_ref.mesh_revision) ||
@@ -211,11 +224,7 @@ export function resolveAnalysisResultFieldOverlayMetadata(
     analysisResultFieldRef: fieldRef,
     artifactPath: fieldRef.resource_key,
     availableViews: AVAILABLE_ANALYSIS_RESULT_FIELD_VIEWS,
-    binaryQuery: Object.freeze({
-      component: "full",
-      scope_kind: "full",
-      view: "complex",
-    }),
+    binaryQuery,
     defaultPhaseRad: 0,
     fieldId: fieldRef.field_id,
     intent,
@@ -224,25 +233,140 @@ export function resolveAnalysisResultFieldOverlayMetadata(
   });
 }
 
+function analysisResultFieldVectorQuery(
+  fieldRef: AnalysisResultFieldRef,
+): FieldVectorQuery | null {
+  const parsed = parseCanonicalFieldVectorResourceKey(fieldRef.resource_key);
+  const expectedQuantityId = canonicalFieldVectorQuery(fieldRef.field_id).quantityId;
+  if (
+    !parsed ||
+    parsed.quantityId !== expectedQuantityId ||
+    !isCanonicalRelativeFieldVectorResourceKey(fieldRef.resource_key, parsed) ||
+    (parsed.component !== "full" && !isSupportedFieldVectorComponent(parsed.component)) ||
+    parsed.scopeKind !== "full" ||
+    (parsed.view !== undefined && !SUPPORTED_ANALYSIS_FIELD_QUERY_VIEWS.has(parsed.view)) ||
+    (parsed.maxSamples !== undefined &&
+      (!Number.isSafeInteger(parsed.maxSamples) || parsed.maxSamples <= 0)) ||
+    [
+      parsed.expectedArtifactGenerationId,
+      parsed.expectedCarrierRevision,
+      parsed.expectedGenerationId,
+      parsed.geometryScope,
+      parsed.ownerObjectId,
+      parsed.scopeId,
+      parsed.snapshotId,
+      parsed.stageId,
+    ].some((value) => value !== undefined && value.trim().length === 0)
+  ) {
+    return null;
+  }
+
+  const query = {
+    component: "full",
+    expected_artifact_generation_id: parsed.expectedArtifactGenerationId,
+    expected_carrier_revision: parsed.expectedCarrierRevision,
+    expected_generation_id: parsed.expectedGenerationId,
+    geometry_scope: parsed.geometryScope,
+    max_samples: parsed.maxSamples,
+    owner_object_id: parsed.ownerObjectId,
+    phase_rad: parsed.phaseRad,
+    scope_id: parsed.scopeId,
+    scope_kind: "full",
+    snapshot_id: parsed.snapshotId,
+    stage_id: parsed.stageId,
+    view: "complex",
+  } satisfies FieldVectorQuery;
+  return Object.freeze(query);
+}
+
+function isSupportedFieldVectorComponent(component: string): boolean {
+  return (
+    component === "magnitude" ||
+    component === "x" ||
+    component === "y" ||
+    component === "z" ||
+    /^c(?:0|[1-9]\d*)$/.test(component)
+  );
+}
+
+function isCanonicalRelativeFieldVectorResourceKey(
+  resourceKey: string,
+  parsed: CanonicalFieldVectorQuery,
+): boolean {
+  if (
+    !resourceKey.startsWith("/") ||
+    resourceKey.startsWith("//") ||
+    resourceKey.includes("#")
+  ) {
+    return false;
+  }
+
+  let resourceUrl: URL;
+  let canonicalUrl: URL;
+  try {
+    resourceUrl = new URL(resourceKey, "http://fullmag.invalid");
+    canonicalUrl = new URL(
+      serializeCanonicalFieldVectorResourceKey(parsed),
+      "http://fullmag.invalid",
+    );
+  } catch {
+    return false;
+  }
+  if (
+    resourceUrl.origin !== "http://fullmag.invalid" ||
+    resourceUrl.pathname !== canonicalUrl.pathname
+  ) {
+    return false;
+  }
+
+  const actualParameters = new Map<string, string>();
+  for (const [name, value] of resourceUrl.searchParams) {
+    if (actualParameters.has(name)) return false;
+    actualParameters.set(name, value);
+  }
+  if (actualParameters.size !== canonicalUrl.searchParams.size) return false;
+  for (const [name, value] of canonicalUrl.searchParams) {
+    if (actualParameters.get(name) !== value) return false;
+  }
+  return true;
+}
+
 export function validateAnalysisResultFieldResponseMetadata(
   intent: AnalysisResultFieldOverlayIntent,
   metadata: FieldVectorResponseMetadata | null | undefined,
 ): boolean {
+  const expectedBinaryQuery =
+    intent.fieldRef.field_id === intent.fieldId
+      ? analysisResultFieldVectorQuery(intent.fieldRef)
+      : null;
+  if (!expectedBinaryQuery) return false;
+  const expectedArtifactGenerationId =
+    expectedBinaryQuery.expected_artifact_generation_id;
   // The result index revision identifies the immutable source field. The
   // binary data-plane revision is a separate transport/cache revision (the
   // legacy analysis endpoints derive it from the active domain and payload
   // path), so it must be present and internally consistent but need not be
   // byte-for-byte equal to the result-index revision.
+  const indexingMatches = Boolean(
+    metadata &&
+      (metadata.fieldIndexing === "full_domain" ||
+        (metadata.encoding === "FMVP;version=5" &&
+          metadata.fieldIndexing === "explicit_node_indices" &&
+          metadata.nodeIndexCount === metadata.pointCount)),
+  );
   return Boolean(
     metadata &&
       metadata.fieldRevision &&
       metadata.component === "full" &&
-      metadata.encoding === "FMVP;version=3" &&
-      metadata.fieldIndexing === "full_domain" &&
+      (metadata.encoding === "FMVP;version=3" ||
+        metadata.encoding === "FMVP;version=5") &&
+      indexingMatches &&
       metadata.nComp === 6 &&
       metadata.pointCount !== null &&
       metadata.pointCount > 0 &&
       metadata.valueCount === metadata.pointCount * metadata.nComp &&
+      (expectedArtifactGenerationId === undefined ||
+        metadata.artifactGenerationId === expectedArtifactGenerationId) &&
       metadata.meshTopologyHash ===
         intent.fieldRef.mesh_ref?.topology_fingerprint &&
       metadata.quantityId === intent.fieldRef.field_id &&
@@ -262,7 +386,7 @@ export function validateAnalysisResultFieldOverlayBinary(
     !complex ||
     !meshRef ||
     field.dtype !== "float64" ||
-    field.formatVersion !== 3 ||
+    (field.formatVersion !== 3 && field.formatVersion !== 5) ||
     field.nComp !== 6 ||
     complex.componentCount !== 3 ||
     field.quantityId !== metadata.fieldId ||
@@ -275,9 +399,8 @@ export function validateAnalysisResultFieldOverlayBinary(
     !sameTopologyToken(field.meshTopologyRevision, meshRef.mesh_revision) ||
     !sameTopologyToken(topology.meshTopologyRevision, meshRef.mesh_revision) ||
     field.domainGenerationId !== topology.domainGenerationId ||
-    field.indexing !== "full_domain" ||
+    !hasValidAnalysisOverlayIndexing(field, topology) ||
     field.pointCount <= 0 ||
-    field.pointCount !== topology.pointCount ||
     gridPointCount(field.grid) !== field.pointCount ||
     field.valueCount !== field.pointCount * field.nComp ||
     field.values.length !== field.valueCount ||
@@ -290,6 +413,35 @@ export function validateAnalysisResultFieldOverlayBinary(
     complex,
     phasorAmplitudeMax: complexAmplitudeMax(complex),
   });
+}
+
+function hasValidAnalysisOverlayIndexing(
+  field: DecodedFieldVector,
+  topology: ModeFieldOverlayTopologyIdentity,
+): boolean {
+  if (field.indexing === "full_domain") {
+    return field.pointCount === topology.pointCount;
+  }
+  if (
+    field.formatVersion !== 5 ||
+    field.indexing !== "explicit_node_indices" ||
+    !Number.isSafeInteger(topology.pointCount) ||
+    topology.pointCount <= 0 ||
+    !field.nodeIndices ||
+    field.nodeIndices.length !== field.pointCount
+  ) {
+    return false;
+  }
+  for (const nodeIndex of field.nodeIndices) {
+    if (
+      !Number.isSafeInteger(nodeIndex) ||
+      nodeIndex < 0 ||
+      nodeIndex >= topology.pointCount
+    ) {
+      return false;
+    }
+  }
+  return true;
 }
 
 function nonEmpty(value: unknown): value is string {

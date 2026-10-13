@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo } from "react";
+import { useCallback, useEffect, useMemo } from "react";
 
 import { useKernel } from "@/kernel/KernelContext";
 import { createCommandContext } from "@/kernel/commands/commandContext";
@@ -75,14 +75,14 @@ export default function InspectorModule() {
     isEqual: selectionSnapshotEquals,
   });
 
-  const handleFocus = () => {
+  const handleFocus = useCallback(() => {
     if (projectOnly) return;
     void kernel.commands.execute("viewport-3d.fit", {
       source: "inspector",
       layout: kernel.layout,
       selection: kernel.selection,
     });
-  };
+  }, [kernel, projectOnly]);
 
   const handleToggleVisibility = () => {
     void kernel.commands.execute(

@@ -1153,6 +1153,7 @@ Nie jest to jeszcze konfiguracja działającej usługi ani dowód enforcement.
 Root/config/topology ownership, service scheduler/preparation wiring, owner lifecycle
 i runtime recovery są nadal otwartymi bramkami E2. Service cap pozostaje 1.
 
+
 ### 13.15 Przypięta konfiguracja usługi i wynik oczekiwania admission
 
 RuntimeServiceConfig v1 zachowuje dotychczasowy format bez host_execution,
@@ -1570,3 +1571,12 @@ określa checkpoint; ten kontrakt sam nie dowodzi wykonania.
 Ograniczony odbiór operator initialization na przypiętym pakiecie opisuje
 [raport 26 kontroli natywnych](../plans/active/compute-execution-20261004/host-initialization-check-20261007.md).
 Nie odblokowuje on guardu v2 ani pozostałych bramek wykonania.
+
+## Wspólna normalizacja authoring — ADR0057
+
+Scoped korekta ownership z E1: pure replay execution profile/layers jest współdzielony przez IR core, a application re-exportuje te same funkcje i nadal wiąże ProblemIR, rozstrzyga capability oraz steruje submit/runtime. Algorytm precedence, origins i immutable hashes pozostaje bez zmian. Authoring adaptive waliduje efektywne requested intent, zamiast stale legacy fields sceny. Nie ma zmiany wire, fizyki ani nowego GPU fallback. [ADR0057](../adr/0057-shared-execution-intent-normalization.md) określa zakres i bramki; implementacja/runtime wymagają osobnych dowodów.
+
+
+### Polityka równoległości jest obiektem — korekta po GHA38294719727
+
+Pełne authoring validation134PASS/1FAIL ujawniło serde struct sequence fallback: `[]` normalizowało się do serialdefaults. Shared `ParallelExecutionPolicyIR` Deserialize wymaga teraz mapy, zachowując canonical defaults, typy, duplicate/unknown-field rejection i validation zakresów na dotychczasowych boundary. Scene explicit null reset pozostaje wspierany przez istniejący helper; raw policy null nie staje się obiektem. JSON object wire/Serialize bez zmian, brak nowej capability lub zmiany fizyki. Dodatkowe regresje obejmują pełny roundtrip, malformed runtime metadata i duplicate rawJSON. Nowy CI pending.

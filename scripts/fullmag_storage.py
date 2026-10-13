@@ -46,6 +46,7 @@ PATH_OVERRIDES = {
     "FULLMAG_TEMP_ROOT": "temp_root",
     "FULLMAG_WINDOWS_TARGET_DIR": "build_root",
     "CARGO_TARGET_DIR": "build_root",
+    "CARGO_BUILD_BUILD_DIR": "build_root",
     "FULLMAG_CARGO_TARGET_DIR": "build_root",
     "FULLMAG_CARGO_TARGET_ROOT": "build_root",
     "CARGO_TARGET_ROOT": "build_root",
@@ -60,11 +61,12 @@ PATH_OVERRIDES = {
     "FULLMAG_WINDOWS_PNPM_ROOT": "cache_root",
 }
 MANAGED_VARIABLES = set(PATH_OVERRIDES) | {
-    "FULLMAG_PROJECT_STORAGE_ROOT", "FULLMAG_STORAGE_PROFILE",
+    "FULLMAG_PROJECT_STORAGE_ROOT", "FULLMAG_WINDOWS_VOLATILE_ROOT", "FULLMAG_STORAGE_PROFILE",
     "FULLMAG_STORAGE_LOCK_TOKEN", "FULLMAG_STORAGE_LOCK_KEY",
     "FULLMAG_BUILD_STORAGE_ROOT", "FULLMAG_STORAGE_USE_MANAGED_EXT4",
     "FULLMAG_NATIVE_STORAGE_PROFILE", "FULLMAG_NATIVE_BUILD_IMAGE",
     "FULLMAG_NATIVE_MOUNT_VIEW", "FULLMAG_MANAGED_NATIVE_ROOT",
+    "FULLMAG_FRONTEND_CONTAINER_ROOT",
     "FULLMAG_WINDOWS_VOLATILE_ROOT",
 }
 
@@ -268,11 +270,16 @@ def resolve_layout(repo_root, profile=None, environ=None):
     registrations = worktree_records(repo)
     main_repo = Path(registrations[0]["worktree"]).resolve()
     env = {**storage_dotenv(main_repo), **env}
-    project = main_repo.parent
+    # This Windows checkout keeps its worktrees below the canonical checkout
+    # itself (`D:\\git\\fullmag\\worktrees`), so its durable storage belongs
+    # to the checkout (`D:\\git\\fullmag\\storage`). Linux keeps the existing
+    # sibling-project layout used by the managed native storage contract.
+    project = main_repo if os.name == "nt" else main_repo.parent
+    canonical_storage = project / "storage"
     profile = profile or env.get("FULLMAG_STORAGE_PROFILE") or ("windows-native" if os.name == "nt" else "linux-host")
     if not re.fullmatch(r"[a-z0-9][a-z0-9._-]{0,79}", profile):
         raise StorageError(f"Invalid storage profile: {profile!r}")
-    root = absolute(env.get("FULLMAG_PROJECT_STORAGE_ROOT", str(project / "storage")), "FULLMAG_PROJECT_STORAGE_ROOT")
+    root = absolute(env.get("FULLMAG_PROJECT_STORAGE_ROOT", str(canonical_storage)), "FULLMAG_PROJECT_STORAGE_ROOT")
     if root == Path(root.anchor) or inside(project, root):
         raise StorageError(f"Storage cannot contain the project or be a filesystem root: {root}")
     if root in {Path(root.anchor) / name for name in ("fullmag-build", "fullmag-cache", "fullmag-tmp")}:
@@ -282,7 +289,7 @@ def resolve_layout(repo_root, profile=None, environ=None):
         validate_path(marker, root, "storage marker")
         if json.loads(marker.read_text(encoding="utf-8")) != {"schema": SCHEMA, "project_root": str(project)}:
             raise StorageError(f"Storage marker belongs to another project or schema: {marker}")
-    elif root != project / "storage":
+    elif root != canonical_storage:
         raise StorageError(f"A non-default storage root must already be registered by the operator with a project marker: {root}. No automatic fallback or alternate-root initialization.")
     checkouts = [repo, main_repo]
     for registration in registrations:
@@ -292,8 +299,13 @@ def resolve_layout(repo_root, profile=None, environ=None):
         if candidate.is_absolute():
             checkouts.append(candidate.resolve())
     for checkout in checkouts:
+        # The Windows canonical storage directory is deliberately inside the
+        # main checkout, but remains outside every worktree checkout. No other
+        # in-repository or worktree-overlapping path receives this exception.
+        if os.name == "nt" and checkout == main_repo and root == canonical_storage:
+            continue
         if inside(root, checkout) or inside(checkout, root):
-            raise StorageError(f"Storage must be outside the repository and all worktrees: {root} overlaps {checkout}")
+            raise StorageError(f"Storage must be outside all worktrees and non-canonical checkout paths: {root} overlaps {checkout}")
     wt = identifier(repo)
     platform = "windows" if os.name == "nt" else "linux"
     infrastructure = linux_infrastructure(root, env) if os.name != "nt" else {}
@@ -346,6 +358,12 @@ def resolve_layout(repo_root, profile=None, environ=None):
         "FULLMAG_TEMP_ROOT": str(temp), "FULLMAG_RUNTIME_ROOT": layout["runtime_root"],
         "FULLMAG_RUNS_ROOT": layout["runs_root"],
         "FULLMAG_FRONTEND_ROOT": layout["frontend_root"],
+        # Bind sources are host paths, while Docker Desktop needs a Linux
+        # target for a Windows checkout. Linux retains the absolute target
+        # used by compatibility links.
+        "FULLMAG_FRONTEND_CONTAINER_ROOT": (
+            "/fullmag-frontend" if os.name == "nt" else layout["frontend_root"]
+        ),
         "FULLMAG_CARGO_TARGET_DIR": target,
         "FULLMAG_CARGO_TARGET_ROOT": str(build / "cargo-targets"),
         "FULLMAG_FDM_NATIVE_BUILD_ROOT": env.get("FULLMAG_FDM_NATIVE_BUILD_ROOT", str(build / "native-fdm")),
@@ -366,6 +384,13 @@ def resolve_layout(repo_root, profile=None, environ=None):
                          FULLMAG_NATIVE_MOUNT_VIEW=infrastructure["native_mount_view"],
                          FULLMAG_NATIVE_STORAGE_LEGACY="1" if infrastructure["native_storage_legacy"] else "0",
                          FULLMAG_MANAGED_EXT4="1" if managed else "0")
+    if profile in WINDOWS_WORKSPACE_STORAGE_PROFILES.values():
+        # Reduce intermediate path length for the MSVC linker's legacy path limit.
+        # Final artifacts remain in target; existing caches are never removed.
+        variables["CARGO_BUILD_BUILD_DIR"] = str(validate_path(
+            env.get("CARGO_BUILD_BUILD_DIR") or build / "b", build, "CARGO_BUILD_BUILD_DIR"))
+    elif env.get("CARGO_BUILD_BUILD_DIR"):
+        variables["CARGO_BUILD_BUILD_DIR"] = env["CARGO_BUILD_BUILD_DIR"]
     layout["env"] = variables
     return layout
 
@@ -436,6 +461,8 @@ def initialize(layout):
     # Recheck paths at the mutation boundary, including existing markers.
     for field in ("build_root", "cache_root", "temp_root", "runtime_root", "frontend_root"):
         validate_path(layout[field], build_storage, field)
+    if layout["env"].get("CARGO_BUILD_BUILD_DIR"):
+        validate_path(layout["env"]["CARGO_BUILD_BUILD_DIR"], layout["build_root"], "CARGO_BUILD_BUILD_DIR")
     validate_path(layout["runs_root"], root, "runs_root")
     for directory in ("index", "locks"):
         validate_path(root / directory, root, directory)

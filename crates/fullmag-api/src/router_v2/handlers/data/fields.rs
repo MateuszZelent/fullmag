@@ -48,8 +48,8 @@ use crate::field_slice::{
     FieldSliceQuery, ProjectionResult, ResolvedProjectionQuery, SlicePlane,
 };
 use crate::field_store::{
-    serialize_field_vector_binary_v2, serialize_field_vector_binary_v3, FieldVectorBinaryMetadata,
-    FieldVectorIndexing,
+    serialize_field_vector_binary_v2, serialize_field_vector_binary_v3,
+    serialize_field_vector_binary_v5, FieldVectorBinaryMetadata, FieldVectorIndexing,
 };
 use crate::orientation_color::apply_magnetization_hsl_rgba;
 use crate::preview::{quantity_spatial_domain, quantity_unit};
@@ -64,8 +64,11 @@ use crate::router_v2::handlers::sessions::status::{
 use crate::schemas::common::AcceptedObservationFrameRef;
 use crate::schemas::fields::*;
 use crate::session::{
-    current_artifact_dir, latest_field_source_precedence, preview_cache_precedes_latest,
-    preview_field_source_precedence, resolved_current_field_source, ResolvedCurrentFieldSource,
+    current_artifact_dir, latest_field_source_is_qualified, latest_field_source_precedence,
+    preview_cache_precedes_latest, preview_field_source_is_qualified,
+    preview_field_source_precedence, relevant_field_materialization_status,
+    resolved_current_field_observation_frame, resolved_current_field_source,
+    ResolvedCurrentFieldSource,
 };
 use crate::types::{AppState, CommandLifecycleState, SessionStateResponse};
 use fullmag_quantities::{normalize_quantity_id, quantity_spec};
@@ -75,6 +78,7 @@ use fullmag_runner::{FemMeshPayload, QuantityMaterializationCapability, RuntimeE
 
 static HDR_FIELD_REVISION: &str = "x-fullmag-field-revision";
 static HDR_DOMAIN_GEN_ID: &str = "x-fullmag-domain-generation-id";
+static HDR_ARTIFACT_GEN_ID: &str = "x-fullmag-artifact-generation-id";
 static HDR_QUANTITY_ID: &str = "x-fullmag-quantity-id";
 static HDR_COMPONENT: &str = "x-fullmag-component";
 static HDR_ENCODING: &str = "x-fullmag-encoding";
@@ -1264,6 +1268,21 @@ fn insert_field_headers(
     );
 }
 
+fn insert_artifact_generation_header(
+    resp: &mut axum::response::Response,
+    generation_id: Option<&str>,
+) {
+    let Some(generation_id) = generation_id else {
+        return;
+    };
+    if let Ok(value) = HeaderValue::from_str(generation_id) {
+        resp.headers_mut().insert(
+            HeaderName::from_static(HDR_ARTIFACT_GEN_ID),
+            value,
+        );
+    }
+}
+
 fn insert_scope_headers(resp: &mut axum::response::Response, scope: Option<&ResolvedFieldScope>) {
     let Some(scope) = scope else {
         return;
@@ -1388,6 +1407,33 @@ fn current_source_step(snapshot: &SessionStateResponse) -> u64 {
         .unwrap_or(0)
 }
 
+fn freshness_from_selected_observation_frame(
+    snapshot: &SessionStateResponse,
+    quantity_id: &str,
+    mut freshness: FieldFreshness,
+) -> FieldFreshness {
+    let n_comp = quantity_spec(quantity_id)
+        .map(|spec| usize::from(spec.n_comp))
+        .unwrap_or(3);
+    let Some(frame) = resolved_current_field_observation_frame(snapshot, quantity_id, n_comp)
+    else {
+        return freshness;
+    };
+    freshness.source_step = frame.source_step;
+    freshness.source_time_seconds = frame
+        .source_time_seconds
+        .filter(|time| time.is_finite() && *time >= 0.0);
+    freshness.stale_by_steps = current_source_step(snapshot).saturating_sub(frame.source_step);
+    freshness.state = if freshness.stale_by_steps == 0 {
+        FieldMaterializationState::Complete
+    } else {
+        FieldMaterializationState::StaleComplete
+    };
+    freshness.materialization_reason_code = (freshness.stale_by_steps > 0)
+        .then_some("field_stale_complete".to_string());
+    freshness
+}
+
 fn latest_json_field_freshness(
     snapshot: &SessionStateResponse,
     value: &serde_json::Value,
@@ -1434,6 +1480,9 @@ fn preview_cache_is_fresher(snapshot: &SessionStateResponse, quantity_id: &str) 
     let Some(preview) = snapshot.preview_cache.get(quantity_id) else {
         return false;
     };
+    if !preview_field_source_is_qualified(snapshot, preview) {
+        return false;
+    }
     let n_comp = quantity_spec(quantity_id)
         .map(|spec| spec.n_comp as usize)
         .unwrap_or(3);
@@ -1445,7 +1494,10 @@ fn preview_cache_is_fresher(snapshot: &SessionStateResponse, quantity_id: &str) 
     ) {
         return false;
     }
-    if snapshot.latest_fields.get(quantity_id).is_none() {
+    let Some(latest) = snapshot.latest_fields.get(quantity_id) else {
+        return true;
+    };
+    if !latest_field_source_is_qualified(snapshot, quantity_id, latest) {
         return true;
     }
     preview_cache_precedes_latest(snapshot, quantity_id)
@@ -1494,7 +1546,7 @@ fn resolved_current_field_values<'a>(
         .flatten()?;
     let point_count = field.values.len() / n_comp.max(1);
     let grid = resolved_current_field_grid(snapshot, field.source_grid, point_count);
-    let freshness = match field.source_kind {
+    let mut freshness = match field.source_kind {
         SpatialFieldSourceKind::Materialized => latest_json_field_freshness(
             snapshot,
             snapshot.latest_fields.get(quantity_id)?,
@@ -1506,7 +1558,7 @@ fn resolved_current_field_values<'a>(
         SpatialFieldSourceKind::Live => completed_field_freshness(
             current_source_step(snapshot),
             current_source_step(snapshot),
-            field.quantity_revision,
+            0,
             snapshot
                 .live_state
                 .as_ref()
@@ -1516,6 +1568,9 @@ fn resolved_current_field_values<'a>(
         ),
         SpatialFieldSourceKind::Persisted => return None,
     };
+    if quantity_id == "m" {
+        freshness = freshness_from_selected_observation_frame(snapshot, quantity_id, freshness);
+    }
     Some((field, grid, freshness))
 }
 
@@ -1586,14 +1641,7 @@ fn materializer_status<'a>(
     snapshot: &'a SessionStateResponse,
     quantity_id: &str,
 ) -> Option<&'a fullmag_runner::LiveFieldMaterializationStatus> {
-    snapshot
-        .live_state
-        .as_ref()?
-        .latest_step
-        .field_materialization_states
-        .iter()
-        .rev()
-        .find(|status| status.quantity == quantity_id)
+    relevant_field_materialization_status(snapshot, quantity_id)
 }
 
 fn legacy_pending_field_freshness(snapshot: &SessionStateResponse) -> FieldFreshness {
@@ -1629,6 +1677,44 @@ fn validate_field_vector_generation_precondition(
         )));
     }
     Ok(())
+}
+
+fn validate_analysis_artifact_generation_precondition(
+    query: &FieldVectorQuery,
+    generation: Option<&fullmag_runner::artifact_generation::GenerationCapture>,
+    artifact_path: &str,
+) -> Result<Option<String>, ApiError> {
+    let expected = query
+        .expected_artifact_generation_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let Some(generation) = generation else {
+        return if expected.is_some() {
+            Err(ApiError::conflict(
+                "frequency_domain_artifact_generation_unavailable",
+            ))
+        } else {
+            Ok(None)
+        };
+    };
+    if !generation
+        .commit
+        .content
+        .members
+        .contains_key(artifact_path)
+    {
+        return Err(ApiError::conflict(
+            "frequency_domain_artifact_generation_member_missing",
+        ));
+    }
+    let actual = generation.commit.generation_id.as_str();
+    if expected != Some(actual) {
+        return Err(ApiError::conflict(format!(
+            "stale_artifact_generation_id: expected a metadata-bound generation id, current generation is '{actual}'"
+        )));
+    }
+    Ok(Some(actual.to_string()))
 }
 
 fn validate_field_vector_carrier_precondition(
@@ -1855,6 +1941,7 @@ fn invalid_live_magnetization_is_present(snapshot: &SessionStateResponse) -> boo
     snapshot
         .live_state
         .as_ref()
+        .filter(|state| state.latest_step.is_physical_observation())
         .and_then(|state| state.latest_step.magnetization.as_ref())
         .is_some()
         && !live_magnetization_available(snapshot)
@@ -1869,7 +1956,8 @@ fn invalid_current_field_source_is_present(
         .latest_fields
         .get(quantity_id)
         .is_some_and(|value| {
-            !json_field_matches_current_domain(snapshot, quantity_id, n_comp, value)
+            latest_field_source_is_qualified(snapshot, quantity_id, value)
+                && !json_field_matches_current_domain(snapshot, quantity_id, n_comp, value)
         });
     let invalid_live = quantity_id == "m" && invalid_live_magnetization_is_present(snapshot);
     invalid_latest || invalid_live
@@ -1907,6 +1995,9 @@ pub async fn get_field_catalog(
         BTreeMap::<String, (String, Option<String>, String, String)>::new();
 
     for (qid, value) in snapshot.latest_fields.entries() {
+        if !latest_field_source_is_qualified(snapshot, qid, value) {
+            continue;
+        }
         if preview_cache_is_fresher(snapshot, qid) {
             continue;
         }
@@ -1922,6 +2013,12 @@ pub async fn get_field_catalog(
             field
         };
         remember_materialized_carrier(&mut materialized_carriers, &resolved);
+        let freshness = latest_json_field_freshness(snapshot, value, qid);
+        let freshness = if qid == "m" {
+            freshness_from_selected_observation_frame(snapshot, qid, freshness)
+        } else {
+            freshness
+        };
         push_field_descriptor(
             &mut quantities,
             qid,
@@ -1929,12 +2026,15 @@ pub async fn get_field_catalog(
             None,
             resolved.quantity_revision,
             &gen_id,
-            latest_json_field_freshness(snapshot, value, qid),
+            freshness,
             !resolved.values.is_empty(),
         );
     }
 
     for (qid, field) in snapshot.preview_cache.iter() {
+        if !preview_field_source_is_qualified(snapshot, field) {
+            continue;
+        }
         if quantities.iter().any(|q| q.quantity_id == *qid) {
             continue;
         }
@@ -1945,6 +2045,12 @@ pub async fn get_field_catalog(
             continue;
         };
         remember_materialized_carrier(&mut materialized_carriers, &resolved);
+        let freshness = preview_field_freshness(snapshot, field);
+        let freshness = if qid == "m" {
+            freshness_from_selected_observation_frame(snapshot, qid, freshness)
+        } else {
+            freshness
+        };
         push_field_descriptor(
             &mut quantities,
             qid,
@@ -1955,7 +2061,7 @@ pub async fn get_field_catalog(
                 .then_some(field.spatial_kind.as_str()),
             resolved.quantity_revision,
             &gen_id,
-            preview_field_freshness(snapshot, field),
+            freshness,
             !resolved.values.is_empty(),
         );
     }
@@ -2041,17 +2147,13 @@ pub async fn get_field_catalog(
             .ok_or_else(|| ApiError::internal("selected live magnetization has no carrier"))?;
         remember_materialized_carrier(&mut materialized_carriers, &live_magnetization);
         quantities.retain(|quantity| quantity.quantity_id != "m");
-        push_field_descriptor(
-            &mut quantities,
+        let freshness = freshness_from_selected_observation_frame(
+            snapshot,
             "m",
-            quantity_unit("m"),
-            None,
-            live_magnetization.quantity_revision,
-            &gen_id,
             completed_field_freshness(
                 current_source_step(snapshot),
                 current_source_step(snapshot),
-                live_magnetization.quantity_revision,
+                0,
                 snapshot
                     .live_state
                     .as_ref()
@@ -2059,17 +2161,33 @@ pub async fn get_field_catalog(
                     .unwrap_or(0),
                 0,
             ),
+        );
+        push_field_descriptor(
+            &mut quantities,
+            "m",
+            quantity_unit("m"),
+            None,
+            live_magnetization.quantity_revision,
+            &gen_id,
+            freshness,
             true,
         );
     }
 
-    for status in snapshot
+    let status_quantities = snapshot
         .live_state
         .as_ref()
         .into_iter()
         .flat_map(|state| state.latest_step.field_materialization_states.iter())
-        .filter(|status| status.state != fullmag_runner::LiveFieldMaterializationState::Complete)
-    {
+        .map(|status| status.quantity.clone())
+        .collect::<BTreeSet<_>>();
+    for quantity_id in status_quantities {
+        let Some(status) = relevant_field_materialization_status(snapshot, &quantity_id) else {
+            continue;
+        };
+        if status.state == fullmag_runner::LiveFieldMaterializationState::Complete {
+            continue;
+        }
         if let Some(descriptor) = quantities
             .iter_mut()
             .find(|descriptor| descriptor.quantity_id == status.quantity)
@@ -2451,6 +2569,7 @@ pub(crate) fn resolve_target_field_availability(
             view: None,
             phase_rad: None,
             expected_generation_id: None,
+            expected_artifact_generation_id: None,
             expected_carrier_revision: None,
         };
         match resolve_field_scope(
@@ -2725,6 +2844,7 @@ pub async fn get_field_meta(
     let location = snapshot
         .preview_cache
         .get(quantity_id)
+        .filter(|field| preview_field_source_is_qualified(snapshot, field))
         .filter(|field| field.spatial_kind.starts_with("fem_"))
         .map(|field| field.spatial_kind.clone())
         .unwrap_or_else(|| quantity_spatial_domain(quantity_id).to_string());
@@ -2743,6 +2863,7 @@ pub async fn get_field_meta(
             view: None,
             phase_rad: None,
             expected_generation_id: None,
+            expected_artifact_generation_id: None,
             expected_carrier_revision: None,
         },
         quantity_id,
@@ -3034,6 +3155,7 @@ pub async fn get_field_meta(
         view: None,
         phase_rad: None,
         expected_generation_id: None,
+        expected_artifact_generation_id: None,
         expected_carrier_revision: None,
     };
     let resolved_scope = resolve_field_scope(
@@ -3131,9 +3253,15 @@ fn field_observation_frame_ref(
     source_step: u64,
     source_time_seconds: Option<f64>,
 ) -> AcceptedObservationFrameRef {
+    if quantity_id == "m" {
+        if let Some(frame) = resolved_current_field_observation_frame(snapshot, "m", 3) {
+            return frame;
+        }
+    }
     snapshot
         .latest_fields
         .get(quantity_id)
+        .filter(|value| latest_field_source_is_qualified(snapshot, quantity_id, value))
         .and_then(|value| value.get("observation_frame"))
         .and_then(|value| serde_json::from_value(value.clone()).ok())
         .unwrap_or_else(|| {
@@ -4514,9 +4642,10 @@ fn sample_unscoped_field_values(
         FieldVectorQuery,
     ),
     responses(
-        (status = 200, description = "Binary FMVP field vector. Scoped FEM and FDM payloads use FMVP v3 metadata with domain_generation_id, carrier topology revision/hash, scope kind/id, indexing, and optional node_indices. Multilayer FDM layer/object scopes identify their native grid carrier. Full-domain regular-grid FDM uses FMVP v3 sampled indices when max_samples is supplied and may use FMVP v2 for an uncapped complete payload.", content_type = "application/octet-stream", headers(
+        (status = 200, description = "Binary FMVP field vector. Analysis response and eigen-mode vectors use FMVP v5 metadata with the full quantity ID and domain generation identity; when a mesh carrier is available they also include topology, scope, and indexing metadata. Analysis vectors without a mesh use the explicit legacy_count_only absent-topology sentinel and cannot establish topology-bound overlay compatibility. Other scoped FEM and FDM payloads use FMVP v3 metadata with domain_generation_id, carrier topology revision/hash, scope kind/id, indexing, and optional node_indices. Multilayer FDM layer/object scopes identify their native grid carrier. Full-domain regular-grid FDM uses FMVP v3 sampled indices when max_samples is supplied and may use FMVP v2 for an uncapped complete payload.", content_type = "application/octet-stream", headers(
             ("x-fullmag-field-revision" = String, description = "Field revision"),
             ("x-fullmag-domain-generation-id" = String, description = "Domain generation identity"),
+            ("x-fullmag-artifact-generation-id" = String, description = "Committed analysis artifact generation identity; present only when the served field member is verified"),
             ("x-fullmag-quantity-id" = String, description = "Canonical quantity identifier"),
             ("x-fullmag-component" = String, description = "Resolved component projection"),
             ("x-fullmag-encoding" = String, description = "FMVP encoding and version"),
@@ -4526,10 +4655,10 @@ fn sample_unscoped_field_values(
             ("x-fullmag-scope-kind" = String, description = "Resolved scope kind"),
             ("x-fullmag-scope-id" = String, description = "Resolved optional scope identifier"),
             ("x-fullmag-snapshot-id" = String, description = "Optional persisted snapshot identifier"),
-            ("x-fullmag-mesh-topology-hash" = String, description = "Optional FMVP v3 mesh topology hash"),
-            ("x-fullmag-field-indexing" = String, description = "Optional FMVP v3 field indexing"),
-            ("x-fullmag-node-index-count" = usize, description = "Optional FMVP v3 node-index count"),
-            ("x-fullmag-payload-state" = String, description = "current for metadata-complete FMVP v3; legacy_unverified for FMVP v2")
+            ("x-fullmag-mesh-topology-hash" = String, description = "Optional FMVP v3/v5 mesh topology hash"),
+            ("x-fullmag-field-indexing" = String, description = "Optional FMVP v3/v5 field indexing"),
+            ("x-fullmag-node-index-count" = usize, description = "Optional FMVP v3/v5 node-index count"),
+            ("x-fullmag-payload-state" = String, description = "current for metadata-complete FMVP v3 through v5; legacy_unverified for FMVP v2")
         )),
         (status = 202, description = "Field vector materialization is pending. The JSON body contains a stable reason_code, retry_after_ms, requested quantity/scope, and domain generation; clients may retry this resource.", body = FieldVectorPendingResponse, content_type = "application/json"),
         (status = 204, description = "Recognized field quantity has no materialized source and no active pending materialization is reported (not requested or currently unavailable); no payload is returned."),
@@ -4686,17 +4815,17 @@ async fn get_field_vector_unfenced(
                         .map(|(field, grid, _freshness)| (field.values.clone(), grid, Some(field)))
                 })
         };
+    let has_qualified_latest = snapshot.latest_fields.get(quantity_id).is_some_and(|value| {
+        latest_field_source_is_qualified(snapshot, quantity_id, value)
+    });
+    let has_qualified_preview = snapshot
+        .preview_cache
+        .get(quantity_id)
+        .is_some_and(|field| preview_field_source_is_qualified(snapshot, field));
     let has_field_source = airbox_field.is_some()
         || (!multilayer_airbox_scope
-            && (snapshot.latest_fields.get(quantity_id).is_some()
-                || snapshot.preview_cache.get(quantity_id).is_some()
-                || transport_field.is_some()))
-        || (quantity_id == "m"
-            && snapshot
-                .live_state
-                .as_ref()
-                .and_then(|state| state.latest_step.magnetization.as_ref())
-                .is_some());
+            && (has_qualified_latest || has_qualified_preview || transport_field.is_some()))
+        || (quantity_id == "m" && live_magnetization_available(snapshot));
 
     if raw_values_opt.is_none() {
         validate_pending_field_vector_scope(
@@ -5094,17 +5223,25 @@ fn analysis_frequency_response_vector_response(
     };
     let artifact_dir = current_artifact_dir(snapshot)
         .ok_or_else(|| ApiError::not_found("no artifact directory for analysis field payload"))?;
-    let frequency_point_path = response_frequency_point_path(&artifact_dir, frequency_index)?;
+    let generation = fullmag_runner::artifact_generation::capture(&artifact_dir).map_err(|error| {
+        ApiError::internal(format!("invalid frequency-domain artifact generation: {error}"))
+    })?;
+    let frequency_point_path =
+        response_frequency_point_path(&artifact_dir, frequency_index, generation.as_ref())?;
     let relative_path = if let Some(path) =
-        response_field_payload_path_from_manifest(&artifact_dir, frequency_index)?
+        response_field_payload_path_from_manifest(&artifact_dir, frequency_index, generation.as_ref())?
     {
         path
     } else if let Some(path) =
-        response_field_payload_path_from_sweep(&artifact_dir, frequency_index)?
+        response_field_payload_path_from_sweep(&artifact_dir, frequency_index, generation.as_ref())?
     {
         path
     } else if let Some(path) =
-        response_field_payload_path_from_point_artifact(&artifact_dir, &frequency_point_path)?
+        response_field_payload_path_from_point_artifact(
+            &artifact_dir,
+            &frequency_point_path,
+            generation.as_ref(),
+        )?
     {
         path
     } else {
@@ -5112,27 +5249,29 @@ fn analysis_frequency_response_vector_response(
             "response/field_payloads.zarr/frequency_{frequency_index:04}/vector_xyz_complex/0.0.0"
         )
     };
-    let Some(path) = try_resolve_artifact_path(&artifact_dir, &relative_path)? else {
+    let artifact_generation_id = validate_analysis_artifact_generation_precondition(
+        query,
+        generation.as_ref(),
+        &relative_path,
+    )?;
+    crate::router_v2::handlers::analysis::frequency_domain::
+        validate_frequency_domain_field_artifact_owner(snapshot, &relative_path, generation.as_ref())?;
+    let metadata = response_field_data_plane_metadata_from_point_artifact(
+        &artifact_dir,
+        &frequency_point_path,
+        generation.as_ref(),
+    )?;
+    let Some((bytes, member)) =
+        crate::router_v2::handlers::analysis::results::read_frequency_domain_field_payload_in_generation(
+            &artifact_dir,
+            &relative_path,
+            generation.as_ref(),
+        )?
+    else {
         return Err(ApiError::not_found(format!(
             "analysis frequency-response field payload is missing: {relative_path}"
         )));
     };
-    let bytes = std::fs::read(&path).map_err(|error| {
-        if error.kind() == std::io::ErrorKind::NotFound {
-            ApiError::not_found(format!(
-                "analysis frequency-response field payload is missing: {relative_path}"
-            ))
-        } else {
-            ApiError::internal(format!(
-                "failed to read analysis frequency-response field payload '{}': {}",
-                relative_path, error
-            ))
-        }
-    })?;
-    let metadata = response_field_data_plane_metadata_from_point_artifact(
-        &artifact_dir,
-        &frequency_point_path,
-    )?;
     let effective_view = query.view.as_deref().unwrap_or(&metadata.default_view);
     let effective_phase_rad = query.phase_rad.unwrap_or(metadata.default_phase_rad);
     validate_response_field_requested_view(
@@ -5176,18 +5315,29 @@ fn analysis_frequency_response_vector_response(
     let (out_n_comp, projected) = project_values(&raw_values, n_comp, &component)?;
     let point_count = raw_values.len() / n_comp;
     let out_grid = [point_count as u32, 1, 1];
-    let binary = serialize_analysis_field_vector_binary(
+    let AnalysisFieldVectorBinary {
+        bytes: binary,
+        topology_hash,
+        indexing,
+        node_index_count,
+    } = serialize_analysis_field_vector_binary(
         snapshot, field_id, out_n_comp, out_grid, &projected, None,
     )?;
-    let revision = analysis_payload_revision(snapshot, &relative_path, bytes.len());
+    let revision = analysis_payload_revision(
+        snapshot,
+        &relative_path,
+        bytes.len(),
+        artifact_generation_id.as_deref(),
+    );
     let etag = crate::router_v2::handlers::shared::stable_strong_etag(&format!(
-        "{field_id}:{revision}:{}:{}:{}",
+        "fmvp5:{field_id}:{revision}:{}:{}:{}:{:x}",
         effective_view,
         query
             .component
             .as_deref()
             .unwrap_or(default_component.unwrap_or("full")),
-        effective_phase_rad
+        effective_phase_rad,
+        Sha256::digest(&binary)
     ));
     let mut resp =
         crate::router_v2::handlers::shared::conditional_binary_response(headers, &etag, binary);
@@ -5200,17 +5350,40 @@ fn analysis_frequency_response_vector_response(
         point_count,
         projected.len(),
     );
+    insert_field_vector_binary_headers(
+        &mut resp,
+        5,
+        topology_hash.as_deref(),
+        Some(indexing),
+        node_index_count,
+    );
+    insert_artifact_generation_header(&mut resp, artifact_generation_id.as_deref());
+    if artifact_generation_id.is_some() != member.is_some() {
+        return Err(ApiError::internal(
+            "frequency-domain artifact generation membership was not preserved",
+        ));
+    }
+    crate::router_v2::handlers::analysis::results::ensure_generation_capture_current(
+        &artifact_dir,
+        generation.as_ref(),
+    )?;
     Ok(Some(resp))
 }
 
 fn response_field_payload_path_from_manifest(
     artifact_dir: &std::path::Path,
     frequency_index: u32,
+    generation: Option<&fullmag_runner::artifact_generation::GenerationCapture>,
 ) -> Result<Option<String>, ApiError> {
-    if try_resolve_artifact_path(artifact_dir, "frequency_domain/manifest.v1.json")?.is_none() {
+    let Some((manifest, _)) = crate::router_v2::handlers::analysis::results::
+        read_result_artifact_snapshot_in_generation(
+            artifact_dir,
+            "frequency_domain/manifest.v1.json",
+            generation,
+        )?
+    else {
         return Ok(None);
-    }
-    let manifest = read_json_artifact_value(artifact_dir, "frequency_domain/manifest.v1.json")?;
+    };
     Ok(manifest
         .get("resources")
         .and_then(|resources| resources.get("response_field_resources"))
@@ -5234,47 +5407,57 @@ fn response_field_payload_path_from_manifest(
 fn response_field_payload_path_from_sweep(
     artifact_dir: &std::path::Path,
     frequency_index: u32,
+    generation: Option<&fullmag_runner::artifact_generation::GenerationCapture>,
 ) -> Result<Option<String>, ApiError> {
     response_sweep_linked_path(
         artifact_dir,
         frequency_index,
         "response_field_payload_path",
         "response_field_payload_paths",
+        generation,
     )
 }
 
 fn response_frequency_point_path_from_sweep(
     artifact_dir: &std::path::Path,
     frequency_index: u32,
+    generation: Option<&fullmag_runner::artifact_generation::GenerationCapture>,
 ) -> Result<Option<String>, ApiError> {
     response_sweep_linked_path(
         artifact_dir,
         frequency_index,
         "frequency_point_artifact_path",
         "frequency_point_artifact_paths",
+        generation,
     )
 }
 
 fn response_frequency_point_path(
     artifact_dir: &std::path::Path,
     frequency_index: u32,
+    generation: Option<&fullmag_runner::artifact_generation::GenerationCapture>,
 ) -> Result<String, ApiError> {
     Ok(
-        response_frequency_point_path_from_sweep(artifact_dir, frequency_index)?.unwrap_or_else(
-            || format!("response/frequency_points/frequency_{frequency_index:04}.json"),
-        ),
+        response_frequency_point_path_from_sweep(artifact_dir, frequency_index, generation)?
+            .unwrap_or_else(|| format!("response/frequency_points/frequency_{frequency_index:04}.json")),
     )
 }
 
 fn response_field_payload_path_from_point_artifact(
     artifact_dir: &std::path::Path,
     frequency_point_artifact_path: &str,
+    generation: Option<&fullmag_runner::artifact_generation::GenerationCapture>,
 ) -> Result<Option<String>, ApiError> {
-    if try_resolve_artifact_path(artifact_dir, frequency_point_artifact_path)?.is_none() {
+    let Some((payload, _)) = crate::router_v2::handlers::analysis::results::
+        read_result_artifact_snapshot_in_generation(
+            artifact_dir,
+            frequency_point_artifact_path,
+            generation,
+        )?
+    else {
         return Ok(None);
-    }
-    let point = read_json_artifact_value(artifact_dir, frequency_point_artifact_path)?;
-    point
+    };
+    payload
         .get("field_payload_path")
         .and_then(serde_json::Value::as_str)
         .map(str::to_string)
@@ -5287,6 +5470,13 @@ fn response_field_payload_path_from_point_artifact(
         })
 }
 
+struct AnalysisFieldVectorBinary {
+    bytes: Vec<u8>,
+    topology_hash: Option<String>,
+    indexing: FieldVectorIndexing,
+    node_index_count: Option<usize>,
+}
+
 fn serialize_analysis_field_vector_binary(
     snapshot: &SessionStateResponse,
     field_id: &str,
@@ -5294,25 +5484,50 @@ fn serialize_analysis_field_vector_binary(
     out_grid: [u32; 3],
     projected: &[f64],
     scope: Option<&ResolvedFieldScope>,
-) -> Result<Vec<u8>, ApiError> {
+) -> Result<AnalysisFieldVectorBinary, ApiError> {
+    if out_n_comp == 0 {
+        return Err(ApiError::internal(
+            "analysis field vector cannot serialize zero components",
+        ));
+    }
+    let domain_generation_id = domain_generation_id(snapshot);
+    let point_count = projected.len() / out_n_comp;
     let Some(mesh) = snapshot.fem_mesh.as_ref() else {
-        return serialize_field_vector_binary_v2(field_id, out_n_comp, out_grid, projected)
-            .map_err(ApiError::internal);
+        if scope.is_some() {
+            return Err(ApiError::conflict(
+                "analysis_field_node_mapping_unavailable: scoped fields require current mesh topology",
+            ));
+        }
+        let metadata = FieldVectorBinaryMetadata {
+            domain_generation_id: &domain_generation_id,
+            mesh_topology_revision: 0,
+            mesh_topology_hash: [0; 32],
+            scope_kind: "full",
+            scope_id: "",
+            indexing: FieldVectorIndexing::LegacyCountOnly,
+            node_indices: &[],
+        };
+        let bytes = serialize_field_vector_binary_v5(
+            field_id, out_n_comp, out_grid, projected, &metadata, None,
+        )
+        .map_err(ApiError::internal)?;
+        return Ok(AnalysisFieldVectorBinary {
+            bytes,
+            topology_hash: None,
+            indexing: FieldVectorIndexing::LegacyCountOnly,
+            node_index_count: Some(0),
+        });
     };
-    let point_count = if out_n_comp > 0 {
-        projected.len() / out_n_comp
-    } else {
-        projected.len()
-    };
+
     let full_node_count = mesh.nodes.len();
-    let node_indices = if let Some(scope) = scope {
+    let (node_indices, indexing) = if let Some(scope) = scope {
         if scope.node_indices.len() != point_count {
             return Err(ApiError::conflict(format!(
                 "mode_field_object_coverage_incomplete: object scope has {} nodes but the scoped mode payload has {point_count} points",
                 scope.node_indices.len()
             )));
         }
-        scope
+        let node_indices = scope
             .node_indices
             .iter()
             .map(|index| {
@@ -5322,16 +5537,18 @@ fn serialize_analysis_field_vector_binary(
                     ))
                 })
             })
-            .collect::<Result<Vec<_>, ApiError>>()?
+            .collect::<Result<Vec<_>, ApiError>>()?;
+        (node_indices, FieldVectorIndexing::ExplicitNodeIndices)
     } else if point_count == full_node_count {
-        Vec::new()
+        (Vec::new(), FieldVectorIndexing::FullDomain)
     } else {
         let indices = magnetic_node_index_set(mesh);
         if indices.len() != point_count {
-            return serialize_field_vector_binary_v2(field_id, out_n_comp, out_grid, projected)
-                .map_err(ApiError::internal);
+            return Err(ApiError::conflict(format!(
+                "analysis_field_node_mapping_unavailable: field has {point_count} points but current mesh cannot provide a matching node map"
+            )));
         }
-        indices
+        let node_indices = indices
             .into_iter()
             .map(|index| {
                 u32::try_from(index).map_err(|_| {
@@ -5340,32 +5557,37 @@ fn serialize_analysis_field_vector_binary(
                     ))
                 })
             })
-            .collect::<Result<Vec<_>, ApiError>>()?
+            .collect::<Result<Vec<_>, ApiError>>()?;
+        (node_indices, FieldVectorIndexing::ExplicitNodeIndices)
     };
+
     let topology_hash = fullmag_runner::fem_mesh_topology_fingerprint(mesh);
     let topology_hash_bytes = mesh_topology_hash_bytes(&topology_hash)?;
-    let indexing = if node_indices.is_empty() {
-        FieldVectorIndexing::FullDomain
-    } else {
-        FieldVectorIndexing::ExplicitNodeIndices
+    let (scope_kind, scope_id) = match scope {
+        Some(scope) => (scope.kind.as_str(), scope.id.as_deref().unwrap_or("")),
+        None if indexing == FieldVectorIndexing::FullDomain => ("full", ""),
+        None => ("magnetic_only", ""),
     };
     let metadata = FieldVectorBinaryMetadata {
-        domain_generation_id: &domain_generation_id(snapshot),
+        domain_generation_id: &domain_generation_id,
         mesh_topology_revision: snapshot.mesh_revision,
         mesh_topology_hash: topology_hash_bytes,
-        scope_kind: scope.map(|scope| scope.kind.as_str()).unwrap_or_else(|| {
-            if node_indices.is_empty() {
-                "full"
-            } else {
-                "magnetic_only"
-            }
-        }),
-        scope_id: scope.and_then(|scope| scope.id.as_deref()).unwrap_or(""),
+        scope_kind,
+        scope_id,
         indexing,
         node_indices: &node_indices,
     };
-    serialize_field_vector_binary_v3(field_id, out_n_comp, out_grid, projected, &metadata)
-        .map_err(ApiError::internal)
+    let bytes = serialize_field_vector_binary_v5(
+        field_id, out_n_comp, out_grid, projected, &metadata, None,
+    )
+    .map_err(ApiError::internal)?;
+    Ok(AnalysisFieldVectorBinary {
+        bytes,
+        topology_hash: Some(topology_hash),
+        indexing,
+        node_index_count: (indexing == FieldVectorIndexing::ExplicitNodeIndices)
+            .then_some(node_indices.len()),
+    })
 }
 
 struct ResponseFieldDataPlaneMetadata {
@@ -5412,13 +5634,17 @@ fn response_sweep_linked_path(
     frequency_index: u32,
     point_field: &str,
     list_field: &str,
+    generation: Option<&fullmag_runner::artifact_generation::GenerationCapture>,
 ) -> Result<Option<String>, ApiError> {
-    if try_resolve_artifact_path(artifact_dir, "response/magnetic_response_sweep.v2.json")?
-        .is_none()
-    {
+    let Some((sweep, _)) = crate::router_v2::handlers::analysis::results::
+        read_result_artifact_snapshot_in_generation(
+            artifact_dir,
+            "response/magnetic_response_sweep.v2.json",
+            generation,
+        )?
+    else {
         return Ok(None);
-    }
-    let sweep = read_json_artifact_value(artifact_dir, "response/magnetic_response_sweep.v2.json")?;
+    };
     if let Some(path) = sweep
         .get("points")
         .and_then(serde_json::Value::as_array)
@@ -5450,8 +5676,16 @@ fn response_sweep_linked_path(
 fn response_field_data_plane_metadata_from_point_artifact(
     artifact_dir: &std::path::Path,
     relative_path: &str,
+    generation: Option<&fullmag_runner::artifact_generation::GenerationCapture>,
 ) -> Result<ResponseFieldDataPlaneMetadata, ApiError> {
-    if try_resolve_artifact_path(artifact_dir, relative_path)?.is_none() {
+    let Some((point, _)) = crate::router_v2::handlers::analysis::results::
+        read_result_artifact_snapshot_in_generation(artifact_dir, relative_path, generation)?
+    else {
+        if generation.is_some() {
+            return Err(ApiError::conflict(
+                "frequency_domain_artifact_generation_field_metadata_missing",
+            ));
+        }
         return Ok(ResponseFieldDataPlaneMetadata {
             payload_path: relative_path.to_string(),
             component_count: Some(3),
@@ -5463,8 +5697,7 @@ fn response_field_data_plane_metadata_from_point_artifact(
             component_basis: None,
             object_coverage: None,
         });
-    }
-    let point = read_json_artifact_value(artifact_dir, relative_path)?;
+    };
     let Some(component_count) = point
         .get("component_count")
         .and_then(serde_json::Value::as_u64)
@@ -5530,15 +5763,17 @@ fn eigen_mode_data_plane_metadata_from_mode_artifact(
     artifact_dir: &std::path::Path,
     sample_index: u32,
     mode_index: u32,
+    generation: Option<&fullmag_runner::artifact_generation::GenerationCapture>,
 ) -> Result<ResponseFieldDataPlaneMetadata, ApiError> {
     let relative_path = format!("eigen/modes/sample_{sample_index:04}/mode_{mode_index:04}.json");
-    if try_resolve_artifact_path(artifact_dir, &relative_path)?.is_none() {
+    let Some((mode, _)) = crate::router_v2::handlers::analysis::results::
+        read_result_artifact_snapshot_in_generation(artifact_dir, &relative_path, generation)?
+    else {
         return Err(ApiError::internal(format!(
             "eigen mode field payload is present but metadata '{}' is missing",
             relative_path
         )));
-    }
-    let mode = read_json_artifact_value(artifact_dir, &relative_path)?;
+    };
     let Some(component_count) = mode
         .get("component_count")
         .and_then(serde_json::Value::as_u64)
@@ -5625,6 +5860,7 @@ fn eigen_mode_data_plane_metadata_from_mode_artifact(
         sample_index,
         mode_index,
         &relative_path,
+        generation,
     )?;
     Ok(ResponseFieldDataPlaneMetadata {
         payload_path,
@@ -5645,17 +5881,18 @@ fn eigen_mode_data_plane_payload_path(
     sample_index: u32,
     mode_index: u32,
     mode_metadata_path: &str,
+    generation: Option<&fullmag_runner::artifact_generation::GenerationCapture>,
 ) -> Result<String, ApiError> {
     for field in ["zarr_chunk_path", "compatibility_binary_payload_path"] {
         if let Some(path) = mode.get(field).and_then(serde_json::Value::as_str) {
-            if try_resolve_artifact_path(artifact_dir, path)?.is_some() {
+            if field_artifact_present(artifact_dir, path, generation)? {
                 return Ok(path.to_string());
             }
         }
     }
     let legacy_path =
         format!("eigen/mode_fields/sample_{sample_index:04}/mode_{mode_index:04}/vector.bin");
-    if try_resolve_artifact_path(artifact_dir, &legacy_path)?.is_some() {
+    if field_artifact_present(artifact_dir, &legacy_path, generation)? {
         return Ok(legacy_path);
     }
     if mode.get("zarr_chunk_path").is_some()
@@ -5666,6 +5903,21 @@ fn eigen_mode_data_plane_payload_path(
         )));
     }
     Ok(legacy_path)
+}
+
+fn field_artifact_present(
+    artifact_dir: &std::path::Path,
+    artifact_path: &str,
+    generation: Option<&fullmag_runner::artifact_generation::GenerationCapture>,
+) -> Result<bool, ApiError> {
+    if let Some(generation) = generation {
+        return Ok(generation
+            .commit
+            .content
+            .members
+            .contains_key(artifact_path));
+    }
+    Ok(try_resolve_artifact_path(artifact_dir, artifact_path)?.is_some())
 }
 
 fn validate_response_field_available_views(
@@ -5944,9 +6196,23 @@ fn analysis_eigen_mode_vector_response(
     };
     let artifact_dir = current_artifact_dir(snapshot)
         .ok_or_else(|| ApiError::not_found("no artifact directory for analysis field payload"))?;
-    let metadata =
-        eigen_mode_data_plane_metadata_from_mode_artifact(&artifact_dir, sample_index, mode_index)?;
+    let generation = fullmag_runner::artifact_generation::capture(&artifact_dir).map_err(|error| {
+        ApiError::internal(format!("invalid frequency-domain artifact generation: {error}"))
+    })?;
+    let metadata = eigen_mode_data_plane_metadata_from_mode_artifact(
+        &artifact_dir,
+        sample_index,
+        mode_index,
+        generation.as_ref(),
+    )?;
     let relative_path = metadata.payload_path.clone();
+    let artifact_generation_id = validate_analysis_artifact_generation_precondition(
+        query,
+        generation.as_ref(),
+        &relative_path,
+    )?;
+    crate::router_v2::handlers::analysis::frequency_domain::
+        validate_frequency_domain_field_artifact_owner(snapshot, &relative_path, generation.as_ref())?;
     let source_mesh_identity = metadata.source_mesh_identity.as_ref().ok_or_else(|| {
         ApiError::conflict(format!(
             "mode_field_mesh_generation_mismatch: eigen mode payload '{}' has no immutable source mesh identity",
@@ -5965,19 +6231,17 @@ fn analysis_eigen_mode_vector_response(
             relative_path
         )));
     }
-    let path = artifact_dir.join(&relative_path);
-    let bytes = std::fs::read(&path).map_err(|error| {
-        if error.kind() == std::io::ErrorKind::NotFound {
-            ApiError::not_found(format!(
-                "analysis eigen mode field payload is missing: {relative_path}"
-            ))
-        } else {
-            ApiError::internal(format!(
-                "failed to read analysis eigen mode field payload '{}': {}",
-                relative_path, error
-            ))
-        }
-    })?;
+    let Some((bytes, member)) =
+        crate::router_v2::handlers::analysis::results::read_frequency_domain_field_payload_in_generation(
+            &artifact_dir,
+            &relative_path,
+            generation.as_ref(),
+        )?
+    else {
+        return Err(ApiError::not_found(format!(
+            "analysis eigen mode field payload is missing: {relative_path}"
+        )));
+    };
     if let Some(payload_value_count) = metadata.payload_value_count {
         let expected_size = payload_value_count.checked_mul(8).ok_or_else(|| {
             ApiError::internal(format!(
@@ -6036,7 +6300,12 @@ fn analysis_eigen_mode_vector_response(
         projected.len()
     };
     let out_grid = [scoped_point_count as u32, 1, 1];
-    let binary = serialize_analysis_field_vector_binary(
+    let AnalysisFieldVectorBinary {
+        bytes: binary,
+        topology_hash,
+        indexing,
+        node_index_count,
+    } = serialize_analysis_field_vector_binary(
         snapshot,
         field_id,
         out_n_comp,
@@ -6044,7 +6313,12 @@ fn analysis_eigen_mode_vector_response(
         &projected,
         resolved_scope.as_ref(),
     )?;
-    let revision = analysis_payload_revision(snapshot, &relative_path, bytes.len());
+    let revision = analysis_payload_revision(
+        snapshot,
+        &relative_path,
+        bytes.len(),
+        artifact_generation_id.as_deref(),
+    );
     let scope_token = resolved_scope
         .as_ref()
         .map(ResolvedFieldScope::cache_token)
@@ -6062,13 +6336,14 @@ fn analysis_eigen_mode_vector_response(
         })
         .unwrap_or_else(|| "none".to_string());
     let etag = crate::router_v2::handlers::shared::stable_strong_etag(&format!(
-        "{field_id}:{revision}:{}:{}:{}:{scope_token}:{node_indices_token}",
+        "fmvp5:{field_id}:{revision}:{}:{}:{}:{scope_token}:{node_indices_token}:{:x}",
         effective_view,
         query
             .component
             .as_deref()
             .unwrap_or(default_component.unwrap_or("full")),
-        effective_phase_rad
+        effective_phase_rad,
+        Sha256::digest(&binary)
     ));
     let mut resp =
         crate::router_v2::handlers::shared::conditional_binary_response(headers, &etag, binary);
@@ -6081,24 +6356,24 @@ fn analysis_eigen_mode_vector_response(
         scoped_point_count,
         projected.len(),
     );
-    let topology_hash = snapshot
-        .fem_mesh
-        .as_ref()
-        .map(fullmag_runner::fem_mesh_topology_fingerprint);
     insert_field_vector_binary_headers(
         &mut resp,
-        3,
+        5,
         topology_hash.as_deref(),
-        Some(if resolved_scope.is_some() {
-            FieldVectorIndexing::ExplicitNodeIndices
-        } else {
-            FieldVectorIndexing::FullDomain
-        }),
-        resolved_scope
-            .as_ref()
-            .map(|scope| scope.node_indices.len()),
+        Some(indexing),
+        node_index_count,
     );
     insert_scope_headers(&mut resp, resolved_scope.as_ref());
+    insert_artifact_generation_header(&mut resp, artifact_generation_id.as_deref());
+    if artifact_generation_id.is_some() != member.is_some() {
+        return Err(ApiError::internal(
+            "frequency-domain artifact generation membership was not preserved",
+        ));
+    }
+    crate::router_v2::handlers::analysis::results::ensure_generation_capture_current(
+        &artifact_dir,
+        generation.as_ref(),
+    )?;
     Ok(Some(resp))
 }
 
@@ -6305,10 +6580,16 @@ fn analysis_payload_revision(
     snapshot: &SessionStateResponse,
     relative_path: &str,
     byte_len: usize,
+    artifact_generation_id: Option<&str>,
 ) -> u64 {
     let mut hash = domain_generation_revision(snapshot) ^ (byte_len as u64);
     for byte in relative_path.as_bytes() {
         hash = hash.wrapping_mul(1099511628211).wrapping_add(*byte as u64);
+    }
+    if let Some(generation_id) = artifact_generation_id {
+        for byte in generation_id.as_bytes() {
+            hash = hash.wrapping_mul(1099511628211).wrapping_add(*byte as u64);
+        }
     }
     hash
 }
@@ -8559,13 +8840,16 @@ fn urlencoding(s: &str) -> String {
 mod tests {
     use super::{
         analysis_complex_vector_view_values, analysis_frequency_response_view_values,
+        AcceptedObservationFrameRef,
         apply_field_scope, decode_complex_f64_pairs_little_endian,
+        domain_generation_id,
         insert_field_vector_binary_headers, is_fem_runtime, materializer_status,
         parse_analysis_eigen_mode_field_id, parse_analysis_frequency_response_field_id,
         parse_component, preview_cache_is_fresher, project_values, push_field_descriptor,
         resolve_field_scope, resolve_target_field_availability, resolve_transport_spatial_field,
         serialize_analysis_field_vector_binary, FieldFreshness, FieldMaterializationState,
-        FieldVectorQuery, ResolvedFieldScopeDomain, TargetFieldAvailabilityQuery,
+        FieldVectorIndexing, FieldVectorQuery, ResolvedFieldScopeDomain,
+        TargetFieldAvailabilityQuery,
     };
     use crate::router_v2::handlers::data::resolved_spatial_field::{
         resolve_current_spatial_field, ResolvedSpatialField, SpatialFieldSourceKind,
@@ -8610,6 +8894,39 @@ mod tests {
         snapshot
     }
 
+    fn add_physical_field_source(
+        snapshot: &mut crate::types::SessionStateResponse,
+        step: u64,
+        time: Option<f64>,
+    ) {
+        let mut row: crate::types::ScalarRow = serde_json::from_value(serde_json::json!({
+            "kind": "physical_observation",
+            "step": step,
+            "time": time.unwrap_or(step as f64 * 1.0e-12),
+            "solver_dt": 1.0e-12,
+            "mx": 0.0,
+            "my": 0.0,
+            "mz": 1.0,
+            "e_ex": 0.0,
+            "e_demag": 0.0,
+            "e_ext": 0.0,
+            "e_total": 0.0,
+            "max_dm_dt": 0.0,
+            "max_h_eff": 0.0,
+            "max_h_demag": 0.0
+        }))
+        .expect("physical source row fixture");
+        row.observation_frame = Some(AcceptedObservationFrameRef::for_snapshot(
+            &snapshot.session.session_id,
+            snapshot.session.started_at_unix_ms,
+            domain_generation_id(snapshot),
+            snapshot.mesh_revision,
+            row.step,
+            Some(row.time),
+        ));
+        snapshot.scalar_rows.push(row);
+    }
+
     #[test]
     fn field_vector_payload_state_is_fail_closed_for_legacy_fmvp() {
         let mut legacy = axum::response::Response::new(axum::body::Body::empty());
@@ -8630,6 +8947,24 @@ mod tests {
                 .get(super::HDR_PAYLOAD_STATE)
                 .and_then(|value| value.to_str().ok()),
             Some("current")
+        );
+    }
+
+    #[test]
+    fn artifact_generation_header_is_emitted_only_for_a_verified_member() {
+        let mut legacy = axum::response::Response::new(axum::body::Body::empty());
+        super::insert_artifact_generation_header(&mut legacy, None);
+        assert!(legacy.headers().get(super::HDR_ARTIFACT_GEN_ID).is_none());
+
+        let generation_id = format!("sha256:{}", "a".repeat(64));
+        let mut verified = axum::response::Response::new(axum::body::Body::empty());
+        super::insert_artifact_generation_header(&mut verified, Some(&generation_id));
+        assert_eq!(
+            verified
+                .headers()
+                .get(super::HDR_ARTIFACT_GEN_ID)
+                .and_then(|value| value.to_str().ok()),
+            Some(generation_id.as_str())
         );
     }
 
@@ -8760,6 +9095,7 @@ mod tests {
         snapshot
             .field_quantity_revisions
             .insert("H_demag".to_string(), 7);
+        add_physical_field_source(&mut snapshot, 3, None);
         snapshot.preview_cache.insert(LivePreviewField {
             config_revision: 1,
             source_step: 3,
@@ -8949,6 +9285,7 @@ mod tests {
                 "grid_cells": [2, 1, 1]
             }
         }));
+        add_physical_field_source(&mut snapshot, 2, None);
         snapshot.preview_cache.insert(LivePreviewField {
             config_revision: 1,
             source_step: 2,
@@ -9029,6 +9366,7 @@ mod tests {
             build_report: None,
         });
         snapshot.field_quantity_revisions.insert("m".to_string(), 9);
+        add_physical_field_source(&mut snapshot, 2, None);
         snapshot.preview_cache.insert(LivePreviewField {
             config_revision: 1,
             source_step: 2,
@@ -9206,6 +9544,7 @@ mod tests {
         snapshot
             .field_quantity_revisions
             .insert("H_demag".to_string(), 17);
+        add_physical_field_source(&mut snapshot, 5, None);
         snapshot.preview_cache.insert(LivePreviewField {
             config_revision: 31,
             source_step: 5,
@@ -9275,6 +9614,7 @@ mod tests {
             view: None,
             phase_rad: None,
             expected_generation_id: None,
+            expected_artifact_generation_id: None,
             expected_carrier_revision: None,
         };
 
@@ -9412,6 +9752,8 @@ mod tests {
             }
         }))
         .expect("full latest field should deserialize");
+        add_physical_field_source(&mut snapshot, 12, None);
+        add_physical_field_source(&mut snapshot, 13, None);
         snapshot.preview_cache.insert(LivePreviewField {
             config_revision: 13,
             source_step: 13,
@@ -9577,6 +9919,7 @@ mod tests {
                 stage_id: None,
                 view: None,
                 expected_generation_id: None,
+                expected_artifact_generation_id: None,
                 expected_carrier_revision: None,
             },
             &snapshot,
@@ -9616,6 +9959,7 @@ mod tests {
                 stage_id: None,
                 view: None,
                 expected_generation_id: None,
+                expected_artifact_generation_id: None,
                 expected_carrier_revision: None,
             },
             &snapshot,
@@ -9644,6 +9988,7 @@ mod tests {
                 stage_id: None,
                 view: None,
                 expected_generation_id: None,
+                expected_artifact_generation_id: None,
                 expected_carrier_revision: None,
             },
             &snapshot,
@@ -9747,6 +10092,7 @@ mod tests {
                 stage_id: None,
                 view: None,
                 expected_generation_id: None,
+                expected_artifact_generation_id: None,
                 expected_carrier_revision: None,
             },
             &snapshot,
@@ -9986,7 +10332,7 @@ mod tests {
     }
 
     #[test]
-    fn analysis_field_vector_binary_uses_fmvp_v3_explicit_nodes_for_scoped_fem_payload() {
+    fn analysis_field_vector_binary_uses_fmvp_v5_explicit_nodes_for_analysis_payload() {
         let mut snapshot = default_current_live_state(&CurrentLiveSnapshotRequest {
             frozen_spins_runtime_status: None,
             session_id: "analysis-field-fem-scope".to_string(),
@@ -10053,7 +10399,7 @@ mod tests {
         });
         let values = vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0];
 
-        let binary = serialize_analysis_field_vector_binary(
+        let serialized = serialize_analysis_field_vector_binary(
             &snapshot,
             "analysis:frequency-response:frequency-0000",
             3,
@@ -10062,14 +10408,20 @@ mod tests {
             None,
         )
         .expect("analysis FEM field should serialize");
+        let binary = serialized.bytes;
 
         assert_eq!(&binary[0..4], b"FMVP");
-        assert_eq!(binary[4], 3);
+        assert_eq!(binary[4], 5);
+        assert_eq!(
+            serialized.indexing,
+            FieldVectorIndexing::ExplicitNodeIndices
+        );
+        assert!(serialized.topology_hash.is_some());
         assert_eq!(binary[6], 3);
         assert_eq!(u32::from_le_bytes(binary[12..16].try_into().unwrap()), 6);
         assert_eq!(u32::from_le_bytes(binary[16..20].try_into().unwrap()), 2);
         let metadata_len = u32::from_le_bytes(binary[8..12].try_into().unwrap()) as usize;
-        assert!(metadata_len >= 68);
+        assert!(metadata_len >= 88);
         let metadata_start = 48;
         assert_eq!(&binary[metadata_start..metadata_start + 4], b"FMMI");
         assert_eq!(
@@ -10103,8 +10455,33 @@ mod tests {
                 .try_into()
                 .unwrap(),
         ) as usize;
-        let node_indices_start =
-            metadata_start + 68 + scope_kind_len + scope_id_len + generation_id_len;
+        assert_eq!(
+            u16::from_le_bytes(
+                binary[metadata_start + 4..metadata_start + 6]
+                    .try_into()
+                    .unwrap()
+            ),
+            4
+        );
+        let source_lengths = [10usize, 12, 14].map(|offset| {
+            u16::from_le_bytes(
+                binary[metadata_start + offset..metadata_start + offset + 2]
+                    .try_into()
+                    .unwrap(),
+            ) as usize
+        });
+        let full_quantity_id_len = u16::from_le_bytes(
+            binary[metadata_start + 80..metadata_start + 82]
+                .try_into()
+                .unwrap(),
+        ) as usize;
+        let node_indices_start = metadata_start
+            + 88
+            + scope_kind_len
+            + scope_id_len
+            + generation_id_len
+            + source_lengths.iter().sum::<usize>()
+            + full_quantity_id_len;
         assert_eq!(
             u32::from_le_bytes(
                 binary[node_indices_start..node_indices_start + 4]
@@ -10121,6 +10498,23 @@ mod tests {
             ),
             3
         );
+
+        let unmappable_values = vec![0.0; 6 * 3];
+        let error = match serialize_analysis_field_vector_binary(
+            &snapshot,
+            "analysis:eigen:sample-0000:mode-0002",
+            3,
+            [6, 1, 1],
+            &unmappable_values,
+            None,
+        ) {
+            Err(error) => error,
+            Ok(_) => panic!("unmapped analysis points must not fall back to unverified binary"),
+        };
+        assert_eq!(error.status, axum::http::StatusCode::CONFLICT);
+        assert!(error
+            .message
+            .contains("analysis_field_node_mapping_unavailable"));
     }
 
     #[test]
@@ -10156,6 +10550,98 @@ mod tests {
             "{}",
             error.message
         );
+    }
+
+    #[test]
+    fn analysis_artifact_generation_precondition_requires_metadata_binding() {
+        use fullmag_runner::artifact_generation::{
+            GenerationBody, GenerationCommit, GenerationMember, COMMIT_PATH,
+        };
+        use sha2::{Digest, Sha256};
+        use std::collections::BTreeMap;
+
+        let root = std::env::temp_dir().join(format!(
+            "field-artifact-generation-precondition-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(root.join("frequency_domain")).unwrap();
+        std::fs::create_dir_all(root.join("eigen")).unwrap();
+        let member_path = "eigen/field.bin";
+        let member_bytes = b"verified field";
+        std::fs::write(root.join(member_path), member_bytes).unwrap();
+        let content = GenerationBody {
+            schema_version: "frequency_domain_artifact_generation.v1".to_string(),
+            producer: None,
+            members: BTreeMap::from([(
+                member_path.to_string(),
+                GenerationMember {
+                    byte_length: member_bytes.len() as u64,
+                    sha256: format!("sha256:{:x}", Sha256::digest(member_bytes)),
+                },
+            )]),
+        };
+        let generation_id = format!(
+            "sha256:{:x}",
+            Sha256::digest(serde_json::to_vec(&content).unwrap())
+        );
+        let commit = GenerationCommit {
+            generation_id: generation_id.clone(),
+            content,
+        };
+        std::fs::write(
+            root.join(COMMIT_PATH),
+            serde_json::to_vec_pretty(&commit).unwrap(),
+        )
+        .unwrap();
+        let generation = fullmag_runner::artifact_generation::capture(&root)
+            .unwrap()
+            .unwrap();
+        let query = |expected_artifact_generation_id: Option<&str>| {
+            serde_json::from_value::<FieldVectorQuery>(serde_json::json!({
+                "expected_artifact_generation_id": expected_artifact_generation_id
+            }))
+            .unwrap()
+        };
+
+        assert_eq!(
+            super::validate_analysis_artifact_generation_precondition(
+                &query(Some(&generation_id)),
+                Some(&generation),
+                member_path,
+            )
+            .unwrap()
+            .as_deref(),
+            Some(generation_id.as_str())
+        );
+        assert!(super::validate_analysis_artifact_generation_precondition(
+            &query(None),
+            Some(&generation),
+            member_path,
+        )
+        .is_err());
+        assert!(super::validate_analysis_artifact_generation_precondition(
+            &query(Some("sha256:wrong")),
+            Some(&generation),
+            member_path,
+        )
+        .is_err());
+        assert!(super::validate_analysis_artifact_generation_precondition(
+            &query(Some(&generation_id)),
+            None,
+            member_path,
+        )
+        .is_err());
+        assert_eq!(
+            super::validate_analysis_artifact_generation_precondition(
+                &query(None),
+                None,
+                member_path,
+            )
+            .unwrap(),
+            None
+        );
+
+        std::fs::remove_dir_all(root).unwrap();
     }
 }
 fn is_airbox_selection_id(id: &str) -> bool {

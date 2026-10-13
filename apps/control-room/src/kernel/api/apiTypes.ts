@@ -109,6 +109,21 @@ export type PlanarSampleSourceResource =
   components["schemas"]["PlanarSampleSourceResource"];
 export type PlanarFieldProbeResource =
   components["schemas"]["PlanarFieldProbeResource"];
+export type PostprocessingDataRef = components["schemas"]["PostprocessingDataRef"];
+export type PostprocessingDefinition = components["schemas"]["PostprocessingDefinition"];
+export type AnalyticReferenceModelCollectionResource =
+  components["schemas"]["AnalyticReferenceModelCollectionResource"];
+export type AnalyticReferenceModelResource = components["schemas"]["AnalyticReferenceModelResource"];
+export type PostprocessingDefinitionCollectionResource =
+  components["schemas"]["PostprocessingDefinitionCollectionResource"];
+export type PostprocessingDefinitionCreateRequest =
+  components["schemas"]["PostprocessingDefinitionCreateRequest"];
+export type PostprocessingDefinitionDeleteRequest =
+  components["schemas"]["PostprocessingDefinitionDeleteRequest"];
+export type PostprocessingDefinitionPatchRequest =
+  components["schemas"]["PostprocessingDefinitionPatchRequest"];
+export type PostprocessingDefinitionResource =
+  components["schemas"]["PostprocessingDefinitionResource"];
 export type PlanarMonitorCollectionResource =
   components["schemas"]["PlanarMonitorCollectionResource"];
 export type PlanarMonitorCreateRequest =
@@ -269,6 +284,46 @@ export type FrequencyDomainFmrPeaksArtifactPayload =
 export type FrequencyDomainTextArtifactResource =
   components["schemas"]["FrequencyDomainTextArtifactResource"];
 export type ArtifactResource = components["schemas"]["ArtifactResource"];
+export type AntennaFieldSolutionResource =
+  components["schemas"]["AntennaFieldSolutionResource"];
+export type AntennaFieldPayloadKind =
+  | "conductor_positions"
+  | "sample_positions"
+  | "sample_topology"
+  | "electric_potential_per_ampere"
+  | "current_density_per_ampere"
+  | "magnetic_field_per_ampere";
+export type AntennaStageOutputCatalogResource =
+  components["schemas"]["AntennaStageOutputCatalogResource"];
+export type AntennaExternalLeadInspectionResource =
+  components["schemas"]["AntennaExternalLeadInspectionResource"];
+export type AntennaInspectionDisplayResource =
+  components["schemas"]["AntennaInspectionDisplayResource"];
+export type AntennaInspectionCurrentPayloadKind =
+  | "current_center_positions"
+  | "current_center_density"
+  | "current_trace_positions"
+  | "current_trace_density"
+  | "current_snapshot";
+export type AntennaInspectionPayloadKind =
+  | AntennaInspectionCurrentPayloadKind
+  | "bundle"
+  | "sample_positions"
+  | "magnetic_field"
+  | "device_vertex_ids"
+  | "device_potential"
+  | "device_positions"
+  | "device_topology";
+export type AntennaInspectionManifestPayloadKind = Exclude<
+  AntennaInspectionPayloadKind, "device_positions" | "device_topology" | AntennaInspectionCurrentPayloadKind
+>;
+export type AntennaSourceSpectrumResource =
+  components["schemas"]["AntennaSourceSpectrumResource"];
+export type AntennaSpectrumPayloadKind =
+  | "k_u_rad_per_m"
+  | "k_v_rad_per_m"
+  | "amplitudes_re_im"
+  | "power";
 export type FrequencyDomainKPathMetadataResource =
   components["schemas"]["FrequencyDomainKPathMetadataResource"];
 export type FrequencyDomainKPathSamplingResource =
@@ -984,6 +1039,7 @@ export interface FieldVectorIdentityIssue {
 export interface FieldVectorResponseMetadata {
   component: string | null;
   domainGenerationId: string | null;
+  artifactGenerationId?: string | null;
   encoding: string | null;
   fieldIndexing: string | null;
   fieldGenerationId?: string | null;
@@ -1040,7 +1096,7 @@ export type BinaryResourceResult<TData, TMetadata = unknown> =
 
 export interface RequestOptions {
   /**
-   * Canonical session=<encoded-id>&epoch=<encoded-epoch> identity used for
+   * Canonical session, scientific epoch and request_scope_epoch identity used for
    * coalescing and the x-fullmag-session-scope HTTP precondition header.
    * It is never serialized into URLs.
    */

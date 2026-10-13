@@ -1,0 +1,26 @@
+name: eigensolve-pipeline-source-contracts
+on:
+  workflow_dispatch:
+  push:
+    branches: ['codex/eigensolve-dispersion-plan-20260912']
+    paths:
+      - 'crates/fullmag-application/src/script_stage_materialization.rs'
+      - '.github/workflows/eigensolve-pipeline-source-contracts.yml'
+permissions:
+  contents: read
+jobs:
+  canonical-eigen-pipeline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Preserve exact source identity
+        run: git rev-parse HEAD
+      - name: Validate real pipeline materialization and explicit outputs
+        run: |
+          set -o pipefail
+          cargo test --locked -p fullmag-application --lib pipeline_eigenmodes -- --nocapture | tee "$RUNNER_TEMP/eigen-pipeline.log"
+          grep -F "pipeline_eigenmodes_without_prior_eigen_outputs_use_canonical_spectrum ... ok" "$RUNNER_TEMP/eigen-pipeline.log"
+          grep -F "pipeline_eigenmodes_preserve_explicit_eigen_outputs ... ok" "$RUNNER_TEMP/eigen-pipeline.log"

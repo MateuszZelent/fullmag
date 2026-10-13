@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   canonicalFieldVectorQuery,
+  canonicalFieldVectorQueriesEqual,
   fieldVectorComponentsSemanticallyEqual,
   fieldVectorResourceKey,
   isCanonicalU64Decimal,
@@ -36,6 +37,33 @@ describe("fieldQueryIdentity", () => {
       "/v2/sessions/current/data/fields/m/samples/vector?component=full&scope_id=part-a&scope_kind=part",
     );
   });
+
+  it("keeps committed artifact generation separate from domain generation in resource identity", () => {
+    const first = fieldVectorResourceKey("m", {
+      expected_artifact_generation_id: "publication-a",
+      expected_generation_id: "mesh-generation-3",
+    });
+    const second = fieldVectorResourceKey("m", {
+      expected_artifact_generation_id: "publication-b",
+      expected_generation_id: "mesh-generation-3",
+    });
+
+    expect(first).not.toBe(second);
+    expect(first).toContain("expected_artifact_generation_id=publication-a");
+    expect(first).toContain("expected_generation_id=mesh-generation-3");
+    expect(
+      canonicalFieldVectorQueriesEqual(
+        canonicalFieldVectorQuery("m", {
+          expected_artifact_generation_id: "publication-a",
+          expected_generation_id: "mesh-generation-3",
+        }),
+        canonicalFieldVectorQuery("m", {
+          expected_artifact_generation_id: "publication-b",
+          expected_generation_id: "mesh-generation-3",
+        }),
+      ),
+    ).toBe(false);
+  });
   it("normalizes object target ids while preserving exact mesh part ids", () => {
     expect(
       canonicalFieldVectorQuery("m", {
@@ -66,6 +94,7 @@ describe("fieldQueryIdentity", () => {
     const key = serializeCanonicalFieldVectorResourceKey(
       canonicalFieldVectorQuery("m", {
         component: "y",
+        expected_artifact_generation_id: "publication-14",
         expected_carrier_revision: "carrier-7",
         expected_generation_id: "generation-3",
         geometry_scope: "surface",
@@ -80,7 +109,7 @@ describe("fieldQueryIdentity", () => {
     );
 
     expect(key).toBe(
-      "/v2/sessions/current/data/fields/m/samples/vector?component=y&expected_carrier_revision=carrier-7&expected_generation_id=generation-3&geometry_scope=surface&max_samples=1200&phase_rad=1.5&scope_id=film&scope_kind=object&snapshot_id=snapshot-1&stage_id=stage-1&view=phase_rotated_real",
+      "/v2/sessions/current/data/fields/m/samples/vector?component=y&expected_artifact_generation_id=publication-14&expected_carrier_revision=carrier-7&expected_generation_id=generation-3&geometry_scope=surface&max_samples=1200&phase_rad=1.5&scope_id=film&scope_kind=object&snapshot_id=snapshot-1&stage_id=stage-1&view=phase_rotated_real",
     );
   });
 
@@ -112,11 +141,12 @@ describe("fieldQueryIdentity", () => {
   it("parses an exact recommended fetch regardless of query parameter order", () => {
     expect(
       parseCanonicalFieldVectorResourceKey(
-        "/v2/sessions/current/data/fields/m/samples/vector?view=phase_rotated_real&stage_id=stage-1&scope_kind=object&scope_id=object%3Afilm&snapshot_id=snapshot-1&phase_rad=1.5&max_samples=1200&geometry_scope=surface&expected_generation_id=generation-3&expected_carrier_revision=carrier-7&component=y",
+        "/v2/sessions/current/data/fields/m/samples/vector?view=phase_rotated_real&stage_id=stage-1&scope_kind=object&scope_id=object%3Afilm&snapshot_id=snapshot-1&phase_rad=1.5&max_samples=1200&geometry_scope=surface&expected_generation_id=generation-3&expected_carrier_revision=carrier-7&expected_artifact_generation_id=publication-14&component=y",
       ),
     ).toEqual(
       canonicalFieldVectorQuery("m", {
         component: "y",
+        expected_artifact_generation_id: "publication-14",
         expected_carrier_revision: "carrier-7",
         expected_generation_id: "generation-3",
         geometry_scope: "surface",

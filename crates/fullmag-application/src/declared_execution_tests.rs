@@ -79,7 +79,11 @@ fn orphan_layers_and_ambiguous_declaration_are_rejected() {
 fn already_bound_input_replays_even_without_new_overrides() {
     let mut bound = bind_declared_execution(&declared("cpu"), vec![]).unwrap();
     assert_eq!(bind_declared_execution(&bound, vec![]).unwrap(), bound);
-    bound.problem_meta.runtime_metadata["execution_materialization"]["requested"]["device"] =
+    bound
+        .problem_meta
+        .runtime_metadata
+        .get_mut("execution_materialization")
+        .expect("bound input must contain execution materialization")["requested"]["device"] =
         json!("gpu");
     assert!(bind_declared_execution(&bound, vec![]).is_err());
 }

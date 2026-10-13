@@ -14,10 +14,12 @@ record contains the API token.
 from __future__ import annotations
 
 import json
+import math
 import os
 from pathlib import Path
 import re
 import secrets
+import time
 import urllib.error
 import urllib.request
 from collections.abc import Callable, Mapping
@@ -61,13 +63,22 @@ ALLOWED_PROFILES = (
 )
 CPU_CONTRACT_PROFILES = (*ALLOWED_PROFILES, "fem-cpu-current-contracts-v1")
 CURRENT_CONTRACT_PROFILES = (*CPU_CONTRACT_PROFILES, "fem-gpu-current-contracts-v1")
-SLEPC_MODAL_PROFILES = (*CURRENT_CONTRACT_PROFILES, "fem-cpu-slepc-modal-v1")
+SLEPC_MODAL_PROFILES = (
+    *CURRENT_CONTRACT_PROFILES,
+    "fem-cpu-slepc-modal-v1",
+    "fem-cpu-slepc-runtime-v1",
+    "fem-cpu-slepc-runtime-v2",
+)
 _PROFILE_LISTS = (
     ALLOWED_PROFILES,
     CPU_CONTRACT_PROFILES,
     CURRENT_CONTRACT_PROFILES,
     SLEPC_MODAL_PROFILES,
 )
+STARTUP_HEALTH_ATTEMPTS = 60
+STARTUP_HEALTH_RETRY_SECONDS = 1.0
+STARTUP_HEALTH_TIMEOUT_SECONDS = 60.0
+STARTUP_HEALTH_REQUEST_TIMEOUT_SECONDS = 5.0
 
 
 def _known_profile_list(value: object) -> bool:
@@ -80,6 +91,58 @@ def _known_profile_list(value: object) -> bool:
         if val_list[:len(ALLOWED_PROFILES)] == list(ALLOWED_PROFILES):
             return True
     return False
+
+
+def _observed_profile_list(value: object) -> list[str] | None:
+    """Normalize only a complete, unique, known coordinator profile list."""
+    if not isinstance(value, list) or not value:
+        return None
+    if any(not isinstance(profile, str) or profile not in SLEPC_MODAL_PROFILES for profile in value):
+        return None
+    if len(set(value)) != len(value) or not set(ALLOWED_PROFILES).issubset(value):
+        return None
+    return sorted(value)
+
+
+def _profile_activation(
+    public: Mapping[str, object],
+    health: object,
+    *,
+    unavailable_reason: str | None = None,
+) -> dict[str, Any]:
+    """Compare configured intent with the coordinator's observed health list."""
+    desired = list(public["allowed_profiles"])
+    activation: dict[str, Any] = {
+        "status": "unverified",
+        "desired_allowed_profiles": desired,
+        "observed_allowed_profiles": None,
+        "reason": unavailable_reason or "Coordinator health has not confirmed the configured profile list.",
+    }
+    if unavailable_reason is not None:
+        return activation
+    if not isinstance(health, Mapping):
+        activation["reason"] = "Coordinator health response is unavailable or is not an object."
+        return activation
+    # Worker readiness is reported separately; profile activation is the
+    # allow-list observed by this coordinator process, regardless of `ok`.
+    observed = _observed_profile_list(health.get("allowed_profiles"))
+    if observed is None:
+        activation["reason"] = "Coordinator health omitted a valid, complete allowed_profiles list."
+        return activation
+    activation["observed_allowed_profiles"] = observed
+    if set(observed) != set(desired):
+        activation["status"] = "mismatch"
+        activation["reason"] = (
+            "The running coordinator profile list differs from the configured allow-list; "
+            "pause and drain it, then use explicit container replacement to apply the desired list."
+        )
+        return activation
+    activation["status"] = "active"
+    activation["reason"] = None
+    return activation
+
+
+_HEALTH_NOT_CHECKED = object()
 
 
 _IMAGE_RE = re.compile(r"sha256:[0-9a-f]{64}\Z")
@@ -326,6 +389,7 @@ def configure(
     image: str | None = None,
     enable_current_contracts: bool = False,
     enable_slepc_modal: bool = False,
+    enable_slepc_runtime_v2: bool = False,
 ) -> dict[str, Any]:
     """Install or update host configuration without contacting Docker.
 
@@ -338,9 +402,10 @@ def configure(
         image_id = image
     elif image is not None:
         raise ContainerClientError("Specify only one coordinator image ID")
-    if not isinstance(enable_current_contracts, bool) or not isinstance(enable_slepc_modal, bool):
+    if not all(isinstance(flag, bool) for flag in
+               (enable_current_contracts, enable_slepc_modal, enable_slepc_runtime_v2)):
         raise ContainerClientError("Profile activation flags must be boolean")
-    if enable_current_contracts and enable_slepc_modal:
+    if sum((enable_current_contracts, enable_slepc_modal, enable_slepc_runtime_v2)) > 1:
         raise ContainerClientError("Choose only one profile activation set")
     operator = _owner(owner)
     image = _image_id(image_id)
@@ -387,10 +452,15 @@ def configure(
                     port = CONTAINER_PORT
             port = _port(port)
             token = secrets.token_urlsafe(48)
-        if enable_slepc_modal:
+        if enable_slepc_runtime_v2:
+            if "fem-cpu-slepc-runtime-v2" not in selected_profiles:
+                selected_profiles.append("fem-cpu-slepc-runtime-v2")
+        elif enable_slepc_modal:
             selected_profiles = list(SLEPC_MODAL_PROFILES)
-        elif enable_current_contracts and "fem-cpu-slepc-modal-v1" not in selected_profiles:
-            selected_profiles = list(CURRENT_CONTRACT_PROFILES)
+        elif enable_current_contracts:
+            for profile in CURRENT_CONTRACT_PROFILES:
+                if profile not in selected_profiles:
+                    selected_profiles.append(profile)
         public = _public_record(storage, operator, image, port, allowed_profiles=selected_profiles)
         secret = _secret_record(storage, operator, token, port, allowed_profiles=selected_profiles)
         atomic_json(secret_path, secret)
@@ -401,7 +471,13 @@ def configure(
             # best-effort POSIX hardening step and never changes the contract.
             pass
         atomic_json(public_path, public)
-    return dict(public)
+    result = dict(public)
+    result["profile_activation"] = _profile_activation(
+        public,
+        None,
+        unavailable_reason="Configuration saved as desired state only; configure does not contact the running coordinator.",
+    )
+    return result
 
 
 def _selected_docker_call(
@@ -612,6 +688,21 @@ def _metadata_without_container(public: Mapping[str, object]) -> dict[str, Any]:
     }
 
 
+def _with_profile_activation(
+    metadata: Mapping[str, object],
+    public: Mapping[str, object],
+    activation: Mapping[str, object],
+    *,
+    health: object = _HEALTH_NOT_CHECKED,
+) -> dict[str, Any]:
+    result = dict(metadata)
+    result["allowed_profiles"] = list(public["allowed_profiles"])
+    result["profile_activation"] = dict(activation)
+    if health is not _HEALTH_NOT_CHECKED:
+        result["health"] = health
+    return result
+
+
 def status(
     layout: Mapping[str, object],
     owner: str,
@@ -619,21 +710,54 @@ def status(
     docker_call: Callable[[list[str]], object] | None = None,
     call: Callable[[list[str]], object] | None = None,
 ) -> dict[str, Any]:
-    """Return sanitized metadata after exact identity attestation."""
+    """Attest container identity, then observe profiles from authenticated health."""
 
     operator = _owner(owner)
-    storage, secret_path, public, _ = _load_config(layout, operator)
-    docker = _selected_docker_call(docker_call, call)
-    identifier = _find_container(docker)
-    if identifier is None:
-        return _metadata_without_container(public)
-    return _attest(
-        _inspect_container(docker, identifier),
-        storage=storage,
-        secret_path=secret_path,
-        public=public,
-        operator=operator,
-    )
+    _, _, lock_path = _config_paths(layout)
+    try:
+        with file_lock(lock_path, "local runner container status", blocking=True):
+            storage, secret_path, public, _ = _load_config(layout, operator)
+            docker = _selected_docker_call(docker_call, call)
+            identifier = _find_container(docker)
+            if identifier is None:
+                metadata = _metadata_without_container(public)
+                activation = _profile_activation(
+                    public,
+                    None,
+                    unavailable_reason="No coordinator container is present to report its runtime profile list.",
+                )
+                return _with_profile_activation(metadata, public, activation)
+
+            metadata = _attest(
+                _inspect_container(docker, identifier),
+                storage=storage,
+                secret_path=secret_path,
+                public=public,
+                operator=operator,
+            )
+            if not metadata["running"]:
+                activation = _profile_activation(
+                    public,
+                    None,
+                    unavailable_reason="Coordinator container is stopped; its runtime profile list is unverified.",
+                )
+                return _with_profile_activation(metadata, public, activation)
+
+            try:
+                health = request(layout, operator, "GET", "/health")
+                activation = _profile_activation(public, health)
+            except ContainerClientError as error:
+                health = {"ok": False, "error": str(error)}
+                activation = _profile_activation(
+                    public,
+                    None,
+                    unavailable_reason=f"Authenticated coordinator health request failed: {error}",
+                )
+            return _with_profile_activation(metadata, public, activation, health=health)
+    except StorageError as error:
+        raise ContainerClientError("Local runner container lifecycle is busy") from error
+    except OSError as error:
+        raise ContainerClientError("Local runner container lifecycle lock is unavailable") from error
 
 
 def _start_unlocked(
@@ -669,7 +793,8 @@ def _start_unlocked(
                 public=public,
                 operator=operator,
             )
-        return metadata
+        health, activation = _verify_startup_profile_activation(layout, operator, public)
+        return _with_profile_activation(metadata, public, activation, health=health)
 
     if any("," in str(path) for path in (storage, secret_path)):
         raise ContainerClientError("Storage paths containing commas cannot be bound safely")
@@ -710,13 +835,15 @@ def _start_unlocked(
         operator=operator,
     )
     _docker_text(docker, ["start", metadata["container_id"]])
-    return _attest(
+    metadata = _attest(
         _inspect_container(docker, metadata["container_id"]),
         storage=storage,
         secret_path=secret_path,
         public=public,
         operator=operator,
     )
+    health, activation = _verify_startup_profile_activation(layout, operator, public)
+    return _with_profile_activation(metadata, public, activation, health=health)
 
 
 def start(
@@ -758,7 +885,7 @@ def _request_path(path: str) -> str:
     return parsed.path
 
 
-def _open_url(request_object: urllib.request.Request, timeout: int):
+def _open_url(request_object: urllib.request.Request, timeout: float):
     return _LOCAL_OPENER.open(request_object, timeout=timeout)
 
 
@@ -768,6 +895,8 @@ def request(
     method: str,
     path: str,
     payload: object | None = None,
+    *,
+    timeout: float | None = None,
 ) -> Any:
     """Perform an authenticated bounded JSON request to the host-local API."""
 
@@ -789,7 +918,14 @@ def request(
         headers["Content-Type"] = "application/json"
     url = f"{public['endpoint']}{path}"
     request_object = urllib.request.Request(url, data=body, headers=headers, method=method)
-    timeout = HTTP_SUBMIT_TIMEOUT_SECONDS if method == "POST" and path == "/jobs" else HTTP_TIMEOUT_SECONDS
+    default_timeout = HTTP_SUBMIT_TIMEOUT_SECONDS if method == "POST" and path == "/jobs" else HTTP_TIMEOUT_SECONDS
+    if timeout is None:
+        timeout = default_timeout
+    elif isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or (isinstance(timeout, float) and not math.isfinite(timeout)) or timeout <= 0:
+        raise ContainerClientError("Runner API timeout must be positive and finite")
+    else:
+        # A caller may shorten the operation deadline, never extend its bound.
+        timeout = float(min(timeout, default_timeout))
     try:
         with _open_url(request_object, timeout) as response:
             length_header = response.headers.get("Content-Length")
@@ -821,15 +957,68 @@ def request(
         raise ContainerClientError("Runner API returned invalid JSON") from error
 
 
+def _verify_startup_profile_activation(
+    layout: Mapping[str, object],
+    owner: str,
+    public: Mapping[str, object],
+) -> tuple[object, dict[str, Any]]:
+    """Bound startup by a wall-clock deadline and require the exact profile set."""
+    last_reason = "Coordinator health did not confirm the configured profile list."
+    deadline = time.monotonic() + STARTUP_HEALTH_TIMEOUT_SECONDS
+    checks = 0
+    for attempt in range(STARTUP_HEALTH_ATTEMPTS):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        checks += 1
+        try:
+            health = request(
+                layout, owner, "GET", "/health",
+                timeout=min(STARTUP_HEALTH_REQUEST_TIMEOUT_SECONDS, remaining),
+            )
+            activation = _profile_activation(public, health)
+        except ContainerClientError as error:
+            health = None
+            activation = _profile_activation(
+                public,
+                None,
+                unavailable_reason=f"Authenticated coordinator health request failed: {error}",
+            )
+        if activation["status"] == "active":
+            return health, activation
+        if activation["status"] == "mismatch":
+            raise ContainerClientError(
+                "Coordinator profile activation mismatch: "
+                f"desired={activation['desired_allowed_profiles']!r}, "
+                f"observed={activation['observed_allowed_profiles']!r}. "
+                f"{activation['reason']}"
+            )
+        last_reason = str(activation["reason"])
+        if attempt + 1 < STARTUP_HEALTH_ATTEMPTS:
+            remaining = deadline - time.monotonic()
+            if remaining > 0:
+                time.sleep(min(STARTUP_HEALTH_RETRY_SECONDS, remaining))
+    raise ContainerClientError(
+        "Coordinator profile activation remains unverified after "
+        f"{checks} bounded authenticated health checks within "
+        f"{STARTUP_HEALTH_TIMEOUT_SECONDS:g} seconds; "
+        f"no automatic stop or replacement was attempted. {last_reason}"
+    )
+
+
 def stop(layout: Mapping[str, object], owner: str) -> Any:
     """Ask the container API to stop gracefully; never invoke Docker stop/kill."""
 
     return request(layout, owner, "POST", "/stop", {})
 
 
-def _assert_replacement_health(health: object) -> None:
+def _assert_replacement_health(health: object, *, readonly_preview_verified: bool = False) -> None:
     if not isinstance(health, Mapping):
         raise ContainerClientError("Coordinator health did not confirm a healthy service")
+    if health.get('retention_busy', False) is not False and not readonly_preview_verified:
+        raise ContainerClientError('Coordinator retention is active; replacement is refused')
+    if 'retention_busy' in health and health.get('retention_draining') is not True:
+        raise ContainerClientError('Coordinator retention must be drained before replacement')
     service = health.get('coordinator')
     # Upgrade compatibility: old Application.run discarded the normal stopped
     # result. Accept only a completed intentional stop, never a crashed worker
@@ -852,11 +1041,48 @@ def _assert_replacement_health(health: object) -> None:
         raise ContainerClientError("Coordinator must be stopped or paused before replacement")
 
 
+def _verify_readonly_preview_abandonment(layout, operator, plan_id, health):
+    """Authorize only an explicitly named, drained, unapplied execution preview."""
+    from local_runner.retention import _checked_child, _read_json, _PathIssue
+    if not isinstance(plan_id, str) or re.fullmatch(r'plan-[a-f0-9]{8,32}', plan_id) is None:
+        raise ContainerClientError('Invalid read-only preview ID')
+    if (not isinstance(health, Mapping) or health.get('retention_busy') is not True
+            or health.get('retention_draining') is not True or health.get('worker_alive') is not False
+            or health.get('accepting_jobs') is not False or health.get('stop_requested') is not True
+            or health.get('worker_error') is not None or health.get('active_jobs') != []
+            or health.get('legacy_jobs') != []):
+        raise ContainerClientError('Read-only preview abandonment requires completed drain')
+    service = health.get('coordinator')
+    if not isinstance(service, Mapping) or service.get('active_job_ids') != [] or service.get('last_error') is not None:
+        raise ContainerClientError('Coordinator state is not quiescent')
+    policy = request(layout, operator, 'GET', '/api/v1/retention/policy')
+    if not isinstance(policy, Mapping) or policy.get('mode') != 'preview':
+        raise ContainerClientError('Automatic retention cannot be abandoned as a read-only preview')
+    public = request(layout, operator, 'GET', '/api/v1/retention/plans/' + plan_id)
+    storage = Path(layout['storage_root']).resolve(strict=True)
+    try:
+        path = _checked_child(storage, ('index', 'retention-plans', plan_id + '.json'), kind='file')
+        raw = dict(_read_json(path))
+    except _PathIssue as error:
+        raise ContainerClientError('Unverified read-only preview record') from error
+    expected = {'plan_id': plan_id, 'scope': 'execution', 'status': 'planning', 'applied': False}
+    if (not isinstance(public, Mapping) or any(public.get(key) != value for key, value in expected.items())
+            or any(raw.get(key) != value for key, value in expected.items())
+            or public.get('applied') is not False or raw.get('applied') is not False):
+        raise ContainerClientError('Only a live, unapplied execution preview can be abandoned')
+    if (os.path.lexists(storage / 'index/retention-operations' / (plan_id + '.json'))
+            or os.path.lexists(storage / 'locks/retention-admission')):
+        raise ContainerClientError('A mutation or admission gate exists; preview abandonment is refused')
+    _assert_replacement_health(health, readonly_preview_verified=True)
+    return path, raw
+
+
 def _replace_unlocked(
     layout: Mapping[str, object],
     image_id: str,
     owner: str,
     *,
+    abandon_readonly_preview: str | None = None,
     docker_call: Callable[[list[str]], object] | None = None,
     call: Callable[[list[str]], object] | None = None,
 ) -> dict[str, Any]:
@@ -884,7 +1110,12 @@ def _replace_unlocked(
 
     # This is an external loopback HTTP request.  It does not use the Docker
     # socket and cannot be satisfied by a Docker inspect result.
-    _assert_replacement_health(request(layout, operator, "GET", "/health"))
+    health = request(layout, operator, "GET", "/health")
+    abandoned = None
+    if abandon_readonly_preview is not None:
+        abandoned = _verify_readonly_preview_abandonment(layout, operator, abandon_readonly_preview, health)
+    else:
+        _assert_replacement_health(health)
 
     _docker_text(docker, ["stop", "--time", "10", current["container_id"]])
     terminal = _attest(
@@ -896,6 +1127,21 @@ def _replace_unlocked(
     )
     if terminal["running"] or terminal["state"] != "exited":
         raise ContainerClientError("Coordinator did not reach an exited terminal state")
+
+    if abandoned is not None:
+        from local_runner.retention import _checked_child, _read_json
+        path, original = abandoned
+        path = _checked_child(storage, ('index', 'retention-plans', abandon_readonly_preview + '.json'), kind='file')
+        final = dict(_read_json(path))
+        if (final.get('status') not in ('planning', 'preview') or final.get('scope') != 'execution'
+                or final.get('plan_id') != abandon_readonly_preview
+                or not (final.get('applied') is False or (final.get('status') == 'preview' and 'applied' not in final))
+                or os.path.lexists(storage / 'index/retention-operations' / (abandon_readonly_preview + '.json'))
+                or os.path.lexists(storage / 'locks/retention-admission')):
+            raise ContainerClientError('Preview state changed; preserve the stopped coordinator for reconciliation')
+        final.update(status='blocked', applied=False, abandoned_readonly_preview=True,
+                     error='Read-only preview abandoned for coordinator maintenance; create a fresh plan')
+        atomic_json(path, final)
 
     # Explicit replacement is the only lifecycle path allowed to remove this
     # reserved container.  Never add -f/-v and never remove by name.
@@ -919,6 +1165,7 @@ def replace(
     image_id: str,
     owner: str,
     *,
+    abandon_readonly_preview: str | None = None,
     docker_call: Callable[[list[str]], object] | None = None,
     call: Callable[[list[str]], object] | None = None,
 ) -> dict[str, Any]:
@@ -933,6 +1180,7 @@ def replace(
                 layout,
                 image_id,
                 owner,
+                abandon_readonly_preview=abandon_readonly_preview,
                 docker_call=docker_call,
                 call=call,
             )

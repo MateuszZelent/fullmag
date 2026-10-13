@@ -26,7 +26,9 @@ import {
   useMeshSummaryResource,
 } from "@/kernel/resources/geometryLifecycleResources";
 import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
-import type { JsonObject, LiveStatusResource } from "@/kernel/api/apiTypes";
+import { resolveActiveLaneOperation } from "@/kernel/resources/useActiveLaneCapabilities";
+import { resolveSessionAuthoringDiscretization } from "@/kernel/resources/sessionDiscretization";
+import type { JsonObject } from "@/kernel/api/apiTypes";
 import type { KernelApi } from "@/kernel/types";
 import { diffMeshPolicies } from "@/shared/domain/mesh/meshPolicyDiff";
 import { buildMeshSnapshotRows } from "@/shared/domain/mesh/meshBuildSnapshots";
@@ -43,6 +45,10 @@ import { MeshBuildConfirmDialogContent } from "./mesh-build/MeshBuildConfirmDial
 import { FdmGridBuildConfirmContent } from "./mesh-build/FdmGridBuildConfirmContent";
 import { buildRegionMeshBuildReasonRows } from "./mesh-build/meshBuildRegionReasons";
 import { openMeshBuildDiagnostics } from "./meshBuildDiagnosticsNavigation";
+import {
+  meshBuildDialogRuntimeStatusEquals,
+  selectMeshBuildDialogRuntimeStatus,
+} from "./MeshBuildDialogRuntimeStatus";
 
 function asRecord(value: unknown): JsonObject | null {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -57,18 +63,6 @@ function text(value: unknown, fallback = "unknown"): string {
   return JSON.stringify(value);
 }
 
-type MeshBuildDialogRuntimeStatus = {
-  capabilities: Pick<
-    LiveStatusResource["capabilities"],
-    "active_lane" | "explicit_topology"
-  >;
-  domain: Pick<LiveStatusResource["domain"], "discretization">;
-  resources: Pick<
-    LiveStatusResource["resources"],
-    "mesh_build_revision" | "mesh_revision"
-  >;
-};
-
 type MeshBuildDialogSnapshot = {
   requestId: string;
   sceneRevision: number;
@@ -82,45 +76,6 @@ type MeshBuildDialogSnapshot = {
     quality: JsonObject | null;
   };
 };
-
-function selectMeshBuildDialogRuntimeStatus(status: {
-  data: LiveStatusResource | null;
-}): MeshBuildDialogRuntimeStatus | null {
-  if (!status.data) return null;
-  return {
-    capabilities: {
-      active_lane: status.data.capabilities.active_lane,
-      explicit_topology: status.data.capabilities.explicit_topology,
-    },
-    domain: {
-      discretization: status.data.domain.discretization,
-    },
-    resources: {
-      mesh_build_revision: status.data.resources.mesh_build_revision,
-      mesh_revision: status.data.resources.mesh_revision,
-    },
-  };
-}
-
-function meshBuildDialogRuntimeStatusEquals(
-  previous: MeshBuildDialogRuntimeStatus | null,
-  next: MeshBuildDialogRuntimeStatus | null,
-): boolean {
-  if (previous === next) return true;
-  if (!previous || !next) return previous === next;
-  return (
-    previous.capabilities.explicit_topology ===
-      next.capabilities.explicit_topology &&
-    previous.capabilities.active_lane.operations.grid_build.reason ===
-      next.capabilities.active_lane.operations.grid_build.reason &&
-    previous.capabilities.active_lane.operations.grid_build.state ===
-      next.capabilities.active_lane.operations.grid_build.state &&
-    previous.domain.discretization === next.domain.discretization &&
-    previous.resources.mesh_build_revision ===
-      next.resources.mesh_build_revision &&
-    previous.resources.mesh_revision === next.resources.mesh_revision
-  );
-}
 
 export function resolveMeshBuildDialogLane(
   discretization: unknown,
@@ -162,14 +117,20 @@ export function MeshBuildDialog({ kernel }: { kernel: KernelApi }) {
     selectMeshBuildDialogRuntimeStatus,
     { enabled: state.open, isEqual: meshBuildDialogRuntimeStatusEquals },
   );
-  const lane = resolveMeshBuildDialogLane(runtimeStatus?.domain.discretization);
+  const lane = resolveMeshBuildDialogLane(
+    resolveSessionAuthoringDiscretization(runtimeStatus),
+  );
+  const buildOperation = resolveActiveLaneOperation(
+    runtimeStatus?.capabilities.active_lane ?? null,
+    "shared_mesh_build",
+  );
   const explicitFemLane = shouldLoadMeshBuildDialogFemResources(
     state.open,
     lane,
   );
   const unavailableMessage = meshBuildDialogUnavailableMessage(
     lane,
-    runtimeStatus?.capabilities.active_lane.operations.grid_build.reason,
+    runtimeStatus?.capabilities.active_lane?.operations.grid_build.reason,
   );
   const activeBuild = useMeshBuildCurrent({
     enabled: explicitFemLane,
@@ -432,7 +393,7 @@ export function MeshBuildDialog({ kernel }: { kernel: KernelApi }) {
   }
 
   function confirmBuild(): void {
-    if (!state.request?.requestId || !stableSnapshotBefore || !snapshotCurrent || state.phase !== "pre-build") return;
+    if (!state.request?.requestId || !stableSnapshotBefore || !snapshotCurrent || !buildOperation.enabled || state.phase !== "pre-build") return;
     dispatch({ type: "submitting" });
     kernel.bus.emit("mesh:build-confirm-resolved", { requestId: state.request.requestId, confirmed: true, precondition: { scene_revision: stableSnapshotBefore.sceneRevision, mesh_revision: stableSnapshotBefore.meshRevision } });
   }
@@ -481,7 +442,7 @@ export function MeshBuildDialog({ kernel }: { kernel: KernelApi }) {
               diffRows={diffRows}
               errorMessage={state.errorMessage}
               mode={state.phase}
-              ready={snapshotCurrent}
+              ready={snapshotCurrent && buildOperation.enabled}
               stale={stableSnapshotBefore !== null && !snapshotCurrent}
               onRefresh={() => {
                 captureSnapshot(null);
@@ -521,7 +482,7 @@ export function MeshBuildDialog({ kernel }: { kernel: KernelApi }) {
                 closeDialog();
                 openMeshBuildDiagnostics(kernel);
               }}
-              ready={snapshotCurrent}
+              ready={snapshotCurrent && buildOperation.enabled}
               rendered={state.lastCommandStatus === "rendered"}
               sceneRevision={sceneRevision}
               stale={stableSnapshotBefore !== null && !snapshotCurrent}
@@ -561,7 +522,7 @@ export function MeshBuildDialog({ kernel }: { kernel: KernelApi }) {
                   size="sm"
                   type="button"
                   variant="ghost"
-                  onClick={() => dispatch({ open: false, type: "open" })}
+                  onClick={closeDialog}
                 >
                   Close
                 </Button>

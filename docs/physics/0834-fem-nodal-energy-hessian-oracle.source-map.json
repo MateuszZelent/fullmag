@@ -1,0 +1,373 @@
+{
+  "document": {
+    "path": "docs/physics/0834-fem-nodal-energy-hessian-oracle.md"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "algebra-oracle-only / production-unqualified",
+      "reason": "Hosted non-MFEM Tet4 oracle only; production FEM remains unqualified."
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "not-qualified-by-this-artifact",
+      "reason": "No GPU implementation or device evidence is part of this test."
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "not-applicable-to-oracle / production-unqualified",
+      "reason": "The artifact tests only algebraic Tet4 P1 energy; it does not qualify production FDM."
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "not-applicable-to-oracle / production-unqualified",
+      "reason": "The artifact tests only algebraic Tet4 P1 energy; it does not qualify production FDM GPU."
+    }
+  ],
+  "equations": [
+    {
+      "id": "eq-nodal-hessian-tet4-moments",
+      "symbols": [
+        "tetra_and_indices",
+        "edge_length_and_element_volume",
+        "shape_functions_and_gradient",
+        "stiffness_and_mass_moments",
+        "node_position",
+        "volume_measure"
+      ],
+      "sources": [
+        "oracle-test-entrypoint"
+      ]
+    },
+    {
+      "id": "eq-nodal-hessian-energy",
+      "symbols": [
+        "energy_derivatives",
+        "material_constants",
+        "stiffness_and_mass_moments",
+        "unit_spin_and_tangent_inputs",
+        "physical_constants",
+        "field_parameters"
+      ],
+      "sources": [
+        "oracle-test-entrypoint"
+      ]
+    },
+    {
+      "id": "eq-nodal-hessian-poisson-map",
+      "symbols": [
+        "poisson_source_and_residual",
+        "unit_spin_and_tangent_inputs",
+        "field_parameters",
+        "edge_length_and_element_volume",
+        "shape_functions_and_gradient",
+        "mean_zero_poisson_matrices_and_potentials",
+        "spatial_derivative_and_kronecker_symbols",
+        "stacked_magnetization"
+      ],
+      "sources": [
+        "oracle-test-entrypoint"
+      ]
+    },
+    {
+      "id": "eq-nodal-hessian-demag-energy",
+      "symbols": [
+        "energy_derivatives",
+        "physical_constants",
+        "poisson_source_and_residual",
+        "mean_zero_poisson_matrices_and_potentials"
+      ],
+      "sources": [
+        "oracle-test-entrypoint"
+      ]
+    },
+    {
+      "id": "eq-nodal-hessian-retraction",
+      "symbols": [
+        "unit_spin_and_tangent_inputs",
+        "retraction_steps",
+        "normalization_operator"
+      ],
+      "sources": [
+        "oracle-test-entrypoint"
+      ]
+    },
+    {
+      "id": "eq-nodal-hessian-retracted-second-variation",
+      "symbols": [
+        "energy_derivatives",
+        "unit_spin_and_tangent_inputs"
+      ],
+      "sources": [
+        "oracle-test-entrypoint"
+      ]
+    },
+    {
+      "id": "eq-nodal-hessian-demag-positivity",
+      "symbols": [
+        "energy_derivatives",
+        "poisson_source_and_residual",
+        "mean_zero_poisson_matrices_and_potentials",
+        "physical_constants",
+        "psd_probe"
+      ],
+      "sources": [
+        "oracle-test-entrypoint"
+      ]
+    },
+    {
+      "id": "eq-nodal-hessian-uniform-anisotropy-sanity",
+      "symbols": [
+        "material_constants",
+        "edge_length_and_element_volume",
+        "unit_spin_and_tangent_inputs",
+        "coordinate_unit_vectors"
+      ],
+      "sources": [
+        "oracle-test-entrypoint"
+      ]
+    },
+    {
+      "id": "eq-nodal-hessian-richardson",
+      "symbols": [
+        "energy_derivatives",
+        "retraction_steps",
+        "difference_and_error_estimates"
+      ],
+      "sources": [
+        "oracle-test-entrypoint"
+      ]
+    },
+    {
+      "id": "eq-nodal-hessian-error-estimates",
+      "symbols": [
+        "poisson_source_and_residual",
+        "mean_zero_poisson_matrices_and_potentials",
+        "difference_and_error_estimates",
+        "physical_constants",
+        "source_and_potential_norms"
+      ],
+      "sources": [
+        "oracle-test-entrypoint"
+      ]
+    },
+    {
+      "id": "eq-nodal-hessian-interior-p1-normal",
+      "symbols": [
+        "barycenter_fields",
+        "interior_normal_component",
+        "unit_spin_and_tangent_inputs",
+        "normalization_operator"
+      ],
+      "sources": [
+        "oracle-test-entrypoint"
+      ]
+    },
+    {
+      "id": "eq-nodal-hessian-ambient-derivatives",
+      "symbols": [
+        "energy_derivatives",
+        "material_constants",
+        "stiffness_and_mass_moments",
+        "unit_spin_and_tangent_inputs",
+        "spatial_derivative_and_kronecker_symbols",
+        "tetra_and_indices"
+      ],
+      "sources": [
+        "oracle-test-entrypoint"
+      ]
+    },
+    {
+      "id": "eq-nodal-hessian-zeeman-derivatives",
+      "symbols": [
+        "energy_derivatives",
+        "physical_constants",
+        "field_parameters",
+        "stiffness_and_mass_moments"
+      ],
+      "sources": [
+        "oracle-test-entrypoint"
+      ]
+    },
+    {
+      "id": "eq-nodal-hessian-anisotropy-derivatives",
+      "symbols": [
+        "energy_derivatives",
+        "material_constants",
+        "stiffness_and_mass_moments",
+        "unit_spin_and_tangent_inputs",
+        "tetra_and_indices"
+      ],
+      "sources": [
+        "oracle-test-entrypoint"
+      ]
+    }
+  ],
+  "symbols": [
+    {
+      "id": "tetra_and_indices",
+      "latex": "$T$, $i$, $j$, $a$, $b$",
+      "meaning": "tetraedr oraz indeksy węzłów i składowych",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "node_position",
+      "latex": "$\\mathbf x_i$",
+      "meaning": "położenie węzła $i$",
+      "si_unit": "$\\mathrm{m}$"
+    },
+    {
+      "id": "volume_measure",
+      "latex": "$dV$",
+      "meaning": "miara objętości fizycznej",
+      "si_unit": "$\\mathrm{m^3}$"
+    },
+    {
+      "id": "spatial_derivative_and_kronecker_symbols",
+      "latex": "$\\partial_a$, $\\delta_{ij}$, $\\delta_{ab}$",
+      "meaning": "pochodna przestrzenna i symbole Kroneckera",
+      "si_unit": "$\\mathrm{m^{-1}}$, $1$, $1$"
+    },
+    {
+      "id": "normalization_operator",
+      "latex": "$\\operatorname{normalize}(\\cdot)$",
+      "meaning": "normalizacja wektora do długości jeden",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "coordinate_unit_vectors",
+      "latex": "$\\hat{\\mathbf x}$, $\\hat{\\mathbf z}$",
+      "meaning": "jednostkowe wektory osi użyte w sanity checku",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "psd_probe",
+      "latex": "$\\mathbf z$",
+      "meaning": "dowolny wektor nodalny w postaci kwadratowej PSD",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "stacked_magnetization",
+      "latex": "$\\mathbf m$",
+      "meaning": "stos dwunastu składowych magnetyzacji węzłowej",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "source_and_potential_norms",
+      "latex": "$\\lVert Q^{\\mathsf T}\\mathbf s\\rVert_2$, $\\lVert\\delta\\boldsymbol\\phi_Q\\rVert_2$",
+      "meaning": "normy euklidesowe źródła i korekty potencjału",
+      "si_unit": "$\\mathrm{A\\,m}$, $\\mathrm{A}$"
+    },
+    {
+      "id": "barycenter_fields",
+      "latex": "$\\widehat{\\mathbf m}_c$, $\\boldsymbol\\xi_c$",
+      "meaning": "znormalizowana interpolacja magnetyzacji i interpolowany kierunek w barycentrum",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "interior_normal_component",
+      "latex": "$\\nu_c$",
+      "meaning": "normalny składnik nodalnej perturbacji w barycentrum",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "edge_length_and_element_volume",
+      "latex": "$L$, $V$",
+      "meaning": "długość osiowej krawędzi i objętość Tet4",
+      "si_unit": "$\\mathrm{m}$, $\\mathrm{m^3}$"
+    },
+    {
+      "id": "shape_functions_and_gradient",
+      "latex": "$N_i$, $\\nabla N_i$",
+      "meaning": "liniowa funkcja kształtu i jej gradient fizyczny",
+      "si_unit": "$1$, $\\mathrm{m^{-1}}$"
+    },
+    {
+      "id": "stiffness_and_mass_moments",
+      "latex": "$K_{ij}$, $M_{ij}$",
+      "meaning": "moment sztywności P1 i zgodny moment masy",
+      "si_unit": "$\\mathrm{m}$, $\\mathrm{m^3}$"
+    },
+    {
+      "id": "unit_spin_and_tangent_inputs",
+      "latex": "$\\mathbf m_i$, $\\boldsymbol\\xi_i$, $\\mathbf u$",
+      "meaning": "nodalna magnetyzacja jednostkowa, kierunek styczny, oś anizotropii",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "retraction_steps",
+      "latex": "$h$, $\\alpha$",
+      "meaning": "bezwymiarowe kroki retraction i sanity pochodnej",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "material_constants",
+      "latex": "$A$, $K_u$",
+      "meaning": "sztywność wymiany i gęstość energii anizotropii",
+      "si_unit": "$\\mathrm{J\\,m^{-1}}$, $\\mathrm{J\\,m^{-3}}$"
+    },
+    {
+      "id": "field_parameters",
+      "latex": "$M_s$, $\\mathbf H_j$",
+      "meaning": "magnetyzacja nasycenia i ustalone pole węzłowe",
+      "si_unit": "$\\mathrm{A\\,m^{-1}}$, $\\mathrm{A\\,m^{-1}}$"
+    },
+    {
+      "id": "physical_constants",
+      "latex": "$\\mu_0$, $\\epsilon_{\\mathrm{mach}}$",
+      "meaning": "przenikalność próżni i epsilon maszynowy",
+      "si_unit": "$\\mathrm{N\\,A^{-2}}$, $1$"
+    },
+    {
+      "id": "poisson_source_and_residual",
+      "latex": "$B$, $\\mathbf s$, $\\mathbf r_Q$",
+      "meaning": "mapa źródła, źródło słabe, reszta układu zredukowanego",
+      "si_unit": "$\\mathrm{A\\,m}$, $\\mathrm{A\\,m}$, $\\mathrm{A\\,m}$"
+    },
+    {
+      "id": "mean_zero_poisson_matrices_and_potentials",
+      "latex": "$Q$, $P_Q$, $P_Q^{-1}$, $\\boldsymbol\\phi_Q$, $\\delta\\boldsymbol\\phi_Q$",
+      "meaning": "baza mean-zero, zredukowana sztywność i jej odwrotność, potencjał i korekta reszty",
+      "si_unit": "$1$, $\\mathrm{m}$, $\\mathrm{m^{-1}}$, $\\mathrm{A}$, $\\mathrm{A}$"
+    },
+    {
+      "id": "energy_derivatives",
+      "latex": "$E$, $\\mathbf g$, $\\mathsf H$, $C$, $E_d$",
+      "meaning": "energia, gradient ambientowy, Hessian ambientowy, korekta retrakcji, energia demag",
+      "si_unit": "$\\mathrm{J}$"
+    },
+    {
+      "id": "difference_and_error_estimates",
+      "latex": "$D(h)$, $R(h)$, $\\varepsilon_{\\mathrm{solve}}$, $\\varepsilon_{\\mathrm{scale}}$, $E_\\ell$, $\\ell$",
+      "meaning": "różnica, ekstrapolacja, estymaty skali numerycznej, składnik i indeks energii",
+      "si_unit": "$\\mathrm{J}$, $1$"
+    }
+  ],
+  "sources": [
+    {
+      "id": "oracle-test-entrypoint",
+      "path": "backends/fem/tests/frequency_domain/nodal_energy_hessian_contract_test.cpp",
+      "symbol": "main",
+      "responsibility": "Entry point constructs the Tet4 fixture and runs the uniform and textured energy-Hessian regressions; called helpers define each independent calculation.",
+      "status": "source-visible",
+      "evidence_status": "not-run"
+    },
+    {
+      "id": "oracle-native-modal-selector",
+      "path": "scripts/ci/run_modal_cabi_contract.py",
+      "symbol": "main",
+      "responsibility": "Selects the standalone oracle target and includes its executable digest in the hosted native-modal receipt.",
+      "status": "source-visible",
+      "evidence_status": "not-run"
+    }
+  ],
+  "public_api": {
+    "status": "unchanged",
+    "parameters": [],
+    "reason": "This source-only test adds no Python API, ProblemIR parameter, planner route, or runtime behavior."
+  }
+}

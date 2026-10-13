@@ -12,7 +12,11 @@
 .fm-workspace-shell {
   display: grid;
   position: relative;
-  grid-template-rows: var(--fm-menu-height) var(--fm-ribbon-height) 1fr var(--fm-status-height);
+  grid-template-rows:
+    var(--fm-menu-height)
+    minmax(var(--fm-ribbon-height), max-content)
+    minmax(0, 1fr)
+    var(--fm-status-height);
   width: 100%;
   height: auto;
   flex: 1 1 0%;

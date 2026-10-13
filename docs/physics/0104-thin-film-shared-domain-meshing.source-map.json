@@ -47,7 +47,25 @@
         "h_target"
       ],
       "sources": [
-        "policy-adr"
+        "policy-adr",
+        "scoped-lower-composition-owner"
+      ]
+    },
+    {
+      "id": "eq-thin-film-exact-plane-local-target",
+      "symbols": [
+        "thickness",
+        "layer_count",
+        "layer_height",
+        "k",
+        "z_k",
+        "layer_section",
+        "h_section_target"
+      ],
+      "sources": [
+        "scoped-layer-meshed-extrusion",
+        "scoped-lower-composition-owner",
+        "scoped-layer-density-regression"
       ]
     }
   ],
@@ -93,6 +111,30 @@
       "latex": "h_\\mathrm{target}",
       "meaning": "resolved target size",
       "si_unit": "\\mathrm m"
+    },
+    {
+      "id": "k",
+      "latex": "k",
+      "meaning": "exact layer-plane index",
+      "si_unit": "1"
+    },
+    {
+      "id": "z_k",
+      "latex": "z_k",
+      "meaning": "requested exact layer-plane coordinate",
+      "si_unit": "\\mathrm m"
+    },
+    {
+      "id": "layer_section",
+      "latex": "\\Sigma_k",
+      "meaning": "body-owned cross-section at $z_k$",
+      "si_unit": "\\mathrm{m^2}"
+    },
+    {
+      "id": "h_section_target",
+      "latex": "h_{\\Sigma,k}",
+      "meaning": "resolved target size evaluated on $\\Sigma_k$",
+      "si_unit": "\\mathrm m"
     }
   ],
   "sources": [
@@ -130,6 +172,89 @@
       "symbol": "DOC-ANCHOR:canonical-fem-mesh-policy",
       "responsibility": "Defines canonical size policy and evidence.",
       "evidence_status": "planned_contract"
+    },
+    {
+      "id": "periodic-layer-subdivision",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_layered_tetrahedra.py",
+      "symbol": "subdivide_layered_prisms",
+      "responsibility": "Subdivides vertical prism6 and quad4 with a shared translation-invariant rule without new nodes.",
+      "evidence_status": "source_regression_passed_runtime_not_verified"
+    },
+    {
+      "id": "periodic-layer-owner",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py",
+      "symbol": "_generate_coincident_ring_airbox_mesh",
+      "responsibility": "Preserves exact layers and physical regions; classifies only the combined domain boundary as exterior.",
+      "evidence_status": "source_regression_passed_runtime_not_verified"
+    },
+    {
+      "id": "periodic-layer-regression",
+      "path": "scripts/test_box_layered_airbox_mesh.py",
+      "symbol": "test_layered_periodic_triangles_are_conforming",
+      "responsibility": "Real-Gmsh periodic bijection, facet incidence, volume and exact-plane regression.",
+      "evidence_status": "python_passed"
+    },
+    {
+      "id": "scoped-lower-composition-owner",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_fields.py",
+      "symbol": "_configure_mesh_size_fields",
+      "responsibility": "Composes owner-scoped upper/lower fields; GHA status applied is not proof of layered local density.",
+      "evidence_status": "existing_source_actual_density_failed"
+    },
+    {
+      "id": "scoped-layer-meshed-extrusion",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py",
+      "symbol": "_generate_coincident_ring_airbox_mesh",
+      "responsibility": "Uses fixed meshed extrusion that copies one source-face triangulation through exact z levels; current finite ROI density gate fails.",
+      "evidence_status": "source_mechanism_reviewed_actual_density_failed"
+    },
+    {
+      "id": "scoped-layer-density-regression",
+      "path": "packages/fullmag-py/tests/test_meshing.py",
+      "symbol": "test_direct_layered_box_region_floor_beats_eligible_upper_actual_density",
+      "responsibility": "Checks actual local ROI and bulk edge-density limits while preserving exact layer count and coordinates.",
+      "evidence_status": "existing_github_actions_regression_pending"
+    },
+    {
+      "id": "quality-si-conversion",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py",
+      "symbol": "_quality_volumes_in_si",
+      "responsibility": "Convert ring quality volume channels from scaled Gmsh coordinates to cubic metres.",
+      "evidence_status": "implemented"
+    },
+    {
+      "id": "quality-si-regression",
+      "path": "packages/fullmag-py/tests/test_gmsh_quality_units.py",
+      "symbol": "test_scaled_quality_preserves_dimensionless_metrics_and_input",
+      "responsibility": "Check dimensional conversion without mutating source or dimensionless quality.",
+      "evidence_status": "implemented"
+    },
+    {
+      "id": "periodic-si-recertification",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py",
+      "symbol": "_recertify_scaled_periodic_mesh",
+      "responsibility": "Revalidate final SI periodic relations and rebuild their coordinate-bound certificate.",
+      "evidence_status": "planned_contract_runtime_not_verified"
+    },
+    {
+      "id": "source-canonical-geometry-owner-roster",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_mesh_targets.py",
+      "symbol": "_geometry_owner_alias_index",
+      "responsibility": "Canonical exact-name-first owner roster shared by scalar targets and size-field resolution; source regression pending hosted CI, no scientific qualification."
+    },
+    {
+      "id": "box-exact-cell-route-bounds",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py",
+      "symbol": "_coincident_ring_airbox_bounds",
+      "responsibility": "Decides exact-cell bbox dimensions, lateral center and body containment without Gmsh.",
+      "evidence_status": "implemented"
+    },
+    {
+      "id": "box-exact-cell-route-selection",
+      "path": "packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py",
+      "symbol": "_realize_fem_domain_mesh_asset_from_components_impl",
+      "responsibility": "Selects layered GEO only for an exact-cell Box airbox; other unscoped supported geometry uses OCC.",
+      "evidence_status": "source-only"
     }
   ],
   "public_api": {

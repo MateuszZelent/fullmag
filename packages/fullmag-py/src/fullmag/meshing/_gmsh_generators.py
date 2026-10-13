@@ -12,6 +12,7 @@ from fullmag._progress import emit_progress
 from fullmag.model.geometry import (
     ArchWaveguide,
     Box,
+    CPWAntennaLayout,
     Cylinder,
     Difference,
     Ellipse,
@@ -19,6 +20,7 @@ from fullmag.model.geometry import (
     Geometry,
     ImportedGeometry,
     Intersection,
+    MicrostripAntennaLayout,
     Translate,
     Union,
 )
@@ -56,7 +58,12 @@ from ._gmsh_fields import _apply_mesh_options, _apply_post_mesh_options
 from ._gmsh_selectors import collect_orphan_entity_diagnostics
 from ._gmsh_airbox import _add_airbox_and_fragment, _add_airbox_geo
 from ._gmsh_swept import should_use_swept, generate_swept_mesh, classify_sweepability
-from ._gmsh_waveguides import add_arch_waveguide_to_occ
+from ._gmsh_waveguides import (
+    add_antenna_layout_parts_to_occ,
+    add_antenna_layout_terminal_physical_groups,
+    add_arch_waveguide_to_occ,
+    add_antenna_layout_to_occ,
+)
 from ._gmsh_occ import _configure_axis_periodic_surfaces, _scale_periodic_boundary_pairs
 
 _NO_OP_FIELD_SIZE = 1.0e22
@@ -115,6 +122,29 @@ def _airbox_volume_tags_for_components(
     }
     all_volumes = [int(tag) for dim, tag in gmsh.model.getEntities(3) if dim == 3]
     return [tag for tag in all_volumes if tag not in component_volumes]
+
+
+def _named_single_component_volume_tags(
+    geometry_name: str | None,
+    volume_tags: Sequence[int],
+) -> dict[str, list[int]] | None:
+    """Bind only the exact volumes created for one geometry generator."""
+    if not isinstance(geometry_name, str) or not geometry_name.strip():
+        return None
+    resolved = list(dict.fromkeys(int(tag) for tag in volume_tags))
+    if not resolved:
+        return None
+    return {geometry_name: resolved}
+
+
+def _physical_group_volume_tags(gmsh: Any, marker: int) -> list[int]:
+    try:
+        return [
+            int(tag)
+            for tag in gmsh.model.getEntitiesForPhysicalGroup(3, int(marker))
+        ]
+    except Exception:
+        return []
 
 
 def _add_airbox_volume_clamp_fields(
@@ -271,6 +301,7 @@ def generate_mesh(
     airbox: AirboxOptions | None = None,
     options: MeshOptions | None = None,
     maximum_element_size: float | None = None,
+    object_id: str | None = None,
 ) -> MeshData:
     """Generate a tetrahedral mesh for the given geometry.
 
@@ -283,6 +314,8 @@ def generate_mesh(
         airbox: Structured airbox configuration. When given, takes precedence
                 over *air_padding*.
         options: Advanced Gmsh options (algorithms, quality, size fields).
+        object_id: Immutable owner for antenna terminal markers. Geometry-name
+                markers remain the compatibility default for unowned callers.
     """
     resolved_hmax = maximum_element_size if maximum_element_size is not None else hmax
     if resolved_hmax is None:
@@ -315,7 +348,14 @@ def generate_mesh(
         )
 
     if isinstance(geometry, Box):
-        return generate_box_mesh(geometry.size, hmax=resolved_hmax, order=order, airbox=resolved_airbox, options=opts)
+        return generate_box_mesh(
+            geometry.size,
+            hmax=resolved_hmax,
+            order=order,
+            airbox=resolved_airbox,
+            options=opts,
+            geometry_name=geometry.geometry_name,
+        )
     if isinstance(geometry, Cylinder) and geometry.axis == (0.0, 0.0, 1.0):
         return generate_cylinder_mesh(
             geometry.radius,
@@ -324,8 +364,23 @@ def generate_mesh(
             order=order,
             airbox=resolved_airbox,
             options=opts,
+            geometry_name=geometry.geometry_name,
         )
-    if isinstance(geometry, (Cylinder, Difference, Union, Intersection, Translate, Ellipsoid, Ellipse, ArchWaveguide)):
+    if isinstance(
+        geometry,
+        (
+            Cylinder,
+            Difference,
+            Union,
+            Intersection,
+            Translate,
+            Ellipsoid,
+            Ellipse,
+            ArchWaveguide,
+            MicrostripAntennaLayout,
+            CPWAntennaLayout,
+        ),
+    ):
         # A chain of Translate wrapping an ImportedGeometry cannot go through
         # the OCC CSG pipeline (OCC cannot ingest STL/NPZ sources). Detect this
         # pattern, mesh the imported file directly, and apply the accumulated
@@ -340,13 +395,14 @@ def generate_mesh(
                     airbox=resolved_airbox,
                     scale=inner.scale,
                     options=opts,
+                    geometry_name=geometry.geometry_name,
                 )
                 ox, oy, oz = offset
                 if ox != 0.0 or oy != 0.0 or oz != 0.0:
                     shift = np.array([ox, oy, oz], dtype=np.float64)
                     mesh = _dc_replace(mesh, nodes=mesh.nodes + shift)
                 return mesh
-        return _generate_csg_mesh(geometry, hmax=resolved_hmax, order=order, airbox=resolved_airbox, options=opts)
+        return _generate_csg_mesh(geometry, hmax=resolved_hmax, order=order, airbox=resolved_airbox, options=opts, object_id=object_id)
     if isinstance(geometry, ImportedGeometry):
         return generate_mesh_from_file(
             geometry.source,
@@ -356,6 +412,7 @@ def generate_mesh(
             airbox=resolved_airbox,
             scale=geometry.scale,
             options=opts,
+            geometry_name=geometry.geometry_name,
         )
     raise TypeError(f"unsupported geometry type: {type(geometry)!r}")
 
@@ -367,6 +424,7 @@ def generate_box_mesh(
     air_padding: float = 0.0,
     airbox: AirboxOptions | None = None,
     options: MeshOptions | None = None,
+    geometry_name: str | None = None,
 ) -> MeshData:
     resolved = airbox or (AirboxOptions(padding_factor=air_padding) if air_padding > 0 else None)
     resolved_scaled = _scale_airbox_options(resolved, 1e6)
@@ -383,7 +441,7 @@ def generate_box_mesh(
         _configure_gmsh_threads(gmsh)
         gmsh.model.add("fullmag_box")
         sx, sy, sz = [dim * SCALE for dim in size]
-        gmsh.model.occ.addBox(-sx / 2.0, -sy / 2.0, -sz / 2.0, sx, sy, sz)
+        body_volume = gmsh.model.occ.addBox(-sx / 2.0, -sy / 2.0, -sz / 2.0, sx, sy, sz)
         gmsh.model.occ.synchronize()
         has_airbox = resolved_scaled is not None
         airbox_field_ids: list[int] = []
@@ -394,6 +452,13 @@ def generate_box_mesh(
             )
             if airbox_field is not None:
                 airbox_field_ids.append(airbox_field)
+            owner_volumes = _physical_group_volume_tags(gmsh, 1)
+        else:
+            owner_volumes = [int(body_volume)]
+        component_volume_tags = _named_single_component_volume_tags(
+            geometry_name,
+            owner_volumes,
+        )
         emit_progress("Gmsh: generating 3D tetrahedral mesh")
         _apply_mesh_options(
             gmsh,
@@ -402,6 +467,7 @@ def generate_box_mesh(
             opts,
             hscale=SCALE,
             preexisting_field_ids=airbox_field_ids,
+            component_volume_tags=component_volume_tags,
             airbox_maximum_element_size=resolved_scaled.maximum_element_size if resolved_scaled is not None and resolved_scaled.maximum_element_size is not None else None,
         )
         with _GmshProgressLogger(gmsh):
@@ -414,6 +480,7 @@ def generate_box_mesh(
         )
         return MeshData.from_legacy_tet4(
             nodes=mesh.nodes / SCALE,
+            vertex_identity=mesh.vertex_identity,
             elements=mesh.elements,
             element_markers=mesh.element_markers,
             boundary_faces=mesh.boundary_faces,
@@ -433,6 +500,7 @@ def generate_cylinder_mesh(
     air_padding: float = 0.0,
     airbox: AirboxOptions | None = None,
     options: MeshOptions | None = None,
+    geometry_name: str | None = None,
 ) -> MeshData:
     resolved = airbox or (AirboxOptions(padding_factor=air_padding) if air_padding > 0 else None)
     resolved_scaled = _scale_airbox_options(resolved, 1e6)
@@ -448,7 +516,7 @@ def generate_cylinder_mesh(
     try:
         _configure_gmsh_threads(gmsh)
         gmsh.model.add("fullmag_cylinder")
-        gmsh.model.occ.addCylinder(0.0, 0.0, -height * SCALE / 2.0, 0.0, 0.0, height * SCALE, radius * SCALE)
+        body_volume = gmsh.model.occ.addCylinder(0.0, 0.0, -height * SCALE / 2.0, 0.0, 0.0, height * SCALE, radius * SCALE)
         gmsh.model.occ.synchronize()
         has_airbox = resolved_scaled is not None
         airbox_field_ids: list[int] = []
@@ -459,6 +527,13 @@ def generate_cylinder_mesh(
             )
             if airbox_field is not None:
                 airbox_field_ids.append(airbox_field)
+            owner_volumes = _physical_group_volume_tags(gmsh, 1)
+        else:
+            owner_volumes = [int(body_volume)]
+        component_volume_tags = _named_single_component_volume_tags(
+            geometry_name,
+            owner_volumes,
+        )
         emit_progress("Gmsh: generating 3D tetrahedral mesh")
         _apply_mesh_options(
             gmsh,
@@ -467,6 +542,7 @@ def generate_cylinder_mesh(
             opts,
             hscale=SCALE,
             preexisting_field_ids=airbox_field_ids,
+            component_volume_tags=component_volume_tags,
             airbox_maximum_element_size=resolved_scaled.maximum_element_size if resolved_scaled is not None and resolved_scaled.maximum_element_size is not None else None,
         )
         with _GmshProgressLogger(gmsh):
@@ -479,6 +555,7 @@ def generate_cylinder_mesh(
         )
         return MeshData.from_legacy_tet4(
             nodes=mesh.nodes / SCALE,
+            vertex_identity=mesh.vertex_identity,
             elements=mesh.elements,
             element_markers=mesh.element_markers,
             boundary_faces=mesh.boundary_faces,
@@ -495,6 +572,7 @@ def generate_difference_mesh(
     hmax: float,
     order: int = 1,
     options: MeshOptions | None = None,
+    geometry_name: str | None = None,
 ) -> MeshData:
     """Mesh a CSG Difference via Gmsh OCC boolean cut.
 
@@ -515,8 +593,12 @@ def generate_difference_mesh(
         gmsh.model.add("fullmag_difference")
         base_tags = _add_geometry_to_occ(gmsh, geometry.base, scale=SCALE)
         tool_tags = _add_geometry_to_occ(gmsh, geometry.tool, scale=SCALE)
-        gmsh.model.occ.cut(base_tags, tool_tags)
+        cut_result, _cut_map = gmsh.model.occ.cut(base_tags, tool_tags)
         gmsh.model.occ.synchronize()
+        component_volume_tags = _named_single_component_volume_tags(
+            geometry_name or geometry.geometry_name,
+            [int(tag) for dim, tag in cut_result if int(dim) == 3],
+        )
         periodic_pair_specs = _configure_axis_periodic_surfaces(
             gmsh,
             surface_tags=[
@@ -527,7 +609,14 @@ def generate_difference_mesh(
             pair_ids=list(opts.periodic_pair_ids),
         )
         emit_progress("Gmsh: generating 3D tetrahedral mesh")
-        _apply_mesh_options(gmsh, hmax * SCALE, order, opts, hscale=SCALE)
+        _apply_mesh_options(
+            gmsh,
+            hmax * SCALE,
+            order,
+            opts,
+            hscale=SCALE,
+            component_volume_tags=component_volume_tags,
+        )
         with _GmshProgressLogger(gmsh):
             gmsh.model.mesh.generate(3)
         _apply_post_mesh_options(gmsh, opts)
@@ -544,6 +633,7 @@ def generate_difference_mesh(
         # Scale nodes back to SI metres
         return MeshData.from_legacy_tet4(
             nodes=mesh.nodes / SCALE,
+            vertex_identity=mesh.vertex_identity,
             elements=mesh.elements,
             element_markers=mesh.element_markers,
             boundary_faces=mesh.boundary_faces,
@@ -566,6 +656,7 @@ def _generate_csg_mesh(
     order: int = 1,
     airbox: AirboxOptions | None = None,
     options: MeshOptions | None = None,
+    object_id: str | None = None,
 ) -> MeshData:
     """Mesh any geometry type via the generic OCC pipeline.
 
@@ -585,7 +676,20 @@ def _generate_csg_mesh(
     try:
         _configure_gmsh_threads(gmsh)
         gmsh.model.add("fullmag_csg")
-        mag_tags = _add_geometry_to_occ(gmsh, geometry, scale=SCALE)
+        antenna_part_tags = None
+        if isinstance(geometry, (MicrostripAntennaLayout, CPWAntennaLayout)):
+            antenna_part_tags = add_antenna_layout_parts_to_occ(
+                gmsh,
+                geometry,
+                scale=SCALE,
+            )
+            mag_tags = [
+                dimtag
+                for part_tags in antenna_part_tags.values()
+                for dimtag in part_tags
+            ]
+        else:
+            mag_tags = _add_geometry_to_occ(gmsh, geometry, scale=SCALE)
         gmsh.model.occ.synchronize()
         has_airbox = airbox_scaled is not None
         airbox_field_ids: list[int] = []
@@ -610,6 +714,19 @@ def _generate_csg_mesh(
                 component_volume_tags = {geometry.geometry_name: [int(tag) for tag in magnetic_volumes]}
             if interface_surfaces:
                 component_surface_tags = {geometry.geometry_name: [int(tag) for tag in interface_surfaces]}
+        else:
+            component_volume_tags = _named_single_component_volume_tags(
+                geometry.geometry_name,
+                [int(tag) for dim, tag in mag_tags if int(dim) == 3],
+            )
+            if antenna_part_tags is not None:
+                add_antenna_layout_terminal_physical_groups(
+                    gmsh,
+                    geometry,
+                    antenna_part_tags,
+                    scale=SCALE,
+                    object_id=object_id,
+                )
         periodic_pair_specs = _configure_axis_periodic_surfaces(
             gmsh,
             surface_tags=[
@@ -638,7 +755,7 @@ def _generate_csg_mesh(
         mesh = _extract_mesh_data(
             gmsh,
             quality=quality,
-            has_physical_groups=has_airbox,
+            has_physical_groups=has_airbox or antenna_part_tags is not None,
             per_domain_quality=_pdq,
             periodic_pair_specs=periodic_pair_specs,
         )
@@ -647,6 +764,7 @@ def _generate_csg_mesh(
         )
         return MeshData.from_legacy_tet4(
             nodes=mesh.nodes / SCALE,
+            vertex_identity=mesh.vertex_identity,
             elements=mesh.elements,
             element_markers=mesh.element_markers,
             boundary_faces=mesh.boundary_faces,
@@ -714,6 +832,8 @@ def _add_geometry_to_occ(
         return [(3, tag)]
     if isinstance(geometry, ArchWaveguide):
         return add_arch_waveguide_to_occ(gmsh, geometry, scale=scale)
+    if isinstance(geometry, (MicrostripAntennaLayout, CPWAntennaLayout)):
+        return add_antenna_layout_to_occ(gmsh, geometry, scale=scale)
     if isinstance(geometry, Difference):
         base_tags = _add_geometry_to_occ(gmsh, geometry.base, scale=scale)
         tool_tags = _add_geometry_to_occ(gmsh, geometry.tool, scale=scale)
@@ -772,6 +892,7 @@ def generate_mesh_from_file(
     options: MeshOptions | None = None,
     *,
     provisional_interface_markers: set[int] | None = None,
+    geometry_name: str | None = None,
 ) -> MeshData:
     resolved = airbox or (AirboxOptions(padding_factor=air_padding) if air_padding > 0 else None)
     opts = options or MeshOptions()
@@ -794,6 +915,7 @@ def generate_mesh_from_file(
             airbox=resolved,
             scale_xyz=scale_xyz,
             options=opts,
+            geometry_name=geometry_name,
         )
     if suffix == ".stl":
         emit_progress(f"Gmsh: meshing STL surface {path.name}")
@@ -805,6 +927,7 @@ def generate_mesh_from_file(
             scale_xyz=scale_xyz,
             options=opts,
             provisional_interface_markers=provisional_interface_markers,
+            geometry_name=geometry_name,
         )
     raise ValueError(f"unsupported mesh/geometry source format: {path.suffix}")
 
@@ -816,6 +939,7 @@ def _mesh_cad_file(
     airbox: AirboxOptions | None = None,
     scale_xyz: NDArray[np.float64] = np.ones(3),
     options: MeshOptions | None = None,
+    geometry_name: str | None = None,
 ) -> MeshData:
     opts = _sanitize_volume_mesh_options(
         options or MeshOptions(),
@@ -828,8 +952,11 @@ def _mesh_cad_file(
         _configure_gmsh_threads(gmsh)
         gmsh.model.add(path.stem)
         emit_progress("Gmsh: importing CAD shapes")
-        gmsh.model.occ.importShapes(str(path))
+        imported_entities = gmsh.model.occ.importShapes(str(path))
         gmsh.model.occ.synchronize()
+        imported_volumes = [
+            int(tag) for dim, tag in imported_entities if int(dim) == 3
+        ]
         has_airbox = airbox is not None
         airbox_field_ids: list[int] = []
         if has_airbox:
@@ -838,8 +965,25 @@ def _mesh_cad_file(
             airbox_field = _add_airbox_and_fragment(gmsh, volumes, airbox, hmax)
             if airbox_field is not None:
                 airbox_field_ids.append(airbox_field)
+            owner_volumes = _physical_group_volume_tags(gmsh, 1)
+        else:
+            owner_volumes = imported_volumes
+        component_volume_tags = _named_single_component_volume_tags(
+            geometry_name,
+            owner_volumes,
+        )
         emit_progress("Gmsh: generating 3D tetrahedral mesh")
-        _apply_mesh_options(gmsh, hmax, order, opts, preexisting_field_ids=airbox_field_ids, airbox_maximum_element_size=airbox.maximum_element_size if airbox is not None else None)
+        _apply_mesh_options(
+            gmsh,
+            hmax,
+            order,
+            opts,
+            preexisting_field_ids=airbox_field_ids,
+            airbox_maximum_element_size=(
+                airbox.maximum_element_size if airbox is not None else None
+            ),
+            component_volume_tags=component_volume_tags,
+        )
         with _GmshProgressLogger(gmsh):
             gmsh.model.mesh.generate(3)
         _apply_post_mesh_options(gmsh, opts)
@@ -966,6 +1110,7 @@ def _mesh_stl_surface(
     scale_xyz: NDArray[np.float64] = np.ones(3),
     options: MeshOptions | None = None,
     provisional_interface_markers: set[int] | None = None,
+    geometry_name: str | None = None,
 ) -> MeshData:
     opts = options or MeshOptions()
     stl_opts = _sanitize_volume_mesh_options(opts, context="STL mesh")
@@ -981,6 +1126,7 @@ def _mesh_stl_surface(
                 scale_xyz=scale_xyz,
                 options=stl_opts,
                 provisional_interface_markers=provisional_interface_markers,
+                geometry_name=geometry_name,
             )
         except Exception as exc:
             retry_algorithm = _stl_meshing_retry_algorithm(
@@ -1007,6 +1153,7 @@ def _mesh_stl_surface_once(
     scale_xyz: NDArray[np.float64],
     options: MeshOptions,
     provisional_interface_markers: set[int] | None = None,
+    geometry_name: str | None = None,
 ) -> MeshData:
     stl_opts = options
     gmsh = _import_gmsh()
@@ -1023,6 +1170,10 @@ def _mesh_stl_surface_once(
             airbox_field = _add_airbox_geo(gmsh, body_vols, body_surfs, airbox, hmax)
             if airbox_field is not None:
                 airbox_field_ids.append(airbox_field)
+        component_volume_tags = _named_single_component_volume_tags(
+            geometry_name,
+            body_vols,
+        )
         emit_progress("Gmsh: generating 3D tetrahedral mesh")
         _apply_mesh_options(
             gmsh,
@@ -1031,6 +1182,7 @@ def _mesh_stl_surface_once(
             stl_opts,
             preexisting_field_ids=airbox_field_ids,
             airbox_maximum_element_size=airbox.maximum_element_size if airbox is not None else None,
+            component_volume_tags=component_volume_tags,
         )
         with _GmshProgressLogger(gmsh):
             gmsh.model.mesh.generate(3)

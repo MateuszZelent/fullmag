@@ -40,6 +40,14 @@ struct ContourIntervalMode {
     std::complex<double> mode[2]{};
     std::vector<std::complex<double>> mode_vector{};
     double relative_residual = 0.0;
+    // Optional certificate from the original Floquet descriptor.  The
+    // contour solver itself only sees the real-split Schur pencil; these
+    // fields are populated by the production adapter after reconstructing
+    // the eliminated scalar potential.
+    bool floquet_descriptor_certified = false;
+    double floquet_magnetic_residual = 0.0;
+    double floquet_potential_residual = 0.0;
+    std::vector<std::complex<double>> floquet_potential_real_split{};
 };
 
 struct ContourPointSolveDiagnostic {

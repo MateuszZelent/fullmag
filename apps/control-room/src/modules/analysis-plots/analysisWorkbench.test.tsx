@@ -134,7 +134,7 @@ import { useAnalysisPlotsController } from "./useAnalysisPlotsController";
 
 const props = {
   datasetRefs: [], dynamicStructureFactor: null, dynamicStructureFactorStatus: "idle", frequencyDomainSeries: [], frequencyDomainStatus: "idle", frequencyDomainTitle: "Frequency domain", frequencyDomainUnavailableReason: null,
-  kernel: {} as KernelApi, onDatasetRefChange: vi.fn(), onSurfaceChange: vi.fn(), selectedDatasetRef: null, selectedStageId: null, spinWaveGamma: null, spinWaveGammaStatus: "idle", table: null, tableStatus: "idle", tableUnsupportedReason: null,
+  kernel: {} as KernelApi, onDatasetRefChange: vi.fn(), selectedDatasetRef: null, selectedStageId: null, spinWaveGamma: null, spinWaveGammaStatus: "idle", table: null, tableStatus: "idle", tableUnsupportedReason: null,
 };
 
 const dynamicStructureFactor = { schema_version: "dynamic_structure_factor.1d.v1:sha256:dsf-1" } as DynamicStructureFactorResource;
@@ -166,9 +166,28 @@ describe("Analysis workbench", () => {
     });
   });
 
-  it("exposes the five physics-first workbench surfaces", () => {
-    const html = renderToStaticMarkup(<AnalysisPlotsView {...props} activeSurface="dynamics" />);
-    for (const label of ["Dynamics", "Resonance &amp; FMR", "Dispersion", "Hysteresis", "Comparison"]) expect(html).toContain(`>${label}</button>`);
+  it("renders the selected surface heading without duplicate surface tabs", () => {
+    const surfaces = [
+      ["dynamics", "Dynamics"],
+      ["resonance-fmr", "Resonance & FMR"],
+      ["dispersion", "Dispersion"],
+      ["hysteresis", "Hysteresis"],
+      ["comparison", "Comparison"],
+    ] as const;
+
+    for (const [activeSurface, label] of surfaces) {
+      const html = renderToStaticMarkup(
+        <AnalysisPlotsView {...props} activeSurface={activeSurface} />,
+      );
+      const heading = html.match(
+        /<h2\b[^>]*data-analysis-surface-title="([^"]+)"[^>]*>(.*?)<\/h2>/,
+      );
+
+      expect(heading?.[1]).toBe(activeSurface);
+      expect(heading?.[2]).toBe(label.replace("&", "&amp;"));
+      expect(html.match(/data-analysis-surface-title=/g)).toHaveLength(1);
+      expect(html).not.toContain('role="tablist"');
+    }
   });
 
   it("renders each selected workbench surface", () => {

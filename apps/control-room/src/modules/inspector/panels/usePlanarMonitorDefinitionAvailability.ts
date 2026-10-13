@@ -8,6 +8,7 @@ import {
   useModelRegionsResource,
   useSceneResource,
 } from "@/kernel/resources/geometryLifecycleResources";
+import { resolveSessionDiscretization } from "@/kernel/resources/sessionDiscretization";
 import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
 
 import {
@@ -17,7 +18,7 @@ import {
 
 export function usePlanarMonitorDefinitionAvailability(): PlanarMonitorDefinitionAvailability {
   const discretization = useSessionStatusSelector(
-    (status) => status.data?.domain.discretization ?? null,
+    (status) => resolveSessionDiscretization(status.data),
   );
   const scene = useSceneResource({ enabled: discretization === "fdm" || discretization === "fem" });
   const regions = useModelRegionsResource({ enabled: discretization === "fdm" || discretization === "fem" });

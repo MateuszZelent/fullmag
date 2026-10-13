@@ -1,10 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { ControlRoomApiError } from "../api/ControlRoomApi";
 import type { FrequencyDomainFieldResource } from "../api/apiTypes";
 import type { DecodedFieldVector } from "../api/codecs";
 import type { ModeCompositionResource } from "./ModeCompositionController";
 import {
   ModeCompositionFieldLayerController,
+  type ModeCompositionFieldLayerSnapshot,
   type ModeCompositionFieldLayerTopologyIdentity,
 } from "./ModeCompositionFieldLayerController";
 
@@ -77,7 +79,10 @@ function composition(overrides: {
   };
 }
 
-function metadata(fieldId: string): FrequencyDomainFieldResource {
+function metadata(
+  fieldId: string,
+  overrides: Partial<FrequencyDomainFieldResource> = {},
+): FrequencyDomainFieldResource {
   return {
     artifact_path: "eigen/modes/sample_0000_mode_0000.field.v1.json",
     available_views: ["complex", "real", "imag", "abs", "amplitude", "phase", "phase_rotated_real"],
@@ -90,6 +95,8 @@ function metadata(fieldId: string): FrequencyDomainFieldResource {
     default_phase_rad: 0,
     default_view: "phase_rotated_real",
     field_id: fieldId,
+    generation_id: "publication-12",
+    generation_status: "member_verified_owner_bound",
     payload_encoding: "f64_interleaved_real_imag_xyz",
     payload_value_count: 12,
     quantity: "delta_m",
@@ -99,14 +106,19 @@ function metadata(fieldId: string): FrequencyDomainFieldResource {
     source_family: "analysis/eigen",
     status: "ready",
     value_kind: "complex_spatial_vector",
+    ...overrides,
   };
 }
 
-function binary(fieldId: string, objectId = "object-a"): DecodedFieldVector {
+function binary(
+  fieldId: string,
+  objectId = "object-a",
+  formatVersion: 2 | 3 | 4 | 5 = 3,
+): DecodedFieldVector {
   return {
     domainGenerationId: topology.domainGenerationId,
     dtype: "float64",
-    formatVersion: 3,
+    formatVersion,
     grid: [2, 1, 1],
     indexing: "explicit_node_indices",
     meshTopologyHash: topology.meshTopologyHash,
@@ -122,7 +134,7 @@ function binary(fieldId: string, objectId = "object-a"): DecodedFieldVector {
   };
 }
 
-function loaders() {
+function loaders(formatVersion: 3 | 5 = 3) {
   const loadMetadata = vi.fn(async (
     layer: ModeCompositionResource["layers"][number],
     _signal: AbortSignal,
@@ -130,18 +142,37 @@ function loaders() {
   const loadBinary = vi.fn(async (
     layer: ModeCompositionResource["layers"][number],
     _signal: AbortSignal,
+    expectedArtifactGenerationId: string,
   ) => ({
+    artifactGenerationId: expectedArtifactGenerationId as string | null,
     byteLength: 96,
-    data: binary(layer.field_id, layer.object_id),
+    data: binary(layer.field_id, layer.object_id, formatVersion),
     etag: "field-etag-11",
     fieldRevision: "field-11",
-    encoding: "FMVP;version=3",
+    encoding: `FMVP;version=${formatVersion}`,
   }));
   return { loadBinary, loadMetadata };
 }
 
+function twoLayerComposition() {
+  const resource = composition();
+  const first = resource.layers[0]!;
+  const second = {
+    ...first,
+    field_id: "analysis:eigen:sample-0:mode-1:delta_m_xyz",
+    layer_id: "layer-b",
+    mode: { ...first.mode, mode_id: "mode-1", raw_mode_index: 1 },
+    object_id: "object-b",
+    target_id: "object:object-b",
+  };
+  return {
+    resource: { ...resource, layers: [first, second] },
+    topologyByTarget: { "object:object-a": topology, "object:object-b": topology },
+  };
+}
+
 describe("ModeCompositionFieldLayerController", () => {
-  it("loads one full complex object field and never refetches it for presentation-only mutations", async () => {
+  it("refreshes metadata but reuses unchanged binary data for presentation-only mutations", async () => {
     const controller = new ModeCompositionFieldLayerController();
     const source = loaders();
 
@@ -152,12 +183,226 @@ describe("ModeCompositionFieldLayerController", () => {
       source,
     );
 
-    expect(source.loadMetadata).toHaveBeenCalledTimes(1);
+    expect(source.loadMetadata).toHaveBeenCalledTimes(2);
     expect(source.loadBinary).toHaveBeenCalledTimes(1);
+    expect(source.loadBinary).toHaveBeenCalledWith(
+      expect.objectContaining({ field_id: "analysis:eigen:sample-0:mode-0:delta_m_xyz" }),
+      expect.any(AbortSignal),
+      "publication-12",
+      null,
+    );
     expect(controller.getSnapshot().get("object:object-a")).toMatchObject({
       identity: { fieldRevision: "field-11" },
       status: "ready",
     });
+  });
+
+  it.each([3, 5] as const)(
+    "loads and reuses version %s identities for both object layers",
+    async (formatVersion) => {
+      const controller = new ModeCompositionFieldLayerController();
+      const source = loaders(formatVersion);
+      const { resource, topologyByTarget } = twoLayerComposition();
+
+      await controller.activate(resource, topologyByTarget, source);
+      for (const [targetId, objectId] of [
+        ["object:object-a", "object-a"],
+        ["object:object-b", "object-b"],
+      ] as const) {
+        expect(controller.getSnapshot().get(targetId)).toMatchObject({
+          identity: {
+            binaryEncoding: `FMVP;version=${formatVersion}`,
+            scopeId: objectId,
+            scopeKind: "object",
+          },
+          status: "ready",
+        });
+      }
+
+      await controller.activate({ ...resource, revision: 2 }, topologyByTarget, source);
+
+      expect(source.loadBinary).toHaveBeenCalledTimes(2);
+      for (const [targetId, objectId] of [
+        ["object:object-a", "object-a"],
+        ["object:object-b", "object-b"],
+      ] as const) {
+        expect(controller.getSnapshot().get(targetId)).toMatchObject({
+          identity: {
+            binaryEncoding: `FMVP;version=${formatVersion}`,
+            scopeId: objectId,
+            scopeKind: "object",
+          },
+          status: "ready",
+        });
+      }
+    },
+  );
+
+  it.each([
+    { encoding: "FMVP;version=3", formatVersion: 5 },
+    { encoding: "FMVP;version=5", formatVersion: 3 },
+  ] as const)(
+    "rejects an FMVP header $encoding with decoded format $formatVersion",
+    async ({ encoding, formatVersion }) => {
+      const controller = new ModeCompositionFieldLayerController();
+      const source = loaders();
+      source.loadBinary.mockImplementationOnce(async (layer) => ({
+        artifactGenerationId: "publication-12",
+        byteLength: 96,
+        data: binary(layer.field_id, layer.object_id, formatVersion),
+        encoding,
+        etag: "field-etag-11",
+        fieldRevision: "field-11",
+      }));
+
+      await controller.activate(composition(), { "object:object-a": topology }, source);
+
+      expect(controller.getSnapshot().get("object:object-a")).toMatchObject({
+        field: null,
+        identity: null,
+        reason: "identity_mismatch",
+        status: "error",
+      });
+    },
+  );
+
+  it.each([2, 4] as const)("rejects unsupported FMVP v%s mode fields", async (formatVersion) => {
+    const controller = new ModeCompositionFieldLayerController();
+    const source = loaders();
+    source.loadBinary.mockImplementationOnce(async (layer) => ({
+      artifactGenerationId: "publication-12",
+      byteLength: 96,
+      data: binary(layer.field_id, layer.object_id, formatVersion),
+      encoding: `FMVP;version=${formatVersion}`,
+      etag: "field-etag-11",
+      fieldRevision: "field-11",
+    }));
+
+    await controller.activate(composition(), { "object:object-a": topology }, source);
+
+    expect(controller.getSnapshot().get("object:object-a")).toMatchObject({
+      field: null,
+      identity: null,
+      reason: "identity_mismatch",
+      status: "error",
+    });
+  });
+
+  it("rejects an unbound member before requesting composition bytes", async () => {
+    const controller = new ModeCompositionFieldLayerController();
+    const source = loaders();
+    const resource = composition();
+    const first = resource.layers[0]!;
+    const second = {
+      ...first,
+      layer_id: "layer-b",
+      mode: { ...first.mode, mode_id: "mode-1", raw_mode_index: 1 },
+      object_id: "object-b",
+      target_id: "object:object-b",
+    };
+    source.loadMetadata.mockImplementation(async (layer) =>
+      metadata(layer.field_id, {
+        generation_status:
+          layer.mode.mode_id === "mode-0"
+            ? "member_verified_unbound"
+            : "member_verified_owner_bound",
+      }),
+    );
+
+    await controller.activate(
+      { ...resource, layers: [first, second] },
+      { "object:object-a": topology, "object:object-b": topology },
+      source,
+    );
+
+    expect(source.loadBinary).not.toHaveBeenCalled();
+    expect(controller.getSnapshot().get("object:object-a")).toMatchObject({
+      error: expect.objectContaining({ message: expect.stringContaining("member_verified_unbound") }),
+      reason: "identity_mismatch",
+      status: "error",
+    });
+    expect(controller.getSnapshot().get("object:object-b")).toMatchObject({
+      error: expect.objectContaining({ message: expect.stringContaining("cannot join fields") }),
+      reason: "identity_mismatch",
+      status: "error",
+    });
+  });
+
+  it("does not admit legacy field metadata into a multi-artifact composition", async () => {
+    const controller = new ModeCompositionFieldLayerController();
+    const source = loaders();
+    source.loadMetadata.mockResolvedValueOnce(metadata(
+      "analysis:eigen:sample-0:mode-0:delta_m_xyz",
+      {
+        generation_id: null,
+        generation_status: "legacy_unverified",
+      },
+    ));
+
+    await controller.activate(composition(), { "object:object-a": topology }, source);
+
+    expect(source.loadBinary).not.toHaveBeenCalled();
+    expect(controller.getSnapshot().get("object:object-a")).toMatchObject({
+      error: expect.objectContaining({ message: expect.stringContaining("legacy fields cannot join") }),
+      reason: "identity_mismatch",
+      status: "error",
+    });
+  });
+
+  it("rejects a missing artifact-generation response header", async () => {
+    const controller = new ModeCompositionFieldLayerController();
+    const source = loaders();
+    source.loadBinary.mockImplementationOnce(async (layer) => ({
+      artifactGenerationId: null,
+      byteLength: 96,
+      data: binary(layer.field_id, layer.object_id),
+      etag: "field-etag-11",
+      fieldRevision: "field-11",
+      encoding: "FMVP;version=3",
+    }));
+
+    await controller.activate(composition(), { "object:object-a": topology }, source);
+
+    expect(controller.getSnapshot().get("object:object-a")).toMatchObject({
+      error: expect.objectContaining({ message: expect.stringContaining("artifact generation header") }),
+      field: null,
+      reason: "identity_mismatch",
+      status: "error",
+    });
+  });
+
+  it("rejects a composition whose mode fields belong to different committed publications", async () => {
+    const controller = new ModeCompositionFieldLayerController();
+    const source = loaders();
+    const resource = composition();
+    const first = resource.layers[0]!;
+    const second = {
+      ...first,
+      layer_id: "layer-b",
+      mode: { ...first.mode, mode_id: "mode-1", raw_mode_index: 1 },
+      object_id: "object-b",
+      target_id: "object:object-b",
+    };
+    source.loadMetadata.mockImplementation(async (layer) =>
+      metadata(layer.field_id, {
+        generation_id: layer.mode.mode_id === "mode-0" ? "publication-12" : "publication-13",
+      }),
+    );
+
+    await controller.activate(
+      { ...resource, layers: [first, second] },
+      { "object:object-a": topology, "object:object-b": topology },
+      source,
+    );
+
+    expect(source.loadBinary).not.toHaveBeenCalled();
+    for (const targetId of ["object:object-a", "object:object-b"]) {
+      expect(controller.getSnapshot().get(targetId)).toMatchObject({
+        error: expect.objectContaining({ message: expect.stringContaining("different committed artifact generations") }),
+        reason: "identity_mismatch",
+        status: "error",
+      });
+    }
   });
 
   it("does not reuse decoded mode fields after the session scope changes", async () => {
@@ -184,22 +429,175 @@ describe("ModeCompositionFieldLayerController", () => {
     });
   });
 
-  it("retains a ready field as degraded after a same-topology refresh failure", async () => {
+  it("rereads metadata and fetches binary data when the committed generation changes under stable IDs", async () => {
+    const controller = new ModeCompositionFieldLayerController();
+    const source = loaders();
+    const fieldId = "analysis:eigen:sample-0:mode-0:delta_m_xyz";
+    source.loadMetadata
+      .mockResolvedValueOnce(metadata(fieldId, {
+        content_digest: "sha256:publication-a",
+        generation_id: "publication-a",
+        revision: "metadata-a",
+      }))
+      .mockResolvedValueOnce(metadata(fieldId, {
+        content_digest: "sha256:publication-b",
+        generation_id: "publication-b",
+        revision: "metadata-b",
+      }));
+    source.loadBinary.mockImplementation(async (layer, _signal, generationId) => ({
+      artifactGenerationId: generationId,
+      byteLength: 96,
+      data: binary(layer.field_id, layer.object_id),
+      etag: `etag:${generationId}`,
+      fieldRevision: `field:${generationId}`,
+      encoding: "FMVP;version=3",
+    }));
+
+    const resource = composition();
+    await controller.activate(resource, { "object:object-a": topology }, source);
+    await controller.activate(resource, { "object:object-a": topology }, source);
+
+    expect(source.loadMetadata).toHaveBeenCalledTimes(2);
+    expect(source.loadBinary).toHaveBeenCalledTimes(2);
+    expect(controller.getSnapshot().get("object:object-a")).toMatchObject({
+      identity: {
+        artifactGenerationId: "publication-b",
+        fieldRevision: "field:publication-b",
+      },
+      status: "ready",
+    });
+  });
+
+  it("clears cached metadata when the controller is cleared", async () => {
+    const controller = new ModeCompositionFieldLayerController();
+    const source = loaders();
+
+    await controller.activate(composition(), { "object:object-a": topology }, source);
+    controller.clear();
+    await controller.activate(composition(), { "object:object-a": topology }, source);
+
+    expect(source.loadMetadata).toHaveBeenCalledTimes(2);
+    expect(source.loadBinary).toHaveBeenCalledTimes(1);
+    expect(controller.getSnapshot().get("object:object-a")).toMatchObject({ status: "ready" });
+  });
+
+  it("retains the exact ready field after a same-generation binary transport failure", async () => {
     const controller = new ModeCompositionFieldLayerController();
     const source = loaders();
     await controller.activate(composition(), { "object:object-a": topology }, source);
-    source.loadMetadata.mockRejectedValueOnce(new Error("offline"));
+    // Simulate an evicted binary entry while keeping the immutable field revision
+    // known, so this activation must exercise the transport-failure fallback.
+    (controller as unknown as { fieldCache: { clear(): void } }).fieldCache.clear();
+    source.loadBinary.mockRejectedValueOnce(new Error("offline"));
 
     await controller.activate(
-      composition({ modeId: "mode-1" }),
+      { ...composition(), revision: 2 },
       { "object:object-a": topology },
       source,
     );
 
+    expect(source.loadMetadata).toHaveBeenCalledTimes(2);
+    expect(source.loadBinary).toHaveBeenCalledTimes(2);
     expect(controller.getSnapshot().get("object:object-a")).toMatchObject({
       error: expect.objectContaining({ message: "offline" }),
       field: expect.any(Object),
+      identity: { artifactGenerationId: "publication-12", fieldRevision: "field-11" },
+      reason: "transport_error",
       status: "degraded",
+    });
+  });
+
+  it("removes stale-generation fields before per-target binary publication after a generic 409", async () => {
+    const controller = new ModeCompositionFieldLayerController();
+    const source = loaders();
+    const { resource, topologyByTarget } = twoLayerComposition();
+    source.loadMetadata.mockImplementation(async (layer) => metadata(layer.field_id, {
+      content_digest: "sha256:publication-a",
+      generation_id: "publication-a",
+      revision: "metadata-a",
+    }));
+    await controller.activate(resource, topologyByTarget, source);
+
+    source.loadMetadata.mockImplementation(async (layer) => metadata(layer.field_id, {
+      content_digest: "sha256:publication-b",
+      generation_id: "publication-b",
+      revision: "metadata-b",
+    }));
+    source.loadBinary.mockImplementation(async (layer, _signal, generationId) => {
+      if (generationId === "publication-b" && layer.mode.mode_id === "mode-1") {
+        throw new ControlRoomApiError("conflict", 409);
+      }
+      return {
+        artifactGenerationId: generationId,
+        byteLength: 96,
+        data: binary(layer.field_id, layer.object_id),
+        etag: `etag:${generationId}`,
+        fieldRevision: `field:${generationId}`,
+        encoding: "FMVP;version=3",
+      };
+    });
+    const frames: Array<ReadonlyMap<string, ModeCompositionFieldLayerSnapshot>> = [];
+    const unsubscribe = controller.subscribe(() => {
+      frames.push(new Map(controller.getSnapshot()));
+    });
+    await controller.activate(resource, topologyByTarget, source);
+    unsubscribe();
+
+    expect(frames.some((frame) => {
+      const generations = [...frame.values()]
+        .map((snapshot) => snapshot.identity?.artifactGenerationId)
+        .filter((generation): generation is string => Boolean(generation));
+      return generations.includes("publication-a") && generations.includes("publication-b");
+    })).toBe(false);
+    expect(controller.getSnapshot().get("object:object-a")).toMatchObject({
+      identity: { artifactGenerationId: "publication-b" },
+      status: "ready",
+    });
+    expect(controller.getSnapshot().get("object:object-b")).toMatchObject({
+      field: null,
+      reason: "identity_mismatch",
+      status: "error",
+    });
+  });
+
+  it("fails closed when one fresh metadata member cannot prove the collection generation", async () => {
+    const controller = new ModeCompositionFieldLayerController();
+    const source = loaders();
+    const { resource, topologyByTarget } = twoLayerComposition();
+    source.loadMetadata.mockImplementation(async (layer) => metadata(layer.field_id, {
+      content_digest: "sha256:publication-a",
+      generation_id: "publication-a",
+      revision: "metadata-a",
+    }));
+    await controller.activate(resource, topologyByTarget, source);
+    const binaryCallCount = source.loadBinary.mock.calls.length;
+
+    source.loadMetadata.mockImplementation(async (layer) => {
+      if (layer.mode.mode_id === "mode-1") throw new Error("metadata offline");
+      return metadata(layer.field_id, {
+        content_digest: "sha256:publication-b",
+        generation_id: "publication-b",
+        revision: "metadata-b",
+      });
+    });
+    const frames: Array<ReadonlyMap<string, ModeCompositionFieldLayerSnapshot>> = [];
+    const unsubscribe = controller.subscribe(() => {
+      frames.push(new Map(controller.getSnapshot()));
+    });
+    await controller.activate(resource, topologyByTarget, source);
+    unsubscribe();
+
+    expect(source.loadBinary).toHaveBeenCalledTimes(binaryCallCount);
+    expect(frames.every((frame) => [...frame.values()].every((snapshot) => snapshot.field === null))).toBe(true);
+    expect(controller.getSnapshot().get("object:object-a")).toMatchObject({
+      field: null,
+      status: "error",
+    });
+    expect(controller.getSnapshot().get("object:object-b")).toMatchObject({
+      error: expect.objectContaining({ message: "metadata offline" }),
+      field: null,
+      reason: "transport_error",
+      status: "error",
     });
   });
 
@@ -217,6 +615,7 @@ describe("ModeCompositionFieldLayerController", () => {
     source.loadBinary.mockImplementation(async (
       layer: ModeCompositionResource["layers"][number],
     ) => ({
+      artifactGenerationId: "publication-12",
       byteLength: 96,
       data: {
         ...binary(layer.field_id, layer.object_id),

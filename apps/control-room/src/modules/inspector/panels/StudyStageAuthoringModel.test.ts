@@ -374,7 +374,7 @@ describe("StudyStageAuthoringModel", () => {
       entrypoint_kind: "flat_run",
       kind: "run",
       stage_id: "excite",
-      until_seconds: 2e-9,
+      until_seconds: "2e-9",
     });
   });
 
@@ -535,7 +535,7 @@ describe("StudyStageAuthoringModel", () => {
       entrypoint_kind: "flat_run",
       kind: "run",
       stage_id: "legacy-run",
-      until_seconds: 2e-9,
+      until_seconds: "2e-9",
     });
   });
 
@@ -598,10 +598,10 @@ describe("StudyStageAuthoringModel", () => {
       algorithm: "llg_overdamped",
       demag_interval_s: 2e-12,
       energy_tolerance_j: 1e-20,
-      fixed_timestep: 1e-13,
+      fixed_timestep: "1e-13",
       integrator: "rk45",
       max_relaxation_time_s: 4e-9,
-      max_steps: 50000,
+      max_steps: "50000",
       torque_tolerance_apm: 1e-4,
     });
 
@@ -616,7 +616,7 @@ describe("StudyStageAuthoringModel", () => {
     });
     expect(direct).toMatchObject({
       algorithm: "projected_gradient_bb",
-      max_steps: 50000,
+      max_steps: "50000",
       torque_tolerance_apm: 1e-4,
     });
     expect(direct).not.toHaveProperty("demag_interval_s");
@@ -1446,7 +1446,7 @@ describe("StudyStageAuthoringModel", () => {
               integrator: "rk45",
               kind: "relax",
               max_relaxation_time_s: 5e-9,
-              max_steps: 1000,
+              max_steps: "1000",
               relax_alpha: 0.7,
               stage_id: "relax-1",
               torque_tolerance_apm: 1e-6,
@@ -1490,13 +1490,44 @@ describe("StudyStageAuthoringModel", () => {
               entrypoint_kind: "flat_run",
               kind: "run",
               stage_id: "run-2",
-              until_seconds: 3e-9,
+              until_seconds: "3e-9",
             },
           ],
         },
       },
     });
   });
+
+  it.each(["1e-12", " 1e-12 ", "0.000000000001"])(
+    "saves Run duration %s as canonical scene text and round-trips it",
+    (untilSeconds) => {
+      const run = {
+        ...createDefaultStudyStageDraft("run", 0),
+        untilSeconds,
+      };
+      const stage = studyStageDraftToSceneStage(run);
+
+      expect(stage.until_seconds).toBe("1e-12");
+      expect(buildStudyStagesMergePatch([run], 6)).toMatchObject({
+        base_revision: 6,
+        merge_patch: {
+          study: { stages: [{ kind: "run", until_seconds: "1e-12" }] },
+        },
+      });
+      expect(createStudyStageDraft(stage, 0).untilSeconds).toBe("1e-12");
+    },
+  );
+
+  it.each(["", "0", "-1e-12", "Infinity", "NaN", "1e309"])(
+    "rejects invalid Run duration %s before saving scene text",
+    (untilSeconds) => {
+      expect(() =>
+        buildStudyStagesMergePatch([
+          { ...createDefaultStudyStageDraft("run", 0), untilSeconds },
+        ]),
+      ).toThrow("until_seconds must be a positive finite number.");
+    },
+  );
 
   it("carries the scene revision when saving a newly authored Relax stage", () => {
     const relax = createDefaultStudyStageDraft("relax", 0);
@@ -1508,7 +1539,7 @@ describe("StudyStageAuthoringModel", () => {
     });
   });
 
-  it("serializes fixed relax dt as a numeric timestep", () => {
+  it("serializes fixed relax dt as canonical scene text", () => {
     expect(
       studyStageDraftToSceneStage({
         ...createDefaultStudyStageDraft("relax", 0),
@@ -1516,9 +1547,35 @@ describe("StudyStageAuthoringModel", () => {
         timestepMode: "fixed",
       }),
     ).toMatchObject({
-      fixed_timestep: 5e-15,
+      fixed_timestep: "5e-15",
     });
   });
+
+  it.each(["0", "-1", "1.5", "Infinity", "NaN"])(
+    "rejects invalid Relax max_steps %s before saving scene text",
+    (maxSteps) => {
+      expect(() =>
+        buildStudyStagesMergePatch([
+          { ...createDefaultStudyStageDraft("relax", 0), maxSteps },
+        ]),
+      ).toThrow("max_steps must be a positive integer.");
+    },
+  );
+
+  it.each(["0", "-1e-15", "Infinity", "NaN", "1e309"])(
+    "rejects invalid fixed Relax timestep %s before saving scene text",
+    (dt) => {
+      expect(() =>
+        buildStudyStagesMergePatch([
+          {
+            ...createDefaultStudyStageDraft("relax", 0),
+            dt,
+            timestepMode: "fixed",
+          },
+        ]),
+      ).toThrow("fixed_timestep must be a positive finite number.");
+    },
+  );
 
   it("serializes spectral authoring options with Python DSL vocabulary", () => {
     expect(

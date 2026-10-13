@@ -7,6 +7,7 @@ import math
 from fullmag.model.geometry import (
     ArchWaveguide,
     Box,
+    CPWAntennaLayout,
     Cylinder,
     Difference,
     Ellipse,
@@ -14,6 +15,7 @@ from fullmag.model.geometry import (
     Geometry,
     ImportedGeometry,
     Intersection,
+    MicrostripAntennaLayout,
     Translate,
     Union,
 )
@@ -114,7 +116,17 @@ def is_occ_compatible(geometries: list[Geometry]) -> bool:
             return False
         if isinstance(geometry, Cylinder):
             continue
-        if isinstance(geometry, (Box, Ellipsoid, Ellipse, ArchWaveguide)):
+        if isinstance(
+            geometry,
+            (
+                Box,
+                Ellipsoid,
+                Ellipse,
+                ArchWaveguide,
+                MicrostripAntennaLayout,
+                CPWAntennaLayout,
+            ),
+        ):
             continue
         if isinstance(geometry, Translate):
             if not is_occ_compatible([geometry.geometry]):

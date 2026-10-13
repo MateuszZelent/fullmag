@@ -132,6 +132,48 @@ export function rotateFreeCameraTarget(
   };
 }
 
+/** Rotate in the camera's screen plane without a polar-axis singularity. */
+export function dragViewCubeCamera(
+  current: Viewport3DCameraState,
+  deltaX: number,
+  deltaY: number,
+  sensitivity: number,
+  mode: "camera" | "object",
+): Viewport3DCameraState {
+  const offset: Direction3 = current.position.map(
+    (value, axis) => value - current.target[axis],
+  ) as Direction3;
+  const backward = normalizeDirection(offset);
+  const projectedUp = (candidate: Direction3): Direction3 => {
+    const dot = candidate.reduce((sum, value, axis) => sum + value * backward[axis], 0);
+    return candidate.map((value, axis) => value - dot * backward[axis]) as Direction3;
+  };
+  let perpendicularUp = projectedUp(current.up);
+  if (Math.hypot(...perpendicularUp) < 1e-8) {
+    perpendicularUp = projectedUp(Math.abs(backward[2]) > 0.9 ? [0, 1, 0] : [0, 0, 1]);
+  }
+  const up = normalizeDirection(perpendicularUp);
+  const yawed = rotateDirectionAroundAxis(offset, up, -deltaX * sensitivity);
+  const right = normalizeDirection([
+    up[1] * yawed[2] - up[2] * yawed[1],
+    up[2] * yawed[0] - up[0] * yawed[2],
+    up[0] * yawed[1] - up[1] * yawed[0],
+  ]);
+  const rotated = rotateDirectionAroundAxis(yawed, right, -deltaY * sensitivity);
+  const nextUp = rotateDirectionAroundAxis(up, right, -deltaY * sensitivity);
+  return mode === "camera"
+    ? {
+        position: current.position,
+        target: current.position.map((value, axis) => value - rotated[axis]) as Direction3,
+        up: nextUp,
+      }
+    : {
+        position: current.target.map((value, axis) => value + rotated[axis]) as Direction3,
+        target: current.target,
+        up: nextUp,
+      };
+}
+
 function rotateDirectionAroundAxis(
   direction: Direction3,
   axis: Direction3,

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
 
 import type {
   SceneCurrentTransport,
@@ -9,6 +9,7 @@ import type {
   TransportValidationRequest,
   TransportValidationResponse,
 } from "@/kernel/api/apiTypes";
+import { ControlRoomApiError } from "@/kernel/api/ControlRoomApi";
 import {
   authoringWriteOptions,
   captureAuthoringMutationFence,
@@ -16,6 +17,7 @@ import {
 } from "@/kernel/authoring/authoringHistoryMutation";
 import { createCommandContext } from "@/kernel/commands/commandContext";
 import { useKernel } from "@/kernel/KernelContext";
+import { publishCommittedSceneResource } from "@/kernel/resources/geometryLifecycleResources";
 import {
   invalidateSpinAuthoringResources,
   transportMutationResourceKeys,
@@ -48,10 +50,12 @@ import {
   isKnownCurrentTransport,
   isKnownSpinTransport,
   readonlyTransportPayload,
+  reconcileTransportDraft,
   resolveTransportRecord,
   spinTransportDraft,
   transportIdentity,
   transportSelectionKey,
+  transportDraftValuesEqual,
   type CurrentTransportDraft,
   type SpinTransportDraft,
   type StructuredCurrentSourceCutDraft,
@@ -107,19 +111,28 @@ export function TransportAuthoringInspector({
     () => (active.data?.items ?? []) as (SceneCurrentTransport | SceneSpinTransport)[],
     [active.data],
   );
-  const [localSelectionKey, setLocalSelectionKey] = useState("");
+  const selectionOwnerKey = JSON.stringify([sessionScopeKey, family, resourceId ?? null,
+    resourceId == null ? resourceIndex ?? null : null, initialScope?.objectId ?? null, initialScope?.regionId ?? null]);
+  const [selectionState, setSelectionState] = useState({ ownerKey: selectionOwnerKey, selectionKey: "" });
+  if (selectionState.ownerKey !== selectionOwnerKey) {
+    setSelectionState({ ownerKey: selectionOwnerKey, selectionKey: "" });
+  }
+  const localSelectionKey = selectionState.ownerKey === selectionOwnerKey ? selectionState.selectionKey : "";
+  const setLocalSelectionKey = (selectionKey: string) => setSelectionState({ ownerKey: selectionOwnerKey, selectionKey });
   const selected = resolveTransportRecord(family, items, {
     resourceId,
     resourceIndex,
     selectionKey: localSelectionKey,
   });
-  const selectedId = resourceId ?? (selected ? transportIdentity(family, selected) : null);
+  const selectedId = resourceId ?? (localSelectionKey.startsWith("id:")
+    ? localSelectionKey.slice(3)
+    : selected ? transportIdentity(family, selected) : null);
   const known = selected
     ? family === "current_transport"
       ? isKnownCurrentTransport(selected as SceneCurrentTransport)
       : isKnownSpinTransport(selected as SceneSpinTransport)
     : true;
-  const baseDraft = family === "current_transport"
+  const serverDraft = useMemo(() => family === "current_transport"
     ? currentTransportDraft(
         selected && known ? selected as Parameters<typeof currentTransportDraft>[0] : null,
         selected ? null : initialScope,
@@ -127,22 +140,69 @@ export function TransportAuthoringInspector({
     : spinTransportDraft(
         selected && known ? selected as Parameters<typeof spinTransportDraft>[0] : null,
         selected ? null : initialScope,
-      );
-  const draftKey = `${sessionScopeKey ?? "no-session"}:${family}:${resourceId ?? resourceIndex ?? localSelectionKey}:${JSON.stringify(baseDraft)}`;
-  const [draftState, setDraftState] = useState<{ draft: Draft; key: string }>({
-    draft: baseDraft,
+      ), [family, initialScope, known, selected]);
+  const draftKeyFor = (address: string | number) => JSON.stringify([selectionOwnerKey, address]);
+  const draftKey = draftKeyFor(selectedId ?? resourceIndex ?? localSelectionKey);
+  const activeDraftKey = useRef(draftKey);
+  const activeDraftGeneration = useRef(0);
+  const [draftState, setDraftState] = useState<{ draft: Draft; baseline: Draft; key: string; generation: number; ackRevision: number | null }>({
+    draft: serverDraft,
+    baseline: serverDraft,
     key: draftKey,
+    generation: 0,
+    ackRevision: null,
   });
-  const draft = draftState.key === draftKey ? draftState.draft : baseDraft;
-  const [feedback, setFeedback] = useState<{ kind: "error" | "success"; message: string } | null>(null);
+  const draftGeneration = draftState.generation + (draftState.key === draftKey ? 0 : 1);
+  const [deletedTarget, setDeletedTarget] = useState<{ key: string; generation: number; revision: number } | null>(null);
+  const targetUnavailable = Boolean(selectedId && (
+    deletedTarget?.key === draftKey && deletedTarget.generation === draftGeneration
+      && (active.status !== "ready" || (active.data?.scene_revision ?? -1) <= deletedTarget.revision)
+    || !selected && active.status === "ready"
+      && (draftState.key !== draftKey || draftState.ackRevision === null
+        || (active.data?.scene_revision ?? -1) >= draftState.ackRevision)
+  ));
+  useLayoutEffect(() => {
+    activeDraftKey.current = draftKey;
+    activeDraftGeneration.current = draftGeneration;
+  }, [draftGeneration, draftKey]);
+  const baseDraft = useMemo(() => {
+    if (selectedId && !selected && draftState.key === draftKey) return draftState.baseline;
+    if (draftState.key === draftKey && draftState.ackRevision !== null
+      && (active.data?.scene_revision ?? -1) < draftState.ackRevision) return draftState.baseline;
+    return family === "current_transport" && selected && known
+      ? currentTransportDraft(selected as Parameters<typeof currentTransportDraft>[0], null,
+          draftState.key === draftKey ? draftState.draft as CurrentTransportDraft : null)
+      : serverDraft;
+  }, [active.data?.scene_revision, draftKey, draftState, family, known, selected, selectedId, serverDraft]);
+  const resolved = useMemo(() => draftState.key === draftKey
+    ? reconcileTransportDraft(baseDraft, draftState.draft, draftState.baseline)
+    : { draft: baseDraft, conflicts: [] }, [baseDraft, draftKey, draftState]);
+  const draft = resolved.draft;
+  const [feedbackState, setFeedbackState] = useState<{ key: string; kind: "error" | "success"; message: string } | null>(null);
+  const feedback = feedbackState?.key === draftKey ? feedbackState : null;
+  const setFeedback = (value: { kind: "error" | "success"; message: string } | null) =>
+    setFeedbackState(value ? { ...value, key: draftKey } : null);
+  const [revisionConflict, setRevisionConflict] = useState<{ key: string; revision: number } | null>(null);
+  const rejectedRevision = revisionConflict?.key === draftKey ? revisionConflict.revision : null;
+  const hasConflict = resolved.conflicts.length > 0 || rejectedRevision !== null;
   const [pendingOperation, setPendingOperation] = useState<{
     id: number;
     sessionScopeKey: string;
+    draftKey: string;
+    generation: number;
   } | null>(null);
   const nextPendingOperationId = useRef(0);
-  const pending = pendingOperation?.sessionScopeKey === sessionScopeKey;
-  const validationKey = `${sessionScopeKey ?? "no-session"}:${draftKey}:${active.data?.scene_revision ?? "none"}`;
+  const pending = pendingOperation?.sessionScopeKey === sessionScopeKey && pendingOperation?.draftKey === draftKey
+    && pendingOperation.generation === draftGeneration;
+  const validationKey = `${draftKey}:${active.data?.scene_revision ?? "none"}:${JSON.stringify(draft)}`;
   const [validationState, setValidationState] = useState<{ error: string | null; key: string; response: TransportValidationResponse | null }>({ error: null, key: "", response: null });
+  if (draftState.key !== draftKey) {
+    setDraftState({ draft: serverDraft, baseline: serverDraft, key: draftKey, generation: draftGeneration, ackRevision: null });
+    setFeedbackState(null);
+    setRevisionConflict(null);
+    setValidationState({ error: null, key: "", response: null });
+    setDeletedTarget(null);
+  }
   const validation = validationState.key === validationKey ? validationState.response : null;
   const validationError = validationState.key === validationKey ? validationState.error : null;
   const capabilities = useSessionStatusSelector(
@@ -150,9 +210,14 @@ export function TransportAuthoringInspector({
     { enabled: true },
   );
   const capability = requestedCapability(family, draft, capabilities);
-  const dirty = JSON.stringify(draft) !== JSON.stringify(baseDraft);
+  const dirty = !transportDraftValuesEqual(draft, baseDraft);
   const valid = Boolean(
-    known &&
+    known && !targetUnavailable &&
+      sessionScopeKey &&
+      !hasConflict &&
+      Number.isSafeInteger(active.data?.scene_revision) &&
+      (draftState.key !== draftKey || draftState.ackRevision === null
+        || (active.data?.scene_revision ?? -1) >= draftState.ackRevision) &&
       active.status === "ready" &&
       capability?.authoring_allowed &&
       validation?.semantic.valid === true &&
@@ -160,6 +225,8 @@ export function TransportAuthoringInspector({
   );
   const lockReason = !known
     ? "Unknown transport variants are read-only."
+    : targetUnavailable
+      ? "The selected transport no longer exists. Select another resource or explicitly create a new one."
     : !sessionScopeKey
       ? "Session identity is not ready."
       : active.status !== "ready"
@@ -204,24 +271,24 @@ export function TransportAuthoringInspector({
   );
 
   useEffect(() => {
-    if (!sessionScopeKey || !known || active.data?.scene_revision === undefined) return;
+    if (!sessionScopeKey || !known || targetUnavailable || active.data?.scene_revision === undefined) return;
     const controller = new AbortController();
     const timer = window.setTimeout(() => {
       try {
         const request = validationRequest();
         void api.model.validateTransport(request, { sessionScopeKey, signal: controller.signal })
           .then((response) => {
-            if (!controller.signal.aborted && isCurrentSession()) {
+            if (!controller.signal.aborted && isCurrentSession() && activeDraftKey.current === draftKey) {
               setValidationState({ error: null, key: validationKey, response });
             }
           })
           .catch((error: unknown) => {
-            if (!controller.signal.aborted && isCurrentSession()) {
+            if (!controller.signal.aborted && isCurrentSession() && activeDraftKey.current === draftKey) {
               setValidationState({ error: error instanceof Error ? error.message : String(error), key: validationKey, response: null });
             }
           });
       } catch (error) {
-        if (!controller.signal.aborted && isCurrentSession()) {
+        if (!controller.signal.aborted && isCurrentSession() && activeDraftKey.current === draftKey) {
           setValidationState({ error: error instanceof Error ? error.message : String(error), key: validationKey, response: null });
         }
       }
@@ -232,26 +299,39 @@ export function TransportAuthoringInspector({
     };
   // The serialized draft deliberately makes every semantic edit trigger clone-only validation.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active.data?.scene_revision, api, commands, draft, family, known, selectedId, sessionScopeKey, validationKey]);
+  }, [active.data?.scene_revision, api, commands, draft, family, known, selectedId, sessionScopeKey, targetUnavailable, validationKey]);
 
-  const patch = (value: Partial<Draft>) => setDraftState({
-    draft: { ...draft, ...value } as Draft,
-    key: draftKey,
+  const patch = (value: Partial<Draft>) => setDraftState((current) => {
+    const baseline = { ...(current.key === draftKey ? current.baseline : baseDraft) };
+    for (const key of Object.keys(baseDraft) as Array<keyof Draft>) {
+      if (current.key !== draftKey
+        || transportDraftValuesEqual(current.draft[key], current.baseline[key])
+        || transportDraftValuesEqual(current.draft[key], baseDraft[key])) {
+        Object.assign(baseline, { [key]: baseDraft[key] });
+      }
+    }
+    return { draft: { ...draft, ...value } as Draft, baseline, key: draftKey,
+      generation: current.key === draftKey ? current.generation : draftGeneration,
+      ackRevision: current.key === draftKey ? current.ackRevision : null };
   });
 
   async function save(): Promise<boolean> {
-    if (active.data?.scene_revision === undefined) return false;
-    if (!sessionScopeKey) return false;
+    if (pending || !valid || active.data?.scene_revision === undefined || !sessionScopeKey) return false;
+    const submittedDraft = draft;
+    const submittedRevision = active.data.scene_revision;
+    const submittedGeneration = activeDraftGeneration.current;
+    patch({});
     const mutationContext = captureMutationContext();
     const operationId = ++nextPendingOperationId.current;
-    setPendingOperation({ id: operationId, sessionScopeKey });
+    setPendingOperation({ id: operationId, sessionScopeKey, draftKey, generation: submittedGeneration });
     setFeedback(null);
     try {
       if (!capability?.authoring_allowed) {
         throw new Error(capability?.reason ?? "Transport authoring capability is unavailable.");
       }
       const checked = await api.model.validateTransport(validationRequest(), { sessionScopeKey });
-      if (mutationContext.isCurrentSessionScope?.() !== true) return false;
+      if (mutationContext.isCurrentSessionScope?.() !== true || activeDraftKey.current !== draftKey
+        || activeDraftGeneration.current !== submittedGeneration) return false;
       setValidationState({ error: null, key: validationKey, response: checked });
       if (!checked.semantic.valid || !checked.execution.authoring_allowed) {
         throw new Error(
@@ -262,7 +342,10 @@ export function TransportAuthoringInspector({
         mutationContext,
         `${selectedId ? "Replace" : "Create"} ${family}${selectedId ? ` ${selectedId}` : ""}`,
         async ({ baseRevision }) => {
-          const committedRevision = baseRevision ?? active.data!.scene_revision;
+          if (baseRevision !== null && baseRevision !== submittedRevision) {
+            throw new ControlRoomApiError("Scene revision changed before transport commit; refresh and rebase.", 409);
+          }
+          const committedRevision = submittedRevision;
           const requestOptions = authoringWriteOptions(null, mutationContext.sessionScopeKey);
           if (!requestOptions?.sessionScopeKey) throw new Error("Session identity is not ready.");
           if (family === "current_transport") {
@@ -280,11 +363,37 @@ export function TransportAuthoringInspector({
         },
       );
       if (mutationContext.isCurrentSessionScope?.() !== true) return false;
+      publishCommittedSceneResource(resources, commit.committed_scene, commit.scene_revision,
+        undefined, false, sessionScopeKey, api.resourceCacheScope);
       invalidateSpinAuthoringResources(resources, commit, transportMutationResourceKeys(family));
-      setFeedback({ kind: "success", message: "Transport resource committed." });
+      if (activeDraftKey.current !== draftKey || activeDraftGeneration.current !== submittedGeneration) return false;
+      const committedDraft = family === "current_transport" && isKnownCurrentTransport(commit.resource as SceneCurrentTransport)
+        ? currentTransportDraft(commit.resource as Parameters<typeof currentTransportDraft>[0], null, submittedDraft as CurrentTransportDraft)
+        : family === "spin_transport" && isKnownSpinTransport(commit.resource as SceneSpinTransport)
+          ? spinTransportDraft(commit.resource as Parameters<typeof spinTransportDraft>[0])
+          : null;
+      if (!committedDraft) throw new Error("The committed transport variant is not recognized; refresh the resource.");
+      const committedId = transportIdentity(family, commit.resource);
+      if (!committedId) throw new Error("The committed transport identity is unavailable; refresh the resource.");
+      const committedDraftKey = selectedId ? draftKey : draftKeyFor(committedId);
+      setDraftState((current) => current.key === draftKey ? {
+        ...current,
+        key: committedDraftKey,
+        draft: reconcileTransportDraft(committedDraft, current.draft, submittedDraft).draft,
+        baseline: committedDraft,
+        ackRevision: commit.scene_revision,
+      } : current);
+      if (!selectedId) setLocalSelectionKey(`id:${committedId}`);
+      setRevisionConflict(null);
+      setFeedbackState({ key: committedDraftKey, kind: "success", message: "Transport resource committed." });
       return true;
     } catch (error) {
-      if (mutationContext.isCurrentSessionScope?.() !== true) return false;
+      if (mutationContext.isCurrentSessionScope?.() !== true || activeDraftKey.current !== draftKey
+        || activeDraftGeneration.current !== submittedGeneration) return false;
+      if (error instanceof ControlRoomApiError && error.status === 409) {
+        setRevisionConflict({ key: draftKey, revision: submittedRevision });
+        active.refetch();
+      }
       setFeedback({ kind: "error", message: error instanceof Error ? error.message : String(error) });
       return false;
     } finally {
@@ -293,15 +402,22 @@ export function TransportAuthoringInspector({
   }
 
   function resetDraft(): void {
-    setDraftState({ draft: baseDraft, key: draftKey });
+    setDraftState({ draft: baseDraft, baseline: baseDraft, key: draftKey,
+      generation: draftGeneration,
+      ackRevision: draftState.key === draftKey ? draftState.ackRevision : null });
+    setRevisionConflict(null);
     setFeedback(null);
   }
 
   async function remove(): Promise<void> {
-    if (!selectedId || active.data?.scene_revision === undefined || !sessionScopeKey) return;
+    if (pending || !valid || !selectedId || active.data?.scene_revision === undefined || !sessionScopeKey) return;
+    const submittedRevision = active.data.scene_revision;
+    const submittedGeneration = activeDraftGeneration.current;
+    patch({});
     const mutationContext = captureMutationContext();
     const operationId = ++nextPendingOperationId.current;
-    setPendingOperation({ id: operationId, sessionScopeKey });
+    setPendingOperation({ id: operationId, sessionScopeKey, draftKey, generation: submittedGeneration });
+    setFeedback(null);
     try {
       if (!capability?.authoring_allowed || validation?.semantic.valid !== true || validation.execution.authoring_allowed !== true) {
         throw new Error(capability?.reason ?? validation?.execution.reason ?? "Latest clone-only validation does not permit mutation.");
@@ -310,10 +426,13 @@ export function TransportAuthoringInspector({
         mutationContext,
         `Delete ${family} ${selectedId}`,
         async ({ baseRevision }) => {
-          const request = {
-            base_revision:
-              baseRevision ?? active.data!.scene_revision,
-          };
+          if (baseRevision !== null && baseRevision !== submittedRevision) {
+            throw new ControlRoomApiError("Scene revision changed before transport delete; refresh and rebase.", 409);
+          }
+          if (activeDraftKey.current !== draftKey || activeDraftGeneration.current !== submittedGeneration) {
+            throw new Error("Transport selection changed before delete.");
+          }
+          const request = { base_revision: submittedRevision };
           const requestOptions = authoringWriteOptions(null, mutationContext.sessionScopeKey);
           if (!requestOptions?.sessionScopeKey) throw new Error("Session identity is not ready.");
           return family === "current_transport"
@@ -322,11 +441,21 @@ export function TransportAuthoringInspector({
         },
       );
       if (mutationContext.isCurrentSessionScope?.() !== true) return;
+      publishCommittedSceneResource(resources, commit.committed_scene, commit.scene_revision,
+        undefined, false, sessionScopeKey, api.resourceCacheScope);
       invalidateSpinAuthoringResources(resources, commit, transportMutationResourceKeys(family));
-      setLocalSelectionKey("");
+      if (activeDraftKey.current !== draftKey || activeDraftGeneration.current !== submittedGeneration) return;
+      setDeletedTarget({ key: draftKey, generation: submittedGeneration, revision: commit.scene_revision });
+      setDraftState((current) => current.key === draftKey ? { ...current, ackRevision: commit.scene_revision } : current);
+      setRevisionConflict(null);
       setFeedback({ kind: "success", message: "Transport resource deleted." });
     } catch (error) {
-      if (mutationContext.isCurrentSessionScope?.() !== true) return;
+      if (mutationContext.isCurrentSessionScope?.() !== true || activeDraftKey.current !== draftKey
+        || activeDraftGeneration.current !== submittedGeneration) return;
+      if (error instanceof ControlRoomApiError && error.status === 409) {
+        setRevisionConflict({ key: draftKey, revision: submittedRevision });
+        active.refetch();
+      }
       setFeedback({ kind: "error", message: error instanceof Error ? error.message : String(error) });
     } finally {
       setPendingOperation((current) => current?.id === operationId ? null : current);
@@ -350,6 +479,7 @@ export function TransportAuthoringInspector({
         {resourceId === undefined || resourceId === null ? resourceIndex === undefined || resourceIndex === null ? (
           <FormField label="Resource" type="select" value={localSelectionKey} onChange={(event) => setLocalSelectionKey(event.target.value)}>
             <option value="">New resource</option>
+            {selectedId && !selected ? <option value={`id:${selectedId}`}>{selectedId} · {targetUnavailable ? "missing" : "refreshing"}</option> : null}
             {items.map((item, index) => {
               const key = transportSelectionKey(family, item, index);
               const label = transportIdentity(family, item) ?? `Unknown ${family === "current_transport" ? "current" : "spin"} transport ${index + 1}`;
@@ -363,11 +493,24 @@ export function TransportAuthoringInspector({
             <FormField label="Opaque payload" type="textarea" rows={20} readOnly value={readonlyTransportPayload(selected)} />
           </>
         ) : family === "current_transport" ? (
-          <CurrentFields draft={draft as CurrentTransportDraft} focus={structuredCurrentFocus} identityReadOnly={Boolean(selected)} patch={patch} />
+          <CurrentFields draft={draft as CurrentTransportDraft} focus={structuredCurrentFocus} identityReadOnly={Boolean(selectedId) || pending} patch={patch} />
         ) : (
-          <SpinFields draft={draft as SpinTransportDraft} identityReadOnly={Boolean(selected)} patch={patch} />
+          <SpinFields draft={draft as SpinTransportDraft} identityReadOnly={Boolean(selectedId) || pending} patch={patch} />
         )}
         {feedback ? <FeedbackBanner kind={feedback.kind} message={feedback.message} /> : null}
+        {targetUnavailable ? <FeedbackBanner kind="warning" message="The selected transport no longer exists. Select another resource or explicitly create a new one." /> : null}
+        {hasConflict ? <div>
+          <FeedbackBanner kind="warning" message="The server changed an edited transport field. Compare and explicitly rebase before saving." />
+          {resolved.conflicts.map((key) => <InspectorPropertyRow key={key} label={`Conflict: ${key}`}>
+            Server: {JSON.stringify(baseDraft[key])} · Draft: {JSON.stringify(draft[key])}
+          </InspectorPropertyRow>)}
+          <Button disabled={pending || active.status !== "ready" || active.data?.scene_revision === rejectedRevision}
+            onClick={() => {
+              setDraftState({ draft, baseline: baseDraft, key: draftKey, generation: draftGeneration, ackRevision: null });
+              setRevisionConflict(null);
+              setFeedback(null);
+            }}>Rebase Draft</Button>
+        </div> : null}
         {known ? <div className="fm-help-text" data-testid="transport-capability">
           <div>Qualification: {validation?.execution.qualification ?? capability?.status ?? "checking"}</div>
           <div>Requested lane: {validation?.execution.requested_lane ? JSON.stringify(validation.execution.requested_lane) : "semantic authoring"}</div>
@@ -375,10 +518,10 @@ export function TransportAuthoringInspector({
           <div>{validationError ?? validation?.execution.reason ?? capability?.reason ?? "Capability status unavailable."}</div>
           {validation?.semantic.issues.map((issue) => <div key={`${issue.code}:${issue.path}`}>{issue.path}: {issue.message}</div>)}
         </div> : null}
-        {known ? <Button disabled={pending || active.status !== "ready" || !capability?.authoring_allowed || validation?.semantic.valid !== true || validation.execution.authoring_allowed !== true} onClick={() => void save()}>
-          {pending ? "Committing…" : selected ? "Replace" : "Create"}
+        {known ? <Button disabled={pending || !valid} onClick={() => void save()}>
+          {pending ? "Committing…" : selectedId ? "Replace" : "Create"}
         </Button> : null}
-        {selected && known ? <Button disabled={pending || !capability?.authoring_allowed || validation?.semantic.valid !== true || validation.execution.authoring_allowed !== true} variant="danger" onClick={() => void remove()}>Delete</Button> : null}
+        {selected && known ? <Button disabled={pending || !valid} variant="danger" onClick={() => void remove()}>Delete</Button> : null}
       </InspectorGroup>
     </div>
   );
@@ -544,7 +687,7 @@ function CurrentFields({ draft, focus, identityReadOnly, patch }: { draft: Curre
       <FormField label="Domain region refs" type="textarea" rows={5} value={draft.domain} onChange={field("domain")} />
       <FormField label="Material assignments (sigma_Spm; M2: sigma_parallel_Spm, sigma_perpendicular_Spm, sigma_AHE_Spm)" type="textarea" rows={9} value={draft.materials} onChange={field("materials")} />
       <FormField label="Charge boundaries" type="textarea" rows={9} value={draft.boundaries} onChange={field("boundaries")} />
-      <FormField label="Gauge" type="select" value={draft.gauge} onChange={field("gauge")}><option value="dirichlet_reference">Dirichlet reference</option><option value="zero_mean">Zero mean</option></FormField>
+      <FormField label="Gauge" type="select" value={draft.gauge} onChange={field("gauge")}><option value="dirichlet_reference">Dirichlet reference</option><option value="zero_mean">Zero mean</option><option value="terminal_reference">Terminal reference</option></FormField>
       <SolverFields draft={draft} field={field} patch={patch} />
     </>}
     <FormField label="Current-source time envelope (JSON; dimensionless)" rows={7} type="textarea" value={draft.timeEnvelope} onChange={field("timeEnvelope")} />
@@ -567,24 +710,27 @@ function StructuredCurrentClosureFields({
     patch({ structuredCurrentClosure: value });
   };
   const updateSourceCut = (
-    index: number,
+    rowId: string,
     value: Partial<StructuredCurrentSourceCutDraft>,
   ) => {
     if (!closure) return;
     updateClosure({
       ...closure,
-      sourceCuts: closure.sourceCuts.map((cut, cutIndex) => cutIndex === index
+      sourceCuts: closure.sourceCuts.map((cut) => cut.rowId === rowId
         ? { ...cut, ...value }
         : cut),
     });
   };
   const appendSourceCut = () => {
     if (!closure) return;
-    const ordinal = closure.sourceCuts.length + 1;
+    let ordinal = closure.sourceCuts.length + 1;
+    while (closure.sourceCuts.some((cut) => cut.sourceCutId === `source-cut-${ordinal}`
+      || cut.circuitId === `circuit-${ordinal}` || cut.driveId === `drive-${ordinal}`)) ordinal += 1;
     const scope = closure.sourceCuts[0];
     updateClosure({
       ...closure,
       sourceCuts: [...closure.sourceCuts, {
+        rowId: `draft:${crypto.randomUUID()}`,
         axis: "x",
         circuitId: `circuit-${ordinal}`,
         driveId: `drive-${ordinal}`,
@@ -615,7 +761,7 @@ function StructuredCurrentClosureFields({
         {closure.sourceCuts.map((cut, index) => <section
           className="fm-structured-current-closure__cut"
           data-focused={focus?.closureId === closure.closureId && focus.sourceCutId === cut.sourceCutId || undefined}
-          key={`${cut.sourceCutId}:${index}`}
+          key={cut.rowId}
         >
           <div className="fm-structured-current-closure__cut-header">
             <span>Source cut {index + 1}</span>
@@ -627,19 +773,19 @@ function StructuredCurrentClosureFields({
               variant="danger"
               onClick={() => updateClosure({
                 ...closure,
-                sourceCuts: closure.sourceCuts.filter((_, cutIndex) => cutIndex !== index),
+                sourceCuts: closure.sourceCuts.filter((candidate) => candidate.rowId !== cut.rowId),
               })}
             >Remove</Button>
           </div>
-          <FormField label={`Source cut ${index + 1} id`} value={cut.sourceCutId} onChange={(event) => updateSourceCut(index, { sourceCutId: event.target.value })} />
-          <FormField label={`Source cut ${index + 1} circuit id`} value={cut.circuitId} onChange={(event) => updateSourceCut(index, { circuitId: event.target.value })} />
-          <FormField label={`Source cut ${index + 1} object id`} value={cut.objectId} onChange={(event) => updateSourceCut(index, { objectId: event.target.value })} />
-          <FormField label={`Source cut ${index + 1} region id`} value={cut.regionId} onChange={(event) => updateSourceCut(index, { regionId: event.target.value })} />
-          <FormField label={`Source cut ${index + 1} plane axis`} type="select" value={cut.axis} onChange={(event) => updateSourceCut(index, { axis: event.target.value as StructuredCurrentSourceCutDraft["axis"] })}><option value="x">X</option><option value="y">Y</option><option value="z">Z</option></FormField>
-          <FormField label={`Source cut ${index + 1} plane offset`} unit="m" value={cut.offsetM} onChange={(event) => updateSourceCut(index, { offsetM: event.target.value })} />
-          <FormField label={`Source cut ${index + 1} plane normal`} type="select" value={cut.normal} onChange={(event) => updateSourceCut(index, { normal: event.target.value as StructuredCurrentSourceCutDraft["normal"] })}><option value="positive_axis">Positive axis</option><option value="negative_axis">Negative axis</option></FormField>
-          <FormField label={`Source cut ${index + 1} drive id`} value={cut.driveId} onChange={(event) => updateSourceCut(index, { driveId: event.target.value })} />
-          <FormField label={`Source cut ${index + 1} potential jump`} unit="V" value={cut.potentialJumpV} onChange={(event) => updateSourceCut(index, { potentialJumpV: event.target.value })} />
+          <FormField label={`Source cut ${index + 1} id`} value={cut.sourceCutId} onChange={(event) => updateSourceCut(cut.rowId, { sourceCutId: event.target.value })} />
+          <FormField label={`Source cut ${index + 1} circuit id`} value={cut.circuitId} onChange={(event) => updateSourceCut(cut.rowId, { circuitId: event.target.value })} />
+          <FormField label={`Source cut ${index + 1} object id`} value={cut.objectId} onChange={(event) => updateSourceCut(cut.rowId, { objectId: event.target.value })} />
+          <FormField label={`Source cut ${index + 1} region id`} value={cut.regionId} onChange={(event) => updateSourceCut(cut.rowId, { regionId: event.target.value })} />
+          <FormField label={`Source cut ${index + 1} plane axis`} type="select" value={cut.axis} onChange={(event) => updateSourceCut(cut.rowId, { axis: event.target.value as StructuredCurrentSourceCutDraft["axis"] })}><option value="x">X</option><option value="y">Y</option><option value="z">Z</option></FormField>
+          <FormField label={`Source cut ${index + 1} plane offset`} unit="m" value={cut.offsetM} onChange={(event) => updateSourceCut(cut.rowId, { offsetM: event.target.value })} />
+          <FormField label={`Source cut ${index + 1} plane normal`} type="select" value={cut.normal} onChange={(event) => updateSourceCut(cut.rowId, { normal: event.target.value as StructuredCurrentSourceCutDraft["normal"] })}><option value="positive_axis">Positive axis</option><option value="negative_axis">Negative axis</option></FormField>
+          <FormField label={`Source cut ${index + 1} drive id`} value={cut.driveId} onChange={(event) => updateSourceCut(cut.rowId, { driveId: event.target.value })} />
+          <FormField label={`Source cut ${index + 1} potential jump`} unit="V" value={cut.potentialJumpV} onChange={(event) => updateSourceCut(cut.rowId, { potentialJumpV: event.target.value })} />
         </section>)}
       </div>
       <Button size="sm" type="button" onClick={appendSourceCut}>Add source cut</Button>

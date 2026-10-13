@@ -3,9 +3,29 @@ import type {
   MeshUniverseConfigReplaceRequest,
   MeshUniverseConfigResource,
 } from "@/kernel/api/apiTypes";
+import {
+  changeQuantityInputUnit,
+  parseQuantityInput,
+  type QuantityUnit,
+} from "@/kernel/authoring/object-edit/quantityInput";
 
 export const AIRBOX_GRADING_MODES = ["auto", "geometric", "linear"] as const;
 export type AirboxMeshPolicyLane = "fem" | "fdm";
+export type AirboxLengthUnit = Extract<QuantityUnit, "m" | "mm" | "um" | "µm" | "μm" | "nm">;
+export const AIRBOX_LENGTH_FIELDS = [
+  "airboxHmax",
+  "airboxHmin",
+  "paddingX",
+  "paddingY",
+  "paddingZ",
+  "airboxSizeX",
+  "airboxSizeY",
+  "airboxSizeZ",
+  "airboxCenterX",
+  "airboxCenterY",
+  "airboxCenterZ",
+] as const;
+export type AirboxLengthPolicyField = (typeof AIRBOX_LENGTH_FIELDS)[number];
 
 type AirboxGradingMode = (typeof AIRBOX_GRADING_MODES)[number];
 
@@ -23,6 +43,7 @@ export interface AirboxMeshPolicyDraft {
   configSynchronized?: boolean;
   curvatureFactor: string;
   narrowRegionResolution: string;
+  quantityUnits?: Partial<Record<AirboxLengthPolicyField, AirboxLengthUnit>>;
   paddingX: string;
   paddingY: string;
   paddingZ: string;
@@ -110,9 +131,26 @@ export function airboxMeshPolicyDraftDirty(
   baseDraft: AirboxMeshPolicyDraft,
 ): boolean {
   return !draftRecordsEqual(
-    draft as unknown as Record<string, unknown>,
-    baseDraft as unknown as Record<string, unknown>,
+    normalizeLengthDraftForComparison(draft) as unknown as Record<string, unknown>,
+    normalizeLengthDraftForComparison(baseDraft) as unknown as Record<string, unknown>,
   );
+}
+
+function normalizeLengthDraftForComparison(
+  draft: AirboxMeshPolicyDraft,
+): AirboxMeshPolicyDraft {
+  const normalized = { ...draft, quantityUnits: undefined };
+  for (const field of AIRBOX_LENGTH_FIELDS) {
+    const input = parseQuantityInput(
+      draft[field],
+      "length",
+      draft.quantityUnits?.[field] ?? "m",
+    );
+    if (input.parseStatus === "valid" && input.parsedSI !== null) {
+      normalized[field] = String(input.parsedSI);
+    }
+  }
+  return normalized;
 }
 
 export function airboxMeshPolicyJsonError(configText: string): string | null {
@@ -129,13 +167,40 @@ function synchronizeAirboxMeshPolicyJson(draft: AirboxMeshPolicyDraft): AirboxMe
   const previousFields = project(previous.value);
   const nextFields = project(next.value);
   const changes: Partial<AirboxMeshPolicyDraft> = {};
+  const resetUnits: Partial<Record<AirboxLengthPolicyField, AirboxLengthUnit>> = {};
   for (const key of Object.keys(nextFields) as (keyof AirboxMeshPolicyDraft)[]) {
-    if (["configText", "syncedConfigText", "configSynchronized", "authoredConfigPresent"].includes(key)) continue;
+    if (["configText", "syncedConfigText", "configSynchronized", "authoredConfigPresent", "quantityUnits"].includes(key)) continue;
     if (!Object.is(previousFields[key], nextFields[key])) {
-      Object.assign(changes, { [key]: nextFields[key] });
+      let value = nextFields[key];
+      if (isAirboxLengthPolicyField(key) && typeof value === "string") {
+        const unit = draft.quantityUnits?.[key] ?? "m";
+        if (unit !== "m") {
+          const valueInSI = parseQuantityInput(value, "length", "m");
+          if (valueInSI.parseStatus === "valid") {
+            const displayed = changeQuantityInputUnit(valueInSI, unit);
+            if (displayed.ok) {
+              value = displayed.input.rawText;
+            } else if (displayed.reason === "out-of-range") {
+              // Keep the new JSON SI value readable if the selected display
+              // unit cannot represent it. Reset that field's unit atomically.
+              resetUnits[key] = "m";
+            }
+          }
+        }
+      }
+      Object.assign(changes, { [key]: value });
     }
   }
+  if (Object.keys(resetUnits).length > 0) {
+    changes.quantityUnits = { ...draft.quantityUnits, ...resetUnits };
+  }
   return { ...draft, ...changes, syncedConfigText: draft.configText, configSynchronized: true };
+}
+
+function isAirboxLengthPolicyField(
+  field: keyof AirboxMeshPolicyDraft,
+): field is AirboxLengthPolicyField {
+  return AIRBOX_LENGTH_FIELDS.includes(field as AirboxLengthPolicyField);
 }
 
 export function updateAirboxMeshPolicyDraft(
@@ -168,6 +233,26 @@ export function updateAirboxMeshPolicyDraft(
   return { ...formDraft, configText, syncedConfigText: configText, configSynchronized: true };
 }
 
+export function updateAirboxLengthUnit(
+  draft: AirboxMeshPolicyDraft,
+  field: AirboxLengthPolicyField,
+  unit: AirboxLengthUnit,
+  options: { lane?: AirboxMeshPolicyLane } = {},
+): AirboxMeshPolicyDraft {
+  const currentUnit = draft.quantityUnits?.[field] ?? "m";
+  const current = parseQuantityInput(draft[field], "length", currentUnit);
+  const changed = changeQuantityInputUnit(current, unit);
+  if (!changed.ok) return draft;
+  return updateAirboxMeshPolicyDraft(
+    draft,
+    {
+      [field]: changed.input.rawText,
+      quantityUnits: { ...draft.quantityUnits, [field]: unit },
+    },
+    options,
+  );
+}
+
 export function buildAirboxMeshPolicyReplaceRequest(
   draft: AirboxMeshPolicyDraft,
   options: { lane?: AirboxMeshPolicyLane } = {},
@@ -179,6 +264,13 @@ export function buildAirboxMeshPolicyReplaceRequest(
   const parsed = parseConfig(synchronized.configText);
   if (!parsed.ok) return { error: parsed.error };
   const config = { ...parsed.value };
+  if (
+    Object.hasOwn(config, "mode") &&
+    config.mode !== "auto" &&
+    config.mode !== "manual"
+  ) {
+    return { error: "Domain mode must be auto or manual." };
+  }
   if (options.lane !== "fdm" && config.airbox_grading !== undefined && !AIRBOX_GRADING_MODES.includes(config.airbox_grading as AirboxGradingMode)) {
     return { error: "Airbox grading must be auto, geometric, or linear." };
   }
@@ -219,16 +311,18 @@ function buildAirboxMeshPolicyFormRequest(
       delete config.airbox_grading;
     }
 
-    const hmax = parsePositiveNumber(
+    const hmax = parsePositiveLength(
       draft.airboxHmax,
       "Airbox maximum element size",
+      draft.quantityUnits?.airboxHmax ?? "m",
     );
     if (!hmax.ok) return { error: hmax.error };
     applyOptionalNumber(config, "airbox_hmax", hmax.value);
 
-    const hmin = parsePositiveNumber(
+    const hmin = parsePositiveLength(
       draft.airboxHmin,
       "Airbox minimum element size",
+      draft.quantityUnits?.airboxHmin ?? "m",
     );
     if (!hmin.ok) return { error: hmin.error };
     applyOptionalNumber(config, "airbox_hmin", hmin.value);
@@ -264,41 +358,43 @@ function buildAirboxMeshPolicyFormRequest(
   }
 
   // Padding (vec3)
-  const padX = parseOptionalNumber(draft.paddingX, "Padding X");
-  if (!padX.ok) return { error: padX.error };
-  const padY = parseOptionalNumber(draft.paddingY, "Padding Y");
-  if (!padY.ok) return { error: padY.error };
-  const padZ = parseOptionalNumber(draft.paddingZ, "Padding Z");
-  if (!padZ.ok) return { error: padZ.error };
-  if (padX.value !== null || padY.value !== null || padZ.value !== null) {
-    config.padding = [padX.value ?? 0, padY.value ?? 0, padZ.value ?? 0];
+  const padding = parseLengthVector(
+    [draft.paddingX, draft.paddingY, draft.paddingZ],
+    [draft.quantityUnits?.paddingX ?? "m", draft.quantityUnits?.paddingY ?? "m", draft.quantityUnits?.paddingZ ?? "m"],
+    ["Padding X", "Padding Y", "Padding Z"],
+    "Padding",
+  );
+  if (!padding.ok) return { error: padding.error };
+  if (padding.value !== null) {
+    config.padding = padding.value;
   } else {
     delete config.padding;
   }
 
-  // Airbox size (vec3)
-  const sizeX = parseOptionalNumber(draft.airboxSizeX, "Size X");
-  if (!sizeX.ok) return { error: sizeX.error };
-  const sizeY = parseOptionalNumber(draft.airboxSizeY, "Size Y");
-  if (!sizeY.ok) return { error: sizeY.error };
-  const sizeZ = parseOptionalNumber(draft.airboxSizeZ, "Size Z");
-  if (!sizeZ.ok) return { error: sizeZ.error };
-  if (sizeX.value !== null || sizeY.value !== null || sizeZ.value !== null) {
-    config.size = [sizeX.value ?? 0, sizeY.value ?? 0, sizeZ.value ?? 0];
+  const mode = trimmedMode || "auto";
+  if (mode === "manual") {
+    const size = parseLengthVector(
+      [draft.airboxSizeX, draft.airboxSizeY, draft.airboxSizeZ],
+      [draft.quantityUnits?.airboxSizeX ?? "m", draft.quantityUnits?.airboxSizeY ?? "m", draft.quantityUnits?.airboxSizeZ ?? "m"],
+      ["Size X", "Size Y", "Size Z"],
+      "Manual size",
+      { required: true, positive: true },
+    );
+    if (!size.ok) return { error: size.error };
+    const center = parseLengthVector(
+      [draft.airboxCenterX, draft.airboxCenterY, draft.airboxCenterZ],
+      [draft.quantityUnits?.airboxCenterX ?? "m", draft.quantityUnits?.airboxCenterY ?? "m", draft.quantityUnits?.airboxCenterZ ?? "m"],
+      ["Center X", "Center Y", "Center Z"],
+      "Manual center",
+    );
+    if (!center.ok) return { error: center.error };
+    config.size = size.value!;
+    if (center.value !== null) config.center = center.value;
+    else delete config.center;
   } else {
+    // Automatic bounds are derived from accepted geometry. Do not manufacture
+    // or retain zero-filled manual extents in an automatic policy.
     delete config.size;
-  }
-
-  // Airbox center (vec3)
-  const cenX = parseOptionalNumber(draft.airboxCenterX, "Center X");
-  if (!cenX.ok) return { error: cenX.error };
-  const cenY = parseOptionalNumber(draft.airboxCenterY, "Center Y");
-  if (!cenY.ok) return { error: cenY.error };
-  const cenZ = parseOptionalNumber(draft.airboxCenterZ, "Center Z");
-  if (!cenZ.ok) return { error: cenZ.error };
-  if (cenX.value !== null || cenY.value !== null || cenZ.value !== null) {
-    config.center = [cenX.value ?? 0, cenY.value ?? 0, cenZ.value ?? 0];
-  } else {
     delete config.center;
   }
 
@@ -465,6 +561,19 @@ function parsePositiveNumber(
   return { ok: true, value: parsed };
 }
 
+function parsePositiveLength(
+  value: string,
+  label: string,
+  unit: AirboxLengthUnit,
+): { ok: true; value: number | null } | { error: string; ok: false } {
+  const parsed = parseOptionalLength(value, label, unit);
+  if (!parsed.ok) return parsed;
+  if (parsed.value !== null && parsed.value <= 0) {
+    return { error: `${label} must be greater than 0.`, ok: false };
+  }
+  return parsed;
+}
+
 function applyOptionalNumber(
   config: JsonObject,
   key: string,
@@ -478,20 +587,50 @@ function applyOptionalNumber(
   config[key] = value;
 }
 
-function parseOptionalNumber(
+function parseOptionalLength(
   value: string,
   label: string,
+  unit: AirboxLengthUnit,
 ): { ok: true; value: number | null } | { error: string; ok: false } {
-  const trimmed = value.trim();
-  if (!trimmed) return { ok: true, value: null };
-
-  const parsed = Number(trimmed);
-  if (!Number.isFinite(parsed)) {
+  const parsed = parseQuantityInput(value, "length", unit);
+  if (parsed.parseStatus === "empty") return { ok: true, value: null };
+  if (parsed.parseStatus !== "valid" || parsed.parsedSI === null) {
     return {
-      error: `${label} must be a finite number.`,
+      error: `${label} must be a finite length with a supported unit.`,
       ok: false,
     };
   }
+  return { ok: true, value: parsed.parsedSI };
+}
 
-  return { ok: true, value: parsed };
+function parseLengthVector(
+  values: readonly [string, string, string],
+  units: readonly [AirboxLengthUnit, AirboxLengthUnit, AirboxLengthUnit],
+  labels: readonly [string, string, string],
+  vectorLabel: string,
+  options: { positive?: boolean; required?: boolean } = {},
+): { ok: true; value: [number, number, number] | null } | { error: string; ok: false } {
+  const components: (number | null)[] = [];
+  for (let index = 0; index < values.length; index += 1) {
+    const component = parseOptionalLength(
+      values[index]!,
+      labels[index]!,
+      units[index]!,
+    );
+    if (!component.ok) return component;
+    components.push(component.value);
+  }
+  if (components.every((value) => value === null)) {
+    return options.required
+      ? { error: `${vectorLabel} requires three explicit components.`, ok: false }
+      : { ok: true, value: null };
+  }
+  if (components.some((value) => value === null)) {
+    return { error: `${vectorLabel} requires all three explicit components.`, ok: false };
+  }
+  const vector = components as [number, number, number];
+  if (options.positive && vector.some((value) => value <= 0)) {
+    return { error: `${vectorLabel} components must be greater than 0.`, ok: false };
+  }
+  return { ok: true, value: vector };
 }

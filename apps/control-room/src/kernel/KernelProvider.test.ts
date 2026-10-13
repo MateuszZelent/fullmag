@@ -8,6 +8,15 @@ const kernelProviderSource = readFileSync(
 ).replace(/\r\n/g, "\n");
 
 describe("KernelProvider performance contracts", () => {
+  it("preserves the kernel host across Fast Refresh through lazy state ownership", () => {
+    expect(kernelProviderSource).toContain(
+      "const [host] = useState(() => new DevelopmentKernelHost(createKernel));",
+    );
+    expect(kernelProviderSource).not.toContain(
+      "useMemo(() => new DevelopmentKernelHost(createKernel)",
+    );
+  });
+
   it("keeps the global shortcut listener stable across runtime resource updates", () => {
     expect(kernelProviderSource).toContain(
       "runtimeResourceDataRef.current = runtimeResourceData",

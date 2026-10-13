@@ -1117,6 +1117,16 @@
             },
             "type": "array"
           },
+          "spectrum_output_scopes": {
+            "description": "Requested output scopes declared by the producer manifest. This does not\ndescribe which requested outputs completed or were resolved.",
+            "items": {
+              "$ref": "#/components/schemas/AnalysisResultSpectrumOutputScope"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
           "stage_id": {
             "type": "string"
           },
@@ -1422,7 +1432,8 @@
           "modal_eigen",
           "driven_response",
           "time_domain_spectrum",
-          "dynamic_structure_factor"
+          "dynamic_structure_factor",
+          "hysteresis_loop"
         ],
         "type": "string"
       },
@@ -2020,6 +2031,13 @@
         ],
         "type": "object"
       },
+      "AnalysisResultSpectrumOutputScope": {
+        "enum": [
+          "per_sample",
+          "global"
+        ],
+        "type": "string"
+      },
       "AnalysisResultStatusFacets": {
         "properties": {
           "completeness": {
@@ -2052,6 +2070,89 @@
           "execution",
           "completeness",
           "qualification"
+        ],
+        "type": "object"
+      },
+      "AnalyticReferenceModelCollectionResource": {
+        "properties": {
+          "models": {
+            "items": {
+              "$ref": "#/components/schemas/AnalyticReferenceModelResource"
+            },
+            "type": "array"
+          },
+          "schema_version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema_version",
+          "models"
+        ],
+        "type": "object"
+      },
+      "AnalyticReferenceModelResource": {
+        "properties": {
+          "assumptions": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "bibliography": {
+            "type": "string"
+          },
+          "boundary_assumption": {
+            "description": "Boundary assumption compared with the run's, e.g. `open_film`.",
+            "type": "string"
+          },
+          "model_id": {
+            "type": "string"
+          },
+          "physics_note": {
+            "type": "string"
+          },
+          "surface_pinning": {
+            "type": "string"
+          },
+          "thickness_mode_order": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "title": {
+            "type": "string"
+          },
+          "validity": {
+            "$ref": "#/components/schemas/AnalyticReferenceValidity"
+          }
+        },
+        "required": [
+          "model_id",
+          "title",
+          "boundary_assumption",
+          "surface_pinning",
+          "thickness_mode_order",
+          "assumptions",
+          "validity",
+          "bibliography",
+          "physics_note"
+        ],
+        "type": "object"
+      },
+      "AnalyticReferenceValidity": {
+        "properties": {
+          "note": {
+            "type": "string"
+          },
+          "wavevector_limit_source": {
+            "description": "Field of the run's validation intent that bounds the compared |k| [rad/m].",
+            "type": "string"
+          }
+        },
+        "required": [
+          "wavevector_limit_source",
+          "note"
         ],
         "type": "object"
       },
@@ -2914,7 +3015,7 @@
       "AuthoringTransactionResponse": {
         "properties": {
           "committed_scene": {
-            "type": "object"
+            "$ref": "#/components/schemas/SceneResource"
           },
           "scene_revision": {
             "format": "int64",
@@ -9833,6 +9934,13 @@
               "null"
             ]
           },
+          "expected_artifact_generation_id": {
+            "description": "Optional optimistic-concurrency precondition for a committed analysis artifact generation.\nThis is distinct from `expected_generation_id`, which identifies the mesh/domain generation.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "expected_carrier_revision": {
             "description": "Optional optimistic-concurrency precondition for the resolved field carrier.",
             "type": [
@@ -10104,6 +10212,14 @@
       "FrequencyDomainArtifactExtras": {
         "additionalProperties": true,
         "type": "object"
+      },
+      "FrequencyDomainArtifactGenerationStatus": {
+        "enum": [
+          "legacy_unverified",
+          "member_verified_unbound",
+          "member_verified_owner_bound"
+        ],
+        "type": "string"
       },
       "FrequencyDomainAvailabilitySummaryResource": {
         "properties": {
@@ -10517,7 +10633,7 @@
             "type": "array"
           },
           "content_digest": {
-            "description": "SHA-256 digest of the immutable field payload bytes.",
+            "description": "SHA-256 digest of the field metadata and exact payload member identity.",
             "type": [
               "string",
               "null"
@@ -10535,6 +10651,24 @@
           },
           "field_id": {
             "type": "string"
+          },
+          "generation_id": {
+            "description": "Committed publication containing this exact field member; absent for legacy artifacts.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "generation_status": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/FrequencyDomainArtifactGenerationStatus",
+                "description": "Membership verification state for the returned field member."
+              }
+            ]
           },
           "missing_reason": {
             "type": [
@@ -10563,7 +10697,7 @@
             "type": "string"
           },
           "revision": {
-            "description": "Content-addressed revision of the immutable field payload bytes.",
+            "description": "Content-addressed revision of the returned field metadata and immutable payload member.",
             "type": [
               "string",
               "null"
@@ -11021,6 +11155,13 @@
                   "null"
                 ]
               },
+              "mode_field_available": {
+                "description": "Explicit availability; absent values use legacy reference checks.",
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
               "mode_field_id": {
                 "type": [
                   "string",
@@ -11453,11 +11594,36 @@
           "artifact_path": {
             "type": "string"
           },
+          "artifact_set_id": {
+            "description": "Opaque identity of the canonical artifact directory shared by its files.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "content_digest": {
             "description": "SHA-256 digest of the immutable JSON artifact bytes.",
             "type": [
               "string",
               "null"
+            ]
+          },
+          "generation_id": {
+            "description": "Committed publication containing this member; only consumed member bytes are verified.\nAbsent for legacy artifacts without a generation receipt, which remain unverified.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "generation_status": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/FrequencyDomainArtifactGenerationStatus",
+                "description": "Verification state for a returned artifact member."
+              }
             ]
           },
           "mesh_generation_id": {
@@ -12590,6 +12756,13 @@
                 "format": "double",
                 "type": "number"
               },
+              "mode_field_available": {
+                "description": "Explicit availability; absent values use legacy reference checks.",
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
               "mode_field_id": {
                 "type": [
                   "string",
@@ -12611,15 +12784,18 @@
                 "type": "integer"
               },
               "residual_relative_l2": {
+                "description": "Missing solver evidence remains unavailable, never an inferred zero.",
                 "format": "double",
-                "type": "number"
+                "type": [
+                  "number",
+                  "null"
+                ]
               }
             },
             "required": [
               "mode_id",
               "raw_mode_index",
               "frequency_hz",
-              "residual_relative_l2",
               "component_participation"
             ],
             "type": "object"
@@ -12752,8 +12928,45 @@
           "artifact_path": {
             "type": "string"
           },
+          "artifact_set_id": {
+            "description": "Opaque identity of the canonical artifact directory shared by its files.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "content_digest": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "content_type": {
             "type": "string"
+          },
+          "generation_id": {
+            "description": "Committed publication containing this member; only consumed member bytes are verified.\nAbsent for legacy artifacts without a generation receipt, which remain unverified.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "generation_status": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/FrequencyDomainArtifactGenerationStatus",
+                "description": "Verification state for a returned artifact member."
+              }
+            ]
+          },
+          "mesh_generation_id": {
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "missing_reason": {
             "type": [
@@ -12774,8 +12987,32 @@
           "resource_key": {
             "type": "string"
           },
+          "revision": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "run_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "schema_version": {
             "type": "string"
+          },
+          "session_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "stage_id": {
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "status": {
             "type": "string"
@@ -16262,6 +16499,14 @@
               "null"
             ]
           },
+          "conservative_current_source": {
+            "additionalProperties": true,
+            "description": "Authored current-driven request; no accepted field SHA exists yet.",
+            "type": [
+              "object",
+              "null"
+            ]
+          },
           "conservative_current_view": {
             "additionalProperties": true,
             "description": "Optional explicit accepted RT0/H(div) source descriptor.  It remains a\nJSON object at the scene boundary so every closure field survives UI\nround-trip; the planner performs mesh-exact typed validation.",
@@ -16288,6 +16533,14 @@
               "$ref": "#/components/schemas/SceneRegionRef"
             },
             "type": "array"
+          },
+          "external_lead_preparation": {
+            "additionalProperties": true,
+            "description": "Mesh-independent authored intent; execution binds it to the device mesh.",
+            "type": [
+              "object",
+              "null"
+            ]
           },
           "gauge": {
             "oneOf": [
@@ -23399,6 +23652,183 @@
         },
         "type": "object"
       },
+      "ParallelExecutionModeResource": {
+        "enum": [
+          "serial",
+          "adaptive"
+        ],
+        "type": "string"
+      },
+      "ParallelExecutionResource": {
+        "additionalProperties": false,
+        "properties": {
+          "max_cpu_percent": {
+            "format": "double",
+            "type": "number"
+          },
+          "max_memory_percent": {
+            "format": "double",
+            "type": "number"
+          },
+          "max_workers": {
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "memory_reserve_bytes": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "mode": {
+            "$ref": "#/components/schemas/ParallelExecutionModeResource"
+          },
+          "threads_per_worker": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "mode",
+          "max_cpu_percent",
+          "max_memory_percent",
+          "memory_reserve_bytes",
+          "threads_per_worker"
+        ],
+        "type": "object"
+      },
+      "ParallelExecutionTelemetryResource": {
+        "properties": {
+          "active_workers": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "admission_desired_workers": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "admission_pending_samples": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "admission_reason": {
+            "type": "string"
+          },
+          "admission_worker_limit": {
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "allocated_cpu_cores": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "cpu_available_cores": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "cpu_busy_percent": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "cpu_target_kind": {
+            "type": "string"
+          },
+          "cpu_target_percent": {
+            "format": "double",
+            "type": "number"
+          },
+          "memory_available_bytes": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "memory_limit_bytes": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "memory_reserve_bytes": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "memory_target_percent": {
+            "format": "double",
+            "type": "number"
+          },
+          "resolved_workers": {
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "sampled_at_unix_ms": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "terminal": {
+            "type": "boolean"
+          },
+          "worker_peak_cpu_cores": {
+            "description": "Admission CPU demand envelope, including a conservative resolved-team\nbound when a short or sparsely observed worker lacks CPU sampling coverage.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "worker_peak_rss_bytes": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "sampled_at_unix_ms",
+          "active_workers",
+          "admission_desired_workers",
+          "admission_pending_samples",
+          "cpu_target_percent",
+          "memory_target_percent",
+          "memory_reserve_bytes",
+          "cpu_target_kind",
+          "admission_reason",
+          "terminal"
+        ],
+        "type": "object"
+      },
       "PeriodicValidationStatus": {
         "enum": [
           "valid",
@@ -23535,6 +23965,12 @@
           "modules": {
             "items": {
               "$ref": "#/components/schemas/PhysicsGraphModuleResource"
+            },
+            "type": "array"
+          },
+          "objects": {
+            "items": {
+              "$ref": "#/components/schemas/PhysicsGraphObjectResource"
             },
             "type": "array"
           },
@@ -25259,6 +25695,194 @@
         "minimum": 1,
         "type": "integer"
       },
+      "PostprocessingDataRef": {
+        "description": "Published data identity a definition refers to; never array indices.",
+        "properties": {
+          "branch_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "dataset_id": {
+            "type": "string"
+          },
+          "dataset_revision": {
+            "type": "string"
+          },
+          "field_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "item_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "sample_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "run_id",
+          "dataset_id",
+          "dataset_revision"
+        ],
+        "type": "object"
+      },
+      "PostprocessingDefinition": {
+        "properties": {
+          "data_ref": {
+            "$ref": "#/components/schemas/PostprocessingDataRef"
+          },
+          "definition_id": {
+            "type": "string"
+          },
+          "definition_schema": {
+            "description": "Versioned settings schema, e.g. `analysis.dispersion.mode_visualization.v1`.",
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "module_id": {
+            "description": "Owning analysis module, e.g. `analysis.dispersion`.",
+            "type": "string"
+          },
+          "module_version": {
+            "type": "string"
+          },
+          "node_kind": {
+            "description": "Node template kind; must start with `<module_id>.`.",
+            "type": "string"
+          },
+          "parent_definition_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "revision": {
+            "description": "Bumped by the server on every change to this definition.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "settings": {
+            "additionalProperties": true,
+            "description": "Module-owned settings validated by `definition_schema` on the client.",
+            "type": "object"
+          }
+        },
+        "required": [
+          "definition_id",
+          "module_id",
+          "module_version",
+          "definition_schema",
+          "node_kind",
+          "label",
+          "data_ref"
+        ],
+        "type": "object"
+      },
+      "PostprocessingDefinitionCollectionResource": {
+        "properties": {
+          "count": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "definitions": {
+            "items": {
+              "$ref": "#/components/schemas/PostprocessingDefinition"
+            },
+            "type": "array"
+          },
+          "scene_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "scene_revision",
+          "count",
+          "definitions"
+        ],
+        "type": "object"
+      },
+      "PostprocessingDefinitionCreateRequest": {
+        "properties": {
+          "definition": {
+            "$ref": "#/components/schemas/PostprocessingDefinition"
+          },
+          "expected_scene_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "expected_scene_revision",
+          "definition"
+        ],
+        "type": "object"
+      },
+      "PostprocessingDefinitionDeleteRequest": {
+        "properties": {
+          "expected_scene_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "expected_scene_revision"
+        ],
+        "type": "object"
+      },
+      "PostprocessingDefinitionPatchRequest": {
+        "properties": {
+          "definition": {
+            "$ref": "#/components/schemas/PostprocessingDefinition"
+          },
+          "expected_scene_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "expected_scene_revision",
+          "definition"
+        ],
+        "type": "object"
+      },
+      "PostprocessingDefinitionResource": {
+        "properties": {
+          "definition": {
+            "$ref": "#/components/schemas/PostprocessingDefinition"
+          },
+          "scene_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "scene_revision",
+          "definition"
+        ],
+        "type": "object"
+      },
       "PreparationClockAdjustment": {
         "properties": {
           "backward_delta_ms": {
@@ -25698,299 +26322,6 @@
           "expected_project_id",
           "expected_revision",
           "scene_document"
-        ],
-        "type": "object"
-      },
-      "ProjectBatchAxisSummaryResource": {
-        "properties": {
-          "canonical_unit": {
-            "type": "string"
-          },
-          "name": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "name",
-          "canonical_unit"
-        ],
-        "type": "object"
-      },
-      "ProjectBatchCaseState": {
-        "enum": [
-          "pending_expansion",
-          "pending_materialization"
-        ],
-        "type": "string"
-      },
-      "ProjectBatchCaseSummaryResource": {
-        "properties": {
-          "case_id": {
-            "type": "string"
-          },
-          "parameter_tuple": {
-            "additionalProperties": {},
-            "propertyNames": {
-              "type": "string"
-            },
-            "type": "object"
-          },
-          "planned_run_id": {
-            "type": "string"
-          },
-          "state": {
-            "$ref": "#/components/schemas/ProjectBatchCaseState"
-          }
-        },
-        "required": [
-          "case_id",
-          "planned_run_id",
-          "parameter_tuple",
-          "state"
-        ],
-        "type": "object"
-      },
-      "ProjectBatchCasesQuery": {
-        "properties": {
-          "cursor": {
-            "description": "Last CaseId returned on the previous page.",
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "limit": {
-            "description": "Page size, from 1 to 100; defaults to 50.",
-            "format": "int32",
-            "minimum": 0,
-            "type": [
-              "integer",
-              "null"
-            ]
-          }
-        },
-        "type": "object"
-      },
-      "ProjectBatchCasesResource": {
-        "properties": {
-          "axes": {
-            "description": "Axis names and canonical units for the parameter tuples in this manifest.",
-            "items": {
-              "$ref": "#/components/schemas/ProjectBatchAxisSummaryResource"
-            },
-            "type": "array"
-          },
-          "batch_id": {
-            "type": "string"
-          },
-          "cases": {
-            "items": {
-              "$ref": "#/components/schemas/ProjectBatchCaseSummaryResource"
-            },
-            "type": "array"
-          },
-          "next_cursor": {
-            "type": [
-              "string",
-              "null"
-            ]
-          }
-        },
-        "required": [
-          "batch_id",
-          "axes",
-          "cases"
-        ],
-        "type": "object"
-      },
-      "ProjectBatchExpansionState": {
-        "enum": [
-          "pending",
-          "expanding",
-          "complete",
-          "stopped"
-        ],
-        "type": "string"
-      },
-      "ProjectBatchFailurePolicy": {
-        "enum": [
-          "continue_independent",
-          "stop_admission"
-        ],
-        "type": "string"
-      },
-      "ProjectBatchListQuery": {
-        "properties": {
-          "cursor": {
-            "description": "Last BatchId returned on the previous page.",
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "limit": {
-            "description": "Page size, from 1 to 100; defaults to 50.",
-            "format": "int32",
-            "minimum": 0,
-            "type": [
-              "integer",
-              "null"
-            ]
-          }
-        },
-        "type": "object"
-      },
-      "ProjectBatchListResource": {
-        "properties": {
-          "batches": {
-            "items": {
-              "$ref": "#/components/schemas/ProjectBatchSummaryResource"
-            },
-            "type": "array"
-          },
-          "next_cursor": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "project_id": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "project_id",
-          "batches"
-        ],
-        "type": "object"
-      },
-      "ProjectBatchSubmitRequest": {
-        "additionalProperties": false,
-        "description": "Immutable independent batch submission. The server deserializes\n`batch_request` into the versioned application contract before accepting it.",
-        "properties": {
-          "archive_base64": {
-            "description": "Exact base64-encoded portable project archive accepted for this batch.",
-            "type": "string"
-          },
-          "asset_paths": {
-            "additionalProperties": {
-              "type": "string"
-            },
-            "description": "Explicit immutable asset ID to path inside `project/assets/`.",
-            "propertyNames": {
-              "type": "string"
-            },
-            "type": "object"
-          },
-          "batch_request": {
-            "additionalProperties": {},
-            "description": "Versioned `BatchExpansionRequest` object, including template and axes.",
-            "propertyNames": {
-              "type": "string"
-            },
-            "type": "object"
-          },
-          "idempotency_key": {
-            "description": "Client intent key used to recover an ACK after a timeout.",
-            "type": "string"
-          },
-          "study_plan": {
-            "additionalProperties": {},
-            "description": "Versioned immutable StudyPlan used by the batch template.",
-            "propertyNames": {
-              "type": "string"
-            },
-            "type": "object"
-          },
-          "study_problem_catalog": {
-            "additionalProperties": {},
-            "description": "Immutable StudyProblemCatalog pinned by the batch template.",
-            "propertyNames": {
-              "type": "string"
-            },
-            "type": "object"
-          }
-        },
-        "required": [
-          "archive_base64",
-          "idempotency_key",
-          "batch_request",
-          "study_plan",
-          "study_problem_catalog",
-          "asset_paths"
-        ],
-        "type": "object"
-      },
-      "ProjectBatchSubmitResource": {
-        "properties": {
-          "batch_id": {
-            "type": "string"
-          },
-          "case_count": {
-            "format": "int64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "disposition": {
-            "$ref": "#/components/schemas/ProjectRunSubmitDisposition"
-          },
-          "manifest_sha256": {
-            "description": "Logical digest stored in the expansion manifest.",
-            "type": "string"
-          }
-        },
-        "required": [
-          "disposition",
-          "batch_id",
-          "manifest_sha256",
-          "case_count"
-        ],
-        "type": "object"
-      },
-      "ProjectBatchSummaryResource": {
-        "properties": {
-          "accepted_at": {
-            "type": "string"
-          },
-          "batch_id": {
-            "type": "string"
-          },
-          "case_count": {
-            "format": "int64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "expansion_state": {
-            "$ref": "#/components/schemas/ProjectBatchExpansionState"
-          },
-          "failure_policy": {
-            "$ref": "#/components/schemas/ProjectBatchFailurePolicy"
-          },
-          "manifest_sha256": {
-            "type": "string"
-          },
-          "max_parallel_cases": {
-            "format": "int32",
-            "minimum": 0,
-            "type": [
-              "integer",
-              "null"
-            ]
-          },
-          "published_case_count": {
-            "format": "int64",
-            "minimum": 0,
-            "type": "integer"
-          }
-        },
-        "required": [
-          "batch_id",
-          "accepted_at",
-          "manifest_sha256",
-          "case_count",
-          "failure_policy",
-          "published_case_count",
-          "expansion_state"
         ],
         "type": "object"
       },
@@ -26794,49 +27125,6 @@
         ],
         "type": "string"
       },
-      "ProjectRunTaskCancellationIntentResource": {
-        "properties": {
-          "cancellation_id": {
-            "type": "string"
-          },
-          "cancellation_state": {
-            "$ref": "#/components/schemas/ProjectRunTaskCancellationState"
-          },
-          "catalog_revision": {
-            "format": "int64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "disposition": {
-            "$ref": "#/components/schemas/ProjectRunTaskCancellationDisposition"
-          },
-          "expected_catalog_revision": {
-            "format": "int64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "lifecycle": {
-            "$ref": "#/components/schemas/ProjectRunTaskLifecycle"
-          },
-          "run_id": {
-            "type": "string"
-          },
-          "task_id": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "disposition",
-          "run_id",
-          "task_id",
-          "cancellation_id",
-          "cancellation_state",
-          "lifecycle",
-          "catalog_revision",
-          "expected_catalog_revision"
-        ],
-        "type": "object"
-      },
       "ProjectRunTaskCancellationRequest": {
         "additionalProperties": false,
         "properties": {
@@ -26874,37 +27162,6 @@
             "$ref": "#/components/schemas/ProjectRunTaskCancellationIntentResource"
           }
         ]
-      },
-      "ProjectRunTaskCancellationState": {
-        "enum": [
-          "requested"
-        ],
-        "type": "string"
-      },
-      "ProjectRunTaskCancellationSummary": {
-        "properties": {
-          "cancellation_id": {
-            "type": "string"
-          },
-          "created_at": {
-            "type": "string"
-          },
-          "expected_catalog_revision": {
-            "format": "int64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "reason": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "cancellation_id",
-          "reason",
-          "expected_catalog_revision",
-          "created_at"
-        ],
-        "type": "object"
       },
       "ProjectRunTaskLifecycle": {
         "enum": [
@@ -27039,39 +27296,6 @@
           "lifecycle",
           "readiness",
           "artifact_ids"
-        ],
-        "type": "object"
-      },
-      "ProjectRunTaskStopResource": {
-        "properties": {
-          "catalog_revision": {
-            "format": "int64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "command_id": {
-            "type": "string"
-          },
-          "disposition": {
-            "$ref": "#/components/schemas/ProjectRunTaskCancellationDisposition"
-          },
-          "lifecycle": {
-            "$ref": "#/components/schemas/ProjectRunTaskLifecycle"
-          },
-          "run_id": {
-            "type": "string"
-          },
-          "task_id": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "disposition",
-          "run_id",
-          "task_id",
-          "command_id",
-          "lifecycle",
-          "catalog_revision"
         ],
         "type": "object"
       },
@@ -29727,6 +29951,31 @@
               },
               "kind": {
                 "enum": [
+                  "equipotential_current_terminal"
+                ],
+                "type": "string"
+              },
+              "surfaces": {
+                "items": {
+                  "$ref": "#/components/schemas/SceneSurfaceRef"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "id",
+              "surfaces",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
                   "voltage_electrode"
                 ],
                 "type": "string"
@@ -29810,7 +30059,8 @@
       "SceneChargePotentialGauge": {
         "enum": [
           "dirichlet_reference",
-          "zero_mean"
+          "zero_mean",
+          "terminal_reference"
         ],
         "type": "string"
       },
@@ -31521,6 +31771,30 @@
       },
       "SceneResource": {
         "properties": {
+          "antenna_field_solve_stages": {
+            "items": {
+              "$ref": "#/components/schemas/AntennaFieldSolveStageResource"
+            },
+            "type": "array"
+          },
+          "antenna_port_modes": {
+            "items": {
+              "$ref": "#/components/schemas/AntennaPortModeResource"
+            },
+            "type": "array"
+          },
+          "antenna_spectrum_requests": {
+            "items": {
+              "$ref": "#/components/schemas/AntennaSpectrumRequestResource"
+            },
+            "type": "array"
+          },
+          "antenna_target_projections": {
+            "items": {
+              "$ref": "#/components/schemas/AntennaTargetProjectionResource"
+            },
+            "type": "array"
+          },
           "couplings": {
             "items": {
               "$ref": "#/components/schemas/SceneCoupling"
@@ -31627,6 +31901,12 @@
           "selections": {
             "items": {
               "$ref": "#/components/schemas/SelectionDefinitionSchema"
+            },
+            "type": "array"
+          },
+          "solved_antenna_drives": {
+            "items": {
+              "$ref": "#/components/schemas/SolvedAntennaDriveResource"
             },
             "type": "array"
           },
@@ -37565,14 +37845,6 @@
               "null"
             ]
           },
-          "completed_step": {
-            "format": "int64",
-            "minimum": 0,
-            "type": [
-              "integer",
-              "null"
-            ]
-          },
           "converged": {
             "type": "boolean"
           },
@@ -37698,6 +37970,16 @@
               "null"
             ]
           },
+          "parallel_execution": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ParallelExecutionTelemetryResource"
+              }
+            ]
+          },
           "progress_detail": {
             "type": [
               "string",
@@ -37790,6 +38072,21 @@
               "number",
               "null"
             ]
+          },
+          "antenna_solve_stage_id": {
+            "description": "Exact authored antenna definition ID, not the study node or runtime ID.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "completed_step": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
           }
         },
         "required": [
@@ -37829,7 +38126,17 @@
             "minimum": 0,
             "type": "integer"
           },
+          "run_id": {
+            "type": "string"
+          },
           "runtime_state": {
+            "type": "string"
+          },
+          "session_epoch": {
+            "type": "string"
+          },
+          "session_id": {
+            "description": "Identity of the same locked snapshot that owns the stage records.",
             "type": "string"
           },
           "stage_statuses": {
@@ -37848,15 +38155,22 @@
             "format": "int32",
             "minimum": 0,
             "type": "integer"
+          },
+          "request_scope_epoch": {
+            "type": "string"
           }
         },
         "required": [
+          "session_id",
+          "session_epoch",
+          "run_id",
           "revision",
           "runtime_state",
           "total_stages",
           "completed_stage_indexes",
           "stage_statuses",
-          "stages"
+          "stages",
+          "request_scope_epoch"
         ],
         "type": "object"
       },
@@ -38491,6 +38805,16 @@
       },
       "StudyRuntimePatchRequest": {
         "properties": {
+          "parallel_execution": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ParallelExecutionResource"
+              }
+            ]
+          },
           "requested_backend": {
             "type": [
               "string",
@@ -38536,6 +38860,9 @@
               "null"
             ]
           },
+          "parallel_execution": {
+            "$ref": "#/components/schemas/ParallelExecutionResource"
+          },
           "requested_backend": {
             "type": "string"
           },
@@ -38561,7 +38888,8 @@
           "requested_backend",
           "requested_device",
           "requested_precision",
-          "requested_mode"
+          "requested_mode",
+          "parallel_execution"
         ],
         "type": "object"
       },
@@ -42453,6 +42781,2620 @@
           "zl_mumax3_central_v1"
         ],
         "type": "string"
+      },
+      "AcceptedAntennaInspectionCatalogResource": {
+        "properties": {
+          "entries": {
+            "items": {
+              "$ref": "#/components/schemas/AcceptedAntennaInspectionIdentity"
+            },
+            "type": "array"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "resource_id": {
+            "type": "string"
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "validation_scope": {
+            "description": "Publication evidence only; pinned reads separately validate numerical packages.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema_version",
+          "resource_id",
+          "project_id",
+          "run_id",
+          "validation_scope",
+          "entries"
+        ],
+        "type": "object"
+      },
+      "AcceptedAntennaInspectionIdentity": {
+        "description": "The Study step and native antenna stage are deliberately separate identities.",
+        "properties": {
+          "artifact_id": {
+            "type": "string"
+          },
+          "attempt_id": {
+            "type": "string"
+          },
+          "case_id": {
+            "type": "string"
+          },
+          "manifest_artifact_id": {
+            "type": "string"
+          },
+          "manifest_object_ref": {
+            "type": "string"
+          },
+          "native_stage_id": {
+            "type": "string"
+          },
+          "ownership_epoch": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "package_object_ref": {
+            "type": "string"
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "study_step_id": {
+            "type": "string"
+          },
+          "task_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "run_id",
+          "task_id",
+          "study_step_id",
+          "native_stage_id",
+          "attempt_id",
+          "ownership_epoch",
+          "manifest_artifact_id",
+          "manifest_object_ref",
+          "artifact_id",
+          "package_object_ref",
+          "case_id"
+        ],
+        "type": "object"
+      },
+      "AcceptedAntennaInspectionResource": {
+        "properties": {
+          "display": {
+            "$ref": "#/components/schemas/AntennaInspectionDisplayDataResource"
+          },
+          "manifest": {
+            "$ref": "#/components/schemas/AntennaInspectionManifestResource"
+          },
+          "output_id": {
+            "type": "string"
+          },
+          "owner": {
+            "$ref": "#/components/schemas/AcceptedAntennaInspectionIdentity"
+          },
+          "port_mode_id": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "resource_id": {
+            "type": "string"
+          },
+          "schema_version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema_version",
+          "resource_id",
+          "project_id",
+          "owner",
+          "port_mode_id",
+          "output_id",
+          "manifest",
+          "display"
+        ],
+        "type": "object"
+      },
+      "AntennaExternalLeadInspectionResource": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/AntennaInspectionStageRecordResource"
+          },
+          {
+            "properties": {
+              "manifest": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/AntennaInspectionManifestResource"
+                  }
+                ]
+              },
+              "record_content_digest": {
+                "type": "string"
+              },
+              "request_scope_epoch": {
+                "type": "string"
+              },
+              "resource_id": {
+                "type": "string"
+              },
+              "run_id": {
+                "type": "string"
+              },
+              "runtime_stage_id": {
+                "type": "string"
+              },
+              "session_epoch": {
+                "type": "string"
+              },
+              "session_id": {
+                "type": "string"
+              },
+              "stage_revision": {
+                "format": "int64",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "resource_id",
+              "session_id",
+              "session_epoch",
+              "request_scope_epoch",
+              "run_id",
+              "runtime_stage_id",
+              "stage_revision",
+              "record_content_digest"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "AntennaFieldBasisResource": {
+        "properties": {
+          "current_balance_certificate_digest": {
+            "type": "string"
+          },
+          "current_density_per_ampere": {
+            "$ref": "#/components/schemas/AntennaFieldBinaryRefResource"
+          },
+          "electric_potential_per_ampere": {
+            "$ref": "#/components/schemas/AntennaFieldBinaryRefResource"
+          },
+          "magnetic_field_per_ampere": {
+            "$ref": "#/components/schemas/AntennaFieldBinaryRefResource"
+          },
+          "measured_positive_terminal_current_a": {
+            "format": "double",
+            "type": "number"
+          },
+          "normalization_current_a": {
+            "format": "double",
+            "type": "number"
+          },
+          "normalization_scale": {
+            "format": "double",
+            "type": "number"
+          },
+          "oersted_operator_version": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "port_mode_id": {
+            "type": "string"
+          },
+          "quadrature_diagnostics": {},
+          "quadrature_evidence": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AntennaQuadratureEvidenceRefResource"
+              }
+            ]
+          }
+        },
+        "required": [
+          "port_mode_id",
+          "measured_positive_terminal_current_a",
+          "normalization_current_a",
+          "normalization_scale",
+          "current_balance_certificate_digest",
+          "electric_potential_per_ampere",
+          "current_density_per_ampere",
+          "magnetic_field_per_ampere",
+          "quadrature_diagnostics"
+        ],
+        "type": "object"
+      },
+      "AntennaFieldBinaryRefResource": {
+        "properties": {
+          "layout": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "scalar_type": {
+            "type": "string"
+          },
+          "sha256": {
+            "type": "string"
+          },
+          "unit": {
+            "type": "string"
+          },
+          "value_count": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "path",
+          "sha256",
+          "scalar_type",
+          "layout",
+          "unit",
+          "value_count"
+        ],
+        "type": "object"
+      },
+      "AntennaFieldModelResource": {
+        "enum": [
+          "quasistatic_conduction_biot_savart3d"
+        ],
+        "type": "string"
+      },
+      "AntennaFieldSolutionRefResource": {
+        "additionalProperties": false,
+        "properties": {
+          "asset_id": {
+            "type": "string"
+          },
+          "content_digest": {
+            "type": "string"
+          },
+          "output_id": {
+            "type": "string"
+          },
+          "stage_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "stage_id",
+          "output_id",
+          "asset_id",
+          "content_digest"
+        ],
+        "type": "object"
+      },
+      "AntennaFieldSolutionResource": {
+        "properties": {
+          "asset_id": {
+            "type": "string"
+          },
+          "assumptions": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "bases": {
+            "items": {
+              "$ref": "#/components/schemas/AntennaFieldBasisResource"
+            },
+            "type": "array"
+          },
+          "component": {
+            "type": "string"
+          },
+          "conductor_positions": {
+            "$ref": "#/components/schemas/AntennaFieldBinaryRefResource"
+          },
+          "content_digest": {
+            "type": "string"
+          },
+          "current_transport_id": {
+            "type": "string"
+          },
+          "gauge_policy": {
+            "type": "string"
+          },
+          "geometry_revision": {
+            "type": "string"
+          },
+          "material_revision": {
+            "type": "string"
+          },
+          "mesh_digest": {
+            "type": "string"
+          },
+          "quantity": {
+            "type": "string"
+          },
+          "request_scope_epoch": {
+            "type": "string"
+          },
+          "requested_execution": {},
+          "resolved_execution": {},
+          "resource_id": {
+            "type": "string"
+          },
+          "sample_carrier": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AntennaSampleCarrierResource"
+              }
+            ]
+          },
+          "sample_positions": {
+            "$ref": "#/components/schemas/AntennaFieldBinaryRefResource"
+          },
+          "sample_topology": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AntennaFieldBinaryRefResource"
+              }
+            ]
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "session_epoch": {
+            "type": "string"
+          },
+          "session_id": {
+            "type": "string"
+          },
+          "signatures": {
+            "$ref": "#/components/schemas/AntennaFieldSolutionSignaturesResource"
+          },
+          "solution_id": {
+            "type": "string"
+          },
+          "solver_policy": {},
+          "source_object_id": {
+            "type": "string"
+          },
+          "stage_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "target_projection_signature": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "resource_id",
+          "session_id",
+          "session_epoch",
+          "request_scope_epoch",
+          "schema_version",
+          "asset_id",
+          "status",
+          "solution_id",
+          "source_object_id",
+          "current_transport_id",
+          "stage_id",
+          "geometry_revision",
+          "material_revision",
+          "mesh_digest",
+          "requested_execution",
+          "resolved_execution",
+          "gauge_policy",
+          "solver_policy",
+          "signatures",
+          "content_digest",
+          "quantity",
+          "component",
+          "conductor_positions",
+          "sample_positions",
+          "assumptions",
+          "bases"
+        ],
+        "type": "object"
+      },
+      "AntennaFieldSolutionSignaturesResource": {
+        "properties": {
+          "current_solution_signature": {
+            "type": "string"
+          },
+          "field_solution_signature": {
+            "type": "string"
+          },
+          "target_projection_signatures": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          }
+        },
+        "required": [
+          "current_solution_signature",
+          "field_solution_signature",
+          "target_projection_signatures"
+        ],
+        "type": "object"
+      },
+      "AntennaFieldSolveStageResource": {
+        "additionalProperties": false,
+        "properties": {
+          "conductor_mesh_policy": {
+            "type": "string"
+          },
+          "conservative_current_view_ref": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "current_transport_id": {
+            "type": "string"
+          },
+          "field_sampling_domain": {
+            "$ref": "#/components/schemas/FieldTargetResource"
+          },
+          "id": {
+            "type": "string"
+          },
+          "model": {
+            "$ref": "#/components/schemas/AntennaFieldModelResource"
+          },
+          "oersted_realization": {
+            "$ref": "#/components/schemas/AntennaOerstedRealizationResource"
+          },
+          "outputs": {
+            "items": {
+              "$ref": "#/components/schemas/AntennaNamedOutputResource"
+            },
+            "type": "array"
+          },
+          "port_mode_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "solver_policy": {
+            "type": "string"
+          },
+          "source_object_id": {
+            "type": "string"
+          },
+          "target_refs": {
+            "items": {
+              "$ref": "#/components/schemas/FieldTargetResource"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "source_object_id",
+          "current_transport_id",
+          "port_mode_ids",
+          "model",
+          "oersted_realization",
+          "conductor_mesh_policy",
+          "field_sampling_domain",
+          "target_refs",
+          "solver_policy",
+          "outputs"
+        ],
+        "type": "object"
+      },
+      "AntennaFieldTargetResource": {
+        "oneOf": [
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "global"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "object"
+                ],
+                "type": "string"
+              },
+              "object_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "object_id",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "region"
+                ],
+                "type": "string"
+              },
+              "object_id": {
+                "type": "string"
+              },
+              "region_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "object_id",
+              "region_id",
+              "kind"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "AntennaInspectionCurrentDisplayResource": {
+        "properties": {
+          "center_current_density": {
+            "$ref": "#/components/schemas/AntennaInspectionPayloadResource"
+          },
+          "center_positions": {
+            "$ref": "#/components/schemas/AntennaInspectionPayloadResource"
+          },
+          "ordered_snapshot": {
+            "$ref": "#/components/schemas/AntennaInspectionPayloadResource"
+          },
+          "receipt": {
+            "$ref": "#/components/schemas/AntennaInspectionCurrentReceiptResource"
+          },
+          "trace_current_density": {
+            "$ref": "#/components/schemas/AntennaInspectionPayloadResource"
+          },
+          "trace_positions": {
+            "$ref": "#/components/schemas/AntennaInspectionPayloadResource"
+          }
+        },
+        "required": [
+          "receipt",
+          "center_positions",
+          "center_current_density",
+          "trace_positions",
+          "trace_current_density",
+          "ordered_snapshot"
+        ],
+        "type": "object"
+      },
+      "AntennaInspectionCurrentReceiptResource": {
+        "properties": {
+          "cell_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "center_policy": {
+            "type": "string"
+          },
+          "coordinate_unit": {
+            "type": "string"
+          },
+          "current_density_unit": {
+            "type": "string"
+          },
+          "current_evaluator_version": {
+            "type": "string"
+          },
+          "normalization": {
+            "type": "string"
+          },
+          "operator_version": {
+            "type": "string"
+          },
+          "payload": {
+            "$ref": "#/components/schemas/AntennaInspectionPayloadResource"
+          },
+          "sampling_policy": {
+            "type": "string"
+          },
+          "schema_version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema_version",
+          "operator_version",
+          "current_evaluator_version",
+          "sampling_policy",
+          "center_policy",
+          "normalization",
+          "coordinate_unit",
+          "current_density_unit",
+          "cell_count",
+          "payload"
+        ],
+        "type": "object"
+      },
+      "AntennaInspectionDisplayCapabilities": {
+        "properties": {
+          "current_density": {
+            "type": "boolean"
+          },
+          "display": {
+            "type": "boolean"
+          },
+          "llg_drive": {
+            "type": "boolean"
+          },
+          "per_ampere_basis": {
+            "type": "boolean"
+          },
+          "source_fft": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "display",
+          "per_ampere_basis",
+          "source_fft",
+          "llg_drive",
+          "current_density"
+        ],
+        "type": "object"
+      },
+      "AntennaInspectionDisplayDataResource": {
+        "description": "Shared verified display contract, without Live or accepted-run ownership.",
+        "properties": {
+          "capabilities": {
+            "$ref": "#/components/schemas/AntennaInspectionDisplayCapabilities"
+          },
+          "content_digest": {
+            "type": "string"
+          },
+          "device_cell_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "device_current": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AntennaInspectionCurrentDisplayResource"
+              }
+            ]
+          },
+          "device_node_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "device_positions": {
+            "$ref": "#/components/schemas/AntennaInspectionPayloadResource"
+          },
+          "device_potential": {
+            "$ref": "#/components/schemas/AntennaInspectionPayloadResource"
+          },
+          "device_topology": {
+            "$ref": "#/components/schemas/AntennaInspectionPayloadResource"
+          },
+          "field_scope": {
+            "type": "string"
+          },
+          "magnetic_field": {
+            "$ref": "#/components/schemas/AntennaInspectionPayloadResource"
+          },
+          "normalization": {
+            "type": "string"
+          },
+          "qualification": {
+            "type": "string"
+          },
+          "sample_positions": {
+            "$ref": "#/components/schemas/AntennaInspectionPayloadResource"
+          },
+          "sampling_carrier": {
+            "$ref": "#/components/schemas/AntennaInspectionSamplingResource"
+          },
+          "source_object_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "content_digest",
+          "source_object_id",
+          "status",
+          "qualification",
+          "field_scope",
+          "normalization",
+          "capabilities",
+          "device_node_count",
+          "device_cell_count",
+          "sampling_carrier",
+          "device_positions",
+          "device_topology",
+          "device_potential",
+          "sample_positions",
+          "magnetic_field"
+        ],
+        "type": "object"
+      },
+      "AntennaInspectionDisplayResource": {
+        "properties": {
+          "capabilities": {
+            "$ref": "#/components/schemas/AntennaInspectionDisplayCapabilities"
+          },
+          "content_digest": {
+            "type": "string"
+          },
+          "device_cell_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "device_current": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AntennaInspectionCurrentDisplayResource"
+              }
+            ]
+          },
+          "device_node_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "device_positions": {
+            "$ref": "#/components/schemas/AntennaInspectionPayloadResource"
+          },
+          "device_potential": {
+            "$ref": "#/components/schemas/AntennaInspectionPayloadResource"
+          },
+          "device_topology": {
+            "$ref": "#/components/schemas/AntennaInspectionPayloadResource"
+          },
+          "field_scope": {
+            "type": "string"
+          },
+          "magnetic_field": {
+            "$ref": "#/components/schemas/AntennaInspectionPayloadResource"
+          },
+          "normalization": {
+            "type": "string"
+          },
+          "qualification": {
+            "type": "string"
+          },
+          "record_content_digest": {
+            "type": "string"
+          },
+          "request_scope_epoch": {
+            "type": "string"
+          },
+          "resource_id": {
+            "type": "string"
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "runtime_stage_id": {
+            "type": "string"
+          },
+          "sample_positions": {
+            "$ref": "#/components/schemas/AntennaInspectionPayloadResource"
+          },
+          "sampling_carrier": {
+            "$ref": "#/components/schemas/AntennaInspectionSamplingResource"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "session_epoch": {
+            "type": "string"
+          },
+          "session_id": {
+            "type": "string"
+          },
+          "source_object_id": {
+            "type": "string"
+          },
+          "stage_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema_version",
+          "resource_id",
+          "session_id",
+          "session_epoch",
+          "request_scope_epoch",
+          "run_id",
+          "runtime_stage_id",
+          "stage_revision",
+          "record_content_digest",
+          "content_digest",
+          "source_object_id",
+          "status",
+          "qualification",
+          "field_scope",
+          "normalization",
+          "capabilities",
+          "device_node_count",
+          "device_cell_count",
+          "sampling_carrier",
+          "device_positions",
+          "device_topology",
+          "device_potential",
+          "sample_positions",
+          "magnetic_field"
+        ],
+        "type": "object"
+      },
+      "AntennaInspectionManifestResource": {
+        "properties": {
+          "bundle": {
+            "$ref": "#/components/schemas/AntennaInspectionPayloadResource"
+          },
+          "charge_content_sha256": {
+            "type": "string"
+          },
+          "closure_revision": {
+            "type": "string"
+          },
+          "content_digest": {
+            "type": "string"
+          },
+          "current_display": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AntennaInspectionCurrentReceiptResource"
+              }
+            ]
+          },
+          "current_transport_id": {
+            "type": "string"
+          },
+          "device_potential": {
+            "$ref": "#/components/schemas/AntennaInspectionPayloadResource"
+          },
+          "device_vertex_ids": {
+            "$ref": "#/components/schemas/AntennaInspectionPayloadResource"
+          },
+          "drive_id": {
+            "type": "string"
+          },
+          "field_content_sha256": {
+            "type": "string"
+          },
+          "input_pins": {},
+          "magnetic_field": {
+            "$ref": "#/components/schemas/AntennaInspectionPayloadResource"
+          },
+          "requested_execution": {},
+          "resolved_execution": {},
+          "sample_positions": {
+            "$ref": "#/components/schemas/AntennaInspectionPayloadResource"
+          },
+          "sampling_carrier": {
+            "$ref": "#/components/schemas/AntennaInspectionSamplingResource"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "solver_policy": {},
+          "source_content_sha256": {
+            "type": "string"
+          },
+          "source_object_id": {
+            "type": "string"
+          },
+          "validation_scope": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema_version",
+          "validation_scope",
+          "source_object_id",
+          "current_transport_id",
+          "drive_id",
+          "closure_revision",
+          "input_pins",
+          "requested_execution",
+          "resolved_execution",
+          "solver_policy",
+          "sampling_carrier",
+          "charge_content_sha256",
+          "source_content_sha256",
+          "field_content_sha256",
+          "content_digest",
+          "bundle",
+          "sample_positions",
+          "magnetic_field",
+          "device_vertex_ids",
+          "device_potential"
+        ],
+        "type": "object"
+      },
+      "AntennaInspectionOutputResource": {
+        "additionalProperties": false,
+        "properties": {
+          "inspection_ref": {
+            "$ref": "#/components/schemas/AntennaInspectionReferenceResource"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "manifest_ref": {
+            "type": "string"
+          },
+          "payload_units": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "reused_existing": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "kind",
+          "inspection_ref",
+          "manifest_ref",
+          "payload_units",
+          "reused_existing"
+        ],
+        "type": "object"
+      },
+      "AntennaInspectionPayloadResource": {
+        "properties": {
+          "byte_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "layout": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "scalar_type": {
+            "type": "string"
+          },
+          "sha256": {
+            "type": "string"
+          },
+          "unit": {
+            "type": "string"
+          },
+          "value_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "path",
+          "sha256",
+          "byte_count",
+          "scalar_type",
+          "layout",
+          "unit",
+          "value_count"
+        ],
+        "type": "object"
+      },
+      "AntennaInspectionReferenceResource": {
+        "additionalProperties": false,
+        "properties": {
+          "content_digest": {
+            "type": "string"
+          },
+          "output_id": {
+            "type": "string"
+          },
+          "stage_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "stage_id",
+          "output_id",
+          "content_digest"
+        ],
+        "type": "object"
+      },
+      "AntennaInspectionSamplingResource": {
+        "properties": {
+          "carrier_kind": {
+            "type": "string"
+          },
+          "domain": {
+            "$ref": "#/components/schemas/AntennaFieldTargetResource"
+          },
+          "location": {
+            "type": "string"
+          },
+          "sample_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "topology_digest": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "domain",
+          "carrier_kind",
+          "location",
+          "topology_digest",
+          "sample_count"
+        ],
+        "type": "object"
+      },
+      "AntennaInspectionStageRecordResource": {
+        "additionalProperties": false,
+        "properties": {
+          "diagnostic": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "field_scope": {
+            "type": "string"
+          },
+          "output_id": {
+            "type": "string"
+          },
+          "outputs": {
+            "items": {
+              "$ref": "#/components/schemas/AntennaInspectionOutputResource"
+            },
+            "type": "array"
+          },
+          "port_mode_id": {
+            "type": "string"
+          },
+          "qualification": {
+            "type": "string"
+          },
+          "resolved_action": {
+            "type": "string"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "stage_id": {
+            "type": "string"
+          },
+          "stage_kind": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema_version",
+          "stage_kind",
+          "resolved_action",
+          "stage_id",
+          "port_mode_id",
+          "output_id",
+          "status",
+          "qualification",
+          "field_scope",
+          "outputs"
+        ],
+        "type": "object"
+      },
+      "AntennaNamedOutputResource": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "quantity": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "quantity"
+        ],
+        "type": "object"
+      },
+      "AntennaOerstedRealizationResource": {
+        "enum": [
+          "direct_tetra_quadrature",
+          "vector_potential_solver"
+        ],
+        "type": "string"
+      },
+      "AntennaPortBranchResource": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "inlet_terminal_ref": {
+            "type": "string"
+          },
+          "outlet_terminal_ref": {
+            "type": "string"
+          },
+          "signed_weight": {
+            "format": "double",
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "inlet_terminal_ref",
+          "outlet_terminal_ref",
+          "signed_weight"
+        ],
+        "type": "object"
+      },
+      "AntennaPortModeResource": {
+        "additionalProperties": false,
+        "properties": {
+          "branches": {
+            "items": {
+              "$ref": "#/components/schemas/AntennaPortBranchResource"
+            },
+            "type": "array"
+          },
+          "current_transport_id": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "normalization_current_a": {
+            "format": "double",
+            "type": "number"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "source_object_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema_version",
+          "id",
+          "source_object_id",
+          "current_transport_id",
+          "branches"
+        ],
+        "type": "object"
+      },
+      "AntennaQuadratureEvidenceRefResource": {
+        "additionalProperties": false,
+        "properties": {
+          "byte_length": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "path": {
+            "type": "string"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "sha256": {
+            "type": "string"
+          },
+          "target_count": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "schema_version",
+          "path",
+          "sha256",
+          "byte_length",
+          "target_count"
+        ],
+        "type": "object"
+      },
+      "AntennaResolvedAssetKindResource": {
+        "enum": [
+          "resolved_asset"
+        ],
+        "type": "string"
+      },
+      "AntennaResolvedAssetRefResource": {
+        "additionalProperties": false,
+        "properties": {
+          "asset_id": {
+            "type": "string"
+          },
+          "content_digest": {
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/AntennaResolvedAssetKindResource"
+          },
+          "output_id": {
+            "type": "string"
+          },
+          "stage_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "stage_id",
+          "output_id",
+          "asset_id",
+          "content_digest"
+        ],
+        "type": "object"
+      },
+      "AntennaSampleCarrierResource": {
+        "additionalProperties": false,
+        "properties": {
+          "carrier_kind": {
+            "type": "string"
+          },
+          "domain": {
+            "$ref": "#/components/schemas/AntennaFieldTargetResource"
+          },
+          "location": {
+            "type": "string"
+          },
+          "topology_digest": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "domain",
+          "carrier_kind",
+          "location",
+          "topology_digest"
+        ],
+        "type": "object"
+      },
+      "AntennaSolutionRefResource": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/AntennaStageOutputRefResource"
+          },
+          {
+            "$ref": "#/components/schemas/AntennaResolvedAssetRefResource"
+          },
+          {
+            "$ref": "#/components/schemas/AntennaFieldSolutionRefResource"
+          }
+        ]
+      },
+      "AntennaSourceSpectrumResource": {
+        "properties": {
+          "amplitude_count": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "amplitude_unit": {
+            "type": "string"
+          },
+          "coherent_gain": {
+            "format": "double",
+            "type": "number"
+          },
+          "component": {
+            "type": "string"
+          },
+          "component_labels": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "content_digest": {
+            "type": "string"
+          },
+          "equivalent_noise_bandwidth_bins": {
+            "format": "double",
+            "type": "number"
+          },
+          "field_signature": {
+            "type": "string"
+          },
+          "k_u_count": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "k_v_count": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "normalization": {
+            "type": "string"
+          },
+          "output_id": {
+            "type": "string"
+          },
+          "payload": {
+            "$ref": "#/components/schemas/AntennaSpectrumPayloadResource"
+          },
+          "payloads": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AntennaSpectrumPayloadsResource"
+              }
+            ]
+          },
+          "port_mode_id": {
+            "type": "string"
+          },
+          "power_count": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "quantity": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "request_scope_epoch": {
+            "type": "string"
+          },
+          "resource_id": {
+            "type": "string"
+          },
+          "sampling": {
+            "$ref": "#/components/schemas/AntennaSpectrumSamplingResource"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "session_epoch": {
+            "type": "string"
+          },
+          "session_id": {
+            "type": "string"
+          },
+          "solution_content_digest": {
+            "type": "string"
+          },
+          "solution_id": {
+            "type": "string"
+          },
+          "source_object_id": {
+            "type": "string"
+          },
+          "target_projection_signature": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "wave_vector_unit": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "resource_id",
+          "session_id",
+          "session_epoch",
+          "request_scope_epoch",
+          "schema_version",
+          "request_id",
+          "output_id",
+          "solution_id",
+          "source_object_id",
+          "port_mode_id",
+          "solution_content_digest",
+          "content_digest",
+          "field_signature",
+          "quantity",
+          "component",
+          "component_labels",
+          "k_u_count",
+          "k_v_count",
+          "amplitude_count",
+          "power_count",
+          "coherent_gain",
+          "equivalent_noise_bandwidth_bins",
+          "normalization",
+          "amplitude_unit",
+          "wave_vector_unit",
+          "sampling",
+          "payload"
+        ],
+        "type": "object"
+      },
+      "AntennaSpectrumKGridResource": {
+        "additionalProperties": false,
+        "properties": {
+          "k_u_rad_per_m": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "k_v_rad_per_m": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "k_u_rad_per_m",
+          "k_v_rad_per_m"
+        ],
+        "type": "object"
+      },
+      "AntennaSpectrumNormalizationResource": {
+        "enum": [
+          "integral_si",
+          "unitary_discrete"
+        ],
+        "type": "string"
+      },
+      "AntennaSpectrumOutsidePolicyResource": {
+        "enum": [
+          "error",
+          "zero"
+        ],
+        "type": "string"
+      },
+      "AntennaSpectrumPayloadResource": {
+        "properties": {
+          "content_type": {
+            "type": "string"
+          },
+          "format": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "content_type",
+          "format"
+        ],
+        "type": "object"
+      },
+      "AntennaSpectrumPayloadsResource": {
+        "properties": {
+          "amplitudes_re_im": {
+            "$ref": "#/components/schemas/AntennaFieldBinaryRefResource"
+          },
+          "k_u_rad_per_m": {
+            "$ref": "#/components/schemas/AntennaFieldBinaryRefResource"
+          },
+          "k_v_rad_per_m": {
+            "$ref": "#/components/schemas/AntennaFieldBinaryRefResource"
+          },
+          "power": {
+            "$ref": "#/components/schemas/AntennaFieldBinaryRefResource"
+          }
+        },
+        "required": [
+          "k_u_rad_per_m",
+          "k_v_rad_per_m",
+          "amplitudes_re_im",
+          "power"
+        ],
+        "type": "object"
+      },
+      "AntennaSpectrumRequestResource": {
+        "additionalProperties": false,
+        "properties": {
+          "component": {
+            "type": "string"
+          },
+          "equilibrium_ref": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "mode_basis_ref": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "nonuniform_k_grid": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AntennaSpectrumKGridResource"
+              }
+            ]
+          },
+          "normalization": {
+            "$ref": "#/components/schemas/AntennaSpectrumNormalizationResource"
+          },
+          "output_id": {
+            "type": "string"
+          },
+          "port_mode_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sampling_plane": {
+            "$ref": "#/components/schemas/AntennaSpectrumSamplingPlaneResource"
+          },
+          "solution_ref": {
+            "$ref": "#/components/schemas/AntennaSolutionRefResource"
+          },
+          "target": {
+            "$ref": "#/components/schemas/FieldTargetResource"
+          },
+          "transform": {
+            "$ref": "#/components/schemas/AntennaSpectrumTransformResource"
+          },
+          "window": {
+            "$ref": "#/components/schemas/AntennaSpectrumWindowResource"
+          }
+        },
+        "required": [
+          "id",
+          "solution_ref",
+          "target",
+          "transform",
+          "sampling_plane",
+          "window",
+          "normalization",
+          "component",
+          "output_id"
+        ],
+        "type": "object"
+      },
+      "AntennaSpectrumSamplingPlaneResource": {
+        "additionalProperties": false,
+        "properties": {
+          "axis_u": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "axis_v": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "extent_u_m": {
+            "format": "double",
+            "type": "number"
+          },
+          "extent_v_m": {
+            "format": "double",
+            "type": "number"
+          },
+          "interpolation": {
+            "type": "string"
+          },
+          "origin_m": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "outside_policy": {
+            "$ref": "#/components/schemas/AntennaSpectrumOutsidePolicyResource"
+          },
+          "sample_count_u": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "sample_count_v": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "origin_m",
+          "axis_u",
+          "axis_v",
+          "extent_u_m",
+          "extent_v_m",
+          "sample_count_u",
+          "sample_count_v",
+          "interpolation",
+          "outside_policy"
+        ],
+        "type": "object"
+      },
+      "AntennaSpectrumSamplingResource": {
+        "properties": {
+          "axis_u": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "axis_v": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "extent_u_m": {
+            "format": "double",
+            "type": "number"
+          },
+          "extent_v_m": {
+            "format": "double",
+            "type": "number"
+          },
+          "fourier_origin_uv_m": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "fourier_phase_convention": {
+            "type": "string"
+          },
+          "interpolation": {
+            "type": "string"
+          },
+          "mapping_digest": {
+            "type": "string"
+          },
+          "origin_m": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "outside_count": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "outside_policy": {
+            "type": "string"
+          },
+          "port_mode_id": {
+            "type": "string"
+          },
+          "realization": {
+            "type": "string"
+          },
+          "sample_count_u": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "sample_count_v": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "solution_id": {
+            "type": "string"
+          },
+          "source_object_id": {
+            "type": "string"
+          },
+          "source_sample_count": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "target": {
+            "$ref": "#/components/schemas/AntennaFieldTargetResource"
+          }
+        },
+        "required": [
+          "schema_version",
+          "solution_id",
+          "source_object_id",
+          "port_mode_id",
+          "target",
+          "origin_m",
+          "axis_u",
+          "axis_v",
+          "extent_u_m",
+          "extent_v_m",
+          "sample_count_u",
+          "sample_count_v",
+          "interpolation",
+          "realization",
+          "outside_policy",
+          "outside_count",
+          "source_sample_count",
+          "mapping_digest",
+          "fourier_origin_uv_m",
+          "fourier_phase_convention"
+        ],
+        "type": "object"
+      },
+      "AntennaSpectrumTransformResource": {
+        "enum": [
+          "spatial_fft",
+          "nonuniform_spatial_fft"
+        ],
+        "type": "string"
+      },
+      "AntennaSpectrumWindowResource": {
+        "enum": [
+          "rectangular",
+          "hann",
+          "hamming",
+          "blackman"
+        ],
+        "type": "string"
+      },
+      "AntennaStageOutputCatalogResource": {
+        "properties": {
+          "content_digest": {
+            "type": "string"
+          },
+          "diagnostic": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "outputs": {
+            "items": {
+              "$ref": "#/components/schemas/AntennaStageOutputResource"
+            },
+            "type": "array"
+          },
+          "port_mode_id": {
+            "type": "string"
+          },
+          "request_scope_epoch": {
+            "type": "string"
+          },
+          "resource_id": {
+            "type": "string"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "session_epoch": {
+            "type": "string"
+          },
+          "session_id": {
+            "type": "string"
+          },
+          "solution_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "stage_id": {
+            "type": "string"
+          },
+          "stage_kind": {
+            "type": "string"
+          },
+          "stage_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "resource_id",
+          "session_id",
+          "session_epoch",
+          "request_scope_epoch",
+          "stage_revision",
+          "schema_version",
+          "stage_id",
+          "stage_kind",
+          "port_mode_id",
+          "status",
+          "outputs",
+          "content_digest"
+        ],
+        "type": "object"
+      },
+      "AntennaStageOutputRefResource": {
+        "oneOf": [
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "stage_output"
+                ],
+                "type": "string"
+              },
+              "output_id": {
+                "type": "string"
+              },
+              "stage_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "stage_id",
+              "output_id",
+              "kind"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "AntennaStageOutputResource": {
+        "properties": {
+          "kind": {
+            "type": "string"
+          },
+          "manifest_ref": {
+            "type": "string"
+          },
+          "output_id": {
+            "type": "string"
+          },
+          "quantity_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "reused_existing": {
+            "type": "boolean"
+          },
+          "solution_ref": {
+            "$ref": "#/components/schemas/AntennaStageOutputSolutionReferenceResource"
+          }
+        },
+        "required": [
+          "kind",
+          "output_id",
+          "solution_ref",
+          "manifest_ref",
+          "quantity_ids",
+          "reused_existing"
+        ],
+        "type": "object"
+      },
+      "AntennaStageOutputSolutionReferenceResource": {
+        "properties": {
+          "asset_id": {
+            "type": "string"
+          },
+          "content_digest": {
+            "type": "string"
+          },
+          "output_id": {
+            "type": "string"
+          },
+          "stage_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "stage_id",
+          "output_id",
+          "asset_id",
+          "content_digest"
+        ],
+        "type": "object"
+      },
+      "AntennaTargetProjectionResource": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "output_id": {
+            "type": "string"
+          },
+          "solution": {
+            "$ref": "#/components/schemas/AntennaSolutionRefResource"
+          },
+          "target": {
+            "$ref": "#/components/schemas/FieldTargetResource"
+          }
+        },
+        "required": [
+          "id",
+          "solution",
+          "target",
+          "output_id"
+        ],
+        "type": "object"
+      },
+      "AntennaWaveformBandwidthDeclarationResource": {
+        "additionalProperties": false,
+        "properties": {
+          "f_max_hz": {
+            "description": "Authored physical upper band for pulse or piecewise-linear waveforms.\nIt is not inferred from pulse duration, spacing, or Nyquist frequency.",
+            "format": "double",
+            "type": "number"
+          }
+        },
+        "required": [
+          "f_max_hz"
+        ],
+        "type": "object"
+      },
+      "PhysicsGraphObjectResource": {
+        "description": "OpenAPI projection only; serialized ownership uses the canonical IR type.",
+        "properties": {
+          "geometry_id": {
+            "type": "string"
+          },
+          "label": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "material_assignment_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "name": {
+            "type": "string"
+          },
+          "object_id": {
+            "type": "string"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "type": {
+            "$ref": "#/components/schemas/PhysicsGraphObjectTypeResource"
+          }
+        },
+        "required": [
+          "schema_version",
+          "object_id",
+          "name",
+          "type",
+          "geometry_id"
+        ],
+        "type": "object"
+      },
+      "PhysicsGraphObjectTypeResource": {
+        "enum": [
+          "geometry",
+          "ferromagnet",
+          "conductor",
+          "electrode",
+          "antenna"
+        ],
+        "type": "string"
+      },
+      "ProjectBatchAxisSummaryResource": {
+        "properties": {
+          "canonical_unit": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "canonical_unit"
+        ],
+        "type": "object"
+      },
+      "ProjectBatchCaseState": {
+        "enum": [
+          "pending_expansion",
+          "pending_materialization"
+        ],
+        "type": "string"
+      },
+      "ProjectBatchCaseSummaryResource": {
+        "properties": {
+          "case_id": {
+            "type": "string"
+          },
+          "parameter_tuple": {
+            "additionalProperties": {},
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "planned_run_id": {
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/ProjectBatchCaseState"
+          }
+        },
+        "required": [
+          "case_id",
+          "planned_run_id",
+          "parameter_tuple",
+          "state"
+        ],
+        "type": "object"
+      },
+      "ProjectBatchCasesQuery": {
+        "properties": {
+          "cursor": {
+            "description": "Last CaseId returned on the previous page.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "limit": {
+            "description": "Page size, from 1 to 100; defaults to 50.",
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "ProjectBatchCasesResource": {
+        "properties": {
+          "axes": {
+            "description": "Axis names and canonical units for the parameter tuples in this manifest.",
+            "items": {
+              "$ref": "#/components/schemas/ProjectBatchAxisSummaryResource"
+            },
+            "type": "array"
+          },
+          "batch_id": {
+            "type": "string"
+          },
+          "cases": {
+            "items": {
+              "$ref": "#/components/schemas/ProjectBatchCaseSummaryResource"
+            },
+            "type": "array"
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "batch_id",
+          "axes",
+          "cases"
+        ],
+        "type": "object"
+      },
+      "ProjectBatchExpansionState": {
+        "enum": [
+          "pending",
+          "expanding",
+          "complete",
+          "stopped"
+        ],
+        "type": "string"
+      },
+      "ProjectBatchFailurePolicy": {
+        "enum": [
+          "continue_independent",
+          "stop_admission"
+        ],
+        "type": "string"
+      },
+      "ProjectBatchListQuery": {
+        "properties": {
+          "cursor": {
+            "description": "Last BatchId returned on the previous page.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "limit": {
+            "description": "Page size, from 1 to 100; defaults to 50.",
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "ProjectBatchListResource": {
+        "properties": {
+          "batches": {
+            "items": {
+              "$ref": "#/components/schemas/ProjectBatchSummaryResource"
+            },
+            "type": "array"
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "project_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "project_id",
+          "batches"
+        ],
+        "type": "object"
+      },
+      "ProjectBatchSubmitRequest": {
+        "additionalProperties": false,
+        "description": "Immutable independent batch submission. The server deserializes\n`batch_request` into the versioned application contract before accepting it.",
+        "properties": {
+          "archive_base64": {
+            "description": "Exact base64-encoded portable project archive accepted for this batch.",
+            "type": "string"
+          },
+          "asset_paths": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Explicit immutable asset ID to path inside `project/assets/`.",
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "batch_request": {
+            "additionalProperties": {},
+            "description": "Versioned `BatchExpansionRequest` object, including template and axes.",
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "idempotency_key": {
+            "description": "Client intent key used to recover an ACK after a timeout.",
+            "type": "string"
+          },
+          "study_plan": {
+            "additionalProperties": {},
+            "description": "Versioned immutable StudyPlan used by the batch template.",
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "study_problem_catalog": {
+            "additionalProperties": {},
+            "description": "Immutable StudyProblemCatalog pinned by the batch template.",
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          }
+        },
+        "required": [
+          "archive_base64",
+          "idempotency_key",
+          "batch_request",
+          "study_plan",
+          "study_problem_catalog",
+          "asset_paths"
+        ],
+        "type": "object"
+      },
+      "ProjectBatchSubmitResource": {
+        "properties": {
+          "batch_id": {
+            "type": "string"
+          },
+          "case_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "disposition": {
+            "$ref": "#/components/schemas/ProjectRunSubmitDisposition"
+          },
+          "manifest_sha256": {
+            "description": "Logical digest stored in the expansion manifest.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "disposition",
+          "batch_id",
+          "manifest_sha256",
+          "case_count"
+        ],
+        "type": "object"
+      },
+      "ProjectBatchSummaryResource": {
+        "properties": {
+          "accepted_at": {
+            "type": "string"
+          },
+          "batch_id": {
+            "type": "string"
+          },
+          "case_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "expansion_state": {
+            "$ref": "#/components/schemas/ProjectBatchExpansionState"
+          },
+          "failure_policy": {
+            "$ref": "#/components/schemas/ProjectBatchFailurePolicy"
+          },
+          "manifest_sha256": {
+            "type": "string"
+          },
+          "max_parallel_cases": {
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "published_case_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "batch_id",
+          "accepted_at",
+          "manifest_sha256",
+          "case_count",
+          "failure_policy",
+          "published_case_count",
+          "expansion_state"
+        ],
+        "type": "object"
+      },
+      "ProjectRunIntentRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "archive_base64": {
+            "type": "string"
+          },
+          "asset_paths": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "expected_revision": {
+            "description": "Revision of the exact archived definition observed by the author.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "run_authoring": {
+            "additionalProperties": {},
+            "description": "Explicit RunIntentAuthoring: run_id, idempotency_key, parameters, seeds,\ndependencies, scheduling_priority and requested_execution. No defaults\nor identities are inferred from a live session.",
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "study_plan": {
+            "additionalProperties": {},
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "study_problem_catalog": {
+            "additionalProperties": {},
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          }
+        },
+        "required": [
+          "archive_base64",
+          "expected_revision",
+          "run_authoring",
+          "study_plan",
+          "study_problem_catalog",
+          "asset_paths"
+        ],
+        "type": "object"
+      },
+      "ProjectRunIntentResource": {
+        "properties": {
+          "definition_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "payload_fingerprint": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "run_intent": {
+            "additionalProperties": {},
+            "description": "Canonical run_intent.v1 for the existing Submit operation. Submit must\nreceive the same archive, Study, catalog and asset bindings. It repeats\nvalidation and checks published profiles before durable acceptance.",
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          }
+        },
+        "required": [
+          "project_id",
+          "definition_revision",
+          "payload_fingerprint",
+          "run_intent"
+        ],
+        "type": "object"
+      },
+      "ProjectRunTaskCancellationIntentResource": {
+        "properties": {
+          "cancellation_id": {
+            "type": "string"
+          },
+          "cancellation_state": {
+            "$ref": "#/components/schemas/ProjectRunTaskCancellationState"
+          },
+          "catalog_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "disposition": {
+            "$ref": "#/components/schemas/ProjectRunTaskCancellationDisposition"
+          },
+          "expected_catalog_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "lifecycle": {
+            "$ref": "#/components/schemas/ProjectRunTaskLifecycle"
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "task_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "disposition",
+          "run_id",
+          "task_id",
+          "cancellation_id",
+          "cancellation_state",
+          "lifecycle",
+          "catalog_revision",
+          "expected_catalog_revision"
+        ],
+        "type": "object"
+      },
+      "ProjectRunTaskCancellationState": {
+        "enum": [
+          "requested"
+        ],
+        "type": "string"
+      },
+      "ProjectRunTaskCancellationSummary": {
+        "properties": {
+          "cancellation_id": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "expected_catalog_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "cancellation_id",
+          "reason",
+          "expected_catalog_revision",
+          "created_at"
+        ],
+        "type": "object"
+      },
+      "ProjectRunTaskStopResource": {
+        "properties": {
+          "catalog_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "command_id": {
+            "type": "string"
+          },
+          "disposition": {
+            "$ref": "#/components/schemas/ProjectRunTaskCancellationDisposition"
+          },
+          "lifecycle": {
+            "$ref": "#/components/schemas/ProjectRunTaskLifecycle"
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "task_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "disposition",
+          "run_id",
+          "task_id",
+          "command_id",
+          "lifecycle",
+          "catalog_revision"
+        ],
+        "type": "object"
+      },
+      "SolvedAntennaDriveResource": {
+        "additionalProperties": false,
+        "properties": {
+          "activation": {
+            "$ref": "#/components/schemas/DriveActivationResource"
+          },
+          "bandwidth_declaration": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AntennaWaveformBandwidthDeclarationResource"
+              }
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "peak_current_a": {
+            "format": "double",
+            "type": "number"
+          },
+          "port_mode_id": {
+            "type": "string"
+          },
+          "projection_ref": {
+            "type": "string"
+          },
+          "time_origin": {
+            "$ref": "#/components/schemas/FieldTimeOriginResource"
+          },
+          "waveform": {
+            "$ref": "#/components/schemas/TimeDependenceResource"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "projection_ref",
+          "port_mode_id",
+          "peak_current_a",
+          "waveform",
+          "time_origin",
+          "activation"
+        ],
+        "type": "object"
       }
     }
   },
@@ -42649,196 +45591,6 @@
           },
           "400": {
             "description": "Invalid or unsupported project archive"
-          }
-        },
-        "tags": [
-          "persistence"
-        ]
-      }
-    },
-    "/v2/persistence/projects/{project_id}/batches": {
-      "get": {
-        "operationId": "persistence_get_persistence_projects_project_id_batches",
-        "parameters": [
-          {
-            "description": "Pinned project identity",
-            "in": "path",
-            "name": "project_id",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Page size, from 1 to 100; defaults to 50.",
-            "in": "query",
-            "name": "limit",
-            "required": false,
-            "schema": {
-              "format": "int32",
-              "minimum": 0,
-              "type": [
-                "integer",
-                "null"
-              ]
-            }
-          },
-          {
-            "description": "Last BatchId returned on the previous page.",
-            "in": "query",
-            "name": "cursor",
-            "required": false,
-            "schema": {
-              "type": [
-                "string",
-                "null"
-              ]
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProjectBatchListResource"
-                }
-              }
-            },
-            "description": "Page of durable batch parents for one project"
-          },
-          "400": {
-            "description": "Invalid page size or cursor"
-          }
-        },
-        "tags": [
-          "persistence"
-        ]
-      },
-      "post": {
-        "operationId": "persistence_post_persistence_projects_project_id_batches",
-        "parameters": [
-          {
-            "description": "Pinned project identity",
-            "in": "path",
-            "name": "project_id",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ProjectBatchSubmitRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProjectBatchSubmitResource"
-                }
-              }
-            },
-            "description": "Identical batch submit replayed"
-          },
-          "201": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProjectBatchSubmitResource"
-                }
-              }
-            },
-            "description": "Durable immutable batch parent accepted"
-          },
-          "400": {
-            "description": "Invalid immutable batch inputs"
-          },
-          "409": {
-            "description": "Project identity, batch identity or idempotency conflict"
-          }
-        },
-        "tags": [
-          "persistence"
-        ]
-      }
-    },
-    "/v2/persistence/projects/{project_id}/batches/{batch_id}/cases": {
-      "get": {
-        "operationId": "persistence_get_persistence_projects_project_id_batches_batch_id_cases",
-        "parameters": [
-          {
-            "description": "Pinned project identity",
-            "in": "path",
-            "name": "project_id",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Durable batch identity",
-            "in": "path",
-            "name": "batch_id",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Page size, from 1 to 100; defaults to 50.",
-            "in": "query",
-            "name": "limit",
-            "required": false,
-            "schema": {
-              "format": "int32",
-              "minimum": 0,
-              "type": [
-                "integer",
-                "null"
-              ]
-            }
-          },
-          {
-            "description": "Last CaseId returned on the previous page.",
-            "in": "query",
-            "name": "cursor",
-            "required": false,
-            "schema": {
-              "type": [
-                "string",
-                "null"
-              ]
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProjectBatchCasesResource"
-                }
-              }
-            },
-            "description": "Page of planned cases from the immutable expansion manifest"
-          },
-          "400": {
-            "description": "Invalid page size or cursor"
-          },
-          "404": {
-            "description": "Accepted batch is missing"
-          },
-          "409": {
-            "description": "Batch belongs to another project"
           }
         },
         "tags": [
@@ -46199,6 +48951,228 @@
               }
             },
             "description": "Settle trace for a point"
+          }
+        },
+        "tags": [
+          "analysis"
+        ]
+      }
+    },
+    "/v2/sessions/current/analysis/postprocessing/definitions": {
+      "get": {
+        "operationId": "analysis_get_sessions_current_analysis_postprocessing_definitions",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PostprocessingDefinitionCollectionResource"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "tags": [
+          "analysis"
+        ]
+      },
+      "post": {
+        "operationId": "analysis_post_sessions_current_analysis_postprocessing_definitions",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PostprocessingDefinitionCreateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PostprocessingDefinitionResource"
+                }
+              }
+            },
+            "description": ""
+          },
+          "400": {
+            "description": "Invalid definition"
+          },
+          "409": {
+            "description": "Revision or identity conflict"
+          }
+        },
+        "tags": [
+          "analysis"
+        ]
+      }
+    },
+    "/v2/sessions/current/analysis/postprocessing/definitions/{definition_id}": {
+      "delete": {
+        "operationId": "analysis_delete_sessions_current_analysis_postprocessing_definitions_definition_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "definition_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PostprocessingDefinitionDeleteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PostprocessingDefinitionCollectionResource"
+                }
+              }
+            },
+            "description": ""
+          },
+          "404": {
+            "description": "Definition missing"
+          },
+          "409": {
+            "description": "Revision conflict or definition has children"
+          }
+        },
+        "tags": [
+          "analysis"
+        ]
+      },
+      "get": {
+        "operationId": "analysis_get_sessions_current_analysis_postprocessing_definitions_definition_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "definition_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PostprocessingDefinitionResource"
+                }
+              }
+            },
+            "description": ""
+          },
+          "404": {
+            "description": "Definition missing"
+          }
+        },
+        "tags": [
+          "analysis"
+        ]
+      },
+      "patch": {
+        "operationId": "analysis_patch_sessions_current_analysis_postprocessing_definitions_definition_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "definition_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PostprocessingDefinitionPatchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PostprocessingDefinitionResource"
+                }
+              }
+            },
+            "description": ""
+          },
+          "400": {
+            "description": "Invalid definition"
+          },
+          "404": {
+            "description": "Definition missing"
+          },
+          "409": {
+            "description": "Revision conflict"
+          }
+        },
+        "tags": [
+          "analysis"
+        ]
+      }
+    },
+    "/v2/sessions/current/analysis/references/analytic-models": {
+      "get": {
+        "operationId": "analysis_get_sessions_current_analysis_references_analytic_models",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AnalyticReferenceModelCollectionResource"
+                }
+              }
+            },
+            "description": ""
           }
         },
         "tags": [
@@ -53870,6 +56844,18 @@
             }
           },
           {
+            "description": "Optional optimistic-concurrency precondition for a committed analysis artifact generation.\nThis is distinct from `expected_generation_id`, which identifies the mesh/domain generation.",
+            "in": "query",
+            "name": "expected_artifact_generation_id",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
             "description": "Optional optimistic-concurrency precondition for the resolved field carrier.",
             "in": "query",
             "name": "expected_carrier_revision",
@@ -53890,8 +56876,14 @@
             "content": {
               "application/octet-stream": {}
             },
-            "description": "Binary FMVP field vector. Scoped FEM and FDM payloads use FMVP v3 metadata with domain_generation_id, carrier topology revision/hash, scope kind/id, indexing, and optional node_indices. Multilayer FDM layer/object scopes identify their native grid carrier. Full-domain regular-grid FDM uses FMVP v3 sampled indices when max_samples is supplied and may use FMVP v2 for an uncapped complete payload.",
+            "description": "Binary FMVP field vector. Analysis response and eigen-mode vectors use FMVP v5 metadata with the full quantity ID and domain generation identity; when a mesh carrier is available they also include topology, scope, and indexing metadata. Analysis vectors without a mesh use the explicit legacy_count_only absent-topology sentinel and cannot establish topology-bound overlay compatibility. Other scoped FEM and FDM payloads use FMVP v3 metadata with domain_generation_id, carrier topology revision/hash, scope kind/id, indexing, and optional node_indices. Multilayer FDM layer/object scopes identify their native grid carrier. Full-domain regular-grid FDM uses FMVP v3 sampled indices when max_samples is supplied and may use FMVP v2 for an uncapped complete payload.",
             "headers": {
+              "x-fullmag-artifact-generation-id": {
+                "description": "Committed analysis artifact generation identity; present only when the served field member is verified",
+                "schema": {
+                  "type": "string"
+                }
+              },
               "x-fullmag-component": {
                 "description": "Resolved component projection",
                 "schema": {
@@ -53911,7 +56903,7 @@
                 }
               },
               "x-fullmag-field-indexing": {
-                "description": "Optional FMVP v3 field indexing",
+                "description": "Optional FMVP v3/v5 field indexing",
                 "schema": {
                   "type": "string"
                 }
@@ -53923,7 +56915,7 @@
                 }
               },
               "x-fullmag-mesh-topology-hash": {
-                "description": "Optional FMVP v3 mesh topology hash",
+                "description": "Optional FMVP v3/v5 mesh topology hash",
                 "schema": {
                   "type": "string"
                 }
@@ -53936,14 +56928,14 @@
                 }
               },
               "x-fullmag-node-index-count": {
-                "description": "Optional FMVP v3 node-index count",
+                "description": "Optional FMVP v3/v5 node-index count",
                 "schema": {
                   "minimum": 0,
                   "type": "integer"
                 }
               },
               "x-fullmag-payload-state": {
-                "description": "current for metadata-complete FMVP v3; legacy_unverified for FMVP v2",
+                "description": "current for metadata-complete FMVP v3 through v5; legacy_unverified for FMVP v2",
                 "schema": {
                   "type": "string"
                 }
@@ -62657,6 +65649,1364 @@
           "workspace_items"
         ]
       }
+    },
+    "/v2/persistence/projects/{project_id}/batches": {
+      "get": {
+        "operationId": "persistence_get_persistence_projects_project_id_batches",
+        "parameters": [
+          {
+            "description": "Pinned project identity",
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Page size, from 1 to 100; defaults to 50.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Last BatchId returned on the previous page.",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectBatchListResource"
+                }
+              }
+            },
+            "description": "Page of durable batch parents for one project"
+          },
+          "400": {
+            "description": "Invalid page size or cursor"
+          }
+        },
+        "tags": [
+          "persistence"
+        ]
+      },
+      "post": {
+        "operationId": "persistence_post_persistence_projects_project_id_batches",
+        "parameters": [
+          {
+            "description": "Pinned project identity",
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProjectBatchSubmitRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectBatchSubmitResource"
+                }
+              }
+            },
+            "description": "Identical batch submit replayed"
+          },
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectBatchSubmitResource"
+                }
+              }
+            },
+            "description": "Durable immutable batch parent accepted"
+          },
+          "400": {
+            "description": "Invalid immutable batch inputs"
+          },
+          "409": {
+            "description": "Project identity, batch identity or idempotency conflict"
+          }
+        },
+        "tags": [
+          "persistence"
+        ]
+      }
+    },
+    "/v2/persistence/projects/{project_id}/batches/{batch_id}/cases": {
+      "get": {
+        "operationId": "persistence_get_persistence_projects_project_id_batches_batch_id_cases",
+        "parameters": [
+          {
+            "description": "Pinned project identity",
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Durable batch identity",
+            "in": "path",
+            "name": "batch_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Page size, from 1 to 100; defaults to 50.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Last CaseId returned on the previous page.",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectBatchCasesResource"
+                }
+              }
+            },
+            "description": "Page of planned cases from the immutable expansion manifest"
+          },
+          "400": {
+            "description": "Invalid page size or cursor"
+          },
+          "404": {
+            "description": "Accepted batch is missing"
+          },
+          "409": {
+            "description": "Batch belongs to another project"
+          }
+        },
+        "tags": [
+          "persistence"
+        ]
+      }
+    },
+    "/v2/persistence/projects/{project_id}/run-intent": {
+      "post": {
+        "operationId": "persistence_post_persistence_projects_project_id_run_intent",
+        "parameters": [
+          {
+            "description": "Exact archived project identity",
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProjectRunIntentRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectRunIntentResource"
+                }
+              }
+            },
+            "description": "Prepared immutable identity; not accepted or admitted"
+          },
+          "400": {
+            "description": "Invalid archive or compiled authoring inputs"
+          },
+          "409": {
+            "description": "Project identity or revision conflict; read-only archive"
+          }
+        },
+        "tags": [
+          "persistence"
+        ]
+      }
+    },
+    "/v2/persistence/projects/{project_id}/runs/{run_id}/antenna-inspections": {
+      "get": {
+        "operationId": "persistence_get_persistence_projects_project_id_runs_run_id_antenna_inspections",
+        "parameters": [
+          {
+            "description": "Pinned project identity",
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Accepted durable run identity",
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Previous strong ETag",
+            "in": "header",
+            "name": "If-None-Match",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AcceptedAntennaInspectionCatalogResource"
+                }
+              }
+            },
+            "description": "Current published inspection identities; no field packages are decoded"
+          },
+          "304": {
+            "description": "Unchanged after accepted publication checks"
+          },
+          "400": {
+            "description": "Invalid identity"
+          },
+          "404": {
+            "description": "Accepted run or catalogs are missing"
+          },
+          "409": {
+            "description": "Project/run mismatch or catalogs changed during read"
+          },
+          "500": {
+            "description": "Invalid accepted state or publication metadata"
+          }
+        },
+        "tags": [
+          "persistence"
+        ]
+      }
+    },
+    "/v2/persistence/projects/{project_id}/runs/{run_id}/antenna-inspections/{step_id}": {
+      "get": {
+        "operationId": "persistence_get_persistence_projects_project_id_runs_run_id_antenna_inspections_step_id",
+        "parameters": [
+          {
+            "description": "Pinned project identity",
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Accepted durable run identity",
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Exact accepted Study step ID, not the native stage ID",
+            "in": "path",
+            "name": "step_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Required current successful task attempt",
+            "in": "query",
+            "name": "attempt_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Required current task ownership epoch",
+            "in": "query",
+            "name": "ownership_epoch",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Required package CAS SHA-256 from the published artifact catalog",
+            "in": "query",
+            "name": "package_object_ref",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Previous strong ETag",
+            "in": "header",
+            "name": "If-None-Match",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AcceptedAntennaInspectionResource"
+                }
+              }
+            },
+            "description": "Fully verified accepted inspection metadata and display descriptors, no numerical arrays"
+          },
+          "304": {
+            "description": "Unchanged after current-attempt and full integrity checks"
+          },
+          "400": {
+            "description": "Invalid identity or query"
+          },
+          "404": {
+            "description": "Selected step has no published inspection"
+          },
+          "409": {
+            "description": "Project/run mismatch or stale publication identity"
+          },
+          "500": {
+            "description": "Invalid accepted state, package or storage failure"
+          }
+        },
+        "tags": [
+          "persistence"
+        ]
+      }
+    },
+    "/v2/persistence/projects/{project_id}/runs/{run_id}/antenna-inspections/{step_id}/payloads/{payload_kind}": {
+      "get": {
+        "operationId": "persistence_get_persistence_projects_project_id_runs_run_id_antenna_inspections_step_id_payloads_payload_kind",
+        "parameters": [
+          {
+            "description": "Pinned project identity",
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Accepted durable run identity",
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Exact accepted Study step ID, not the native stage ID",
+            "in": "path",
+            "name": "step_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Same verified V/J/H and geometry payload kinds as the Live inspection API",
+            "in": "path",
+            "name": "payload_kind",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Required current successful task attempt",
+            "in": "query",
+            "name": "attempt_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Required current task ownership epoch",
+            "in": "query",
+            "name": "ownership_epoch",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Required package CAS SHA-256 from the published artifact catalog",
+            "in": "query",
+            "name": "package_object_ref",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Previous strong ETag",
+            "in": "header",
+            "name": "If-None-Match",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "One byte range",
+            "in": "header",
+            "name": "Range",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/octet-stream": {}
+            },
+            "description": "Verified accepted antenna payload"
+          },
+          "206": {
+            "content": {
+              "application/octet-stream": {}
+            },
+            "description": "Verified payload byte range"
+          },
+          "304": {
+            "description": "Unchanged after current-attempt and full integrity checks"
+          },
+          "400": {
+            "description": "Invalid identity, query or payload kind"
+          },
+          "404": {
+            "description": "Selected step has no published inspection"
+          },
+          "409": {
+            "description": "Project/run mismatch or stale publication identity"
+          },
+          "416": {
+            "description": "Invalid byte range"
+          },
+          "500": {
+            "description": "Invalid accepted state, package or storage failure"
+          }
+        },
+        "tags": [
+          "persistence"
+        ]
+      }
+    },
+    "/v2/sessions/current/data/antenna/field-solutions/{solution_id}": {
+      "get": {
+        "operationId": "data_get_sessions_current_data_antenna_field_solutions_solution_id",
+        "parameters": [
+          {
+            "description": "Published antenna field solution id",
+            "in": "path",
+            "name": "solution_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Canonical current-session scope; stale scope is rejected before artifact reads",
+            "in": "header",
+            "name": "x-fullmag-session-scope",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AntennaFieldSolutionResource"
+                }
+              }
+            },
+            "description": "Published antenna field solution metadata"
+          },
+          "304": {
+            "description": "Field solution metadata not modified for the supplied ETag"
+          },
+          "404": {
+            "description": "Field solution artifact not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Stale current-session request scope"
+          }
+        },
+        "tags": [
+          "data"
+        ]
+      }
+    },
+    "/v2/sessions/current/data/antenna/field-solutions/{solution_id}/payloads/{payload_kind}": {
+      "get": {
+        "operationId": "data_get_sessions_current_data_antenna_field_solutions_solution_id_payloads_payload_kind",
+        "parameters": [
+          {
+            "description": "Published antenna field solution id",
+            "in": "path",
+            "name": "solution_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "conductor_positions, sample_positions, sample_topology, electric_potential_per_ampere, current_density_per_ampere, or magnetic_field_per_ampere",
+            "in": "path",
+            "name": "payload_kind",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Required for per-port V, J, or H payloads",
+            "in": "query",
+            "name": "port_mode_id",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Canonical current-session scope; stale scope is rejected before artifact reads",
+            "in": "header",
+            "name": "x-fullmag-session-scope",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Strong ETag from a previous binary payload response",
+            "in": "header",
+            "name": "If-None-Match",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Optional single byte range",
+            "in": "header",
+            "name": "Range",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/octet-stream": {}
+            },
+            "description": "Verified binary antenna field payload"
+          },
+          "206": {
+            "content": {
+              "application/octet-stream": {}
+            },
+            "description": "Partial verified binary antenna field payload"
+          },
+          "304": {
+            "description": "Binary payload not modified for the supplied ETag"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Unsupported payload or invalid port selector"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Field solution or payload not found; missing payload uses code missing_payload"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Stale current-session request scope"
+          },
+          "416": {
+            "description": "Requested binary payload range is not satisfiable"
+          }
+        },
+        "tags": [
+          "data"
+        ]
+      }
+    },
+    "/v2/sessions/current/data/antenna/source-spectra/{output_id}": {
+      "get": {
+        "operationId": "data_get_sessions_current_data_antenna_source_spectra_output_id",
+        "parameters": [
+          {
+            "description": "Published antenna source spectrum output id",
+            "in": "path",
+            "name": "output_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Canonical current-session scope; stale scope is rejected before artifact reads",
+            "in": "header",
+            "name": "x-fullmag-session-scope",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AntennaSourceSpectrumResource"
+                }
+              }
+            },
+            "description": "Published antenna source spectrum metadata"
+          },
+          "304": {
+            "description": "Source spectrum metadata not modified for the supplied ETag"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Source spectrum artifact or payload not found; missing payloads use code missing_payload"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Stale current-session request scope"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Source spectrum sampling topology is unsupported; code unsupported_topology"
+          }
+        },
+        "tags": [
+          "data"
+        ]
+      }
+    },
+    "/v2/sessions/current/data/antenna/source-spectra/{output_id}/payloads/{payload_kind}": {
+      "get": {
+        "operationId": "data_get_sessions_current_data_antenna_source_spectra_output_id_payloads_payload_kind",
+        "parameters": [
+          {
+            "description": "Published antenna source spectrum output id",
+            "in": "path",
+            "name": "output_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Binary payload name: k_u_rad_per_m, k_v_rad_per_m, amplitudes_re_im, or power",
+            "in": "path",
+            "name": "payload_kind",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Canonical current-session scope; stale scope is rejected before artifact reads",
+            "in": "header",
+            "name": "x-fullmag-session-scope",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Strong ETag from a previous binary payload response",
+            "in": "header",
+            "name": "If-None-Match",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Optional single byte range",
+            "in": "header",
+            "name": "Range",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/octet-stream": {}
+            },
+            "description": "Binary antenna source-spectrum payload"
+          },
+          "206": {
+            "content": {
+              "application/octet-stream": {}
+            },
+            "description": "Partial binary antenna source-spectrum payload"
+          },
+          "304": {
+            "description": "Binary payload not modified for the supplied ETag"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Source-spectrum payload not found; code missing_payload"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Stale current-session request scope"
+          },
+          "416": {
+            "description": "Requested binary payload range is not satisfiable"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Source spectrum sampling topology is unsupported; code unsupported_topology"
+          }
+        },
+        "tags": [
+          "data"
+        ]
+      }
+    },
+    "/v2/sessions/current/data/antenna/stages/{stage_id}/external-lead-inspection": {
+      "get": {
+        "operationId": "data_get_sessions_current_data_antenna_stages_stage_id_external_lead_inspection",
+        "parameters": [
+          {
+            "description": "Exact runtime stage ID, not the authored antenna stage ID",
+            "in": "path",
+            "name": "stage_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Canonical current-session scope; stale scope is rejected before artifact reads",
+            "in": "header",
+            "name": "x-fullmag-session-scope",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Previous strong ETag",
+            "in": "header",
+            "name": "If-None-Match",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AntennaExternalLeadInspectionResource"
+                }
+              }
+            },
+            "description": "Inspection record and manifest-only metadata; never a drive basis"
+          },
+          "304": {
+            "description": "Unchanged manifest-only resource"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "No registered inspection result"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Stale request scope or owner changed during read"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid inspection record or manifest"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Filesystem or worker failure"
+          }
+        },
+        "tags": [
+          "data"
+        ]
+      }
+    },
+    "/v2/sessions/current/data/antenna/stages/{stage_id}/external-lead-inspection/display": {
+      "get": {
+        "operationId": "data_get_sessions_current_data_antenna_stages_stage_id_external_lead_inspection_display",
+        "parameters": [
+          {
+            "description": "Exact runtime stage ID",
+            "in": "path",
+            "name": "stage_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Required immutable inspection content digest",
+            "in": "query",
+            "name": "content_digest",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Canonical current-session scope",
+            "in": "header",
+            "name": "x-fullmag-session-scope",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Previous strong ETag",
+            "in": "header",
+            "name": "If-None-Match",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AntennaInspectionDisplayResource"
+                }
+              }
+            },
+            "description": "Fully verified immutable display descriptors; no FFT/LLG qualification"
+          },
+          "304": {
+            "description": "Unchanged after integrity validation"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid query"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "No registered inspection"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Stale owner, content digest or failed/cancelled result"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid bundle or device ownership"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Worker failure"
+          }
+        },
+        "tags": [
+          "data"
+        ]
+      }
+    },
+    "/v2/sessions/current/data/antenna/stages/{stage_id}/external-lead-inspection/payloads/{payload_kind}": {
+      "get": {
+        "operationId": "data_get_sessions_current_data_antenna_stages_stage_id_external_lead_inspection_payloads_payload_kind",
+        "parameters": [
+          {
+            "description": "Exact runtime stage ID",
+            "in": "path",
+            "name": "stage_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "bundle, sample_positions, magnetic_field, device_vertex_ids, device_potential, device_positions, device_topology; v2 additionally current_center_positions, current_center_density, current_trace_positions, current_trace_density, current_snapshot",
+            "in": "path",
+            "name": "payload_kind",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Required sha256: digest from inspection_ref, not the stage record digest",
+            "in": "query",
+            "name": "content_digest",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Canonical current-session scope; stale scope is rejected before artifact reads",
+            "in": "header",
+            "name": "x-fullmag-session-scope",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Previous strong ETag",
+            "in": "header",
+            "name": "If-None-Match",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "One byte range",
+            "in": "header",
+            "name": "Range",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/octet-stream": {}
+            },
+            "description": "Fully verified inspection binary payload"
+          },
+          "206": {
+            "content": {
+              "application/octet-stream": {}
+            },
+            "description": "Verified payload byte range"
+          },
+          "304": {
+            "description": "Unchanged, after full integrity validation"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid payload kind or query"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "No registered result"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Stale request scope, owner changed, terminal result or digest mismatch"
+          },
+          "416": {
+            "description": "Invalid byte range"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid manifest or binary payload"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Filesystem or worker failure"
+          }
+        },
+        "tags": [
+          "data"
+        ]
+      }
+    },
+    "/v2/sessions/current/data/antenna/stages/{stage_id}/output-catalog": {
+      "get": {
+        "operationId": "data_get_sessions_current_data_antenna_stages_stage_id_output_catalog",
+        "parameters": [
+          {
+            "description": "Antenna field-solve stage identifier",
+            "in": "path",
+            "name": "stage_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Canonical session, scientific epoch and request_scope_epoch; stale scope is rejected before artifact reads",
+            "in": "header",
+            "name": "x-fullmag-session-scope",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Strong ETag from a previous catalog response",
+            "in": "header",
+            "name": "If-None-Match",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AntennaStageOutputCatalogResource"
+                }
+              }
+            },
+            "description": "Published antenna stage output catalog"
+          },
+          "304": {
+            "description": "Antenna stage output catalog not modified for the supplied ETag"
+          },
+          "404": {
+            "description": "Antenna stage output catalog not found"
+          },
+          "409": {
+            "description": "Stale request scope or antenna stage output catalog identity conflict"
+          }
+        },
+        "tags": [
+          "data"
+        ]
+      }
     }
   },
   "tags": [
@@ -62721,6 +67071,7 @@
     "eigenmodes",
     "frequency_response",
     "hysteresis",
+    "antenna_field_solve",
     "change_device",
     "add_field_drive",
     "remove_field_drive",

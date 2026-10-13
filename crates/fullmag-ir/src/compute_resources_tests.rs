@@ -107,7 +107,33 @@ fn unknown_resource_fields_are_not_discarded() {
         json!({"schema_version":COMPUTE_RESOURCES_SCHEMA,"unexpected":true}),
         json!({"schema_version":COMPUTE_RESOURCES_SCHEMA,"cpu":{"thread":8}}),
         json!({"schema_version":COMPUTE_RESOURCES_SCHEMA,"target":{"kind":"local","id":"other"}}),
+        json!({"schema_version":COMPUTE_RESOURCES_SCHEMA,"target":{"kind":"node","id":"node-1","extra":true}}),
+        json!({"schema_version":COMPUTE_RESOURCES_SCHEMA,"target":{"kind":"pool","id":"pool-1","extra":true}}),
+        json!({"schema_version":COMPUTE_RESOURCES_SCHEMA,"parallelism":{"kind":"single_process","ranks":2}}),
+        json!({"schema_version":COMPUTE_RESOURCES_SCHEMA,"parallelism":{"kind":"distributed","ranks":2,"threads_per_rank":4,"ranks_per_node":2,"gpus_per_rank":0,"extra":true}}),
     ] {
-        assert!(serde_json::from_value::<ComputeResourcesIR>(value).is_err());
+        assert!(
+            serde_json::from_value::<ComputeResourcesIR>(value.clone()).is_err(),
+            "unexpectedly accepted {value}"
+        );
+    }
+}
+
+#[test]
+fn tagged_resource_variants_preserve_valid_wire_round_trips() {
+    for value in [
+        json!({"kind":"local"}),
+        json!({"kind":"node","id":"node-1"}),
+        json!({"kind":"pool","id":"pool-1"}),
+    ] {
+        let decoded: ComputeTargetIR = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(serde_json::to_value(decoded).unwrap(), value);
+    }
+    for value in [
+        json!({"kind":"single_process"}),
+        json!({"kind":"distributed","ranks":2,"threads_per_rank":4,"ranks_per_node":2,"gpus_per_rank":0}),
+    ] {
+        let decoded: ComputeParallelismIR = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(serde_json::to_value(decoded).unwrap(), value);
     }
 }

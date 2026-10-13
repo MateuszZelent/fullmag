@@ -44,6 +44,7 @@
   --fm-chart-height-md: 260px;
   --fm-chart-height-lg: 360px;
   --fm-chart-height-analysis: 360px;
+  --fm-chart-cell-separator-width: 1px;
   --fm-ribbon-chevron-size: 19px;
   --fm-ribbon-tab-indicator-bottom: 25px;
   --fm-thread-progress-width: 54px;

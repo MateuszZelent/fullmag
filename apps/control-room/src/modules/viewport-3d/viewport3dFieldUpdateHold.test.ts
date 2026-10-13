@@ -11,11 +11,31 @@ import {
 
 import {
   beginViewport3DFieldUpdateHold,
+  createViewport3DInteractionFieldHold,
   endViewport3DFieldUpdateHold,
   resetViewport3DFieldUpdateHoldForTest,
+  viewport3DFieldUpdateHoldActive,
 } from "./viewport3dFieldUpdateHold";
 
 describe("viewport3dFieldUpdateHold", () => {
+  it("keeps a newer interaction paused when an older interaction ends", () => {
+    resetViewport3DFieldUpdateHoldForTest();
+    const hold = createViewport3DInteractionFieldHold();
+    try {
+      hold.begin(1);
+      hold.begin(2);
+      hold.end(1);
+      expect(viewport3DFieldUpdateHoldActive()).toBe(true);
+      hold.end(2);
+      expect(viewport3DFieldUpdateHoldActive()).toBe(false);
+      hold.end(2);
+      expect(viewport3DFieldUpdateHoldActive()).toBe(false);
+    } finally {
+      hold.end();
+      resetViewport3DFieldUpdateHoldForTest();
+    }
+  });
+
   it("pauses active viewport field-vector loads as soon as a camera hold starts", () => {
     const magnetizationVectorPath = DATA_FIELD_VECTOR_PATH.replace(
       "{quantity_id}",

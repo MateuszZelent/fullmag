@@ -413,6 +413,9 @@ pub(crate) fn diagnose_initial_backend_plan(
     resolved_runtime: &fullmag_runner::RuntimeEngineInfo,
 ) -> Result<InitialStateDiagnostic> {
     match backend_plan {
+        BackendPlanIR::AntennaExternalLeadInspection(_) => {
+            anyhow::bail!("standalone antenna inspection has no magnetic initial-state diagnostic")
+        }
         BackendPlanIR::Fdm(plan) => diagnose_initial_fdm_plan(plan),
         BackendPlanIR::FdmMultilayer(plan) => Ok(diagnose_initial_multilayer_plan(plan)),
         BackendPlanIR::Fem(plan) => {

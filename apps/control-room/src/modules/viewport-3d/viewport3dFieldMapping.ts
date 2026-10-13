@@ -1,4 +1,7 @@
-import type { DecodedFieldVector } from "@/kernel/api/codecs";
+import type {
+  DecodedComplexFieldVector,
+  DecodedFieldVector,
+} from "@/kernel/api/codecs";
 import type { SurfaceFieldProjectionMode } from "@/kernel/visualization/ObjectVisualizationController";
 
 import { buildFdmFieldIndexResolver } from "./model/fdmFieldIndexing";
@@ -40,6 +43,24 @@ export interface ScalarRangeDiagnostics extends ScalarRange {
   p01: number;
   p99: number;
   zeroCount: number;
+}
+
+/**
+ * Optional mesh-node membership for target-scoped world-Z projection. This is
+ * separate from targetNodeIndices, which maps payload entries to global nodes.
+ */
+export interface Viewport3DProjectionNodeSelection {
+  nodeCount?: number;
+  node_count?: number;
+  nodeIndices?: ArrayLike<number>;
+  node_indices?: ArrayLike<number>;
+  nodeStart?: number;
+  node_start?: number;
+}
+
+export interface Viewport3DProjectionNodeMembership {
+  cacheKey: string;
+  contains(nodeIndex: number): boolean;
 }
 
 export interface ScalarColorBuffer {
@@ -201,7 +222,12 @@ export function buildSampledScalarColors(
   for (let index = 0; index < pointIndices.length; index += 1) {
     const pointIndex = pointIndices[index] ?? 0;
     if (pointIndex >= fieldVector.pointCount) {
-      writeLinearRgb(colors, index, MISSING_FIELD_COVERAGE_RGB);
+      writeColorBufferRgb(
+        colors,
+        index,
+        MISSING_FIELD_COVERAGE_RGB,
+        "srgb",
+      );
       continue;
     }
     if (scalarValues) {
@@ -210,10 +236,11 @@ export function buildSampledScalarColors(
         range,
       );
     }
-    writeLinearRgb(
+    writeColorBufferRgb(
       colors,
       index,
       colorAt(fieldVector, pointIndex, resolvedColorMode, range, colorPalette),
+      resolvedColorMode === "orientation" ? "srgb" : "linear",
     );
   }
 
@@ -289,10 +316,11 @@ export function buildFdmSampledScalarColors(
         range,
       );
     }
-    writeLinearRgb(
+    writeColorBufferRgb(
       colors,
       index,
       colorAt(fieldVector, fieldIndex, resolvedColorMode, range, colorPalette),
+      resolvedColorMode === "orientation" ? "srgb" : "linear",
     );
   }
 
@@ -354,10 +382,11 @@ export function buildMappedVertexScalarColors(
         range,
       );
     }
-    writeLinearRgb(
+    writeColorBufferRgb(
       colors,
       nodeIndex,
       colorAt(fieldVector, index, resolvedColorMode, range, colorPalette),
+      resolvedColorMode === "orientation" ? "srgb" : "linear",
     );
   }
 
@@ -488,7 +517,14 @@ export function buildSurfaceFaceScalarColors(
     for (let corner = 0; corner < 3; corner += 1) {
       const targetIndex = faceIndex * 3 + corner;
       const colorOffset = targetIndex * 3;
-      writeLinearRgb(colors, targetIndex, rgb);
+      writeColorBufferRgb(
+        colors,
+        targetIndex,
+        rgb,
+        degradedFaces[faceIndex] === 1 || resolvedColorMode === "orientation"
+          ? "srgb"
+          : "linear",
+      );
       if (scalarValues) {
         scalarValues[targetIndex] = normalizeScalarValueForShaderAttribute(
           scalar,
@@ -532,6 +568,7 @@ export function buildThicknessAverageZScalarColors(
   scalarRange?: ScalarRange | null,
   maxSynchronousPoints = VIEWPORT_3D_SYNC_COLOR_POINT_LIMIT,
   targetNodeIndices?: ArrayLike<number> | null,
+  projectionNodeMembership?: Viewport3DProjectionNodeMembership | null,
 ): ScalarColorBuffer | null {
   const resolvedColorMode = normalizeViewport3DVectorColorMode(
     colorMode,
@@ -566,6 +603,7 @@ export function buildThicknessAverageZScalarColors(
     nodeToFieldIndex,
     positions,
     vertexCount,
+    projectionNodeMembership,
   });
   if (!projection) return null;
   const projectedVectors = projection.vectors;
@@ -643,7 +681,14 @@ export function buildThicknessAverageZScalarColors(
     for (let corner = 0; corner < 3; corner += 1) {
       const targetIndex = faceIndex * 3 + corner;
       const colorOffset = targetIndex * 3;
-      writeLinearRgb(colors, targetIndex, rgb);
+      writeColorBufferRgb(
+        colors,
+        targetIndex,
+        rgb,
+        degradedFaces[faceIndex] === 1 || resolvedColorMode === "orientation"
+          ? "srgb"
+          : "linear",
+      );
       if (scalarValues) {
         scalarValues[targetIndex] = normalizeScalarValueForShaderAttribute(
           scalar,
@@ -682,6 +727,209 @@ export function buildThicknessAverageZScalarColors(
     scalarValues,
     vectorValues,
   };
+}
+
+/**
+ * Projects complex modal pairs using the same face averaging and world-Z
+ * columns as the scalar surface buffer, returning face-expanded shader values.
+ */
+export function buildProjectedComplexSurfaceShaderValues({
+  complexFieldVector,
+  positions,
+  projectionNodeMembership,
+  projectionMode,
+  surfaceIndices,
+  targetNodeIndices,
+  vertexCount,
+}: {
+  complexFieldVector: DecodedComplexFieldVector | null | undefined;
+  positions?: ArrayLike<number> | null;
+  projectionNodeMembership?: Viewport3DProjectionNodeMembership | null;
+  projectionMode: "surface_faces" | "thickness_average_z";
+  surfaceIndices: Uint32Array | null | undefined;
+  targetNodeIndices?: ArrayLike<number> | null;
+  vertexCount: number;
+}): {
+  complexImagValues: Float32Array;
+  complexRealValues: Float32Array;
+} | null {
+  if (
+    !complexFieldVector ||
+    !surfaceIndices ||
+    surfaceIndices.length === 0 ||
+    surfaceIndices.length % 3 !== 0 ||
+    complexFieldVector.pointCount === 0
+  ) {
+    return null;
+  }
+
+  const nodeToFieldIndex = buildNodeToFieldIndexMap(
+    complexFieldVector,
+    vertexCount,
+    targetNodeIndices,
+  );
+  if (!nodeToFieldIndex) return null;
+
+  let projectedVectors: ReadonlyMap<number, ComplexFieldVector6> | null = null;
+  if (projectionMode === "thickness_average_z") {
+    if (!positions || positions.length < vertexCount * 3) return null;
+    projectedVectors = buildWorldZProjectedComplexVectors({
+      complexFieldVector,
+      nodeToFieldIndex,
+      positions,
+      vertexCount,
+      projectionNodeMembership,
+    });
+    if (!projectedVectors) return null;
+  }
+
+  const complexRealValues = new Float32Array(surfaceIndices.length * 3);
+  const complexImagValues = new Float32Array(surfaceIndices.length * 3);
+  for (
+    let faceIndex = 0;
+    faceIndex < surfaceIndices.length / 3;
+    faceIndex += 1
+  ) {
+    const surfaceOffset = faceIndex * 3;
+    const nodeA = surfaceIndices[surfaceOffset] ?? -1;
+    const nodeB = surfaceIndices[surfaceOffset + 1] ?? -1;
+    const nodeC = surfaceIndices[surfaceOffset + 2] ?? -1;
+    const fieldA = nodeToFieldIndex.get(nodeA);
+    const fieldB = nodeToFieldIndex.get(nodeB);
+    const fieldC = nodeToFieldIndex.get(nodeC);
+    if (fieldA === undefined || fieldB === undefined || fieldC === undefined) {
+      return null;
+    }
+
+    const vectorA = projectedVectors
+      ? projectedVectors.get(nodeA)
+      : complexFieldVector6(complexFieldVector, fieldA);
+    const vectorB = projectedVectors
+      ? projectedVectors.get(nodeB)
+      : complexFieldVector6(complexFieldVector, fieldB);
+    const vectorC = projectedVectors
+      ? projectedVectors.get(nodeC)
+      : complexFieldVector6(complexFieldVector, fieldC);
+    if (!vectorA || !vectorB || !vectorC) return null;
+    const faceVector: ComplexFieldVector6 = [
+      (vectorA[0] + vectorB[0] + vectorC[0]) / 3,
+      (vectorA[1] + vectorB[1] + vectorC[1]) / 3,
+      (vectorA[2] + vectorB[2] + vectorC[2]) / 3,
+      (vectorA[3] + vectorB[3] + vectorC[3]) / 3,
+      (vectorA[4] + vectorB[4] + vectorC[4]) / 3,
+      (vectorA[5] + vectorB[5] + vectorC[5]) / 3,
+    ];
+
+    for (let corner = 0; corner < 3; corner += 1) {
+      const targetOffset = (faceIndex * 3 + corner) * 3;
+      complexRealValues[targetOffset] = faceVector[0];
+      complexRealValues[targetOffset + 1] = faceVector[1];
+      complexRealValues[targetOffset + 2] = faceVector[2];
+      complexImagValues[targetOffset] = faceVector[3];
+      complexImagValues[targetOffset + 1] = faceVector[4];
+      complexImagValues[targetOffset + 2] = faceVector[5];
+    }
+  }
+  return { complexImagValues, complexRealValues };
+}
+
+type ComplexFieldVector6 = readonly [
+  number,
+  number,
+  number,
+  number,
+  number,
+  number,
+];
+
+function complexFieldVector6(
+  fieldVector: DecodedComplexFieldVector,
+  fieldIndex: number,
+): ComplexFieldVector6 {
+  const base = fieldIndex * fieldVector.componentCount * 2;
+  const componentValue = (componentIndex: number, pairComponent: 0 | 1) =>
+    componentIndex < fieldVector.componentCount
+      ? fieldVector.values[base + componentIndex * 2 + pairComponent] ?? 0
+      : 0;
+  return [
+    componentValue(0, 0),
+    componentValue(1, 0),
+    componentValue(2, 0),
+    componentValue(0, 1),
+    componentValue(1, 1),
+    componentValue(2, 1),
+  ];
+}
+
+function buildWorldZProjectedComplexVectors({
+  complexFieldVector,
+  nodeToFieldIndex,
+  positions,
+  projectionNodeMembership,
+  vertexCount,
+}: {
+  complexFieldVector: DecodedComplexFieldVector;
+  nodeToFieldIndex: ReadonlyMap<number, number>;
+  positions: ArrayLike<number>;
+  projectionNodeMembership?: Viewport3DProjectionNodeMembership | null;
+  vertexCount: number;
+}): Map<number, ComplexFieldVector6> | null {
+  const membership = projectionNodeMembership ?? null;
+  const bounds = worldZProjectionBounds(positions, vertexCount, membership);
+  if (!bounds) return null;
+  const tolerance = worldZProjectionTolerance(bounds);
+  if (!Number.isFinite(tolerance) || tolerance <= 0) return null;
+  const columns = new Map<
+    string,
+    { count: number; sums: [number, number, number, number, number, number] }
+  >();
+  const nodeColumnKeys = new Map<number, string>();
+
+  for (const [nodeIndex, fieldIndex] of nodeToFieldIndex) {
+    if (nodeIndex < 0 || nodeIndex >= vertexCount) return null;
+    if (membership && !membership.contains(nodeIndex)) continue;
+    const positionOffset = nodeIndex * 3;
+    const x = positions[positionOffset] ?? Number.NaN;
+    const y = positions[positionOffset + 1] ?? Number.NaN;
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+    const key = `${Math.round(x / tolerance)}:${Math.round(y / tolerance)}`;
+    const column = columns.get(key) ?? {
+      count: 0,
+      sums: [0, 0, 0, 0, 0, 0],
+    };
+    const vector = complexFieldVector6(complexFieldVector, fieldIndex);
+    column.count += 1;
+    for (let componentIndex = 0; componentIndex < 6; componentIndex += 1) {
+      column.sums[componentIndex] =
+        (column.sums[componentIndex] ?? 0) +
+        (vector[componentIndex] ?? 0);
+    }
+    columns.set(key, column);
+    nodeColumnKeys.set(nodeIndex, key);
+  }
+
+  const columnVectors = new Map<string, ComplexFieldVector6>();
+  for (const [key, column] of Array.from(columns).sort(([left], [right]) =>
+    left.localeCompare(right),
+  )) {
+    if (column.count <= 0) return null;
+    columnVectors.set(key, [
+      column.sums[0] / column.count,
+      column.sums[1] / column.count,
+      column.sums[2] / column.count,
+      column.sums[3] / column.count,
+      column.sums[4] / column.count,
+      column.sums[5] / column.count,
+    ]);
+  }
+
+  const projected = new Map<number, ComplexFieldVector6>();
+  for (const [nodeIndex, key] of nodeColumnKeys) {
+    const vector = columnVectors.get(key);
+    if (!vector) return null;
+    projected.set(nodeIndex, vector);
+  }
+  return projected;
 }
 
 export async function buildVertexScalarColorsChunked(
@@ -966,7 +1214,10 @@ export function resolveScalarRangeDiagnostics(
 }
 
 function buildNodeToFieldIndexMap(
-  fieldVector: Viewport3DFieldVector,
+  fieldVector: Pick<
+    Viewport3DFieldVector,
+    "indexing" | "nodeIndices" | "pointCount"
+  >,
   vertexCount: number,
   targetNodeIndices?: ArrayLike<number> | null,
 ): Map<number, number> | null {
@@ -1047,11 +1298,13 @@ function buildWorldZProjectedVectors({
   fieldVector,
   nodeToFieldIndex,
   positions,
+  projectionNodeMembership,
   vertexCount,
 }: {
   fieldVector: Viewport3DFieldVector;
   nodeToFieldIndex: ReadonlyMap<number, number>;
   positions: ArrayLike<number>;
+  projectionNodeMembership?: Viewport3DProjectionNodeMembership | null;
   vertexCount: number;
 }): {
   binCount: number;
@@ -1062,7 +1315,8 @@ function buildWorldZProjectedVectors({
   tolerance: number;
   vectors: Map<number, readonly [number, number, number]>;
 } | null {
-  const bounds = worldZProjectionBounds(positions, vertexCount);
+  const membership = projectionNodeMembership ?? null;
+  const bounds = worldZProjectionBounds(positions, vertexCount, membership);
   if (!bounds) return null;
   const tolerance = worldZProjectionTolerance(bounds);
   if (!Number.isFinite(tolerance) || tolerance <= 0) return null;
@@ -1074,6 +1328,7 @@ function buildWorldZProjectedVectors({
 
   for (const [nodeIndex, fieldIndex] of nodeToFieldIndex) {
     if (nodeIndex < 0 || nodeIndex >= vertexCount) return null;
+    if (membership && !membership.contains(nodeIndex)) continue;
     const positionOffset = nodeIndex * 3;
     const x = positions[positionOffset] ?? Number.NaN;
     const y = positions[positionOffset + 1] ?? Number.NaN;
@@ -1137,6 +1392,7 @@ function buildWorldZProjectedVectors({
 function worldZProjectionBounds(
   positions: ArrayLike<number>,
   vertexCount: number,
+  membership: Viewport3DProjectionNodeMembership | null,
 ): {
   maxX: number;
   maxY: number;
@@ -1152,6 +1408,7 @@ function worldZProjectionBounds(
   let minZ = Infinity;
   let maxZ = -Infinity;
   for (let nodeIndex = 0; nodeIndex < vertexCount; nodeIndex += 1) {
+    if (membership && !membership.contains(nodeIndex)) continue;
     const offset = nodeIndex * 3;
     const x = positions[offset] ?? Number.NaN;
     const y = positions[offset + 1] ?? Number.NaN;
@@ -1177,6 +1434,57 @@ function worldZProjectionBounds(
     return null;
   }
   return { maxX, maxY, maxZ, minX, minY, minZ };
+}
+
+export function buildViewport3DProjectionNodeMembership(
+  selection: Viewport3DProjectionNodeSelection | null | undefined,
+  vertexCount: number,
+): Viewport3DProjectionNodeMembership | null {
+  if (!selection) return null;
+
+  const explicitNodeIndices = selection.nodeIndices ?? selection.node_indices;
+  if (explicitNodeIndices !== undefined) {
+    const selected = new Set<number>();
+    let hash = 2166136261;
+    for (let offset = 0; offset < explicitNodeIndices.length; offset += 1) {
+      const nodeIndex = explicitNodeIndices[offset];
+      hash ^= nodeIndex ?? 0;
+      hash = Math.imul(hash, 16777619);
+      if (
+        nodeIndex !== undefined &&
+        Number.isInteger(nodeIndex) &&
+        nodeIndex >= 0 &&
+        nodeIndex < vertexCount
+      ) {
+        selected.add(nodeIndex);
+      }
+    }
+    return {
+      cacheKey: `indices:${explicitNodeIndices.length}:${hash >>> 0}`,
+      contains: (nodeIndex) => selected.has(nodeIndex),
+    };
+  }
+
+  const rawStart = selection.nodeStart ?? selection.node_start ?? 0;
+  if (!Number.isFinite(rawStart)) {
+    return {
+      cacheKey: `range:invalid:${vertexCount}`,
+      contains: () => false,
+    };
+  }
+  const start = Math.max(0, Math.floor(rawStart));
+  const rawCount = selection.nodeCount ?? selection.node_count;
+  const count =
+    rawCount === undefined || (rawCount <= 0 && start > 0)
+      ? vertexCount - start
+      : Math.max(0, Math.floor(rawCount));
+  const end = Number.isNaN(count)
+    ? start
+    : Math.min(vertexCount, start + count);
+  return {
+    cacheKey: `range:${start}:${end}:${vertexCount}`,
+    contains: (nodeIndex) => nodeIndex >= start && nodeIndex < end,
+  };
 }
 
 function worldZProjectionTolerance(
@@ -1430,38 +1738,40 @@ function writeScalarColors(
       );
     }
     if (colors.length > 0) {
-      writeLinearRgb(
+      writeColorBufferRgb(
         colors,
         index,
         colorAt(fieldVector, index, colorMode, range, colorPalette),
+        colorMode === "orientation" ? "srgb" : "linear",
       );
     }
   }
 }
 
 /**
- * Writes one sRGB colour into a vertex/instance colour buffer, converting it
- * to linear-sRGB on the way in.
+ * Writes one colour into a vertex/instance colour buffer.
  *
- * `ScalarColorBuffer.colors` is uploaded verbatim into a three.js `color` or
- * `instanceColor` attribute, and three.js reads those as values that are
- * already in its Linear-sRGB working space -- then encodes them to sRGB on
- * output. Every producer feeding this function (the HSL sphere, the scalar
- * palettes) authors in sRGB, so without this conversion the transfer function
- * was applied twice and every mid-tone was lifted towards white. See
- * viewport3dColorSpace.ts for the numbers, and note that the surface shaders
- * perform the identical conversion in GLSL -- CPU-built colours and
- * shader-computed colours only match because both convert.
+ * `scalarColorRgb()` already returns Linear-sRGB values for scalar palettes,
+ * while orientation colours and neutral sentinels are authored in sRGB. The
+ * input space must therefore be explicit: converting every input here would
+ * apply the sRGB EOTF twice to scalar palette values.
  */
-function writeLinearRgb(
+function writeColorBufferRgb(
   colors: Float32Array,
   targetIndex: number,
   rgb: readonly [number, number, number],
+  inputColorSpace: "linear" | "srgb",
 ): void {
   const target = targetIndex * 3;
-  colors[target] = srgbToLinearChannel(rgb[0]);
-  colors[target + 1] = srgbToLinearChannel(rgb[1]);
-  colors[target + 2] = srgbToLinearChannel(rgb[2]);
+  if (inputColorSpace === "srgb") {
+    colors[target] = srgbToLinearChannel(rgb[0]);
+    colors[target + 1] = srgbToLinearChannel(rgb[1]);
+    colors[target + 2] = srgbToLinearChannel(rgb[2]);
+    return;
+  }
+  colors[target] = rgb[0];
+  colors[target + 1] = rgb[1];
+  colors[target + 2] = rgb[2];
 }
 
 function writeVectorValue(

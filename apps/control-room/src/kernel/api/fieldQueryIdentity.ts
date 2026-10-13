@@ -13,6 +13,7 @@ import { resolveCanonicalQuantityId } from "./quantityIds";
 export interface CanonicalFieldVectorQuery {
   readonly component: string;
   readonly componentExplicit: boolean;
+  readonly expectedArtifactGenerationId?: string;
   readonly expectedCarrierRevision?: string;
   readonly expectedGenerationId?: string;
   readonly geometryScope?: string;
@@ -30,6 +31,7 @@ export interface CanonicalFieldVectorQuery {
 
 const FIELD_VECTOR_QUERY_ORDER = [
   "component",
+  "expected_artifact_generation_id",
   "expected_carrier_revision",
   "expected_generation_id",
   "geometry_scope",
@@ -96,6 +98,9 @@ export function canonicalFieldVectorQuery(
   return {
     component: component ?? "full",
     componentExplicit: component !== undefined,
+    expectedArtifactGenerationId: nonEmptyString(
+      query.expected_artifact_generation_id,
+    ),
     expectedCarrierRevision: nonEmptyString(query.expected_carrier_revision),
     expectedGenerationId: nonEmptyString(query.expected_generation_id),
     geometryScope: nonEmptyString(query.geometry_scope),
@@ -117,6 +122,7 @@ export function canonicalFieldVectorQueryParams(
 ): Record<(typeof FIELD_VECTOR_QUERY_ORDER)[number], string | undefined> {
   return {
     component: query.componentExplicit ? query.component : undefined,
+    expected_artifact_generation_id: query.expectedArtifactGenerationId,
     expected_carrier_revision: query.expectedCarrierRevision,
     expected_generation_id: query.expectedGenerationId,
     geometry_scope: query.geometryScope,
@@ -137,6 +143,7 @@ export function canonicalFieldVectorQueriesEqual(
 ): boolean {
   return (
     left.component === right.component &&
+    left.expectedArtifactGenerationId === right.expectedArtifactGenerationId &&
     left.expectedCarrierRevision === right.expectedCarrierRevision &&
     left.expectedGenerationId === right.expectedGenerationId &&
     left.geometryScope === right.geometryScope &&
@@ -223,6 +230,8 @@ export function parseCanonicalFieldVectorResourceKey(
   const phaseRad = url.searchParams.get("phase_rad");
   return canonicalFieldVectorQuery(quantityId, {
     component: url.searchParams.get("component") ?? undefined,
+    expected_artifact_generation_id:
+      url.searchParams.get("expected_artifact_generation_id") ?? undefined,
     expected_carrier_revision:
       url.searchParams.get("expected_carrier_revision") ?? undefined,
     expected_generation_id:

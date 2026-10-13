@@ -12,10 +12,21 @@ import {
 } from "@/kernel/resources/studyRuntimeResources";
 import {
   buildEigenSpectrumChartModel,
+  eigenModeFieldAvailable,
   frequencyDomainManifestPayload,
 } from "@/shared/domain/analysis/frequencyDomainChartModels";
+import {
+  buildEigenResidualSummary,
+  readEigenModeResourcePayload,
+  type EigenResidualSummary,
+} from "@/shared/domain/analysis/eigenResidualSummary";
 import { formatFrequencyHz } from "@/shared/domain/analysis/frequencyUnits";
-import { phasorAdapter } from "@/shared/domain/analysis/phasorConventionAdapter";
+import {
+  finiteModalScalar,
+  modalDampingObservables,
+  resolveModalPhasorConvention,
+  type ModalDampingObservables,
+} from "@/shared/domain/analysis/modalDampingObservables";
 import { Button } from "@/shared/ui/Button";
 
 import type { InspectorPanelProps } from "../../inspectorTypes";
@@ -93,14 +104,12 @@ export function EigenModeInspectorPanel({
         <FieldRow label="Mode identity" value={summary.modeIdentity} />
         <FieldRow label="Frequency" value={summary.frequencyDisplay} />
         <FieldRow label="Imaginary frequency" value={summary.imaginaryFrequency} />
-        <FieldRow label="Decay rate (Gamma)" value={summary.decayRate} />
-        <FieldRow label="Linewidth (FWHM)" value={summary.linewidthFwhm} />
-        <FieldRow label="Q-factor" value={summary.qualityFactor} />
+        <EigenModeDampingFields damping={summary.damping} />
         <FieldRow label="Angular frequency" value={summary.angularFrequency} />
         <FieldRow label="Mode field" value={summary.fieldStatus} />
         <FieldRow label="Mode field resource" value={summary.fieldResource} />
         <FieldRow label="Available field views" value={summary.availableViews} />
-        <FieldRow label="Residual" value={summary.residual} />
+        <EigenModeResidualFields residual={summary.residual} />
         <FieldRow label="Tangent leakage max" value={summary.tangentLeakageMax} />
         <FieldRow label="Dominant polarization" value={summary.dominantPolarization} />
         <FieldRow label="3D workflow" value={summary.workflow} />
@@ -136,6 +145,78 @@ export function EigenModeInspectorPanel({
 }
 
 EigenModeInspectorPanel.displayName = "EigenModeInspectorPanel";
+
+export function EigenModeResidualFields({
+  residual,
+}: {
+  residual: EigenResidualSummary;
+}) {
+  return (
+    <>
+      <FieldRow
+        label="Absolute residual (L2)"
+        value={formatNumberOrUnavailable(residual.absoluteL2)}
+      />
+      <FieldRow
+        label="Relative residual (L2)"
+        value={formatNumberOrUnavailable(residual.relativeL2)}
+      />
+      <FieldRow label="Residual scope" value={residual.scope} />
+      <FieldRow
+        label="Spectrum residual (type unspecified)"
+        value={formatNumberOrUnavailable(residual.reportedSpectrumResidual)}
+      />
+    </>
+  );
+}
+
+export function EigenModeDampingFields({
+  damping,
+}: {
+  damping: ModalDampingObservables;
+}) {
+  return (
+    <>
+      <FieldRow
+        label="Decay rate Γ / 2π (Hz)"
+        value={
+          damping.decayRateHz == null
+            ? "not available"
+            : formatFrequency(damping.decayRateHz)
+        }
+      />
+      <FieldRow
+        label="Stability"
+        value={damping.stability}
+        status={damping.stability}
+      />
+      <FieldRow
+        label="Lifetime"
+        value={
+          damping.lifetimeSeconds == null
+            ? "not available"
+            : formatNumber(damping.lifetimeSeconds) + " s"
+        }
+      />
+      <FieldRow
+        label="Linewidth (FWHM)"
+        value={
+          damping.linewidthFwhmHz == null
+            ? "not available"
+            : formatFrequency(damping.linewidthFwhmHz)
+        }
+      />
+      <FieldRow
+        label="Q-factor"
+        value={
+          damping.qualityFactor == null
+            ? "not available"
+            : formatNumber(damping.qualityFactor)
+        }
+      />
+    </>
+  );
+}
 
 function EigenMode3DActions({
   settings,
@@ -296,7 +377,7 @@ function useEigenModeSummary(selection: InspectorPanelProps["selection"]) {
     (point) =>
       point.sampleIndex === sampleIndex && point.rawModeIndex === modeIndex,
   );
-  const modePayload = record(eigenMode.data);
+  const modePayload = readEigenModeResourcePayload(eigenMode.data, sampleIndex, modeIndex);
   const componentSummary = record(modePayload?.component_summary);
   const frequencyHz =
     finiteNumber(modePayload?.frequency_real_hz) ??
@@ -307,24 +388,26 @@ function useEigenModeSummary(selection: InspectorPanelProps["selection"]) {
     spectrumPoint?.imaginaryFrequencyHz ??
     null;
   const angularFrequency = finiteNumber(modePayload?.angular_frequency_rad_per_s);
-  const residual =
-    finiteNumber(modePayload?.residual_norm) ??
-    spectrumPoint?.residualNorm ??
-    null;
+  const residual = buildEigenResidualSummary(
+    modePayload,
+    spectrumPoint?.residualNorm,
+    spectrumPoint?.residualRelativeL2,
+  );
   const tangentLeakage =
     finiteNumber(modePayload?.tangent_leakage_max_abs) ??
     spectrumPoint?.tangentLeakageMax ??
     null;
-  const fieldId =
-    ref?.fieldId ??
-    fieldMeta.data?.field_id ??
-    spectrumPoint?.modeFieldId ??
-    null;
-  const fieldResource =
-    ref?.resourceRef ??
-    fieldMeta.data?.resource_key ??
-    spectrumPoint?.modeFieldResourceKey ??
-    null;
+  const spectrumFieldAvailable =
+    spectrumPoint == null || eigenModeFieldAvailable(spectrumPoint);
+  const fieldId = spectrumFieldAvailable
+    ? ref?.fieldId ?? fieldMeta.data?.field_id ?? spectrumPoint?.modeFieldId ?? null
+    : null;
+  const fieldResource = spectrumFieldAvailable
+    ? ref?.resourceRef ??
+      fieldMeta.data?.resource_key ??
+      spectrumPoint?.modeFieldResourceKey ??
+      null
+    : null;
   const identity = buildEigenModeIdentityViewModel({
     branchId: ref?.branchId,
     fieldId,
@@ -341,26 +424,17 @@ function useEigenModeSummary(selection: InspectorPanelProps["selection"]) {
   const phaseConvention =
     stringValue(record(fieldMetaRecord?.field_units)?.phase_convention) ??
     stringValue(record(modePayload?.metadata)?.phase_convention) ??
-    "exp(-i omega t)";
+    "not available";
 
   const manifest = useFrequencyDomainManifestResource();
   const manifestPayload = record(frequencyDomainManifestPayload(manifest.data));
   const physics = record(manifestPayload?.physics);
-  const rawPhasorConvention =
-    stringValue(physics?.phase_convention) ?? "exp_i_omega_t";
-  const phasorConv = rawPhasorConvention.includes("exp_minus")
-    ? "exp_minus_i_omega_t"
-    : "exp_i_omega_t";
-  const { decayRateSign } = phasorAdapter(phasorConv);
-
-  const decayRateHz =
-    imaginaryFrequencyHz != null ? decayRateSign * imaginaryFrequencyHz : null;
-  const linewidthFwhmHz =
-    decayRateHz != null ? 2 * Math.abs(decayRateHz) : null;
-  const qualityFactor =
-    frequencyHz != null && linewidthFwhmHz && linewidthFwhmHz > 0
-      ? frequencyHz / linewidthFwhmHz
-      : null;
+  const rawPhasorConvention = resolveModalPhasorConvention(modePayload, physics);
+  const damping = modalDampingObservables(
+    frequencyHz,
+    imaginaryFrequencyHz,
+    rawPhasorConvention,
+  );
   const field3DReady =
     fieldMeta.status === "ready" && canPlotSelectedFieldIn3D(fieldMeta.data);
   const field3DStatus =
@@ -416,17 +490,10 @@ function useEigenModeSummary(selection: InspectorPanelProps["selection"]) {
       : "mode field missing",
     frequencyDisplay: formatFrequency(frequencyHz),
     imaginaryFrequency: formatFrequency(imaginaryFrequencyHz),
-    decayRate:
-      decayRateHz == null ? "not available" : formatFrequency(decayRateHz),
-    linewidthFwhm:
-      linewidthFwhmHz == null
-        ? "not available"
-        : formatFrequency(linewidthFwhmHz),
-    qualityFactor:
-      qualityFactor == null ? "not available" : formatNumber(qualityFactor),
+    damping,
     modeIdentity: identity.label,
     phaseConvention,
-    residual: formatNumberOrUnavailable(residual),
+    residual,
     tangentLeakageMax: formatNumberOrUnavailable(tangentLeakage),
     valueKind: stringValue(fieldMetaRecord?.value_kind),
     workflow:
@@ -443,8 +510,7 @@ function record(value: unknown): Record<string, unknown> | null {
 }
 
 function finiteNumber(value: unknown): number | null {
-  const parsed = typeof value === "number" ? value : Number(value);
-  return Number.isFinite(parsed) ? parsed : null;
+  return finiteModalScalar(value);
 }
 
 function stringValue(value: unknown): string | null {

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Clipboard } from "lucide-react";
 
 import type { Selection } from "@/kernel/selection/selectionTypes";
+import { resolveSessionDiscretization } from "@/kernel/resources/sessionDiscretization";
 import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
 import { Button } from "@/shared/ui/Button";
 
@@ -57,7 +58,7 @@ export function VisualizationDebugPanel({
 }) {
   const lane = useSessionStatusSelector(
     (status) =>
-      resolveVisualizationDebugLane(status.data?.domain?.discretization),
+      resolveVisualizationDebugLane(resolveSessionDiscretization(status.data)),
   );
   if (lane === "unresolved") {
     return (

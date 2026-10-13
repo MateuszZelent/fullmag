@@ -7,6 +7,7 @@ use serde_json::Value;
 use std::ffi::OsString;
 
 mod accepted_run_transport;
+mod antenna_workflow;
 mod args;
 mod command_bridge;
 mod communication_policy;
@@ -207,7 +208,7 @@ fn main() -> Result<()> {
         Command::Runtime(RuntimeCommand::FemAvailability { json }) => {
             let gpu = fullmag_runner::native_fem_gpu_status();
             let payload = serde_json::json!({
-                "native_fem_cpu_available": fullmag_runner::is_native_fem_cpu_available(),
+                "native_fem_cpu_available": gpu.cpu_available,
                 "native_fem_gpu_available": gpu.available,
                 "visible_cuda_device_count": gpu.visible_cuda_device_count,
                 "requested_gpu_index": gpu.requested_gpu_index,
@@ -329,6 +330,14 @@ fn main() -> Result<()> {
                 serde_json::to_string_pretty(&direct_run_summary(&result, &output_dir))?
             );
         }
+        Command::PrepareRunJson {
+            path,
+            project_id,
+            api_url,
+        } => {
+            let result = accepted_run_transport::prepare_run_json(&path, &project_id, &api_url)?;
+            println!("{}", serde_json::to_string_pretty(&result)?);
+        }
         Command::RunJson {
             path,
             api_url,
@@ -445,6 +454,10 @@ fn main() -> Result<()> {
             } else {
                 println!("{}", serde_json::to_string(&resolution)?);
             }
+        }
+        Command::EigenKWorker { request } => {
+            fullmag_runner::run_eigen_k_worker_request_file(&request)
+                .map_err(|error| anyhow!(error.message))?;
         }
         Command::Project(cmd) => handle_project(cmd)?,
         Command::Script(cmd) => script_inspect::handle_script(cmd)?,
@@ -926,6 +939,7 @@ fn is_script_mode(raw_args: &[OsString]) -> bool {
         "run-problem-json-direct",
         "resume-json",
         "resolve-runtime-invocation",
+        "__eigen-k-worker",
         "session",
         "project",
         "script",
@@ -1576,10 +1590,12 @@ mod tests {
             enable_demag: true,
             external_field: None,
             antenna_zeeman_masks: Vec::new(),
+            solved_antenna_drive_bases: Vec::new(),
             field_drives: Vec::new(),
             field_drive_geometry_masks: Vec::new(),
             time_stage: Default::default(),
             current_modules: vec![],
+            charge_transport_plans: vec![],
             spin_transport_plans: vec![],
             gyromagnetic_ratio: 2.211e5,
             precision: ExecutionPrecision::Double,
@@ -1865,6 +1881,26 @@ mod tests {
     }
 
     #[test]
+    fn cli_prepares_run_identity_without_an_implicit_submit() {
+        let cli = Cli::try_parse_from([
+            "fullmag",
+            "prepare-run-json",
+            "authored-run.json",
+            "--project-id",
+            "project-submit",
+            "--api-url",
+            "http://127.0.0.1:8000",
+        ])
+        .expect("cli parse");
+        assert!(matches!(
+            cli.command,
+            Command::PrepareRunJson { path, project_id, api_url }
+                if path == std::path::Path::new("authored-run.json")
+                    && project_id == "project-submit" && api_url == "http://127.0.0.1:8000"
+        ));
+    }
+
+    #[test]
     fn cli_keeps_hidden_submit_run_json_compatibility_alias() {
         let cli = Cli::try_parse_from([
             "fullmag",
@@ -2132,6 +2168,7 @@ mod tests {
                 stage_autosave: None,
                 outputs: vec![fullmag_ir::OutputIR::EigenSpectrum {
                     quantity: "eigenfrequency".to_string(),
+                    scope: None,
                 }],
             },
         };

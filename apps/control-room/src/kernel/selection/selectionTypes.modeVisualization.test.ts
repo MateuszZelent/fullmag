@@ -56,6 +56,8 @@ describe("mode visualization selection identity", () => {
       analysisRunId: "run-1",
       analysisStageId: "stage-1",
       artifactRevision: 7,
+      datasetId: "catalog:dataset-1",
+      datasetRevision: "catalog-revision-4",
       availability: "available",
       contractGap: null,
       equilibriumId: "eq-1",
@@ -75,6 +77,8 @@ describe("mode visualization selection identity", () => {
 
     expect(selectionRefEquals(first, { ...first })).toBe(true);
     expect(selectionRefEquals(first, { ...first, artifactRevision: 8 })).toBe(false);
+    expect(selectionRefEquals(first, { ...first, datasetId: "catalog:dataset-2" })).toBe(false);
+    expect(selectionRefEquals(first, { ...first, datasetRevision: "catalog-revision-5" })).toBe(false);
     expect(selectionRefEquals(first, { ...first, availability: "partial" })).toBe(false);
     expect(selectionRefEquals(first, { ...first, contractGap: "missing drive evidence" })).toBe(false);
     expect(selectionRefEquals(first, { ...first, equilibriumId: "eq-2" })).toBe(false);

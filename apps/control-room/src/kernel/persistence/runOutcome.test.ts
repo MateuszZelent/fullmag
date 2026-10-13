@@ -228,3 +228,41 @@ describe("advanceRunOutcomeTracker", () => {
     expect(advanceRunOutcomeTracker(idle.tracker, observation("completed"), T0 + 2).outcome).toBeNull();
   });
 });
+
+
+describe("run method provenance", () => {
+  it("uses the active lane rather than stale domain topology", () => {
+    const observed = observeRunLifecycle(status("running", {
+      domain: { discretization: "fdm" },
+      capabilities: { active_lane: { resolved: { discretization: "fem" } } },
+    }));
+    expect(observed?.discretization).toBe("fem");
+  });
+
+  it("does not invent a backend from retained domain data while the active lane is unresolved", () => {
+    const observed = observeRunLifecycle(status("running", {
+      domain: { discretization: "fdm" },
+      capabilities: { active_lane: { resolved: null } },
+    }));
+    expect(observed?.discretization).toBeNull();
+  });
+
+  it("retains the active run method if a terminal refresh changes the domain method", () => {
+    expect(runOutcomeFromStatusTransition(
+      observation("running", { discretization: "fem" }),
+      observation("completed", { discretization: "fdm" }),
+      { nowMs: T0 },
+    )?.backend).toBe("FEM");
+  });
+});
+
+
+it("retains a known active run method through a temporarily unresolved active-lane refresh", () => {
+  const started = advanceRunOutcomeTracker(INITIAL_RUN_OUTCOME_TRACKER,
+    observation("running", { discretization: "fem" }), T0);
+  const paused = advanceRunOutcomeTracker(started.tracker,
+    observation("paused", { discretization: null }), T0 + 1000);
+  const completed = advanceRunOutcomeTracker(paused.tracker,
+    observation("completed", { discretization: "fdm" }), T0 + 2000);
+  expect(completed.outcome?.backend).toBe("FEM");
+});

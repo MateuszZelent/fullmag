@@ -1,7 +1,10 @@
+#include "frequency_domain/floquet_dynamic_demag_k.hpp"
 #include "frequency_domain/modal_eigen_solver.hpp"
 
 #include "cpu/frequency_domain/contour_interval_solver.hpp"
+#include "cpu/frequency_domain/floquet_k_classification.hpp"
 #include "cpu/frequency_domain/mode_deduplication.hpp"
+#include "cpu/frequency_domain/modal/floquet_modal_solver.hpp"
 #include "cpu/frequency_domain/slepc_modal_eigen.hpp"
 #include "cpu/frequency_domain/spectral_transform.hpp"
 #include "cpu/frequency_domain/window_partition.hpp"
@@ -11,6 +14,7 @@
 #include <algorithm>
 #include <cmath>
 #include <complex>
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <limits>
@@ -24,6 +28,16 @@ namespace {
 constexpr double kWindowDedupFrequencyRelativeTolerance = 1.0e-8;
 constexpr double kWindowDedupFrequencyAbsoluteToleranceHz = 1.0e-12;
 constexpr double kWindowDedupOverlapThreshold = 0.90;
+constexpr const char *kNativeFloquetCountCertificateUnavailableReason =
+    "native_floquet_count_certificate_unavailable";
+
+bool dynamic_demag_k_payload_is_declared(const ModalEigenRequest &) noexcept;
+bool dynamic_demag_k_payload_is_consistent(const ModalEigenRequest &) noexcept;
+bool modal_request_is_nonzero_k_floquet(const ModalEigenRequest &) noexcept;
+bool effective_dense_stiffness_for_request(
+    const ModalEigenRequest &,
+    std::vector<double> &,
+    const double **) noexcept;
 
 std::string escape_json_string(const char *value)
 {
@@ -81,6 +95,13 @@ std::string with_operator_diagnostics(
 
 std::string format_double(double value) noexcept
 {
+    // JSON has no NaN/Infinity literals.  A failed or incomplete native
+    // solve may leave a diagnostic scalar non-finite; publish null so the
+    // runner can parse the envelope and reject the result through its
+    // finite-value/certification gates instead of failing on malformed JSON.
+    if (!std::isfinite(value)) {
+        return "null";
+    }
     char buffer[64]{};
     const int written = std::snprintf(buffer, sizeof(buffer), "%.17g", value);
     if (written <= 0 || static_cast<std::size_t>(written) >= sizeof(buffer)) {
@@ -89,13 +110,1452 @@ std::string format_double(double value) noexcept
     return buffer;
 }
 
-std::string mode_kinematics_json_fields(ComplexEigenvalue lambda)
+std::string floquet_shifted_ksp_configuration_json_field(
+    const SLEPcTinyGyrotropicModalEigenResult &result)
+{
+    if (!result.shifted_ksp_configuration_before_eps_available) {
+        return "\"shifted_ksp_configuration_before_eps\":null";
+    }
+    return std::string("\"shifted_ksp_configuration_before_eps\":{") +
+        "\"phase\":\"before_eps_solve\",\"pc_side\":" +
+        std::to_string(result.shifted_ksp_pc_side_before_eps) +
+        ",\"norm_type\":" +
+        std::to_string(result.shifted_ksp_norm_type_before_eps) + "}";
+}
+
+std::string shifted_lu_policy_outcome_json(
+    const char *policy,
+    bool factorization_shift_amount_is_honored_by_policy,
+    const FloquetShiftedKspFailureProbe::CandidateOperatorDiagnostic::
+        ShiftedLuPolicyOutcome &outcome)
+{
+    return std::string("{\"factorization_shift_policy\":\"") + policy +
+        "\",\"factorization_shift_amount_is_honored_by_policy\":" +
+        std::string(factorization_shift_amount_is_honored_by_policy ? "true" : "false") +
+        ",\"actual_factorization_perturbation_measured\":false"
+        ",\"factorization_setup_available\":" +
+        std::string(outcome.factorization_setup_available ? "true" : "false") +
+        ",\"factorization_setup_error_code\":" +
+        std::to_string(outcome.factorization_setup_error_code) +
+        ",\"solve_available\":" +
+        std::string(outcome.solve_available ? "true" : "false") +
+        ",\"solve_error_code\":" + std::to_string(outcome.solve_error_code) +
+        ",\"solve_reason_available\":" +
+        std::string(outcome.solve_reason_available ? "true" : "false") +
+        ",\"solve_reason\":" +
+        (outcome.solve_reason_available
+            ? std::to_string(outcome.solve_reason)
+            : std::string("null")) +
+        ",\"repeat_solve_reason_available\":" +
+        std::string(outcome.repeat_solve_reason_available ? "true" : "false") +
+        ",\"repeat_solve_reason\":" +
+        (outcome.repeat_solve_reason_available
+            ? std::to_string(outcome.repeat_solve_reason)
+            : std::string("null")) +
+        ",\"preconditioner_solution_l2_norm_available\":" +
+        std::string(outcome.preconditioner_solution_l2_norm_available
+            ? "true" : "false") +
+        ",\"preconditioner_solution_l2_norm\":" +
+        (outcome.preconditioner_solution_l2_norm_available
+            ? format_double(outcome.preconditioner_solution_l2_norm)
+            : std::string("null")) +
+        ",\"operator_solution_l2_norm_available\":" +
+        std::string(outcome.operator_solution_l2_norm_available ? "true" : "false") +
+        ",\"operator_solution_l2_norm\":" +
+        (outcome.operator_solution_l2_norm_available
+            ? format_double(outcome.operator_solution_l2_norm)
+            : std::string("null")) +
+        ",\"repeat_operator_solution_l2_norm_available\":" +
+        std::string(outcome.repeat_operator_solution_l2_norm_available
+            ? "true" : "false") +
+        ",\"repeat_operator_solution_l2_norm\":" +
+        (outcome.repeat_operator_solution_l2_norm_available
+            ? format_double(outcome.repeat_operator_solution_l2_norm)
+            : std::string("null")) +
+        ",\"repeatability_relative_defect_available\":" +
+        std::string(outcome.repeatability_relative_defect_available
+            ? "true" : "false") +
+        ",\"repeatability_relative_defect\":" +
+        (outcome.repeatability_relative_defect_available
+            ? format_double(outcome.repeatability_relative_defect)
+            : std::string("null")) +
+        ",\"preconditioner_residual_l2_norm_available\":" +
+        std::string(outcome.preconditioner_residual_l2_norm_available
+            ? "true" : "false") +
+        ",\"preconditioner_residual_l2_norm\":" +
+        (outcome.preconditioner_residual_l2_norm_available
+            ? format_double(outcome.preconditioner_residual_l2_norm)
+            : std::string("null")) +
+        ",\"preconditioner_relative_residual_available\":" +
+        std::string(outcome.preconditioner_relative_residual_available
+            ? "true" : "false") +
+        ",\"preconditioner_relative_residual\":" +
+        (outcome.preconditioner_relative_residual_available
+            ? format_double(outcome.preconditioner_relative_residual)
+            : std::string("null")) +
+        ",\"operator_residual_l2_norm_available\":" +
+        std::string(outcome.operator_residual_l2_norm_available ? "true" : "false") +
+        ",\"operator_residual_l2_norm\":" +
+        (outcome.operator_residual_l2_norm_available
+            ? format_double(outcome.operator_residual_l2_norm)
+            : std::string("null")) +
+        ",\"operator_relative_residual_available\":" +
+        std::string(outcome.operator_relative_residual_available
+            ? "true" : "false") +
+        ",\"operator_relative_residual\":" +
+        (outcome.operator_relative_residual_available
+            ? format_double(outcome.operator_relative_residual)
+            : std::string("null")) +
+        ",\"operator_tolerance_ratio_available\":" +
+        std::string(outcome.operator_tolerance_ratio_available ? "true" : "false") +
+        ",\"operator_residual_to_unchanged_ksp_threshold_ratio\":" +
+        (outcome.operator_tolerance_ratio_available
+            ? format_double(outcome.operator_tolerance_ratio)
+            : std::string("null")) + "}";
+}
+
+std::string shifted_lu_policy_comparison_json(
+    const FloquetShiftedKspFailureProbe::CandidateOperatorDiagnostic::
+        ShiftedLuPolicyComparison &comparison)
+{
+    if (!comparison.requested) {
+        return "null";
+    }
+    return std::string("{\"schema_version\":\"floquet_shifted_lu_policy_comparison.v1\",") +
+        "\"requested\":true,"
+        "\"measurement_scope\":\"true_probe_callback_live_rhs_exact_materialized_shifted_schur_matrix\","
+        "\"rhs_source\":\"live_shifted_ksp_get_rhs\","
+        "\"shifted_operator_action_source\":\"isolated_copy_of_production_matshell_components\","
+        "\"operator_normalization_relation\":\"normalized_live_ksp_A_shift = operator_normalization_scale * raw_pencil_A_shift\","
+        "\"solution_calibration\":\"P_normalized = preconditioner_normalization_scale * normalized_live_ksp_A_shift; x_A = preconditioner_normalization_scale * y_P\","
+        "\"factorization_shift_semantics\":\"requested amount is not a measurement of the actual factorization perturbation\","
+        "\"status\":\"" +
+        escape_json_string(comparison.status != nullptr ? comparison.status : "unknown") +
+        "\",\"reason\":\"" +
+        escape_json_string(comparison.reason != nullptr ? comparison.reason : "") +
+        "\",\"exact_shifted_matrix_available\":" +
+        std::string(comparison.exact_shifted_matrix_available ? "true" : "false") +
+        ",\"rhs_available\":" +
+        std::string(comparison.rhs_available ? "true" : "false") +
+        ",\"rhs_l2_norm_available\":" +
+        std::string(comparison.rhs_l2_norm_available ? "true" : "false") +
+        ",\"rhs_l2_norm\":" +
+        (comparison.rhs_l2_norm_available
+            ? format_double(comparison.rhs_l2_norm)
+            : std::string("null")) +
+        ",\"true_residual_threshold_l2_norm_available\":" +
+        std::string(comparison.true_residual_threshold_available ? "true" : "false") +
+        ",\"true_residual_threshold_l2_norm\":" +
+        (comparison.true_residual_threshold_available
+            ? format_double(comparison.true_residual_threshold_l2_norm)
+            : std::string("null")) +
+        ",\"available\":" +
+        std::string(comparison.available ? "true" : "false") +
+        ",\"target_shift_rad_s\":" + format_double(comparison.target_shift_rad_s) +
+        ",\"operator_normalization_scale\":" +
+        format_double(comparison.operator_normalization_scale) +
+        ",\"preconditioner_normalization_scale\":" +
+        format_double(comparison.preconditioner_normalization_scale) +
+        ",\"shifted_preconditioner_matrix_infinity_norm_after_normalization\":" +
+        format_double(
+            comparison.shifted_preconditioner_matrix_infinity_norm_after_normalization) +
+        ",\"requested_factorization_shift_amount\":" +
+        format_double(comparison.requested_factorization_shift_amount) +
+        ",\"requested_factorization_shift_amount_scope\":\"sqrt(PETSC_MACHINE_EPSILON)*norm_infinity_of_normalized_shifted_preconditioner\""
+        ",\"shifted_ksp_rtol\":" + format_double(comparison.shifted_ksp_rtol) +
+        ",\"shifted_ksp_atol\":" + format_double(comparison.shifted_ksp_atol) +
+        ",\"mat_shift_nonzero\":" + shifted_lu_policy_outcome_json(
+            "MAT_SHIFT_NONZERO", true, comparison.mat_shift_nonzero) +
+        ",\"mat_shift_none\":" + shifted_lu_policy_outcome_json(
+            "MAT_SHIFT_NONE", false, comparison.mat_shift_none) + "}";
+}
+
+std::string borrowed_pmat_copy_observation_json(
+    const FloquetShiftedKspFailureProbe::CandidateOperatorDiagnostic::
+        BorrowedPmatCopyObservation &observation)
+{
+    if (!observation.requested) {
+        return "null";
+    }
+    std::string json =
+        "{\"schema_version\":\"floquet_borrowed_pmat_copy.v1\","
+        "\"requested\":true,\"measurement_scope\":\"private_diagnostic_only_solver_acceptance_unchanged\","
+        "\"factor_shift_configuration_scope\":\"queried_live_PCLU_configuration_not_actual_factor_perturbation\","
+        "\"matrix_copy_method\":\"MatDuplicate(MAT_COPY_VALUES)\","
+        "\"full_entry_comparison_method\":\"all MatGetRow entries for sequential AIJ; MatEqual sampling is not full proof\","
+        "\"same_private_rhs_source\":\"live_pc_rhs_snapshot\","
+        "\"actual_reorder_threshold_available\":false,\"live_pc_modified\":false,\"live_factor_workspace_modified\":false,";
+    const auto append_bool = [&json](const char *key, bool value) {
+        json += "\"" + std::string(key) + "\":" + (value ? "true" : "false") + ",";
+    };
+    const auto append_text = [&json, &append_bool](const char *key, bool available, const char *value) {
+        append_bool((std::string(key) + "_available").c_str(), available);
+        json += "\"" + std::string(key) + "\":" +
+            (available && value != nullptr
+                ? "\"" + escape_json_string(value) + "\""
+                : std::string("null")) + ",";
+    };
+    const auto append_number = [&json, &append_bool](const char *key, bool available, double value) {
+        append_bool((std::string(key) + "_available").c_str(), available);
+        json += "\"" + std::string(key) + "\":" +
+            (available ? format_double(value) : std::string("null")) + ",";
+    };
+    const auto append_integer = [&json, &append_bool](const char *key, bool available, long long value) {
+        append_bool((std::string(key) + "_available").c_str(), available);
+        json += "\"" + std::string(key) + "\":" +
+            (available ? std::to_string(value) : std::string("null")) + ",";
+    };
+    const auto append_optional_bool = [&json, &append_bool](const char *key, bool available, bool value) {
+        append_bool((std::string(key) + "_available").c_str(), available);
+        json += "\"" + std::string(key) + "\":" +
+            (available ? (value ? "true" : "false") : "null") + ",";
+    };
+    append_text("status", true, observation.status);
+    append_text("reason", true, observation.reason);
+    append_bool("live_shift_query_attempted", observation.live_shift_query_attempted);
+    append_text("live_shift_query_status", true, observation.live_shift_query_status);
+    append_text("live_shift_query_reason", true, observation.live_shift_query_reason);
+    append_integer("live_pc_type_query_error_code",
+        observation.live_pc_type_query_error_code_available,
+        observation.live_pc_type_query_error_code);
+    append_text("actual_factorization_shift_type",
+        observation.actual_factorization_shift_type_available,
+        observation.actual_factorization_shift_type);
+    append_integer("actual_factorization_shift_type_enum_value",
+        observation.actual_factorization_shift_type_enum_value_available,
+        observation.actual_factorization_shift_type_enum_value);
+    append_integer("actual_factorization_shift_type_query_error_code",
+        observation.actual_factorization_shift_type_query_error_code_available,
+        observation.actual_factorization_shift_type_query_error_code);
+    append_number("actual_factorization_shift_amount",
+        observation.actual_factorization_shift_amount_available,
+        observation.actual_factorization_shift_amount);
+    append_integer("actual_factorization_shift_amount_query_error_code",
+        observation.actual_factorization_shift_amount_query_error_code_available,
+        observation.actual_factorization_shift_amount_query_error_code);
+    append_optional_bool("actual_factorization_shift_amount_nonfinite",
+        observation.actual_factorization_shift_amount_nonfinite_available,
+        observation.actual_factorization_shift_amount_nonfinite);
+    append_bool("actual_factorization_perturbation_measured",
+        observation.actual_factorization_perturbation_measured);
+    append_bool("matrix_copy_attempted", observation.matrix_copy_attempted);
+    append_bool("matrix_copy_available", observation.matrix_copy_available);
+    append_integer("matrix_copy_error_code", observation.matrix_copy_error_code_available,
+        observation.matrix_copy_error_code);
+    append_text("source_matrix_type", observation.source_matrix_type_available,
+        observation.source_matrix_type);
+    append_bool("source_matrix_type_overflow", observation.source_matrix_type_overflow);
+    append_text("copied_matrix_type", observation.copied_matrix_type_available,
+        observation.copied_matrix_type);
+    append_bool("copied_matrix_type_overflow", observation.copied_matrix_type_overflow);
+    append_text("comparison_status", true, observation.comparison_status);
+    append_text("comparison_reason", true, observation.comparison_reason);
+    append_bool("row_restore_attempts_available", observation.row_restore_attempts_available);
+    append_optional_bool("reference_row_restore_attempted",
+        observation.row_restore_attempts_available, observation.reference_row_restore_attempted);
+    append_optional_bool("copied_row_restore_attempted",
+        observation.row_restore_attempts_available, observation.copied_row_restore_attempted);
+    append_bool("bounded_pattern_fixture_requested",
+        observation.bounded_pattern_fixture_requested);
+    append_bool("bounded_pattern_fixture_attempted",
+        observation.bounded_pattern_fixture_attempted);
+    append_bool("bounded_pattern_fixture_available",
+        observation.bounded_pattern_fixture_available);
+    append_text("bounded_pattern_fixture_status", true,
+        observation.bounded_pattern_fixture_status);
+    append_text("bounded_pattern_fixture_reason", true,
+        observation.bounded_pattern_fixture_reason);
+    append_integer("bounded_pattern_fixture_copied_nnz",
+        observation.bounded_pattern_fixture_copied_nnz_available,
+        static_cast<long long>(observation.bounded_pattern_fixture_copied_nnz));
+    append_integer("bounded_pattern_fixture_reference_nnz",
+        observation.bounded_pattern_fixture_reference_nnz_available,
+        static_cast<long long>(observation.bounded_pattern_fixture_reference_nnz));
+    append_optional_bool("bounded_pattern_fixture_nnz_match",
+        observation.bounded_pattern_fixture_nnz_match_available,
+        observation.bounded_pattern_fixture_nnz_match);
+    append_optional_bool("bounded_pattern_fixture_structural_pattern_match",
+        observation.bounded_pattern_fixture_structural_pattern_match_available,
+        observation.bounded_pattern_fixture_structural_pattern_match);
+    append_integer("matrix_rows", observation.matrix_dimensions_available,
+        static_cast<long long>(observation.matrix_rows));
+    append_integer("matrix_columns", observation.matrix_dimensions_available,
+        static_cast<long long>(observation.matrix_columns));
+    append_integer("reference_rows", observation.reference_dimensions_available,
+        static_cast<long long>(observation.reference_rows));
+    append_integer("reference_columns", observation.reference_dimensions_available,
+        static_cast<long long>(observation.reference_columns));
+    append_optional_bool("matrix_dimensions_match", observation.matrix_dimensions_match_available,
+        observation.matrix_dimensions_match);
+    append_integer("copied_nnz", observation.copied_nnz_available,
+        static_cast<long long>(observation.copied_nnz));
+    append_integer("reference_nnz", observation.reference_nnz_available,
+        static_cast<long long>(observation.reference_nnz));
+    append_optional_bool("nnz_match", observation.nnz_match_available, observation.nnz_match);
+    append_optional_bool("structural_pattern_match",
+        observation.structural_pattern_match_available, observation.structural_pattern_match);
+    append_bool("full_explicit_entry_comparison_available",
+        observation.full_explicit_entry_comparison_available);
+    append_optional_bool("values_equal", observation.values_equal_available,
+        observation.values_equal);
+    append_number("max_absolute_entry_defect", observation.max_absolute_entry_defect_available,
+        observation.max_absolute_entry_defect);
+    append_number("reference_frobenius_norm", observation.reference_frobenius_norm_available,
+        observation.reference_frobenius_norm);
+    append_number("relative_frobenius_defect", observation.relative_frobenius_defect_available,
+        observation.relative_frobenius_defect);
+    append_text("reference_matrix_type", observation.reference_matrix_type_available,
+        observation.reference_matrix_type);
+    append_bool("reference_matrix_type_overflow", observation.reference_matrix_type_overflow);
+    append_text("actual_live_solver_package", observation.actual_solver_package_available,
+        observation.actual_solver_package);
+    append_bool("actual_live_solver_package_overflow", observation.actual_solver_package_overflow);
+    append_text("fresh_requested_solver_package",
+        observation.fresh_solver_package_configured && !observation.fresh_solver_package_overflow,
+        observation.fresh_solver_package);
+    append_bool("fresh_solver_package_configured", observation.fresh_solver_package_configured);
+    append_bool("fresh_solver_package_overflow", observation.fresh_solver_package_overflow);
+    append_bool("fresh_pc_type_configured", observation.fresh_pc_type_configured);
+    // PETSc configures PCLU in the solver; this formatter stays dependency-neutral.
+    append_text("fresh_pc_type", observation.fresh_pc_type_configured, "lu");
+    append_bool("fresh_reorder_threshold_configured", observation.fresh_reorder_threshold_configured);
+    append_number("fresh_reorder_threshold", observation.fresh_reorder_threshold_configured,
+        observation.fresh_reorder_threshold);
+    append_bool("fresh_shift_type_configured", observation.fresh_shift_type_configured);
+    append_text("fresh_shift_type", observation.fresh_shift_type_configured,
+        observation.fresh_shift_type_configured ? "MAT_SHIFT_NONZERO" : nullptr);
+    append_number("fresh_shift_amount_configured", observation.fresh_shift_amount_configured_available,
+        observation.fresh_shift_amount_configured);
+    append_text("fresh_solver_status", true, observation.fresh_solver_status);
+    append_text("fresh_solver_reason", true, observation.fresh_solver_reason);
+    append_bool("fresh_ksp_setup_available", observation.fresh_ksp_setup_available);
+    append_integer("fresh_ksp_setup_error_code", observation.fresh_ksp_setup_error_code_available,
+        observation.fresh_ksp_setup_error_code);
+    append_bool("fresh_solve_attempted", observation.fresh_solve_attempted);
+    append_bool("fresh_solve_fault_injected", observation.fresh_solve_fault_injected);
+    append_bool("fresh_solve_available", observation.fresh_solve_available);
+    append_integer("fresh_solve_error_code", observation.fresh_solve_error_code_available,
+        observation.fresh_solve_error_code);
+    append_integer("fresh_converged_reason", observation.fresh_converged_reason_available,
+        observation.fresh_converged_reason);
+    append_number("same_private_rhs_l2_norm", observation.same_private_rhs_available,
+        observation.same_private_rhs_l2_norm);
+    append_number("fresh_pmat_residual_l2_norm", observation.fresh_pmat_residual_l2_norm_available,
+        observation.fresh_pmat_residual_l2_norm);
+    append_number("fresh_pmat_relative_residual", observation.fresh_pmat_relative_residual_available,
+        observation.fresh_pmat_relative_residual);
+    append_number("fresh_shifted_operator_residual_l2_norm",
+        observation.fresh_shifted_operator_residual_l2_norm_available,
+        observation.fresh_shifted_operator_residual_l2_norm);
+    append_number("fresh_shifted_operator_relative_residual",
+        observation.fresh_shifted_operator_relative_residual_available,
+        observation.fresh_shifted_operator_relative_residual);
+    append_number("live_vs_fresh_solution_relative_defect",
+        observation.live_vs_fresh_solution_relative_defect_available,
+        observation.live_vs_fresh_solution_relative_defect);
+    append_bool("cleanup_attempted", observation.cleanup_attempted);
+    append_optional_bool("cleanup_succeeded", observation.cleanup_attempted,
+        observation.cleanup_succeeded);
+    append_integer("cleanup_error_code", observation.cleanup_error_code_available,
+        observation.cleanup_error_code);
+    append_integer("first_error_code", observation.first_error_code_available,
+        observation.first_error_code);
+    if (!json.empty() && json.back() == ',') {
+        json.pop_back();
+    }
+    json += "}";
+    return json;
+}
+
+std::string live_pclu_monitor_observation_json(
+    const LivePcluMonitorObservation &observation)
+{
+    const auto &configuration = observation.configuration;
+    const auto optional_integer = [](bool available, long long value) {
+        return available ? std::to_string(value) : std::string("null");
+    };
+    const auto optional_unsigned = [](bool available, std::uint64_t value) {
+        return available ? std::to_string(value) : std::string("null");
+    };
+    const auto optional_bool = [](bool available, bool value) {
+        return available
+            ? std::string(value ? "true" : "false")
+            : std::string("null");
+    };
+    const auto optional_number = [](bool available, double value) {
+        return available && std::isfinite(value)
+            ? format_double(value)
+            : std::string("null");
+    };
+    return
+        "{\"schema_version\":\"floquet_live_pclu_monitor_observation.v1\","
+        "\"measurement_scope\":\"queried_live_PCLU_configuration_during_ksp_monitor_not_actual_factor_perturbation\","
+        "\"requested\":" +
+        std::string(observation.requested ? "true" : "false") +
+        ",\"query_count\":" + std::to_string(observation.query_count) +
+        ",\"callback_ordinal_available\":" +
+        std::string(observation.callback_ordinal_available ? "true" : "false") +
+        ",\"callback_ordinal\":" +
+        optional_unsigned(observation.callback_ordinal_available,
+                          observation.callback_ordinal) +
+        ",\"iteration_available\":" +
+        std::string(observation.iteration_available ? "true" : "false") +
+        ",\"iteration\":" +
+        optional_integer(observation.iteration_available, observation.iteration) +
+        ",\"eps_attempt_number_available\":" +
+        std::string(observation.eps_attempt_number_available ? "true" : "false") +
+        ",\"eps_attempt_number\":" +
+        optional_integer(observation.eps_attempt_number_available,
+                         observation.eps_attempt_number) +
+        ",\"ksp_get_pc_error_code_available\":" +
+        std::string(observation.ksp_get_pc_error_code_available ? "true" : "false") +
+        ",\"ksp_get_pc_error_code\":" +
+        optional_integer(observation.ksp_get_pc_error_code_available,
+                         observation.ksp_get_pc_error_code) +
+        ",\"configuration\":{"
+        "\"status\":\"" +
+        escape_json_string(configuration.status != nullptr
+                               ? configuration.status
+                               : "unknown") +
+        "\",\"reason\":\"" +
+        escape_json_string(configuration.reason != nullptr
+                               ? configuration.reason
+                               : "") +
+        "\",\"pc_type_available\":" +
+        std::string(configuration.pc_type_available ? "true" : "false") +
+        ",\"pc_type_is_exact_pclu\":" +
+        optional_bool(configuration.pc_type_available,
+                      configuration.pc_type_is_exact_pclu) +
+        ",\"pc_type_query_error_code_available\":" +
+        std::string(configuration.pc_type_query_error_code_available
+                        ? "true" : "false") +
+        ",\"pc_type_query_error_code\":" +
+        optional_integer(configuration.pc_type_query_error_code_available,
+                         configuration.pc_type_query_error_code) +
+        ",\"factor_getters_attempted\":" +
+        std::string(configuration.factor_getters_attempted ? "true" : "false") +
+        ",\"shift_type_query_error_code_available\":" +
+        std::string(configuration.shift_type_query_error_code_available
+                        ? "true" : "false") +
+        ",\"shift_type_query_error_code\":" +
+        optional_integer(configuration.shift_type_query_error_code_available,
+                         configuration.shift_type_query_error_code) +
+        ",\"shift_type_enum_value_available\":" +
+        std::string(configuration.shift_type_enum_value_available
+                        ? "true" : "false") +
+        ",\"shift_type_enum_value\":" +
+        optional_integer(configuration.shift_type_enum_value_available,
+                         configuration.shift_type_enum_value) +
+        ",\"shift_type_name_available\":" +
+        std::string(configuration.shift_type_name_available ? "true" : "false") +
+        ",\"shift_type_name\":" +
+        (configuration.shift_type_name_available &&
+                 configuration.shift_type_name != nullptr
+             ? "\"" + escape_json_string(configuration.shift_type_name) + "\""
+             : std::string("null")) +
+        ",\"shift_amount_query_error_code_available\":" +
+        std::string(configuration.shift_amount_query_error_code_available
+                        ? "true" : "false") +
+        ",\"shift_amount_query_error_code\":" +
+        optional_integer(configuration.shift_amount_query_error_code_available,
+                         configuration.shift_amount_query_error_code) +
+        ",\"shift_amount_available\":" +
+        std::string(configuration.shift_amount_available ? "true" : "false") +
+        ",\"shift_amount\":" +
+        optional_number(configuration.shift_amount_available,
+                        configuration.shift_amount) +
+        ",\"shift_amount_nonfinite_available\":" +
+        std::string(configuration.shift_amount_nonfinite_available
+                        ? "true" : "false") +
+        ",\"shift_amount_nonfinite\":" +
+        optional_bool(configuration.shift_amount_nonfinite_available,
+                      configuration.shift_amount_nonfinite) +
+        ",\"actual_factorization_perturbation_measured\":false}}";
+}
+
+std::string live_pc_observation_json(
+    const FloquetShiftedKspFailureProbe::CandidateOperatorDiagnostic::
+        LivePcObservation &observation)
+{
+    if (!observation.requested) {
+        return "null";
+    }
+    const auto optional_bool = [](bool available, bool value) {
+        return available
+            ? std::string(value ? "true" : "false")
+            : std::string("null");
+    };
+    const auto optional_number = [](bool available, double value) {
+        return available ? format_double(value) : std::string("null");
+    };
+    std::string json =
+        "{\"schema_version\":\"floquet_live_pc_observation.v1\","
+        "\"requested\":true,"
+        "\"measurement_scope\":\"borrowed_live_shifted_ksp_pc_before_residual_gate\","
+        "\"solution_calibration\":\"P_normalized = preconditioner_normalization_scale * normalized_live_ksp_A_shift; x_A = preconditioner_normalization_scale * z_P\","
+        "\"shifted_operator_action_source\":\"isolated_copy_of_production_matshell_components\","
+        "\"preconditioner_normalization_scale_available\":" +
+        std::string(observation.preconditioner_normalization_scale_available ? "true" : "false") +
+        ",\"preconditioner_normalization_scale\":" +
+        (observation.preconditioner_normalization_scale_available
+            ? format_double(observation.preconditioner_normalization_scale)
+            : std::string("null")) +
+        ",\"status\":\"" +
+        escape_json_string(observation.status != nullptr ? observation.status : "unknown") +
+        "\",\"reason\":\"" +
+        escape_json_string(observation.reason != nullptr ? observation.reason : "") +
+        "\",\"available\":" +
+        std::string(observation.available ? "true" : "false") +
+        ",\"pc_available\":" +
+        std::string(observation.pc_available ? "true" : "false") +
+        ",\"pc_type_available\":" +
+        std::string(observation.pc_type_available ? "true" : "false") +
+        ",\"pc_type_overflow\":" +
+        std::string(observation.pc_type_overflow ? "true" : "false") +
+        ",\"pc_type\":" +
+        (observation.pc_type_available
+            ? "\"" + escape_json_string(observation.pc_type) + "\""
+            : std::string("null")) +
+        ",\"pmat_type_available\":" +
+        std::string(observation.pmat_type_available ? "true" : "false") +
+        ",\"pmat_type_overflow\":" +
+        std::string(observation.pmat_type_overflow ? "true" : "false") +
+        ",\"pmat_type\":" +
+        (observation.pmat_type_available
+            ? "\"" + escape_json_string(observation.pmat_type) + "\""
+            : std::string("null")) +
+        ",\"pc_side_available\":" +
+        std::string(observation.pc_side_available ? "true" : "false") +
+        ",\"pc_side\":" +
+        (observation.pc_side_available
+            ? std::to_string(observation.pc_side)
+            : std::string("null")) +
+        ",\"ksp_diagonal_scaling_available\":" +
+        std::string(
+            observation.ksp_diagonal_scaling_available ? "true" : "false") +
+        ",\"ksp_diagonal_scaling_enabled\":" +
+        optional_bool(
+            observation.ksp_diagonal_scaling_available,
+            observation.ksp_diagonal_scaling_enabled) +
+        ",\"pc_pmat_available\":" +
+        std::string(observation.pc_pmat_available ? "true" : "false") +
+        ",\"ksp_pmat_available\":" +
+        std::string(observation.ksp_pmat_available ? "true" : "false") +
+        ",\"pc_and_ksp_pmat_identity_available\":" +
+        std::string(observation.pc_and_ksp_pmat_identity_available ? "true" : "false") +
+        ",\"pc_and_ksp_pmat_identical\":" +
+        optional_bool(
+            observation.pc_and_ksp_pmat_identity_available,
+            observation.pc_and_ksp_pmat_identical) +
+        ",\"pc_pmat_matches_expected_available\":" +
+        std::string(observation.pc_pmat_matches_expected_available ? "true" : "false") +
+        ",\"pc_pmat_matches_expected\":" +
+        optional_bool(
+            observation.pc_pmat_matches_expected_available,
+            observation.pc_pmat_matches_expected) +
+        ",\"expected_pmat_action_defect_available\":" +
+        std::string(observation.expected_pmat_action_defect_available
+            ? "true" : "false") +
+        ",\"expected_pmat_action_relative_defect\":" +
+        optional_number(
+            observation.expected_pmat_action_defect_available,
+            observation.expected_pmat_action_relative_defect) +
+        ",\"pc_apply_attempt_count\":" +
+        std::to_string(observation.pc_apply_attempt_count) +
+        ",\"pc_apply_success_count\":" +
+        std::to_string(observation.pc_apply_success_count) +
+        ",\"pc_apply_error_code_available\":" +
+        std::string(observation.pc_apply_error_code_available ? "true" : "false") +
+        ",\"pc_apply_error_code\":" +
+        (observation.pc_apply_error_code_available
+            ? std::to_string(observation.pc_apply_error_code)
+            : std::string("null")) +
+        ",\"pc_apply_fault_injected\":" +
+        std::string(observation.pc_apply_fault_injected ? "true" : "false") +
+        ",\"repeat_pc_apply_attempt_count\":" +
+        std::to_string(observation.repeat_pc_apply_attempt_count) +
+        ",\"repeat_pc_apply_success_count\":" +
+        std::to_string(observation.repeat_pc_apply_success_count) +
+        ",\"repeat_pc_apply_error_code_available\":" +
+        std::string(observation.repeat_pc_apply_error_code_available ? "true" : "false") +
+        ",\"repeat_pc_apply_error_code\":" +
+        (observation.repeat_pc_apply_error_code_available
+            ? std::to_string(observation.repeat_pc_apply_error_code)
+            : std::string("null")) +
+        ",\"pmat_action_attempt_count\":" +
+        std::to_string(observation.pmat_action_attempt_count) +
+        ",\"shifted_operator_action_attempt_count\":" +
+        std::to_string(observation.shifted_operator_action_attempt_count) +
+        ",\"rhs_l2_norm_available\":" +
+        std::string(observation.rhs_l2_norm_available ? "true" : "false") +
+        ",\"rhs_l2_norm\":" +
+        optional_number(observation.rhs_l2_norm_available, observation.rhs_l2_norm) +
+        ",\"pmat_residual_l2_norm_available\":" +
+        std::string(observation.pmat_residual_l2_norm_available ? "true" : "false") +
+        ",\"pmat_residual_l2_norm\":" +
+        optional_number(
+            observation.pmat_residual_l2_norm_available,
+            observation.pmat_residual_l2_norm) +
+        ",\"pmat_relative_residual_available\":" +
+        std::string(observation.pmat_relative_residual_available ? "true" : "false") +
+        ",\"pmat_relative_residual\":" +
+        optional_number(
+            observation.pmat_relative_residual_available,
+            observation.pmat_relative_residual) +
+        ",\"shifted_operator_residual_l2_norm_available\":" +
+        std::string(observation.shifted_operator_residual_l2_norm_available
+            ? "true" : "false") +
+        ",\"shifted_operator_residual_l2_norm\":" +
+        optional_number(
+            observation.shifted_operator_residual_l2_norm_available,
+            observation.shifted_operator_residual_l2_norm) +
+        ",\"shifted_operator_relative_residual_available\":" +
+        std::string(observation.shifted_operator_relative_residual_available
+            ? "true" : "false") +
+        ",\"shifted_operator_relative_residual\":" +
+        optional_number(
+            observation.shifted_operator_relative_residual_available,
+            observation.shifted_operator_relative_residual) +
+        ",\"repeatability_relative_defect_available\":" +
+        std::string(observation.repeatability_relative_defect_available
+            ? "true" : "false") +
+        ",\"repeatability_relative_defect\":" +
+        optional_number(
+            observation.repeatability_relative_defect_available,
+            observation.repeatability_relative_defect) +
+        ",\"candidate_snapshot_available\":" +
+        std::string(observation.candidate_snapshot_available ? "true" : "false") +
+        ",\"candidate_unchanged_after_first_apply_available\":" +
+        std::string(observation.candidate_unchanged_after_first_apply_available
+            ? "true" : "false") +
+        ",\"candidate_unchanged_after_first_apply\":" +
+        optional_bool(
+            observation.candidate_unchanged_after_first_apply_available,
+            observation.candidate_unchanged_after_first_apply) +
+        ",\"candidate_unchanged_after_repeat_apply_available\":" +
+        std::string(observation.candidate_unchanged_after_repeat_apply_available
+            ? "true" : "false") +
+        ",\"candidate_unchanged_after_repeat_apply\":" +
+        optional_bool(
+            observation.candidate_unchanged_after_repeat_apply_available,
+            observation.candidate_unchanged_after_repeat_apply) +
+        ",\"production_phi_rhs_unchanged_after_observation_available\":" +
+        std::string(
+            observation.production_phi_rhs_unchanged_after_observation_available
+                ? "true" : "false") +
+        ",\"production_phi_rhs_unchanged_after_observation\":" +
+        optional_bool(
+            observation.production_phi_rhs_unchanged_after_observation_available,
+            observation.production_phi_rhs_unchanged_after_observation) +
+        ",\"production_phi_solution_unchanged_after_observation_available\":" +
+        std::string(
+            observation.production_phi_solution_unchanged_after_observation_available
+                ? "true" : "false") +
+        ",\"production_phi_solution_unchanged_after_observation\":" +
+        optional_bool(
+            observation.
+                production_phi_solution_unchanged_after_observation_available,
+            observation.
+                production_phi_solution_unchanged_after_observation) +
+        ",\"mat_shift_nonzero_solution_defect_available\":" +
+        std::string(observation.mat_shift_nonzero_solution_defect_available
+            ? "true" : "false") +
+        ",\"mat_shift_nonzero_solution_relative_defect\":" +
+        optional_number(
+            observation.mat_shift_nonzero_solution_defect_available,
+            observation.mat_shift_nonzero_solution_relative_defect) +
+        ",\"mat_shift_none_solution_defect_available\":" +
+        std::string(observation.mat_shift_none_solution_defect_available
+            ? "true" : "false") +
+        ",\"mat_shift_none_solution_relative_defect\":" +
+        optional_number(
+            observation.mat_shift_none_solution_defect_available,
+            observation.mat_shift_none_solution_relative_defect) +
+        ",\"first_error_code_available\":" +
+        std::string(observation.first_error_code_available ? "true" : "false") +
+        ",\"first_error_code\":" +
+        (observation.first_error_code_available
+            ? std::to_string(observation.first_error_code)
+            : std::string("null")) +
+        ",\"borrowed_pmat_copy\":" +
+        borrowed_pmat_copy_observation_json(observation.borrowed_pmat_copy) +
+        "}";
+    return json;
+}
+
+std::string candidate_operator_diagnostic_json(
+    const FloquetShiftedKspFailureProbe::CandidateOperatorDiagnostic &diagnostic)
+{
+    if (!diagnostic.requested) {
+        return "null";
+    }
+    return std::string("{\"schema_version\":\"floquet_candidate_operator_diagnostic.v1\",") +
+        "\"requested\":true,"
+        "\"measurement_scope\":\"true_probe_callback_candidate_pre_residual_mutation\"," +
+        "\"status\":\"" +
+        escape_json_string(diagnostic.status != nullptr ? diagnostic.status : "unknown") +
+        "\",\"reason\":\"" +
+        escape_json_string(diagnostic.reason != nullptr ? diagnostic.reason : "") +
+        "\",\"workspace_available\":" +
+        std::string(diagnostic.workspace_available ? "true" : "false") +
+        ",\"sample_available\":" +
+        std::string(diagnostic.sample_available ? "true" : "false") +
+        ",\"callback_ordinal\":" +
+        (diagnostic.callback_ordinal > 0
+            ? std::to_string(diagnostic.callback_ordinal)
+            : std::string("null")) +
+        ",\"iteration\":" +
+        (diagnostic.iteration >= 0
+            ? std::to_string(diagnostic.iteration)
+            : std::string("null")) +
+        ",\"production_phi_rhs_l2_norm_available\":" +
+        std::string(diagnostic.production_phi_rhs_norm_available ? "true" : "false") +
+        ",\"production_phi_rhs_l2_norm\":" +
+        (diagnostic.production_phi_rhs_norm_available
+            ? format_double(diagnostic.production_phi_rhs_norm)
+            : std::string("null")) +
+        ",\"production_phi_l2_norm_available\":" +
+        std::string(diagnostic.production_phi_norm_available ? "true" : "false") +
+        ",\"production_phi_l2_norm\":" +
+        (diagnostic.production_phi_norm_available
+            ? format_double(diagnostic.production_phi_norm)
+            : std::string("null")) +
+        ",\"production_poisson_residual_l2_norm_available\":" +
+        std::string(diagnostic.production_poisson_residual_available ? "true" : "false") +
+        ",\"production_poisson_residual_l2_norm\":" +
+        (diagnostic.production_poisson_residual_available
+            ? format_double(diagnostic.production_poisson_residual_norm)
+            : std::string("null")) +
+        ",\"production_poisson_relative_residual_available\":" +
+        std::string(diagnostic.production_poisson_relative_residual_available
+            ? "true" : "false") +
+        ",\"production_poisson_relative_residual\":" +
+        (diagnostic.production_poisson_relative_residual_available
+            ? format_double(diagnostic.production_poisson_relative_residual)
+            : std::string("null")) +
+        ",\"production_vs_isolated_replay_available\":" +
+        std::string(diagnostic.production_vs_isolated_replay_available
+            ? "true" : "false") +
+        ",\"production_vs_isolated_replay_relative_defect\":" +
+        (diagnostic.production_vs_isolated_replay_available
+            ? format_double(diagnostic.production_vs_isolated_replay_relative_defect)
+            : std::string("null")) +
+        ",\"isolated_repeatability_available\":" +
+        std::string(diagnostic.isolated_repeatability_available ? "true" : "false") +
+        ",\"isolated_repeatability_relative_defect\":" +
+        (diagnostic.isolated_repeatability_available
+            ? format_double(diagnostic.isolated_repeatability_relative_defect)
+            : std::string("null")) +
+        ",\"isolated_additivity_available\":" +
+        std::string(diagnostic.isolated_additivity_available ? "true" : "false") +
+        ",\"isolated_additivity_relative_defect\":" +
+        (diagnostic.isolated_additivity_available
+            ? format_double(diagnostic.isolated_additivity_relative_defect)
+            : std::string("null")) +
+        ",\"exact_shifted_matrix_comparison_available\":" +
+        std::string(diagnostic.exact_shifted_matrix_comparison_available
+            ? "true" : "false") +
+        ",\"exact_shifted_matrix_relative_defect\":" +
+        (diagnostic.exact_shifted_matrix_comparison_available
+            ? format_double(diagnostic.exact_shifted_matrix_relative_defect)
+            : std::string("null")) +
+        ",\"preconditioner_normalization_scale\":" +
+        format_double(diagnostic.preconditioner_normalization_scale) +
+        ",\"live_pc_observation\":" +
+        live_pc_observation_json(diagnostic.live_pc_observation) +
+        ",\"shifted_lu_policy_comparison\":" +
+        shifted_lu_policy_comparison_json(diagnostic.shifted_lu_policy_comparison) +
+        ",\"measurement_failure_count\":" +
+        std::to_string(diagnostic.measurement_failure_count) +
+        ",\"last_error_code\":" +
+        std::to_string(diagnostic.last_error_code) + "}";
+}
+
+std::string floquet_certified_recovery_json(
+    const FloquetShiftedKspCertifiedRecoveryProvenance &value)
+{
+    const auto boolean = [](bool field) { return field ? "true" : "false"; };
+    return std::string("{\"schema_version\":\"floquet_shifted_ksp_certified_recovery.v1\",") +
+        "\"available\":" + boolean(value.available) +
+        ",\"transport_ksp_type\":\"" + value.transport_ksp_type +
+        "\",\"transport_pc_type\":\"" + value.transport_pc_type +
+        "\",\"transport_pc_side\":" + std::to_string(value.transport_pc_side) +
+        ",\"transport_norm_type\":" + std::to_string(value.transport_norm_type) +
+        ",\"transport_converged_reason\":" +
+        (value.transport_converged_reason_available
+            ? std::to_string(value.transport_converged_reason) : std::string("null")) +
+        ",\"inner_ksp_type\":\"" + value.inner_ksp_type +
+        "\",\"inner_pc_type\":\"" + value.inner_pc_type +
+        "\",\"certificate_source\":\"" + value.certificate_source +
+        "\",\"reference_norm\":\"original_rhs_norm\"," +
+        "\"iteration_budget_semantics\":\"cumulative_per_original_rhs\"," +
+        "\"solve_count\":" + std::to_string(value.solve_count) +
+        ",\"certified_count\":" + std::to_string(value.certified_count) +
+        ",\"failed_count\":" + std::to_string(value.failed_count) +
+        ",\"recovery_attempt_count\":" + std::to_string(value.recovery_attempt_count) +
+        ",\"recovered_solve_count\":" + std::to_string(value.recovered_solve_count) +
+        ",\"inner_attempt_count\":" + std::to_string(value.inner_attempt_count) +
+        ",\"failed_inner_attempt_count\":" + std::to_string(value.failed_inner_attempt_count) +
+        ",\"cumulative_iterations_total\":" + std::to_string(value.cumulative_iterations_total) +
+        ",\"last_cumulative_iterations\":" + std::to_string(value.last_cumulative_iterations) +
+        ",\"last_cycle_count\":" + std::to_string(value.last_cycle_count) +
+        ",\"max_cumulative_iterations_per_solve\":" + std::to_string(value.max_cumulative_iterations_per_solve) +
+        ",\"candidate_iteration\":" + std::to_string(value.last_candidate_iteration) +
+        ",\"terminal_iteration\":" + std::to_string(value.last_terminal_iteration) +
+        ",\"candidate_source\":\"" + value.last_candidate_source + "\"" +
+        ",\"last_certified\":" + boolean(value.last_certified) +
+        ",\"last_recovered\":" + boolean(value.last_recovered) +
+        ",\"last_inner_reason\":" + (value.last_inner_reason_available
+            ? std::to_string(value.last_inner_reason) : std::string("null")) +
+        ",\"last_failed_inner_reason\":" + (value.last_failed_inner_reason_available
+            ? std::to_string(value.last_failed_inner_reason) : std::string("null")) +
+        ",\"last_failed_inner_iterations\":" + (value.last_failed_inner_reason_available
+            ? std::to_string(value.last_failed_inner_iterations) : std::string("null")) +
+        ",\"final_residual\":" + (value.final_residual_available
+            ? format_double(value.final_residual) : std::string("null")) +
+        ",\"original_rhs_norm\":" + (value.last_rhs_norm_available
+            ? format_double(value.last_rhs_norm) : std::string("null")) +
+        ",\"threshold\":" + (value.threshold_available
+            ? format_double(value.threshold) : std::string("null")) +
+        ",\"maximum_tolerance_ratio\":" + (value.max_tolerance_ratio_available
+            ? format_double(value.max_tolerance_ratio) : std::string("null")) +
+        ",\"maximum_tolerance_ratio_semantics\":\"all_inner_attempts\"," +
+        "\"primary_error\":" + std::to_string(value.primary_error) +
+        ",\"cleanup_error\":" + std::to_string(value.cleanup_error) +
+        ",\"unsafe\":" + boolean(value.unsafe) + "}";
+}
+
+// Serialize cached measurements only: a hard EPSSolve error can invalidate
+// the PETSc object graph, so publication must never query solver handles.
+std::string floquet_shifted_ksp_diagnostics_json_fields(
+    const SLEPcTinyGyrotropicModalEigenResult &result,
+    bool include_basic_fields)
+{
+    if (result.solver_adapter == nullptr ||
+        std::strcmp(result.solver_adapter, "floquet_airbox_cpu_schur_slepc") != 0) {
+        return "";
+    }
+    std::string json =
+        "\"ksp_diagnostics_available\":" +
+        std::string(result.ksp_diagnostics_available ? "true" : "false") +
+        "," + floquet_shifted_ksp_configuration_json_field(result) +
+        ",\"ksp_monitor_progress\":{"
+        "\"schema_version\":\"floquet_shifted_ksp_monitor_progress.v1\","
+        "\"phase\":\"during_eps_solve\","
+        "\"source\":\"petsc_ksp_monitor\","
+        "\"monitor_registered\":" +
+        std::string(result.ksp_monitor_registered ? "true" : "false") +
+        ",\"available\":" +
+        std::string(result.ksp_monitor_observation_count > 0 ? "true" : "false") +
+        ",\"observation_count\":" +
+        std::to_string(result.ksp_monitor_observation_count) +
+        ",\"observation_count_scope\":\"all_shifted_ksp_monitor_callbacks_during_one_epsolve\""
+        ",\"last_iteration_available\":" +
+        std::string(result.ksp_monitor_last_iteration_available ? "true" : "false") +
+        ",\"last_iteration\":" +
+        (result.ksp_monitor_last_iteration_available
+            ? std::to_string(result.ksp_monitor_last_iteration)
+            : std::string("null")) +
+        ",\"recursive_residual_available\":" +
+        std::string(result.ksp_monitor_recursive_residual_available
+            ? "true" : "false") +
+        ",\"recursive_residual_norm\":" +
+        (result.ksp_monitor_recursive_residual_available
+            ? format_double(result.ksp_monitor_recursive_residual_norm)
+            : std::string("null")) +
+        ",\"recursive_residual_semantics\":\"petsc_monitor_recursive_norm_not_true_residual\""
+        ",\"last_observed_reason_available\":" +
+        std::string(result.ksp_monitor_last_reason_available ? "true" : "false") +
+        ",\"last_observed_reason\":" +
+        (result.ksp_monitor_last_reason_available
+            ? std::to_string(result.ksp_monitor_last_observed_reason)
+            : std::string("null")) +
+        ",\"last_observed_reason_is_final\":false,"
+        "\"live_pclu_configuration\":" +
+        live_pclu_monitor_observation_json(
+            result.live_pclu_configuration_during_ksp_monitor) +
+        "}" +
+        ",\"ksp_true_residual_criterion\":{"
+        "\"schema_version\":\"floquet_shifted_ksp_true_residual_criterion.v1\","
+        "\"reference_norm\":\"rhs_norm_zero_initial_guess\","
+        "\"solve_count_scope\":\"certified_outer_transport_actions\","
+        "\"configuration_source\":\"inner_gmres_original_policy\","
+        "\"solve_count\":" + std::to_string(result.ksp_true_criterion_solve_count) +
+        ",\"measured_count\":" + std::to_string(result.ksp_true_criterion_measured_count) +
+        ",\"violation_count\":" + std::to_string(result.ksp_true_criterion_violation_count) +
+        ",\"unavailable_count\":" + std::to_string(result.ksp_true_criterion_unavailable_count) +
+        ",\"maximum_tolerance_ratio\":" + format_double(result.ksp_true_criterion_maximum_tolerance_ratio) +
+        "},\"ksp_certified_recovery\":" +
+        floquet_certified_recovery_json(result.shifted_ksp_certified_recovery) +
+        ",\"ksp_converged_reason_semantics\":\"inner_engine_reason\"," +
+        "\"ksp_last_iterations\":" +
+        std::to_string(result.ksp_last_iterations) +
+        ",\"ksp_last_true_residual_available\":" +
+        std::string(result.ksp_last_true_residual_available
+            ? "true" : "false") +
+        ",\"ksp_last_true_residual_norm\":" +
+        format_double(result.ksp_last_true_residual_norm) +
+        ",\"ksp_last_rhs_norm\":" +
+        format_double(result.ksp_last_rhs_norm) +
+        ",\"ksp_last_true_relative_residual\":" +
+        format_double(result.ksp_last_true_relative_residual) +
+        ",\"ksp_true_residual_sample_count\":" +
+        std::to_string(result.ksp_true_residual_sample_count) +
+        ",\"ksp_true_residual_measurement_failure_count\":" +
+        std::to_string(result.ksp_true_residual_measurement_failure_count) +
+        ",\"ksp_max_true_relative_residual\":" +
+        format_double(result.ksp_max_true_relative_residual) +
+        ",\"ksp_pc_side\":" +
+        (result.ksp_last_true_residual_available
+            ? std::to_string(result.ksp_pc_side)
+            : std::string("null")) +
+        ",\"ksp_norm_type\":" +
+        (result.ksp_last_true_residual_available
+            ? std::to_string(result.ksp_norm_type)
+            : std::string("null")) +
+        ",\"ksp_converged_reason\":" +
+        (result.ksp_converged_reason_available
+            ? std::to_string(result.ksp_converged_reason)
+            : std::string("null")) +
+        ",\"ksp_residual_norm_semantics\":\"petsc_configured_norm_from_last_shift_invert_solve\"" +
+        ",\"eps_converged_reason\":" +
+        (result.eps_converged_reason_available
+            ? std::to_string(result.eps_converged_reason)
+            : std::string("null")) +
+        ",\"eps_solve_error_available\":" +
+        std::string(result.eps_solve_error_available ? "true" : "false") +
+        ",\"eps_solve_error_code\":" +
+        (result.eps_solve_error_available
+            ? std::to_string(result.eps_solve_error_code)
+            : std::string("null")) +
+        ",\"eps_dimensions_available\":" +
+        std::string(result.eps_dimensions_available ? "true" : "false") +
+        ",\"eps_nev\":" +
+        (result.eps_dimensions_available
+            ? std::to_string(result.eps_nev)
+            : std::string("null")) +
+        ",\"eps_ncv\":" +
+        (result.eps_dimensions_available
+            ? std::to_string(result.eps_ncv)
+            : std::string("null")) +
+        ",\"eps_mpd\":" +
+        (result.eps_dimensions_available && result.eps_mpd > 0
+            ? std::to_string(result.eps_mpd)
+            : std::string("null"));
+    json +=
+        ",\"floquet_eps_nev_refill\":{"
+        "\"schema_version\":\"floquet_eps_nev_refill.v1\","
+        "\"attempt_count\":" + std::to_string(result.eps_attempt_count) +
+        ",\"solved_attempt_count\":" +
+        std::to_string(result.eps_solved_attempt_count) +
+        ",\"initial_nev\":" +
+        (result.eps_initial_nev > 0
+            ? std::to_string(result.eps_initial_nev)
+            : std::string("null")) +
+        ",\"last_solved_nev\":" +
+        (result.eps_dimensions_available
+            ? std::to_string(result.eps_nev)
+            : std::string("null")) +
+        ",\"last_finalized_attempt\":" +
+        (result.eps_finalized_attempt_number > 0
+            ? std::to_string(result.eps_finalized_attempt_number)
+            : std::string("null")) +
+        ",\"last_finalized_nev\":" +
+        (result.eps_finalized_nev > 0
+            ? std::to_string(result.eps_finalized_nev)
+            : std::string("null")) +
+        ",\"unique_certified_mode_count\":" +
+        std::to_string(result.eps_unique_certified_mode_count) +
+        ",\"iteration_budget_available\":" +
+        std::string(result.eps_iteration_budget_available ? "true" : "false") +
+        ",\"outer_iteration_budget_exhausted\":" +
+        std::string(result.eps_outer_iteration_budget_exhausted ? "true" : "false") +
+        ",\"outer_iteration_budget\":" +
+        (result.eps_iteration_budget_available
+            ? std::to_string(result.max_outer_iterations)
+            : std::string("null")) +
+        ",\"cumulative_outer_iterations_available\":" +
+        std::string(result.eps_cumulative_iterations_available ? "true" : "false") +
+        ",\"cumulative_outer_iterations\":" +
+        (result.eps_cumulative_iterations_available
+            ? std::to_string(result.outer_iterations)
+            : std::string("null")) +
+        ",\"cancellation_observed\":" +
+        std::string(result.eps_cancellation_observed ? "true" : "false") + "}";
+    json +=
+        ",\"eps_monitor_iteration_scope\":\"last_actual_eps_attempt\"";
+    if (result.unsupported_reason != nullptr &&
+        std::strcmp(
+            result.unsupported_reason,
+            "floquet_slepc_solve_failed") == 0) {
+        const auto &probe = result.shifted_ksp_failure_probe;
+        json +=
+            ",\"shifted_ksp_failure_probe\":{"
+            "\"schema_version\":\"shifted_ksp_failure_probe.v1\","
+            "\"scope\":\"internal_shifted_linear_system_not_original_descriptor\","
+            "\"eps_dimension_semantics\":\"arguments_passed_to_EPSSetDimensions_not_resolved_dimensions\","
+            "\"eps_attempt_number\":" +
+            (probe.eps_attempt_number > 0
+                ? std::to_string(probe.eps_attempt_number)
+                : std::string("null")) +
+            ",\"eps_dimension_arguments_available\":" +
+            std::string(probe.eps_dimension_arguments_available ? "true" : "false") +
+            ",\"eps_nev_argument\":" +
+            (probe.eps_dimension_arguments_available
+                ? std::to_string(probe.eps_nev_argument)
+                : std::string("null")) +
+            ",\"eps_ncv_argument\":" +
+            (probe.eps_dimension_arguments_available
+                ? std::to_string(probe.eps_ncv_argument)
+                : std::string("null")) +
+            ",\"callback_observation_available\":" +
+            std::string(probe.callback_observation_available ? "true" : "false") +
+            ",\"callback_count\":" + std::to_string(probe.callback_count) +
+            ",\"callback_count_scope\":\"registered_callbacks_during_this_eps_attempt\""
+            ",\"last_callback_iteration\":" +
+            (probe.callback_count > 0
+                ? std::to_string(probe.last_callback_iteration)
+                : std::string("null")) +
+            ",\"last_recursive_residual_available\":" +
+            std::string(probe.last_recursive_residual_available ? "true" : "false") +
+            ",\"last_recursive_residual_norm\":" +
+            (probe.last_recursive_residual_available
+                ? format_double(probe.last_recursive_residual_norm)
+                : std::string("null")) +
+            ",\"last_default_reason_available\":" +
+            std::string(probe.last_default_reason_available ? "true" : "false") +
+            ",\"last_default_reason\":" +
+            (probe.last_default_reason_available
+                ? std::to_string(probe.last_default_reason)
+                : std::string("null")) +
+            ",\"last_reason_after_gate_available\":" +
+            std::string(probe.last_reason_after_gate_available ? "true" : "false") +
+            ",\"last_reason_after_gate\":" +
+            (probe.last_reason_after_gate_available
+                ? std::to_string(probe.last_reason_after_gate)
+                : std::string("null")) +
+            ",\"true_probe_attempt_count\":" +
+            std::to_string(probe.true_probe_attempt_count) +
+            ",\"true_probe_attempt_count_scope\":\"positive_default_reason_callbacks_during_this_eps_attempt\""
+            ",\"true_probe_count\":" +
+            std::to_string(probe.true_probe_count) +
+            ",\"true_probe_count_scope\":\"completed_true_gate_measurements_during_this_eps_attempt\""
+            ",\"true_probe_measurement_failure_count\":" +
+            std::to_string(probe.true_probe_measurement_failure_count) +
+            ",\"true_probe_auxiliary_measurement_failure_count\":" +
+            std::to_string(
+                probe.true_probe_auxiliary_measurement_failure_count) +
+            ",\"last_true_probe\":{"
+            "\"available\":" +
+            std::string(probe.last_true_probe_available ? "true" : "false") +
+            ",\"callback_ordinal\":" +
+            (probe.true_probe_attempt_count > 0
+                ? std::to_string(probe.last_true_probe_callback_ordinal)
+                : std::string("null")) +
+            ",\"iteration\":" +
+            (probe.true_probe_attempt_count > 0
+                ? std::to_string(probe.last_true_probe_iteration)
+                : std::string("null")) +
+            ",\"recursive_residual_available\":" +
+            std::string(probe.last_true_probe_recursive_residual_available
+                ? "true" : "false") +
+            ",\"recursive_residual_norm\":" +
+            (probe.last_true_probe_recursive_residual_available
+                ? format_double(probe.last_true_probe_recursive_residual_norm)
+                : std::string("null")) +
+            ",\"default_reason_available\":" +
+            std::string(probe.last_true_probe_default_reason_available
+                ? "true" : "false") +
+            ",\"default_reason\":" +
+            (probe.last_true_probe_default_reason_available
+                ? std::to_string(probe.last_true_probe_default_reason)
+                : std::string("null")) +
+            ",\"build_solution_reason_available\":" +
+            std::string(probe.last_true_build_reason_available
+                ? "true" : "false") +
+            ",\"build_solution_reason\":" +
+            (probe.last_true_build_reason_available
+                ? std::to_string(probe.last_true_build_reason)
+                : std::string("null")) +
+            ",\"reason_after_gate_available\":" +
+            std::string(probe.last_true_probe_reason_after_gate_available
+                ? "true" : "false") +
+            ",\"reason_after_gate\":" +
+            (probe.last_true_probe_reason_after_gate_available
+                ? std::to_string(probe.last_true_probe_reason_after_gate)
+                : std::string("null")) +
+            ",\"solution_l2_norm_available\":" +
+            std::string(probe.last_true_solution_norm_available
+                ? "true" : "false") +
+            ",\"solution_l2_norm_source\":\"KSPBuildSolution_vector\""
+            ",\"solution_l2_norm\":" +
+            (probe.last_true_solution_norm_available
+                ? format_double(probe.last_true_solution_norm)
+                : std::string("null")) +
+            ",\"shifted_operator_action_l2_norm_available\":" +
+            std::string(probe.last_true_operator_action_norm_available
+                ? "true" : "false") +
+            ",\"shifted_operator_action_l2_norm_source\":\"MatMult_before_residual_mutation\""
+            ",\"shifted_operator_action_l2_norm\":" +
+            (probe.last_true_operator_action_norm_available
+                ? format_double(probe.last_true_operator_action_norm)
+                : std::string("null")) +
+            ",\"rhs_l2_norm\":" +
+            (probe.last_true_probe_available
+                ? format_double(probe.last_true_rhs_norm)
+                : std::string("null")) +
+            ",\"true_residual_l2_norm\":" +
+            (probe.last_true_probe_available
+                ? format_double(probe.last_true_residual_norm)
+                : std::string("null")) +
+            ",\"rtol\":" +
+            (probe.true_probe_attempt_count > 0
+                ? format_double(probe.last_true_rtol)
+                : std::string("null")) +
+            ",\"atol\":" +
+            (probe.true_probe_attempt_count > 0
+                ? format_double(probe.last_true_atol)
+                : std::string("null")) +
+            ",\"threshold_l2_norm\":" +
+            (probe.last_true_probe_available
+                ? format_double(probe.last_true_residual_threshold)
+                : std::string("null")) +
+            ",\"tolerance_ratio_available\":" +
+            std::string(probe.last_true_tolerance_ratio_available
+                ? "true" : "false") +
+            ",\"true_residual_to_threshold_ratio\":" +
+            (probe.last_true_tolerance_ratio_available
+                ? format_double(probe.last_true_tolerance_ratio)
+                : std::string("null")) +
+            ",\"candidate_operator_diagnostic\":" +
+            candidate_operator_diagnostic_json(
+                probe.candidate_operator_diagnostic) + "}}";
+    }
+    // Publish only the cached opt-in observation after a successful solve.
+    // Its diagnostic availability does not certify physics or alter acceptance.
+    if (result.ok && result.shifted_ksp_failure_probe.candidate_operator_diagnostic.requested) {
+        json += ",\"candidate_operator_observation\":" +
+            candidate_operator_diagnostic_json(
+                result.shifted_ksp_failure_probe.candidate_operator_diagnostic);
+    }
+    // Sparse nearest success already publishes these configuration fields.
+    // Window and nearest failure need them here; emit each key exactly once.
+    if (include_basic_fields) {
+        json +=
+            ",\"ksp_type\":\"" + std::string(result.ksp_type) +
+            "\",\"ksp_rtol\":" + format_double(result.ksp_rtol) +
+            ",\"ksp_atol\":" + format_double(result.ksp_atol) +
+            ",\"ksp_final_residual\":" +
+            format_double(result.ksp_final_residual);
+    }
+    return json;
+}
+
+std::string floquet_demag_operator_probe_json_field(
+    const FloquetDemagOperatorProbeResult &probe)
+{
+    if (!probe.requested) {
+        return {};
+    }
+    const auto sample_json = [](const char *direction,
+                                const FloquetDemagOperatorProbeSample &sample) {
+        return "\"" + std::string(direction) + "\":{"
+            "\"attempted\":" + (sample.attempted ? "true" : "false") +
+            ",\"passed\":" + (sample.passed ? "true" : "false") +
+            ",\"q_l2_norm\":" + format_double(sample.q_l2_norm) +
+            ",\"potential_relative_residual\":" +
+            format_double(sample.potential_relative_residual) +
+            ",\"self_energy_j\":" + format_double(sample.self_energy_j) +
+            ",\"potential_energy_j\":" +
+            format_double(sample.potential_energy_j) +
+            ",\"energy_form_relative_defect\":" +
+            format_double(sample.energy_form_relative_defect) + "}";
+    };
+    const char *status = probe.passed
+        ? "passed"
+        : probe.available ? "failed" : "not_observable";
+    return "\"dynamic_demag_operator_probe\":{"
+        "\"schema_version\":\"floquet_dynamic_demag_operator_probe.v1\","
+        "\"status\":\"" + std::string(status) + "\","
+        "\"potential_equation\":\"P_phi_plus_A_phiq_q_equals_zero\","
+        "\"potential_coefficient_unit\":\"A\","
+        "\"energy_unit\":\"J\","
+        "\"relative_tolerance\":1e-8,"
+        "\"field_reconstruction\":\"not_included_in_this_probe\","
+        "\"hermitian_relative_defect\":" +
+        format_double(probe.hermitian_relative_defect) + "," +
+        sample_json("global_y", probe.global_y) + "," +
+        sample_json("global_z", probe.global_z) + "}";
+}
+
+std::string floquet_dense_oracle_json_field(
+    const FloquetDenseOracleDiagnostics &oracle)
+{
+    if (!oracle.requested) {
+        return "\"floquet_dense_oracle\":null";
+    }
+    std::string json = std::string("\"floquet_dense_oracle\":{") +
+        "\"schema_version\":\"floquet_dense_original_schur_oracle.v1\"," +
+        "\"status\":\"" + std::string(oracle.status != nullptr ? oracle.status : "unknown") +
+        "\",\"reason\":\"" + std::string(oracle.reason != nullptr ? oracle.reason : "") +
+        "\",\"available\":" + std::string(oracle.available ? "true" : "false") +
+        ",\"candidate_found\":" + std::string(oracle.candidate_found ? "true" : "false") +
+        ",\"action_match\":" + std::string(oracle.action_match ? "true" : "false") +
+        ",\"st_type\":\"" +
+        std::string(oracle.st_shift_zero ? "shift" : "unverified") +
+        "\",\"st_shift\":" +
+        std::string(oracle.st_shift_zero ? "0" : "null") +
+        ",\"eps_type\":\"" + std::string(oracle.eps_type) +
+        "\",\"problem_type\":\"" + std::string(oracle.problem_type) +
+        "\",\"spectral_transform\":\"" +
+        std::string(oracle.spectral_transform) +
+        "\",\"q_complex_dof_count\":" + std::to_string(oracle.q_complex_dof_count) +
+        ",\"phi_dof_count\":" + std::to_string(oracle.phi_dof_count) +
+        ",\"real_split_dimension\":" + std::to_string(oracle.real_split_dimension) +
+        ",\"eps_converged_count\":" + std::to_string(oracle.eps_converged_count) +
+        ",\"eps_converged_reason\":" +
+        (oracle.eps_converged_reason_available
+             ? std::to_string(oracle.eps_converged_reason)
+             : std::string("null")) +
+        ",\"action_probe_count\":" + std::to_string(oracle.action_probe_count) +
+        ",\"operator_normalization_scale\":" +
+        format_double(oracle.operator_normalization_scale) +
+        ",\"action_relative_error_max\":" +
+        format_double(oracle.action_relative_error_max) +
+        ",\"poisson_relative_residual_max\":" +
+        format_double(oracle.poisson_relative_residual_max) +
+        ",\"eps_absolute_residual\":" +
+        format_double(oracle.eps_absolute_residual) +
+        ",\"rotated_omega_rad_s\":" +
+        format_double(oracle.rotated_omega_rad_s) +
+        ",\"rotated_imaginary_rad_s\":" +
+        format_double(oracle.rotated_imaginary_rad_s) +
+        ",\"frequency_hz\":" + format_double(oracle.frequency_hz) +
+        ",\"frequency_distance_hz\":" +
+        format_double(oracle.frequency_distance_hz) +
+        ",\"raw_lambda_real_per_s\":" +
+        format_double(oracle.raw_lambda_real_per_s) +
+        ",\"raw_lambda_imag_rad_per_s\":" +
+        format_double(oracle.raw_lambda_imag_rad_per_s) +
+        ",\"projected_lambda_real_per_s\":" +
+        format_double(oracle.projected_lambda_real_per_s) +
+        ",\"projected_lambda_imag_rad_per_s\":" +
+        format_double(oracle.projected_lambda_imag_rad_per_s) +
+        ",\"magnetic_residual_raw\":" +
+        format_double(oracle.magnetic_residual_raw) +
+        ",\"magnetic_residual_projected\":" +
+        format_double(oracle.magnetic_residual_projected) +
+        ",\"potential_residual\":" +
+        format_double(oracle.potential_residual) +
+        ",\"q_projection_ratio\":" +
+        format_double(oracle.q_projection_ratio);
+    json += ",\"raw_spectrum\":{\"count_available\":" +
+        std::string(oracle.raw_spectrum_count_available ? "true" : "false") +
+        ",\"total_count\":" +
+        (oracle.raw_spectrum_count_available
+            ? std::to_string(oracle.raw_spectrum_total_count)
+            : std::string("null")) +
+        ",\"entry_count\":" +
+        (oracle.raw_spectrum_count_available
+            ? std::to_string(oracle.raw_spectrum_entry_count)
+            : std::string("null")) +
+        ",\"truncated\":" +
+        (oracle.raw_spectrum_count_available
+            ? std::string(oracle.raw_spectrum_truncated ? "true" : "false")
+            : std::string("null")) +
+        ",\"entries\":[";
+    const int entry_count = std::max(
+        0,
+        std::min(
+            oracle.raw_spectrum_entry_count,
+            static_cast<int>(FloquetDenseOracleDiagnostics::kRawSpectrumCapacity)));
+    for (int index = 0; index < entry_count; ++index) {
+        if (index != 0) {
+            json += ",";
+        }
+        const auto &entry = oracle.raw_spectrum[static_cast<std::size_t>(index)];
+        json += "{\"available\":" +
+            std::string(entry.available ? "true" : "false") +
+            ",\"eps_index\":" +
+            (entry.eps_index >= 0
+                ? std::to_string(entry.eps_index)
+                : std::string("null")) +
+            ",\"rotated_eps_real_rad_s\":" +
+            (entry.available
+                ? format_double(entry.rotated_real_rad_s)
+                : std::string("null")) +
+            ",\"rotated_eps_imaginary_rad_s\":" +
+            (entry.available
+                ? format_double(entry.rotated_imaginary_rad_s)
+                : std::string("null")) +
+            ",\"raw_lambda_real_per_s\":" +
+            (entry.available
+                ? format_double(entry.raw_lambda_real_per_s)
+                : std::string("null")) +
+            ",\"raw_lambda_imag_rad_per_s\":" +
+            (entry.available
+                ? format_double(entry.raw_lambda_imag_rad_s)
+                : std::string("null")) +
+            ",\"shift_distance_available\":" +
+            std::string(entry.shift_distance_available ? "true" : "false") +
+            ",\"shift_distance_rad_s\":" +
+            (entry.shift_distance_available
+                ? format_double(entry.shift_distance_rad_s)
+                : std::string("null")) +
+            ",\"shift_distance_hz\":" +
+            (entry.shift_distance_available
+                ? format_double(entry.shift_distance_hz)
+                : std::string("null")) + "}";
+    }
+    json += "]}}";
+    return json;
+}
+
+std::string floquet_schur_action_diagnostic_json_field(
+    const FloquetSchurActionDiagnostic &diagnostic)
+{
+    if (!diagnostic.requested) {
+        return "\"floquet_schur_action_diagnostic\":null";
+    }
+    return std::string("\"floquet_schur_action_diagnostic\":{") +
+        "\"schema_version\":\"floquet_schur_action_diagnostic.v1\","
+        "\"status\":\"" +
+        escape_json_string(diagnostic.status != nullptr ? diagnostic.status : "unknown") +
+        "\",\"reason\":\"" +
+        escape_json_string(diagnostic.reason != nullptr ? diagnostic.reason : "") +
+        "\",\"available\":" +
+        std::string(diagnostic.available ? "true" : "false") +
+        ",\"pre_eps_only\":" +
+        std::string(diagnostic.pre_eps_only ? "true" : "false") +
+        ",\"dense_materialization\":" +
+        std::string(diagnostic.dense_materialization ? "true" : "false") +
+        ",\"measurement_phase\":\"" +
+        escape_json_string(
+            diagnostic.measurement_phase != nullptr
+                ? diagnostic.measurement_phase : "unknown") +
+        "\",\"workspace_scope\":\"" +
+        escape_json_string(
+            diagnostic.workspace_scope != nullptr
+                ? diagnostic.workspace_scope : "unknown") +
+        "\",\"q_complex_dof_count\":" +
+        std::to_string(diagnostic.q_complex_dof_count) +
+        ",\"real_split_dimension\":" +
+        std::to_string(diagnostic.real_split_dimension) +
+        ",\"context_phase_sign\":" +
+        std::to_string(diagnostic.context_phase_sign) +
+        ",\"action_count\":" + std::to_string(diagnostic.action_count) +
+        ",\"expected_action_count\":" +
+        std::to_string(diagnostic.expected_action_count) +
+        ",\"nonzero_signal_count\":" +
+        std::to_string(diagnostic.nonzero_signal_count) +
+        ",\"operator_normalization_scale\":" +
+        format_double(diagnostic.operator_normalization_scale) +
+        ",\"preconditioner_normalization_scale\":" +
+        format_double(diagnostic.preconditioner_normalization_scale) +
+        ",\"max_potential_relative_residual\":" +
+        format_double(diagnostic.max_potential_relative_residual) +
+        ",\"max_repeatability_relative_defect\":" +
+        format_double(diagnostic.max_repeatability_relative_defect) +
+        ",\"repeatability_first_relative_defect\":" +
+        format_double(diagnostic.repeatability_first_relative_defect) +
+        ",\"repeatability_second_relative_defect\":" +
+        format_double(diagnostic.repeatability_second_relative_defect) +
+        ",\"max_homogeneity_relative_defect\":" +
+        format_double(diagnostic.max_homogeneity_relative_defect) +
+        ",\"homogeneity_half_relative_defect\":" +
+        format_double(diagnostic.homogeneity_half_relative_defect) +
+        ",\"homogeneity_double_relative_defect\":" +
+        format_double(diagnostic.homogeneity_double_relative_defect) +
+        ",\"homogeneity_tiny_relative_defect\":" +
+        format_double(diagnostic.homogeneity_tiny_relative_defect) +
+        ",\"additivity_relative_defect\":" +
+        format_double(diagnostic.additivity_relative_defect) +
+        ",\"mat_shell_reconstruction_relative_defect\":" +
+        format_double(diagnostic.mat_shell_reconstruction_relative_defect) +
+        ",\"min_cancellation_ratio\":" +
+        format_double(diagnostic.min_cancellation_ratio) +
+        ",\"max_magnetic_l2_norm\":" +
+        format_double(diagnostic.max_magnetic_l2_norm) +
+        ",\"max_feedback_l2_norm\":" +
+        format_double(diagnostic.max_feedback_l2_norm) +
+        ",\"max_combined_l2_norm\":" +
+        format_double(diagnostic.max_combined_l2_norm) +
+        ",\"min_rhs_l2_norm\":" +
+        format_double(diagnostic.min_rhs_l2_norm) +
+        ",\"max_rhs_l2_norm\":" +
+        format_double(diagnostic.max_rhs_l2_norm) + "}";
+}
+
+void append_optional_json_field(std::string &json, const std::string &field)
+{
+    if (field.empty() || json.empty() || json.back() != '}') {
+        return;
+    }
+    json.pop_back();
+    if (json.size() > 1u) {
+        json += ",";
+    }
+    json += field;
+    json += "}";
+}
+
+bool is_nearest_frequency_target(const ModalEigenRequest &request) noexcept
+{
+    return request.target_kind != nullptr &&
+        std::strcmp(request.target_kind, "nearest_frequency") == 0;
+}
+
+std::string nearest_frequency_metadata_json(
+    const ModalEigenRequest &request,
+    bool solve_complete)
+{
+    if (!is_nearest_frequency_target(request)) {
+        return {};
+    }
+    return "\"target_kind\":\"nearest_frequency\","
+        "\"target_frequency_hz\":" +
+        format_double(request.target_frequency_hz) +
+        ",\"spectrum_completeness\":\"selected_only\","
+        "\"window_complete\":false,"
+        "\"solve_complete\":" +
+        std::string(solve_complete ? "true" : "false");
+}
+
+void append_nearest_frequency_metadata(
+    std::string &json,
+    const ModalEigenRequest &request,
+    FrequencyDomainStatus status)
+{
+    append_optional_json_field(
+        json,
+        nearest_frequency_metadata_json(
+            request,
+            status == FrequencyDomainStatus::ok));
+}
+
+const char *phase_convention_json_label(
+    FrequencyDomainPhaseConvention phase_convention) noexcept
+{
+    switch (phase_convention) {
+    case FrequencyDomainPhaseConvention::exp_i_omega_t:
+        return "exp_i_omega_t";
+    case FrequencyDomainPhaseConvention::exp_minus_i_omega_t:
+        return "exp_minus_i_omega_t";
+    }
+    return "unknown";
+}
+
+std::string mode_kinematics_json_fields(
+    ComplexEigenvalue lambda,
+    FrequencyDomainPhaseConvention phase_convention)
 {
     const ModeKinematics kinematics = map_eigenvalue(
         lambda,
-        FrequencyDomainPhaseConvention::exp_i_omega_t);
+        phase_convention);
     return
-        "\"frequency_hz\":" + format_double(kinematics.frequency_hz) +
+        "\"phasor_convention\":\"" +
+        std::string(phase_convention_json_label(phase_convention)) +
+        "\",\"frequency_hz\":" + format_double(kinematics.frequency_hz) +
         ",\"omega_rad_s\":" + format_double(kinematics.omega_rad_s) +
         ",\"eigenvalue_real\":" + format_double(kinematics.lambda.real_per_s) +
         ",\"eigenvalue_imag\":" + format_double(kinematics.lambda.imag_rad_per_s) +
@@ -142,14 +1602,40 @@ std::string modal_floquet_periodic_pair_diagnostics_json(
            std::to_string(request.floquet_periodic_pair_count);
 }
 
+std::string dynamic_demag_k_diagnostics_json(
+    const ModalEigenRequest &request)
+{
+    if (!dynamic_demag_k_payload_is_declared(request)) {
+        return "";
+    }
+    return ",\"dynamic_demag_k_operator\":{\"payload_kind\":\"dense_real_split_tangent_matrix\",\"value_count\":" +
+        std::to_string(request.dynamic_demag_k_tangent_matrix_value_count) +
+        ",\"assembly_owner\":\"caller_supplied_preassembled\"}";
+}
+
 std::string with_modal_request_diagnostics(
     std::string diagnostics_json,
-    const ModalEigenRequest &request)
+    const ModalEigenRequest &request,
+    FrequencyDomainStatus status)
 {
     if (!diagnostics_json.empty() && diagnostics_json.back() == '}') {
         diagnostics_json.pop_back();
         diagnostics_json += operator_k_vector_diagnostics_json(request);
         diagnostics_json += modal_floquet_periodic_pair_diagnostics_json(request);
+        diagnostics_json += dynamic_demag_k_diagnostics_json(request);
+        const std::string nearest_metadata =
+            nearest_frequency_metadata_json(
+                request,
+                status == FrequencyDomainStatus::ok);
+        if (!nearest_metadata.empty()) {
+            diagnostics_json += ",";
+            diagnostics_json += nearest_metadata;
+        }
+        if (modal_request_is_nonzero_k_floquet(request)) {
+            diagnostics_json += ",\"floquet_modal_solver_model\":\"";
+            diagnostics_json += floquet_modal_solver_model();
+            diagnostics_json += "\"";
+        }
         diagnostics_json += "}";
     }
     return with_operator_diagnostics(
@@ -157,36 +1643,56 @@ std::string with_modal_request_diagnostics(
         request.operator_request.operator_diagnostics_json);
 }
 
-bool modal_request_is_nonzero_k_floquet(const ModalEigenRequest &request) noexcept
+floquet_k::Classification modal_request_floquet_k_classification(
+    const ModalEigenRequest &request) noexcept
 {
+    if (request.operator_request.spin_wave_bc_kind == nullptr ||
+        std::strcmp(request.operator_request.spin_wave_bc_kind, "floquet") != 0) {
+        return floquet_k::Classification::invalid;
+    }
+
     const double *k_vector = request.operator_request.k_vector_rad_m;
     int k_vector_len = request.operator_request.k_vector_len;
+    const bool has_explicit_k_vector = request.has_floquet_k_vector ||
+        k_vector_len != 0;
+    if (!has_explicit_k_vector) {
+        return floquet_k::Classification::gamma;
+    }
     if ((k_vector == nullptr || k_vector_len <= 0) &&
         request.has_floquet_k_vector) {
         k_vector = request.floquet_k_vector_rad_per_m;
         k_vector_len = 3;
     }
-    if (request.operator_request.spin_wave_bc_kind == nullptr ||
-        std::strcmp(request.operator_request.spin_wave_bc_kind, "floquet") != 0 ||
-        k_vector == nullptr ||
-        k_vector_len <= 0) {
-        return false;
-    }
-    for (int index = 0; index < k_vector_len; ++index) {
-        if (std::abs(k_vector[index]) > 0.0) {
-            return true;
-        }
-    }
-    return false;
+    return floquet_k::classify_components(k_vector, k_vector_len);
+}
+
+bool modal_request_is_nonzero_k_floquet(const ModalEigenRequest &request) noexcept
+{
+    return modal_request_floquet_k_classification(request) ==
+        floquet_k::Classification::nonzero;
+}
+
+bool modal_request_has_invalid_floquet_k(const ModalEigenRequest &request) noexcept
+{
+    return request.operator_request.spin_wave_bc_kind != nullptr &&
+        std::strcmp(request.operator_request.spin_wave_bc_kind, "floquet") == 0 &&
+        modal_request_floquet_k_classification(request) ==
+            floquet_k::Classification::invalid;
 }
 
 bool modal_request_has_bloch_floquet_tangent_operator_payload(
     const ModalEigenRequest &request) noexcept
 {
     const char *diagnostics = request.operator_request.operator_diagnostics_json;
-    return request.floquet_periodic_pair_count > 0 &&
-           diagnostics != nullptr &&
-           std::strstr(
+    if (request.floquet_periodic_pair_count == 0 || diagnostics == nullptr) {
+        return false;
+    }
+    if (request.floquet_shared_domain_operator != nullptr) {
+        return std::strstr(
+                   diagnostics,
+                   "\"payload_kind\":\"certified_shared_domain\"") != nullptr;
+    }
+    return std::strstr(
                diagnostics,
                "\"payload_kind\":\"bloch_floquet_tangent_operator\"") != nullptr;
 }
@@ -200,7 +1706,14 @@ const char *modal_request_gated_operator_term(
         return nullptr;
     }
     if (std::strstr(diagnostics, "\"dynamic_demag\"") != nullptr) {
-        return "dynamic_demag";
+        // An owned shared-domain operator or an explicit complete, finite
+        // dense k-dependent payload proves materialization. Optional-payload
+        // consistency alone also accepts absence and is not such a proof.
+        if (request.floquet_shared_domain_operator == nullptr &&
+            (!dynamic_demag_k_payload_is_declared(request) ||
+             !dynamic_demag_k_payload_is_consistent(request))) {
+            return "dynamic_demag";
+        }
     }
     if (std::strstr(diagnostics, "\"floquet_airbox\"") != nullptr) {
         return "floquet_airbox";
@@ -249,9 +1762,10 @@ FrequencyDomainContractResult nonzero_k_floquet_modal_operator_missing(
         std::string(request.floquet_periodic_pair_count > 0 ? "true" : "false") +
         ","
         "\"spectral_transform\":\"shift_invert\","
-        "\"phasor_convention\":\"exp_i_omega_t\"}";
+        "\"phasor_convention\":\"" +
+        std::string(phase_convention_json_label(request.phase_convention)) + "\"}";
     result.diagnostics_json =
-        with_modal_request_diagnostics(result.diagnostics_json, request);
+        with_modal_request_diagnostics(result.diagnostics_json, request, result.status);
     result.result_json =
         "{\"schema_version\":\"frequency_domain_modal_result.v1\","
         "\"study_product\":\"modal_eigen\","
@@ -260,7 +1774,7 @@ FrequencyDomainContractResult nonzero_k_floquet_modal_operator_missing(
         "\"unsupported_reason\":\"production_cpu_modal_nonzero_k_floquet_operator_missing\","
         "\"required_operator_contract\":\"bloch_floquet_tangent_operator_with_periodic_pairs\","
         "\"required_operator_payload_kind\":\"bloch_floquet_tangent_operator\"}";
-    result.result_json = with_modal_request_diagnostics(result.result_json, request);
+    result.result_json = with_modal_request_diagnostics(result.result_json, request, result.status);
     result.artifact_manifest_path.clear();
     return result;
 }
@@ -289,9 +1803,10 @@ FrequencyDomainContractResult nonzero_k_floquet_modal_gated_operator_terms_prese
         "\"gated_operator_term\":\"" +
         escape_json_string(term.c_str()) +
         "\",\"spectral_transform\":\"shift_invert\","
-        "\"phasor_convention\":\"exp_i_omega_t\"}";
+        "\"phasor_convention\":\"" +
+        std::string(phase_convention_json_label(request.phase_convention)) + "\"}";
     result.diagnostics_json =
-        with_modal_request_diagnostics(result.diagnostics_json, request);
+        with_modal_request_diagnostics(result.diagnostics_json, request, result.status);
     result.result_json =
         "{\"schema_version\":\"frequency_domain_modal_result.v1\","
         "\"study_product\":\"modal_eigen\","
@@ -302,7 +1817,7 @@ FrequencyDomainContractResult nonzero_k_floquet_modal_gated_operator_terms_prese
         "\"required_operator_contract\":\"bloch_floquet_tangent_operator_without_gated_terms\","
         "\"gated_operator_term\":\"" +
         escape_json_string(term.c_str()) + "\"}";
-    result.result_json = with_modal_request_diagnostics(result.result_json, request);
+    result.result_json = with_modal_request_diagnostics(result.result_json, request, result.status);
     result.artifact_manifest_path.clear();
     return result;
 }
@@ -333,9 +1848,10 @@ FrequencyDomainContractResult nonzero_k_floquet_modal_dynamic_demag_k_missing(
         "\",\"modal_periodic_pair_contract_available\":" +
         std::string(request.floquet_periodic_pair_count > 0 ? "true" : "false") +
         ",\"spectral_transform\":\"shift_invert\","
-        "\"phasor_convention\":\"exp_i_omega_t\"}";
+        "\"phasor_convention\":\"" +
+        std::string(phase_convention_json_label(request.phase_convention)) + "\"}";
     result.diagnostics_json =
-        with_modal_request_diagnostics(result.diagnostics_json, request);
+        with_modal_request_diagnostics(result.diagnostics_json, request, result.status);
     result.result_json =
         "{\"schema_version\":\"frequency_domain_modal_result.v1\","
         "\"study_product\":\"modal_eigen\","
@@ -346,55 +1862,528 @@ FrequencyDomainContractResult nonzero_k_floquet_modal_dynamic_demag_k_missing(
         "\"required_operator_payload_kind\":\"bloch_floquet_tangent_operator\","
         "\"required_demag_payload_kind\":\"dynamic_demag_k_operator\","
         "\"dynamic_demag_operator_source\":\"missing_numeric_fem_demag_k\"}";
-    result.result_json = with_modal_request_diagnostics(result.result_json, request);
+    result.result_json = with_modal_request_diagnostics(result.result_json, request, result.status);
     result.artifact_manifest_path.clear();
     return result;
 }
 
-std::string format_slepc_modes_json(
-    const std::vector<SLEPcModalAcceptedMode> &accepted_modes)
+const char *frequency_domain_status_json_name(FrequencyDomainStatus status) noexcept
 {
+    switch (status) {
+    case FrequencyDomainStatus::ok:
+        return "ok";
+    case FrequencyDomainStatus::unavailable:
+        return "unavailable";
+    case FrequencyDomainStatus::validation_error:
+        return "validation_error";
+    case FrequencyDomainStatus::operator_error:
+        return "operator_error";
+    case FrequencyDomainStatus::solve_error:
+        return "solve_error";
+    case FrequencyDomainStatus::artifact_error:
+        return "artifact_error";
+    case FrequencyDomainStatus::interrupted:
+        return "interrupted";
+    }
+    return "solve_error";
+}
+
+bool modal_request_is_floquet_route(const ModalEigenRequest &request) noexcept
+{
+    return (request.operator_request.spin_wave_bc_kind != nullptr &&
+            std::strcmp(request.operator_request.spin_wave_bc_kind, "floquet") == 0) ||
+        request.floquet_shared_domain_operator != nullptr ||
+        request.poisson_airbox_block_enabled != 0;
+}
+
+struct NativeModeTransportView {
+    std::complex<double> lambda{};
+    double relative_residual = 0.0;
+    const std::vector<std::complex<double>> *q = nullptr;
+    const std::vector<std::complex<double>> *phi = nullptr;
+};
+
+struct NativeModesJsonResult {
+    std::string json;
+    std::string error;
+};
+
+bool finite_complex_values(const std::vector<std::complex<double>> &values) noexcept
+{
+    return std::all_of(values.begin(), values.end(), [](const std::complex<double> &value) {
+        return std::isfinite(value.real()) && std::isfinite(value.imag());
+    });
+}
+
+// DOC-ANCHOR: native-cpu-modal-vector-transport
+std::string populate_typed_modal_result(
+    const std::vector<NativeModeTransportView> &modes,
+    bool phi_required,
+    ModalEigenTypedResult &typed_result)
+{
+    typed_result = ModalEigenTypedResult{};
+    if (modes.empty()) {
+        return {};
+    }
+    if (static_cast<std::uintmax_t>(modes.size()) >
+        static_cast<std::uintmax_t>(std::numeric_limits<std::uint64_t>::max())) {
+        return "mode_count_overflow";
+    }
+    if (modes.front().q == nullptr || modes.front().phi == nullptr) {
+        return "mode_payload_unavailable";
+    }
+    const std::size_t q_count = modes.front().q->size();
+    const std::size_t phi_count = modes.front().phi->size();
+    if (q_count == 0) {
+        return "empty_q_vector";
+    }
+    if (phi_required && phi_count == 0) {
+        return "required_phi_vector_missing";
+    }
+    for (const NativeModeTransportView &mode : modes) {
+        if (mode.q == nullptr || mode.phi == nullptr) {
+            return "mode_payload_unavailable";
+        }
+        if (mode.q->size() != q_count) {
+            return "q_dof_count_mismatch";
+        }
+        if (mode.phi->size() != phi_count) {
+            return "phi_dof_count_mismatch";
+        }
+        if (!std::isfinite(mode.lambda.real()) || !std::isfinite(mode.lambda.imag()) ||
+            !std::isfinite(mode.relative_residual) || mode.relative_residual < 0.0 ||
+            !finite_complex_values(*mode.q) || !finite_complex_values(*mode.phi)) {
+            return "nonfinite_mode_payload";
+        }
+    }
+    const std::size_t mode_count = modes.size();
+    const std::size_t maximum = std::numeric_limits<std::size_t>::max();
+    if (mode_count > typed_result.mode_lambda.max_size() ||
+        mode_count > typed_result.mode_residuals.max_size() ||
+        q_count > maximum / mode_count || phi_count > maximum / mode_count) {
+        return "typed_mode_count_overflow";
+    }
+    const std::size_t q_value_count = mode_count * q_count;
+    const std::size_t phi_value_count = mode_count * phi_count;
+    if (q_value_count > typed_result.mode_q_complex.max_size() ||
+        phi_value_count > typed_result.mode_phi_complex.max_size() ||
+        static_cast<std::uintmax_t>(q_count) >
+            static_cast<std::uintmax_t>(std::numeric_limits<std::uint64_t>::max()) ||
+        static_cast<std::uintmax_t>(phi_count) >
+            static_cast<std::uintmax_t>(std::numeric_limits<std::uint64_t>::max())) {
+        return "typed_mode_count_overflow";
+    }
+
+    typed_result.q_dof_count = static_cast<std::uint64_t>(q_count);
+    typed_result.phi_dof_count = static_cast<std::uint64_t>(phi_count);
+    typed_result.mode_lambda.reserve(mode_count);
+    typed_result.mode_residuals.reserve(mode_count);
+    typed_result.mode_q_complex.reserve(q_value_count);
+    typed_result.mode_phi_complex.reserve(phi_value_count);
+    for (const NativeModeTransportView &mode : modes) {
+        typed_result.mode_lambda.push_back(mode.lambda);
+        typed_result.mode_residuals.push_back(mode.relative_residual);
+        typed_result.mode_q_complex.insert(
+            typed_result.mode_q_complex.end(), mode.q->begin(), mode.q->end());
+        typed_result.mode_phi_complex.insert(
+            typed_result.mode_phi_complex.end(), mode.phi->begin(), mode.phi->end());
+    }
+    return {};
+}
+
+void mark_mode_transport_failure(
+    FrequencyDomainContractResult &result,
+    const std::string &error)
+{
+    if (error.empty()) {
+        return;
+    }
+    result.status = FrequencyDomainStatus::solve_error;
+    const std::string message =
+        "native FEM modal_eigen typed mode transport failed: " + error;
+    if (result.error_message.empty()) {
+        result.error_message = message;
+    } else {
+        result.error_message += "; " + message;
+    }
+}
+
+void append_mode_transport_error_fields(
+    FrequencyDomainContractResult &result,
+    const NativeModesJsonResult &modes)
+{
+    if (modes.error.empty()) {
+        return;
+    }
+    const std::string field =
+        "\"mode_vector_transport_error\":\"" +
+        escape_json_string(modes.error.c_str()) + "\"";
+    append_optional_json_field(result.diagnostics_json, field);
+    append_optional_json_field(result.result_json, field);
+}
+
+void replace_json_status(std::string &json, const char *status)
+{
+    const std::string key = "\"status\":\"";
+    const std::size_t key_begin = json.find(key);
+    if (key_begin == std::string::npos) {
+        return;
+    }
+    const std::size_t value_begin = key_begin + key.size();
+    const std::size_t value_end = json.find('"', value_begin);
+    if (value_end != std::string::npos) {
+        json.replace(value_begin, value_end - value_begin, status);
+    }
+}
+
+void finalize_mode_transport_result(
+    FrequencyDomainContractResult &result,
+    const NativeModesJsonResult &modes)
+{
+    if (modes.error.empty()) {
+        return;
+    }
+    mark_mode_transport_failure(result, modes.error);
+    replace_json_status(result.diagnostics_json, "solve_error");
+    replace_json_status(result.result_json, "solve_error");
+    // These generated envelopes may already contain success-derived metadata.
+    // Missing typed q/phi makes the public solve incomplete even if EPS found a
+    // diagnostic candidate; do not retain stale nearest/window success flags.
+    std::string *envelopes[] = {&result.diagnostics_json, &result.result_json};
+    const char *completion_fields[] = {"complete", "solve_complete", "window_complete"};
+    for (std::string *json : envelopes) {
+        for (const char *field : completion_fields) {
+            const std::string success = std::string("\"") + field + "\":true";
+            const std::size_t position = json->find(success);
+            if (position != std::string::npos) {
+                json->replace(position, success.size(),
+                    std::string("\"") + field + "\":false");
+            }
+        }
+    }
+    append_mode_transport_error_fields(result, modes);
+}
+
+NativeModesJsonResult format_slepc_modes_json(
+    const std::vector<SLEPcModalAcceptedMode> &accepted_modes,
+    const ModalEigenRequest &request,
+    ModalEigenTypedResult &typed_result)
+{
+    NativeModesJsonResult formatted{};
+    const bool floquet_route = modal_request_is_floquet_route(request);
+    const bool phi_required = floquet_route &&
+        (request.operator_request.include_demag != 0 ||
+         request.floquet_shared_domain_operator != nullptr ||
+         request.poisson_airbox_block_enabled != 0);
+    static const std::vector<std::complex<double>> empty_phi{};
+    std::vector<NativeModeTransportView> views;
+    views.reserve(accepted_modes.size());
+    for (const SLEPcModalAcceptedMode &mode : accepted_modes) {
+        views.push_back({
+            {mode.lambda_real, mode.lambda_imag},
+            mode.relative_residual,
+            &mode.mode_vector,
+            floquet_route ? &mode.floquet_potential_real_split : &empty_phi});
+    }
+    formatted.error = populate_typed_modal_result(views, phi_required, typed_result);
+
     std::string modes = "[";
     for (std::size_t index = 0; index < accepted_modes.size(); ++index) {
         const SLEPcModalAcceptedMode &mode = accepted_modes[index];
         if (index != 0) {
             modes += ",";
         }
+        const bool physical_complex =
+            floquet_route && mode.floquet_mode_vector_physical_complex;
+        const bool phi_available =
+            floquet_route && !mode.floquet_potential_real_split.empty();
+        const char *q_layout = !floquet_route
+            ? "native_complex_dof"
+            : physical_complex ? "interleaved_node_component" : "doubled_real_split";
         modes +=
             "{\"mode_index\":" + std::to_string(index) +
+            ",\"mode_vector_transport\":\"typed_abi_v18\","
+            "\"q_dof_count\":" + std::to_string(mode.mode_vector.size()) +
+            ",\"phi_dof_count\":" +
+            std::to_string(floquet_route ? mode.floquet_potential_real_split.size() : 0u) +
+            ",\"q_layout\":\"" + q_layout + "\"";
+        if (floquet_route) {
+            modes += ",\"floquet_mode_vector_physical_complex\":" +
+                std::string(mode.floquet_mode_vector_physical_complex ? "true" : "false");
+        }
+        if (!phi_available) {
+            modes += ",\"phi_layout\":null";
+        } else if (floquet_route) {
+            modes += ",\"phi_layout\":\"" + std::string(physical_complex
+                ? "complex_coefficients"
+                : "doubled_real_split_complex_coefficients") + "\"";
+        } else {
+            modes += ",\"phi_layout\":\"native_complex_dof\"";
+        }
+        modes +=
             ",\"slepc_eigenpair_index\":" +
             std::to_string(mode.eigenpair_index) +
             ",\"positive_frequency_pair_index\":" +
             std::to_string(mode.positive_frequency_pair_index) +
             "," +
-            mode_kinematics_json_fields({mode.lambda_real, mode.lambda_imag}) +
+            mode_kinematics_json_fields(
+                {mode.lambda_real, mode.lambda_imag}, request.phase_convention) +
             ",\"relative_residual\":" +
             format_double(mode.relative_residual) +
-            ",\"discarded_negative_frequency_partner\":true,"
-            "\"mode_vector_real\":[";
-        for (std::size_t component = 0; component < mode.mode_vector.size(); ++component) {
-            if (component != 0) {
-                modes += ",";
+            ",\"discarded_negative_frequency_partner\":true";
+        if (physical_complex) {
+            modes += ",\"potential_dof_count\":" +
+                std::to_string(mode.floquet_potential_real_split.size());
+            const double reduced_descriptor_residual = std::max(
+                mode.floquet_magnetic_residual,
+                mode.floquet_potential_residual);
+            modes += ",\"floquet_descriptor_certified\":" +
+                std::string(mode.floquet_descriptor_certified ? "true" : "false") +
+                ",\"floquet_seam_frame_certified\":" +
+                std::string(mode.floquet_seam_frame_certified ? "true" : "false") +
+                ",\"floquet_gauge_policy_satisfied\":" +
+                std::string(mode.floquet_gauge_policy_satisfied ? "true" : "false") +
+                ",\"poisson_boundary_kind\":\"" +
+                escape_json_string(mode.floquet_poisson_boundary_kind.data()) +
+                "\",\"poisson_gauge_policy\":\"" +
+                escape_json_string(mode.floquet_poisson_gauge_policy.data()) +
+                "\",\"floquet_geometric_bc_certified\":false,"
+                "\"floquet_full_descriptor_certified\":" +
+                std::string(mode.floquet_descriptor_certified ? "true" : "false") +
+                ",\"floquet_certificate_scope\":\"" +
+                std::string(mode.floquet_descriptor_certified
+                    ? "full_projected_weak_form_and_periodic_seams"
+                    : "reduced_original_blocks_only") + "\"";
+            if (phi_available) {
+                modes += ",\"potential_representation\":\"complex_coefficients\"";
             }
-            modes += format_double(std::real(mode.mode_vector[component]));
-        }
-        modes += "],\"mode_vector_imag\":[";
-        for (std::size_t component = 0; component < mode.mode_vector.size(); ++component) {
-            if (component != 0) {
-                modes += ",";
+            modes += ",\"magnetic_relative_residual\":" +
+                format_double(mode.floquet_magnetic_residual) +
+                ",\"potential_relative_residual\":" +
+                format_double(mode.floquet_potential_residual) +
+                ",\"reduced_magnetic_relative_residual\":" +
+                format_double(mode.floquet_magnetic_residual) +
+                ",\"reduced_potential_relative_residual\":" +
+                format_double(mode.floquet_potential_residual) +
+                ",\"reduced_descriptor_relative_residual\":" +
+                format_double(reduced_descriptor_residual) +
+                ",\"floquet_full_magnetic_relative_residual\":" +
+                format_double(mode.floquet_full_magnetic_residual) +
+                ",\"floquet_full_potential_relative_residual\":" +
+                format_double(mode.floquet_full_potential_residual) +
+                ",\"floquet_scalar_phase_seam_relative_residual\":" +
+                format_double(mode.floquet_scalar_phase_seam_residual) +
+                ",\"floquet_tangent_frame_seam_relative_residual\":" +
+                format_double(mode.floquet_tangent_frame_seam_residual) +
+                ",\"floquet_cartesian_magnetic_seam_relative_residual\":" +
+                format_double(mode.floquet_cartesian_seam_residual) +
+                ",\"floquet_equilibrium_pair_relative_residual\":" +
+                format_double(mode.floquet_equilibrium_pair_residual) +
+                ",\"magnetic_block_backward_error\":" +
+                format_double(mode.floquet_magnetic_residual) +
+                ",\"poisson_block_backward_error\":" +
+                format_double(mode.floquet_potential_residual) +
+                ",\"gauge_constraint_backward_error\":null,"
+                "\"gauge_constraint_policy\":\"nonzero_k_poisson_without_mean_constraint\","
+                "\"reduced_original_block_residuals\":{\"magnetic\":" +
+                format_double(mode.floquet_magnetic_residual) +
+                ",\"potential\":" +
+                format_double(mode.floquet_potential_residual) +
+                ",\"full\":" + format_double(reduced_descriptor_residual) + "}";
+        } else if (floquet_route && mode.floquet_descriptor_certified) {
+            modes += ",\"floquet_descriptor_certified\":true,"
+                "\"floquet_geometric_bc_certified\":false";
+            if (phi_available) {
+                modes += ",\"potential_representation\":\"doubled_real_split_complex_coefficients\"";
             }
-            modes += format_double(std::imag(mode.mode_vector[component]));
+            modes += ",\"magnetic_relative_residual\":" +
+                format_double(mode.floquet_magnetic_residual) +
+                ",\"potential_relative_residual\":" +
+                format_double(mode.floquet_potential_residual);
         }
-        modes += "]}";
+        modes += "}";
     }
     modes += "]";
-    return modes;
+    formatted.json = std::move(modes);
+    return formatted;
 }
 
-std::string format_slepc_modes_json(
-    const SLEPcTinyGyrotropicModalEigenResult &slepc_result)
+NativeModesJsonResult format_slepc_modes_json(
+    const SLEPcTinyGyrotropicModalEigenResult &slepc_result,
+    const ModalEigenRequest &request,
+    ModalEigenTypedResult &typed_result)
 {
-    return format_slepc_modes_json(slepc_result.accepted_modes);
+    return format_slepc_modes_json(
+        slepc_result.accepted_modes, request, typed_result);
+}
+
+NativeModesJsonResult format_contour_modes_json(
+    const std::vector<ContourIntervalMode> &accepted_modes,
+    const ModalEigenRequest &request,
+    ModalEigenTypedResult &typed_result)
+{
+    NativeModesJsonResult formatted{};
+    const bool floquet_route = modal_request_is_floquet_route(request);
+    const bool phi_required = floquet_route &&
+        (request.operator_request.include_demag != 0 ||
+         request.floquet_shared_domain_operator != nullptr ||
+         request.poisson_airbox_block_enabled != 0);
+    static const std::vector<std::complex<double>> empty_phi{};
+    std::vector<NativeModeTransportView> views;
+    views.reserve(accepted_modes.size());
+    for (const ContourIntervalMode &mode : accepted_modes) {
+        views.push_back({
+            mode.eigenvalue,
+            mode.relative_residual,
+            &mode.mode_vector,
+            floquet_route ? &mode.floquet_potential_real_split : &empty_phi});
+    }
+    formatted.error = populate_typed_modal_result(views, phi_required, typed_result);
+
+    std::string modes = "[";
+    for (std::size_t index = 0; index < accepted_modes.size(); ++index) {
+        const ContourIntervalMode &mode = accepted_modes[index];
+        if (index != 0) {
+            modes += ",";
+        }
+        const bool phi_available =
+            floquet_route && !mode.floquet_potential_real_split.empty();
+        modes +=
+            "{\"mode_index\":" + std::to_string(index) +
+            ",\"mode_vector_transport\":\"typed_abi_v18\","
+            "\"q_dof_count\":" + std::to_string(mode.mode_vector.size()) +
+            ",\"phi_dof_count\":" +
+            std::to_string(floquet_route ? mode.floquet_potential_real_split.size() : 0u) +
+            ",\"q_layout\":\"" +
+            std::string(floquet_route ? "doubled_real_split" : "native_complex_dof") + "\"";
+        if (!phi_available) {
+            modes += ",\"phi_layout\":null";
+        } else if (floquet_route) {
+            modes += ",\"phi_layout\":\"doubled_real_split_complex_coefficients\"";
+        } else {
+            modes += ",\"phi_layout\":\"native_complex_dof\"";
+        }
+        modes +=
+            ",\"positive_frequency_pair_index\":" + std::to_string(index) +
+            "," +
+            mode_kinematics_json_fields(
+                {std::real(mode.eigenvalue), std::imag(mode.eigenvalue)},
+                request.phase_convention) +
+            ",\"relative_residual\":" +
+            format_double(mode.relative_residual) +
+            ",\"discarded_negative_frequency_partner\":true";
+        if (floquet_route && mode.floquet_descriptor_certified) {
+            modes += ",\"floquet_descriptor_certified\":true,"
+                "\"floquet_geometric_bc_certified\":false";
+            if (phi_available) {
+                modes += ",\"potential_representation\":\"doubled_real_split_complex_coefficients\"";
+            }
+            modes += ",\"magnetic_relative_residual\":" +
+                format_double(mode.floquet_magnetic_residual) +
+                ",\"potential_relative_residual\":" +
+                format_double(mode.floquet_potential_residual);
+        }
+        modes += "}";
+    }
+    modes += "]";
+    formatted.json = std::move(modes);
+    return formatted;
+}
+
+std::string generic_slepc_nev_refill_json_field(
+    const SLEPcTinyGyrotropicModalEigenResult &result)
+{
+    if (result.solver_adapter == nullptr ||
+        std::strcmp(result.solver_adapter, "slepc_modal_eigen") != 0) {
+        return {};
+    }
+    return
+        "\"slepc_modal_nev_refill\":{"
+        "\"schema_version\":\"generic_slepc_modal_nev_refill.v1\","
+        "\"adapter_status\":\"" +
+        escape_json_string(result.status != nullptr ? result.status : "unknown") + "\""
+        ",\"accepted_mode_count\":" +
+        std::to_string(result.accepted_mode_count) +
+        ",\"unique_certified_mode_count\":" +
+        std::to_string(result.eps_unique_certified_mode_count) +
+        ",\"attempt_count\":" + std::to_string(result.eps_attempt_count) +
+        ",\"solved_attempt_count\":" +
+        std::to_string(result.eps_solved_attempt_count) +
+        ",\"initial_nev\":" +
+        (result.eps_initial_nev > 0
+            ? std::to_string(result.eps_initial_nev)
+            : std::string("null")) +
+        ",\"initial_resolved_ncv\":" +
+        (result.eps_initial_ncv > 0
+            ? std::to_string(result.eps_initial_ncv)
+            : std::string("null")) +
+        ",\"initial_resolved_mpd\":" +
+        (result.eps_initial_mpd > 0
+            ? std::to_string(result.eps_initial_mpd)
+            : std::string("null")) +
+        ",\"last_attempt_dimensions_available\":" +
+        std::string(result.eps_dimensions_available ? "true" : "false") +
+        ",\"last_attempt_nev\":" +
+        (result.eps_dimensions_available
+            ? std::to_string(result.eps_nev)
+            : std::string("null")) +
+        ",\"last_attempt_ncv\":" +
+        (result.eps_dimensions_available
+            ? std::to_string(result.eps_ncv)
+            : std::string("null")) +
+        ",\"last_attempt_mpd\":" +
+        (result.eps_dimensions_available && result.eps_mpd > 0
+            ? std::to_string(result.eps_mpd)
+            : std::string("null")) +
+        ",\"last_finalized_attempt\":" +
+        (result.eps_finalized_attempt_number > 0
+            ? std::to_string(result.eps_finalized_attempt_number)
+            : std::string("null")) +
+        ",\"last_finalized_nev\":" +
+        (result.eps_finalized_nev > 0
+            ? std::to_string(result.eps_finalized_nev)
+            : std::string("null")) +
+        ",\"iteration_budget_available\":" +
+        std::string(result.eps_iteration_budget_available ? "true" : "false") +
+        ",\"outer_iteration_budget_exhausted\":" +
+        std::string(result.eps_outer_iteration_budget_exhausted ? "true" : "false") +
+        ",\"outer_iteration_budget\":" +
+        (result.eps_iteration_budget_available
+            ? std::to_string(result.max_outer_iterations)
+            : std::string("null")) +
+        ",\"cumulative_outer_iterations_available\":" +
+        std::string(result.eps_cumulative_iterations_available ? "true" : "false") +
+        ",\"cumulative_outer_iterations\":" +
+        (result.eps_cumulative_iterations_available
+            ? std::to_string(result.outer_iterations)
+            : std::string("null")) +
+        ",\"eps_converged_reason\":" +
+        (result.eps_converged_reason_available
+            ? std::to_string(result.eps_converged_reason)
+            : std::string("null")) +
+        ",\"unsupported_reason\":\"" +
+        escape_json_string(result.unsupported_reason != nullptr
+            ? result.unsupported_reason : "") + "\"}";
+}
+
+std::string format_slepc_partial_candidate_metadata_json(
+    const std::vector<SLEPcModalAcceptedMode> &candidates)
+{
+    std::string json = "\"certified_partial_candidates\":[";
+    for (std::size_t index = 0; index < candidates.size(); ++index) {
+        const SLEPcModalAcceptedMode &candidate = candidates[index];
+        if (index != 0) {
+            json += ",";
+        }
+        json +=
+            "{\"slepc_eigenpair_index\":" +
+            std::to_string(candidate.eigenpair_index) +
+            ",\"frequency_hz\":" + format_double(candidate.frequency_hz) +
+            ",\"relative_residual\":" +
+            format_double(candidate.relative_residual) + "}";
+    }
+    json += "]";
+    return json;
 }
 
 bool has_dense_modal_payload(const ModalEigenRequest &request) noexcept
@@ -405,9 +2394,175 @@ bool has_dense_modal_payload(const ModalEigenRequest &request) noexcept
         request.mfem_gyrotropic_matrix_row_major != nullptr;
 }
 
+SLEPcTinyGyrotropicModalEigenResult solve_modal_spectrum_for_request(
+    const ModalEigenRequest &request,
+    const SLEPcTinyGyrotropicModalEigenRequest &spectral_request,
+    const FloquetPotentialReconstruction *reconstruction) noexcept
+{
+    if (modal_request_is_nonzero_k_floquet(request)) {
+        auto solved = solve_floquet_modal_spectrum(request, spectral_request);
+        // A partial result retains only candidates that passed the modal
+        // finalizer. Reconstruct those vectors for best-effort transport, but
+        // exclude other non-ok statuses and quarantined solver graphs.
+        const bool reconstructable_partial =
+            !solved.slepc_graph_quarantined &&
+            solved.status != nullptr &&
+            std::strcmp(solved.status, "partial") == 0 &&
+            !solved.accepted_modes.empty();
+        if (reconstruction && (solved.ok || reconstructable_partial)) {
+            for (auto &mode : solved.accepted_modes) {
+                FloquetModalResidual residual;
+                if (certify_floquet_realified_mode(
+                        *reconstruction, reconstruction->magnetic_stiffness_real_split,
+                        spectral_request.gyrotropic_matrix_row_major,
+                        mode.mode_vector, {mode.lambda_real,mode.lambda_imag}, &residual)
+                    != FrequencyDomainStatus::ok) {
+                    solved.ok=false;
+                    solved.status="solve_error";
+                    solved.unsupported_reason="floquet_original_descriptor_residual_failed";
+                    solved.accepted_modes.clear();
+                    solved.accepted_mode_count=0;
+                    return solved;
+                }
+                mode.floquet_descriptor_certified=true;
+                mode.floquet_magnetic_residual=residual.magnetic_relative_residual;
+                mode.floquet_potential_residual=residual.potential_relative_residual;
+                mode.floquet_potential_real_split=std::move(residual.potential_real_split);
+            }
+        }
+        return solved;
+    }
+    return solve_slepc_tiny_gyrotropic_modal_eigen(spectral_request);
+}
+
+SLEPcTinyGyrotropicModalEigenResult solve_sparse_modal_spectrum_for_request(
+    const ModalEigenRequest &request,
+    const SLEPcSparseGyrotropicModalEigenRequest &spectral_request,
+    FloquetSharedDomainSparseModalSolveContext *reuse_context) noexcept
+{
+    if (modal_request_is_nonzero_k_floquet(request)) {
+        // The reused shared-domain entry point must pass through the same
+        // request/operator/device/phase/payload admission as the ordinary
+        // sparse Floquet route.  Calling the lower-level owner directly is
+        // necessary for one-window state reuse, but it must never bypass the
+        // public CPU Floquet contract.
+        const FloquetModalSolverAdmission admission =
+            admit_floquet_modal_sparse_request(request, spectral_request);
+        if (!admission.accepted) {
+            SLEPcTinyGyrotropicModalEigenResult rejected{};
+            rejected.status = "validation_error";
+            rejected.unsupported_reason = admission.reason;
+            return rejected;
+        }
+        if (spectral_request.floquet_shared_domain_operator != nullptr &&
+            reuse_context != nullptr) {
+            return solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
+                *spectral_request.floquet_shared_domain_operator,
+                spectral_request,
+                reuse_context);
+        }
+        return solve_floquet_modal_sparse_spectrum(request, spectral_request);
+    }
+    return solve_slepc_sparse_gyrotropic_modal_eigen(spectral_request);
+}
+
+bool dynamic_demag_k_payload_is_declared(const ModalEigenRequest &request) noexcept
+{
+    return request.dynamic_demag_k_tangent_matrix_row_major != nullptr ||
+        request.dynamic_demag_k_tangent_matrix_value_count != 0;
+}
+
+bool dynamic_demag_k_payload_is_consistent(
+    const ModalEigenRequest &request) noexcept
+{
+    const bool declared = dynamic_demag_k_payload_is_declared(request);
+    if (!declared) {
+        return true;
+    }
+    if (!modal_request_is_nonzero_k_floquet(request) ||
+        request.operator_request.include_demag == 0 ||
+        request.mfem_sparse_operator_enabled != 0 ||
+        !has_dense_modal_payload(request) ||
+        request.dynamic_demag_k_tangent_matrix_row_major == nullptr) {
+        return false;
+    }
+    const std::uint64_t n = request.mfem_tangent_dof_count;
+    if (n > std::numeric_limits<std::uint64_t>::max() / n) {
+        return false;
+    }
+    const std::uint64_t expected = n * n;
+    if (expected > static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max())) {
+        return false;
+    }
+    if (request.dynamic_demag_k_tangent_matrix_value_count != expected) {
+        return false;
+    }
+    for (std::uint64_t index = 0; index < expected; ++index) {
+        if (!std::isfinite(request.dynamic_demag_k_tangent_matrix_row_major[index])) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// Build the tangent stiffness consumed by the SLEPc adapter.  The caller
+// supplies the already assembled, topology-bound k-dependent demagnetisation
+// contribution; this adapter only adds it to the static restoring Hessian.
+// A missing or malformed payload is never replaced by the k=0/static field
+// term.
+bool effective_dense_stiffness_for_request(
+    const ModalEigenRequest &request,
+    std::vector<double> &storage,
+    const double **out_stiffness) noexcept
+{
+    if (out_stiffness == nullptr || !has_dense_modal_payload(request)) {
+        return false;
+    }
+    *out_stiffness = request.mfem_stiffness_matrix_row_major;
+    if (!dynamic_demag_k_payload_is_declared(request)) {
+        return true;
+    }
+    if (!dynamic_demag_k_payload_is_consistent(request)) {
+        return false;
+    }
+    const std::uint64_t n = request.mfem_tangent_dof_count;
+    const std::uint64_t value_count = n * n;
+    try {
+        storage.assign(
+            request.mfem_stiffness_matrix_row_major,
+            request.mfem_stiffness_matrix_row_major + value_count);
+        for (std::uint64_t index = 0; index < value_count; ++index) {
+            storage[static_cast<std::size_t>(index)] +=
+                request.dynamic_demag_k_tangent_matrix_row_major[index];
+        }
+    } catch (...) {
+        storage.clear();
+        return false;
+    }
+    *out_stiffness = storage.data();
+    return true;
+}
+
 bool has_sparse_modal_payload(const ModalEigenRequest &request) noexcept
 {
-    return request.mfem_sparse_operator_enabled != 0;
+    return request.mfem_sparse_operator_enabled != 0 ||
+        request.floquet_shared_domain_operator != nullptr;
+}
+
+std::uint64_t sparse_modal_tangent_dof_count(
+    const ModalEigenRequest &request) noexcept
+{
+    return request.floquet_shared_domain_operator != nullptr
+        ? request.floquet_shared_domain_operator->q_complex_dof_count
+        : request.mfem_sparse_stiffness_csr.row_count;
+}
+
+bool sparse_modal_tangent_dof_count_is_supported(
+    const ModalEigenRequest &request) noexcept
+{
+    const std::uint64_t count = sparse_modal_tangent_dof_count(request);
+    return count > 0u &&
+        count <= static_cast<std::uint64_t>(std::numeric_limits<int>::max() / 2);
 }
 
 bool csr_matrix_view_is_consistent(const CsrMatrixView &view) noexcept
@@ -440,6 +2595,9 @@ bool csr_matrix_view_is_consistent(const CsrMatrixView &view) noexcept
 
 bool sparse_modal_payload_shapes_match(const ModalEigenRequest &request) noexcept
 {
+    if (request.floquet_shared_domain_operator != nullptr) {
+        return sparse_modal_tangent_dof_count_is_supported(request);
+    }
     const CsrMatrixView &stiffness = request.mfem_sparse_stiffness_csr;
     const CsrMatrixView &gyrotropic = request.mfem_sparse_gyrotropic_csr;
     const CsrMatrixView &mass = request.mfem_sparse_mass_csr;
@@ -448,32 +2606,6 @@ bool sparse_modal_payload_shapes_match(const ModalEigenRequest &request) noexcep
         gyrotropic.column_count == stiffness.column_count &&
         mass.row_count == stiffness.row_count &&
         mass.column_count == stiffness.column_count;
-}
-
-std::vector<double> csr_matrix_view_to_dense_row_major(const CsrMatrixView &view)
-{
-    if (view.row_count == 0 ||
-        view.column_count == 0 ||
-        view.row_count > static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max()) ||
-        view.column_count > static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max())) {
-        return {};
-    }
-    const std::size_t row_count = static_cast<std::size_t>(view.row_count);
-    const std::size_t column_count = static_cast<std::size_t>(view.column_count);
-    if (row_count > std::numeric_limits<std::size_t>::max() / column_count) {
-        return {};
-    }
-    std::vector<double> dense(row_count * column_count, 0.0);
-    for (std::size_t row = 0; row < row_count; ++row) {
-        const std::uint32_t row_begin = view.row_offsets[row];
-        const std::uint32_t row_end = view.row_offsets[row + 1u];
-        for (std::uint32_t entry = row_begin; entry < row_end; ++entry) {
-            const std::size_t column =
-                static_cast<std::size_t>(view.column_indices[entry]);
-            dense[row * column_count + column] += view.values[entry];
-        }
-    }
-    return dense;
 }
 
 FrequencyDomainContractResult dense_payload_validation_error(
@@ -495,11 +2627,32 @@ FrequencyDomainContractResult dense_payload_validation_error(
         std::string(reason != nullptr ? reason : "validation_error") +
         "\"}";
     result.diagnostics_json =
-        with_modal_request_diagnostics(result.diagnostics_json, request);
+        with_modal_request_diagnostics(result.diagnostics_json, request, result.status);
     result.result_json =
         "{\"schema_version\":\"frequency_domain_modal_result.v1\","
         "\"study_product\":\"modal_eigen\","
         "\"status\":\"validation_error\","
+        "\"accepted_mode_count\":0}";
+    append_nearest_frequency_metadata(result.result_json, request, result.status);
+    return result;
+}
+
+FrequencyDomainContractResult floquet_wavevector_validation_error() noexcept
+{
+    FrequencyDomainContractResult result{};
+    result.status = FrequencyDomainStatus::validation_error;
+    result.error_message =
+        "native FEM modal_eigen Floquet wavevector must contain exactly three finite components";
+    // Do not serialize the invalid raw vector: it may contain NaN/Inf or have
+    // an invalid length, and the caller-owned pointer must not be traversed.
+    result.diagnostics_json =
+        "{\"schema_version\":\"frequency_domain_modal_diagnostics.v1\","
+        "\"study_product\":\"modal_eigen\",\"status\":\"validation_error\","
+        "\"complete\":false,\"execution_lane\":\"production_cpu\","
+        "\"reason\":\"invalid_floquet_wavevector\"}";
+    result.result_json =
+        "{\"schema_version\":\"frequency_domain_modal_result.v1\","
+        "\"study_product\":\"modal_eigen\",\"status\":\"validation_error\","
         "\"accepted_mode_count\":0}";
     return result;
 }
@@ -523,12 +2676,13 @@ FrequencyDomainContractResult sparse_payload_validation_error(
         std::string(reason != nullptr ? reason : "validation_error") +
         "\"}";
     result.diagnostics_json =
-        with_modal_request_diagnostics(result.diagnostics_json, request);
+        with_modal_request_diagnostics(result.diagnostics_json, request, result.status);
     result.result_json =
         "{\"schema_version\":\"frequency_domain_modal_result.v1\","
         "\"study_product\":\"modal_eigen\","
         "\"status\":\"validation_error\","
         "\"accepted_mode_count\":0}";
+    append_nearest_frequency_metadata(result.result_json, request, result.status);
     return result;
 }
 
@@ -559,7 +2713,7 @@ FrequencyDomainContractResult sparse_payload_solver_pending_result(
         ",\"mfem_operator_request\":true,"
         "\"mfem_operator_payload\":\"sparse_csr\","
         "\"tangent_dof_count\":" +
-        std::to_string(request.mfem_sparse_stiffness_csr.row_count) +
+        std::to_string(sparse_modal_tangent_dof_count(request)) +
         ",\"progress_schema_version\":\"fem_frequency_domain_progress.v1\","
         "\"resolved_solver_family\":\"" +
         std::string(selection.family) +
@@ -588,7 +2742,7 @@ FrequencyDomainContractResult sparse_payload_solver_pending_result(
         std::string(adapter.slepc_available ? "true" : "false") +
         ",\"unsupported_reason\":\"sparse_modal_operator_payload_solver_pending\"}";
     result.diagnostics_json =
-        with_modal_request_diagnostics(result.diagnostics_json, request);
+        with_modal_request_diagnostics(result.diagnostics_json, request, result.status);
     result.result_json =
         "{\"schema_version\":\"frequency_domain_modal_result.v1\","
         "\"study_product\":\"modal_eigen\","
@@ -603,6 +2757,7 @@ FrequencyDomainContractResult sparse_payload_solver_pending_result(
             format_double(shift.shift_frequency_hz);
     }
     result.result_json += "}";
+    append_nearest_frequency_metadata(result.result_json, request, result.status);
     return result;
 }
 
@@ -613,6 +2768,36 @@ const char *stop_reason_or_default(
             slepc_result.unsupported_reason[0] != '\0' ?
         slepc_result.unsupported_reason :
         "slepc_production_solve_failed";
+}
+
+bool subwindow_is_clean_empty_window(
+    const SLEPcTinyGyrotropicModalEigenResult &slepc_result) noexcept
+{
+    const char *unsupported_reason =
+        slepc_result.unsupported_reason != nullptr
+            ? slepc_result.unsupported_reason : "";
+    // The ABI stores SLEPc's EPSConvergedReason as an int.  SLEPc uses zero
+    // for EPS_CONVERGED_ITERATING and negative values for divergence.  A
+    // positive reason plus converged pairs is therefore required before an
+    // empty frequency interval may be treated as an exhausted subwindow.
+    // Every candidate-rejection counter must remain zero: a residual, vector,
+    // reconstruction or EPS failure is a hard failure, never an empty band.
+    return !slepc_result.ok &&
+        slepc_result.status != nullptr &&
+        std::strcmp(slepc_result.status, "solve_error") == 0 &&
+        std::strcmp(unsupported_reason,
+                    "no_positive_frequency_eigenpair_in_window") == 0 &&
+        slepc_result.eps_converged_reason_available &&
+        slepc_result.eps_converged_reason > 0 &&
+        slepc_result.converged_eigenpair_count > 0 &&
+        slepc_result.positive_frequency_candidate_count > 0 &&
+        slepc_result.frequency_window_candidate_count == 0 &&
+        slepc_result.residual_evaluation_candidate_count == 0 &&
+        slepc_result.residual_rejection_count == 0 &&
+        slepc_result.non_real_rotated_eigenvalue_count == 0 &&
+        slepc_result.eigenpair_evaluation_failure_count == 0 &&
+        slepc_result.mode_vector_failure_count == 0 &&
+        slepc_result.potential_reconstruction_failure_count == 0;
 }
 
 bool is_frequency_window(const ModalEigenRequest &request) noexcept
@@ -651,61 +2836,62 @@ struct DenseSubwindowSolve {
     const char *stop_reason = "window_exhausted";
 };
 
-std::vector<SLEPcModalAcceptedMode> deduplicate_slepc_modes_by_overlap(
-    const std::vector<SLEPcModalAcceptedMode> &candidate_modes,
-    std::size_t tangent_dof_count,
-    const double *mass_matrix_row_major)
-{
-    std::vector<ModalCandidate> modal_candidates;
-    modal_candidates.reserve(candidate_modes.size());
-    for (std::size_t index = 0; index < candidate_modes.size(); ++index) {
-        const SLEPcModalAcceptedMode &mode = candidate_modes[index];
-        ModalCandidate candidate{};
-        candidate.frequency_hz = mode.frequency_hz;
-        candidate.relative_residual = mode.relative_residual;
-        candidate.source_index = static_cast<int>(index);
-        candidate.mode = mode.mode_vector;
-        modal_candidates.push_back(std::move(candidate));
-    }
-
-    const std::vector<ModalCandidate> deduplicated =
-        deduplicate_modes_by_frequency_and_overlap(
-            modal_candidates,
-            mass_matrix_row_major,
-            tangent_dof_count,
-            kWindowDedupFrequencyRelativeTolerance,
-            kWindowDedupFrequencyAbsoluteToleranceHz,
-            kWindowDedupOverlapThreshold);
-
-    std::vector<SLEPcModalAcceptedMode> accepted_modes;
-    accepted_modes.reserve(deduplicated.size());
-    for (const ModalCandidate &candidate : deduplicated) {
-        if (candidate.source_index < 0 ||
-            static_cast<std::size_t>(candidate.source_index) >= candidate_modes.size()) {
-            continue;
-        }
-        SLEPcModalAcceptedMode mode =
-            candidate_modes[static_cast<std::size_t>(candidate.source_index)];
-        mode.mode_vector = candidate.mode;
-        accepted_modes.push_back(std::move(mode));
-    }
-    return accepted_modes;
-}
-
 const char *subwindow_stop_reason(
     const SLEPcTinyGyrotropicModalEigenResult &slepc_result) noexcept
 {
+    if (slepc_result.status != nullptr &&
+        std::strcmp(slepc_result.status, "cancelled") == 0) {
+        return "cancelled";
+    }
+    if (slepc_result.status != nullptr &&
+        std::strcmp(slepc_result.status, "partial") == 0) {
+        return "partial_convergence";
+    }
     if (slepc_result.ok) {
         return "converged";
     }
-    if (std::strcmp(slepc_result.unsupported_reason, "no_positive_frequency_eigenpair_in_window") == 0 ||
-        std::strcmp(slepc_result.unsupported_reason, "no_accepted_positive_frequency_mode") == 0) {
+    if (subwindow_is_clean_empty_window(slepc_result)) {
         return "window_exhausted";
     }
     if (std::strcmp(slepc_result.unsupported_reason, "residual_tolerance_not_met") == 0) {
         return "residual_not_met";
     }
     return stop_reason_or_default(slepc_result);
+}
+
+bool subwindow_requires_fail_closed(
+    const SLEPcTinyGyrotropicModalEigenResult &slepc_result,
+    int completeness_policy) noexcept
+{
+    // A clean empty interval is not a solver failure: a converged positive EPS
+    // set can simply have its nearest positive mode in a later subwindow.
+    // Every other solve/validation error remains fail-closed so an EPS failure
+    // or rejected physical residual can never be published as a nearest mode.
+    if (slepc_result.ok || slepc_result.status == nullptr) {
+        return false;
+    }
+    if (std::strcmp(slepc_result.status, "validation_error") == 0) {
+        return true;
+    }
+    if (std::strcmp(slepc_result.status, "partial") == 0) {
+        const bool generic_slepc_adapter =
+            slepc_result.solver_adapter != nullptr &&
+            std::strcmp(slepc_result.solver_adapter, "slepc_modal_eigen") == 0;
+        if (!generic_slepc_adapter) {
+            return false;
+        }
+        const char *unsupported_reason =
+            slepc_result.unsupported_reason != nullptr
+                ? slepc_result.unsupported_reason : "";
+        return completeness_policy != 0 ||
+            std::strcmp(
+                unsupported_reason,
+                "slepc_modal_nev_refill_dimension_limit_reached") != 0;
+    }
+    if (std::strcmp(slepc_result.status, "solve_error") != 0) {
+        return false;
+    }
+    return !subwindow_is_clean_empty_window(slepc_result);
 }
 
 std::string production_window_diagnostics_json(
@@ -729,7 +2915,11 @@ std::string production_window_diagnostics_json(
     const bool certified =
         partition.uncertified_subwindows.empty() &&
         std::strcmp(partition.certification_method, "none") != 0;
+    const bool native_floquet_certified_count_unavailable =
+        request.floquet_shared_domain_operator != nullptr &&
+        request.completeness_policy == 1;
     const bool exhausted_without_modes =
+        !native_floquet_certified_count_unavailable &&
         !truncated_by_requested_count &&
         accepted_modes.empty() &&
         !subwindow_solves.empty() &&
@@ -748,13 +2938,36 @@ std::string production_window_diagnostics_json(
                 return std::strcmp(solve.stop_reason, "window_exhausted") != 0 &&
                     std::strcmp(solve.stop_reason, "converged") != 0;
             });
-    const std::string completeness_status = truncated_by_requested_count ?
+    const bool generic_dimension_limited_partial_without_modes =
+        request.completeness_policy == 0 && accepted_modes.empty() &&
+        std::any_of(
+            subwindow_solves.begin(),
+            subwindow_solves.end(),
+            [](const DenseSubwindowSolve &solve) {
+                return solve.result.solver_adapter != nullptr &&
+                    std::strcmp(solve.result.solver_adapter, "slepc_modal_eigen") == 0 &&
+                    solve.result.status != nullptr &&
+                    std::strcmp(solve.result.status, "partial") == 0 &&
+                    solve.result.unsupported_reason != nullptr &&
+                    std::strcmp(
+                        solve.result.unsupported_reason,
+                        "slepc_modal_nev_refill_dimension_limit_reached") == 0;
+            });
+    const bool hard_failure = std::any_of(
+        subwindow_solves.begin(),
+        subwindow_solves.end(),
+        [&request](const DenseSubwindowSolve &solve) {
+            return subwindow_requires_fail_closed(
+                solve.result, request.completeness_policy);
+        }) || generic_dimension_limited_partial_without_modes;
+    const std::string completeness_status = hard_failure ?
+        "solver_error" : (truncated_by_requested_count ?
         "truncated_by_requested_count" :
         (exhausted_without_modes ? "window_exhausted" :
             (partial_convergence ? "partial_convergence" :
-                (certified ? "certified" : "not_certified")));
+                (certified ? "certified" : "not_certified"))));
     const char *additional_modes_may_exist =
-        (certified && !truncated_by_requested_count) ? "false" : "true";
+        (!hard_failure && certified && !truncated_by_requested_count) ? "false" : "true";
     double ksp_final_residual = 0.0;
     for (const DenseSubwindowSolve &solve : subwindow_solves) {
         if (std::isfinite(solve.result.ksp_final_residual)) {
@@ -775,19 +2988,35 @@ std::string production_window_diagnostics_json(
         json +=
             "\"ksp_type\":\"" +
             std::string(policy.ksp_type) +
+            "\",\"ksp_orthogonalization\":\"" +
+            std::string(policy.ksp_orthogonalization) +
             "\",\"pc_type\":\"" +
             std::string(policy.pc_type) +
-            "\",\"ksp_rtol\":" +
+            "\",\"max_outer_iterations\":" +
+            std::to_string(policy.max_outer_iterations) +
+            ",\"ksp_rtol\":" +
             format_double(policy.ksp_rtol) +
             ",\"ksp_atol\":" +
             format_double(policy.ksp_atol) +
             ",\"ksp_max_iterations\":" +
             std::to_string(policy.ksp_max_iterations) +
+            ",\"ksp_restart\":" +
+            std::to_string(policy.ksp_restart) +
+            ",\"ksp_breakdown_tolerance\":" +
+            format_double(policy.ksp_breakdown_tolerance) +
             ",\"ksp_final_residual\":" +
             format_double(ksp_final_residual) +
             ",\"factorization_package\":\"" +
             std::string(policy.factorization_package) +
-            "\",\"nullspace_policy\":\"" +
+            "\",\"factorization_shift_policy\":\"" +
+            std::string(policy.factorization_shift_policy) +
+            "\",\"factorization_shift_amount\":" +
+            format_double(policy.factorization_shift_amount) +
+            ",\"operator_normalization_scale\":" +
+            format_double(policy.operator_normalization_scale) +
+            ",\"preconditioner_normalization_scale\":" +
+            format_double(policy.preconditioner_normalization_scale) +
+            ",\"nullspace_policy\":\"" +
             std::string(policy.nullspace_policy) +
             "\",";
     }
@@ -814,6 +3043,10 @@ std::string production_window_diagnostics_json(
             "") +
         ",\"additional_modes_may_exist\":" +
         std::string(additional_modes_may_exist) +
+        (native_floquet_certified_count_unavailable
+            ? ",\"certification_unavailable_reason\":\"" +
+                std::string(kNativeFloquetCountCertificateUnavailableReason) + "\""
+            : "") +
         "},\"subwindows\":[";
 
     for (std::size_t i = 0; i < subwindow_solves.size(); ++i) {
@@ -822,10 +3055,18 @@ std::string production_window_diagnostics_json(
         if (i != 0) {
             json += ",";
         }
+        const bool has_floquet_candidate_diagnostics =
+            solve.result.solver_adapter != nullptr &&
+            std::strcmp(
+                solve.result.solver_adapter,
+                "floquet_airbox_cpu_schur_slepc") == 0;
         json +=
             "{\"index\":" +
             std::to_string(subwindow.index) +
-            ",\"requested_hz\":[" +
+            ",\"status\":\"" +
+            std::string(
+                solve.result.status != nullptr ? solve.result.status : "unknown") +
+            "\",\"requested_hz\":[" +
             format_double(subwindow.requested_min_hz) + "," +
             format_double(subwindow.requested_max_hz) +
             "],\"search_hz\":[" +
@@ -843,6 +3084,104 @@ std::string production_window_diagnostics_json(
             std::to_string(solve.result.linear_iterations_total) +
             ",\"candidate_modes\":" +
             std::to_string(solve.result.converged_eigenpair_count) +
+            ",\"operator_normalization_scale\":" +
+            format_double(solve.result.operator_normalization_scale) +
+            ",\"preconditioner_normalization_scale\":" +
+            format_double(solve.result.preconditioner_normalization_scale) +
+            ",\"unsupported_reason\":\"" +
+            std::string(solve.result.unsupported_reason) +
+            "\",\"positive_frequency_candidates\":" +
+            std::to_string(solve.result.positive_frequency_candidate_count) +
+            ",\"frequency_window_candidates\":" +
+            std::to_string(solve.result.frequency_window_candidate_count) +
+            ",\"residual_rejections\":" +
+            std::to_string(solve.result.residual_rejection_count) +
+            ",\"non_real_rotated_eigenvalues\":" +
+            std::to_string(solve.result.non_real_rotated_eigenvalue_count) +
+            ",\"candidate_relative_residual_max\":" +
+            format_double(solve.result.max_candidate_relative_residual);
+        const std::string generic_refill_diagnostics =
+            generic_slepc_nev_refill_json_field(solve.result);
+        if (!generic_refill_diagnostics.empty()) {
+            json += "," + generic_refill_diagnostics;
+            if (solve.result.status != nullptr &&
+                std::strcmp(solve.result.status, "partial") == 0) {
+                json +=
+                    ",\"certified_partial_candidate_count\":" +
+                    std::to_string(solve.result.accepted_modes.size());
+                if (!solve.result.accepted_modes.empty()) {
+                    json += "," + format_slepc_partial_candidate_metadata_json(
+                        solve.result.accepted_modes);
+                }
+            }
+        }
+        if (has_floquet_candidate_diagnostics) {
+            json +=
+                ",\"residual_evaluation_candidates\":" +
+                std::to_string(
+                    solve.result.residual_evaluation_candidate_count) +
+                "," + floquet_shifted_ksp_diagnostics_json_fields(solve.result, true) +
+                ",\"eps_monitor_iteration\":" +
+                std::to_string(solve.result.eps_monitor_iteration) +
+                ",\"eps_first_unconverged_error_estimate\":" +
+                format_double(solve.result.eps_first_unconverged_error_estimate) +
+                ",\"eps_convergence_test\":\"absolute_true_residual\"" +
+                ",\"eps_normalized_absolute_tolerance\":" +
+                format_double(solve.result.eps_normalized_absolute_tolerance) +
+                ",\"eps_normalized_absolute_residual_max\":" +
+                format_double(solve.result.max_eps_normalized_absolute_residual) +
+                ",\"floquet_magnetic_relative_residual_max\":" +
+                format_double(
+                    solve.result.max_floquet_magnetic_relative_residual) +
+                ",\"floquet_potential_relative_residual_max\":" +
+                format_double(
+                    solve.result.max_floquet_potential_relative_residual) +
+                ",\"worst_candidate_frequency_hz\":" +
+                format_double(solve.result.worst_candidate_frequency_hz) +
+                ",\"worst_candidate_residuals\":{\"eps_normalized_absolute\":" +
+                format_double(
+                    solve.result.worst_candidate_eps_normalized_absolute_residual) +
+                ",\"magnetic\":" +
+                format_double(
+                    solve.result.worst_candidate_floquet_magnetic_relative_residual) +
+                ",\"potential\":" +
+                format_double(
+                    solve.result.worst_candidate_floquet_potential_relative_residual) +
+                ",\"magnetic_unprojected\":" +
+                format_double(
+                    solve.result.worst_candidate_unprojected_magnetic_relative_residual) +
+                ",\"rotated_imaginary_rad_s\":" +
+                format_double(
+                    solve.result.worst_candidate_rotated_imaginary_rad_s) +
+                ",\"q_projection_ratio\":" +
+                format_double(
+                    solve.result.worst_candidate_q_projection_ratio) +
+                "}" +
+                ",\"eigenpair_evaluation_failures\":" +
+                std::to_string(
+                    solve.result.eigenpair_evaluation_failure_count) +
+                ",\"mode_vector_failures\":" +
+                std::to_string(solve.result.mode_vector_failure_count) +
+                ",\"potential_reconstruction_failures\":" +
+                std::to_string(
+                    solve.result.potential_reconstruction_failure_count) +
+                "," +
+                floquet_dense_oracle_json_field(solve.result.floquet_dense_oracle) +
+                "," +
+                floquet_schur_action_diagnostic_json_field(
+                    solve.result.floquet_schur_action_diagnostic);
+        }
+        const std::string demag_probe_json_field =
+            floquet_demag_operator_probe_json_field(
+                solve.result.dynamic_demag_operator_probe);
+        if (!demag_probe_json_field.empty()) {
+            json += ",";
+            json += demag_probe_json_field;
+        }
+        json +=
+            ",\"candidate_frequency_hz\":[" +
+            format_double(solve.result.min_candidate_frequency_hz) + "," +
+            format_double(solve.result.max_candidate_frequency_hz) + "]" +
             ",\"accepted_modes\":" +
             std::to_string(solve.result.accepted_mode_count) +
             ",\"residual_max\":" +
@@ -867,43 +3206,53 @@ double contour_max_relative_residual(
     return residual;
 }
 
-std::string format_contour_modes_json(
-    const std::vector<ContourIntervalMode> &accepted_modes)
+FrequencyDomainContractResult contour_descriptor_certification_error(
+    const ModalEigenRequest &request,
+    const ModalSolverSelection &selection,
+    const char *reason,
+    int failed_mode_index) noexcept
 {
-    std::string modes = "[";
-    for (std::size_t index = 0; index < accepted_modes.size(); ++index) {
-        const ContourIntervalMode &mode = accepted_modes[index];
-        if (index != 0) {
-            modes += ",";
-        }
-        modes +=
-            "{\"mode_index\":" + std::to_string(index) +
-            ",\"positive_frequency_pair_index\":" +
-            std::to_string(index) +
-            "," +
-            mode_kinematics_json_fields(
-                {std::real(mode.eigenvalue), std::imag(mode.eigenvalue)}) +
-            ",\"relative_residual\":" +
-            format_double(mode.relative_residual) +
-            ",\"discarded_negative_frequency_partner\":true,"
-            "\"mode_vector_real\":[";
-        for (std::size_t component = 0; component < mode.mode_vector.size(); ++component) {
-            if (component != 0) {
-                modes += ",";
-            }
-            modes += format_double(std::real(mode.mode_vector[component]));
-        }
-        modes += "],\"mode_vector_imag\":[";
-        for (std::size_t component = 0; component < mode.mode_vector.size(); ++component) {
-            if (component != 0) {
-                modes += ",";
-            }
-            modes += format_double(std::imag(mode.mode_vector[component]));
-        }
-        modes += "]}";
-    }
-    modes += "]";
-    return modes;
+    FrequencyDomainContractResult result{};
+    result.status = FrequencyDomainStatus::solve_error;
+    result.error_message =
+        "native FEM modal_eigen contour interval Floquet descriptor certification failed";
+    result.diagnostics_json =
+        "{\"schema_version\":\"frequency_domain_modal_diagnostics.v1\","
+        "\"study_product\":\"modal_eigen\","
+        "\"status\":\"solve_error\","
+        "\"complete\":false,"
+        "\"execution_lane\":\"production_cpu\","
+        "\"mfem_operator_payload\":\"dense_gyrotropic_matrix\","
+        "\"resolved_solver_family\":\"" +
+        std::string(selection.family) +
+        "\",\"solver_selection_reason\":\"" +
+        std::string(selection.reason) +
+        "\",\"solver_adapter\":\"contour_interval_solver\","
+        "\"solver_model\":\"contour_interval_production_cpu_dense\","
+        "\"spectral_transform\":\"contour_integral\","
+        "\"floquet_descriptor_certified\":false,"
+        "\"floquet_geometric_bc_certified\":false,"
+        "\"unsupported_reason\":\"" +
+        std::string(reason != nullptr ? reason : "floquet_original_descriptor_residual_failed") +
+        "\",\"failed_mode_index\":" +
+        (failed_mode_index >= 0 ? std::to_string(failed_mode_index) : "null") +
+        "}";
+    result.diagnostics_json =
+        with_modal_request_diagnostics(result.diagnostics_json, request, result.status);
+    result.result_json =
+        "{\"schema_version\":\"frequency_domain_modal_result.v1\","
+        "\"study_product\":\"modal_eigen\","
+        "\"status\":\"solve_error\","
+        "\"accepted_mode_count\":0,"
+        "\"resolved_solver_family\":\"" +
+        std::string(selection.family) +
+        "\",\"floquet_descriptor_certified\":false,"
+        "\"floquet_geometric_bc_certified\":false,"
+        "\"unsupported_reason\":\"" +
+        std::string(reason != nullptr ? reason : "floquet_original_descriptor_residual_failed") +
+        "\"}";
+    append_nearest_frequency_metadata(result.result_json, request, result.status);
+    return result;
 }
 
 std::string production_contour_window_diagnostics_json(
@@ -1026,14 +3375,38 @@ void emit_production_contour_progress(
 
 FrequencyDomainContractResult solve_dense_production_modal_contour_payload(
     const ModalEigenRequest &request,
-    const ModalSolverSelection &selection) noexcept
+    const ModalSolverSelection &selection,
+    const FloquetPotentialReconstruction *reconstruction) noexcept
 {
+    // The contour adapter currently maps its returned pencil eigenvalues with
+    // the exp(+i omega t) convention.  Refuse the other convention explicitly
+    // so the certificate and published frequency cannot silently use a wrong
+    // sign.
+    if (request.phase_convention !=
+        FrequencyDomainPhaseConvention::exp_i_omega_t) {
+        return dense_payload_validation_error(
+            request,
+            "native FEM modal_eigen contour interval supports exp_i_omega_t phase convention only",
+            "contour_interval_phase_convention_unsupported");
+    }
     if (request.mfem_tangent_dof_count == 0 ||
         request.mfem_tangent_dof_count % 2 != 0) {
         return dense_payload_validation_error(
             request,
             "native FEM modal_eigen contour interval dense payload requires a positive even tangent DOF count",
             "contour_interval_dense_payload_requires_even_tangent_dofs");
+    }
+
+    std::vector<double> effective_stiffness;
+    const double *stiffness = nullptr;
+    if (!effective_dense_stiffness_for_request(
+            request,
+            effective_stiffness,
+            &stiffness)) {
+        return dense_payload_validation_error(
+            request,
+            "native FEM modal_eigen dynamic demag-k payload is malformed",
+            "invalid_dynamic_demag_k_tangent_matrix");
     }
 
     ContourIntervalSolverRequest contour_request{};
@@ -1048,11 +3421,11 @@ FrequencyDomainContractResult solve_dense_production_modal_contour_payload(
     contour_request.contour_point_count = 16;
     contour_request.tangent_dof_count = request.mfem_tangent_dof_count;
     contour_request.stiffness_matrix_row_major =
-        request.mfem_stiffness_matrix_row_major;
+        stiffness;
     contour_request.gyrotropic_mass_matrix_row_major =
         request.mfem_gyrotropic_matrix_row_major;
 
-    const ContourIntervalSolveResult contour_result =
+    ContourIntervalSolveResult contour_result =
         solve_tiny_contour_interval(contour_request);
     const bool truncated_by_requested_count =
         request.requested_mode_count > 0 &&
@@ -1098,7 +3471,7 @@ FrequencyDomainContractResult solve_dense_production_modal_contour_payload(
         result.diagnostics_json += contour_interval_diagnostics_json(contour_result);
         result.diagnostics_json += "}";
         result.diagnostics_json =
-            with_modal_request_diagnostics(result.diagnostics_json, request);
+            with_modal_request_diagnostics(result.diagnostics_json, request, result.status);
         result.result_json =
             "{\"schema_version\":\"frequency_domain_modal_result.v1\","
             "\"study_product\":\"modal_eigen\","
@@ -1109,7 +3482,45 @@ FrequencyDomainContractResult solve_dense_production_modal_contour_payload(
             "\",\"stop_reason\":\"" +
             std::string(window_stop_reason) +
             "\",\"window_completeness\":\"not_certified\"}";
+        append_nearest_frequency_metadata(result.result_json, request, result.status);
         return result;
+    }
+
+    if (reconstruction != nullptr) {
+        if (reconstruction->magnetic_stiffness_real_split == nullptr) {
+            return contour_descriptor_certification_error(
+                request,
+                selection,
+                "floquet_descriptor_original_magnetic_stiffness_missing",
+                -1);
+        }
+        for (std::size_t index = 0; index < contour_result.modes.size(); ++index) {
+            ContourIntervalMode &mode = contour_result.modes[index];
+            FloquetModalResidual residual{};
+            const FrequencyDomainStatus certification_status =
+                certify_floquet_realified_mode(
+                    *reconstruction,
+                    reconstruction->magnetic_stiffness_real_split,
+                    request.mfem_gyrotropic_matrix_row_major,
+                    mode.mode_vector,
+                    mode.eigenvalue,
+                    &residual);
+            if (certification_status != FrequencyDomainStatus::ok ||
+                !residual.certified) {
+                return contour_descriptor_certification_error(
+                    request,
+                    selection,
+                    "floquet_original_descriptor_residual_failed",
+                    static_cast<int>(index));
+            }
+            mode.floquet_descriptor_certified = true;
+            mode.floquet_magnetic_residual =
+                residual.magnetic_relative_residual;
+            mode.floquet_potential_residual =
+                residual.potential_relative_residual;
+            mode.floquet_potential_real_split =
+                std::move(residual.potential_real_split);
+        }
     }
 
     emit_production_contour_progress(request, contour_result);
@@ -1121,6 +3532,8 @@ FrequencyDomainContractResult solve_dense_production_modal_contour_payload(
             "certified" :
             "not_certified");
     FrequencyDomainContractResult result{};
+    const NativeModesJsonResult mode_transport = format_contour_modes_json(
+        contour_result.modes, request, result.modal_eigen);
     result.status = FrequencyDomainStatus::ok;
     result.error_message.clear();
     result.diagnostics_json =
@@ -1145,7 +3558,7 @@ FrequencyDomainContractResult solve_dense_production_modal_contour_payload(
         "\"solver_model\":\"contour_interval_production_cpu_dense\","
         "\"solver_family\":\"contour_interval_production_cpu_dense\","
         "\"spectral_transform\":\"contour_integral\","
-        "\"positive_frequency_filter\":\"select_positive_frequency_mode(map_eigenvalue(lambda, exp_i_omega_t), exclude_zero_frequency)\","
+        "\"positive_frequency_filter\":\"select_positive_frequency_mode(map_eigenvalue(lambda, phase_convention), exclude_zero_frequency)\","
         "\"zero_frequency_mode_policy\":\"exclude_zero_frequency\","
         "\"eigenvalue_to_frequency\":\"map_eigenvalue(lambda, phase)\","
         "\"conjugate_pair_policy\":\"keep_positive_frequency_partner\","
@@ -1168,7 +3581,7 @@ FrequencyDomainContractResult solve_dense_production_modal_contour_payload(
     result.diagnostics_json += contour_interval_diagnostics_json(contour_result);
     result.diagnostics_json += "}";
     result.diagnostics_json =
-        with_modal_request_diagnostics(result.diagnostics_json, request);
+        with_modal_request_diagnostics(result.diagnostics_json, request, result.status);
     result.result_json =
         "{\"schema_version\":\"frequency_domain_modal_result.v1\","
         "\"study_product\":\"modal_eigen\","
@@ -1182,13 +3595,16 @@ FrequencyDomainContractResult solve_dense_production_modal_contour_payload(
         std::to_string(contour_result.accepted_mode_count) +
         "," +
         mode_kinematics_json_fields(
-            {std::real(first_mode.eigenvalue), std::imag(first_mode.eigenvalue)}) +
+            {std::real(first_mode.eigenvalue), std::imag(first_mode.eigenvalue)},
+            request.phase_convention) +
         ",\"relative_residual\":" +
         format_double(first_mode.relative_residual) +
         ",\"window_completeness\":\"" +
         completeness_status +
         "\",\"modes\":" +
-        format_contour_modes_json(contour_result.modes) + "}";
+        mode_transport.json + "}";
+    append_nearest_frequency_metadata(result.result_json, request, result.status);
+    finalize_mode_transport_result(result, mode_transport);
     result.artifact_manifest_path.clear();
     return result;
 }
@@ -1205,10 +3621,18 @@ void emit_production_shift_invert_progress(
 
     const int outer_iteration =
         slepc_result.outer_iterations > 0 ? slepc_result.outer_iterations : 1;
+    const int max_outer_iterations =
+        slepc_result.max_outer_iterations > 0 ?
+            slepc_result.max_outer_iterations :
+            request.max_outer_iterations;
     const int linear_iteration =
         slepc_result.linear_iterations_total > 0 ?
             slepc_result.linear_iterations_total :
             1;
+    const int max_linear_iterations =
+        slepc_result.ksp_max_iterations > 0 ?
+            slepc_result.ksp_max_iterations :
+            request.max_linear_iterations;
     const std::string stop_reason_json = stop_reason == nullptr ?
         "null" :
         std::string("\"") + escape_json_string(stop_reason) + "\"";
@@ -1234,11 +3658,11 @@ void emit_production_shift_invert_progress(
         ",\"outer_iteration\":" +
         std::to_string(outer_iteration) +
         ",\"max_outer_iterations\":" +
-        std::to_string(request.max_outer_iterations) +
+        std::to_string(max_outer_iterations) +
         ",\"linear_iteration\":" +
         std::to_string(linear_iteration) +
         ",\"max_linear_iterations\":" +
-        std::to_string(request.max_linear_iterations) +
+        std::to_string(max_linear_iterations) +
         ",\"current_residual_relative_l2\":" +
         format_double(slepc_result.max_relative_residual) +
         ",\"target_residual_relative_l2\":" +
@@ -1253,7 +3677,8 @@ void emit_production_shift_invert_progress(
 
 FrequencyDomainContractResult solve_dense_production_modal_window_payload(
     const ModalEigenRequest &request,
-    const ModalSolverSelection &selection) noexcept
+    const ModalSolverSelection &selection,
+    const FloquetPotentialReconstruction *reconstruction) noexcept
 {
     FrequencyWindowPartition partition =
         partition_frequency_window(partition_request_from_modal_request(request));
@@ -1264,9 +3689,24 @@ FrequencyDomainContractResult solve_dense_production_modal_window_payload(
             "invalid_frequency_window");
     }
 
+    SLEPcTangentMassActionContext tangent_mass_context{};
+    const CsrMatrixView no_sparse_mass{};
+    if (!create_slepc_tangent_mass_action_context(
+            static_cast<int>(request.mfem_tangent_dof_count),
+            request.mfem_mass_matrix_row_major,
+            no_sparse_mass,
+            &tangent_mass_context)) {
+        return dense_payload_validation_error(
+            request,
+            "native FEM modal_eigen dense tangent mass is missing or invalid",
+            "invalid_tangent_mass_metric");
+    }
+
     std::vector<DenseSubwindowSolve> subwindow_solves;
     subwindow_solves.reserve(partition.subwindows.size());
     std::vector<SLEPcModalAcceptedMode> candidate_modes;
+    bool subwindow_hard_failure = false;
+    const char *subwindow_failure_reason = nullptr;
     for (const FrequencySubwindow &subwindow : partition.subwindows) {
         SLEPcTinyGyrotropicModalEigenRequest slepc_request{};
         slepc_request.tangent_dof_count =
@@ -1275,6 +3715,9 @@ FrequencyDomainContractResult solve_dense_production_modal_window_payload(
             request.mfem_stiffness_matrix_row_major;
         slepc_request.gyrotropic_matrix_row_major =
             request.mfem_gyrotropic_matrix_row_major;
+        slepc_request.tangent_mass_matrix_row_major =
+            request.mfem_mass_matrix_row_major;
+        slepc_request.tangent_mass_action_context = &tangent_mass_context;
         slepc_request.requested_mode_count = subwindow.guard_modes_per_shift;
         slepc_request.target_frequency_hz = subwindow.shift_hz;
         slepc_request.frequency_min_hz = subwindow.search_min_hz;
@@ -1282,8 +3725,9 @@ FrequencyDomainContractResult solve_dense_production_modal_window_payload(
         slepc_request.residual_tolerance = request.residual_tolerance;
         slepc_request.max_outer_iterations = request.max_outer_iterations;
         slepc_request.max_linear_iterations = request.max_linear_iterations;
+        slepc_request.phase_convention = request.phase_convention;
         SLEPcTinyGyrotropicModalEigenResult slepc_result =
-            solve_slepc_tiny_gyrotropic_modal_eigen(slepc_request);
+            solve_modal_spectrum_for_request(request, slepc_request, reconstruction);
         const char *stop_reason = subwindow_stop_reason(slepc_result);
         emit_production_shift_invert_progress(
             request,
@@ -1300,27 +3744,37 @@ FrequencyDomainContractResult solve_dense_production_modal_window_payload(
         }
         subwindow_solves.push_back(
             DenseSubwindowSolve{subwindow, std::move(slepc_result), stop_reason});
+        const DenseSubwindowSolve &completed_subwindow = subwindow_solves.back();
+        if (subwindow_requires_fail_closed(
+                completed_subwindow.result, request.completeness_policy)) {
+            subwindow_hard_failure = true;
+            subwindow_failure_reason = completed_subwindow.result.unsupported_reason;
+            break;
+        }
     }
 
-    std::vector<SLEPcModalAcceptedMode> accepted_modes =
-        deduplicate_slepc_modes_by_overlap(
+    SLEPcModalCandidateFinalization finalization =
+        finalize_slepc_modal_candidates_with_context(
             candidate_modes,
-            static_cast<std::size_t>(request.mfem_tangent_dof_count),
-            request.mfem_mass_matrix_row_major);
-    std::sort(
-        accepted_modes.begin(),
-        accepted_modes.end(),
-        [](const SLEPcModalAcceptedMode &left, const SLEPcModalAcceptedMode &right) {
-            return left.frequency_hz < right.frequency_hz;
-        });
-    const std::size_t accepted_mode_count_before_cap = accepted_modes.size();
-    const bool truncated_by_requested_count =
-        request.requested_mode_count > 0 &&
-        accepted_mode_count_before_cap >
-            static_cast<std::size_t>(request.requested_mode_count);
-    if (truncated_by_requested_count) {
-        accepted_modes.resize(static_cast<std::size_t>(request.requested_mode_count));
+            tangent_mass_context,
+            kWindowDedupFrequencyRelativeTolerance,
+            kWindowDedupFrequencyAbsoluteToleranceHz,
+            kWindowDedupOverlapThreshold,
+            request.target_frequency_hz,
+            request.requested_mode_count,
+            SLEPcModalCandidateSelection::lowest_frequency);
+    if (!finalization.success) {
+        return dense_payload_validation_error(
+            request,
+            "native FEM modal_eigen dense tangent mass is missing or invalid",
+            "invalid_tangent_mass_metric");
     }
+    std::vector<SLEPcModalAcceptedMode> accepted_modes =
+        std::move(finalization.accepted_modes);
+    const std::size_t accepted_mode_count_before_cap =
+        finalization.unique_candidate_count_before_cap;
+    const bool truncated_by_requested_count =
+        finalization.truncated_by_requested_count;
     const bool exhausted_without_modes =
         !truncated_by_requested_count &&
         accepted_modes.empty() &&
@@ -1340,33 +3794,73 @@ FrequencyDomainContractResult solve_dense_production_modal_window_payload(
                 return std::strcmp(solve.stop_reason, "window_exhausted") != 0 &&
                     std::strcmp(solve.stop_reason, "converged") != 0;
             });
-    const char *window_stop_reason = truncated_by_requested_count ?
+    const bool generic_refill_partial = std::any_of(
+        subwindow_solves.begin(),
+        subwindow_solves.end(),
+        [](const DenseSubwindowSolve &solve) {
+            return solve.result.solver_adapter != nullptr &&
+                std::strcmp(solve.result.solver_adapter, "slepc_modal_eigen") == 0 &&
+                solve.result.status != nullptr &&
+                std::strcmp(solve.result.status, "partial") == 0;
+        });
+    const bool generic_dimension_limited_partial = std::any_of(
+        subwindow_solves.begin(),
+        subwindow_solves.end(),
+        [](const DenseSubwindowSolve &solve) {
+            return solve.result.solver_adapter != nullptr &&
+                std::strcmp(solve.result.solver_adapter, "slepc_modal_eigen") == 0 &&
+                solve.result.status != nullptr &&
+                std::strcmp(solve.result.status, "partial") == 0 &&
+                solve.result.unsupported_reason != nullptr &&
+                std::strcmp(
+                    solve.result.unsupported_reason,
+                    "slepc_modal_nev_refill_dimension_limit_reached") == 0;
+        });
+    const bool best_effort_dimension_limited_partial_with_modes =
+        request.completeness_policy == 0 &&
+        generic_dimension_limited_partial &&
+        !subwindow_hard_failure &&
+        !accepted_modes.empty();
+    if (generic_dimension_limited_partial && accepted_modes.empty()) {
+        subwindow_hard_failure = true;
+        subwindow_failure_reason =
+            "slepc_modal_nev_refill_dimension_limit_reached";
+    }
+    const bool window_complete =
+        !subwindow_hard_failure &&
+        !best_effort_dimension_limited_partial_with_modes &&
+        !generic_refill_partial;
+    const char *window_stop_reason = subwindow_hard_failure
+        ? "subwindow_failed" : (truncated_by_requested_count ?
         "requested_count_reached" :
         (accepted_modes.empty() ?
             (partial_convergence ? "partial_convergence" : "window_exhausted") :
-            (partial_convergence ? "partial_convergence" : "converged"));
-    const char *window_completeness_status = truncated_by_requested_count ?
+            (partial_convergence ? "partial_convergence" : "converged")));
+    const char *window_completeness_status = subwindow_hard_failure
+        ? "solver_error" : (truncated_by_requested_count ?
         "truncated_by_requested_count" :
         (exhausted_without_modes ? "window_exhausted" :
-            (partial_convergence ? "partial_convergence" : "not_certified"));
+            (partial_convergence ? "partial_convergence" : "not_certified")));
     for (std::size_t index = 0; index < accepted_modes.size(); ++index) {
         accepted_modes[index].positive_frequency_pair_index =
             static_cast<int>(index);
     }
 
     FrequencyDomainContractResult result{};
-    const std::string window_diagnostics =
-        production_window_diagnostics_json(
-            request,
-            partition,
-            subwindow_solves,
-            accepted_modes,
-            accepted_mode_count_before_cap,
-            truncated_by_requested_count);
-    if (accepted_modes.empty()) {
+    const std::string window_diagnostics = production_window_diagnostics_json(
+        request,
+        partition,
+        subwindow_solves,
+        accepted_modes,
+        accepted_mode_count_before_cap,
+        truncated_by_requested_count);
+    if (subwindow_hard_failure || accepted_modes.empty()) {
         result.status = FrequencyDomainStatus::solve_error;
-        result.error_message =
-            "native FEM modal_eigen production CPU multi-shift solve found no accepted modes in the requested window";
+        result.error_message = subwindow_hard_failure
+            ? "native FEM modal_eigen production CPU multi-shift solve stopped after an incomplete or failed subwindow: " +
+                std::string(subwindow_failure_reason != nullptr
+                    ? subwindow_failure_reason : "subwindow_solver_failed")
+            : "native FEM modal_eigen production CPU multi-shift solve found no accepted modes in the requested window";
         result.diagnostics_json =
             "{\"schema_version\":\"frequency_domain_modal_diagnostics.v1\","
             "\"study_product\":\"modal_eigen\","
@@ -1389,10 +3883,15 @@ FrequencyDomainContractResult solve_dense_production_modal_window_payload(
             "\"stop_reason\":\"" +
             std::string(window_stop_reason) +
             "\",";
+        if (subwindow_hard_failure && subwindow_failure_reason != nullptr) {
+            result.diagnostics_json +=
+                "\"failure_reason\":\"" +
+                escape_json_string(subwindow_failure_reason) + "\",";
+        }
         result.diagnostics_json += window_diagnostics;
         result.diagnostics_json += "}";
         result.diagnostics_json =
-            with_modal_request_diagnostics(result.diagnostics_json, request);
+            with_modal_request_diagnostics(result.diagnostics_json, request, result.status);
         result.result_json =
             "{\"schema_version\":\"frequency_domain_modal_result.v1\","
             "\"study_product\":\"modal_eigen\","
@@ -1416,16 +3915,13 @@ FrequencyDomainContractResult solve_dense_production_modal_window_payload(
     const SLEPcModalAcceptedMode &first_mode = accepted_modes.front();
     result.status = FrequencyDomainStatus::ok;
     result.error_message.clear();
-    const char *deduplication_inner_product =
-        request.mfem_mass_matrix_row_major != nullptr ? "mfem_tangent_mass" :
-                                                        "identity_tangent_dof";
-    const char *deduplication_mass_matrix =
-        request.mfem_mass_matrix_row_major != nullptr ? "provided" : "identity_fallback";
+    const char *deduplication_inner_product = "mfem_tangent_mass";
+    const char *deduplication_mass_matrix = "provided_dense_row_major";
     result.diagnostics_json =
         "{\"schema_version\":\"frequency_domain_modal_diagnostics.v1\","
         "\"study_product\":\"modal_eigen\","
         "\"status\":\"ok\","
-        "\"complete\":true,"
+        "\"complete\":" + std::string(window_complete ? "true" : "false") + ","
         "\"execution_lane\":\"production_cpu\","
         "\"progress_schema_version\":\"fem_frequency_domain_progress.v1\","
         "\"production_solver_available\":true,"
@@ -1446,7 +3942,7 @@ FrequencyDomainContractResult solve_dense_production_modal_window_payload(
         "\"stop_reason\":\"" +
         std::string(window_stop_reason) +
         "\","
-        "\"positive_frequency_filter\":\"select_positive_frequency_mode(map_eigenvalue(lambda, exp_i_omega_t), exclude_zero_frequency)\","
+        "\"positive_frequency_filter\":\"select_positive_frequency_mode(map_eigenvalue(lambda, phase_convention), exclude_zero_frequency)\","
         "\"zero_frequency_mode_policy\":\"exclude_zero_frequency\","
         "\"eigenvalue_to_frequency\":\"map_eigenvalue(lambda, phase)\","
         "\"conjugate_pair_policy\":\"keep_positive_frequency_partner\","
@@ -1472,7 +3968,9 @@ FrequencyDomainContractResult solve_dense_production_modal_window_payload(
     result.diagnostics_json += window_diagnostics;
     result.diagnostics_json += "}";
     result.diagnostics_json =
-        with_modal_request_diagnostics(result.diagnostics_json, request);
+        with_modal_request_diagnostics(result.diagnostics_json, request, result.status);
+    const NativeModesJsonResult mode_transport = format_slepc_modes_json(
+        accepted_modes, request, result.modal_eigen);
     result.result_json =
         "{\"schema_version\":\"frequency_domain_modal_result.v1\","
         "\"study_product\":\"modal_eigen\","
@@ -1485,14 +3983,17 @@ FrequencyDomainContractResult solve_dense_production_modal_window_payload(
         "\",\"accepted_mode_count\":" +
         std::to_string(accepted_modes.size()) +
         "," +
-        mode_kinematics_json_fields({first_mode.lambda_real, first_mode.lambda_imag}) +
+        mode_kinematics_json_fields(
+            {first_mode.lambda_real, first_mode.lambda_imag},
+            request.phase_convention) +
         ",\"relative_residual\":" +
         format_double(first_mode.relative_residual) +
         ",\"window_completeness\":\"" +
         std::string(window_completeness_status) +
         "\","
         "\"modes\":" +
-        format_slepc_modes_json(accepted_modes) + "}";
+        mode_transport.json + "}";
+    finalize_mode_transport_result(result, mode_transport);
     result.artifact_manifest_path.clear();
     return result;
 }
@@ -1500,7 +4001,8 @@ FrequencyDomainContractResult solve_dense_production_modal_window_payload(
 FrequencyDomainContractResult solve_dense_production_modal_payload(
     const ModalEigenRequest &request,
     const ModalSolverSelection &selection,
-    const ModalShiftSelection &shift) noexcept
+    const ModalShiftSelection &shift,
+    const FloquetPotentialReconstruction *reconstruction) noexcept
 {
     if (request.mfem_tangent_dof_count >
         static_cast<std::uint64_t>(std::numeric_limits<int>::max())) {
@@ -1510,17 +4012,47 @@ FrequencyDomainContractResult solve_dense_production_modal_payload(
             "mfem_modal_operator_payload_too_large_for_dense_adapter");
     }
 
+    std::vector<double> effective_stiffness;
+    const double *stiffness = nullptr;
+    if (!effective_dense_stiffness_for_request(
+            request,
+            effective_stiffness,
+            &stiffness)) {
+        return dense_payload_validation_error(
+            request,
+            "native FEM modal_eigen dynamic demag-k payload is malformed",
+            "invalid_dynamic_demag_k_tangent_matrix");
+    }
+    ModalEigenRequest effective_request = request;
+    effective_request.mfem_stiffness_matrix_row_major = stiffness;
+
     if (is_frequency_window(request)) {
-        return solve_dense_production_modal_window_payload(request, selection);
+        return solve_dense_production_modal_window_payload(effective_request, selection, reconstruction);
+    }
+
+    SLEPcTangentMassActionContext tangent_mass_context{};
+    const CsrMatrixView no_sparse_mass{};
+    if (!create_slepc_tangent_mass_action_context(
+            static_cast<int>(request.mfem_tangent_dof_count),
+            request.mfem_mass_matrix_row_major,
+            no_sparse_mass,
+            &tangent_mass_context)) {
+        return dense_payload_validation_error(
+            request,
+            "native FEM modal_eigen dense tangent mass is missing or invalid",
+            "invalid_tangent_mass_metric");
     }
 
     SLEPcTinyGyrotropicModalEigenRequest slepc_request{};
     slepc_request.tangent_dof_count =
         static_cast<int>(request.mfem_tangent_dof_count);
     slepc_request.stiffness_matrix_row_major =
-        request.mfem_stiffness_matrix_row_major;
+        stiffness;
     slepc_request.gyrotropic_matrix_row_major =
         request.mfem_gyrotropic_matrix_row_major;
+    slepc_request.tangent_mass_matrix_row_major =
+        request.mfem_mass_matrix_row_major;
+    slepc_request.tangent_mass_action_context = &tangent_mass_context;
     slepc_request.requested_mode_count = request.requested_mode_count;
     slepc_request.target_frequency_hz = shift.shift_frequency_hz;
     slepc_request.frequency_min_hz = request.frequency_min_hz;
@@ -1528,15 +4060,24 @@ FrequencyDomainContractResult solve_dense_production_modal_payload(
     slepc_request.residual_tolerance = request.residual_tolerance;
     slepc_request.max_outer_iterations = request.max_outer_iterations;
     slepc_request.max_linear_iterations = request.max_linear_iterations;
+    slepc_request.phase_convention = request.phase_convention;
     const SLEPcTinyGyrotropicModalEigenResult slepc_result =
-        solve_slepc_tiny_gyrotropic_modal_eigen(slepc_request);
+        solve_modal_spectrum_for_request(request, slepc_request, reconstruction);
 
     FrequencyDomainContractResult result{};
     if (!slepc_result.ok) {
         const char *stop_reason = stop_reason_or_default(slepc_result);
+        const bool generic_slepc_result =
+            slepc_result.solver_adapter != nullptr &&
+            std::strcmp(slepc_result.solver_adapter, "slepc_modal_eigen") == 0;
+        const bool generic_refill_partial =
+            generic_slepc_result &&
+            slepc_result.status != nullptr &&
+            std::strcmp(slepc_result.status, "partial") == 0;
         result.status = FrequencyDomainStatus::solve_error;
-        result.error_message =
-            "native FEM modal_eigen production CPU SLEPc shift-invert solve failed";
+        result.error_message = generic_refill_partial
+            ? "native FEM modal_eigen nearest-frequency solve did not certify the requested count; certified partial candidates remain diagnostic only"
+            : "native FEM modal_eigen production CPU SLEPc shift-invert solve failed";
         result.diagnostics_json =
             "{\"schema_version\":\"frequency_domain_modal_diagnostics.v1\","
             "\"study_product\":\"modal_eigen\","
@@ -1567,7 +4108,20 @@ FrequencyDomainContractResult solve_dense_production_modal_payload(
             std::string(stop_reason) +
             "\"}";
         result.diagnostics_json =
-            with_modal_request_diagnostics(result.diagnostics_json, request);
+            with_modal_request_diagnostics(result.diagnostics_json, request, result.status);
+        if (generic_slepc_result) {
+            append_optional_json_field(
+                result.diagnostics_json,
+                generic_slepc_nev_refill_json_field(slepc_result));
+            if (generic_refill_partial || !slepc_result.accepted_modes.empty()) {
+                append_optional_json_field(
+                    result.diagnostics_json,
+                    "\"certified_partial_candidate_count\":" +
+                        std::to_string(slepc_result.accepted_modes.size()) + "," +
+                        format_slepc_partial_candidate_metadata_json(
+                            slepc_result.accepted_modes));
+            }
+        }
         result.result_json =
             "{\"schema_version\":\"frequency_domain_modal_result.v1\","
             "\"study_product\":\"modal_eigen\","
@@ -1580,6 +4134,7 @@ FrequencyDomainContractResult solve_dense_production_modal_payload(
             ",\"shift_omega_rad_s\":" +
             format_double(shift.shift_omega_rad_s) +
             "}";
+        append_nearest_frequency_metadata(result.result_json, request, result.status);
         return result;
     }
 
@@ -1609,6 +4164,31 @@ FrequencyDomainContractResult solve_dense_production_modal_payload(
         std::string(slepc_result.solver_adapter) +
         "\",\"solver_model\":\"slepc_shift_invert_production_cpu\","
         "\"solver_family\":\"slepc_shift_invert_production_cpu\","
+        "\"execution_policy\":\"" +
+        std::string(slepc_result.execution_policy) +
+        "\",\"execution_scope\":\"" +
+        std::string(slepc_result.execution_scope) +
+        "\",\"communicator\":\"" +
+        std::string(slepc_result.communicator) +
+        "\",\"scalability_scope\":\"" +
+        std::string(slepc_result.scalability_scope) +
+        "\",\"poisson_ksp_type\":\"" +
+        std::string(slepc_result.poisson_ksp_type) +
+        "\",\"poisson_pc_type\":\"" +
+        std::string(slepc_result.poisson_pc_type) +
+        "\",\"poisson_factorization_package\":\"" +
+        std::string(slepc_result.poisson_factorization_package) +
+        "\",\"poisson_factorization_shift_policy\":\"" +
+        std::string(slepc_result.poisson_factorization_shift_policy) +
+        "\",\"poisson_iteration_semantics\":\"" +
+        std::string(slepc_result.poisson_iteration_semantics) +
+        "\",\"poisson_ksp_rtol\":" +
+        format_double(slepc_result.poisson_ksp_rtol) +
+        ",\"poisson_ksp_atol\":" +
+        format_double(slepc_result.poisson_ksp_atol) +
+        ",\"poisson_ksp_max_iterations\":" +
+        std::to_string(slepc_result.poisson_ksp_max_iterations) +
+        ","
         "\"eps_type\":\"" +
         std::string(slepc_result.eps_type) +
         "\",\"slepc_problem_type\":\"" +
@@ -1627,13 +4207,25 @@ FrequencyDomainContractResult solve_dense_production_modal_payload(
         format_double(slepc_result.ksp_atol) +
         ",\"ksp_max_iterations\":" +
         std::to_string(slepc_result.ksp_max_iterations) +
+        ",\"ksp_restart\":" +
+        std::to_string(slepc_result.ksp_restart) +
+        ",\"ksp_breakdown_tolerance\":" +
+        format_double(slepc_result.ksp_breakdown_tolerance) +
         ",\"ksp_final_residual\":" +
         format_double(slepc_result.ksp_final_residual) +
         ",\"factorization_package\":\"" +
         std::string(slepc_result.factorization_package) +
-        "\",\"nullspace_policy\":\"" +
+        "\",\"factorization_shift_policy\":\"" +
+        std::string(slepc_result.factorization_shift_policy) +
+        "\",\"factorization_shift_amount\":" +
+        format_double(slepc_result.factorization_shift_amount) +
+        ",\"operator_normalization_scale\":" +
+        format_double(slepc_result.operator_normalization_scale) +
+        ",\"preconditioner_normalization_scale\":" +
+        format_double(slepc_result.preconditioner_normalization_scale) +
+        ",\"nullspace_policy\":\"" +
         std::string(slepc_result.nullspace_policy) +
-        "\",\"positive_frequency_filter\":\"select_positive_frequency_mode(map_eigenvalue(lambda, exp_i_omega_t), exclude_zero_frequency)\","
+        "\",\"positive_frequency_filter\":\"select_positive_frequency_mode(map_eigenvalue(lambda, phase_convention), exclude_zero_frequency)\","
         "\"zero_frequency_mode_policy\":\"exclude_zero_frequency\","
         "\"eigenvalue_to_frequency\":\"map_eigenvalue(lambda, phase)\","
         "\"conjugate_pair_policy\":\"keep_positive_frequency_partner\","
@@ -1656,7 +4248,12 @@ FrequencyDomainContractResult solve_dense_production_modal_payload(
         ",\"relative_residual_max\":" +
         format_double(slepc_result.max_relative_residual) + "}";
     result.diagnostics_json =
-        with_modal_request_diagnostics(result.diagnostics_json, request);
+        with_modal_request_diagnostics(result.diagnostics_json, request, result.status);
+    append_optional_json_field(
+        result.diagnostics_json,
+        generic_slepc_nev_refill_json_field(slepc_result));
+    const NativeModesJsonResult mode_transport = format_slepc_modes_json(
+        slepc_result, request, result.modal_eigen);
     result.result_json =
         "{\"schema_version\":\"frequency_domain_modal_result.v1\","
         "\"study_product\":\"modal_eigen\","
@@ -1669,7 +4266,8 @@ FrequencyDomainContractResult solve_dense_production_modal_payload(
         std::to_string(slepc_result.accepted_mode_count) +
         ","
         + mode_kinematics_json_fields(
-            {slepc_result.lambda_real, slepc_result.lambda_imag}) +
+            {slepc_result.lambda_real, slepc_result.lambda_imag},
+            request.phase_convention) +
         ",\"relative_residual\":" +
         format_double(slepc_result.relative_residual) +
         ",\"shift_frequency_hz\":" +
@@ -1677,7 +4275,9 @@ FrequencyDomainContractResult solve_dense_production_modal_payload(
         ",\"shift_omega_rad_s\":" +
         format_double(shift.shift_omega_rad_s) +
         ",\"modes\":" +
-        format_slepc_modes_json(slepc_result) + "}";
+        mode_transport.json + "}";
+    append_nearest_frequency_metadata(result.result_json, request, result.status);
+    finalize_mode_transport_result(result, mode_transport);
     result.artifact_manifest_path.clear();
     return result;
 }
@@ -1691,7 +4291,7 @@ FrequencyDomainContractResult solve_sparse_production_modal_payload(
     const ModalSolverSelection &selection,
     const ModalShiftSelection &shift) noexcept
 {
-    if (request.mfem_sparse_stiffness_csr.row_count >
+    if (sparse_modal_tangent_dof_count(request) >
         static_cast<std::uint64_t>(std::numeric_limits<int>::max())) {
         return sparse_payload_validation_error(
             request,
@@ -1703,11 +4303,32 @@ FrequencyDomainContractResult solve_sparse_production_modal_payload(
         return solve_sparse_production_modal_window_payload(request, selection);
     }
 
+    const bool shared_domain_floquet =
+        request.floquet_shared_domain_operator != nullptr;
+    const bool native_floquet_sparse = shared_domain_floquet;
+    SLEPcTangentMassActionContext tangent_mass_context{};
+    if (!shared_domain_floquet &&
+        !create_slepc_tangent_mass_action_context(
+            static_cast<int>(sparse_modal_tangent_dof_count(request)),
+            nullptr,
+            request.mfem_sparse_mass_csr,
+            &tangent_mass_context)) {
+        return sparse_payload_validation_error(
+            request,
+            "native FEM modal_eigen sparse tangent mass is missing or invalid",
+            "invalid_tangent_mass_metric");
+    }
+
     SLEPcSparseGyrotropicModalEigenRequest slepc_request{};
     slepc_request.tangent_dof_count =
-        static_cast<int>(request.mfem_sparse_stiffness_csr.row_count);
+        static_cast<int>(sparse_modal_tangent_dof_count(request));
     slepc_request.stiffness_csr = request.mfem_sparse_stiffness_csr;
     slepc_request.gyrotropic_csr = request.mfem_sparse_gyrotropic_csr;
+    slepc_request.tangent_mass_csr = request.mfem_sparse_mass_csr;
+    slepc_request.tangent_mass_action_context = shared_domain_floquet
+        ? nullptr : &tangent_mass_context;
+    slepc_request.floquet_shared_domain_operator =
+        request.floquet_shared_domain_operator;
     slepc_request.requested_mode_count = request.requested_mode_count;
     slepc_request.target_frequency_hz = shift.shift_frequency_hz;
     slepc_request.frequency_min_hz = request.frequency_min_hz;
@@ -1715,21 +4336,59 @@ FrequencyDomainContractResult solve_sparse_production_modal_payload(
     slepc_request.residual_tolerance = request.residual_tolerance;
     slepc_request.max_outer_iterations = request.max_outer_iterations;
     slepc_request.max_linear_iterations = request.max_linear_iterations;
+    slepc_request.phase_convention = request.phase_convention;
+    slepc_request.cancel_user_data = request.cancel_user_data;
+    slepc_request.cancel_requested = request.cancel_requested;
     const SLEPcTinyGyrotropicModalEigenResult slepc_result =
-        solve_slepc_sparse_gyrotropic_modal_eigen(slepc_request);
+        solve_sparse_modal_spectrum_for_request(request, slepc_request, nullptr);
 
     FrequencyDomainContractResult result{};
-    constexpr const char *kSparseSolverModel =
-        "slepc_shift_invert_production_cpu_sparse_csr";
+    const char *kSparsePayload = native_floquet_sparse
+        ? "floquet_shared_domain_sparse_matshell"
+        : "sparse_csr";
+    const char *kSparseAdapter = native_floquet_sparse
+        ? "floquet_airbox_cpu_schur_slepc"
+        : "slepc_modal_eigen";
+    const char *kSparseSolverModel = native_floquet_sparse
+        ? "floquet_real_frequency_slepc_sparse"
+        : "slepc_shift_invert_production_cpu_sparse_csr";
+    const std::string demag_probe_json_field =
+        floquet_demag_operator_probe_json_field(
+            slepc_result.dynamic_demag_operator_probe);
+    const std::string schur_action_diagnostic_json_field =
+        floquet_schur_action_diagnostic_json_field(
+            slepc_result.floquet_schur_action_diagnostic);
+    const std::string shifted_ksp_diagnostics_json_fields = floquet_shifted_ksp_diagnostics_json_fields(
+        slepc_result, !slepc_result.ok);
     if (!slepc_result.ok) {
         const char *stop_reason = stop_reason_or_default(slepc_result);
-        result.status = FrequencyDomainStatus::solve_error;
-        result.error_message =
-            "native FEM modal_eigen production CPU sparse CSR SLEPc shift-invert solve failed";
+        const bool cancelled =
+            slepc_result.status != nullptr &&
+            std::strcmp(slepc_result.status, "cancelled") == 0;
+        const bool partial =
+            slepc_result.status != nullptr &&
+            std::strcmp(slepc_result.status, "partial") == 0;
+        const bool generic_slepc_result =
+            !native_floquet_sparse &&
+            slepc_result.solver_adapter != nullptr &&
+            std::strcmp(slepc_result.solver_adapter, "slepc_modal_eigen") == 0;
+        const bool generic_refill_partial = generic_slepc_result && partial;
+        result.status = cancelled
+            ? FrequencyDomainStatus::interrupted
+            : FrequencyDomainStatus::solve_error;
+        result.error_message = cancelled
+            ? "native FEM modal_eigen production CPU sparse CSR SLEPc shift-invert solve was cancelled"
+            : generic_refill_partial
+                ? "native FEM modal_eigen nearest-frequency solve did not certify the requested count; certified partial candidates remain diagnostic only"
+                : partial
+                    ? "native FEM modal_eigen production CPU sparse CSR SLEPc shift-invert solve did not certify the requested mode count"
+                : "native FEM modal_eigen production CPU sparse CSR SLEPc shift-invert solve failed";
         result.diagnostics_json =
             "{\"schema_version\":\"frequency_domain_modal_diagnostics.v1\","
             "\"study_product\":\"modal_eigen\","
-            "\"status\":\"solve_error\","
+            "\"status\":\"" +
+            std::string(cancelled ? "interrupted" : "solve_error") +
+            "\","
             "\"complete\":false,"
             "\"execution_lane\":\"production_cpu\","
             "\"progress_schema_version\":\"fem_frequency_domain_progress.v1\","
@@ -1737,8 +4396,9 @@ FrequencyDomainContractResult solve_sparse_production_modal_payload(
             "\"tiny_validation_solver\":false,"
             "\"mfem_operator_request\":true,"
             "\"tangent_dof_count\":" +
-            std::to_string(request.mfem_sparse_stiffness_csr.row_count) +
-            ",\"mfem_operator_payload\":\"sparse_csr\","
+            std::to_string(sparse_modal_tangent_dof_count(request)) +
+            ",\"mfem_operator_payload\":\"" +
+            std::string(kSparsePayload) + "\","
             "\"resolved_solver_family\":\"" +
             std::string(selection.family) +
             "\",\"solver_selection_reason\":\"" +
@@ -1758,19 +4418,61 @@ FrequencyDomainContractResult solve_sparse_production_modal_payload(
             std::string(stop_reason) +
             "\"}";
         result.diagnostics_json =
-            with_modal_request_diagnostics(result.diagnostics_json, request);
+            with_modal_request_diagnostics(result.diagnostics_json, request, result.status);
+        if (generic_slepc_result) {
+            append_optional_json_field(
+                result.diagnostics_json,
+                generic_slepc_nev_refill_json_field(slepc_result));
+            if (generic_refill_partial || !slepc_result.accepted_modes.empty()) {
+                append_optional_json_field(
+                    result.diagnostics_json,
+                    "\"certified_partial_candidate_count\":" +
+                        std::to_string(slepc_result.accepted_modes.size()) + "," +
+                        format_slepc_partial_candidate_metadata_json(
+                            slepc_result.accepted_modes));
+            }
+        }
         result.result_json =
             "{\"schema_version\":\"frequency_domain_modal_result.v1\","
             "\"study_product\":\"modal_eigen\","
-            "\"status\":\"solve_error\","
-            "\"accepted_mode_count\":0,"
-            "\"resolved_solver_family\":\"" +
+            "\"status\":\"" +
+            std::string(cancelled ? "interrupted" : "solve_error") +
+            "\","
+            "\"accepted_mode_count\":" +
+            std::to_string(generic_slepc_result ? 0 : slepc_result.accepted_mode_count) +
+            ",\"resolved_solver_family\":\"" +
             std::string(selection.family) +
             "\",\"shift_frequency_hz\":" +
             format_double(shift.shift_frequency_hz) +
             ",\"shift_omega_rad_s\":" +
             format_double(shift.shift_omega_rad_s) +
-            "}";
+            ",\"stop_reason\":\"" +
+            std::string(stop_reason) +
+            "\"";
+        NativeModesJsonResult mode_transport{};
+        if (!generic_slepc_result) {
+            mode_transport = format_slepc_modes_json(
+                slepc_result, request, result.modal_eigen);
+            result.result_json +=
+                ",\"modes\":" +
+                mode_transport.json;
+        }
+        result.result_json += "}";
+        append_nearest_frequency_metadata(result.result_json, request, result.status);
+        if (slepc_result.floquet_dense_oracle.requested) {
+            append_optional_json_field(
+                result.result_json,
+                floquet_dense_oracle_json_field(slepc_result.floquet_dense_oracle));
+        }
+        append_optional_json_field(
+            result.diagnostics_json, shifted_ksp_diagnostics_json_fields);
+        append_optional_json_field(result.diagnostics_json, demag_probe_json_field);
+        append_optional_json_field(result.result_json, demag_probe_json_field);
+        append_optional_json_field(
+            result.diagnostics_json, schur_action_diagnostic_json_field);
+        append_optional_json_field(
+            result.result_json, schur_action_diagnostic_json_field);
+        finalize_mode_transport_result(result, mode_transport);
         return result;
     }
 
@@ -1789,9 +4491,10 @@ FrequencyDomainContractResult solve_sparse_production_modal_payload(
         "\"tiny_validation_solver\":false,"
         "\"mfem_operator_request\":true,"
         "\"tangent_dof_count\":" +
-        std::to_string(request.mfem_sparse_stiffness_csr.row_count) +
-        ",\"mfem_operator_payload\":\"sparse_csr\","
-        "\"algebraic_form\":\"gyrotropic_generalized_sparse_csr\","
+        std::to_string(sparse_modal_tangent_dof_count(request)) +
+        ",\"mfem_operator_payload\":\"" +
+        std::string(kSparsePayload) + "\","
+        "\"algebraic_form\":\"real_frequency_rotated_gyrotropic_sparse_csr\","
         "\"resolved_solver_family\":\"" +
         std::string(selection.family) +
         "\",\"solver_selection_reason\":\"" +
@@ -1802,7 +4505,31 @@ FrequencyDomainContractResult solve_sparse_production_modal_payload(
         std::string(kSparseSolverModel) +
         "\",\"solver_family\":\"" +
         std::string(kSparseSolverModel) +
-        "\",\"eps_type\":\"" +
+        "\",\"execution_policy\":\"" +
+        std::string(slepc_result.execution_policy) +
+        "\",\"execution_scope\":\"" +
+        std::string(slepc_result.execution_scope) +
+        "\",\"communicator\":\"" +
+        std::string(slepc_result.communicator) +
+        "\",\"scalability_scope\":\"" +
+        std::string(slepc_result.scalability_scope) +
+        "\",\"poisson_ksp_type\":\"" +
+        std::string(slepc_result.poisson_ksp_type) +
+        "\",\"poisson_pc_type\":\"" +
+        std::string(slepc_result.poisson_pc_type) +
+        "\",\"poisson_factorization_package\":\"" +
+        std::string(slepc_result.poisson_factorization_package) +
+        "\",\"poisson_factorization_shift_policy\":\"" +
+        std::string(slepc_result.poisson_factorization_shift_policy) +
+        "\",\"poisson_iteration_semantics\":\"" +
+        std::string(slepc_result.poisson_iteration_semantics) +
+        "\",\"poisson_ksp_rtol\":" +
+        format_double(slepc_result.poisson_ksp_rtol) +
+        ",\"poisson_ksp_atol\":" +
+        format_double(slepc_result.poisson_ksp_atol) +
+        ",\"poisson_ksp_max_iterations\":" +
+        std::to_string(slepc_result.poisson_ksp_max_iterations) +
+        ",\"eps_type\":\"" +
         std::string(slepc_result.eps_type) +
         "\",\"slepc_problem_type\":\"" +
         std::string(slepc_result.problem_type) +
@@ -1820,13 +4547,25 @@ FrequencyDomainContractResult solve_sparse_production_modal_payload(
         format_double(slepc_result.ksp_atol) +
         ",\"ksp_max_iterations\":" +
         std::to_string(slepc_result.ksp_max_iterations) +
+        ",\"ksp_restart\":" +
+        std::to_string(slepc_result.ksp_restart) +
+        ",\"ksp_breakdown_tolerance\":" +
+        format_double(slepc_result.ksp_breakdown_tolerance) +
         ",\"ksp_final_residual\":" +
         format_double(slepc_result.ksp_final_residual) +
         ",\"factorization_package\":\"" +
         std::string(slepc_result.factorization_package) +
-        "\",\"nullspace_policy\":\"" +
+        "\",\"factorization_shift_policy\":\"" +
+        std::string(slepc_result.factorization_shift_policy) +
+        "\",\"factorization_shift_amount\":" +
+        format_double(slepc_result.factorization_shift_amount) +
+        ",\"operator_normalization_scale\":" +
+        format_double(slepc_result.operator_normalization_scale) +
+        ",\"preconditioner_normalization_scale\":" +
+        format_double(slepc_result.preconditioner_normalization_scale) +
+        ",\"nullspace_policy\":\"" +
         std::string(slepc_result.nullspace_policy) +
-        "\",\"positive_frequency_filter\":\"select_positive_frequency_mode(map_eigenvalue(lambda, exp_i_omega_t), exclude_zero_frequency)\","
+        "\",\"positive_frequency_filter\":\"select_positive_frequency_mode(map_eigenvalue(lambda, phase_convention), exclude_zero_frequency)\","
         "\"zero_frequency_mode_policy\":\"exclude_zero_frequency\","
         "\"eigenvalue_to_frequency\":\"map_eigenvalue(lambda, phase)\","
         "\"conjugate_pair_policy\":\"keep_positive_frequency_partner\","
@@ -1848,20 +4587,26 @@ FrequencyDomainContractResult solve_sparse_production_modal_payload(
         ",\"relative_residual_max\":" +
         format_double(slepc_result.max_relative_residual) + "}";
     result.diagnostics_json =
-        with_modal_request_diagnostics(result.diagnostics_json, request);
+        with_modal_request_diagnostics(result.diagnostics_json, request, result.status);
+    append_optional_json_field(
+        result.diagnostics_json,
+        generic_slepc_nev_refill_json_field(slepc_result));
+    const NativeModesJsonResult mode_transport = format_slepc_modes_json(
+        slepc_result, request, result.modal_eigen);
     result.result_json =
         "{\"schema_version\":\"frequency_domain_modal_result.v1\","
         "\"study_product\":\"modal_eigen\","
         "\"status\":\"ok\","
         "\"solver_adapter\":\"" +
-        std::string(slepc_result.solver_adapter) +
+        std::string(kSparseAdapter) +
         "\",\"resolved_solver_family\":\"" +
         std::string(selection.family) +
         "\",\"accepted_mode_count\":" +
         std::to_string(slepc_result.accepted_mode_count) +
         "," +
         mode_kinematics_json_fields(
-            {slepc_result.lambda_real, slepc_result.lambda_imag}) +
+            {slepc_result.lambda_real, slepc_result.lambda_imag},
+            request.phase_convention) +
         ",\"relative_residual\":" +
         format_double(slepc_result.relative_residual) +
         ",\"shift_frequency_hz\":" +
@@ -1869,7 +4614,22 @@ FrequencyDomainContractResult solve_sparse_production_modal_payload(
         ",\"shift_omega_rad_s\":" +
         format_double(shift.shift_omega_rad_s) +
         ",\"modes\":" +
-        format_slepc_modes_json(slepc_result) + "}";
+        mode_transport.json + "}";
+    append_nearest_frequency_metadata(result.result_json, request, result.status);
+    if (slepc_result.floquet_dense_oracle.requested) {
+        append_optional_json_field(
+            result.result_json,
+            floquet_dense_oracle_json_field(slepc_result.floquet_dense_oracle));
+    }
+    append_optional_json_field(
+        result.diagnostics_json, shifted_ksp_diagnostics_json_fields);
+    append_optional_json_field(result.diagnostics_json, demag_probe_json_field);
+    append_optional_json_field(result.result_json, demag_probe_json_field);
+    append_optional_json_field(
+        result.diagnostics_json, schur_action_diagnostic_json_field);
+    append_optional_json_field(
+        result.result_json, schur_action_diagnostic_json_field);
+    finalize_mode_transport_result(result, mode_transport);
     result.artifact_manifest_path.clear();
     return result;
 }
@@ -1878,7 +4638,7 @@ FrequencyDomainContractResult solve_sparse_production_modal_window_payload(
     const ModalEigenRequest &request,
     const ModalSolverSelection &selection) noexcept
 {
-    if (request.mfem_sparse_stiffness_csr.row_count >
+    if (sparse_modal_tangent_dof_count(request) >
         static_cast<std::uint64_t>(std::numeric_limits<int>::max())) {
         return sparse_payload_validation_error(
             request,
@@ -1895,15 +4655,53 @@ FrequencyDomainContractResult solve_sparse_production_modal_window_payload(
             "invalid_frequency_window");
     }
 
+    const bool shared_domain_floquet =
+        request.floquet_shared_domain_operator != nullptr;
+    const bool native_floquet_sparse = shared_domain_floquet;
+    const bool native_floquet_certified_count_unavailable =
+        native_floquet_sparse && request.completeness_policy == 1;
+    SLEPcTangentMassActionContext tangent_mass_context{};
+    if (!shared_domain_floquet &&
+        !create_slepc_tangent_mass_action_context(
+            static_cast<int>(sparse_modal_tangent_dof_count(request)),
+            nullptr,
+            request.mfem_sparse_mass_csr,
+            &tangent_mass_context)) {
+        return sparse_payload_validation_error(
+            request,
+            "native FEM modal_eigen sparse tangent mass is missing or invalid",
+            "invalid_tangent_mass_metric");
+    }
+
     std::vector<DenseSubwindowSolve> subwindow_solves;
     subwindow_solves.reserve(partition.subwindows.size());
     std::vector<SLEPcModalAcceptedMode> candidate_modes;
+    bool subwindow_hard_failure = false;
+    bool cancellation_interrupted = false;
+    bool generic_slepc_refill_partial = false;
+    bool generic_slepc_refill_dimension_limited = false;
+    bool generic_slepc_refill_other_partial = false;
+    bool native_floquet_refill_partial = false;
+    bool native_floquet_refill_dimension_limited = false;
+    bool native_floquet_refill_other_partial = false;
+    const char *subwindow_failure_reason = nullptr;
+    FloquetSharedDomainSparseModalSolveContext floquet_window_context{};
+    FloquetSharedDomainSparseModalSolveContext *reuse_context =
+        request.floquet_shared_domain_operator != nullptr
+            ? &floquet_window_context
+            : nullptr;
     for (const FrequencySubwindow &subwindow : partition.subwindows) {
         SLEPcSparseGyrotropicModalEigenRequest slepc_request{};
         slepc_request.tangent_dof_count =
-            static_cast<int>(request.mfem_sparse_stiffness_csr.row_count);
+            static_cast<int>(sparse_modal_tangent_dof_count(request));
         slepc_request.stiffness_csr = request.mfem_sparse_stiffness_csr;
         slepc_request.gyrotropic_csr = request.mfem_sparse_gyrotropic_csr;
+        slepc_request.tangent_mass_csr = request.mfem_sparse_mass_csr;
+        slepc_request.tangent_mass_action_context = shared_domain_floquet
+            ? nullptr
+            : &tangent_mass_context;
+        slepc_request.floquet_shared_domain_operator =
+            request.floquet_shared_domain_operator;
         slepc_request.requested_mode_count = subwindow.guard_modes_per_shift;
         slepc_request.target_frequency_hz = subwindow.shift_hz;
         slepc_request.frequency_min_hz = subwindow.search_min_hz;
@@ -1911,8 +4709,41 @@ FrequencyDomainContractResult solve_sparse_production_modal_window_payload(
         slepc_request.residual_tolerance = request.residual_tolerance;
         slepc_request.max_outer_iterations = request.max_outer_iterations;
         slepc_request.max_linear_iterations = request.max_linear_iterations;
+        slepc_request.phase_convention = request.phase_convention;
+        slepc_request.cancel_user_data = request.cancel_user_data;
+        slepc_request.cancel_requested = request.cancel_requested;
         SLEPcTinyGyrotropicModalEigenResult slepc_result =
-            solve_slepc_sparse_gyrotropic_modal_eigen(slepc_request);
+            solve_sparse_modal_spectrum_for_request(
+                request,
+                slepc_request,
+                reuse_context);
+        if (slepc_result.status != nullptr &&
+            std::strcmp(slepc_result.status, "partial") == 0) {
+            const bool generic_slepc_adapter =
+                slepc_result.solver_adapter != nullptr &&
+                std::strcmp(slepc_result.solver_adapter, "slepc_modal_eigen") == 0;
+            if (generic_slepc_adapter) {
+                generic_slepc_refill_partial = true;
+                if (slepc_result.unsupported_reason != nullptr &&
+                    std::strcmp(
+                        slepc_result.unsupported_reason,
+                        "slepc_modal_nev_refill_dimension_limit_reached") == 0) {
+                    generic_slepc_refill_dimension_limited = true;
+                } else {
+                    generic_slepc_refill_other_partial = true;
+                }
+            } else {
+                native_floquet_refill_partial = true;
+                if (slepc_result.unsupported_reason != nullptr &&
+                    std::strcmp(
+                        slepc_result.unsupported_reason,
+                        "floquet_nev_refill_dimension_limit_reached") == 0) {
+                    native_floquet_refill_dimension_limited = true;
+                } else {
+                    native_floquet_refill_other_partial = true;
+                }
+            }
+        }
         const char *stop_reason = subwindow_stop_reason(slepc_result);
         emit_production_shift_invert_progress(
             request,
@@ -1929,33 +4760,109 @@ FrequencyDomainContractResult solve_sparse_production_modal_window_payload(
         }
         subwindow_solves.push_back(
             DenseSubwindowSolve{subwindow, std::move(slepc_result), stop_reason});
+        const DenseSubwindowSolve &completed_subwindow = subwindow_solves.back();
+        if (subwindow_requires_fail_closed(
+                completed_subwindow.result, request.completeness_policy)) {
+            subwindow_hard_failure = true;
+            subwindow_failure_reason = completed_subwindow.result.unsupported_reason;
+            break;
+        }
+        if (completed_subwindow.result.status != nullptr &&
+            std::strcmp(completed_subwindow.result.status, "cancelled") == 0) {
+            cancellation_interrupted = true;
+            break;
+        }
     }
 
-    const std::vector<double> sparse_mass_matrix_row_major =
-        csr_matrix_view_to_dense_row_major(request.mfem_sparse_mass_csr);
-    const double *deduplication_mass_matrix =
-        sparse_mass_matrix_row_major.empty() ? nullptr :
-            sparse_mass_matrix_row_major.data();
-    std::vector<SLEPcModalAcceptedMode> accepted_modes =
-        deduplicate_slepc_modes_by_overlap(
+    if (shared_domain_floquet && !floquet_window_context.close()) {
+        if (!subwindow_hard_failure) {
+            subwindow_hard_failure = true;
+            subwindow_failure_reason = "floquet_context_cleanup_failed";
+        }
+        // No candidate can be published after owner teardown failed. Preserve
+        // prior hard-failure diagnostics/reasons and suppress the aggregate modes.
+        candidate_modes.clear();
+    }
+    std::vector<SLEPcModalAcceptedMode> accepted_modes;
+    std::size_t accepted_mode_count_before_cap = 0;
+    bool truncated_by_requested_count = false;
+    if (request.floquet_shared_domain_operator != nullptr) {
+        // All subwindow candidates refer to the same owned phase-reduced
+        // tangent space. Reuse its physical mass without a dense allocation.
+        std::vector<detail::CertifiedFloquetModalCandidate> merge_candidates;
+        merge_candidates.reserve(candidate_modes.size());
+        for (SLEPcModalAcceptedMode &mode : candidate_modes) {
+            detail::CertifiedFloquetModalCandidate candidate{};
+            candidate.mode = std::move(mode);
+            candidate.target_distance = 0.0;
+            merge_candidates.push_back(std::move(candidate));
+        }
+        const std::size_t merge_candidate_count = merge_candidates.size();
+        detail::FloquetModalCandidateFinalization merged =
+            detail::finalize_certified_floquet_candidates(
+                std::move(merge_candidates),
+                request.floquet_shared_domain_operator->q_complex_dof_count,
+                request.floquet_shared_domain_operator->positive_tangent_mass,
+                merge_candidate_count);
+        if (!merged.success) {
+            // Never turn a failed metric into an empty/exhausted success,
+            // and retain an earlier hard subwindow failure if one occurred.
+            if (!subwindow_hard_failure) {
+                subwindow_hard_failure = true;
+                subwindow_failure_reason = merged.failure_reason;
+            }
+        } else {
+            accepted_modes.reserve(merged.accepted_candidates.size());
+            for (detail::CertifiedFloquetModalCandidate &candidate :
+                 merged.accepted_candidates) {
+                accepted_modes.push_back(std::move(candidate.mode));
+            }
+        }
+        std::sort(
+            accepted_modes.begin(),
+            accepted_modes.end(),
+            [](const SLEPcModalAcceptedMode &left,
+               const SLEPcModalAcceptedMode &right) {
+                return left.frequency_hz < right.frequency_hz;
+            });
+        accepted_mode_count_before_cap = accepted_modes.size();
+        truncated_by_requested_count = request.requested_mode_count > 0 &&
+            accepted_mode_count_before_cap >
+                static_cast<std::size_t>(request.requested_mode_count);
+        if (truncated_by_requested_count) {
+            accepted_modes.resize(static_cast<std::size_t>(request.requested_mode_count));
+        }
+    } else {
+        const SLEPcModalCandidateFinalization finalization =
+            finalize_slepc_modal_candidates_with_context(
             candidate_modes,
-            static_cast<std::size_t>(request.mfem_sparse_stiffness_csr.row_count),
-            deduplication_mass_matrix);
-    std::sort(
-        accepted_modes.begin(),
-        accepted_modes.end(),
-        [](const SLEPcModalAcceptedMode &left, const SLEPcModalAcceptedMode &right) {
-            return left.frequency_hz < right.frequency_hz;
-        });
-    const std::size_t accepted_mode_count_before_cap = accepted_modes.size();
-    const bool truncated_by_requested_count =
-        request.requested_mode_count > 0 &&
-        accepted_mode_count_before_cap >
-            static_cast<std::size_t>(request.requested_mode_count);
-    if (truncated_by_requested_count) {
-        accepted_modes.resize(static_cast<std::size_t>(request.requested_mode_count));
+            tangent_mass_context,
+            kWindowDedupFrequencyRelativeTolerance,
+            kWindowDedupFrequencyAbsoluteToleranceHz,
+            kWindowDedupOverlapThreshold,
+            request.target_frequency_hz,
+            request.requested_mode_count,
+            SLEPcModalCandidateSelection::lowest_frequency);
+        if (!finalization.success) {
+            subwindow_hard_failure = true;
+            subwindow_failure_reason =
+                finalization.deduplication_status ==
+                        ModalDeduplicationStatus::invalid_metric
+                    ? "invalid_tangent_mass_metric"
+                    : finalization.deduplication_status ==
+                            ModalDeduplicationStatus::mass_action_failed
+                        ? "tangent_mass_action_failed"
+                        : "modal_candidate_finalization_failed";
+        } else {
+            accepted_modes = finalization.accepted_modes;
+            accepted_mode_count_before_cap =
+                finalization.unique_candidate_count_before_cap;
+            truncated_by_requested_count =
+                finalization.truncated_by_requested_count;
+        }
     }
     const bool exhausted_without_modes =
+        !native_floquet_certified_count_unavailable &&
         !truncated_by_requested_count &&
         accepted_modes.empty() &&
         !subwindow_solves.empty() &&
@@ -1974,35 +4881,67 @@ FrequencyDomainContractResult solve_sparse_production_modal_window_payload(
                 return std::strcmp(solve.stop_reason, "window_exhausted") != 0 &&
                     std::strcmp(solve.stop_reason, "converged") != 0;
             });
-    const char *window_stop_reason = truncated_by_requested_count ?
+    const bool generic_best_effort_dimension_limited_partial_with_modes =
+        !native_floquet_sparse &&
+        request.completeness_policy == 0 &&
+        generic_slepc_refill_partial &&
+        generic_slepc_refill_dimension_limited &&
+        !generic_slepc_refill_other_partial &&
+        !accepted_modes.empty();
+    if (!native_floquet_sparse &&
+        generic_slepc_refill_dimension_limited &&
+        accepted_modes.empty()) {
+        subwindow_hard_failure = true;
+        subwindow_failure_reason =
+            "slepc_modal_nev_refill_dimension_limit_reached";
+    }
+    const char *window_stop_reason = subwindow_hard_failure
+        ? "subwindow_failed" : (cancellation_interrupted ?
+            "cancelled" : (native_floquet_certified_count_unavailable ?
+        "count_certificate_unavailable" : (truncated_by_requested_count ?
         "requested_count_reached" :
         (accepted_modes.empty() ?
             (partial_convergence ? "partial_convergence" : "window_exhausted") :
-            (partial_convergence ? "partial_convergence" : "converged"));
-    const char *window_completeness_status = truncated_by_requested_count ?
+            (partial_convergence ? "partial_convergence" : "converged")))));
+    const char *window_completeness_status = subwindow_hard_failure
+        ? "solver_error" : (truncated_by_requested_count ?
         "truncated_by_requested_count" :
         (exhausted_without_modes ? "window_exhausted" :
-            (partial_convergence ? "partial_convergence" : "not_certified"));
+            (partial_convergence ? "partial_convergence" : "not_certified")));
+    const bool window_complete =
+        native_floquet_sparse
+            ? std::strcmp(window_completeness_status, "certified") == 0
+            : !subwindow_hard_failure &&
+                !cancellation_interrupted && !generic_slepc_refill_partial;
     for (std::size_t index = 0; index < accepted_modes.size(); ++index) {
         accepted_modes[index].positive_frequency_pair_index =
             static_cast<int>(index);
     }
 
     FrequencyDomainContractResult result{};
-    constexpr const char *kSparseWindowSolverModel =
-        "slepc_multi_shift_invert_production_cpu_sparse_csr";
-    const std::string window_diagnostics =
-        production_window_diagnostics_json(
-            request,
-            partition,
-            subwindow_solves,
-            accepted_modes,
-            accepted_mode_count_before_cap,
-            truncated_by_requested_count);
-    if (accepted_modes.empty()) {
+    const char *kSparsePayload = native_floquet_sparse
+        ? "floquet_shared_domain_sparse_matshell"
+        : "sparse_csr";
+    const char *kSparseAdapter = native_floquet_sparse
+        ? "floquet_airbox_cpu_schur_slepc"
+        : "slepc_modal_eigen";
+    const char *kSparseWindowSolverModel = modal_request_is_nonzero_k_floquet(request)
+        ? "floquet_multi_shift_invert_slepc_sparse"
+        : "slepc_multi_shift_invert_production_cpu_sparse_csr";
+    const std::string window_diagnostics = production_window_diagnostics_json(
+        request,
+        partition,
+        subwindow_solves,
+        accepted_modes,
+        accepted_mode_count_before_cap,
+        truncated_by_requested_count);
+    if (subwindow_hard_failure) {
+        const char *failure_reason = subwindow_failure_reason != nullptr
+            ? subwindow_failure_reason : "subwindow_solver_failed";
         result.status = FrequencyDomainStatus::solve_error;
         result.error_message =
-            "native FEM modal_eigen production CPU sparse CSR multi-shift solve found no accepted modes in the requested window";
+            "native FEM modal_eigen production CPU sparse CSR multi-shift solve stopped after a hard subwindow or candidate merge failure: " +
+            std::string(failure_reason);
         result.diagnostics_json =
             "{\"schema_version\":\"frequency_domain_modal_diagnostics.v1\","
             "\"study_product\":\"modal_eigen\","
@@ -2014,8 +4953,76 @@ FrequencyDomainContractResult solve_sparse_production_modal_window_payload(
             "\"tiny_validation_solver\":false,"
             "\"mfem_operator_request\":true,"
             "\"tangent_dof_count\":" +
-            std::to_string(request.mfem_sparse_stiffness_csr.row_count) +
-            ",\"mfem_operator_payload\":\"sparse_csr\","
+            std::to_string(sparse_modal_tangent_dof_count(request)) +
+            ",\"mfem_operator_payload\":\"" +
+            std::string(kSparsePayload) +
+            "\",\"resolved_solver_family\":\"" +
+            std::string(selection.family) +
+            "\",\"solver_selection_reason\":\"" +
+            std::string(selection.reason) +
+            "\",\"spectral_transform\":\"shift_invert\","
+            "\"solver_model\":\"" +
+            std::string(kSparseWindowSolverModel) +
+            "\",\"stop_reason\":\"subwindow_failed\","
+            "\"failure_reason\":\"" +
+            std::string(failure_reason) +
+            "\",\"accepted_mode_count\":" +
+            std::to_string(accepted_modes.size()) + ",";
+        result.diagnostics_json += window_diagnostics;
+        result.diagnostics_json += "}";
+        result.diagnostics_json =
+            with_modal_request_diagnostics(result.diagnostics_json, request, result.status);
+        result.result_json =
+            "{\"schema_version\":\"frequency_domain_modal_result.v1\","
+            "\"study_product\":\"modal_eigen\","
+            "\"status\":\"solve_error\",\"accepted_mode_count\":" +
+            std::to_string(native_floquet_sparse ? accepted_modes.size() : 0u) +
+            ",\"resolved_solver_family\":\"" +
+            std::string(selection.family) +
+            "\",\"stop_reason\":\"subwindow_failed\","
+            "\"window_completeness\":\"solver_error\","
+            "\"failure_reason\":\"" +
+            escape_json_string(failure_reason) + "\"";
+        NativeModesJsonResult mode_transport{};
+        if (native_floquet_sparse) {
+            mode_transport = format_slepc_modes_json(
+                accepted_modes, request, result.modal_eigen);
+            result.result_json +=
+                ",\"modes\":" +
+                mode_transport.json;
+        }
+        result.result_json += "}";
+        finalize_mode_transport_result(result, mode_transport);
+        return result;
+    }
+    if (accepted_modes.empty()) {
+        const char *terminal_status = cancellation_interrupted
+            ? "interrupted" : "solve_error";
+        result.status = cancellation_interrupted
+            ? FrequencyDomainStatus::interrupted
+            : FrequencyDomainStatus::solve_error;
+        result.error_message = cancellation_interrupted
+            ? "native FEM modal_eigen production CPU sparse CSR multi-shift solve was cancelled"
+            : native_floquet_certified_count_unavailable
+                ? "native FEM modal_eigen certified_count requires a window count certificate; the sparse Floquet shift-invert adapter does not produce one"
+                : "native FEM modal_eigen production CPU sparse CSR multi-shift solve found no accepted modes in the requested window";
+        result.diagnostics_json =
+            "{\"schema_version\":\"frequency_domain_modal_diagnostics.v1\","
+            "\"study_product\":\"modal_eigen\","
+            "\"status\":\"" +
+            std::string(terminal_status) +
+            "\","
+            "\"complete\":false,"
+            "\"execution_lane\":\"production_cpu\","
+            "\"progress_schema_version\":\"fem_frequency_domain_progress.v1\","
+            "\"production_solver_available\":true,"
+            "\"tiny_validation_solver\":false,"
+            "\"mfem_operator_request\":true,"
+            "\"tangent_dof_count\":" +
+            std::to_string(sparse_modal_tangent_dof_count(request)) +
+            ",\"mfem_operator_payload\":\"" +
+            std::string(kSparsePayload) +
+            "\","
             "\"resolved_solver_family\":\"" +
             std::string(selection.family) +
             "\",\"solver_selection_reason\":\"" +
@@ -2029,11 +5036,13 @@ FrequencyDomainContractResult solve_sparse_production_modal_window_payload(
         result.diagnostics_json += window_diagnostics;
         result.diagnostics_json += "}";
         result.diagnostics_json =
-        with_modal_request_diagnostics(result.diagnostics_json, request);
+            with_modal_request_diagnostics(result.diagnostics_json, request, result.status);
         result.result_json =
             "{\"schema_version\":\"frequency_domain_modal_result.v1\","
             "\"study_product\":\"modal_eigen\","
-            "\"status\":\"solve_error\","
+            "\"status\":\"" +
+            std::string(terminal_status) +
+            "\","
             "\"accepted_mode_count\":0,"
             "\"resolved_solver_family\":\"" +
             std::string(selection.family) +
@@ -2051,33 +5060,75 @@ FrequencyDomainContractResult solve_sparse_production_modal_window_payload(
             std::max(max_relative_residual, mode.relative_residual);
     }
     const SLEPcModalAcceptedMode &first_mode = accepted_modes.front();
-    result.status = FrequencyDomainStatus::ok;
-    result.error_message.clear();
+    // Internal NEV overfetch is not a public minimum mode count. A
+    // best_effort window may return a nonempty certified pool after only the
+    // legal dimension guard is exhausted, while its completeness stays partial.
+    const bool native_floquet_best_effort_dimension_limited_partial_with_modes =
+        native_floquet_sparse &&
+        request.completeness_policy == 0 &&
+        native_floquet_refill_partial &&
+        native_floquet_refill_dimension_limited &&
+        !native_floquet_refill_other_partial &&
+        !accepted_modes.empty();
+    const bool best_effort_dimension_limited_partial_with_modes =
+        generic_best_effort_dimension_limited_partial_with_modes ||
+        native_floquet_best_effort_dimension_limited_partial_with_modes;
+    const bool refill_incomplete =
+        (native_floquet_sparse && native_floquet_refill_partial ||
+         !native_floquet_sparse && generic_slepc_refill_partial) &&
+        !best_effort_dimension_limited_partial_with_modes;
+    result.status = cancellation_interrupted
+        ? FrequencyDomainStatus::interrupted
+        : (refill_incomplete || native_floquet_certified_count_unavailable)
+            ? FrequencyDomainStatus::solve_error
+            : FrequencyDomainStatus::ok;
+    result.error_message = cancellation_interrupted
+        ? std::string("native FEM modal_eigen production CPU sparse CSR multi-shift solve was cancelled")
+        : refill_incomplete
+            ? (native_floquet_sparse ? std::string(
+                  "native FEM modal_eigen production CPU Floquet window remained "
+                  "incomplete after bounded refill; certified partial modes are retained")
+              : std::string(
+                  "native FEM modal_eigen generic sparse window remained incomplete "
+                  "after bounded refill; no complete spectrum is claimed"))
+            : native_floquet_certified_count_unavailable
+                ? "native FEM modal_eigen certified_count requires a window count certificate; the sparse Floquet shift-invert adapter does not produce one"
+                : std::string();
     const char *deduplication_inner_product =
-        deduplication_mass_matrix != nullptr ? "mfem_sparse_tangent_mass" :
-                                               "identity_tangent_dof";
+        native_floquet_sparse ? "floquet_positive_tangent_mass" :
+                                "mfem_sparse_tangent_mass";
     const char *deduplication_mass_matrix_status =
-        deduplication_mass_matrix != nullptr ? "provided_sparse_csr" :
-                                               "identity_fallback";
+        native_floquet_sparse ? "provided_complex_csr" : "provided_sparse_csr";
     result.diagnostics_json =
         "{\"schema_version\":\"frequency_domain_modal_diagnostics.v1\","
         "\"study_product\":\"modal_eigen\","
-        "\"status\":\"ok\","
-        "\"complete\":true,"
+        "\"status\":\"" +
+        std::string(cancellation_interrupted
+            ? "interrupted"
+            : (refill_incomplete || native_floquet_certified_count_unavailable)
+                ? "solve_error" : "ok") +
+        "\","
+        "\"complete\":" +
+        std::string(window_complete ? "true" : "false") +
+        ","
         "\"execution_lane\":\"production_cpu\","
         "\"progress_schema_version\":\"fem_frequency_domain_progress.v1\","
         "\"production_solver_available\":true,"
         "\"tiny_validation_solver\":false,"
         "\"mfem_operator_request\":true,"
         "\"tangent_dof_count\":" +
-        std::to_string(request.mfem_sparse_stiffness_csr.row_count) +
-        ",\"mfem_operator_payload\":\"sparse_csr\","
-        "\"algebraic_form\":\"gyrotropic_generalized_sparse_csr\","
+        std::to_string(sparse_modal_tangent_dof_count(request)) +
+        ",\"mfem_operator_payload\":\"" +
+        std::string(kSparsePayload) +
+        "\","
+        "\"algebraic_form\":\"real_frequency_rotated_gyrotropic_sparse_csr\","
         "\"resolved_solver_family\":\"" +
         std::string(selection.family) +
         "\",\"solver_selection_reason\":\"" +
         std::string(selection.reason) +
-        "\",\"solver_adapter\":\"slepc_modal_eigen\","
+        "\",\"solver_adapter\":\"" +
+        std::string(kSparseAdapter) +
+        "\","
         "\"solver_model\":\"" +
         std::string(kSparseWindowSolverModel) +
         "\",\"solver_family\":\"" +
@@ -2086,7 +5137,7 @@ FrequencyDomainContractResult solve_sparse_production_modal_window_payload(
         "\"stop_reason\":\"" +
         std::string(window_stop_reason) +
         "\","
-        "\"positive_frequency_filter\":\"select_positive_frequency_mode(map_eigenvalue(lambda, exp_i_omega_t), exclude_zero_frequency)\","
+        "\"positive_frequency_filter\":\"select_positive_frequency_mode(map_eigenvalue(lambda, phase_convention), exclude_zero_frequency)\","
         "\"zero_frequency_mode_policy\":\"exclude_zero_frequency\","
         "\"eigenvalue_to_frequency\":\"map_eigenvalue(lambda, phase)\","
         "\"conjugate_pair_policy\":\"keep_positive_frequency_partner\","
@@ -2112,12 +5163,21 @@ FrequencyDomainContractResult solve_sparse_production_modal_window_payload(
     result.diagnostics_json += window_diagnostics;
     result.diagnostics_json += "}";
     result.diagnostics_json =
-        with_modal_request_diagnostics(result.diagnostics_json, request);
+        with_modal_request_diagnostics(result.diagnostics_json, request, result.status);
+    const NativeModesJsonResult mode_transport = format_slepc_modes_json(
+        accepted_modes, request, result.modal_eigen);
     result.result_json =
         "{\"schema_version\":\"frequency_domain_modal_result.v1\","
         "\"study_product\":\"modal_eigen\","
-        "\"status\":\"ok\","
-        "\"solver_adapter\":\"slepc_modal_eigen\","
+        "\"status\":\"" +
+        std::string(cancellation_interrupted
+            ? "interrupted"
+            : (refill_incomplete || native_floquet_certified_count_unavailable)
+                ? "solve_error" : "ok") +
+        "\","
+        "\"solver_adapter\":\"" +
+        std::string(kSparseAdapter) +
+        "\","
         "\"resolved_solver_family\":\"" +
         std::string(selection.family) +
         "\",\"stop_reason\":\"" +
@@ -2125,18 +5185,34 @@ FrequencyDomainContractResult solve_sparse_production_modal_window_payload(
         "\",\"accepted_mode_count\":" +
         std::to_string(accepted_modes.size()) +
         "," +
-        mode_kinematics_json_fields({first_mode.lambda_real, first_mode.lambda_imag}) +
+        mode_kinematics_json_fields(
+            {first_mode.lambda_real, first_mode.lambda_imag},
+            request.phase_convention) +
         ",\"relative_residual\":" +
         format_double(first_mode.relative_residual) +
         ",\"window_completeness\":\"" +
         std::string(window_completeness_status) +
         "\",\"modes\":" +
-        format_slepc_modes_json(accepted_modes) + "}";
+        mode_transport.json + "}";
+    finalize_mode_transport_result(result, mode_transport);
     result.artifact_manifest_path.clear();
     return result;
 }
 
 } // namespace
+
+std::string detail::serialize_borrowed_pmat_copy_observation_json(
+    const FloquetShiftedKspFailureProbe::CandidateOperatorDiagnostic::
+        BorrowedPmatCopyObservation &observation)
+{
+    return borrowed_pmat_copy_observation_json(observation);
+}
+
+std::string detail::serialize_live_pclu_monitor_observation_json(
+    const LivePcluMonitorObservation &observation)
+{
+    return live_pclu_monitor_observation_json(observation);
+}
 
 #ifndef FULLMAG_FEM_PETSC_VERSION
 #define FULLMAG_FEM_PETSC_VERSION ""
@@ -2147,16 +5223,30 @@ FrequencyDomainContractResult solve_sparse_production_modal_window_payload(
 #endif
 
 FrequencyDomainContractResult production_cpu_modal_eigen_unavailable(
-    const ModalEigenRequest &request) noexcept
+    const ModalEigenRequest &request,
+    const FloquetPotentialReconstruction *reconstruction) noexcept
 {
+    if (modal_request_has_invalid_floquet_k(request)) {
+        return floquet_wavevector_validation_error();
+    }
     FrequencyDomainContractResult result{};
     result.status = FrequencyDomainStatus::unavailable;
+    if (dynamic_demag_k_payload_is_declared(request) &&
+        !dynamic_demag_k_payload_is_consistent(request)) {
+        return dense_payload_validation_error(
+            request,
+            "native FEM modal_eigen dynamic demag-k payload is malformed",
+            "invalid_dynamic_demag_k_tangent_matrix");
+    }
     if (modal_request_is_nonzero_k_floquet(request)) {
         if (!modal_request_has_bloch_floquet_tangent_operator_payload(request)) {
             return nonzero_k_floquet_modal_operator_missing(request);
         }
-        if (request.operator_request.include_demag != 0) {
-            return nonzero_k_floquet_modal_dynamic_demag_k_missing(request);
+        if (request.operator_request.include_demag != 0 &&
+            request.floquet_shared_domain_operator == nullptr) {
+            if (!dynamic_demag_k_payload_is_declared(request)) {
+                return nonzero_k_floquet_modal_dynamic_demag_k_missing(request);
+            }
         }
         if (const char *gated_operator_term =
                 modal_request_gated_operator_term(request)) {
@@ -2183,9 +5273,12 @@ FrequencyDomainContractResult production_cpu_modal_eigen_unavailable(
     const SLEPcModalEigenAdapterStatus adapter =
         slepc_modal_eigen_adapter_status();
     if (has_sparse_modal_payload(request)) {
-        if (!csr_matrix_view_is_consistent(request.mfem_sparse_stiffness_csr) ||
-            !csr_matrix_view_is_consistent(request.mfem_sparse_gyrotropic_csr) ||
-            !csr_matrix_view_is_consistent(request.mfem_sparse_mass_csr) ||
+        const bool native_floquet_sparse =
+            request.floquet_shared_domain_operator != nullptr;
+        if ((!native_floquet_sparse &&
+             (!csr_matrix_view_is_consistent(request.mfem_sparse_stiffness_csr) ||
+              !csr_matrix_view_is_consistent(request.mfem_sparse_gyrotropic_csr) ||
+              !csr_matrix_view_is_consistent(request.mfem_sparse_mass_csr))) ||
             !sparse_modal_payload_shapes_match(request)) {
             return sparse_payload_validation_error(
                 request,
@@ -2205,12 +5298,15 @@ FrequencyDomainContractResult production_cpu_modal_eigen_unavailable(
     if (!contour_interval &&
         adapter.slepc_available &&
         has_dense_modal_payload(request)) {
-        return solve_dense_production_modal_payload(request, selection, shift);
+        return solve_dense_production_modal_payload(request, selection, shift, reconstruction);
     }
     if (contour_interval &&
         adapter.slepc_available &&
         has_dense_modal_payload(request)) {
-        return solve_dense_production_modal_contour_payload(request, selection);
+        return solve_dense_production_modal_contour_payload(
+            request,
+            selection,
+            reconstruction);
     }
     const char *solver_adapter_status = adapter.solver_adapter_status;
     const char *unsupported_reason = adapter.unsupported_reason;
@@ -2283,6 +5379,8 @@ FrequencyDomainContractResult production_cpu_modal_eigen_unavailable(
             std::string(adapter.pc_type) +
             "\",\"factorization_package\":\"" +
             std::string(adapter.factorization_package) +
+            "\",\"factorization_shift_policy\":\"" +
+            std::string(adapter.factorization_shift_policy) +
             "\",\"nullspace_policy\":\"" +
             std::string(adapter.nullspace_policy) +
             "\",\"linear_tolerance_policy\":\"" +
@@ -2295,7 +5393,7 @@ FrequencyDomainContractResult production_cpu_modal_eigen_unavailable(
     }
     result.diagnostics_json += "}";
     result.diagnostics_json =
-        with_modal_request_diagnostics(result.diagnostics_json, request);
+        with_modal_request_diagnostics(result.diagnostics_json, request, result.status);
     result.result_json =
         "{\"schema_version\":\"frequency_domain_modal_result.v1\","
         "\"study_product\":\"modal_eigen\","
@@ -2312,6 +5410,7 @@ FrequencyDomainContractResult production_cpu_modal_eigen_unavailable(
             format_double(shift.shift_omega_rad_s);
     }
     result.result_json += "}";
+    append_nearest_frequency_metadata(result.result_json, request, result.status);
     result.artifact_manifest_path.clear();
     return result;
 }

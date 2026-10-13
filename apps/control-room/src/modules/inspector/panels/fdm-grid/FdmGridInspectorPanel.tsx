@@ -8,6 +8,7 @@ import {
   useFdmRegionMembershipBinaryResource,
   useFdmRegionMembershipResource,
 } from "@/kernel/resources/geometryLifecycleResources";
+import { resolveSessionAuthoringDiscretization } from "@/kernel/resources/sessionDiscretization";
 import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
 import {
   FDM_UNIVERSE_OUTSIDE_SUPPORT_TARGET,
@@ -311,7 +312,7 @@ export function FdmGridInspectorPanelView({
 
 export function FdmGridInspectorPanel({ selection }: InspectorPanelProps) {
   const sessionDiscretization = useSessionStatusSelector(
-    (status) => status.data?.domain.discretization ?? null,
+    (status) => resolveSessionAuthoringDiscretization(status.data),
   );
   const explicitFdm = sessionDiscretization?.toLowerCase() === "fdm";
   const domain = useDomainMetaResource({ enabled: true });

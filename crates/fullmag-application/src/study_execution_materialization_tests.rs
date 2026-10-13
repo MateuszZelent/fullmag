@@ -98,7 +98,11 @@ fn carried_authored_intent_cannot_be_silently_dropped_or_replaced() {
     assert!(super::validate_carried_execution(&problem, &replaced).is_err());
     let mut bound = crate::bind_materialized_execution(&problem, &preserved).unwrap();
     super::validate_carried_execution(&bound, &preserved).unwrap();
-    bound.problem_meta.runtime_metadata["execution_materialization"]["requested"]["device"] =
+    bound
+        .problem_meta
+        .runtime_metadata
+        .get_mut("execution_materialization")
+        .expect("bound input must contain execution materialization")["requested"]["device"] =
         json!("gpu");
     assert!(super::validate_carried_execution(&bound, &preserved).is_err());
 }
