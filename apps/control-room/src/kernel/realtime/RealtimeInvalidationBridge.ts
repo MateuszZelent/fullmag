@@ -3,6 +3,7 @@ import type { EventBus } from "../events/EventBus";
 import type { KernelEventMap } from "../events/eventTypes";
 import {
   ANALYSIS_POSTPROCESSING_DEFINITIONS_PATH,
+  ANALYSIS_RESULT_DATASETS_PATH,
   ANALYSIS_OBJECT_TOPOLOGICAL_CHARGE_PATH,
   ANALYSIS_HYSTERESIS_ADAPTIVE_REFINEMENT_PATH,
   ANALYSIS_HYSTERESIS_BOOKMARKS_PATH,
@@ -130,6 +131,7 @@ interface RealtimeBatchChangedEvent {
   payload?: {
     changes?: unknown[];
   };
+  run_id?: string | null;
   seq?: ResourceRevision;
   session_id?: string;
   type: string;
@@ -375,6 +377,38 @@ function matchesConcreteStageScopedResource(
   return stageScopedRegex(stagePathTemplate).test(resourceKey);
 }
 
+function matchesAnalysisResultDatasetCatalogResource(
+  resourceKey: string,
+  sessionId: string | undefined,
+  runId: string | null | undefined,
+): boolean {
+  if (!sessionId || !runId) return false;
+  const separator = resourceKey.indexOf("|");
+  if (separator <= 0) return false;
+
+  const identity = resourceKey.slice(0, separator);
+  if (
+    !identity.startsWith(`session=${encodeURIComponent(sessionId)}&epoch=`) ||
+    !identity.includes("&request_scope_epoch=")
+  ) {
+    return false;
+  }
+
+  const datasetCatalogPath = ANALYSIS_RESULT_DATASETS_PATH.replace(
+    "{run_id}",
+    encodeURIComponent(runId),
+  );
+  const scopedPath = resourceKey.slice(separator + 1);
+  if (!scopedPath.startsWith(datasetCatalogPath)) return false;
+
+  const suffix = scopedPath.slice(datasetCatalogPath.length);
+  return (
+    suffix === "" ||
+    suffix === "::complete-catalog" ||
+    suffix.startsWith("?")
+  );
+}
+
 function escapeResourcePathTemplate(pathTemplate: string): string {
   return pathTemplate
     .split(/(\{[^}]+\})/g)
@@ -524,6 +558,20 @@ export class RealtimeInvalidationBridge {
           continue;
         }
         const recommendedFetch = change.recommended_fetch ?? change.resource_key;
+        if (
+          recommendedFetch &&
+          recommendedFetch === SIMULATION_STAGES_EXECUTION_PATH
+        ) {
+          this.queueMatchingInvalidation(
+            (resourceKey) =>
+              matchesAnalysisResultDatasetCatalogResource(
+                resourceKey,
+                event.session_id,
+                event.run_id,
+              ),
+            dependentResourceRevision(recommendedFetch, change.revision),
+          );
+        }
         const fieldSampleChange =
           change.resource === "fields" && change.resource_id === "samples";
         const planarFieldChange = change.resource === "planar_fields";

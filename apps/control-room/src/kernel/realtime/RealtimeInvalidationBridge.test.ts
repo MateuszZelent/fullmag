@@ -7,6 +7,7 @@ import {
   serializeCanonicalFieldVectorResourceKey,
 } from "../api/fieldQueryIdentity";
 import {
+  ANALYSIS_RESULT_DATASETS_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_EIGEN_BRANCHES_V2_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DIAGNOSTICS_V2_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DISPERSION_PATH,
@@ -95,6 +96,10 @@ import {
   VISUALIZATION_STATE_PATH,
 } from "../api/apiPaths";
 import { ResourceInvalidationController } from "../resources/ResourceInvalidationController";
+import {
+  sessionScopedResourceKey,
+  type SessionResourceIdentity,
+} from "../resources/sessionResourceIdentity";
 import { resolveFdmRegionMembershipBinaryResourceKey } from "../resources/geometryLifecycleResources";
 import { PHYSICS_GRAPH_RESOURCE_KEY } from "../resources/physicsGraphResources";
 
@@ -102,6 +107,18 @@ import { RealtimeInvalidationBridge } from "./RealtimeInvalidationBridge";
 
 function dependentRevision(resourceKey: string, revision: string | number): string {
   return `dependent:${resourceKey}:${revision}`;
+}
+
+function analysisResultDatasetCatalogKey(
+  identity: SessionResourceIdentity,
+  runId: string,
+  suffix = "",
+): string {
+  const path = ANALYSIS_RESULT_DATASETS_PATH.replace(
+    "{run_id}",
+    encodeURIComponent(runId),
+  );
+  return sessionScopedResourceKey(identity, `${path}${suffix}`);
 }
 
 describe("RealtimeInvalidationBridge", () => {
@@ -1823,6 +1840,32 @@ describe("RealtimeInvalidationBridge", () => {
     const bus = new EventBus<KernelEventMap>();
     const resources = new ResourceInvalidationController(bus);
     const bridge = new RealtimeInvalidationBridge(resources);
+    const sessionIdentity: SessionResourceIdentity = {
+      requestScopeEpoch: "instance-life:1",
+      sessionEpoch: "epoch-life",
+      sessionId: "session-life",
+    };
+    const runId = "run/lifecycle α";
+    const datasetCatalogPageKey = analysisResultDatasetCatalogKey(
+      sessionIdentity,
+      runId,
+      "?limit=50&cursor=next",
+    );
+    const datasetCatalogCompleteKey = analysisResultDatasetCatalogKey(
+      sessionIdentity,
+      runId,
+      "::complete-catalog",
+    );
+    const otherRunDatasetCatalogKey = analysisResultDatasetCatalogKey(
+      sessionIdentity,
+      "another-run",
+      "?limit=50&cursor=next",
+    );
+    const otherSessionDatasetCatalogKey = analysisResultDatasetCatalogKey(
+      { ...sessionIdentity, sessionId: "session-foreign" },
+      runId,
+      "::complete-catalog",
+    );
     const hysteresisProgressKey =
       SIMULATION_STAGE_HYSTERESIS_PROGRESS_PATH.replace("{stage_id}", "stage-000");
     const hysteresisTreeKey = `${SIMULATION_STAGE_HYSTERESIS_EXECUTION_TREE_PATH.replace(
@@ -1858,8 +1901,18 @@ describe("RealtimeInvalidationBridge", () => {
     resources.subscribe(hysteresisPointKey, () => {});
     resources.subscribe(hysteresisSettleTraceKey, () => {});
     resources.subscribe(hysteresisStageSettleTraceKey, () => {});
+    for (const resourceKey of [
+      datasetCatalogPageKey,
+      datasetCatalogCompleteKey,
+      otherRunDatasetCatalogKey,
+      otherSessionDatasetCatalogKey,
+    ]) {
+      resources.subscribe(resourceKey, () => {});
+    }
 
     const handled = bridge.handleEvent({
+      run_id: runId,
+      session_id: sessionIdentity.sessionId,
       payload: {
         changes: [
           {
@@ -1904,6 +1957,14 @@ describe("RealtimeInvalidationBridge", () => {
     expect(resources.getRevision(hysteresisStageSettleTraceKey)).toBe(
       dependentRevision(SIMULATION_STAGES_EXECUTION_PATH, 44),
     );
+    expect(resources.getRevision(datasetCatalogPageKey)).toBe(
+      dependentRevision(SIMULATION_STAGES_EXECUTION_PATH, 44),
+    );
+    expect(resources.getRevision(datasetCatalogCompleteKey)).toBe(
+      dependentRevision(SIMULATION_STAGES_EXECUTION_PATH, 44),
+    );
+    expect(resources.getRevision(otherRunDatasetCatalogKey)).toBeNull();
+    expect(resources.getRevision(otherSessionDatasetCatalogKey)).toBeNull();
   });
 
   it("refreshes stage hysteresis analysis dependents when points update", () => {

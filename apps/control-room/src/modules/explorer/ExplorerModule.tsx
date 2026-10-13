@@ -1,6 +1,6 @@
 "use client";
 
-import { useAnalysisResultDatasetCatalogResource } from "@/kernel/resources/analysisResultResources";
+import { useCompleteAnalysisResultDatasetCatalogResource } from "@/kernel/resources/analysisResultResources";
 import { usePostprocessingDefinitionsResource } from "@/kernel/resources/postprocessingDefinitionResources";
 import { useEffect, useMemo, useRef } from "react";
 import {
@@ -561,9 +561,10 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
   const analysisDefinitions = usePostprocessingDefinitionsResource({
     enabled: activeTab === "results",
   });
-  const analysisDatasetCatalog = useAnalysisResultDatasetCatalogResource(currentRunId, {
-    enabled: activeTab === "results",
-  });
+  const analysisDatasetCatalog = useCompleteAnalysisResultDatasetCatalogResource(
+    currentRunId,
+    { enabled: activeTab === "results" },
+  );
   const frequencyDomainBranches = useFrequencyDomainEigenBranchesResource({
     enabled: activeTab === "results",
   });

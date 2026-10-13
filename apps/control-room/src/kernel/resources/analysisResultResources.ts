@@ -34,6 +34,10 @@ import type {
 } from "../api/apiTypes";
 import { useKernel } from "../KernelContext";
 
+import {
+  fetchCompleteAnalysisResultDatasetCatalog,
+  type AnalysisResultDatasetCatalogFilters,
+} from "./analysisResultCatalogPagination";
 import { useSessionScopedResourceKey } from "./useSessionScopedResourceKey";
 import { useResource } from "./useResource";
 
@@ -100,6 +104,57 @@ export function useAnalysisResultDatasetCatalogResource(
             .datasets(runId, query, { sessionScopeKey, signal })
             .catch(ignoreMissingResultResource<AnalysisResultDatasetCatalogResource>)
         : Promise.resolve(null),
+    [api, query, runId],
+  );
+
+  return useResource<AnalysisResultDatasetCatalogResource | null>({
+    enabled:
+      Boolean(runId) && options.enabled !== false && sessionIdentity !== null,
+    load,
+    resolveRevision: (data) => data?.revision ?? null,
+    resourceKey: scopedResourceKey,
+  });
+}
+
+export function useCompleteAnalysisResultDatasetCatalogResource(
+  runId: string | null | undefined,
+  options: {
+    enabled?: boolean;
+    query?: AnalysisResultDatasetCatalogFilters;
+  } = {},
+) {
+  const { api } = useKernel();
+  const queryKey = JSON.stringify(options.query ?? {});
+  const query = useMemo(
+    () => JSON.parse(queryKey) as AnalysisResultDatasetCatalogFilters,
+    [queryKey],
+  );
+  const resourceKey = runId
+    ? `${resultResourceKey(ANALYSIS_RESULT_DATASETS_PATH, { run_id: runId }, query)}::complete-catalog`
+    : `${ANALYSIS_RESULT_DATASETS_PATH}:none::complete-catalog`;
+  const { resourceKey: scopedResourceKey, sessionIdentity } =
+    useSessionScopedResourceKey(resourceKey);
+  const load = useCallback(
+    ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) => {
+      if (!runId) return Promise.resolve(null);
+      let initialPage = true;
+      return fetchCompleteAnalysisResultDatasetCatalog({
+        expectedRunId: runId,
+        query,
+        signal,
+        loadPage: (pageQuery, pageSignal) => {
+          const request = api.analysis.results.datasets(runId, pageQuery, {
+            sessionScopeKey,
+            signal: pageSignal,
+          });
+          if (!initialPage) return request;
+          initialPage = false;
+          return request.catch(
+            ignoreMissingResultResource<AnalysisResultDatasetCatalogResource>,
+          );
+        },
+      });
+    },
     [api, query, runId],
   );
 
