@@ -4243,6 +4243,13 @@ void modal_poisson_airbox_tail_shift_invert_action_writes_artifact()
     request.poisson_airbox_shift_action_vector_count = 2;
 
     FullmagFemFrequencyDomainResult result = fullmag_fem_modal_eigen_solve(&request);
+    if (result.status != FULLMAG_FEM_FD_OK &&
+        result.status != FULLMAG_FEM_FD_UNAVAILABLE) {
+        std::fprintf(stderr, "Poisson action status=%d error=%s diagnostics=%s\n",
+            static_cast<int>(result.status),
+            result.error_message != nullptr ? result.error_message : "null",
+            result.diagnostics_json != nullptr ? result.diagnostics_json : "null");
+    }
 #if FULLMAG_FEM_WITH_SLEPC
     check(result.status == FULLMAG_FEM_FD_OK,
           "modal C ABI Poisson-airbox shift-invert action must solve");

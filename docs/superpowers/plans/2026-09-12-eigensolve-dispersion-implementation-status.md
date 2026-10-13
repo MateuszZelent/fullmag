@@ -43,7 +43,13 @@ Warunek admission wymaga teraz declared AND consistent dla dense;
 natywny shared-domain provider pozostaje odrębną ścieżką sparse.
 Istniejące asercje gated-terms pozostają niezmienione; nota0828 i jej mapa
 źródeł dokumentują korektę.
-Nowa poprawka pozostaje NOT VERIFIED do normalnego i ASAN CI;
+CI38463473076 i38463468504/sourcefa2f89bf1 przeszły gated-terms
+regresję oraz wcześniejszy lifetime fixture; następny FAIL dotyczy
+ABI Poisson-airbox shift-invert action przed oczekiwanym dependency status.
+Dodano wydruk rzeczywistego status/error/diagnostics wyłącznie przy
+nieoczekiwanym błędzie action, bez zmiany asercji lub parametrów.
+Pełny kontrakt nadal NOT VERIFIED do rozstrzygnięcia kolejnej przyczyny;
+nowa diagnostyka wymaga normalnego CI;
 lokalny zakaz kompilacji testów zachowano. Aktywna kapsuła244 nie jest zmieniana.
 Build244 potwierdza stage native-build oraz działające procesy C++ MFEM/SLEPc;
 status running nie jest już wyłącznie dowodem przygotowania źródeł.
