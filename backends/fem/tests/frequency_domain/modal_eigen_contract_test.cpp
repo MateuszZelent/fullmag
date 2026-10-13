@@ -3281,7 +3281,8 @@ void modal_floquet_wavevector_validation_precedes_tiny_dispatch()
 {
     constexpr double stiffness_matrix_row_major[] = {1.0, 0.0, 0.0, 1.0};
     constexpr double gyrotropic_mass_row_major[] = {0.0, -1.0, 1.0, 0.0};
-    const auto tiny_floquet_request = [&]() {
+    const auto tiny_floquet_request = [&stiffness_matrix_row_major,
+                                       &gyrotropic_mass_row_major]() {
         FullmagFemModalEigenRequest request = base_request();
         request.operator_request.spin_wave_bc_kind = "floquet";
         request.tiny_validation_enabled = 1;
@@ -3352,18 +3353,13 @@ void modal_floquet_wavevector_validation_precedes_tiny_dispatch()
     raw_vector_wins.floquet_k_vector_rad_per_m[0] =
         std::numeric_limits<double>::quiet_NaN();
     const double *mass_before_solve = raw_vector_wins.tiny_validation_mass_matrix_row_major;
-    std::fprintf(stderr, "raw-vector mass before solve ptr=%p owner=%p values=[%.17g,%.17g,%.17g,%.17g]\n",
-        static_cast<const void *>(mass_before_solve),
-        static_cast<const void *>(gyrotropic_mass_row_major),
-        mass_before_solve[0], mass_before_solve[1], mass_before_solve[2], mass_before_solve[3]);
     check(mass_before_solve == gyrotropic_mass_row_major,
           "tiny request factory must retain the owning gyrotropic matrix buffer");
+    check(raw_vector_wins.tiny_validation_stiffness_matrix_row_major == stiffness_matrix_row_major,
+          "tiny request factory must retain the owning stiffness matrix buffer");
     FullmagFemFrequencyDomainResult raw_vector_wins_result =
         fullmag_fem_modal_eigen_solve(&raw_vector_wins);
     if (raw_vector_wins_result.status != FULLMAG_FEM_FD_OK) {
-        const double *request_mass = raw_vector_wins.tiny_validation_mass_matrix_row_major;
-        std::fprintf(stderr, "raw-vector request mass=[%.17g,%.17g,%.17g,%.17g] expected=[0,-1,1,0]\n",
-            request_mass[0], request_mass[1], request_mass[2], request_mass[3]);
         std::fprintf(stderr, "raw-vector precedence status=%d error=%s diagnostics=%s result=%s\n",
             static_cast<int>(raw_vector_wins_result.status),
             raw_vector_wins_result.error_message != nullptr ? raw_vector_wins_result.error_message : "null",

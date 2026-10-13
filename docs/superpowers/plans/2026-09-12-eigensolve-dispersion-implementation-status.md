@@ -21,12 +21,19 @@ małej macierzy wyłącznie przy istniejącym błędzie singular validation.
 Nie zmienia tolerancji, solve, klasyfikacji wyniku ani asercji testu.
 CI38458199444/source47ca80c66 skompilowało kod; test C ABI nadal FAIL.
 Odczyt testu po solve oraz skopiowana macierz w solverze pokazują identyczne
-cztery nieprawidłowe wartości rzędu6,9e-310, det=0. Przyczyna nie jest jeszcze
-rozstrzygnięta. Dodano pomiar przed solve i sprawdzenie tożsamości bufora
+cztery nieprawidłowe wartości rzędu6,9e-310, det=0. Ten etap nie rozstrzygał
+przyczyny. Dodano pomiar przed solve i sprawdzenie tożsamości bufora
 oraz opt-in AddressSanitizer w istniejącym bootstrap workflow; domyślna
 bramka czterech kontraktów jest zachowana. ASAN działa wyłącznie w GitHub
-Actions i zapisuje tryb/opcje w receipt. Nowe wykonanie pozostaje NOT VERIFIED;
+Actions i zapisuje tryb/opcje w receipt. ASAN38460602938/sourceb3886db21
+potwierdził stack-use-after-return: factory lambda zwracała pointer do
+macierzy w swoim zakończonym frame. Poprawka jawnie przechwytuje obie
+zewnętrzne tablice przez referencję; regresja sprawdza tożsamość obu buforów
+przed solve. Usunięto tymczasowe odczyty adresów/nieprawidłowego bufora.
+Nowa poprawka pozostaje NOT VERIFIED do normalnego i ASAN CI;
 lokalny zakaz kompilacji testów zachowano. Aktywna kapsuła244 nie jest zmieniana.
+Build244 potwierdza stage native-build oraz działające procesy C++ MFEM/SLEPc;
+status running nie jest już wyłącznie dowodem przygotowania źródeł.
 
 Dalsze przyczynowe wymagania meshingu A1: prototyp seeded Box miał podwójne
 węzły punktów CAD. Ich ponowne użycie nie usuwa błędu PBC. Ponowne
