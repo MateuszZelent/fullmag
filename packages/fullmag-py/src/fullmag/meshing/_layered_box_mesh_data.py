@@ -14,7 +14,7 @@ from ._layered_box_tetrahedralization import tetrahedralize_layered_box
 
 _INTERFACE_MARKER = 10
 _MAGNETIC_MARKER = 1
-_AIR_MARKER = 2
+_AIR_MARKER = 0
 _BOUNDARY_PAIR_KEYS = {
     "pair_id",
     "marker_a",
@@ -422,7 +422,7 @@ def build_layered_box_mesh_data(
     ``tetrahedralize_layered_box`` is the topology authority: it validates the
     exact SI nodes and planes, preserves node order, uses every node, and proves
     positive cells plus exact slab coverage. This adapter assigns magnetic
-    marker 1 and air marker 2 from whole-slab containment, then derives all
+    marker 1 and air marker 0 from whole-slab containment, then derives all
     exterior and magnetic-air facets from tetrahedron incidence. It does not
     create periodic certificates, quality reports, or realization evidence.
     """

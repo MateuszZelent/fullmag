@@ -5,6 +5,7 @@ import math
 import numpy as np
 import pytest
 
+from fullmag.meshing._gmsh_extraction import _semantic_marker_from_name
 from fullmag.meshing._layered_box_mesh_data import build_layered_box_mesh_data
 
 
@@ -121,7 +122,7 @@ def test_builds_exact_region_and_interface_mesh_data() -> None:
     np.testing.assert_array_equal(mesh.facet_roles, repeated.facet_roles)
     np.testing.assert_array_equal(mesh.boundary_markers, repeated.boundary_markers)
     assert mesh.cell_types.tolist() == ["tet4"] * mesh.n_elements
-    assert set(mesh.element_markers.tolist()) == {1, 2}
+    assert set(mesh.element_markers.tolist()) == {0, 1}
     assert mesh.cell_mesh_parts.shape == (0,)
     assert mesh.periodic_mesh_certificate is None
     assert mesh.quality is None
@@ -143,7 +144,7 @@ def test_builds_exact_region_and_interface_mesh_data() -> None:
     air_volume = math.fsum(
         float(value) / 6.0
         for value, marker in zip(signed_six_volumes, mesh.element_markers, strict=True)
-        if int(marker) == 2
+        if int(marker) == 0
     )
     cross_section = (_BOUNDS[1] - _BOUNDS[0]) * (_BOUNDS[3] - _BOUNDS[2])
     expected_magnetic_volume = cross_section * (2.0 * _SCALE)
@@ -170,6 +171,28 @@ def test_builds_exact_region_and_interface_mesh_data() -> None:
     assert np.all(mesh.facet_types == "tri3")
     assert np.array_equal(mesh.cell_global_ordinals, np.arange(mesh.n_elements))
     assert np.array_equal(mesh.facet_global_ordinals, np.arange(mesh.n_boundary_faces))
+
+
+def test_air_marker_matches_canonical_gmsh_extraction_semantics() -> None:
+    canonical_air_marker = _semantic_marker_from_name("air", 73)
+    assert canonical_air_marker == 0
+
+    mesh = build_layered_box_mesh_data(
+        _layered_nodes(),
+        _PLANES,
+        _BOUNDS,
+        magnetic_z_bounds=(-_SCALE, _SCALE),
+        outer_boundary_marker=90,
+    )
+
+    assert set(mesh.element_markers.tolist()) == {1, canonical_air_marker}
+    air_cells = mesh.element_markers == canonical_air_marker
+    magnetic_cells = mesh.element_markers == 1
+    assert np.any(air_cells)
+    assert np.any(magnetic_cells)
+    interface = mesh.facet_roles == "material_interface"
+    assert np.any(interface)
+    np.testing.assert_array_equal(mesh.boundary_markers[interface], 10)
 
 
 @pytest.mark.parametrize("axis", (0, 1), ids=("x", "y"))

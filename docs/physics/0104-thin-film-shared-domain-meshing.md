@@ -316,7 +316,11 @@ kernelem. Nie wolno podmienić tej ścieżki na niekontrolowane generate(3).
 Wewnętrzny adapter prototypowy przekazuje wynik kernela do istniejącego
 kanonicznego `MeshData`, bez nowego formatu publicznego. Magnetic bounds
 muszą być dwoma istniejącymi płaszczyznami; klasyfikacja markerów magnetic=1
-oraz air=2 opiera się na pełnym zawieraniu slabu, nie tolerowanym centroidzie.
+oraz air=0 opiera się na pełnym zawieraniu slabu, nie tolerowanym centroidzie.
+Marker powietrza musi być zgodny z kanoniczną ekstrakcją Gmsh
+(`_semantic_marker_from_name`); prototypowe air=2 było rozbieżnością adaptera,
+nie nowym kontraktem materiałowym. Korekta nie zmienia identyfikatorów
+magnetic=1 ani interfejsu10 i nie przepisuje historycznych artefaktów.
 Fasety są wyprowadzone z incydencji rzeczywistych tetraedrów: zewnętrzne
 mają orientację na zewnątrz, magnetic-air marker10 i normalną od magnetic
 do air. Wewnętrzne fasety tego samego materiału nie są granicą fizyczną.

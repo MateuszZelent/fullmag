@@ -658,3 +658,38 @@ kwalifikuje PBC i nie deklaruje setPeriodic/getPeriodicNodes. Zapisanej
 nieperiodycznej próbki nie wolno traktować jako periodycznego benchmarku.
 Kolejny probe wymaga jawnej periodyczności oraz canonical node-pairs;
 nie używamy najbliższych współrzędnych ani nowej tolerancji do zastąpienia map.
+
+## 2026-10-13 — kanoniczny marker air i rzeczywiste powierzchnie PBC
+
+Adapter layered-box błędnie przypisywał air=2, podczas gdy kanoniczna
+`_gmsh_extraction._semantic_marker_from_name` przypisuje powietrzu0.
+Korekta zmienia adapter na air=0, pozostawiając magnetic=1, interface=10,
+whole-slab classification i wszystkie odmowy PBC. Nie wprowadza nowej
+publicznej semantyki ani nie przepisuje historycznych wyników.
+Regresja porównuje z canonical extraction, a istniejący test nadal dowodzi
+objętości obu regionów oraz orientacji interfejsu. Red przed korektą:2FAIL;
+green cały moduł:15PASS,3.51s,exit0, interpretowany pytest bez cache.
+Root review objęło cały diff źródeł/testów. To korekta prototypu, nie
+production routing ani quality/realization certificate.
+
+Rzeczywisty periodic-cap probe na HEAD4211c204: Gmsh4.15.2,exit0,3.4s.
+181 global nodes;141 cap nodes na exact planes−10/0/+10nm (43/55/43).
+Canonical56 node pairs,4 paired side surfaces,80 matched triangle pairs;
+coverage, authored residual oraz3 corner commutations PASS.
+X ma15/23 par on-layer i8 off-layer; y21/33 i12 off-layer.
+Pełnych map nie wolno zastąpić cap-only subset bez jawnej provenance.
+NPZ SHA256e69f20726ff55fef02e4a0e652d8dc57bef310ac71f7788341643b25d29fb85c.
+Dowód: visualization/layered-cap-sliver-diagnostic-20261013/
+actual-periodic-cap-sampler-probe-report.md oraz JSON/NPZ.
+Wynik dowodzi powierzchni2D; volume PBC nadal NOT VERIFIED.
+
+Dodatkowa wykryta luka integracji: rzeczywisty producent Gmsh publikuje
+po dwa rekordy x_faces/y_faces dla osobnych slabów i różnych surface markers.
+Adapter prototypu wymaga jednego unikalnego pair_id i jednej pary per axis.
+Nie zmieniono rekordów ani tolerancji, aby obejść odmowę. Production route
+musi zachować zakres faset i node-pair provenance, a następnie wykazać
+pełną zgodność trójkątów objętościowej siatki.
+
+Repair CAS nadal RUNNING39823; ostatni odczyt5248/7721.
+Nie wykonano retencji podczas naprawy, by nie naruszyć idle guard.
+Pełny S00–S12 pozostaje OPEN, bez nowego runtime FEM/science proof.
