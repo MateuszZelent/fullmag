@@ -179,9 +179,10 @@ describe("ProjectDocumentController", () => {
   it("opens raw bytes without touching runtime APIs", async () => {
     const api = apiFor(undefined, resource({ name: "Opened study" }));
     const controller = new ProjectDocumentController(api);
+    const archive = new Uint8Array([0xff, 1, 2, 3, 4, 0xfe]);
 
     await controller.open({
-      bytes: new Uint8Array([1, 2, 3, 4]),
+      bytes: archive.subarray(1, 5),
       fileName: "opened.fms",
     });
 
@@ -208,11 +209,15 @@ describe("ProjectDocumentController", () => {
   it("downloads a writable archive without publishing runtime state", async () => {
     const click = vi.fn();
     const anchor = { click, download: "", href: "" };
+    const downloadedBlobs: Blob[] = [];
     vi.stubGlobal("document", {
       createElement: vi.fn(() => anchor),
     });
     vi.stubGlobal("URL", {
-      createObjectURL: vi.fn(() => "blob:project"),
+      createObjectURL: vi.fn((blob: Blob) => {
+        downloadedBlobs.push(blob);
+        return "blob:project";
+      }),
       revokeObjectURL: vi.fn(),
     });
     const api = apiFor(resource({ name: "Download me" }));
@@ -224,6 +229,12 @@ describe("ProjectDocumentController", () => {
     expect(anchor.download).toBe("download-me.fms");
     expect(anchor.href).toBe("blob:project");
     expect(click).toHaveBeenCalledOnce();
+    expect(downloadedBlobs).toHaveLength(1);
+    const [downloadedBlob] = downloadedBlobs;
+    expect(downloadedBlob!.type).toBe("application/zip");
+    expect([
+      ...new Uint8Array(await downloadedBlob!.arrayBuffer()),
+    ]).toEqual([80, 75, 3, 4]);
   });
 
   it("uses the host persistence bridge for a durable desktop save", async () => {

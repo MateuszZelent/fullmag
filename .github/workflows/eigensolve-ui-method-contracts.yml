@@ -27,6 +27,11 @@ on:
       - 'apps/control-room/src/kernel/api/apiTypes.ts'
       - 'apps/control-room/src/kernel/api/ControlRoomApi*'
       - 'apps/control-room/src/kernel/api/fieldQueryIdentity*'
+      - 'apps/control-room/src/kernel/api/codecs/fdmRegionMembershipCodec*'
+      - 'apps/control-room/src/kernel/persistence/ProjectDocumentController*'
+      - 'apps/control-room/scripts/typecheck-control-room.mjs'
+      - 'apps/control-room/package.json'
+      - 'pnpm-lock.yaml'
       - 'apps/control-room/src/kernel/resources/frequencyDomainResourceKeys*'
       - 'apps/control-room/src/kernel/resources/analysisResultResources*'
       - 'apps/control-room/src/kernel/resources/analysisResultCatalogPagination*'
@@ -83,6 +88,11 @@ on:
       - 'apps/control-room/src/kernel/api/apiTypes.ts'
       - 'apps/control-room/src/kernel/api/ControlRoomApi*'
       - 'apps/control-room/src/kernel/api/fieldQueryIdentity*'
+      - 'apps/control-room/src/kernel/api/codecs/fdmRegionMembershipCodec*'
+      - 'apps/control-room/src/kernel/persistence/ProjectDocumentController*'
+      - 'apps/control-room/scripts/typecheck-control-room.mjs'
+      - 'apps/control-room/package.json'
+      - 'pnpm-lock.yaml'
       - 'apps/control-room/src/kernel/resources/frequencyDomainResourceKeys*'
       - 'apps/control-room/src/kernel/resources/analysisResultResources*'
       - 'apps/control-room/src/kernel/resources/analysisResultCatalogPagination*'
@@ -174,6 +184,9 @@ jobs:
           src/kernel/resources/studyRuntimeResources.test.ts
           src/kernel/api/ControlRoomApi.test.ts
           src/kernel/api/fieldQueryIdentity.test.ts
+          src/kernel/api/codecs/fdmRegionMembershipCodec.test.ts
+          src/kernel/persistence/ProjectDocumentController.test.ts
+          src/kernel/resources/studyRuntimeResources.provider.test.tsx
           src/kernel/resources/frequencyDomainResourceKeys.test.ts
           src/kernel/resources/analysisResultCatalogPagination.test.ts
           src/kernel/realtime/RealtimeInvalidationBridge.test.ts

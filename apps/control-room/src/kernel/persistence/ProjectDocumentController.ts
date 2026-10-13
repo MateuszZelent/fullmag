@@ -935,7 +935,19 @@ function downloadProjectArchive(bytes: Uint8Array, fileName: string): void {
   if (typeof document === "undefined" || typeof URL === "undefined") {
     throw new Error("Project downloads are unavailable in this environment.");
   }
-  const blob = new Blob([bytes], { type: "application/zip" });
+  const backingBuffer = bytes.buffer;
+  let archiveBuffer: ArrayBuffer;
+  if (
+    backingBuffer instanceof ArrayBuffer &&
+    bytes.byteOffset === 0 &&
+    bytes.byteLength === backingBuffer.byteLength
+  ) {
+    archiveBuffer = backingBuffer;
+  } else {
+    archiveBuffer = new ArrayBuffer(bytes.byteLength);
+    new Uint8Array(archiveBuffer).set(bytes);
+  }
+  const blob = new Blob([archiveBuffer], { type: "application/zip" });
   const href = URL.createObjectURL(blob);
   const anchor = document.createElement("a");
   anchor.download = fileName;

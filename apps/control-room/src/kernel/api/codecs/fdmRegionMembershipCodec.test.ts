@@ -153,6 +153,46 @@ const nativeLayout = {
 } as FdmMultilayerLayoutResource;
 
 describe("FMRM codec", () => {
+  it("hashes only the visible bytes of a sliced view, including the fallback", async () => {
+    const backing = new Uint8Array([0xff, 1, 2, 3, 0xfe]);
+    const sliced = backing.subarray(1, 4);
+    const expected =
+      "039058c6f2c0cb492c533b0a4d14ef77cc0f78abccced5287d84a1a2011cfb81";
+    const digestBuffer = new ArrayBuffer(expected.length / 2);
+    const digestBytes = new Uint8Array(digestBuffer);
+    for (let index = 0; index < digestBytes.length; index += 1) {
+      digestBytes[index] = Number.parseInt(
+        expected.slice(index * 2, index * 2 + 2),
+        16,
+      );
+    }
+    const digest = vi.fn(
+      async (algorithm: AlgorithmIdentifier, data: BufferSource) => {
+        expect(algorithm).toBe("SHA-256");
+        if (!(data instanceof ArrayBuffer)) {
+          throw new Error("WebCrypto input must be an ArrayBuffer.");
+        }
+        expect([...new Uint8Array(data)]).toEqual([1, 2, 3]);
+        return digestBuffer;
+      },
+    );
+
+    vi.stubGlobal("crypto", { subtle: { digest } });
+    try {
+      await expect(sha256HexBytes(sliced)).resolves.toBe(expected);
+      expect(digest).toHaveBeenCalledOnce();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+
+    vi.stubGlobal("crypto", {});
+    try {
+      await expect(sha256HexBytes(sliced)).resolves.toBe(expected);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("decodes grid identity and numeric region IDs", () => {
     const decoded = decodeFdmRegionMembership(makeBuffer());
     expect(decoded.counts).toEqual([2, 2, 1]);
