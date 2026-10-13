@@ -693,3 +693,35 @@ pełną zgodność trójkątów objętościowej siatki.
 Repair CAS nadal RUNNING39823; ostatni odczyt5248/7721.
 Nie wykonano retencji podczas naprawy, by nie naruszyć idle guard.
 Pełny S00–S12 pozostaje OPEN, bez nowego runtime FEM/science proof.
+
+## 2026-10-13 — objętościowy periodic probe i nadal błędny rozmiar
+
+Kod air-marker zapisano i wypchnięto w74ed88322ee606701b887e922288d877f54817e1.
+Actual periodic pool141nodes: kernel400tet PASS,8.443s; wszystkie węzły
+zachowane. Niezależne mapowanie faset: x15nodepairs/16trianglepairs,
+y21/24, zero mismatch i3 commutingcorners. Adapter z oryginalnymi
+czterema side-patch records odmawia duplicate pair_id x_faces przed
+triangle validation. NPZ SHA2564a7cabc5761046532c4cc87f8d3d7ff609a7f2a7ed5cb032bf797f750f737181.
+Dowód w layered-cap-sliver-diagnostic-20261013/
+actual-periodic-cap-kernel-adapter-report.md. Nie jest to certyfikat.
+
+Ten wariant nie rozwiązuje regionalnej gęstości: box ROI37tet,
+median6edges58.36nm/hKp95129.32nm; cylinder28tet,63.22nm/125.12nm.
+Global hKp95/max134.54/144.57nm, exact det/hK³ min3.1728e-4.
+Wszystkie orientacje dodatnie. To nie SICN/gamma. Niezależny nonperiodic
+142/498 wariant ma inne węzły; jego niższych rozmiarów nie wolno uznać
+za controlled benchmark. Kolejny diagnostic używa Delaunay-per-slab
+na SAME141input, bez QJ/snap i bez omijania exact/PBC guard.
+
+CI dokładnego74ed: artifact-consumers38404565985SUCCESS;
+scoped-mesh-fields38404566060FAIL:309tests,1FAIL/1SKIP,79.047s,
+niezmienione emptyROI assertion test_meshing.py12722 dla thin_film_tetrahedral.
+UI38404565728 obserwowane in_progress. Nie przedstawiamy tego jako pełnego CI PASS.
+
+Runner aktualnie healthy/worker_alive,active_jobs=[],retention_busy=false;
+storage_free_bytes35116486656. Blokada miejsca ustąpiła; nadal czekamy
+na terminalne zakończenie exact CAS repair przed capture/retention/build.
+Pre-inventory czterech execution #238–#241: odpowiednio316927274,
+647016132,647134298,647348531 logical bytes; nie jest to deletion plan.
+Reparse symlinks .so w trzech execution pominięto bez podążania.
+Nie usuwano danych, wyników, runtime ani cache. Pełny S00–S12 OPEN.
