@@ -370,6 +370,34 @@
       "symbol": "test_scoped_box_rejects_unexecuted_options_before_gmsh",
       "responsibility": "Reject explicit unexecuted algorithm, optimizer and boundary-layer intent before Gmsh.",
       "evidence_status": "python_passed"
+    },
+    {
+      "id": "scoped-box-absolute-parametric-cap-regression",
+      "path": "packages/fullmag-py/tests/test_layered_box_production_route.py",
+      "symbol": "test_scoped_box_public_de_smoke_materializes_exact_caps",
+      "responsibility": "Actual public DSL DE smoke mesh materialization regression for exact constant-z GEO caps in a tall airbox; no native solver proof.",
+      "evidence_status": "source_visible"
+    },
+    {
+      "id": "congruent-cap-prism-candidate",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_layered_box_delaunay.py",
+      "symbol": "_congruent_cap_prism_candidates",
+      "responsibility": "Exact complete XY-set equality selects a globally ordered three-tet prism candidate from a shared 2D cap triangulation; existing final exact and PBC guards remain mandatory.",
+      "evidence_status": "source_visible"
+    },
+    {
+      "id": "compatible-cap-prism-candidate",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_layered_box_delaunay.py",
+      "symbol": "_compatible_cap_prism_candidates",
+      "responsibility": "Unmodified-node cap bijection is accepted only with independent upper topology equality, exact raw signs, complete slab validation and all-pairs exact AABB/SAT separation.",
+      "evidence_status": "source_visible"
+    },
+    {
+      "id": "compatible-cap-exact-coordinate-regression",
+      "path": "packages/fullmag-py/tests/test_layered_box_delaunay.py",
+      "symbol": "test_compatible_cap_candidate_preserves_different_exact_coordinates",
+      "responsibility": "Interpretation-only regression for unequal exact XY caps, unchanged node coordinates, volume, independent SAT and order invariance; no native eigensolve proof.",
+      "evidence_status": "python_passed"
     }
   ],
   "public_api": {

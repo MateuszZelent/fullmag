@@ -819,3 +819,188 @@ przez `_recertify_scaled_periodic_mesh`, wywołujący
 niemutowalny; zastępowanie certyfikatu tworzy nowy obiekt, a nie zmienia wejścia.
 Certyfikat sprzed konwersji skali nie może być publikowany jako dowód dla
 końcowego mesha. Aktualny managed runtime tej integracji: **NOT VERIFIED**.
+
+
+### Dokładne płaszczyzny GEO w wysokim airboxie — 2026-10-13
+
+Rzeczywisty model DE-SMOKE (film 40×40×10 nm, airbox 4,01 µm w z)
+ujawnił na jednym capie dwie wartości Gmsh z różniące się o jeden ULP:
+−0,015 oraz −0,015000000000000001. Przekrój zbudowany przez kolejne
+`geo.extrude` może otrzymać odmienne wartości na brzegu i we wnętrzu.
+Exact validator prawidłowo odrzuca taki input. Mały test Box nie dowodził
+materializacji tego fizycznego modelu.
+
+Próba z absolutnymi punktami oraz standardowym `addPlaneSurface` nadal
+wykazała różnicę jednego ULP. Mały probe rozróżnił tę parametryzację
+od capu z `geo.addGeometry("ParametricSurface", strings=["u", "v", repr(z)])`
+i `addPointOnGeometry`: ta druga konstrukcja zachowała jedną dokładną z.
+Dla scoped Box poprawka konstruuje każdy poziom GEO z jego absolutnej
+zadanej współrzędnej i parametrycznej stałej z: cztery punkty, zamknięty
+obwód i cap. Jest to definicja geometrii przed meshingiem, a nie naprawa
+wygenerowanych współrzędnych. Oficjalny kontrakt API:
+[Gmsh geo/addGeometry i addPointOnGeometry](https://gmsh.info/doc/texinfo/gmsh.html#Namespace-gmsh_002fmodel_002fgeo).
+Sąsiednie przedziały współdzielą ten sam cap i krawędzie; ściany boczne
+oraz surface-loop/volume zachowują jawnych ownerów. Nie przesuwamy,
+nie zaokrąglamy ani nie snapujemy węzłów po generowaniu. Kontrakt exact-z,
+PBC, jakości końcowej i SI pozostaje bez zmian. Dowód wymaga regresji
+publicznego DSL na tym modelu oraz ponownej kontroli regionalnej i PBC;
+nie jest dowodem wykonania solvera.
+
+
+### Koszt snapshotów okresowych
+
+W każdym snapshotcie przedziały z faset są identyczne dla wszystkich patchy.
+Wyznaczanie ich raz na fasetę w obrębie wywołania nie zmienia testu
+`z_low <= min(z_face) and max(z_face) <= z_high`, wartości SI, pokrycia,
+bijekcji ani narożników. Dokładne guards flipów, per-slab volume i końcowe
+walidatory pozostają aktywne. Cache nie przechodzi między siatkami lub
+wywołaniami; nie przechowuje mutowalnego stanu globalnego. Pomiar małego
+stanu PBC24nodes/36tet: bazowe200 snapshotów0,6531s; hash stanu
+ac81cff0e44d700ac18e475d8b177081197b4b37b4a81ffb19ea78659c63b6b3.
+Nie jest to pomiar czasu native eigensolve ani pełnego meshingu DE.
+
+Po zmianie200 snapshotów zajęło0,2220s (około2,94× szybciej w tym małym
+pomiarze); hash pełnego stanu pozostał identyczny. Regresje dokładnego
+Delaunay7PASS obejmują cały kandydat, deterministykę permutacji, pełne
+trójkąty patchy i mapy narożników. Dodatkowa regresja brakującego patcha
+musi nadal odrzucać niepełne pokrycie; nie promujemy braku faset do PASS.
+
+Ślad żywego fizycznego modelu wskazał także exact SAT w kontroli flipów.
+Te same pary niezmiennych tetraedrów są sprawdzane ponownie przy kolejnych
+kandydatach. Cache bool wyników SAT może być lokalny dla jednej fazy
+reconciliacji i niezmiennej kopii współrzędnych; klucz stanowi para
+kanonicznych zestawów czterech tagów. Ograniczenie8192 wpisów ogranicza
+pamięć, a ewikcja powoduje wyłącznie ponowny exact SAT. Nie pomijamy
+żadnej pary, nie zmieniamy osi SAT ani predykatu rozdzielenia i nie
+współdzielimy wyników między meshami. Końcowe walidatory pozostają aktywne.
+
+
+### Równoważne ograniczenie przeszukiwania legalnych flipów
+
+Ranking wewnętrzny zaczyna się od dokładnych współrzędnych quadu,
+a okresowy od pair_id, markerów i współrzędnych quadu B. Po sortowaniu
+według tego prefiksu można zakończyć przegląd dopiero wtedy, gdy istnieje
+legalny kandydat i następny prefiks jest ściśle większy. Wszystkie remisy
+prefiksu i obie strony/cones są nadal sprawdzane; końcowy min wybiera ten
+sam pełny ranking jak przegląd wszystkich kandydatów. Pomijane kandydaty
+nie mogą wygrać wyboru. Exact guards wybranego ruchu, redukcja mismatchów,
+SAT i finalne walidatory pozostają niezmienione. To optymalizacja wyboru,
+nie nowy warunek legalności ani dowód kwalifikacji solvera.
+
+
+### Różne apexy właścicieli quadu
+
+Exact replay modelu DE6 wykazał, że obie pary faset mają dwóch różnych
+apexów (350/381 oraz342/373). Obecny cone-only ruch2→2 odmawia na
+warunku common apex; guard SAT nie został jeszcze wywołany. To ograniczenie
+obsługiwanej cavity, nie dowód nakładania tetraedrów. Badany ruch3→3 wymaga
+dodatkowego istniejącego tetraedru z oboma apexami i starą przekątną;
+bez niego lub bez zamkniętej legalnej cavity nadal obowiązuje odmowa.
+Nowa triangulacja może użyć wyłącznie tych samych sześciu węzłów i nowej
+przekątnej quadu. Musi zachować dokładnie pozostałą granicę cavity,
+liczność/incidence faset, dodatnie orientacje, exact volume, jeden slab,
+cap signature i SAT rozdzielenie nowych komórek między sobą i od wszystkich
+niezmienionych komórek. Po ruchu wymagana jest dokładna redukcja tych
+samych4 free faces, a finalne walidatory pozostają aktywne. Na tym etapie
+jest to hipoteza wymagająca actual replay i regresji, nie gotowa poprawka.
+
+
+### Odrzucony prosty ruch3→3; wymagana pełna granica cavity
+
+Exact replay potwierdził istnienie obu centralnych komórek, lecz naturalne
+3→3 zmienia4 non-quad boundary faces. Orientacja, volume,slab,cap,SAT
+są poprawne, ale po A→B pozostają4 nowe free faces, po B→A8; wariant
+odwrócony nakłada komórki. Prototyp nie został wdrożony. Dowód:
+de-six-layer-exact-3to3-connector-check-20261013.json i
+de-six-layer-3to3-cavity-summary-20261013.md w folderze diagnostycznym.
+
+Następna hipoteza dotyczy połączonej cavity6tet/8nodes po obu stronach
+quadu. Ponieważ wewnętrzny quad nie jest capem ani granicą ownera, nie
+musi pozostać w nowej triangulacji. Cała zewnętrzna granica cavity musi
+pozostać identyczna. Generator skończonych kandydatów może wykorzystać
+MILP dla całkowitoliczbowych oriented-face incidences, wyłącznie jako
+generator; jego sukces nie jest exact dowodem. Odbiór wymaga exact
+convexity, boundary equality, nodeusage, positive orientation, volume,
+slab/cap signature, SAT wewnątrz cavity i od wszystkich unchanged tets
+oraz finalnych validatorów. Brak kandydata oznacza odmowę. Nie zmieniamy
+SI współrzędnych, capów, fizyki, quality thresholds ani finalnych gates.
+Na tym etapie jest to eksperyment poza repo; bez nowej trasy produkcyjnej.
+
+
+### Korekta diagnostyki slab/cap (nie algorytmu)
+
+Root wykrył błąd w raporcie eksperymentu3→3: etykieta slab0 dotyczyła
+pierwszej pary poziomów zamiast właściwego środkowego przedziału cavity.
+Dotychczasowe assertions same-slab/cap nie są dowodem i wymagają ponowienia
+z pełnymi59 plane_values, jawnym cell_slab_index is not None i niepustym
+cap signature. Agent potwierdził pomyłkę; trwa korekta raportu. Fakt zmiany
+non-quad boundary pozostaje wystarczającą odmową prototypu. Nie wdrożono
+3→3 ani żadnego osłabienia produkcyjnych guardów na podstawie tego raportu.
+
+
+### Kandydat pryzmatyczny dla dokładnie przystających capów
+
+Jeśli pełne zbiory XY obu sąsiednich capów są identyczne w dokładnych
+współrzędnych, interval jest sumą pionowych pryzmatów nad jedną triangulacją
+2D. Uporządkowanie wierzchołków każdego trójkąta według globalnego XY
+i podział na3 dodatnie tety narzuca ten sam diagonal na wspólnej ścianie
+sąsiednich pryzmatów. Jest to generator connectivity bez zmiany nodes,
+warstw lub local-size. Wymaga ścisłej równości całych XYsets; nie wolno
+dopasowywać prawie zgodnych XY przez tolerancję. Przedziały o różnych
+XYsets nadal wymagają dotychczasowej niezależnej metody Delaunay3D.
+
+2D Qhull proponuje tylko trójkąty; orientacja, nodeusage, volume, cap
+ownership, PBC i końcowy exact validator pozostają obowiązkowe. Dokumentacja
+[Qhull Qt](https://www.qhull.org/html/qh-optq.htm) wprost dopuszcza
+zdegenerowane zero-area facets; odrzucenie zerowych tetraedrów nie daje
+samoistnie dowodu konformnej triangulacji sąsiednich pryzmatów. Wdrożenie
+tej ścieżki wymaga regresji exact-równości XY, deterministyczności,
+objętości i fresh physical DE; nie jest dowodem jakości ani eigensolve.
+
+### Kandydat dla różnych capów o zgodnej triangulacji
+
+Dla dwóch capów z różnymi dokładnymi XY dopuszczamy wyłącznie propozycję
+bijekcji istniejących węzłów, bez zmiany współrzędnych. Narożniki i krawędzie
+są rozpoznawane przez dokładną równość ze ścianami boxu; węzły każdej krawędzi
+łączymy monotonicznie, a węzły wewnętrzne przez deterministycznie uporządkowane
+minimalne przypisanie kosztu kwadratowej odległości XY. To generator, nie dowód.
+
+Wymagamy, aby triangulacja dolnego capu po bijekcji była dokładnie triangulacją
+2D wygenerowaną niezależnie dla górnego capu. Każda wspólna płaszczyzna używa
+więc tego samego zestawu trójkątów w sąsiednich zaakceptowanych pryzmatach.
+Globalny porządek XY dolnego capu narzuca spójne przekątne ścian pryzmatów.
+Wymagamy zgodnych dokładnych znaków trzech surowych determinantów względem
+orientacji trójkąta (+,-,+); kanonizacja nie może ukryć odwróconej komórki.
+
+Cały kandydat musi przejść istniejący exact validator pojedynczego slab:
+positive-volume, nodeusage, face incidence/orientations, exact volume oraz
+cap/side coverage. Dodatkowo wszystkie pary tetraedrów muszą być rozdzielone
+według dokładnego SAT. Odsiew AABB używa dokładnych współrzędnych; nie ma
+float epsilon. Kontrola tetraedrów obejmuje także brak nakładania triangulacji
+capów. Niezgodność dowolnego warunku odrzuca tę propozycję; pozostała trasa
+3D Delaunay i pełny validator po reconciliation/PBC pozostają aktywne.
+To nie zmienia SI, DSL/IR, zadanych warstw, fizyki ani bramek kwalifikacji.
+### Wyniki aktualnej weryfikacji geometrii — 2026-10-13
+
+Korekta diagnostyki cavity została zakończona: pełne plane_values wskazują
+slab31→32, po 31 węzłów XY na capie i identyczne dokładne zbiory XY.
+Połączona cavity ma 6 komórek/8 węzłów i 12 ścian zamkniętej wypukłej granicy.
+MILP odrzucił zbiór 62 kandydatów; nie jest to formalny dowód braku innej
+triangulacji. Nie wprowadzono na tej podstawie ruchu 3→3 ani nowego solvera MILP.
+
+Niezależny exact replay kompatybilnego generatora dla dense h5 slab29→30
+oraz30→31 przeszedł: po 98 węzłów na capie, 162 trójkąty/486 tetraedrów,
+exact objętość i incidencja; SAT 4155 i4036 par po exact AABB odsiewie,
+zero nakładania. Review kodu nie wskazało błędu poprawności. Regresje
+obejmują również prawie zgodne XY bez snappingu, odmowę niezgodnych klas,
+konieczność SAT, permutację pełnego wejścia oraz odwrócone przypisanie
+węzłów wewnętrznych. Zależne od wersji SciPy remisy kosztu Hungarian
+mogą wybrać inną propozycję; każda musi niezależnie przejść exact guardy.
+
+Pełne produkcyjne regresje Gmsh zakończyły się exit0, 4 PASS:
+DE6 14,823s; scoped h5/3 14,948s; scoped h5/6 23,919s;
+publiczny DSL DE/3 13,846s. Raport compatible-cap-physical-regressions-20261013.json
+zawiera hashe załadowanych źródeł; później zmieniono wyłącznie docstring
+funkcji, bez zmiany jej algorytmu. Jest to dowód meshingu i PBC tych
+konfiguracji. Nie dowodzi native eigensolve, jakości całej rodziny geometrii,
+zbieżności, COMSOL A1 ani FEM GPU.

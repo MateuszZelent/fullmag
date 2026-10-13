@@ -2,14 +2,16 @@
 
 SciPy/Qhull proposes connectivity only. Every orientation, supported
 reconciliation move, slab volume, cap, exterior face and authored periodic map
-is checked using the existing exact layered-box contracts. This private
-prototype does not activate production routing or certify mesh quality.
+is checked using the existing exact layered-box contracts. The scoped Box
+cap adapter selects this private implementation; final mesh quality and
+scientific qualification require their separate checks.
 """
 from __future__ import annotations
 
 from collections import Counter
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from itertools import combinations
+from functools import lru_cache
 from numbers import Integral
 
 import numpy as np
@@ -255,6 +257,21 @@ def _aabb_disjoint(first: _Cell, second: _Cell, points: Sequence[_Point3]) -> bo
     return False
 
 
+def _separation_checker(points: Sequence[_Point3]) -> Callable[[_Cell, _Cell], bool]:
+    """Reuse exact SAT results only for this immutable realization geometry."""
+    immutable_points = tuple(tuple(point) for point in points)
+
+    @lru_cache(maxsize=8192)
+    def separated(first: _Cell, second: _Cell) -> bool:
+        return _kernel._tetrahedra_are_separated(immutable_points, first, second)
+
+    def check(first: _Cell, second: _Cell) -> bool:
+        pair = sorted((tuple(sorted(first)), tuple(sorted(second))))
+        return separated(pair[0], pair[1])
+
+    return check
+
+
 def _guarded_two_to_two(
     cells: Sequence[_Cell],
     points: Sequence[_Point3],
@@ -265,6 +282,7 @@ def _guarded_two_to_two(
     old_quad_faces: set[_Face],
     new_quad_faces: set[_Face],
     target_incidence: int,
+    separation_checker: Callable[[_Cell, _Cell], bool] | None = None,
 ) -> list[_Cell] | None:
     """Return a globally safe exact 2->2 update, otherwise reject the move."""
     if len(old_cell_indices) != 2 or len(set(old_cell_indices)) != 2:
@@ -370,13 +388,16 @@ def _guarded_two_to_two(
 
     # The same two cavity tets must be separated from each other and from every
     # unchanged tet. AABB rejects most pairs before exact SAT arithmetic.
-    if not _kernel._tetrahedra_are_separated(points, new_cells[0], new_cells[1]):
+    separated = separation_checker or (
+        lambda first, second: _kernel._tetrahedra_are_separated(points, first, second)
+    )
+    if not separated(new_cells[0], new_cells[1]):
         return None
     for candidate in new_cells:
         for index, other in enumerate(cells):
             if index in replaced or _aabb_disjoint(candidate, other, points):
                 continue
-            if not _kernel._tetrahedra_are_separated(points, candidate, other):
+            if not separated(candidate, other):
                 return None
     return updated
 
@@ -459,6 +480,7 @@ def _reconcile_internal_free_faces(
     bounds: tuple[_Exact, _Exact, _Exact, _Exact],
 ) -> list[_Cell]:
     working = list(cells)
+    separation_checker = _separation_checker(points)
     while True:
         free_faces = _free_internal_faces(working, points, plane_values, bounds)
         if not free_faces:
@@ -467,6 +489,11 @@ def _reconcile_internal_free_faces(
         incidence = _face_incidence(working)
         legal_moves: list[tuple[tuple[object, ...], list[_Cell], set[_Face]]] = []
         for patch in patches:
+            # Patches are sorted by the primary rank. Keep all equal-prefix
+            # candidates; a larger prefix cannot beat an existing legal move.
+            patch_rank = tuple(points[node] for node in patch["quad"])
+            if legal_moves and patch_rank > legal_moves[0][0][0]:
+                break
             cones = (
                 _cone_for_faces(
                     patch["triangles_a"], incidence, working, points,
@@ -509,6 +536,7 @@ def _reconcile_internal_free_faces(
                     old_quad_faces=old_faces,
                     new_quad_faces=target_faces,
                     target_incidence=2,
+                    separation_checker=separation_checker,
                 )
                 if updated is None:
                     continue
@@ -658,7 +686,7 @@ def _on_side(
     side: str,
 ) -> bool:
     coordinate = _side_coordinate(bounds_xy, axis, side)
-    return bool(np.all(nodes[np.asarray(face, dtype=np.int64), axis] == coordinate))
+    return all(float(nodes[node, axis]) == coordinate for node in face)
 
 
 def _periodic_snapshots(
@@ -670,6 +698,13 @@ def _periodic_snapshots(
 ) -> dict[tuple[str, int, int], dict[str, object]]:
     incidence = _face_incidence(cells)
     exterior = {face for face, owners in incidence.items() if len(owners) == 1}
+    # Reuse the same finite float extrema across all authored patches in this
+    # snapshot. No cache or coordinate approximation escapes this invocation.
+    face_z_bounds = {
+        face: (min(float(nodes[node, 2]) for node in face),
+               max(float(nodes[node, 2]) for node in face))
+        for face in exterior
+    }
     pair_ids = sorted({str(pair["pair_id"]) for pair in boundary_pairs})
     result: dict[tuple[str, int, int], dict[str, object]] = {}
     for pair_id in pair_ids:
@@ -687,13 +722,13 @@ def _periodic_snapshots(
             z_low, z_high = float(patch["_z_low"]), float(patch["_z_high"])
             row_a = {
                 face for face in side_a_faces
-                if z_low <= float(np.min(nodes[np.asarray(face), 2]))
-                and float(np.max(nodes[np.asarray(face), 2])) <= z_high
+                if z_low <= face_z_bounds[face][0]
+                and face_z_bounds[face][1] <= z_high
             }
             row_b = {
                 face for face in side_b_faces
-                if z_low <= float(np.min(nodes[np.asarray(face), 2]))
-                and float(np.max(nodes[np.asarray(face), 2])) <= z_high
+                if z_low <= face_z_bounds[face][0]
+                and face_z_bounds[face][1] <= z_high
             }
             assigned_a.update(row_a)
             assigned_b.update(row_b)
@@ -818,6 +853,7 @@ def _reconcile_periodic_boundaries(
     if not boundary_pairs:
         return cells
     working = list(cells)
+    separation_checker = _separation_checker(points)
     while True:
         snapshots = _periodic_snapshots(
             working, sorted_nodes, bounds_xy, boundary_pairs, node_maps
@@ -850,7 +886,12 @@ def _reconcile_periodic_boundaries(
         before_count = sum(
             len(row["missing"]) + len(row["extra"]) for row in snapshots.values()
         )
+        row_patches.sort(key=lambda entry: entry[0])
         for patch_key, row_key, patch in row_patches:
+            # The full rank starts with patch_key. Evaluate every tie, then
+            # skip strictly larger keys that cannot win the existing min.
+            if legal_moves and patch_key > legal_moves[0][0][:len(patch_key)]:
+                break
             candidates = (
                 ("a", patch["quad_a"], patch["hull_a"], patch["a_old"], patch["a_target"]),
                 ("b", patch["quad_b"], patch["hull_b"], patch["b_old"], patch["b_target"]),
@@ -866,6 +907,7 @@ def _reconcile_periodic_boundaries(
                     old_quad_faces=old_faces,
                     new_quad_faces=target_faces,
                     target_incidence=1,
+                    separation_checker=separation_checker,
                 )
                 if updated is None:
                     continue
@@ -966,6 +1008,140 @@ def _periodic_validator_facets(
     return facets
 
 
+def _congruent_cap_prism_candidates(
+    points: Sequence[_Point3],
+    slab_node_ids: Sequence[int],
+    lower_z: _Exact,
+    upper_z: _Exact,
+) -> list[_Cell] | None:
+    """Generate ordered prisms only for exactly equal complete cap XY sets."""
+    lower = {points[node][:2]: node for node in slab_node_ids if points[node][2] == lower_z}
+    upper = {points[node][:2]: node for node in slab_node_ids if points[node][2] == upper_z}
+    if set(lower) != set(upper):
+        return None
+    if upper_z <= lower_z or len(lower) < 3 or len(slab_node_ids) != 2 * len(lower):
+        raise ValueError("congruent prism caps require distinct nodes on two exact planes")
+    from scipy.spatial import Delaunay, QhullError
+    xy = sorted(lower)
+    try:
+        cap = Delaunay(np.asarray([[float(x), float(y)] for x, y in xy]))
+    except QhullError as exc:
+        raise ValueError("SciPy Delaunay failed for congruent cap XY candidates") from exc
+    cells: list[_Cell] = []
+    for triangle in cap.simplices:
+        a, b, c = sorted(xy[int(index)] for index in triangle)
+        al, bl, cl = lower[a], lower[b], lower[c]
+        au, bu, cu = upper[a], upper[b], upper[c]
+        # A single global XY order gives adjacent prisms the same side diagonal.
+        for raw in ((al, bl, cl, cu), (al, bl, bu, cu), (al, au, bu, cu)):
+            cell = _canonical_positive_cell(raw, points)
+            if cell is None:
+                raise ValueError("congruent prism candidate has exact-zero volume")
+            cells.append(cell)
+    cells.sort(key=lambda cell: tuple(sorted(cell)))
+    if {node for cell in cells for node in cell} != set(slab_node_ids):
+        raise ValueError("congruent prism candidates do not use every input node")
+    return cells
+
+
+def _compatible_cap_prism_candidates(
+    points: Sequence[_Point3],
+    slab_node_ids: Sequence[int],
+    lower_z: _Exact,
+    upper_z: _Exact,
+    bounds: tuple[_Exact, _Exact, _Exact, _Exact],
+) -> list[_Cell] | None:
+    """Propose a cap bijection, then certify its unmodified slab geometry."""
+    from scipy.optimize import linear_sum_assignment
+    from scipy.spatial import Delaunay, QhullError
+
+    lower = sorted((node for node in slab_node_ids if points[node][2] == lower_z),
+                   key=lambda node: points[node][:2])
+    upper = sorted((node for node in slab_node_ids if points[node][2] == upper_z),
+                   key=lambda node: points[node][:2])
+    if (upper_z <= lower_z or len(lower) < 3 or len(lower) != len(upper)
+            or len(slab_node_ids) != len(lower) + len(upper)):
+        return None
+    xmin, xmax, ymin, ymax = bounds
+
+    def boundary_class(node: int) -> tuple[int, int]:
+        x, y = points[node][:2]
+        return (int(x == xmax) - int(x == xmin), int(y == ymax) - int(y == ymin))
+
+    classes = {(x, y) for x in (-1, 0, 1) for y in (-1, 0, 1)}
+    mapping: dict[int, int] = {}
+    for category in sorted(classes):
+        first = [node for node in lower if boundary_class(node) == category]
+        second = [node for node in upper if boundary_class(node) == category]
+        if len(first) != len(second):
+            return None
+        if category != (0, 0):
+            # Lexicographic XY ordering is monotone along each exact box edge.
+            mapping.update(zip(first, second))
+        elif first:
+            xy_a = np.asarray([[float(value) for value in points[node][:2]] for node in first])
+            xy_b = np.asarray([[float(value) for value in points[node][:2]] for node in second])
+            costs = np.sum((xy_a[:, None, :] - xy_b[None, :, :]) ** 2, axis=2)
+            if not np.isfinite(costs).all():
+                return None
+            rows, columns = linear_sum_assignment(costs)
+            mapping.update((first[int(a)], second[int(b)]) for a, b in zip(rows, columns))
+    if set(mapping) != set(lower) or set(mapping.values()) != set(upper):
+        return None
+
+    try:
+        lower_cap = Delaunay(np.asarray([[float(v) for v in points[node][:2]] for node in lower]))
+        upper_cap = Delaunay(np.asarray([[float(v) for v in points[node][:2]] for node in upper]))
+    except QhullError:
+        return None
+    lower_faces = [tuple(sorted((lower[int(i)] for i in tri), key=lambda n: points[n][:2]))
+                   for tri in lower_cap.simplices]
+    upper_faces = {tuple(sorted(upper[int(i)] for i in tri)) for tri in upper_cap.simplices}
+    mapped_faces = {tuple(sorted(mapping[node] for node in face)) for face in lower_faces}
+    if mapped_faces != upper_faces or len(lower_faces) != len(mapped_faces):
+        return None
+
+    cells: list[_Cell] = []
+    for al, bl, cl in lower_faces:
+        au, bu, cu = mapping[al], mapping[bl], mapping[cl]
+        area2 = _kernel._orient2d(points[al], points[bl], points[cl])
+        top_area2 = _kernel._orient2d(points[au], points[bu], points[cu])
+        if area2 * top_area2 <= 0:
+            return None
+        raws = ((al, bl, cl, cu), (al, bl, bu, cu), (al, au, bu, cu))
+        for raw, sign in zip(raws, (1, -1, 1)):
+            if _kernel._orient3d(points, raw) * area2 * sign <= 0:
+                return None
+            cell = _canonical_positive_cell(raw, points)
+            if cell is None:
+                return None
+            cells.append(cell)
+    cells.sort(key=lambda cell: tuple(sorted(cell)))
+
+    # Existing exact validator needs a complete, local point index space.
+    local_ids = sorted(slab_node_ids)
+    inverse = {node: i for i, node in enumerate(local_ids)}
+    local_points = [points[node] for node in local_ids]
+    local_cells = [tuple(inverse[node] for node in cell) for cell in cells]
+    try:
+        _kernel._validate_tetrahedralization(local_cells, local_points, (lower_z, upper_z), bounds)
+    except ValueError:
+        return None
+
+    # Exact AABB is only a separation certificate; remaining pairs require SAT.
+    boxes = [(tuple(min(points[node][axis] for node in cell) for axis in range(3)),
+              tuple(max(points[node][axis] for node in cell) for axis in range(3)))
+             for cell in cells]
+    for first, second in combinations(range(len(cells)), 2):
+        low_a, high_a = boxes[first]
+        low_b, high_b = boxes[second]
+        if any(high_a[axis] <= low_b[axis] or high_b[axis] <= low_a[axis]
+               for axis in range(3)):
+            continue
+        if not _kernel._tetrahedra_are_separated(points, cells[first], cells[second]):
+            return None
+    return cells
+
 def tetrahedralize_layered_box_delaunay(
     nodes: NDArray[np.float64] | list[list[float]],
     layer_planes: Sequence[float],
@@ -979,8 +1155,10 @@ def tetrahedralize_layered_box_delaunay(
 ) -> NDArray[np.int32]:
     """Return exact-validated, input-indexed Tet4 connectivity for layered boxes.
 
-    Delaunay triangulation is performed independently for each exact adjacent
-    z-plane pair. Qhull coordinates use the exact kernel's isotropic
+    Exactly congruent caps share a 2D triangulation and ordered prism split;
+    compatible cap bijections require independent 2D topology, exact slab and SAT checks;
+    other adjacent z-plane pairs use 3D Delaunay candidates independently.
+    Qhull coordinates use the exact kernel's isotropic
     normalization for candidate generation only; caller SI nodes and planes
     are never modified. Unsupported exact-zero holes, non-quad gaps, illegal
     cavities, incomplete periodic maps, and unresolvable facets fail closed.
@@ -1030,20 +1208,28 @@ def tetrahedralize_layered_box_delaunay(
         ]
         if len(slab_node_ids) < 4:
             raise ValueError(f"exact z slab {slab} has fewer than four candidate nodes")
-        qhull_coordinates = np.asarray(
-            [[float(value) for value in points[node]] for node in slab_node_ids],
-            dtype=np.float64,
+        slab_cells = _congruent_cap_prism_candidates(
+            points, slab_node_ids, plane_values[slab], plane_values[slab + 1],
         )
-        try:
-            triangulation = Delaunay(qhull_coordinates)
-        except QhullError as exc:
-            raise ValueError(f"SciPy Delaunay failed for exact z slab {slab}") from exc
-        local_cells = _exact_positive_simplices(
-            [points[node] for node in slab_node_ids],
-            triangulation.simplices,
-        )
-        for local_cell in local_cells:
-            cell = tuple(slab_node_ids[node] for node in local_cell)
+        if slab_cells is None:
+            slab_cells = _compatible_cap_prism_candidates(
+                points, slab_node_ids, plane_values[slab], plane_values[slab + 1], bounds,
+            )
+        if slab_cells is None:
+            qhull_coordinates = np.asarray(
+                [[float(value) for value in points[node]] for node in slab_node_ids],
+                dtype=np.float64,
+            )
+            try:
+                triangulation = Delaunay(qhull_coordinates)
+            except QhullError as exc:
+                raise ValueError(f"SciPy Delaunay failed for exact z slab {slab}") from exc
+            local_cells = _exact_positive_simplices(
+                [points[node] for node in slab_node_ids],
+                triangulation.simplices,
+            )
+            slab_cells = [tuple(slab_node_ids[node] for node in cell) for cell in local_cells]
+        for cell in slab_cells:
             key = tuple(sorted(cell))
             if key in candidate_keys:
                 raise ValueError("per-slab Delaunay candidates contain duplicate tetrahedra")

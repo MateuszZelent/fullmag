@@ -88,3 +88,30 @@ def test_scoped_box_rejects_unexecuted_options_before_gmsh(monkeypatch, override
             airbox=AirboxOptions(size=(120e-9, 80e-9, 40e-9)),
             options=MeshOptions(size_fields=[field], **override),
         )
+
+
+def test_scoped_box_public_de_smoke_materializes_exact_caps(monkeypatch) -> None:
+    """The 4.01 um airbox exposes mixed cap z values hidden by a short box."""
+    from pathlib import Path
+    import fullmag as fm
+    pytest.importorskip("gmsh")
+    monkeypatch.setenv("FULLMAG_DE_SMOKE_SAMPLING", "k10")
+    monkeypatch.setenv("FULLMAG_DE_SMOKE_MODAL_TARGET", "nearest")
+    monkeypatch.setenv("FULLMAG_DE_SMOKE_TARGET_FREQUENCY_GHZ", "12.0")
+    script = Path(__file__).resolve().parents[3] / "examples/fem_de_smoke_numeric.py"
+    fm.reset()
+    try:
+        loaded = fm.load_problem_from_script(script, lightweight_assets=False)
+        runtime = loaded.problem.runtime
+        ir = loaded.to_ir(
+            requested_backend=runtime.backend_target,
+            execution_mode=runtime.execution_mode,
+            execution_precision=runtime.execution_precision,
+            _copy_cached_geometry_assets=False,
+        )
+        mesh = ir["geometry_assets"]["fem_domain_mesh_asset"]["mesh"]
+        assert len(mesh["nodes"]) > 0
+        assert set(mesh["cells"]["types"]) == {"tet4"}
+        assert len(mesh["periodic_node_pairs"]) > 0
+    finally:
+        fm.reset()

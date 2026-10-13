@@ -934,3 +934,189 @@ oraz solvera; nie podmieniamy źródeł starej kapsuły.
 `packages/fullmag-py/tests/test_gmsh_layered_box.py` SHA256 `e2dcf5e09ae644e6db01cc543506d2dd30e6e550789e73335c93ee016c7290e8`.
 
 `packages/fullmag-py/tests/test_layered_box_production_route.py` SHA256 `a8559ec3a68ff947d8afb9332c736ae9420c5c85b7f44e8c055228b7d3c2805f`.
+
+
+## Dokładny cap fizycznego DE-SMOKE — 2026-10-13, WIP
+
+Opublikowano routing scoped Box w e73dbfc7b6eab500c5f0ffe47551d8969b4c66fb;
+CI scoped-mesh-fields38421753499 i artifact-consumers38421753826 PASS.
+Świeży build242/a9c604849ef74573bbcb8bd2e242d25f został przyjęty, ale
+materializacja publicznego examples/fem_de_smoke_numeric.py (k10, nearest12GHz)
+wykazała mieszane z w capie554. Przyłożone −0,015000000000000001 Gmsh
+wystąpiło na16 węzłach brzegowych, −0,015 na15 wewnętrznych. Zlecono anulowanie
+wyłącznie tego własnego buildu; potwierdzono cancel_requested, terminalnego
+stanu jeszcze nie potwierdzono. Nie zmieniono kapsuły ani nie usunięto danych.
+
+Dodano regresję przez rzeczywisty publiczny loader i to_ir: RED2,30s.
+Absolutna konstrukcja capów standardowym PlaneSurface nadal RED. Probe
+oficjalnego API oddzielił inferred plane (dwa z) od parametrycznej stałej z
+(jedno z). Scoped Box tworzy teraz absolutne parametryczne capy oraz jawne
+ściany boczne i volume-loops, współdzieląc tagi między slabami. Pozostałe
+trasy zachowano. Niezależne source review PASS, mały production PBC4PASS,
+niezmieniona regionalna bramka PASS2,314s. Pełna fizyczna regresja55989
+oraz szerszy test_meshing67273 w toku. Nie oznaczamy ich jako PASS, nie
+wypychamy niezweryfikowanego etapu. Full S00–S12/runtime/science/GUI/A1/GPU
+pozostaje OPEN.
+
+Końcowy follow-up tego przyrostu: test_meshing67273 terminal exit0,
+309tests182,670s OK/skipped1. Validator noty0104/source-map PASS.
+Job242 terminal cancelled/143. Pełny physical pytest55989 nadal live
+(PID102748,437,8125CPU s przy ostatnim odczycie). Ten test nie jest PASS;
+nie uruchomiono drugiego buildu ani solvera. Read-only diagnoza kosztu
+periodic reconciliation trwa niezależnie. Źródła WIP zachowane lokalnie.
+
+
+## 2026-10-13 — dokładny ranking bez zbędnego przeszukiwania
+
+Dwie wcześniejsze próby (sesje29423/84868, PID98832/134700) miały
+potwierdzony aktywny proces, odpowiednio712,59 i678,77CPU s. Zatrzymano
+wyłącznie te własne procesy po sprawdzeniu pełnej command line, ponieważ
+liczyły kod sprzed nowej, zweryfikowanej optymalizacji. Nie traktujemy
+obserwacyjnego faulthandler Timeout jako błędu ani tych prób jako PASS.
+
+Wybór legalnych flipów kończy przegląd dopiero przy ściśle większym
+prefiksie rankingu; wszystkie remisy nadal przechodzą exact guards.
+Niezależne source review PASS. Interpretowane regresje Delaunay10PASS
+(3,67s,exit0); cztery porównania z pełnym przeszukiwaniem dały identyczne
+connectivity (12/24nodes, zwykła i odwrócona kolejność patchy).
+Dowód: rank-prefix-parity-20261013.json w layered-cap-sliver-diagnostic-20261013.
+Małe czasy nie kwalifikują szybkości całego modelu lub solvera.
+
+Nowa pojedyncza sesja62743 sprawdza wszystkie trzy pierwotne błędy CI:
+publiczny model DE z6 warstwami i scoped periodic Box z3/6 warstwami.
+Stan: RUNNING, brak końcowego wyniku. Build242 pozostaje CANCELLED/exit143;
+nowego buildu poprawionych źródeł jeszcze nie zlecono. Nowych częstotliwości
+ani kwalifikacji dyspersji nie uzyskano. Pełny zakres S00–S12 pozostaje OPEN.
+
+
+### Odmowa modelu DE6 po naprawie exact-z
+
+Izolowana regresja test_public_de_model_shared_domain_realizes_six_layers
+zakończyła się FAILED/exit1 po58,25s (sesja4188 terminalna).
+Nowy błąd: unsupported internal free-face quad: no exact guarded one-sided
+2-to-2 reconciliation, _layered_box_delaunay.py::_reconcile_internal_free_faces.
+Nie jest to już mixed-z cap. Nie złagodzono SAT, volume ani incidence.
+Pełna sesja62743 ma jeden nieudany test, pozostałe nadal RUNNING.
+Instrumentowany capture91931 zapisuje dokładne fractions/working cells
+odmówionego stanu do odtwarzalnej diagnozy; nie jest kwalifikacją.
+Dodatkowe aktualne checks:20PASS/17subtests/1deselected,3,79s,exit0
+(kernel i mała production route). Source stage pozostaje WIP bez nowego
+commita/pusha/builda, ponieważ fizyczny model nie przeszedł wymaganej bramki.
+
+
+Zapisany physical failure replay ma 557 nodes,
+1948 tetraedrów, dokładnie4 pozostałe wolne
+fasety i1 quad patch. Capture zakończył się FAIL/exit1 po54.562s;
+pełne Fraction współrzędnych i connectivity zachowano w
+de-six-layer-internal-reconciliation-failure-20261013.json.
+Sesja62743 zgłosiła również drugą odmowę; trzeci przypadek nadal oczekuje
+na wynik końcowy. Badamy dokładny guard/cavity, nie omijamy odmowy.
+
+
+
+
+### Odrzucony prosty ruch3→3; wymagana pełna granica cavity
+
+Exact replay potwierdził istnienie obu centralnych komórek, lecz naturalne
+3→3 zmienia4 non-quad boundary faces. Orientacja, volume,slab,cap,SAT
+są poprawne, ale po A→B pozostają4 nowe free faces, po B→A8; wariant
+odwrócony nakłada komórki. Prototyp nie został wdrożony. Dowód:
+de-six-layer-exact-3to3-connector-check-20261013.json i
+de-six-layer-3to3-cavity-summary-20261013.md w folderze diagnostycznym.
+
+Następna hipoteza dotyczy połączonej cavity6tet/8nodes po obu stronach
+quadu. Ponieważ wewnętrzny quad nie jest capem ani granicą ownera, nie
+musi pozostać w nowej triangulacji. Cała zewnętrzna granica cavity musi
+pozostać identyczna. Generator skończonych kandydatów może wykorzystać
+MILP dla całkowitoliczbowych oriented-face incidences, wyłącznie jako
+generator; jego sukces nie jest exact dowodem. Odbiór wymaga exact
+convexity, boundary equality, nodeusage, positive orientation, volume,
+slab/cap signature, SAT wewnątrz cavity i od wszystkich unchanged tets
+oraz finalnych validatorów. Brak kandydata oznacza odmowę. Nie zmieniamy
+SI współrzędnych, capów, fizyki, quality thresholds ani finalnych gates.
+Na tym etapie jest to eksperyment poza repo; bez nowej trasy produkcyjnej.
+
+
+### Korekta diagnostyki slab/cap (nie algorytmu)
+
+Root wykrył błąd w raporcie eksperymentu3→3: etykieta slab0 dotyczyła
+pierwszej pary poziomów zamiast właściwego środkowego przedziału cavity.
+Dotychczasowe assertions same-slab/cap nie są dowodem i wymagają ponowienia
+z pełnymi59 plane_values, jawnym cell_slab_index is not None i niepustym
+cap signature. Agent potwierdził pomyłkę; trwa korekta raportu. Fakt zmiany
+non-quad boundary pozostaje wystarczającą odmową prototypu. Nie wdrożono
+3→3 ani żadnego osłabienia produkcyjnych guardów na podstawie tego raportu.
+
+
+## 2026-10-13 — przyczynowy generator congruent-cap prisms
+
+Regresja62743 zakończyła się terminalnie FAILED/exit1:3 failed/30deselected
+po1232,59s. Nie zatrzymano jej: przed próbą zastąpienia proces był już
+nieobecny; odczytano terminalny wynik z tego samego handle.
+
+Pełne59 planes potwierdzają właściwy globalny slab31; obie płaszczyzny
+mają dokładnie31 identycznych XY. Wcześniejsza etykieta slab0 była błędna.
+Nowy generator używa shared2Dcap triangulation i ordered3tet prism tylko
+przy ścisłej równości pełnych XYsets. Pozostałe przedziały nadal używają
+3DDelaunay. Nie zmieniono węzłów, poziomów, volume/SAT/PBC guards ani progów.
+Dwie nowe regresje najpierw RED (brakhelpera); następnie16PASS/1deselected,
+2,86s,exit0 (Delaunay+mała production route). Missing-node error zachowuje
+dotychczasowy kontrakt. Prosty3→3 nie został wdrożony.
+
+Nowa physical regression sesja18755: pierwszy publiczny model DE6 PASS;
+sesja zakończyła się exit1: h5/3 FAIL, dalsze dwa przypadki niewykonane po -x. Dowody zapisano w
+prism-physical-regressions-20261013.json z hashes źródeł; stan całości nie
+jest jeszcze PASS. Aktualizacja top-level/function docstrings po startcie
+dotyczy wyłącznie opisu; algoritm niezmieniony względem loaded hash.
+Nowy commit, fresh managed build, wyniki eigensolve i pełne S00–S12 OPEN.
+
+## 2026-10-13 — końcowy wynik regresji siatki i dalsza diagnoza
+
+Zatwierdzony ruch 4→4 jest zapisany i wysłany w commicie
+75c778f4dc778894a3a8d7f9ee30e424314dee77. Nie wymaga ponownego wdrożenia.
+Regresje kernela: 15 PASS; na zapisanej siatce 142 węzłów wykonano 40 i 43
+ruchy w dwóch wariantach, z końcowym validatorem PASS. Nie dowodzi to jakości
+regionalnej ani poprawności wszystkich produkcyjnych siatek.
+
+Nowa sesja fizycznych regresji 18755 jest zakończona, exit1:
+publiczny model DE z sześcioma warstwami PASS (14,915 s), gęstszy h5/3 FAIL
+(160,489 s) na unsupported internal free-face quad. Tryb -x zatrzymał serię;
+h5/6 i publiczny DSL/3 nie zostały wykonane. Raport terminalny:
+prism-physical-regressions-20261013.json; czas wrappera 179,688 s.
+
+Przechwycenie początkowych kandydatów gęstego h5/3 zajęło 1,516 s.
+Capy 29–32 mają po 98 węzłów; dokładne zbiory XY są jednak identyczne
+wyłącznie w slabie 31. Początkowe wolne ściany: slab29=236, slab30=264.
+To diagnostyka wejścia, nie sukces generowania siatki ani solvera.
+Dowód: de-scoped-h5-layers3-initial-prism-candidate-20261013.json.
+
+Rozważane dopasowanie topologii różnych capów wymaga niezależnej kontroli
+braku nakładania capów i tetraedrów oraz wspólnej triangulacji każdej
+płaszczyzny między sąsiednimi slabami. Same orientacje i suma objętości
+nie wystarczą. Nie wdrożono niezweryfikowanego dopasowania ani snappingu.
+Pełny plan S00–S12 pozostaje otwarty; nowy build i wyniki solvera nie są
+potwierdzone tymi regresjami geometrii.
+## 2026-10-13 — naprawa cap topology: bramki źródłowe zakończone
+
+Pełny cel S00–S12 pozostaje OPEN. Ukończony fragment naprawia dokładne z
+parametrycznych capów GEO, ogranicza powtarzane exact obliczenia bez zmiany
+rankingu oraz generuje pryzmatyczne kandydaty dla dokładnie przystających
+lub dokładnie walidowanych kompatybilnych capów. Nie zmienia węzłów, SI,
+liczby warstw ani finalnych guardów. Niezależne review bez błędu poprawności.
+
+Dowody: 21 lekkich regresji PASS; wszystkie cztery fizyczne modele siatki
+PASS w69,16s; szeroki moduł test_meshing: 309 testów, OK, skipped1, 204,127s.
+Validator noty/mapy źródeł i whitespace PASS. Testy były interpretowane;
+nie kompilowano lokalnie testów jednostkowych. Fizyczne regresje siatki
+nie są wynikami eigensolve. Publiczne wejście jest odporne na permutację
+węzłów; nielegalne interior assignment i odmowa SAT są testowane.
+
+Raport terminalny compatible-cap-physical-regressions-20261013.json
+oraz review compatible-cap-matching-review-20261013.md są w zachowanym
+folderze layered-cap-sliver-diagnostic-20261013. Następny krok: checkpoint
+commit/push, rejestr WIP, świeży job fem-cpu-slepc-runtime-v2 z pełnego SHA,
+natywny DE/signed sweep i pozostałe bramki S00–S12. Runner idle/healthy,
+profil dopuszczony, około11GB wolnego; wcześniejszy pełny build miał szczyt
+około27GB, więc realną możliwość zakończenia potwierdzi dopiero receipt.
+Podgląd retencji plan-429f00f24b504f70994daf2fe36086bf tylko analizuje dane;
+nie zastosowano usuwania.

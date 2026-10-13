@@ -2087,15 +2087,25 @@ def _generate_coincident_ring_airbox_mesh(
         gmsh.model.add("fullmag_swept_box_cylinder_ring_coincident_airbox")
         source_hmax_scaled = float(hmax) * SCALE
         z_source = levels[0]
-        outer_points = [
-            gmsh.model.geo.addPoint(x, y, z_source, source_hmax_scaled)
-            for x, y in (
-                (xmin, ymin),
-                (xmax, ymin),
-                (xmax, ymax),
-                (xmin, ymax),
+        def scoped_cap_points(z: float) -> list[int]:
+            # A constant parametric z avoids Gmsh's inferred mean-plane
+            # roundoff between boundary points and interior surface nodes.
+            plane_geometry = gmsh.model.geo.addGeometry(
+                "ParametricSurface", strings=["u", "v", repr(float(z))],
             )
-        ]
+            return [
+                gmsh.model.geo.addPointOnGeometry(
+                    plane_geometry, x, y, meshSize=source_hmax_scaled,
+                )
+                for x, y in ((xmin, ymin), (xmax, ymin), (xmax, ymax), (xmin, ymax))
+            ]
+
+        outer_points = (
+            scoped_cap_points(z_source) if scoped_layer_partitioning else [
+                gmsh.model.geo.addPoint(x, y, z_source, source_hmax_scaled)
+                for x, y in ((xmin, ymin), (xmax, ymin), (xmax, ymax), (xmin, ymax))
+            ]
+        )
         outer_lines = [
             gmsh.model.geo.addLine(outer_points[index], outer_points[(index + 1) % 4])
             for index in range(4)
@@ -2157,17 +2167,42 @@ def _generate_coincident_ring_airbox_mesh(
         annulus_cap_surfaces = [current_annulus]
         current_hole = int(hole_surface) if hole_surface is not None else None
         for level_index in range(len(levels) - 1):
+            if scoped_layer_partitioning:
+                # Build planar GEO caps at absolute authored levels. Chained
+                # extrusion can evaluate boundary and interior z differently
+                # by one ULP in a tall airbox. Do not repair mesh coordinates.
+                top_points = scoped_cap_points(levels[level_index + 1])
+                top_lines = [
+                    gmsh.model.geo.addLine(top_points[index], top_points[(index + 1) % 4])
+                    for index in range(4)
+                ]
+                top_loop = gmsh.model.geo.addCurveLoop(top_lines)
+                top_cap = gmsh.model.geo.addPlaneSurface([top_loop])
+                vertical_lines = [
+                    gmsh.model.geo.addLine(outer_points[index], top_points[index])
+                    for index in range(4)
+                ]
+                sides = []
+                for index in range(4):
+                    side_loop = gmsh.model.geo.addCurveLoop([
+                        outer_lines[index], vertical_lines[(index + 1) % 4],
+                        -top_lines[index], -vertical_lines[index],
+                    ])
+                    sides.append(gmsh.model.geo.addPlaneSurface([side_loop]))
+                shell = gmsh.model.geo.addSurfaceLoop([-current_annulus, top_cap, *sides])
+                annulus_volumes.append(gmsh.model.geo.addVolume([shell]))
+                annulus_cap_surfaces.append(top_cap)
+                current_annulus = top_cap
+                outer_points, outer_lines = top_points, top_lines
+                gmsh.model.geo.synchronize()
+                continue
             step = float(levels[level_index + 1] - levels[level_index])
             source_entities = [(2, current_annulus)] + (
                 [(2, current_hole)] if current_hole is not None else []
             )
-            # Scoped Box caps must be sampled independently after owner fields
-            # are applied. A meshed extrusion would copy the bottom cap and
-            # erase refinement that exists only inside the magnetic layer.
-            extrusion_mesh_options = (
-                {} if scoped_layer_partitioning
-                else {"numElements": [1], "heights": [1.0], "recombine": True}
-            )
+            # Retain the existing one-layer meshed extrusion for non-scoped
+            # geometry. Scoped Box caps were constructed independently above.
+            extrusion_mesh_options = {"numElements": [1], "heights": [1.0], "recombine": True}
             extruded = gmsh.model.geo.extrude(
                 source_entities, 0.0, 0.0, step, **extrusion_mesh_options,
             )
