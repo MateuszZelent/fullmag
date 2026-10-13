@@ -523,7 +523,10 @@ triangulację po ruchu; na granicy okresowej stronę i przekątną wybiera się
 wspólnie przez kanoniczną mapę węzłów Gmsh. Nie wolno wyprowadzać par
 okresowych z numeracji węzłów, kolejności powierzchni lub hardkodowanych
 markerów. Końcowy validator wymaga zachowania objętości każdego slabu,
-pełnej incydencji ścian i zgodności capów; dodatkowa kontrola PBC wymaga
+pełnej incydencji ścian i zgodności capów. Dwie komórki przy wspólnej
+ścianie muszą indukować przeciwne orientacje tej ściany; ta dokładna
+kombinatoryczna kontrola odrzuca folded/same-side cavity zamiast polegać
+wyłącznie na liczbie incydencji. Dodatkowa kontrola PBC wymaga
 pełnej bijekcji węzłów i trójkątów oraz komutacji wspólnych narożników.
 
 **Stan przed implementacją tej alternatywy:** artefakt rzeczywistego Gmsh
@@ -562,6 +565,18 @@ nie jest jeszcze aktywnym routingiem. Regresje muszą obejmować odrzucone
 mapy PBC/cavities, permutacje numeracji, wszystkie węzły oraz dokładne
 objętości i capy. Żaden próg rozmiaru lub jakości nie jest osłabiany.
 
+Prywatny adapter MeshData ma otrzymać jawny wybór
+`tetrahedralization_method`: freudenthal (dotychczasowy domyślny kernel)
+lub delaunay (nowy dokładnie walidowany kandydat). Wybór nie jest publicznym
+DSL ani parametrem ProblemIR. Gałąź delaunay przekazuje wszystkie authored
+boundary records, node pairs i exact-z scopes bez rekonstruowania ich
+z geometrii. Błąd wybranej metody jest propagowany; nie ma cichego fallbacku
+ani powtórnego generowania connectivity przez stary kernel. Klasyfikacja
+magnetic/air i tworzenie facetów pozostają wspólne. Test wyboru metody
+może używać stubu kernela wyłącznie do sprawdzenia dispatch/provenance;
+nie jest dowodem jakości ani działania Delaunay. Produkcyjny caller
+musi być następnie jawnie przełączony i osobno zweryfikowany.
+
 (thin-film-layered-periodic-surface-scopes)=
 ## Zakresy powierzchni okresowych z provenance Gmsh
 
@@ -593,6 +608,28 @@ periodic_patch_z_bounds adaptera MeshData. Wymagane regresje obejmują
 odwróconą kolejność list, off-plane węzły, brak tagów, różne endpointy,
 luki/overlap i zachowanie wejściowych rekordów. Replay rzeczywistych
 zapisanych powierzchni jest odrębnym dowodem od synthetic regression.
+
+(thin-film-final-tet4-gmsh-quality)=
+## Jakość końcowej connectivity Tet4
+
+Po zmianie topologii nie wolno przenosić SICN/gamma ani per-domain quality
+ze starego mesha. Prywatny helper ma importować końcowe węzły SI i Tet4
+do osobnego dyskretnego modelu Gmsh w istniejącej sesji oraz wywołać
+kanoniczny extractor jakości dla jawnych, wyrównanych tagów komórek.
+Objętości są wtedy w metrach sześciennych, bez ponownej konwersji skali.
+Wymagane są wszystkie skończone kanały i dodatnie objętości; markery
+material/air pozostają wyrównane do wejściowych komórek, w tym air0.
+Średnia jakości jest wyznaczana z SICN końcowych komórek, a nie globalnej
+opcji Mesh.AvgQuality pozostałej z poprzedniego modelu.
+
+Caller zachowuje własność sesji i blokady Gmsh. Helper nie wykonuje
+initialize/finalize, nie regeneruje elementów i nie certyfikuje topologii.
+Zarówno sukces, jak błąd musi usunąć wyłącznie pomocniczy model i przywrócić
+poprzedni current model, bez zmian jego CAD/mesh/options. Wymagane regresje:
+wyrównanie kanałów i markerów, SI volume, cleanup po błędzie i zachowanie
+poprzedniego modelu. To hostowe przygotowanie dla FEM CPU/GPU; FDM CPU/GPU
+nie dotyczy. Managed runtime i GPU pozostają NOT VERIFIED. Produkcyjne
+quality/realization/PBC reporty nadal wymagają osobnego końcowego routingu.
 
 (thin-film-mesh-validation)=
 ## Validation
@@ -630,7 +667,7 @@ nie kwalifikuje operatora ani managed runtime.
 | Zakresy PBC | `packages/fullmag-py/src/fullmag/meshing/_gmsh_layered_periodic.py` | `periodic_patch_z_bounds_from_gmsh` |19 source tests i saved-provenance replay PASS; production caller/runtime OPEN |
 | Zmienne przekroje | `packages/fullmag-py/src/fullmag/meshing/_layered_box_tetrahedralization.py` | `tetrahedralize_layered_box` | dokładny prototyp zgodnej topologii; brak production routing |
 | Ruch wewnętrzny 4→4 | `packages/fullmag-py/src/fullmag/meshing/_layered_box_tetrahedralization.py` | `_improve_interior_edges` | dokładne cavity/SAT, malejący profil krawędzi; brak production routing |
-| Regresja kernela | `packages/fullmag-py/tests/test_layered_box_tetrahedralization.py` | `LayeredBoxTetrahedralizationTests` | 15 PASS; synthetic source PBC, production quality/runtime OPEN |
+| Regresja kernela | `packages/fullmag-py/tests/test_layered_box_tetrahedralization.py` | `LayeredBoxTetrahedralizationTests` | 16 tests PASS; oriented-incidence guard, synthetic source PBC, production quality/runtime OPEN |
 | Actual cap sampling | `packages/fullmag-py/tests/test_layered_cap_field_sampling.py` | `TestLayeredCapFieldSampling` | porównanie mesh/geometry extrusion i rzeczywiste nodes→kernel; produkcja i quality OPEN |
 
 

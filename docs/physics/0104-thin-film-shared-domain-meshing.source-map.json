@@ -307,6 +307,20 @@
       "symbol": "test_derives_marker_keyed_ranges_from_explicit_surfaces_and_covers_axes",
       "responsibility": "Marker/tag join, off-plane nodes, exact cover, invalid scale/provenance and unchanged records.",
       "evidence_status": "python_passed"
+    },
+    {
+      "id": "oriented-incidence-regression",
+      "path": "packages/fullmag-py/tests/test_layered_box_tetrahedralization.py",
+      "symbol": "test_final_validator_rejects_same_side_tets_sharing_a_face",
+      "responsibility": "Reject overlapping positive tetrahedra whose shared face has equal induced orientation before global coverage checks.",
+      "evidence_status": "python_passed"
+    },
+    {
+      "id": "final-tet4-quality-contract",
+      "path": "docs/physics/0104-thin-film-shared-domain-meshing.md",
+      "symbol": "DOC-ANCHOR:thin-film-final-tet4-gmsh-quality",
+      "responsibility": "Compute aligned final SI tetrahedral Gmsh quality in an isolated temporary model; integration is planned.",
+      "evidence_status": "planned_contract"
     }
   ],
   "public_api": {

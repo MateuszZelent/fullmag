@@ -831,3 +831,22 @@ elementów. Nowy helper nie zmienia source route ani jakości.
 Kolejka odczytana zdrowa i pusta, storage_free_bytes31126548480.
 CI dla cfbb: UI38409200904 SUCCESS, consumers38409199950 SUCCESS,
 regional38409200242 FAILURE. Pełny S00–S12 OPEN; Delaunay source w realizacji.
+
+## 2026-10-13 — przeciwne orientacje wspólnych ścian
+
+Checkpoint bazowy1d43b161b9cffb54dabc755ace3d88bf1d3c4e3f. Root wzmocnił
+_validate_tetrahedralization: dwa dodatnie tetraedry przy wspólnej ścianie
+muszą indukować przeciwne orientacje. Same count1/2 nie wystarczały do
+wykluczenia folded/same-side cavity. Kontrola jest kombinatoryczna, bez
+float tolerance i bez zmian węzłów lub volume guard. Nowa regresja zawiera
+dwa różne dodatnie nakładające się tety i wymaga odmowy przed coverage.
+Kernel16tests oraz adapter45tests:61PASS/17subtests, exit0,11.62s.
+8 nowych testów adaptera dotyczą dispatch/provenance/no-fallback przy stubie;
+nie dowodzą działania nowego Delaunay. Jego pierwszy actual141 replay
+fail-closed na zbyt mocnej precondition obu cones; worker naprawia ją,
+bez osłabiania cavity/SAT/volume checks. Nie przełączono production caller.
+Prywatny final-tet4-quality helper również w implementacji. Cały S00–S12 OPEN.
+
+`packages/fullmag-py/src/fullmag/meshing/_layered_box_tetrahedralization.py` SHA256 `1793966d33d1c41190140d64ba1c6d4d0ddd59f70f02d03966ccb76e7fe8257f`.
+
+`packages/fullmag-py/tests/test_layered_box_tetrahedralization.py` SHA256 `bbda13abccbd65ae9b5bdf5dfcb7144d3429e7a8c9346c68121dd3120592228f`.

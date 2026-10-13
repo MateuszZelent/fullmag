@@ -1173,6 +1173,7 @@ def _validate_tetrahedralization(
     plane_index_by_z = {z: index for index, z in enumerate(plane_values)}
     slab_volumes = [Fraction(0) for _ in range(len(plane_values) - 1)]
     face_slabs: dict[_Face, list[int]] = {}
+    face_orientations: dict[_Face, list[int]] = {}
     for cell in cells:
         used_nodes.update(cell)
         determinant = _orient3d(points, cell)
@@ -1186,6 +1187,17 @@ def _validate_tetrahedralization(
         for omitted in range(4):
             face = tuple(sorted(cell[index] for index in range(4) if index != omitted))
             face_slabs.setdefault(face, []).append(low)
+            ordered_face = tuple(cell[index] for index in range(4) if index != omitted)
+            inversions = sum(
+                ordered_face[left] > ordered_face[right]
+                for left in range(3) for right in range(left + 1, 3)
+            )
+            induced_sign = -1 if (omitted + inversions) % 2 else 1
+            face_orientations.setdefault(face, []).append(induced_sign)
+
+    for signs in face_orientations.values():
+        if len(signs) == 2 and signs[0] == signs[1]:
+            raise ValueError("shared tetrahedral face has equal induced orientations")
 
     if used_nodes != set(range(len(points))):
         raise ValueError("tetrahedralization does not use every input node")

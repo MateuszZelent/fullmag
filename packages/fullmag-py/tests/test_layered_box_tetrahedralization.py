@@ -8,6 +8,7 @@ import unittest
 from unittest.mock import patch
 
 import numpy as np
+import pytest
 
 from fullmag.meshing import _layered_box_tetrahedralization as _kernel
 from fullmag.meshing._layered_box_tetrahedralization import (
@@ -767,3 +768,19 @@ class LayeredBoxTetrahedralizationTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_final_validator_rejects_same_side_tets_sharing_a_face() -> None:
+    from fractions import Fraction
+    # Both positive tetrahedra have an apex above the same oriented base.
+    # Their connectivity differs and face incidence is two, but they overlap.
+    points = [tuple(Fraction(value) for value in row) for row in
+              ((0, 0, 0), (1, 0, 0), (0, 1, 0), (0, 0, 1),
+               (Fraction(1,4), Fraction(1,4), 1))]
+    cells = [(0, 1, 2, 3), (0, 1, 2, 4)]
+    assert all(_kernel._orient3d(points, cell) > 0 for cell in cells)
+    with pytest.raises(ValueError, match="equal induced orientations"):
+        _kernel._validate_tetrahedralization(
+            cells, points, [Fraction(0), Fraction(1)],
+            (Fraction(0), Fraction(1), Fraction(0), Fraction(1)),
+        )
