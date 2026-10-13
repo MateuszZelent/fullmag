@@ -321,3 +321,47 @@ def test_prism_subdivision_rejects_skew_before_mutation():
         assert list(gmsh.model.mesh.getElements(3, 1)[0]) == [6]
     finally:
         gmsh.finalize()
+
+
+@pytest.mark.parametrize("layers", [3, 6])
+def test_scoped_periodic_box_keeps_exact_layers_before_modal_probe(layers):
+    """Owner-tagged sizing must not add z levels to the modal probe mesh."""
+    pytest.importorskip("gmsh")
+    box = Box(size=(40e-9, 40e-9, 10e-9), name="film")
+    field = {"kind": "ComponentVolumeConstant", "params": {
+        "GeometryName": "film", "VIn": 5e-9, "VOut": 1.0,
+    }}
+    opts = MeshOptions(
+        mesh_strategy="thin_film_tetrahedral", through_thickness_elements=layers,
+        periodic_pair_ids=["x_faces", "y_faces"], size_fields=[field],
+    )
+    mesh = generate_swept_tetrahedral_box_airbox_mesh(
+        box, 5e-9, layers, order=1, distribution="fixed", recombine=False,
+        airbox=AirboxOptions(size=(40e-9, 40e-9, 4.01e-6),
+                            maximum_element_size=100e-9, grading_ratio=1.3),
+        options=opts,
+    )
+    assert set(mesh.cell_types.tolist()) == {"tet4"}
+    assert set(mesh.facet_types.tolist()) == {"tri3"}
+    nodes = np.asarray(mesh.nodes)
+    body = np.asarray(mesh.elements)[np.asarray(mesh.element_markers) == 1]
+    xyz = nodes[body]
+    planes = np.unique(np.round(xyz[:, :, 2].reshape(-1), decimals=17))
+    np.testing.assert_allclose(planes, np.linspace(-5e-9, 5e-9, layers + 1),
+                               rtol=0, atol=1e-16)
+    assert np.max(np.ptp(xyz[:, :, 2], axis=1)) <= 10e-9 / layers + 1e-15
+    volumes = np.abs(np.linalg.det(xyz[:, 1:] - xyz[:, :1])) / 6.0
+    assert np.all(volumes > 0)
+    assert volumes.sum() == pytest.approx(40e-9 * 40e-9 * 10e-9, rel=1e-12)
+    assert field["_gmsh_status"] == "applied"
+    for pair_id, axis in (("x_faces", 0), ("y_faces", 1)):
+        required = set(np.flatnonzero(np.isclose(np.abs(nodes[:, axis]), 20e-9,
+                                                rtol=0, atol=1e-16)))
+        pairs = [p for p in mesh.periodic_node_pairs if p["pair_id"] == pair_id]
+        mapped = {int(p[key]) for p in pairs for key in ("node_a", "node_b")}
+        assert required <= mapped
+        for pair in pairs:
+            translation = np.zeros(3)
+            translation[axis] = 40e-9
+            np.testing.assert_allclose(nodes[pair["node_b"]] - nodes[pair["node_a"]],
+                                       translation, rtol=0, atol=1e-16)

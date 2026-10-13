@@ -57,7 +57,11 @@ from ._gmsh_infra import (
     _configure_gmsh_threads,
     _GmshProgressLogger,
 )
-from ._gmsh_extraction import _extract_mesh_data, _extract_quality_metrics
+from ._gmsh_extraction import (
+    _extract_mesh_data,
+    _extract_quality_metrics,
+    certify_extracted_periodic_mesh,
+)
 from ._gmsh_fields import (
     _add_surface_threshold_field,
     _apply_mesh_options,
@@ -176,6 +180,41 @@ def _fresh_scoped_layer_plane_attempt_options(options: MeshOptions) -> MeshOptio
         size_fields=_clone_descriptors(options.size_fields),
         lower_bound_fields=_clone_descriptors(options.lower_bound_fields),
     )
+
+
+def _quality_volumes_in_si(
+    quality: MeshQualityReport | None, coordinate_scale: float
+) -> MeshQualityReport | None:
+    """Convert dimensional volumes when Gmsh coordinates are scaled from SI."""
+    if quality is None:
+        return None
+    volume_factor = coordinate_scale ** -3
+    return _dc_replace(
+        quality,
+        volume_min=quality.volume_min * volume_factor,
+        volume_max=quality.volume_max * volume_factor,
+        volume_mean=quality.volume_mean * volume_factor,
+        volume_std=quality.volume_std * volume_factor,
+        element_volume=(
+            [volume * volume_factor for volume in quality.element_volume]
+            if quality.element_volume is not None else None
+        ),
+    )
+
+
+def _recertify_scaled_periodic_mesh(mesh: MeshData) -> MeshData:
+    """Return immutable SI mesh with newly validated periodic evidence."""
+    candidate = _dc_replace(mesh, periodic_mesh_certificate=None)
+    if not candidate.periodic_boundary_pairs:
+        return candidate
+    certificate = certify_extracted_periodic_mesh(
+        candidate.nodes,
+        candidate.boundary_faces,
+        candidate.boundary_markers,
+        candidate.periodic_boundary_pairs,
+        candidate.periodic_node_pairs,
+    )
+    return _dc_replace(candidate, periodic_mesh_certificate=certificate)
 
 
 THIN_FILM_SCOPED_LAYER_PARTITION_UNSUPPORTED = (
@@ -2111,26 +2150,19 @@ def _generate_coincident_ring_airbox_mesh(
             source_entities = [(2, current_annulus)] + (
                 [(2, current_hole)] if current_hole is not None else []
             )
-            if scoped_layer_partitioning:
-                # Build the exact layer volumes and owner tags before any mesh
-                # exists, so scoped 3D fields can be evaluated without sharing
-                # a premeshed source face across magnetic and air layers.
-                extruded = gmsh.model.geo.extrude(
-                    source_entities,
-                    0.0,
-                    0.0,
-                    step,
-                )
-            else:
-                extruded = gmsh.model.geo.extrude(
-                    source_entities,
-                    0.0,
-                    0.0,
-                    step,
-                    numElements=[1],
-                    heights=[1.0],
-                    recombine=True,
-                )
+            # Keep every requested z interval to one extrusion layer. Meshed
+            # extrusion still copies one source triangulation through the airbox;
+            # delaying source meshing does not realize interior-only 3D sizing.
+            # Exact layer planes and actual regional density are separate gates.
+            extruded = gmsh.model.geo.extrude(
+                source_entities,
+                0.0,
+                0.0,
+                step,
+                numElements=[1],
+                heights=[1.0],
+                recombine=True,
+            )
             gmsh.model.geo.synchronize()
             volumes = [int(tag) for dim, tag in extruded if int(dim) == 3]
             if len(volumes) != (2 if tool is not None else 1):
@@ -2430,10 +2462,15 @@ def _generate_coincident_ring_airbox_mesh(
                 scale=SCALE,
             ),
             periodic_node_pairs=raw_mesh.periodic_node_pairs,
-            periodic_mesh_certificate=raw_mesh.periodic_mesh_certificate,
-            quality=raw_mesh.quality,
-            per_domain_quality=raw_mesh.per_domain_quality,
+            periodic_mesh_certificate=None,
+            quality=_quality_volumes_in_si(raw_mesh.quality, SCALE),
+            per_domain_quality=(
+                {marker: _quality_volumes_in_si(quality, SCALE)
+                 for marker, quality in raw_mesh.per_domain_quality.items()}
+                if raw_mesh.per_domain_quality is not None else None
+            ),
         )
+        result = _recertify_scaled_periodic_mesh(result)
         if scoped_layer_partitioning:
             scoped_descriptors = [
                 config
@@ -2823,10 +2860,15 @@ def generate_swept_box_cylinder_ring_mesh(
                 scale=SCALE,
             ),
             periodic_node_pairs=raw_mesh.periodic_node_pairs,
-            periodic_mesh_certificate=raw_mesh.periodic_mesh_certificate,
-            quality=raw_mesh.quality,
-            per_domain_quality=raw_mesh.per_domain_quality,
+            periodic_mesh_certificate=None,
+            quality=_quality_volumes_in_si(raw_mesh.quality, SCALE),
+            per_domain_quality=(
+                {marker: _quality_volumes_in_si(quality, SCALE)
+                 for marker, quality in raw_mesh.per_domain_quality.items()}
+                if raw_mesh.per_domain_quality is not None else None
+            ),
         )
+        result = _recertify_scaled_periodic_mesh(result)
         result.validate_strict(require_positive_orientation=True)
         emit_progress(
             "Gmsh swept ring realization: "

@@ -111,3 +111,32 @@ Następna zależność planu: integracja sprawdzonej realizacji warstw przy
 zachowaniu owner-scoped zagęszczenia -> aktualny managed runtime -> powtórzenie
 serial/adaptive probe -> kontrola parytetu -> signed DE/BV i zbieżność.
 Docelowy projekt UI oraz pełne S00–S12 pozostają OPEN.
+
+
+## Przyrost naprawy siatki próby parytetu — 13.10.2026
+
+Po rzeczywistym błędzie 3→9 wybrano ograniczoną closure zamiast merge 380
+niepowiązanych plików nowszego brancha. Przeniesione źródła:
+
+- `f1645a398bb2c65761ca18975152c69c4bf5febf`: jawne single-layer GEO extrusion.
+- `a0999b68c541e4fef23105304d0de7b06f4040e1`: quality volumes do SI i testy.
+- `096fa6a311c816b9b134caa4538898d67cad4721`: ponowny certyfikat końcowego SI mesha.
+- `d8bbe5226422cf7eaec26c09e54a72fd7942b8cf`: zachowanie immutable MeshData.
+- `a4d93372c73da71f917ad70eb81dfda5b34e26a7`: korekta nieprawdziwej deklaracji
+  realizacji interior-only regional density przez kopiowaną cap triangulation.
+
+Zachowano exact-count, brak dodatkowych poziomów z, dodatnie komórki i guardy
+periodyczne. Prawidłowe warstwy nie dowodzą realizacji wszystkich pól 3D.
+Nie przeniesiono nowszych cap refinements bez oddzielnej diagnozy: actual-Gmsh
+CI38041254243 dla1827 pozostaje FAILURE (mixed pyramid quality i ring metric);
+CI38045443734 dla27af ujawniło dodatkowe exact-layer failures. Te dowody nie
+stanowią kwalifikacji importowanego stosu.
+
+Regresja `test_scoped_periodic_box_keeps_exact_layers_before_modal_probe`
+wykonuje rzeczywisty Gmsh:40×40×10nm, owner-scoped5nm, ±2um airbox,
+3/6layers, PBCxy; sprawdza płaszczyzny, nieprzecinanie warstw, objętość filmu,
+dodatnie tetraedry i pełne mapowanie obu osi także w powietrzu.
+Dedicated CI job `exact-layer-mesh` wykonuje tę regresję oraz istniejące
+periodic/topology tests i quality-unit tests. AST i nota0104/source-map PASS.
+Nie kompilowano testów lokalnie. Świeże CI i managed runtime pozostają
+NOT VERIFIED do otrzymania rzeczywistych wyników.

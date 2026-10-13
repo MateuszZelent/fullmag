@@ -110,6 +110,22 @@ wynik musi przejść istniejący exact count, wszystkie węzły magnetyczne musz
 leżeć na dokładnie zadanych płaszczyznach, każda warstwa musi być niepusta,
 a żaden tetraedr magnetyczny nie może przecinać wewnętrznej płaszczyzny.
 Dodatkowe poziomy z są błędem, nie dopuszczoną przybliżoną realizacją.
+Każdy zadany przedział GEO ma jawnie jedną warstwę ekstrudowania
+(`numElements=[1]`, znormalizowane `heights=[1.0]`, `recombine=True`).
+Dotyczy to także trasy scoped, lecz meshed extrusion nadal replikuje jedną
+triangulację źródłowego capu airboxu. Samo odłożenie meshingu do czasu owner tags
+nie realizuje lokalnego pola 3D wewnątrz filmu, którego zakres nie obejmuje capu.
+Źródła zachowują definicję regionalną, ale geometria nie zapewnia jej realizacji.
+Actual density gate pozostaje **FAILED**: w badanym regionie nie ma żadnych
+próbek midpoint. Poprawne exact layer planes nie dowodzą lokalnego zagęszczenia.
+Naprawa musi triangulować przekroje w rzeczywistych współrzędnych i owner scopes
+oraz łączyć zgodnie warstwy bez nowych poziomów z. Przeniesienie lub projekcja
+jednej siatki przez powietrze, rozszerzenie ROI i poluzowanie progów nie stanowią
+naprawy. Obecny geometry admission jest szerszy niż potwierdzona realizacja;
+pełna obsługa tej kombinacji pozostaje zadaniem otwartym.
+Pomijanie parametrów warstwy pozwalało Gmsh dodać poziomy z i kończyło się
+odmową exact-count. Poprawka zachowuje bramki liczby płaszczyzn i gęstości;
+jej świeża regresja actualGmsh pozostaje **NOT VERIFIED** do wykonania w CI.
 
 Raport rozróżnia plan od wyniku. Przed meshingiem oraz po błędzie nie wolno
 emitować potwierdzenia `layer_planes_realized`. Dowód powstaje dopiero po
@@ -293,3 +309,24 @@ incydencję dwóch komórek, a każdy facet exterior/periodic jedną. Jednowła�
 ściany komórek muszą dokładnie pokrywać exterior/periodic facets; brak takiej
 równości oznacza szczelinę lub błędną klasyfikację. Status managed runtime i Rust v6: NOT VERIFIED;
 nie wolno utożsamiać lekkiej kontroli Gmsh z wynikiem eigensolve.
+
+### Konwersja objętości raportu ring do SI
+
+Trasy ring używają bezwymiarowego współczynnika skali $S=10^6$ względem
+metrów. Przy publikacji węzłów $x_{\mathrm{SI}}=x_{\mathrm{Gmsh}}/S$
+raportowane objętości wymagają $V_{\mathrm{SI}}=V_{\mathrm{Gmsh}}/S^3$
+z jednostką $\mathrm{m}^3$. Dotyczy to minimum, maksimum, średniej, odchylenia
+standardowego oraz element_volume, globalnie i per-domain. SICN, gamma,
+histogramy, quality_source, tagi i kolejność elementów nie zmieniają się.
+Konwersja dotyczy dwóch tras ring; cylinder obliczający jakość już z węzłów SI
+nie podlega ponownej konwersji. Bramki: raport syntetyczny bez mutacji wejścia,
+zgodność ring z objętościami końcowych węzłów SI oraz kontrola cylinder.
+Zmiana jest korektą jednostek metadanych, nie warstw, fizyki ani progów jakości.
+
+
+Certyfikat periodyczny jest ponownie wyznaczany dla końcowych współrzędnych SI
+przez `_recertify_scaled_periodic_mesh`, wywołujący
+`_gmsh_extraction.py::certify_extracted_periodic_mesh`. `MeshData` jest
+niemutowalny; zastępowanie certyfikatu tworzy nowy obiekt, a nie zmienia wejścia.
+Certyfikat sprzed konwersji skali nie może być publikowany jako dowód dla
+końcowego mesha. Aktualny managed runtime tej integracji: **NOT VERIFIED**.
