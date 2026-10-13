@@ -265,6 +265,20 @@
       "symbol": "test_cached_orientation_keeps_ordered_sign_and_zero",
       "responsibility": "Verify positive, negative and zero determinants remain distinct and repeated evaluations reuse the exact result.",
       "evidence_status": "python_passed"
+    },
+    {
+      "id": "interior-edge-size-pass",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_layered_box_tetrahedralization.py",
+      "symbol": "_improve_interior_edges",
+      "responsibility": "Exact deterministic valence-four edge replacement after cap optimization; preserves cavity/cap/volume and strictly decreases the unique-edge profile. Internal kernel, no production routing.",
+      "evidence_status": "source_regression_passed_runtime_not_verified"
+    },
+    {
+      "id": "interior-edge-size-regression",
+      "path": "packages/fullmag-py/tests/test_layered_box_tetrahedralization.py",
+      "symbol": "test_interior_edge_4to4_preserves_exact_cavity_and_decreases_profile",
+      "responsibility": "Legal exact replacement, preserved boundary/caps/volume and nondecreasing local quality with a shorter global edge profile.",
+      "evidence_status": "python_passed"
     }
   ],
   "public_api": {

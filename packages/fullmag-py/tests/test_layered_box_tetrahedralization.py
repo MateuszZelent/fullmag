@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import Counter
 from fractions import Fraction
 import itertools
 import math
@@ -190,6 +191,120 @@ def _assert_periodic_side_facets(
             test.assertTrue(facets)
             paired_facets.append(facets)
         test.assertEqual(paired_facets[0], paired_facets[1])
+
+
+def _interior_edge_fixture(kind: str = "valid"):
+    scale = Fraction(1, 2**30)
+    rows_by_kind = {
+        "valid": (
+            (-8, -8, 0), (0, 2, 1), (-2, -1, 0),
+            (2, -1, 0), (1, 1, 1), (-1, 1, 1),
+        ),
+        "nonconvex": (
+            (-10, -5, 0), (0, 2, 1), (-2, -1, 0),
+            (2, -1, 0), (1, 1, 1), (-1, 1, 1),
+        ),
+        "same_plane": (
+            (-2, -1, 0), (2, 1, 0), (-2, -2, 1),
+            (2, -2, 1), (2, 2, 1), (-2, 2, 1),
+        ),
+        "multislab": (
+            (-8, -8, 0), (0, 2, 2), (-2, -1, 0),
+            (2, -1, 0), (1, 1, 1), (-1, 1, 1),
+        ),
+        "degenerate": (
+            (-8, -8, 0), (0, 2, 1), (-2, -1, 0),
+            (2, -1, 0), (1, 1, 1), (2, 0, 1),
+        ),
+    }
+    points = [
+        tuple(Fraction(value) * scale for value in row)
+        for row in rows_by_kind[kind]
+    ]
+    planes = tuple(sorted({point[2] for point in points}))
+    cycle = (2, 3, 4, 5)
+    cells = []
+    for i in range(4):
+        raw = (0, 1, cycle[i], cycle[(i + 1) % 4])
+        determinant = _kernel._orient3d(points, raw)
+        if determinant < 0:
+            raw = (raw[1], raw[0], raw[2], raw[3])
+        cells.append(raw)
+    return points, tuple(cells), planes
+
+
+def _interior_edge_candidate(cells, points, planes, edge=(0, 1)):
+    geometry_order = sorted(range(len(points)), key=points.__getitem__)
+    rank = [0] * len(points)
+    for position, node in enumerate(geometry_order):
+        rank[node] = position
+    edge_cells = {}
+    face_cells = {}
+    edge_set = set()
+    for cell_index, cell in enumerate(cells):
+        for first, second in itertools.combinations(cell, 2):
+            key = tuple(sorted((first, second), key=rank.__getitem__))
+            edge_set.add(key)
+            edge_cells.setdefault(key, []).append(cell_index)
+        for omitted in range(4):
+            face = tuple(sorted(cell[index] for index in range(4) if index != omitted))
+            face_cells.setdefault(face, []).append(cell_index)
+    ordered_edge = tuple(sorted(edge, key=rank.__getitem__))
+    return _kernel._interior_edge_flip_candidate(
+        cells,
+        points,
+        planes,
+        ordered_edge,
+        edge_cells,
+        face_cells,
+        edge_set,
+        {tuple(sorted(cell)): index for index, cell in enumerate(cells)},
+        rank,
+    )
+
+
+def _exact_cell_face_map(cells):
+    return Counter(
+        tuple(sorted(face))
+        for cell in cells
+        for face in itertools.combinations(cell, 3)
+    )
+
+
+def _exact_cell_edge_set(cells):
+    return {
+        tuple(sorted(edge))
+        for cell in cells
+        for edge in itertools.combinations(cell, 2)
+    }
+
+
+def _exact_cell_edge_profile(points, cells):
+    return tuple(
+        sorted(
+            (
+                sum((points[a][axis] - points[b][axis]) ** 2 for axis in range(3))
+                for a, b in _exact_cell_edge_set(cells)
+            ),
+            reverse=True,
+        )
+    )
+
+
+def _exact_cap_face_map(points, cells):
+    return Counter(
+        tuple(sorted(face))
+        for cell in cells
+        for face in itertools.combinations(cell, 3)
+        if len({points[index][2] for index in face}) == 1
+    )
+
+
+def _exact_geometry_connectivity(points, cells):
+    return sorted(
+        tuple(sorted(points[index] for index in cell))
+        for cell in cells
+    )
 
 
 class LayeredBoxTetrahedralizationTests(unittest.TestCase):
@@ -433,6 +548,131 @@ class LayeredBoxTetrahedralizationTests(unittest.TestCase):
         for face in internal_faces:
             self.assertEqual(counts[face], 2)
             self.assertEqual(sorted(slabs[face]), [0, 1])
+
+    def test_interior_edge_4to4_preserves_exact_cavity_and_decreases_profile(self) -> None:
+        points, original, planes = _interior_edge_fixture()
+        cells = _kernel._improve_interior_edges(original, points, planes)
+
+        self.assertEqual(len(cells), len(original))
+        self.assertEqual({node for cell in cells for node in cell}, set(range(6)))
+        self.assertTrue(all(_kernel._orient3d(points, cell) > 0 for cell in cells))
+        before_faces = _exact_cell_face_map(original)
+        after_faces = _exact_cell_face_map(cells)
+        self.assertEqual(
+            {face for face, incidence in before_faces.items() if incidence == 1},
+            {face for face, incidence in after_faces.items() if incidence == 1},
+        )
+        self.assertEqual(
+            _exact_cap_face_map(points, original),
+            _exact_cap_face_map(points, cells),
+        )
+        self.assertEqual(
+            sum((_kernel._orient3d(points, cell) for cell in original), Fraction(0)),
+            sum((_kernel._orient3d(points, cell) for cell in cells), Fraction(0)),
+        )
+        self.assertNotIn((0, 1), _exact_cell_edge_set(cells))
+        added_edges = _exact_cell_edge_set(cells) - _exact_cell_edge_set(original)
+        self.assertEqual(len(added_edges), 1)
+        diagonal = next(iter(added_edges))
+        removed_length2 = sum(
+            (points[0][axis] - points[1][axis]) ** 2 for axis in range(3)
+        )
+        new_length2 = sum(
+            (points[diagonal[0]][axis] - points[diagonal[1]][axis]) ** 2
+            for axis in range(3)
+        )
+        self.assertLess(new_length2, removed_length2)
+        self.assertGreaterEqual(
+            min(_kernel._tetrahedron_quality_q2(points, cell) for cell in cells),
+            min(_kernel._tetrahedron_quality_q2(points, cell) for cell in original),
+        )
+        self.assertLess(
+            _exact_cell_edge_profile(points, cells),
+            _exact_cell_edge_profile(points, original),
+        )
+
+    def test_interior_edge_4to4_rejects_unsupported_cavities(self) -> None:
+        cases = (
+            ("nonconvex", "nonconvex cavity"),
+            ("same_plane", "same-plane edge"),
+            ("multislab", "multiple slabs"),
+            ("degenerate", "zero-volume tetrahedron"),
+        )
+        for fixture, label in cases:
+            with self.subTest(fixture=fixture, label=label):
+                points, cells, planes = _interior_edge_fixture(fixture)
+                original_geometry = _exact_geometry_connectivity(points, cells)
+                result = _kernel._improve_interior_edges(cells, points, planes)
+                self.assertEqual(
+                    _exact_geometry_connectivity(points, result),
+                    original_geometry,
+                )
+
+        points, cells, planes = _interior_edge_fixture()
+        # This external tetrahedron makes both candidate diagonals present in
+        # the global edge set; the local edge star itself remains the same four cells.
+        with_existing_diagonals = cells + ((2, 3, 4, 5),)
+        self.assertIsNone(
+            _interior_edge_candidate(
+                with_existing_diagonals, points, planes, edge=(0, 1)
+            )
+        )
+
+    def test_interior_edge_4to4_is_geometry_deterministic(self) -> None:
+        points, cells, planes = _interior_edge_fixture()
+        expected = _exact_geometry_connectivity(
+            points, _kernel._improve_interior_edges(cells, points, planes)
+        )
+
+        permutation = (5, 2, 0, 4, 1, 3)
+        inverse = {old: new for new, old in enumerate(permutation)}
+        permuted_points = tuple(points[index] for index in permutation)
+        permuted_cells = tuple(
+            tuple(inverse[index] for index in cell) for cell in cells
+        )
+        permuted = _kernel._improve_interior_edges(
+            permuted_cells, permuted_points, planes
+        )
+        reversed_cells = _kernel._improve_interior_edges(
+            tuple(reversed(cells)), points, planes
+        )
+        self.assertEqual(
+            _exact_geometry_connectivity(points, reversed_cells), expected
+        )
+        self.assertEqual(
+            _exact_geometry_connectivity(permuted_points, permuted), expected
+        )
+
+        offset = (
+            Fraction(128, 2**30),
+            Fraction(-64, 2**30),
+            Fraction(256, 2**30),
+        )
+        translated_points = tuple(
+            tuple(point[axis] + offset[axis] for axis in range(3))
+            for point in points
+        )
+        translated_planes = tuple(value + offset[2] for value in planes)
+        translated = _kernel._improve_interior_edges(
+            cells, translated_points, translated_planes
+        )
+        translated_back = tuple(
+            tuple(point[axis] - offset[axis] for axis in range(3))
+            for point in translated_points
+        )
+        self.assertEqual(
+            _exact_geometry_connectivity(translated_back, translated), expected
+        )
+
+    def test_interior_pass_keeps_global_box_boundary_and_runs_final_validator(self) -> None:
+        nodes, planes, bounds = _near_collinear_periodic_input()
+        with patch.object(
+            _kernel, "_improve_interior_edges", wraps=_kernel._improve_interior_edges
+        ) as interior_pass:
+            cells = tetrahedralize_layered_box(nodes, planes, bounds)
+        self.assertEqual(interior_pass.call_count, 1)
+        self._assert_mesh_contract(nodes, planes, bounds, cells)
+        _assert_periodic_side_facets(self, nodes, cells, bounds)
 
     def test_cached_orientation_keeps_ordered_sign_and_zero(self) -> None:
         points = [

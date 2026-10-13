@@ -715,6 +715,449 @@ def _improve_cap_edges(
             return improved
 
 
+def _interior_edge_key(edge: Sequence[int], geometry_rank: Sequence[int]) -> _Edge:
+    first, second = sorted(edge, key=geometry_rank.__getitem__)
+    return (first, second)
+
+
+def _interior_edge_length2(points: Sequence[_Point3], edge: _Edge) -> _Exact:
+    first, second = (points[index] for index in edge)
+    return sum(
+        ((first[axis] - second[axis]) ** 2 for axis in range(3)),
+        Fraction(0),
+    )
+
+
+def _interior_edge_set(
+    cells: Sequence[_Cell], geometry_rank: Sequence[int]
+) -> set[_Edge]:
+    return {
+        _interior_edge_key(edge, geometry_rank)
+        for cell in cells
+        for edge in combinations(cell, 2)
+    }
+
+
+def _interior_edge_profile(
+    points: Sequence[_Point3],
+    edges: set[_Edge],
+) -> tuple[_Exact, ...]:
+    return tuple(
+        sorted(
+            (_interior_edge_length2(points, edge) for edge in edges),
+            reverse=True,
+        )
+    )
+
+
+def _interior_vector_sub(first: _Point3, second: _Point3) -> _Point3:
+    return tuple(first[axis] - second[axis] for axis in range(3))  # type: ignore[return-value]
+
+
+def _interior_vector_cross(first: _Point3, second: _Point3) -> _Point3:
+    return (
+        first[1] * second[2] - first[2] * second[1],
+        first[2] * second[0] - first[0] * second[2],
+        first[0] * second[1] - first[1] * second[0],
+    )
+
+
+def _interior_vector_dot(first: _Point3, second: _Point3) -> _Exact:
+    return sum(
+        (first[axis] * second[axis] for axis in range(3)),
+        Fraction(0),
+    )
+
+
+def _tetrahedra_are_separated(
+    points: Sequence[_Point3], first: _Cell, second: _Cell
+) -> bool:
+    """Use exact face-normal and edge-cross-edge SAT axes for two Tet4 cells."""
+    axes: list[_Point3] = []
+    first_edges = [
+        _interior_vector_sub(points[a], points[b])
+        for a, b in combinations(first, 2)
+    ]
+    second_edges = [
+        _interior_vector_sub(points[a], points[b])
+        for a, b in combinations(second, 2)
+    ]
+    for cell in (first, second):
+        for omitted in range(4):
+            face = tuple(cell[index] for index in range(4) if index != omitted)
+            a, b, c = (points[index] for index in face)
+            normal = _interior_vector_cross(
+                _interior_vector_sub(b, a),
+                _interior_vector_sub(c, a),
+            )
+            if normal != (0, 0, 0):
+                axes.append(normal)
+    axes.extend(
+        _interior_vector_cross(first_edge, second_edge)
+        for first_edge in first_edges
+        for second_edge in second_edges
+    )
+    for axis in axes:
+        if axis == (0, 0, 0):
+            continue
+        first_projection = [
+            _interior_vector_dot(axis, points[index]) for index in first
+        ]
+        second_projection = [
+            _interior_vector_dot(axis, points[index]) for index in second
+        ]
+        if (
+            max(first_projection) <= min(second_projection)
+            or max(second_projection) <= min(first_projection)
+        ):
+            return True
+    return False
+
+
+def _interior_cavity_is_closed_convex(
+    cells: Sequence[_Cell],
+    points: Sequence[_Point3],
+) -> bool:
+    face_counts = _cavity_face_counts(cells)
+    if face_counts is None:
+        return False
+    boundary = [face for face, count in face_counts.items() if count == 1]
+    if len(boundary) != 8:
+        return False
+
+    boundary_edge_counts: dict[_Edge, int] = {}
+    for face in boundary:
+        for edge in combinations(face, 2):
+            key = tuple(sorted(edge))
+            boundary_edge_counts[key] = boundary_edge_counts.get(key, 0) + 1
+    if not boundary_edge_counts or any(
+        count != 2 for count in boundary_edge_counts.values()
+    ):
+        return False
+
+    cavity_vertices = {vertex for cell in cells for vertex in cell}
+    for face in boundary:
+        face_set = set(face)
+        owner_apices = [
+            next(iter(set(cell).difference(face_set)))
+            for cell in cells
+            if face_set.issubset(cell)
+        ]
+        if len(owner_apices) != 1:
+            return False
+        inward_sign = _orient3d(
+            points, (face[0], face[1], face[2], owner_apices[0])
+        )
+        if inward_sign == 0:
+            return False
+        for vertex in cavity_vertices.difference(face_set):
+            side = _orient3d(points, (face[0], face[1], face[2], vertex))
+            if side * inward_sign < 0:
+                return False
+    return True
+
+
+def _interior_edge_flip_candidate(
+    cells: Sequence[_Cell],
+    points: Sequence[_Point3],
+    plane_values: Sequence[_Exact],
+    edge: _Edge,
+    edge_cells: dict[_Edge, list[int]],
+    face_cells: dict[_Face, list[int]],
+    edge_set: set[_Edge],
+    cell_indices_by_key: dict[_Cell, int],
+    geometry_rank: Sequence[int],
+) -> tuple[tuple[int, ...], tuple[_Cell, ...]] | None:
+    """Return one exact legal shortening of a single-slab valence-four edge."""
+    edge = _interior_edge_key(edge, geometry_rank)
+    cavity_indices = tuple(edge_cells.get(edge, ()))
+    if len(cavity_indices) != 4:
+        return None
+    old_cavity = tuple(cells[index] for index in cavity_indices)
+    old_keys = [tuple(sorted(cell)) for cell in old_cavity]
+    if len(set(old_keys)) != 4:
+        return None
+    if any(
+        len(set(cell)) != 4 or _orient3d(points, cell) <= 0
+        for cell in old_cavity
+    ):
+        return None
+
+    plane_index_by_z = {z: index for index, z in enumerate(plane_values)}
+    try:
+        edge_plane_indices = {plane_index_by_z[points[vertex][2]] for vertex in edge}
+    except KeyError:
+        return None
+    if len(edge_plane_indices) != 2:
+        return None
+
+    slab_indices: set[int] = set()
+    for cell in old_cavity:
+        try:
+            z_indices = [plane_index_by_z[points[vertex][2]] for vertex in cell]
+        except KeyError:
+            return None
+        low, high = min(z_indices), max(z_indices)
+        if high - low != 1:
+            return None
+        slab_indices.add(low)
+    if len(slab_indices) != 1:
+        return None
+
+    link_edges: list[_Edge] = []
+    link_vertices: set[int] = set()
+    adjacency: dict[int, set[int]] = {}
+    for cell in old_cavity:
+        remaining = [vertex for vertex in cell if vertex not in edge]
+        if len(remaining) != 2:
+            return None
+        first, second = _interior_edge_key(remaining, geometry_rank)
+        link_edges.append((first, second))
+        link_vertices.update((first, second))
+        adjacency.setdefault(first, set()).add(second)
+        adjacency.setdefault(second, set()).add(first)
+    if (
+        len(link_vertices) != 4
+        or len(set(link_edges)) != 4
+        or any(len(adjacency.get(vertex, ())) != 2 for vertex in link_vertices)
+    ):
+        return None
+
+    start = min(link_vertices, key=geometry_rank.__getitem__)
+    first = min(adjacency[start], key=geometry_rank.__getitem__)
+    cycle = [start, first]
+    while len(cycle) < 4:
+        following = adjacency[cycle[-1]].difference(cycle[-2:])
+        if not following:
+            return None
+        cycle.append(min(following, key=geometry_rank.__getitem__))
+    if cycle[0] not in adjacency[cycle[-1]]:
+        return None
+
+    removed_length2 = _interior_edge_length2(points, edge)
+    diagonal_options: list[tuple[_Edge, tuple[_Cell, ...]]] = []
+    for diagonal_endpoints in ((cycle[0], cycle[2]), (cycle[1], cycle[3])):
+        diagonal = _interior_edge_key(diagonal_endpoints, geometry_rank)
+        if diagonal in edge_set:
+            continue
+        if _interior_edge_length2(points, diagonal) >= removed_length2:
+            continue
+
+        other = [
+            vertex for vertex in cycle if vertex not in diagonal_endpoints
+        ]
+        triangles = (
+            (diagonal_endpoints[0], other[0], diagonal_endpoints[1]),
+            (diagonal_endpoints[0], diagonal_endpoints[1], other[1]),
+        )
+        replacement: list[_Cell] = []
+        for triangle in triangles:
+            for endpoint in edge:
+                cell = (endpoint, *triangle)
+                determinant = _orient3d(points, cell)
+                if determinant == 0:
+                    replacement = []
+                    break
+                if determinant < 0:
+                    cell = (cell[1], cell[0], cell[2], cell[3])
+                replacement.append(cell)
+            if not replacement:
+                break
+        if len(replacement) != 4:
+            continue
+
+        replacement_tuple = tuple(replacement)
+        replacement_keys = [tuple(sorted(cell)) for cell in replacement_tuple]
+        if len(set(replacement_keys)) != 4:
+            continue
+        if any(
+            key in cell_indices_by_key
+            and cell_indices_by_key[key] not in cavity_indices
+            for key in replacement_keys
+        ):
+            continue
+        if set(vertex for cell in replacement_tuple for vertex in cell) != (
+            set(edge) | link_vertices
+        ):
+            continue
+        replacement_slab_ok = True
+        for cell in replacement_tuple:
+            try:
+                z_indices = [
+                    plane_index_by_z[points[vertex][2]] for vertex in cell
+                ]
+            except KeyError:
+                replacement_slab_ok = False
+                break
+            if max(z_indices) - min(z_indices) != 1:
+                replacement_slab_ok = False
+                break
+        if not replacement_slab_ok:
+            continue
+        diagonal_options.append((diagonal, replacement_tuple))
+
+    if not diagonal_options:
+        return None
+
+    old_face_counts = _cavity_face_counts(old_cavity)
+    if old_face_counts is None:
+        return None
+    cavity_index_set = set(cavity_indices)
+    for face, local_count in old_face_counts.items():
+        global_incidents = face_cells.get(face, ())
+        local_incidents = sum(index in cavity_index_set for index in global_incidents)
+        if local_incidents != local_count or len(global_incidents) not in (1, 2):
+            return None
+    old_boundary = {
+        face for face, count in old_face_counts.items() if count == 1
+    }
+    if len(old_boundary) != 8:
+        return None
+    if not _interior_cavity_is_closed_convex(old_cavity, points):
+        return None
+    if any(
+        not _tetrahedra_are_separated(points, old_cavity[first], old_cavity[second])
+        for first, second in combinations(range(4), 2)
+    ):
+        return None
+
+    old_cap_faces = {
+        face: count
+        for face, count in old_face_counts.items()
+        if len({points[vertex][2] for vertex in face}) == 1
+    }
+    old_volume6 = sum(
+        (_orient3d(points, cell) for cell in old_cavity),
+        Fraction(0),
+    )
+    old_minimum_q2 = min(
+        _tetrahedron_quality_q2(points, cell) for cell in old_cavity
+    )
+    old_local_edges = _interior_edge_set(old_cavity, geometry_rank)
+    if edge not in old_local_edges:
+        return None
+
+    for diagonal, replacement in diagonal_options:
+        new_face_counts = _cavity_face_counts(replacement)
+        if new_face_counts is None:
+            continue
+        new_boundary = {
+            face for face, count in new_face_counts.items() if count == 1
+        }
+        if new_boundary != old_boundary:
+            continue
+        new_cap_faces = {
+            face: count
+            for face, count in new_face_counts.items()
+            if len({points[vertex][2] for vertex in face}) == 1
+        }
+        if new_cap_faces != old_cap_faces:
+            continue
+        if any(_orient3d(points, cell) <= 0 for cell in replacement):
+            continue
+        if any(
+            not _tetrahedra_are_separated(points, replacement[first], replacement[second])
+            for first, second in combinations(range(4), 2)
+        ):
+            continue
+        new_volume6 = sum(
+            (_orient3d(points, cell) for cell in replacement),
+            Fraction(0),
+        )
+        if new_volume6 != old_volume6:
+            continue
+        new_minimum_q2 = min(
+            _tetrahedron_quality_q2(points, cell) for cell in replacement
+        )
+        if new_minimum_q2 < old_minimum_q2:
+            continue
+
+        new_local_edges = _interior_edge_set(replacement, geometry_rank)
+        if old_local_edges.difference(new_local_edges) != {edge}:
+            continue
+        if new_local_edges.difference(old_local_edges) != {diagonal}:
+            continue
+        next_edge_set = set(edge_set)
+        next_edge_set.discard(edge)
+        next_edge_set.add(diagonal)
+        if _interior_edge_profile(points, next_edge_set) >= _interior_edge_profile(
+            points, edge_set
+        ):
+            continue
+        return cavity_indices, replacement
+    return None
+
+
+def _improve_interior_edges(
+    cells: Sequence[_Cell],
+    points: Sequence[_Point3],
+    plane_values: Sequence[_Exact],
+) -> list[_Cell]:
+    """Apply deterministic exact valence-four size moves until no move remains."""
+    improved = list(cells)
+    geometry_order = sorted(range(len(points)), key=points.__getitem__)
+    geometry_rank = [0] * len(points)
+    for rank, vertex in enumerate(geometry_order):
+        geometry_rank[vertex] = rank
+
+    # Every accepted move removes one global edge and adds an absent, strictly
+    # shorter edge. The finite descending unique-edge profile is a strict
+    # potential, so this deterministic restart loop needs no iteration limit.
+    while True:
+        edge_cells: dict[_Edge, list[int]] = {}
+        face_cells: dict[_Face, list[int]] = {}
+        edge_set: set[_Edge] = set()
+        cell_indices_by_key: dict[_Cell, int] = {}
+        for cell_index, cell in enumerate(improved):
+            cell_key = tuple(sorted(cell))
+            if cell_key in cell_indices_by_key:
+                return improved
+            cell_indices_by_key[cell_key] = cell_index
+            for edge in combinations(cell, 2):
+                edge_key = _interior_edge_key(edge, geometry_rank)
+                edge_set.add(edge_key)
+                edge_cells.setdefault(edge_key, []).append(cell_index)
+            for omitted in range(4):
+                face = tuple(
+                    sorted(cell[index] for index in range(4) if index != omitted)
+                )
+                face_cells.setdefault(face, []).append(cell_index)
+
+        accepted = False
+        ordered_edges = sorted(
+            edge_set,
+            key=lambda edge: tuple(geometry_rank[vertex] for vertex in edge),
+        )
+        for edge in ordered_edges:
+            candidate = _interior_edge_flip_candidate(
+                improved,
+                points,
+                plane_values,
+                edge,
+                edge_cells,
+                face_cells,
+                edge_set,
+                cell_indices_by_key,
+                geometry_rank,
+            )
+            if candidate is None:
+                continue
+            cavity_indices, replacement = candidate
+            cavity_index_set = set(cavity_indices)
+            insertion_index = min(cavity_indices)
+            next_cells: list[_Cell] = []
+            for cell_index, cell in enumerate(improved):
+                if cell_index == insertion_index:
+                    next_cells.extend(replacement)
+                if cell_index not in cavity_index_set:
+                    next_cells.append(cell)
+            improved = next_cells
+            accepted = True
+            break
+        if not accepted:
+            return improved
+
+
 def _validate_tetrahedralization(
     cells: Sequence[_Cell],
     points: Sequence[_Point3],
@@ -878,6 +1321,7 @@ def tetrahedralize_layered_box(
         )
 
     cells = _improve_cap_edges(cells, exact_points, plane_values)
+    cells = _improve_interior_edges(cells, exact_points, plane_values)
     _validate_tetrahedralization(cells, exact_points, plane_values, bounds)
 
     ordered_cells = sorted(cells, key=lambda cell: tuple(sorted(cell)))

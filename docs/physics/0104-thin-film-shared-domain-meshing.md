@@ -403,10 +403,10 @@ proof; FDM CPU/GPU nie dotyczą tej realizacji.
 (thin-film-interior-size-retriangulation)=
 ### Kontrakt objętościowej redukcji długich krawędzi
 
-**Status: projektowany krok wewnętrznego kernela, bez kwalifikacji produkcyjnej.**
-Cap-quality pass nie dowodzi regionalnego rozmiaru komórek. Kolejny krok
-może zastąpić gwiazdę wewnętrznej krawędzi o walencji cztery innymi czterema
-tetraedrami tylko w pojedynczym slabie. Pozostawia wszystkie współrzędne
+**Status: zaimplementowany w wewnętrznym kernelu; brak produkcyjnego routingu i kwalifikacji naukowej.**
+Cap-quality pass nie dowodzi regionalnego rozmiaru komórek. Funkcja
+`_improve_interior_edges` po jego zakończeniu może zastąpić gwiazdę
+wewnętrznej krawędzi o walencji cztery innymi czterema tetraedrami tylko w pojedynczym slabie. Pozostawia wszystkie współrzędne
 oraz ten sam zestaw sześciu wierzchołków cavity. Wymaga dokładnie zamkniętej,
 wypukłej cavity, identycznych trójkątów jej granicy i capów, dodatnich
 orientacji, równej objętości slabu oraz braku nakładania nowych komórek.
@@ -442,6 +442,22 @@ po permutacji węzłów, zachowanie wszystkich dotychczasowych inwariantów
 oraz pomiar globalnego profilu krawędzi i regionalnego rozmiaru actual mesha.
 Sama redukcja pojedynczej krawędzi nie zamyka bramki produkcyjnej.
 
+Interpretowane regresje kernela: 15/15 PASS. Obejmują legalny ruch,
+odmowy, deterministyczność po zmianie numeracji i kolejności komórek oraz
+przesunięciu, granicę i końcowy validator. Zapisany przykład 142 węzłów,
+404 tetraedrów i trzech przekrojów przeszedł 43 ruchy 4→4 oraz pełny
+validator w 6,843 s (sam pass). Globalne p95 długości unikalnych krawędzi
+spadło z 113,578 do 109,991 nm; maksimum pozostało 144,568 nm.
+To metryka zbioru krawędzi, a nie p95 $h_K$ komórek. Zmienione centroidy
+mogą zmieniać przynależność do ROI mimo zachowania geometrii domeny;
+W tej próbie regionalne p95 $h_K$ nawet wzrosło: w prostokątnym ROI
+129,258→130,064 nm, w cylindrycznym ROI 135,705→136,510 nm.
+Globalne minimum Q² pozostało 4,36014e−8; globalne p95 $h_K$ pozostało
+134,536 nm. W cylindrycznym ROI mediana wszystkich sześciu krawędzi
+pozostała 62,017 nm. Wynik nie zalicza regionalnych bramek rozmiaru ani
+czasu produkcyjnego. Objective tego kroku nie jest regionalnym size solverem.
+Dane diagnostyczne nie zastępują świeżego managed runtime i dowodu PBC.
+
 (thin-film-mesh-validation)=
 ## Validation
 
@@ -475,7 +491,8 @@ nie kwalifikuje operatora ani managed runtime.
 | Cache predykatów | `packages/fullmag-py/src/fullmag/meshing/_layered_box_tetrahedralization.py` | `_cached_orient3d` | dokładny signed cache dla niezmiennych nodes; order/sign regression PASS |
 | Adapter cap → MeshData | `packages/fullmag-py/src/fullmag/meshing/_layered_box_mesh_data.py` | `build_layered_box_mesh_data` | prototyp;14 regresji, brak production routing/quality/certificate |
 | Zmienne przekroje | `packages/fullmag-py/src/fullmag/meshing/_layered_box_tetrahedralization.py` | `tetrahedralize_layered_box` | dokładny prototyp zgodnej topologii; brak production routing |
-| Regresja kernela | `packages/fullmag-py/tests/test_layered_box_tetrahedralization.py` | `LayeredBoxTetrahedralizationTests` | 10 PASS, 13 subtests; kompletne source PBC, production quality/runtime OPEN |
+| Ruch wewnętrzny 4→4 | `packages/fullmag-py/src/fullmag/meshing/_layered_box_tetrahedralization.py` | `_improve_interior_edges` | dokładne cavity/SAT, malejący profil krawędzi; brak production routing |
+| Regresja kernela | `packages/fullmag-py/tests/test_layered_box_tetrahedralization.py` | `LayeredBoxTetrahedralizationTests` | 15 PASS; synthetic source PBC, production quality/runtime OPEN |
 | Actual cap sampling | `packages/fullmag-py/tests/test_layered_cap_field_sampling.py` | `TestLayeredCapFieldSampling` | porównanie mesh/geometry extrusion i rzeczywiste nodes→kernel; produkcja i quality OPEN |
 
 

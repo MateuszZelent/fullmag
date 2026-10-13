@@ -475,3 +475,46 @@ XY we wszystkich płaszczyznach (outer caps43 wspólne). Badamy seed z ich
 konformnej pryzmatycznej triangulacji, aby ograniczyć dalekie apices podczas
 stellar insertions. To eksperyment poza repo; żadnej produkcyjnej zmiany
 ani domniemanej kwalifikacji nie dokonano.
+
+
+## 2026-10-13 — zatwierdzony ruch 4→4 i odrzucona hipoteza seed23
+
+Po jawnej zgodzie użytkownika ruch 4→4 jest włączony po cap-quality pass
+i przed niezmienionym końcowym walidatorem kernela. Review objęło cały
+nowy algorytm i regresje: exact closed convex cavity, SAT, dodatnie orientacje,
+identyczne granice/capy i objętość, nowa nieobecna krótsza przekątna,
+niepogorszone minimum lokalnego Q² oraz malejący globalny profil krawędzi.
+Nie zmieniono publicznego DSL/IR, nodes, exact planes ani progów jakości.
+Kernel: 15/15 interpretowanych testów PASS; zmiana numeracji i kolejności
+komórek oraz przesunięcie zachowują geometryczny wynik. Dokumentacja/mapa
+źródeł PASS, 38 testów kontraktu dokumentacji PASS.
+
+Actual baseline142/404: 43 ruchy, pełny exact validator PASS.
+Global unique-edge p95 113,578→109,991 nm; max144,568 nm bez zmiany.
+Nie jest to p95 hK per komórka ani zaliczenie regionalnej bramki.
+Kontrprzykład: box-ROI hK p95 129,258→130,064 nm, cylinder-ROI
+135,705→136,510 nm; zmiana centroidów zmniejszyła counts40→39 i32→31.
+Global minQ²4,36014e−8 i global hKp95134,536 nm bez zmiany.
+Cylinder all-six-edge median62,017 nm bez zmiany. Poprawa globalnego
+zbioru krawędzi nie gwarantuje regionalnych statystyk; nie włączamy tego
+prototypu do produkcji jako rzekomej naprawy gęstości.
+Wymagane pozostają produkcyjne routing/size/PBC/quality i fresh runtime.
+
+Niezależny eksperyment seed23 nie został wdrożony: choć exact validator
+przeszedł dla356 tetraedrów i wszystkich142 nodes, cylinder ROI mediana
+wszystkich sześciu krawędzi pogorszyła się62,017→64,032 nm,
+hK p95 135,704→144,568 nm, global minQ² 4,36e−8→6,30e−28.
+Ścisły PBC helper odrzuca zapisany baseline i kandydata; brak Gmsh pairs
+w NPZ nie daje podstaw do certyfikacji. Nie osłabiamy tego sprawdzenia.
+Dowody poza repo: common23-staircase-cap-seed-report.md/.json i connectivity
+w visualization layered-cap-sliver-diagnostic-20261013.
+
+Pełny cel S00–S12 nadal OPEN. Ten etap jest poprawką wewnętrznego kernela,
+a nie końcową kwalifikacją solvera, całej siatki ani UI.
+
+Weryfikacja konsumentów po zmianie: adapter MeshData14/14 PASS (3,52 s),
+actual Gmsh cap sampling2/2 PASS (16,715 s), exit0; bez kompilacji testów.
+Dowód actual4→4: interior-4to4-actual-fixture-report.json SHA256
+cf036e26a3cec341b8727afb54d72fd7978d18d38c441ec23d07cb731c652f7b;
+connectivity SHA256 f91838d27d3e713ab8775ed7c16ba6d3daea9d949ac6c78a2d53a52e0ca35ccc.
+Root review i final source/test SHA zgodne z dowodami; brak zmian public API.

@@ -3,14 +3,16 @@
 
 **Pełny cel S00–S12 pozostaje OPEN.** Bieżące prace wykonuje worktree
 `dispersion-mode-ui-20261008`, branch `codex/dispersion-mode-ui-20261008`.
-Checkpoint kodu bieżącej naprawy: `7a90a7d11f814bdc46869404712bace8c5f3c9fc`, na remote.
+Poprzedni checkpoint kernela: `7a90a7d11f814bdc46869404712bace8c5f3c9fc`, na remote.
+Bieżący przyrost dodaje zatwierdzony przez użytkownika dokładny ruch 4→4;
+nie zamyka regionalnej bramki siatki ani kwalifikacji produkcyjnej.
 Oryginalny worktree dyspersji zawiera odrębną niezakończoną pracę;
 jego dirty/staged plików nie zmieniono w tym przyroście.
 
 | Zakres | Potwierdzone obecnymi dowodami | Warunek zamknięcia / następny krok |
 |---|---|---|
-| Capture/storage | Poprawka prywatnego stagingu zachowuje ścisłą walidację rzeczywistych hardlinków CAS; lokalnie12 interpretowanych regresji PASS. CI38378068321 capture-contract:262PASS/181subtests | Nowe capture nadal blokuje utrata ReadOnly w istniejących obiektach CAS. Użytkownik zatwierdził repair7721 obiektów. Przywracanie ReadOnly trwa, z ponowną kontrolą hash/size/identity/link_count pod blokadą CAS. Pełny wynik wymaga terminalnego receiptu; nie dodano implicit repair do capture |
-| Regionalna siatka | Aktualne CI38381498619 nadal FAIL: pusty ROI. Geometry-only sampling daje zmienne przekroje43/56/43 i ROI3/11/3; kernel404tet/142nodes po cap flips ma minimum det/max_edge³2.09e-4. Adapter MeshData14PASS, kernel10PASS/13subtests + cache1PASS;2 actual probes PASS | Pozostała jakość i rozmiary komórek, potem production routing owner fields/lower-upper/quality/markers/PBC/exact-z; prototyp i test topologii nie zamykają bramki |
+| Capture/storage | Poprawka prywatnego stagingu zachowuje ścisłą walidację rzeczywistych hardlinków CAS; lokalnie12 interpretowanych regresji PASS. CI38378068321 capture-contract:262PASS/181subtests | Nowe capture nadal blokuje utrata ReadOnly w istniejących obiektach CAS. Użytkownik zatwierdził repair7721 obiektów. Przywracanie zatrzymane przy2660/7721 (34,45%) po FileNotFoundError pliku statusu koordynatora. Receipty zachowane; brak pełnego sukcesu. Kolejne wznowienie wymaga zdrowego runnera, sprawdzenia przyczyny i fizycznej kontroli prefixu; nie dodano implicit repair do capture |
+| Regionalna siatka | Aktualne CI38381498619 nadal FAIL: pusty ROI. Geometry-only sampling daje zmienne przekroje43/56/43 i ROI3/11/3; kernel404tet/142nodes po cap flips ma minimum det/max_edge³2.09e-4. Zatwierdzony interior4→4: kernel15PASS,43 legalne ruchy na baseline142/404, exact validator PASS. Global unique-edge p95 maleje113,578→109,991nm, max144,568nm bez zmiany; regionalna bramka nadal OPEN. Wcześniej adapter14PASS i2 actual probes PASS | Pozostała jakość i rozmiary komórek, potem production routing owner fields/lower-upper/quality/markers/PBC/exact-z; prototyp i test topologii nie zamykają bramki |
 | Runtime i serial/adaptive | Istnieją historyczne managed wyniki oraz siedem wybranych punktów; selected-only nie jest pełnym oknem spektralnym | Świeży build dokładnych źródeł i przebieg, pełne diagnostics/residuale, signed sweep oraz pomierzony parytet serial/adaptive |
 | Spektrum i nauka | Źródłowe kontrakty i analityczne oracles; wcześniejsze wyniki nie zamykają kwalifikacji | Pełne okno/mod count, DE/BV, zbieżność siatki i airboxu, porównanie identycznego COMSOL A1 oraz wymagane GPU |
 | S09 / 2.5D | Wcześniejsze źródła frame/UV/world, bindings i regresje zachowane | Provider/operator, world equivalence, invariance/equilibrium, typed routing i owner MFEM, z wykonanym runtime proof |
