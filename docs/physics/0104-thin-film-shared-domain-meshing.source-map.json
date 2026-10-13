@@ -342,6 +342,34 @@
       "symbol": "quality_for_tet4_arrays",
       "responsibility": "Compute aligned SI quality on final connectivity and restore caller model; no production call site.",
       "evidence_status": "source_visible"
+    },
+    {
+      "id": "gmsh-cap-shared-box-source",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_layered_box.py",
+      "symbol": "build_layered_box_from_gmsh_caps",
+      "responsibility": "Join cap tags without snapping, preserve SI and authored maps, reject half-retained pairs, evaluate final quality.",
+      "evidence_status": "source_visible"
+    },
+    {
+      "id": "scoped-box-production-route",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py",
+      "symbol": "_generate_coincident_ring_airbox_mesh",
+      "responsibility": "Scoped Box geometry-only caps route through final Delaunay MeshData, SI quality, realization and fresh PBC certificate; ring route separate.",
+      "evidence_status": "source_visible"
+    },
+    {
+      "id": "scoped-box-production-periodic-regression",
+      "path": "packages/fullmag-py/tests/test_layered_box_production_route.py",
+      "symbol": "test_scoped_box_production_route_recertifies_final_periodic_si_mesh",
+      "responsibility": "Actual Gmsh x/y PBC, exact magnetic layers, final SI volumes/quality and full-domain realization report.",
+      "evidence_status": "python_passed"
+    },
+    {
+      "id": "scoped-box-unexecuted-options-regression",
+      "path": "packages/fullmag-py/tests/test_layered_box_production_route.py",
+      "symbol": "test_scoped_box_rejects_unexecuted_options_before_gmsh",
+      "responsibility": "Reject explicit unexecuted algorithm, optimizer and boundary-layer intent before Gmsh.",
+      "evidence_status": "python_passed"
     }
   ],
   "public_api": {

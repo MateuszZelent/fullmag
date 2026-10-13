@@ -660,6 +660,67 @@ oraz sprawdza tagi, kanały i objętości SI; nie zastępuje bramki topologii.
 Managed runtime, GPU, dyspersja na nowej siatce i kwalifikacja pozostają
 NOT VERIFIED.
 
+(thin-film-gmsh-cap-to-shared-box)=
+## Podłączenie niezależnych przekrojów Gmsh do wspólnego Box
+
+Dla wspieranej geometrii Box z regionalnymi polami komponentu GEO tworzy
+wyłącznie geometrię kolejnych slabów; `generate(2)` próbkuje ich przekroje
+po zastosowaniu owner-scoped upper/lower fields. Nie kopiuje triangulacji
+pierwszego przekroju przez meshed extrusion. Pełne źródła/tagi powierzchni
+okresowych pozostają w Gmsh podczas pobierania kanonicznych map.
+
+Prywatny adapter przekrojów otrzymuje jawne uporządkowane tagi capów,
+żądane płaszczyzny SI, indeksy dwóch granic materiału, bounds XY SI,
+skalę Gmsh, opcje oraz pełne authored periodic specs. Pobiera węzły capów
+z includeBoundary=True i łączy je wyłącznie przez tożsamość tagów.
+Powtórzony tag musi mieć identyczne współrzędne. Każdy cap musi mieć jedną
+rzeczywistą, dokładną wartość z, zgodną z żądaną płaszczyzną w obecnej
+jawnej tolerancji warstwy; współrzędnych nie przesuwa ani nie zaokrągla.
+Exact kernel używa tych rzeczywistych binarnych płaszczyzn, a osobny
+production proof sprawdza ich zgodność z żądanymi płaszczyznami SI.
+
+Węzły poza capami nie są węzłami końcowej siatki objętościowej. Para
+okresowa nie może jednak stracić tylko jednego końca: albo oba należą do
+puli capów, albo oba pozostają wyłącznie w źródle powierzchniowym.
+Końcowy validator wymaga pełnej bijekcji wszystkich węzłów i trójkątów
+każdej końcowej strony oraz zgodności narożników. Nie wolno certyfikować
+starej powierzchni zamiast końcowej topologii Tet4.
+
+Materiał zajmuje całe slaby między jawnie wskazanymi capami; pozostałe
+mają kanoniczny marker air0. Końcową jakość oblicza się na nowych Tet4;
+nie podlega ponownej konwersji SI. Realization i periodic certificate
+muszą zostać wyliczone z końcowego MeshData. Brak jakości/density proof
+nie staje się sukcesem przez obecność pól lub dokładnych warstw.
+Raport realizacji v1 liczy wszystkie z-intervals końcowego shared-domain
+mesha, zgodnie z jego walidatorem; liczba warstw magnetycznego filmu jest
+osobno zachowana w layer-plane proof i raporcie operacji thin_film.
+Prywatny per-slab Delaunay nie wykonuje algorytmu Gmsh HXT/Frontal ani
+optymalizacji finalnych Tet4. Żądanie algorithm_3d inne niż domyślna
+rodzina Delaunay (1), optimize lub boundary layers jest odrzucane przed
+wejściem do Gmsh. Nie publikuje się fikcyjnego wykonania tych opcji.
+Ta trasa nie zastępuje jeszcze konstrukcji Box-minus-Cylinder: geometria
+otworu wymaga osobnego zgodnego podziału materiału i powietrza.
+FEM CPU/GPU używają wspólnego hostowego mesha; runtime obu realizacji
+pozostaje osobną bramką. FDM CPU/GPU nie dotyczy.
+
+## Stan produkcyjnego wywołania Box — 2026-10-13
+
+Wspierana scoped Box route używa teraz geometry-only extrusion i niezależnych
+capów Gmsh, a następnie exact-validated Delaunay i końcowego MeshData.
+Wylicza jakość z nowej connectivity w SI, raport pełnych warstw domeny
+oraz świeży certyfikat PBC. Ring/antidot zachowuje osobną trasę; nie ma
+cichego fallbacku w razie błędu wybranej metody.
+
+Niezmieniony `RegionMeshPolicyTests.test_direct_layered_box_region_floor_beats_eligible_upper_actual_density`
+przeszedł oba subtesty: thin-film i kontrolny free-tetrahedral. Wcześniejsza
+CI38417747932 dla ebeb8fc09 nadal potwierdzała empty-ROI FAIL, więc nowy
+lokalny wynik dotyczy zmienionych źródeł i wymaga nowego CI.
+Nowy actual okresowy test Box z końcową jakością/realization/PBC PASS;
+trzy regresje nieobsługiwanych opcji przeszły RED→GREEN. Nie zmieniono
+klasyfikacji ROI, progów 4–12nm/bulk ani liczby wymaganych warstw.
+To hostowe dowody meshingu, bez wykonania nowego managed solvera FEM,
+bez zbieżności naukowej i bez identycznego COMSOL A1.
+
 (thin-film-mesh-validation)=
 ## Validation
 

@@ -6,11 +6,17 @@ on:
     paths:
       - 'packages/fullmag-py/src/fullmag/meshing/**'
       - 'packages/fullmag-py/tests/test_meshing.py'
+      - 'packages/fullmag-py/tests/test_layered*.py'
+      - 'packages/fullmag-py/tests/test_gmsh_layered*.py'
+      - 'packages/fullmag-py/tests/test_gmsh_tet4_quality.py'
       - '.github/workflows/scoped-mesh-fields.yml'
   pull_request:
     paths:
       - 'packages/fullmag-py/src/fullmag/meshing/**'
       - 'packages/fullmag-py/tests/test_meshing.py'
+      - 'packages/fullmag-py/tests/test_layered*.py'
+      - 'packages/fullmag-py/tests/test_gmsh_layered*.py'
+      - 'packages/fullmag-py/tests/test_gmsh_tet4_quality.py'
       - '.github/workflows/scoped-mesh-fields.yml'
   workflow_dispatch:
 
@@ -31,7 +37,17 @@ jobs:
           sudo apt-get update
           sudo apt-get install --yes --no-install-recommends libglu1-mesa
       - name: Install meshing dependencies
-        run: python -m pip install -e 'packages/fullmag-py[meshing,figures]'
+        run: python -m pip install -e 'packages/fullmag-py[meshing,figures]' 'pytest>=9,<10'
+      - name: Validate exact layered topology and final quality contracts
+        run: >-
+          python -B -m pytest -q -p no:cacheprovider
+          packages/fullmag-py/tests/test_layered_box_tetrahedralization.py
+          packages/fullmag-py/tests/test_layered_box_mesh_data.py
+          packages/fullmag-py/tests/test_layered_box_delaunay.py
+          packages/fullmag-py/tests/test_gmsh_layered_periodic.py
+          packages/fullmag-py/tests/test_gmsh_tet4_quality.py
+          packages/fullmag-py/tests/test_gmsh_layered_box.py
+          packages/fullmag-py/tests/test_layered_box_production_route.py
       - name: Validate actual density, exact layers and reporting
         env:
           FULLMAG_MESH_FAILURE_ARTIFACT_ROOT: ${{ runner.temp }}/fullmag-mesh-failure-artifacts

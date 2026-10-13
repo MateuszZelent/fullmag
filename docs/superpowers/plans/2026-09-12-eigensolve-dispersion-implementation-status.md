@@ -3,7 +3,7 @@
 
 **Pełny cel S00–S12 pozostaje OPEN.** Bieżące prace wykonuje worktree
 `dispersion-mode-ui-20261008`, branch `codex/dispersion-mode-ui-20261008`.
-Ostatni opublikowany checkpoint przed tym przyrostem: `0bb02a014844a16cc9636dafce1507ccaa50b92c`.
+Ostatni opublikowany checkpoint przed tym przyrostem: `ebeb8fc09707d2e377887e489fc8ce2667bfbb9d`.
 Ruch 4→4 zapisano w75c778f4; czytnik runnera w5f76503e, fixture retention w961aa64e.
 Naprawa wyścigu zwolnienia publication lock CAS przechodzi347 regresji źródłowych
 (2 skips). Koordynator podmieniono zarządzaną receptą na obraz d376e87b…;
@@ -18,18 +18,23 @@ validator oraz parity x/y po7 flipach wewnętrznych i6 granicznych; naroża12/12
 Adapter ma45PASS; prywatny Delaunay7PASS i końcowa jakość15PASS.
 Nowy source replay141/496 zachowuje4 rekordy markerów oraz36 map węzłów,
 przechodzi exact/PBC i odrębny pomiar końcowej jakości Gmsh.
-Łącznie z kernelem83PASS/17subtests. Produkcyjny routing nadal OPEN.
+Łącznie z kernelem83PASS/17subtests dla wcześniejszego adaptera. Routing ring/antidot A1 i kwalifikacja runtime nadal OPEN.
 Gmsh quality dla496: ROI median edge11,3646nm, SICNmin0,38704;
 global gamma min0,010499 nadal wymaga naprawy/jawnej bramki jakości.
-Bieżący przyrost przenosi dokładne uzgadnianie Delaunay i zakresy markerów
-PBC do prywatnych źródeł; produkcyjna aktywacja i regionalna bramka OPEN.
+Scoped Box jest teraz podłączony do geometry-only cap sampling oraz końcowego
+Delaunay MeshData, quality SI, realization i świeżego certyfikatu PBC.
+Niezmieniony regionalny gate PASS (thin-film i free-tet). Pełny test_meshing:
+309 tests OK, skipped1. Nowy helper16PASS i production periodic/guards4PASS.
+Actual scoped case539nodes/2502tet: region median10,2049nm, bulk12,3170nm,
+gamma min0,040477. Regionalna bramka źródłowa przechodzi, jakość/zbieżność
+oraz nowy CI/runtime pozostają otwarte. Ring/antidot A1 nie został przełączony.
 Oryginalny worktree dyspersji zawiera odrębną niezakończoną pracę;
 jego dirty/staged plików nie zmieniono w tym przyroście.
 
 | Zakres | Potwierdzone obecnymi dowodami | Warunek zamknięcia / następny krok |
 |---|---|---|
 | Capture/storage | Poprawka prywatnego stagingu zachowuje ścisłą walidację rzeczywistych hardlinków CAS; lokalnie12 interpretowanych regresji PASS. CI38378068321 capture-contract:262PASS/181subtests | Historyczne capture blokowała utrata ReadOnly w istniejących obiektach CAS. Użytkownik zatwierdził repair7721 obiektów. Po naprawie czytnika i publication lock oraz rollout koordynatora przywracanie wznowiono po fizycznej kontroli2660 obiektów. Proces39823 zakończył się exit0, succeeded7721/7721. Terminalny summary i closing-verification.json potwierdzają kompletne trzy receipty oraz bieżące identity/size/link_count/ReadOnly wszystkich obiektów. Blokada ReadOnly usunięta; nowe capture/build nie zostało jeszcze wykonane. Nie dodano implicit repair do capture |
-| Regionalna siatka | Aktualne CI38404566060 dla74ed88322 nadal FAIL: pusty ROI (309tests,1FAIL/1SKIP). Geometry-only sampling daje zmienne przekroje43/56/43 i ROI3/11/3; kernel404tet/142nodes po cap flips ma minimum det/max_edge³2.09e-4. Zatwierdzony interior4→4: kernel15PASS,43 legalne ruchy na baseline142/404, exact validator PASS. Global unique-edge p95 maleje113,578→109,991nm, max144,568nm bez zmiany; regionalna bramka nadal OPEN. Wcześniej adapter14PASS i2 actual probes PASS | Pozostała jakość i rozmiary komórek, potem production routing owner fields/lower-upper/quality/markers/PBC/exact-z; prototyp i test topologii nie zamykają bramki |
+| Regionalna siatka | Scoped Box production route: niezależne capy → Delaunay → final MeshData/quality/realization/PBC. Niezmieniony regionalny gate oba subtesty PASS; test_meshing309 OK/skipped1; helper16PASS i production4PASS. Case539nodes/2502tet, ROI median10,2049nm, bulk12,3170nm | Nowy CI dla tego commita; global quality/zbieżność (gamma min0,040477), ring/antidot A1 oraz świeży managed runtime pozostają OPEN. Nie zmieniono progów ani ROI |
 | Runtime i serial/adaptive | Istnieją historyczne managed wyniki oraz siedem wybranych punktów; selected-only nie jest pełnym oknem spektralnym | Świeży build dokładnych źródeł i przebieg, pełne diagnostics/residuale, signed sweep oraz pomierzony parytet serial/adaptive |
 | Spektrum i nauka | Źródłowe kontrakty i analityczne oracles; wcześniejsze wyniki nie zamykają kwalifikacji | Pełne okno/mod count, DE/BV, zbieżność siatki i airboxu, porównanie identycznego COMSOL A1 oraz wymagane GPU |
 | S09 / 2.5D | Wcześniejsze źródła frame/UV/world, bindings i regresje zachowane | Provider/operator, world equivalence, invariance/equilibrium, typed routing i owner MFEM, z wykonanym runtime proof |

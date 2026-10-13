@@ -887,3 +887,50 @@ Kontrola dokumentacji: focused source-map PASS i 38 regresji validatora PASS.
 Przed commitem usunięto wyłącznie pustą linię na końcu helpera jakości;
 finalny SHA256 helpera: `6280d9118d5d7466444e82c1f18c094fd0611ac440d2fd5bae99e8fd5883b91e`. Dowody replay przypinają wersję
 przed tą zmianą whitespace, bez zmiany działania.
+
+## 2026-10-13 — produkcyjne cap sampling i zamknięcie empty-ROI regression
+
+Bazowy opublikowany ebeb8fc09707d2e377887e489fc8ce2667bfbb9d.
+Scoped Box GEO teraz tworzy niezależną geometrię slabów i generate2 po
+owner upper/lower fields; jawne cap tags przekazuje do nowego helpera.
+Helper scala exact tag identity, zachowuje rzeczywiste binarne z po
+jednym podziale SI, nie snapuje, odrzuca utratę jednego końca mapy PBC.
+Buduje Delaunay MeshData i nową jakość Tet4. Caller dodaje global-domain
+realization_report oraz świeży SI periodic certificate.v6.
+
+Review wskazało pomijane explicit algorithm_3d/optimizer/boundary-layer
+opcje i brak realization. Naprawiono przed commitem: nieobsługiwane
+żądania odrzucane przed Gmsh (3 RED→GREEN tests), raport liczy pełną
+planowaną domenę, a layer-plane proof zachowuje osobno body layers.
+Nie wykonano migracji publicznego schematu. Ring/antidot pozostaje osobny.
+
+Nowy helper16PASS; production x/y PBC+quality+SI/realization i guards4PASS.
+Niezmieniony actual ROI test (thin-film oraz free-tet) PASS exit0.
+Pełny interpretowany test_meshing:309tests OK/skipped1,174,072s,exit0.
+Zachowany artefakt production-scoped-box-density-20261013.json w
+layered-cap-sliver-diagnostic-20261013: scoped539nodes/2502tet,
+ROI median10,2048829nm, bulk12,3169618nm; gamma min0,04047697,
+SICNmin0,04582534. Region ma300 obserwacji krawędzi zamiast pustej listy.
+Raport requested/resolved8 shared-domain intervali; body film ma2.
+Free-tet kontrola766nodes/4159tet również przechodzi. Progów nie zmieniono.
+
+CI poprzedniego ebeb:38417748190 UI SUCCESS,38417748021 consumers SUCCESS,
+38417747932 regional FAIL dokładnie empty-ROI. Nowy CI wymaga push.
+Workflow scoped-mesh-fields rozszerzono o prywatne helpery i actualPBC
+regresję. Parser YAML, AST/whitespace i focused scientific source-map PASS.
+Runner health ok/worker_alive, queue idle,29584719872B wolnego;
+profil runtime-v2 dopuszczony. Brak nowego buildu w chwili tego checkpointu.
+
+Regionalny błąd źródłowy naprawiony, ale gamma/zbieżność nie zamknięte.
+Całe S00–S12, managed runtime, signed sweep/parity, nauka/COMSOL A1,
+S09/GPU, prawdziwe GUI oraz review/master/cleanup pozostają OPEN.
+Następnie świeży runtime-v2 z dokładnego commita i walidacja managed mesh
+oraz solvera; nie podmieniamy źródeł starej kapsuły.
+
+`packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py` SHA256 `630aa62a4cc804a2b44446baf8cc32e04583fa7eccb4bae0d33d7620d2670762`.
+
+`packages/fullmag-py/src/fullmag/meshing/_gmsh_layered_box.py` SHA256 `7b2d75ccf1d0fc6d53d144edd990bc9c19f965849bf2e1b519cbcd81bf28fd77`.
+
+`packages/fullmag-py/tests/test_gmsh_layered_box.py` SHA256 `e2dcf5e09ae644e6db01cc543506d2dd30e6e550789e73335c93ee016c7290e8`.
+
+`packages/fullmag-py/tests/test_layered_box_production_route.py` SHA256 `a8559ec3a68ff947d8afb9332c736ae9420c5c85b7f44e8c055228b7d3c2805f`.

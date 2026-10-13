@@ -2050,6 +2050,29 @@ def _generate_coincident_ring_airbox_mesh(
     if any(levels[index + 1] <= levels[index] for index in range(len(levels) - 1)):
         raise ValueError("coincident ring airbox must have positive z clearance")
 
+    scoped_layer_partitioning = (
+        isinstance(geometry, Box) and _has_component_scoped_size_fields(options)
+    )
+    if scoped_layer_partitioning:
+        if not _supports_scoped_layer_partitioned_box(geometry, airbox=airbox):
+            raise ValueError(
+                f"{THIN_FILM_SCOPED_LAYER_PARTITION_UNSUPPORTED}: "
+                f"{THIN_FILM_SCOPED_LAYER_PARTITION_UNSUPPORTED_REASON}"
+            )
+        unsupported = []
+        # The exact per-slab Delaunay route does not execute Gmsh 3D algorithms
+        # or optimization on the final Tet4 mesh. Reject incompatible intent.
+        if options.algorithm_3d != 1:
+            unsupported.append("algorithm_3d")
+        if options.optimize is not None:
+            unsupported.append("optimizer")
+        if options.boundary_layer_count is not None:
+            unsupported.append("boundary layers")
+        if unsupported:
+            raise ValueError(
+                "scoped layered Box Delaunay route does not support: " + ", ".join(unsupported)
+            )
+
     gmsh = _import_gmsh()
     gmsh_version = str(getattr(gmsh, "__version__", "unknown"))
     if gmsh_version != _MIXED_SHARED_GMSH_VERSION:
@@ -2098,19 +2121,6 @@ def _generate_coincident_ring_airbox_mesh(
             hole_surface = gmsh.model.geo.addPlaneSurface([circle_loop])
         gmsh.model.geo.synchronize()
 
-        scoped_layer_partitioning = (
-            isinstance(geometry, Box)
-            and _has_component_scoped_size_fields(options)
-        )
-        if scoped_layer_partitioning and not _supports_scoped_layer_partitioned_box(
-            geometry,
-            airbox=airbox,
-        ):
-            raise ValueError(
-                f"{THIN_FILM_SCOPED_LAYER_PARTITION_UNSUPPORTED}: "
-                f"{THIN_FILM_SCOPED_LAYER_PARTITION_UNSUPPORTED_REASON}"
-            )
-
         source_fields: list[int] = []
         if not scoped_layer_partitioning:
             if options.size_fields:
@@ -2144,24 +2154,22 @@ def _generate_coincident_ring_airbox_mesh(
         annulus_volumes: list[int] = []
         hole_volumes: list[int] = []
         current_annulus = int(annulus_surface)
+        annulus_cap_surfaces = [current_annulus]
         current_hole = int(hole_surface) if hole_surface is not None else None
         for level_index in range(len(levels) - 1):
             step = float(levels[level_index + 1] - levels[level_index])
             source_entities = [(2, current_annulus)] + (
                 [(2, current_hole)] if current_hole is not None else []
             )
-            # Keep every requested z interval to one extrusion layer. Meshed
-            # extrusion still copies one source triangulation through the airbox;
-            # delaying source meshing does not realize interior-only 3D sizing.
-            # Exact layer planes and actual regional density are separate gates.
+            # Scoped Box caps must be sampled independently after owner fields
+            # are applied. A meshed extrusion would copy the bottom cap and
+            # erase refinement that exists only inside the magnetic layer.
+            extrusion_mesh_options = (
+                {} if scoped_layer_partitioning
+                else {"numElements": [1], "heights": [1.0], "recombine": True}
+            )
             extruded = gmsh.model.geo.extrude(
-                source_entities,
-                0.0,
-                0.0,
-                step,
-                numElements=[1],
-                heights=[1.0],
-                recombine=True,
+                source_entities, 0.0, 0.0, step, **extrusion_mesh_options,
             )
             gmsh.model.geo.synchronize()
             volumes = [int(tag) for dim, tag in extruded if int(dim) == 3]
@@ -2193,6 +2201,7 @@ def _generate_coincident_ring_airbox_mesh(
             if len(next_annulus) != 1 or len(next_hole) != (1 if tool is not None else 0):
                 raise RuntimeError("coincident ring extrusion top-face identity is ambiguous")
             current_annulus = next_annulus[0]
+            annulus_cap_surfaces.append(current_annulus)
             current_hole = next_hole[0] if next_hole else None
 
         body_volumes = [volume for i, volume in enumerate(annulus_volumes)
@@ -2331,23 +2340,44 @@ def _generate_coincident_ring_airbox_mesh(
             },
         )
         with _GmshProgressLogger(gmsh):
-            gmsh.model.mesh.generate(3)
+            gmsh.model.mesh.generate(2 if scoped_layer_partitioning else 3)
         _apply_post_mesh_options(gmsh, options)
         _reapply_periodic_surface_mappings(gmsh, periodic_specs)
-        from ._gmsh_layered_tetrahedra import subdivide_layered_prisms
-        subdivide_layered_prisms(gmsh)
-        quality, _per_domain_quality = (
-            _extract_quality_metrics(gmsh, options)
-            if options.compute_quality
-            else (None, None)
-        )
-        raw_mesh = _extract_mesh_data(
-            gmsh,
-            quality=quality,
-            has_physical_groups=True,
-            periodic_pair_specs=periodic_specs,
-            boundary_role_markers=(10, int(airbox.boundary_marker)),
-        )
+        if scoped_layer_partitioning:
+            from ._gmsh_layered_box import build_layered_box_from_gmsh_caps
+
+            body_partition_indices = [
+                index for index, volume in enumerate(annulus_volumes)
+                if volume in body_volumes
+            ]
+            raw_mesh = build_layered_box_from_gmsh_caps(
+                gmsh,
+                cap_surface_tags=annulus_cap_surfaces,
+                requested_layer_planes_si_m=[level / SCALE for level in levels],
+                magnetic_plane_indices=(
+                    body_partition_indices[0], body_partition_indices[-1] + 1,
+                ),
+                bounds_xy_si_m=(xmin / SCALE, xmax / SCALE, ymin / SCALE, ymax / SCALE),
+                gmsh_units_per_m=SCALE,
+                options=options,
+                periodic_surface_specs=periodic_specs,
+                outer_boundary_marker=int(airbox.boundary_marker),
+            )
+        else:
+            from ._gmsh_layered_tetrahedra import subdivide_layered_prisms
+            subdivide_layered_prisms(gmsh)
+            quality, _per_domain_quality = (
+                _extract_quality_metrics(gmsh, options)
+                if options.compute_quality
+                else (None, None)
+            )
+            raw_mesh = _extract_mesh_data(
+                gmsh,
+                quality=quality,
+                has_physical_groups=True,
+                periodic_pair_specs=periodic_specs,
+                boundary_role_markers=(10, int(airbox.boundary_marker)),
+            )
         if any(kind != "tet4" for kind in raw_mesh.cell_types.tolist()):
             raise RuntimeError(
                 "coincident ring shared-domain realization requires tet4 volume cells; "
@@ -2358,7 +2388,9 @@ def _generate_coincident_ring_airbox_mesh(
                 "coincident ring shared-domain realization requires tri3 boundary facets; "
                 f"Gmsh produced {sorted(set(raw_mesh.facet_types.tolist()))}"
             )
-        nodes = np.asarray(raw_mesh.nodes, dtype=np.float64) / SCALE
+        nodes = np.asarray(raw_mesh.nodes, dtype=np.float64)
+        if not scoped_layer_partitioning:
+            nodes = nodes / SCALE
         elements = raw_mesh.elements
         magnetic_mask = np.asarray(raw_mesh.element_markers, dtype=np.int32) == 1
         if not np.any(magnetic_mask):
@@ -2457,14 +2489,26 @@ def _generate_coincident_ring_airbox_mesh(
             cell_global_ordinals=raw_mesh.cell_global_ordinals,
             facet_global_ordinals=raw_mesh.facet_global_ordinals,
             cell_mesh_parts=raw_mesh.cell_mesh_parts,
-            periodic_boundary_pairs=_scale_periodic_boundary_pairs(
-                raw_mesh.periodic_boundary_pairs,
-                scale=SCALE,
+            periodic_boundary_pairs=(
+                raw_mesh.periodic_boundary_pairs if scoped_layer_partitioning
+                else _scale_periodic_boundary_pairs(raw_mesh.periodic_boundary_pairs, scale=SCALE)
             ),
             periodic_node_pairs=raw_mesh.periodic_node_pairs,
             periodic_mesh_certificate=None,
-            quality=_quality_volumes_in_si(raw_mesh.quality, SCALE),
+            realization_report=(
+                MeshRealizationReport(
+                    requested_topology="tet4", resolved_topology="tet4",
+                    requested_layers=len(levels) - 1,
+                    resolved_layers=_count_exact_layer_planes(nodes, 2) - 1,
+                    requested_axis="z", resolved_axis="z",
+                    requested_order=order, resolved_order=1,
+                    requested_direction=options.sweep_direction or "z",
+                ) if scoped_layer_partitioning else raw_mesh.realization_report
+            ),
+            quality=(raw_mesh.quality if scoped_layer_partitioning
+                     else _quality_volumes_in_si(raw_mesh.quality, SCALE)),
             per_domain_quality=(
+                raw_mesh.per_domain_quality if scoped_layer_partitioning else
                 {marker: _quality_volumes_in_si(quality, SCALE)
                  for marker, quality in raw_mesh.per_domain_quality.items()}
                 if raw_mesh.per_domain_quality is not None else None
