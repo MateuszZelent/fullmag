@@ -43,6 +43,13 @@ Instrukcje dotyczą GPT-Astra, GPT-Sol, GPT-Luna oraz innych agentów pracujący
 - Encje sceny mają oddzielne niezmienne `object_id`, nazwę użytkownika `name`, prezentacyjny `type` i jawnie zadane moduły fizyki. Nazwa lub typ nie aktywują fizyki.
 - Control Room ma jeden workspace, jeden viewport, jeden klient typowany i warstwę resource hooks. JSON control plane jest cienki i revision-driven; pola i topologia używają binary data plane. Komponenty nie tworzą własnych endpointów ani osobnych drzew FDM/FEM.
 
+## Sprzątanie po etapach deweloperskich
+
+- Po zakończeniu etapu oraz przed następnym ciężkim buildem oceń wygenerowane dane: job IDs, profile, ścieżki, rozmiary i odwołania. Użyj skilla `fullmag-build-stage-cleanup`, gdy jest dostępny, oraz kanonicznej polityki build-storage. Zapisz co usunięto, co pozostawiono i dlaczego; nie kończ na niezweryfikowanej deklaracji sprzątania.
+- Zakończone `execution` i staging bez użytkowników są pierwszymi kandydatami do zatwierdzonej retencji po zachowaniu wyników, receiptów, logów i manifestów. Stary pakiet build/runtime jest zbędny dopiero po potwierdzeniu zastąpienia właściwym zweryfikowanym pakietem oraz braku odwołań, procesów, kontenerów, mountów i pinów current/rollback. Sam wiek, duży rozmiar lub nowszy commit nie wystarczają.
+- Korzystaj z planera i ponownej walidacji przed usunięciem dokładnych autoryzowanych celów; nie wykonuj globalnego prune. Nie usuwaj wyników naukowych ani współdzielonych cache jako skutku ubocznego. Wykonuj już zatwierdzony zakres bez ponownego pytania; zmiana polityki automatycznej retencji wymaga autoryzacji i potwierdzenia wdrożenia.
+- Sprawdzaj miejsce na woluminie storage i przewidywany szczyt dla danego profilu. Przekroczenie minimalnego progu runnera nie oznacza miejsca na cały build. Przy presji dysku najpierw sprzątaj kwalifikowane dane jednorazowe; jeżeli bezpieczny odzysk nie wystarcza, zgłoś konkretny brak zamiast rozpoczynać build prowadzący do zapełnienia dysku.
+
 ## Build i dowody
 
 - Tymczasowo nie buduj testów jednostkowych ani nie uruchamiaj zadań, których celem jest ich kompilacja; zakaz obowiązuje do odwołania przez użytkownika.
