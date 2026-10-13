@@ -1193,11 +1193,10 @@ fn write_hysteresis_json_artifact<T: Serialize + ?Sized>(
     filename: &str,
     value: &T,
 ) -> Result<(), RunError> {
-    let json = serde_json::to_string_pretty(value).map_err(|error| RunError {
-        message: format!("Failed to serialize hysteresis artifact '{filename}': {error}"),
-    })?;
-    fs::write(output_dir.join(filename), json).map_err(|error| RunError {
-        message: format!("Failed to write hysteresis artifact '{filename}': {error}"),
+    crate::autosave_zarr::write_json_atomic(&output_dir.join(filename), value).map_err(|error| {
+        RunError {
+            message: format!("Failed to write hysteresis artifact '{filename}': {error}"),
+        }
     })
 }
 
@@ -9703,6 +9702,99 @@ mod tests {
         );
         assert!(output_dir.join("hysteresis_metrics.json").exists());
         assert!(output_dir.join("hysteresis_settle_trace.json").exists());
+
+        std::fs::remove_dir_all(output_dir)
+            .expect("temporary artifact directory should be removed");
+    }
+
+    #[test]
+    fn progress_artifact_writer_replaces_complete_json_and_preserves_it_on_failure() {
+        let output_dir = std::env::temp_dir().join(format!(
+            "fullmag-hysteresis-atomic-progress-test-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        let artifact_path = output_dir.join("hysteresis_points.json");
+        let first_points = vec![test_hysteresis_point(0, 25.0, 0.8, None)];
+        let first_metrics = calculate_metrics(&first_points, "major_loop", None, None);
+
+        write_hysteresis_progress_artifacts(
+            &output_dir,
+            &first_points,
+            &first_metrics,
+            &[],
+            None,
+            Some("stage-000"),
+        )
+        .expect("first progress artifact should publish");
+
+        let first_capture: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(&artifact_path).expect("first points artifact should exist"),
+        )
+        .expect("first capture should be complete JSON");
+        assert_eq!(
+            first_capture
+                .as_array()
+                .expect("points should be an array")
+                .len(),
+            1
+        );
+        assert_eq!(first_capture[0]["field_value_mT"], 25.0);
+
+        let second_points = vec![
+            test_hysteresis_point(0, 30.0, 0.7, None),
+            test_hysteresis_point(1, -30.0, -0.6, None),
+        ];
+        let second_metrics = calculate_metrics(&second_points, "major_loop", None, None);
+        write_hysteresis_progress_artifacts(
+            &output_dir,
+            &second_points,
+            &second_metrics,
+            &[],
+            None,
+            Some("stage-000"),
+        )
+        .expect("replacement progress artifact should publish");
+
+        let previous_bytes = std::fs::read(&artifact_path).expect("replacement should be readable");
+        let second_capture: serde_json::Value =
+            serde_json::from_slice(&previous_bytes).expect("replacement should be complete JSON");
+        assert_eq!(
+            second_capture
+                .as_array()
+                .expect("points should be an array")
+                .len(),
+            2
+        );
+        assert_eq!(second_capture[0]["field_value_mT"], 30.0);
+        assert_eq!(second_capture[1]["field_value_mT"], -30.0);
+
+        struct FailingSerialization;
+        impl serde::Serialize for FailingSerialization {
+            fn serialize<S>(&self, _serializer: S) -> Result<S::Ok, S::Error>
+            where
+                S: serde::Serializer,
+            {
+                Err(<S::Error as serde::ser::Error>::custom(
+                    "injected hysteresis serialization failure",
+                ))
+            }
+        }
+
+        let failure = write_hysteresis_json_artifact(
+            &output_dir,
+            "hysteresis_points.json",
+            &FailingSerialization,
+        );
+        assert!(
+            failure.is_err(),
+            "injected serialization failure should propagate"
+        );
+        assert_eq!(
+            std::fs::read(&artifact_path).expect("prior published artifact should remain"),
+            previous_bytes,
+            "failed replacement must leave the last complete JSON untouched"
+        );
 
         std::fs::remove_dir_all(output_dir)
             .expect("temporary artifact directory should be removed");

@@ -237,23 +237,73 @@ fn initialize_array(path: &Path, sample_count: usize, width: usize) -> Result<()
     )
 }
 
-pub(crate) fn write_json_atomic(path: &Path, value: &impl serde::Serialize) -> Result<(), String> {
+pub(crate) fn write_json_atomic<T: serde::Serialize + ?Sized>(
+    path: &Path,
+    value: &T,
+) -> Result<(), String> {
+    write_json_atomic_with_replace(path, value, replace_file_atomically)
+}
+
+fn write_json_atomic_with_replace<T: serde::Serialize + ?Sized>(
+    path: &Path,
+    value: &T,
+    replace: impl FnOnce(&Path, &Path) -> Result<(), String>,
+) -> Result<(), String> {
     let bytes = serde_json::to_vec_pretty(value).map_err(|error| error.to_string())?;
+    write_json_bytes_atomic_with_replace(path, &bytes, replace)
+}
+
+fn write_json_bytes_atomic_with_replace(
+    path: &Path,
+    bytes: &[u8],
+    replace: impl FnOnce(&Path, &Path) -> Result<(), String>,
+) -> Result<(), String> {
     // Each concurrent publication must own its temporary file.
-    let temporary = path.with_extension(format!("tmp.{}.{}", std::process::id(), uuid::Uuid::new_v4()));
-    let file = fs::File::create(&temporary).map_err(|error| error.to_string())?;
-    let mut writer = BufWriter::new(file);
-    writer
-        .write_all(&bytes)
+    let temporary = path.with_extension(format!(
+        "tmp.{}.{}",
+        std::process::id(),
+        uuid::Uuid::new_v4()
+    ));
+    let file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temporary)
         .map_err(|error| error.to_string())?;
+    let mut cleanup = AtomicJsonTempCleanup::new(temporary.clone());
+    let mut writer = BufWriter::new(file);
+    writer.write_all(bytes).map_err(|error| error.to_string())?;
     writer.flush().map_err(|error| error.to_string())?;
     writer
         .get_ref()
         .sync_all()
         .map_err(|error| error.to_string())?;
     drop(writer);
-    replace_file_atomically(&temporary, path)?;
+    replace(&temporary, path)?;
+    cleanup.disarm();
     Ok(())
+}
+
+struct AtomicJsonTempCleanup {
+    path: PathBuf,
+    armed: bool,
+}
+
+impl AtomicJsonTempCleanup {
+    fn new(path: PathBuf) -> Self {
+        Self { path, armed: true }
+    }
+
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for AtomicJsonTempCleanup {
+    fn drop(&mut self) {
+        if self.armed {
+            let _ = fs::remove_file(&self.path);
+        }
+    }
 }
 
 #[cfg(not(windows))]
@@ -353,6 +403,54 @@ mod tests {
 
     fn temp_root() -> PathBuf {
         std::env::temp_dir().join(format!("fullmag-autosave-zarr-{}", uuid::Uuid::new_v4()))
+    }
+
+    #[test]
+    fn atomic_json_failure_preserves_target_and_removes_only_its_temporary() {
+        let root = temp_root();
+        fs::create_dir_all(&root).expect("temporary test root should be created");
+        let target = root.join("hysteresis_points.json");
+        let original = br#"{"version":1}"#.to_vec();
+        fs::write(&target, &original).expect("original JSON should be written");
+
+        let unrelated_temp = target.with_extension("tmp.other-writer");
+        let unrelated_contents = b"other writer owns this file".to_vec();
+        fs::write(&unrelated_temp, &unrelated_contents)
+            .expect("unrelated temporary should be written");
+
+        let mut attempted_temp = None;
+        let error = write_json_atomic_with_replace(
+            &target,
+            &json!({"version": 2}),
+            |temporary, destination| {
+                assert_eq!(destination, target.as_path());
+                let replacement: serde_json::Value =
+                    serde_json::from_slice(&fs::read(temporary).expect("temp JSON should exist"))
+                        .expect("temp JSON should be complete");
+                assert_eq!(replacement, json!({"version": 2}));
+                attempted_temp = Some(temporary.to_path_buf());
+                Err("injected atomic replacement failure".to_string())
+            },
+        )
+        .expect_err("injected replacement failure should be returned");
+
+        assert_eq!(error, "injected atomic replacement failure");
+        assert_eq!(
+            fs::read(&target).expect("old target should remain"),
+            original
+        );
+        assert!(
+            !attempted_temp
+                .expect("replacement should receive the owned temp path")
+                .exists(),
+            "only the failed invocation's temporary should be removed"
+        );
+        assert_eq!(
+            fs::read(&unrelated_temp).expect("unrelated temp should remain"),
+            unrelated_contents
+        );
+
+        fs::remove_dir_all(root).expect("test files should be removed");
     }
 
     #[test]

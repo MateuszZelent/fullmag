@@ -1,0 +1,61 @@
+name: eigensolve-hysteresis-publication-contracts
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'crates/fullmag-runner/src/autosave_zarr.rs'
+      - 'crates/fullmag-runner/src/hysteresis.rs'
+      - '.github/workflows/eigensolve-hysteresis-publication-contracts.yml'
+  pull_request:
+    paths:
+      - 'crates/fullmag-runner/src/autosave_zarr.rs'
+      - 'crates/fullmag-runner/src/hysteresis.rs'
+      - '.github/workflows/eigensolve-hysteresis-publication-contracts.yml'
+
+jobs:
+  atomic-progress-publication:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            profile: linux-host
+          - os: windows-latest
+            profile: windows-native
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    env:
+      FULLMAG_PROJECT_STORAGE_ROOT: ${{ github.workspace }}/../storage
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Prepare managed Cargo paths
+        shell: bash
+        run: python -B scripts/fullmag_storage.py prepare-links --profile '${{ matrix.profile }}' --compat
+      - uses: Swatinem/rust-cache@v2
+      - name: Verify atomic writer and progressive hysteresis publication
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -B scripts/fullmag_storage.py run --profile '${{ matrix.profile }}' -- cargo test --locked -p fullmag-runner --lib autosave_zarr::tests -- --nocapture | tee "$RUNNER_TEMP/atomic-json-writer.log"
+          grep -F 'autosave_zarr::tests::atomic_json_failure_preserves_target_and_removes_only_its_temporary ... ok' "$RUNNER_TEMP/atomic-json-writer.log"
+          python -B scripts/fullmag_storage.py run --profile '${{ matrix.profile }}' -- cargo test --locked -p fullmag-runner --lib hysteresis::tests::progress_artifact_writer_replaces_complete_json_and_preserves_it_on_failure -- --nocapture | tee "$RUNNER_TEMP/hysteresis-atomic-progress.log"
+          grep -F 'hysteresis::tests::progress_artifact_writer_replaces_complete_json_and_preserves_it_on_failure ... ok' "$RUNNER_TEMP/hysteresis-atomic-progress.log"
+      - name: Verify complete runner compatibility
+        if: runner.os == 'Linux'
+        shell: bash
+        run: python -B scripts/fullmag_storage.py run --profile '${{ matrix.profile }}' -- cargo test --locked -p fullmag-runner --lib --no-fail-fast
+      - name: Preserve publication regression evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: hysteresis-publication-${{ matrix.os }}-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/atomic-json-writer.log
+            ${{ runner.temp }}/hysteresis-atomic-progress.log
+            ${{ env.FULLMAG_PROJECT_STORAGE_ROOT }}/builds/**/build-status.json
+          if-no-files-found: error
