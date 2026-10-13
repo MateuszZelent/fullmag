@@ -1650,6 +1650,7 @@ FrequencyDomainContractResult solve_tiny_validation_modal_problem(
         (-coeff_linear - sqrt_discriminant) / (2.0 * det_g),
         (-coeff_linear + sqrt_discriminant) / (2.0 * det_g),
     };
+    constexpr double kTwoPi = 2.0 * 3.14159265358979323846264338327950288;
     const double shift_frequency_hz = target_shift_frequency_hz(request);
     const bool canonical_complex_lambda_representation =
         request.tiny_validation_stiffness_matrix_row_major != nullptr ||
@@ -1941,6 +1942,8 @@ FrequencyDomainContractResult solve_tiny_validation_modal_problem(
         std::to_string(candidate_mode_count) +
         ",\"shift_frequency_hz\":" +
         format_double(shift_frequency_hz) +
+        ",\"shift_omega_rad_s\":" +
+        format_double(kTwoPi * shift_frequency_hz) +
         ",\"outer_iteration\":1,"
         "\"linear_iteration\":1,"
         "\"relative_residual_max\":" +
@@ -1972,7 +1975,9 @@ FrequencyDomainContractResult solve_tiny_validation_modal_problem(
         "\"relative_residual\":" +
         format_double(relative_residual) +
         ",\"shift_frequency_hz\":" +
-        format_double(shift_frequency_hz);
+        format_double(shift_frequency_hz) +
+        ",\"shift_omega_rad_s\":" +
+        format_double(kTwoPi * shift_frequency_hz);
     if (is_frequency_window(request)) {
         result.result_json += ",\"window_completeness\":\"";
         result.result_json += completeness_status;

@@ -8737,3 +8737,16 @@ policy-only test rzeczywistego predykatu, zachowując pełny test Schur.
 Drugi błąd wymaga diagnozy producenta/kontraktu; nie usuwamy asercji ani
 nie przedstawiamy całego CI jako PASS. Build runtime commita 13d9d71f6
 pozostaje osobnym dowodem i nie zawiera późniejszej korekty harnessu CI.
+
+### 2026-10-13 — korekta metadanych tiny validation
+
+Dedykowany `fem_poisson_airbox_window_retry_policy_contract` PASS w CI
+`38454411467` na commicie 3d3b73c5a; kompilacja czterech celów PASS.
+Pozostały native modal contract FAIL ma potwierdzoną przyczynę: sukcesowa
+serializacja `solve_tiny_validation_modal_problem` pomija
+`shift_omega_rad_s` zarówno w diagnostics, jak i result. Korekta dodaje
+`2π × shift_frequency_hz` do obu obiektów, pozostawiając osobne
+`omega_rad_s` znalezionego modu, analytic-validation lane i wszystkie
+asercje istniejącej regresji. Nie zmienia fizyki ani produkcyjnego solve.
+Native test po korekcie pozostaje NOT VERIFIED do nowego CI; runtime
+#244 nadal ma niezmienione źródła 13d9d71f6 i aktywnego obserwatora.
