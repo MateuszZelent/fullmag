@@ -3,7 +3,7 @@
 
 **Pełny cel S00–S12 pozostaje OPEN.** Bieżące prace wykonuje worktree
 `dispersion-mode-ui-20261008`, branch `codex/dispersion-mode-ui-20261008`.
-Ostatni opublikowany checkpoint przed bieżącą implementacją: `cfbb55616d28953f28ae7159250234e9be5328b4`.
+Ostatni opublikowany checkpoint przed tym przyrostem: `0bb02a014844a16cc9636dafce1507ccaa50b92c`.
 Ruch 4→4 zapisano w75c778f4; czytnik runnera w5f76503e, fixture retention w961aa64e.
 Naprawa wyścigu zwolnienia publication lock CAS przechodzi347 regresji źródłowych
 (2 skips). Koordynator podmieniono zarządzaną receptą na obraz d376e87b…;
@@ -15,8 +15,10 @@ nie dowodził periodycznej topologii objętościowej.
 Historyczny nieperiodyczny kandydat498tet nie dowodził PBC. Aktualny
 kandydat na rzeczywistych mapach Gmsh141nodes/496tet przeszedł pełny exact
 validator oraz parity x/y po7 flipach wewnętrznych i6 granicznych; naroża12/12.
-Adapter multi-slab ma37PASS i actual replay141/400 zachowuje4 rekordy markerów
-oraz36 map węzłów. Żaden z tych dowodów nie zamyka produkcyjnego routingu.
+Adapter ma45PASS; prywatny Delaunay7PASS i końcowa jakość15PASS.
+Nowy source replay141/496 zachowuje4 rekordy markerów oraz36 map węzłów,
+przechodzi exact/PBC i odrębny pomiar końcowej jakości Gmsh.
+Łącznie z kernelem83PASS/17subtests. Produkcyjny routing nadal OPEN.
 Gmsh quality dla496: ROI median edge11,3646nm, SICNmin0,38704;
 global gamma min0,010499 nadal wymaga naprawy/jawnej bramki jakości.
 Bieżący przyrost przenosi dokładne uzgadnianie Delaunay i zakresy markerów

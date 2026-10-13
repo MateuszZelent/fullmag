@@ -850,3 +850,40 @@ Prywatny final-tet4-quality helper również w implementacji. Cały S00–S12 OP
 `packages/fullmag-py/src/fullmag/meshing/_layered_box_tetrahedralization.py` SHA256 `1793966d33d1c41190140d64ba1c6d4d0ddd59f70f02d03966ccb76e7fe8257f`.
 
 `packages/fullmag-py/tests/test_layered_box_tetrahedralization.py` SHA256 `bbda13abccbd65ae9b5bdf5dfcb7144d3429e7a8c9346c68121dd3120592228f`.
+
+## 2026-10-13 — źródłowy Delaunay, adapter i jakość końcowych Tet4
+
+Poprawka oriented-incidence opublikowana w
+`0bb02a014844a16cc9636dafce1507ccaa50b92c`. Zatwierdzony ruch 4→4
+pozostaje w `75c778f4dc778894a3a8d7f9ee30e424314dee77`.
+Naprawiono zbyt mocny warunek obu cones w nowym prywatnym algorytmie:
+legalny ruch jednostronny wymaga przeciwnych właścicieli niezmienionych
+trójkątów, zachowując exact volume/cap/incidence/SAT.
+
+Source replay: 141 węzłów → 496 Tet4, wszystkie węzły wykorzystane;
+exact kernel/PBC PASS, cztery zakresy powierzchni i 36 map węzłów,
+komutacja narożników PASS. SHA256 connectivity
+`9dfe4d9a5ccb31b412a99fc25e9474ca278fdc82e2a099a3fca4dd4d8daf6a87`.
+Wejście NPZ `4a7cabc5761046532c4cc87f8d3d7ff609a7f2a7ed5cb032bf797f750f737181`.
+40 off-plane węzłów osobnej siatki powierzchniowej pozostaje poza próbą.
+
+Osobny scope→adapter→quality replay PASS: SICN min0,01186008,
+gamma min0,01049916, średni SICN0,68452222, volume1,92e-22m³.
+Podział248/248 air0/material1 dotyczy wyłącznie diagnostycznego dolnego
+slabu; nie jest fizycznym benchmarkiem. Raporty/skrypty w wizualizacjach
+`layered-cap-sliver-diagnostic-20261013`; nowe pliki mają prefix
+`gmsh-layered-delaunay-meshdata-quality`.
+
+Focused kernel/adapter/Delaunay/quality:83PASS,17subtests, exit0,12,72s.
+Nie kompilowano testów. Delaunay source SHA256
+`638f91ea03436ddae51ef5e0aa0d3be73280f7bc2f1d11d3f488809e32030be1`;
+quality helper `bb2e44a386476b1b091f06c8d4c38a68656273fe534317343a60ec53de670a8c`.
+Production routing, regionalna gęstość/jakość, fresh build/runtime,
+signed sweep/parity/zbieżność, COMSOL A1, UI, S09/GPU i pełne S00–S12 OPEN.
+Następny krok: podłączyć geometry-only cap sampling i końcowe MeshData,
+quality/realization/certificates bez osłabiania regionalnego testu.
+
+Kontrola dokumentacji: focused source-map PASS i 38 regresji validatora PASS.
+Przed commitem usunięto wyłącznie pustą linię na końcu helpera jakości;
+finalny SHA256 helpera: `6280d9118d5d7466444e82c1f18c094fd0611ac440d2fd5bae99e8fd5883b91e`. Dowody replay przypinają wersję
+przed tą zmianą whitespace, bez zmiany działania.

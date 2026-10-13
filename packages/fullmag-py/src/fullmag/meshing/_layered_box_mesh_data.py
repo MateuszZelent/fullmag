@@ -4,6 +4,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from numbers import Integral, Real
 import math
+from typing import Literal
 
 import numpy as np
 from numpy.typing import NDArray
@@ -658,19 +659,35 @@ def build_layered_box_mesh_data(
     periodic_patch_z_bounds: Mapping[
         tuple[str, int, int], tuple[float, float]
     ] | None = None,
+    tetrahedralization_method: Literal["freudenthal", "delaunay"] = "freudenthal",
 ) -> MeshData:
     """Return canonical tet4/tri3 ``MeshData`` for a layered rectangular box.
 
-    ``tetrahedralize_layered_box`` is the topology authority: it validates the
+    The selected private kernel is the topology authority: it validates the
     exact SI nodes and planes, preserves node order, uses every node, and proves
     positive cells plus exact slab coverage. This adapter assigns magnetic
     marker 1 and air marker 0 from whole-slab containment, then derives all
     exterior and magnetic-air facets from tetrahedron incidence. Repeated rows
     for one periodic pair require exact z ranges in periodic_patch_z_bounds; a
     single full-side row may omit them. It does not create periodic certificates,
-    quality reports, or realization evidence.
+    quality reports, or realization evidence. Kernel selection is explicit;
+    errors are propagated without fallback or regenerating connectivity.
     """
-    cells = tetrahedralize_layered_box(nodes, layer_planes, bounds_xy)
+    if not isinstance(tetrahedralization_method, str) or tetrahedralization_method not in (
+        "freudenthal", "delaunay"
+    ):
+        raise ValueError("tetrahedralization_method must be 'freudenthal' or 'delaunay'")
+    if tetrahedralization_method == "delaunay":
+        from ._layered_box_delaunay import tetrahedralize_layered_box_delaunay
+
+        cells = tetrahedralize_layered_box_delaunay(
+            nodes, layer_planes, bounds_xy,
+            periodic_boundary_pairs=periodic_boundary_pairs,
+            periodic_node_pairs=periodic_node_pairs,
+            periodic_patch_z_bounds=periodic_patch_z_bounds,
+        )
+    else:
+        cells = tetrahedralize_layered_box(nodes, layer_planes, bounds_xy)
     coordinates = np.asarray(nodes, dtype=np.float64)
     planes = np.asarray(layer_planes, dtype=np.float64)
     raw_bounds = np.asarray(bounds_xy, dtype=np.float64)

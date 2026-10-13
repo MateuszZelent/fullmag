@@ -631,6 +631,35 @@ poprzedniego modelu. To hostowe przygotowanie dla FEM CPU/GPU; FDM CPU/GPU
 nie dotyczy. Managed runtime i GPU pozostają NOT VERIFIED. Produkcyjne
 quality/realization/PBC reporty nadal wymagają osobnego końcowego routingu.
 
+## Stan prywatnych helperów — 2026-10-13
+
+Zaimplementowano `_layered_box_delaunay.tetrahedralize_layered_box_delaunay`
+i jawny dispatch adaptera MeshData. Kandydat SciPy jest uzgadniany przez
+legalne jednostronne ruchy wewnętrzne oraz wspólne ruchy par okresowych.
+Nie wymaga przebudowy nieruchomej strony; wymaga dokładnie przeciwnej
+strony jej właścicieli, zachowania objętości i kontroli nakładania SAT.
+Błąd wybranej metody nie uruchamia starego kernela jako fallbacku.
+
+Źródłowa próba na zapisanym wejściu Gmsh użyła wszystkich 141 węzłów
+przekrojów i utworzyła 496 tetraedrów. Końcowy exact validator i PBC PASS:
+cztery rekordy powierzchni, 36 map węzłów i zgodna komutacja narożników.
+40 węzłów poza płaszczyznami osobnej siatki powierzchniowej nie jest wejściem
+tej próby. Nie jest to dowód zgodności dowolnej geometrii, antidotów ani A1.
+
+Łańcuch scope helper → Delaunay MeshData → `quality_for_tet4_arrays`
+przeszedł osobny replay. Jakość zmierzono na końcowych 496 komórkach:
+SICN min 0,01186008; gamma min 0,01049916; średni SICN 0,68452222;
+objętość 1,92·10⁻²² m³. Diagnostyczny podział dolnego slabu na materiał
+obejmował 248 komórek, a drugi slab 248 komórek air0; nie jest modelem
+benchmarku fizycznego. Pozostają komórki o niskiej jakości i brak dowodu
+żądanej gęstości regionalnej. Produkcyjny caller nie został przełączony.
+
+Interpretowane regresje: kernel16 + adapter45 + Delaunay7 + quality15 =
+83 PASS, 17 subtests PASS. Helper jakości zachowuje model wywołującego
+oraz sprawdza tagi, kanały i objętości SI; nie zastępuje bramki topologii.
+Managed runtime, GPU, dyspersja na nowej siatce i kwalifikacja pozostają
+NOT VERIFIED.
+
 (thin-film-mesh-validation)=
 ## Validation
 

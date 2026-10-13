@@ -321,6 +321,27 @@
       "symbol": "DOC-ANCHOR:thin-film-final-tet4-gmsh-quality",
       "responsibility": "Compute aligned final SI tetrahedral Gmsh quality in an isolated temporary model; integration is planned.",
       "evidence_status": "planned_contract"
+    },
+    {
+      "id": "delaunay-candidate-source",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_layered_box_delaunay.py",
+      "symbol": "tetrahedralize_layered_box_delaunay",
+      "responsibility": "Private per-slab candidate, exact cavity reconciliation and final kernel/PBC validation; production routing not active.",
+      "evidence_status": "source_visible"
+    },
+    {
+      "id": "delaunay-variable-periodic-regression",
+      "path": "packages/fullmag-py/tests/test_layered_box_delaunay.py",
+      "symbol": "test_periodic_x_y_patches_match_complete_triangles_and_corner_maps",
+      "responsibility": "Variable cap nodes and split x/y scopes pass complete triangle and corner-map validation.",
+      "evidence_status": "python_passed"
+    },
+    {
+      "id": "final-tet4-quality-source",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_tet4_quality.py",
+      "symbol": "quality_for_tet4_arrays",
+      "responsibility": "Compute aligned SI quality on final connectivity and restore caller model; no production call site.",
+      "evidence_status": "source_visible"
     }
   ],
   "public_api": {

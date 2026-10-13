@@ -877,3 +877,68 @@ def test_periodic_patch_scope_mapping_must_be_a_mapping() -> None:
             periodic_node_pairs=node_pairs,
             periodic_patch_z_bounds=[],
         )
+
+
+@pytest.mark.parametrize("method", ["auto", "unknown", "", None, True, []])
+def test_unknown_tetrahedralization_method_fails_before_running_kernel(monkeypatch, method) -> None:
+    def forbidden(*args, **kwargs):
+        raise AssertionError("invalid method invoked a topology kernel")
+    monkeypatch.setattr(_layered_box_adapter, "tetrahedralize_layered_box", forbidden)
+    with pytest.raises(ValueError, match="tetrahedralization_method"):
+        build_layered_box_mesh_data(
+            _layered_nodes(), _PLANES, _BOUNDS,
+            magnetic_z_bounds=(-_SCALE, _SCALE), outer_boundary_marker=90,
+            tetrahedralization_method=method,
+        )
+
+
+def test_delaunay_dispatch_preserves_authored_periodic_inputs(monkeypatch) -> None:
+    import sys
+    from types import ModuleType
+    nodes = _layered_nodes(periodic_axis=0)
+    boundary_pairs, node_pairs, scopes = _scoped_periodic_inputs(nodes, 0, marker_start=101)
+    cells = _layered_box_adapter.tetrahedralize_layered_box(nodes, _PLANES, _BOUNDS)
+    module = ModuleType("fullmag.meshing._layered_box_delaunay")
+    calls = []
+    def selected(actual_nodes, actual_planes, actual_bounds, **kwargs):
+        assert actual_nodes is nodes and actual_planes is _PLANES and actual_bounds is _BOUNDS
+        assert kwargs["periodic_boundary_pairs"] is boundary_pairs
+        assert kwargs["periodic_node_pairs"] is node_pairs
+        assert kwargs["periodic_patch_z_bounds"] is scopes
+        calls.append(True)
+        return cells
+    module.tetrahedralize_layered_box_delaunay = selected
+    monkeypatch.setitem(sys.modules, module.__name__, module)
+    def forbidden(*args, **kwargs):
+        raise AssertionError("selected Delaunay reran the Freudenthal kernel")
+    monkeypatch.setattr(_layered_box_adapter, "tetrahedralize_layered_box", forbidden)
+    mesh = build_layered_box_mesh_data(
+        nodes, _PLANES, _BOUNDS, magnetic_z_bounds=(-_SCALE, _SCALE),
+        outer_boundary_marker=90, periodic_boundary_pairs=boundary_pairs,
+        periodic_node_pairs=node_pairs, periodic_patch_z_bounds=scopes,
+        tetrahedralization_method="delaunay",
+    )
+    assert calls == [True]
+    assert mesh.periodic_boundary_pairs == boundary_pairs
+    assert mesh.periodic_node_pairs == node_pairs
+    np.testing.assert_array_equal(mesh.cell_nodes.reshape((-1,4)), cells)
+    assert set(mesh.element_markers.tolist()) == {0, 1}
+
+
+def test_delaunay_failure_is_not_replaced_by_freudenthal(monkeypatch) -> None:
+    import sys
+    from types import ModuleType
+    module = ModuleType("fullmag.meshing._layered_box_delaunay")
+    def selected(*args, **kwargs):
+        raise ValueError("selected topology has unresolved periodic triangles")
+    module.tetrahedralize_layered_box_delaunay = selected
+    monkeypatch.setitem(sys.modules, module.__name__, module)
+    def forbidden(*args, **kwargs):
+        raise AssertionError("failed selected method silently fell back")
+    monkeypatch.setattr(_layered_box_adapter, "tetrahedralize_layered_box", forbidden)
+    with pytest.raises(ValueError, match="unresolved periodic triangles"):
+        build_layered_box_mesh_data(
+            _layered_nodes(), _PLANES, _BOUNDS,
+            magnetic_z_bounds=(-_SCALE, _SCALE), outer_boundary_marker=90,
+            tetrahedralization_method="delaunay",
+        )
