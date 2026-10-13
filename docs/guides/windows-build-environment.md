@@ -160,6 +160,17 @@ Bieżący setup środowiska nie instaluje ani nie kwalifikuje WebView2, dlatego 
 `runtime: NOT VERIFIED`. Zobacz [Tauri Windows prerequisites](https://v2.tauri.app/start/prerequisites/)
 i [WebView2 Runtime](https://developer.microsoft.com/en-us/microsoft-edge/webview2/).
 
+### Przebieg kreatora
+
+Planowany kreator `fullmag.exe` prowadzi przez ekran powitalny, licencję,
+wybór checkoutu i konfigurację `.env`, kontrolę zależności, podsumowanie
+planowanych zmian, instalację z postępem oraz wynik weryfikacji. Po sukcesie
+użytkownik może uruchomić Fullmaga. Rebuildy z kodu korzystają później z `just`.
+Ekran licencji musi używać zatwierdzonej treści licencji produktu i udostępniać
+informacje o licencjach dołączanych komponentów. Tekst licencji produktu
+oraz wymagane zgody instalatorów zależności pozostają wejściami kwalifikacji
+wydania; dokumentacja kreatora nie ustanawia nowych warunków licencji.
+
 ### Ekran konfiguracji `.env`
 
 Planowany `fullmag.exe` ma zawierać ekran konfiguracji `.env` przed rozpoczęciem
