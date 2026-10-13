@@ -12,7 +12,7 @@ Dokumentacyjny checkpoint nie zmienia tożsamości aktywnego buildu.
 | Exact-z geometria | Parametryczne constant-z caps; wszystkie cztery physical DE/PBC PASS | Jakość i zbieżność siatki oraz ring/antidot A1 |
 | Congruent/compatible-cap generator | 21 lekkich regresji PASS; wszystkie cztery physical cases PASS w 69,16 s; broad meshing 309 tests OK/skipped1 | Wykonanie solvera na nowej siatce |
 | Publikacja i CI | Commit 181b4e7b jest na remote; scoped-mesh-fields 38434846060, artifact-consumers 38434846068 i dispersion/mode UI 38434846141: SUCCESS | Te bramki źródłowe nie zastępują runtime, browser/WebGL ani nauki |
-| Managed FEM | Build #243 `d622e1b693e74b2b9d49bd1fe4941adf`: running dla dokładnego 181b4e7b; Docker potwierdza uruchomiony kontener od 17:21:09 UTC; brak terminalnego wyniku i logu kompilacji | Terminalne succeeded/exit0, receipt i hashe wymaganych artefaktów przed pilotem |
+| Managed FEM | Build #243 `d622e1b693e74b2b9d49bd1fe4941adf`: running dla dokładnego 181b4e7b; Docker potwierdza uruchomiony kontener od 17:21:09 UTC; log potwierdza native-build i aktywne cargo/rustc/cmake; brak terminalnego wyniku | Terminalne succeeded/exit0, receipt i hashe wymaganych artefaktów przed pilotem |
 | Storage | Odczyt runnera 13.10 o 17:22:56 UTC: 32 504 946 688 bajtów wolnego (30,27 GiB), powyżej progu 8 GiB; worker żywy, bez błędu | Monitorować budżet podczas buildu; brak automatycznej zgody na usuwanie danych |
 | S09 / 2.5D | Bounded P1 assembler i dense real-split oracle mają wywołania testowe; typed Waveguide2p5d pozostaje fail-closed | Produkcyjny owner MFEM 2D, invariance admission oraz Python/IR/planner/runner i runtime proof |
 | Dyspersja/nauka/GUI/integracja | Brak nowych wyników solvera dla tego checkpointu; wcześniejsze dowody pozostają historyczne | Pełny signed sweep i okno/pasma, convergence/COMSOL, adaptive parity, browser i review/merge |
@@ -23,8 +23,9 @@ i capture `3c2af89f7cf4494ea391bbff19799123`. Wykonawca
 `execute_build` sprawdza kapsułę przez `verify_source` przed utworzeniem
 katalogu wykonania. Kontener `685c1baa4ac0b0ed77627eb54a0d52b5c524f3b9a7ccf178b331ff1e3702760d`
 ma Docker State running, StartedAt 2026-10-13T17:21:09.854483815Z, bez
-Error/OOMKilled. Jest to dowód uruchomienia workera; jego pusty log oraz
-status running i heartbeat nie dowodzą rozpoczęcia kompilacji.
+Error/OOMKilled. Początkowo był to wyłącznie dowód uruchomienia workera.
+Nowszy log zawiera stage native-build start; procesy cargo/rustc/cmake
+potwierdzają kompilację. Status running i heartbeat same jej nie dowodzą.
 Nie restartować ani nie składać duplikatu po timeoutcie obserwatora.
 
 Po udanym buildzie: publiczny mały DE z demagiem dla Γ i niezerowego k,
@@ -8627,3 +8628,24 @@ profil dopuszczony, około11GB wolnego; wcześniejszy pełny build miał szczyt
 około27GB, więc realną możliwość zakończenia potwierdzi dopiero receipt.
 Podgląd retencji plan-429f00f24b504f70994daf2fe36086bf tylko analizuje dane;
 nie zastosowano usuwania.
+
+## A1 — dokładne authored planes i nowy warunek naprawy, 2026-10-13
+
+Trwały audyt: `docs/audits/2026-10-13-a1-authored-layer-planes.md`.
+Kanoniczna mesh-only A1 została zmaterializowana (exit0, PBC zaakceptowane),
+ale legacy ring route nie zamyka exact-plane contract: trzy z czterech
+planes są o jeden ULP niżej od authored values. Wszystkie 27558 Tet4 są
+konformne do observed planes, bez cross-plane; względem authored levels
+18372 nie mieszczą się w żadnym slab. Replay kolejnych binary64 kroków
+extrude odtwarza observed Z bitowo. Nie dowodzi to fizycznie znaczącej
+przyczyny rozbieżności częstotliwości.
+
+Następna naprawa A1 musi zachować constrained annulus/hole caps, osobne
+tagi materiałowe, owner fields i fresh PBC. Samo rozszerzenie scoped Box
+na Difference nie jest legalnym generatorem. Konieczne exact authored
+planes/no-crossing, realization report, pomiar/naprawa jakości airboxu
+oraz konwergencja i identyczne porównanie COMSOL. Full S00–S12 OPEN.
+
+Build #243 nadal ma niezmienioną kapsułę 181b4e7b; nowy zapis dokumentacji
+nie zmienia jego źródeł ani nie uruchamia duplikatu. Obserwator sesji 45268
+czeka na succeeded/exit0 przed canonical driver de-smoke-two.
