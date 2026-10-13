@@ -208,3 +208,26 @@ w job.env. GitHub context-availability dopuszcza runner dopiero w step.env,
 nie job.env. Przeniesiono env do kroku actual-Gmsh; upload path bez zmian.
 Źródło: https://docs.github.com/en/actions/reference/workflows-and-actions/contexts
 YAML i kontrola umiejscowienia env PASS; świeże CI wymagane.
+
+
+## Actual mesh evidence regionalnej awarii — 13.10.2026
+
+Commit `8ef77fb1d1da7d203e98a4e149172ba1ca3d8eb0`,
+CI38363500597: **309 tests, 1 FAIL, 1 SKIP**. Empty-ROI capture
+regression PASS; artifact11795852756 opublikowany i pobrany. NPZ SHA256:
+`05a94dfcce2c01c5357a3fa137d65c1a90ad03009f7d258fa990550eeb28d9cd`.
+Analiza niezależnie przeliczyła przekroje i centroidy z zapisanych węzłów:
+
+- z-plane [nm]: -40,-33,-20,-10,0,10,20,33,40; każda ma15 węzłów.
+- Wszystkie przekroje mają identyczny zbiór XY; w dysku r<=15nm tylko1 węzeł.
+- Magnetic tetrahedra108; w ROI0; w centralnym zakresie |z|<=4nm36.
+- Minimalny promień centroidu magnetic/central wynosi17.24990173470108nm,
+  czyli przekracza zadane15nm. Bulk edge median33.70151208888nm.
+
+To potwierdza kopiowanie zbyt rzadkiego cap mesh przez body i air;
+nie jest wyłącznie błędem statystyki lub tolerancji membership.
+Gmsh4.15.2, numpy2.4.6, scipy1.17.1. Plan naprawy musi realizować
+właścicielskie wymagania przestrzenne na magnetic przekrojach/slabach,
+zachować exact-z/PBC i zgodność interface-air. Nie wolno podmienić tego
+na globalne XY zagęszczenie, nowe ukryte z-planes ani osłabione progi.
+Zachowany ROI/artifact pozwala rozstrzygnąć poprawkę rzeczywistą siatką.
