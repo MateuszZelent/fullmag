@@ -4216,3 +4216,15 @@ Atomic writer opublikowany wcześniej04b14efdef865c56fda75fefc1295a912758e36e, C
 Run GitHub Actions `38482194992` przeszedł 50 plików / 1116 testów frontendowych, ale pełny typecheck zatrzymał się przed uruchomieniem kompilatora na `ERR_PACKAGE_PATH_NOT_EXPORTED`. TypeScript 7.0.2 deklaruje `bin.tsc`, lecz nie eksportuje subpath `typescript/bin/tsc`.
 
 Wrapper rozwiązuje teraz eksportowany `typescript/package.json`, odczytuje względne `bin.tsc` i uruchamia je przez ten sam `process.execPath`. Wersja zależności, zakres typechecka i reguły storage pozostają zachowane. Source review ukończony; lokalnie nie wykonywano Node ani testów. Weryfikacja nowego wrappera w GitHub Actions pozostaje PENDING. Poprawki katalogu i odświeżania `4240898366` / `4240898359` pozostają `pending_ci_browser`; udany test jednostkowy nie zastępuje typechecka ani runtime/browser.
+
+### 2026-10-14 — aktualizacja diagnozy bramek po integracji
+
+Wrapper TypeScript opublikowano w `15736ae6c7f5907d3f2a38a30184f6bf7e6eb8fa`. Run `38483636725` uruchomił kompilator: poprzedni ERR_PACKAGE_PATH_NOT_EXPORTED został usunięty. Typecheck nadal FAIL: brak API AST w eksportach TypeScript 7, brak request_scope_epoch w fixture'ach, null/string oraz typy buffer/Blob i przeciążenia. Trwa diagnoza; bramka nie została osłabiona.
+
+Atomowy CI `38481140369`: Linux E0063 dotyczy pięciu pominiętych kolekcji w SceneDocument::default; Windows zatrzymał preflight przed kompilacją. Aktualny resolver na tym branchu definiuje canonical storage na Windows wewnątrz main checkoutu, a Linux jako sibling. Workflow narzucał Linuxowy sibling także Windowsowi. Kandydat workflow korzysta z istniejącego resolve --create dla kanonicznego CI rootu, zachowuje walidację markerów/preflight/lease i eksportuje znormalizowane FULLMAG_BUILD_ROOT do zapisu dokładnego receipt. Usunięto także niedopuszczalny pattern uploadu zawierający '..'. Zmiana resolvera i hostowych ustawień nie jest potrzebna.
+
+Scope CI `38481140323`: E0308 w existing both_ir_versions_reject_a_missing_antenna_selection_reference: legacy StudyIR przypisano do typed StudyIRV04. Dalszy przegląd wykazał, że StudyIRV04 nie ma wariantu AntennaFieldSolve; samą zmianą deserializacji nie można zachować zakładanej semantyki testu. Trwa sprawdzenie publicznego kontraktu anten v0.4 przed naprawą — zakresu testu nie zredukowano dla uzyskania PASS.
+
+PR #97 jest closed/merged, merge commit `911902d6d545d1471c77290eedef1a1b6937fb62`; PR #102 closed bez merge. Zamknięcie PR nie dowodzi zakończenia pozostałych napraw audytu. Lokalny checkout/index pozostają chronione; brak lokalnych testów, buildów, Node i zmian Cargo.lock.
+
+Niezależny prerequisite CI: uzupełnienie SceneDocument::default o pięć pustych kolekcji antenowych, zgodnie z pustymi serde defaults i istniejącą poprawką mastera. Zmiana obejmuje tylko konstruktor pustego dokumentu, bez modyfikacji danych authored ani mappingów. Atomic Windows/Linux gate ma kwalifikować nowy combined snapshot; do wyniku pozostaje PENDING.

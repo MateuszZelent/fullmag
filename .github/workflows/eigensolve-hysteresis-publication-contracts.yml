@@ -6,11 +6,17 @@ on:
     paths:
       - 'crates/fullmag-runner/src/autosave_zarr.rs'
       - 'crates/fullmag-runner/src/hysteresis.rs'
+      - 'crates/fullmag-authoring/src/scene.rs'
+      - 'crates/fullmag-ir/tests/ir_tests.rs'
+      - 'scripts/fullmag_storage.py'
       - '.github/workflows/eigensolve-hysteresis-publication-contracts.yml'
   pull_request:
     paths:
       - 'crates/fullmag-runner/src/autosave_zarr.rs'
       - 'crates/fullmag-runner/src/hysteresis.rs'
+      - 'crates/fullmag-authoring/src/scene.rs'
+      - 'crates/fullmag-ir/tests/ir_tests.rs'
+      - 'scripts/fullmag_storage.py'
       - '.github/workflows/eigensolve-hysteresis-publication-contracts.yml'
 
 jobs:
@@ -25,14 +31,29 @@ jobs:
             profile: windows-native
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
-    env:
-      FULLMAG_PROJECT_STORAGE_ROOT: ${{ github.workspace }}/../storage
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
         with:
           python-version: '3.11'
       - uses: dtolnay/rust-toolchain@stable
+      - name: Resolve canonical managed storage
+        shell: python
+        run: |
+          import json
+          import os
+          import subprocess
+          import sys
+          layout = json.loads(subprocess.check_output([
+              sys.executable, "-B", "scripts/fullmag_storage.py", "resolve",
+              "--profile", "${{ matrix.profile }}", "--create",
+          ], text=True))
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as environment:
+              for name in ("FULLMAG_PROJECT_STORAGE_ROOT", "FULLMAG_BUILD_ROOT"):
+                  environment.write(f"{name}={layout['env'][name]}\n")
+          print(json.dumps({key: layout[key] for key in (
+              "repo_root", "project_root", "storage_root", "build_root", "profile",
+          )}, indent=2))
       - name: Prepare managed Cargo paths
         shell: bash
         run: python -B scripts/fullmag_storage.py prepare-links --profile '${{ matrix.profile }}' --compat
@@ -57,5 +78,5 @@ jobs:
           path: |
             ${{ runner.temp }}/atomic-json-writer.log
             ${{ runner.temp }}/hysteresis-atomic-progress.log
-            ${{ env.FULLMAG_PROJECT_STORAGE_ROOT }}/builds/**/build-status.json
+            ${{ env.FULLMAG_BUILD_ROOT }}/build-status.json
           if-no-files-found: error
