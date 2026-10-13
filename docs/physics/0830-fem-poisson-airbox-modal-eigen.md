@@ -1,3 +1,47 @@
+<!-- k0-window-iteration-limit-recovery-20261013 -->
+(k0-window-iteration-limit-recovery)=
+## Ograniczone ponowienie podokna po wyczerpaniu iteracji EPS
+
+Dowód runtime #243 pokazał wyczerpanie iteracji EPS w jednym z 50 podokien K0,
+przy poprawnym zakończeniu pozostałych 49. Dodatnie kody zakończenia EPS,
+residual oryginalnego deskryptora, obie krawędzie lokalnego przedziału oraz
+zgodność klastrów dwóch harmonogramów pozostają wymagane. Częściowo zbieżne
+wektory z nieudanego solve pozostają wyłącznie diagnostyką.
+
+Dla FEM CPU K0 dopuszczamy ograniczone ponowienie wyłącznie po bezpiecznie
+zakończonym `EPSSolve`, gdy dostępny kod zakończenia jest dokładnie
+`EPS_DIVERGED_ITS`. Nie dotyczy to błędu wywołania PETSc, breakdown, anulowania,
+kwarantanny procesu, utraty kontekstu ani niebezpiecznego lifetime EPS.
+Nie wolno ponawiać podokna, gdy ekstrakcja lub certyfikacja którejkolwiek
+obserwowanej pary Ritz zakończyła się błędem lub odrzuceniem residualu.
+
+Ponowienie zwiększa lokalny `requested_mode_count` zgodnie z istniejącą regułą
+podwajania, a przez nią NEV i NCV, zachowując ten sam shift, budżet iteracji,
+operator, granice okna i tolerancje. Obowiązują istniejące limity requestu i
+wymiaru operatora oraz najwyżej dwa ponowienia po wyczerpaniu iteracji na
+podokno. Po odzyskaniu zbieżności wynik przechodzi niezmienione testy pokrycia,
+residualu i zgodności dwóch harmonogramów. Wyczerpanie limitu nadal kończy
+okno błędem. Diagnostyka oddzielnie zapisuje liczbę ponowień i pracę wykonanych
+nieudanych prób, zamiast ukrywać wyczerpanie iteracji za sukcesem ostatniej.
+
+Nie zmieniamy Python DSL, `ProblemIR`, żądanego trybu, jednostek SI, fazy,
+operatorów demag ani polityki fallbacku. FEM GPU i obie realizacje FDM nie
+korzystają z tej polityki. Non-k0 wymaga odrębnego rzeczywistego certyfikatu
+kompletności: sukces solve i mały residual nie zastępują liczby modów.
+
+Źródłowy owner: `backends/fem/cpu/frequency_domain/poisson_airbox_schur_matshell.hpp` +
+`poisson_airbox_window_iteration_limit_retry_eligible`; wywołanie:
+`backends/fem/cpu/frequency_domain/poisson_airbox_schur_matshell.cpp` + `solve_poisson_airbox_modal_eigen_cpu_schur`.
+Regresja predykatu:
+`backends/fem/tests/frequency_domain/poisson_airbox_schur_matshell_test.cpp` +
+`WindowIterationLimitRecoveryEligibilityPreservesFailureBoundaries`, wykonywana
+tylko w GitHub Actions przez `scripts/ci/run_modal_cabi_contract.py` + `main`.
+Regresja predykatu obejmuje kwalifikację retry, wykluczenia awarii i limity.
+Nie wykonuje produkcyjnego EPSSolve; ograniczony nieudany solve i odzyskanie
+zbieżności wymagają osobnych dowodów runtime. Stan: przygotowana poprawka;
+kompilacja, testy natywne oraz runtime naprawy **NOT VERIFIED**. Wynik #243
+nie dowodzi działania przyszłej poprawki.
+
 <!-- scene-pbc-roundtrip-contract-20261005 -->
 (scene-pbc-roundtrip-contract)=
 ## Zachowanie jawnej periodyczności podczas eksportu dokumentu sceny
@@ -1522,6 +1566,8 @@ managed manifest, not these links alone.
 
 | Equation/claim | Lane | Repository path + stable symbol | Responsibility | Tests | Evidence status | Immutable link |
 |---|---|---|---|---|---|---|
+| source-k0-window-iteration-limit-recovery | FEM CPU | `backends/fem/cpu/frequency_domain/poisson_airbox_schur_matshell.hpp` + `poisson_airbox_window_iteration_limit_retry_eligible` | Bounded recovery only for safe EPS iteration-limit termination; existing residual and coverage gates remain mandatory. | native eligibility regression in GitHub Actions | compilation and managed runtime NOT VERIFIED | new task checkpoint required |
+| source-k0-window-iteration-limit-regression | FEM CPU | `backends/fem/tests/frequency_domain/poisson_airbox_schur_matshell_test.cpp` + `WindowIterationLimitRecoveryEligibilityPreservesFailureBoundaries` | Eligible retry and rejected error, lifetime, residual and dimension-limit cases. | dependency-free native CI contract | compilation NOT VERIFIED | new task checkpoint required |
 | source-nearest-ksp-shared-consumer | FEM CPU | `scripts/de_shifted_ksp_trial.py` + `_validate_shifted_solve_diagnostics` | Shared strict true-residual configuration/count/criterion validation for nearest and window; no synthetic window or recursive residual substitution. | interpreted regression | source/fixtures only; managed nearest NOT VERIFIED | current task checkpoint required |
 | source-nearest-ksp-selection-consumer | FEM CPU | `scripts/de_shifted_ksp_trial.py` + `validate_shifted_ksp_trial` | Single nonzero indexed Floquet nearest metadata, target, restart and EPS-dimensions binding; selected-only result, no spectrum completeness. | interpreted regression | source/fixtures only; managed nearest NOT VERIFIED | current task checkpoint required |
 | source-nearest-ksp-driver-admission | FEM CPU | `scripts/run_de_100nm_pilot.py` + `_validate_shifted_ksp_trial_request` | Admit explicit native single-nonzero DE/BV nearest trial; reject dense/Gamma/grouped selection. | interpreted regression | source/fixtures only; managed nearest NOT VERIFIED | current task checkpoint required |

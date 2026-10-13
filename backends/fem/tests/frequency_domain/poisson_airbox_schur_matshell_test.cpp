@@ -614,6 +614,126 @@ void SubwindowTerminationFormatterPreservesMeasuredNullableEpsFields()
         "cancellation must preserve successfully queried EPS termination");
 }
 
+void WindowIterationLimitRecoveryEligibilityPreservesFailureBoundaries()
+{
+    constexpr int kIterationLimitReason = -71;
+    fd::PoissonAirboxWindowIterationRetryEligibilityInput input{};
+    input.solve_status = fd::FrequencyDomainStatus::solve_error;
+    input.eps_reason_available = true;
+    input.slepc_converged_reason_code = kIterationLimitReason;
+    input.observed_ritz_processing_clean = true;
+    input.current_requested_mode_count = 4u;
+    input.next_requested_mode_count = 8u;
+    input.maximum_requested_mode_count = 8u;
+    input.current_nev = 16u;
+    input.next_nev = 32u;
+    input.maximum_nev = 63u;
+
+    check(fd::poisson_airbox_window_iteration_limit_retry_eligible(
+              input, kIterationLimitReason),
+          "clean EPS iteration exhaustion with bounded request growth must be eligible");
+    input.iteration_limit_retry_count = 1u;
+    check(fd::poisson_airbox_window_iteration_limit_retry_eligible(
+              input, kIterationLimitReason),
+          "a second bounded EPS iteration-limit retry may still be eligible");
+    input.iteration_limit_retry_count = 2u;
+    check(!fd::poisson_airbox_window_iteration_limit_retry_eligible(
+              input, kIterationLimitReason),
+          "a subwindow must stop after two EPS iteration-limit retries");
+
+    input.iteration_limit_retry_count = 0u;
+    check(!fd::poisson_airbox_window_iteration_limit_retry_eligible(
+              input, kIterationLimitReason - 1),
+          "only the caller-supplied EPS_DIVERGED_ITS reason may retry");
+    auto rejected = input;
+    rejected.solve_status = fd::FrequencyDomainStatus::ok;
+    check(!fd::poisson_airbox_window_iteration_limit_retry_eligible(
+              rejected, kIterationLimitReason),
+          "a converged solve must use the existing coverage path");
+    rejected = input;
+    rejected.solve_status = fd::FrequencyDomainStatus::interrupted;
+    check(!fd::poisson_airbox_window_iteration_limit_retry_eligible(
+              rejected, kIterationLimitReason),
+          "cancellation must not enter iteration-limit recovery");
+    rejected = input;
+    rejected.eps_reason_available = false;
+    check(!fd::poisson_airbox_window_iteration_limit_retry_eligible(
+              rejected, kIterationLimitReason),
+          "an unavailable EPS reason must fail closed");
+    rejected = input;
+    rejected.slepc_converged_reason_code = kIterationLimitReason - 1;
+    check(!fd::poisson_airbox_window_iteration_limit_retry_eligible(
+              rejected, kIterationLimitReason),
+          "other negative EPS reasons must fail closed");
+
+    rejected = input;
+    rejected.eps_solve_error_code_available = true;
+    check(!fd::poisson_airbox_window_iteration_limit_retry_eligible(
+              rejected, kIterationLimitReason),
+          "a PETSc solve error must never retry as ordinary EPS exhaustion");
+    rejected = input;
+    rejected.cancellation_observed = true;
+    check(!fd::poisson_airbox_window_iteration_limit_retry_eligible(
+              rejected, kIterationLimitReason),
+          "an observed cancellation must block retry");
+    rejected = input;
+    rejected.slepc_process_quarantined = true;
+    check(!fd::poisson_airbox_window_iteration_limit_retry_eligible(
+              rejected, kIterationLimitReason),
+          "a quarantined SLEPc process must not be reused");
+    rejected = input;
+    rejected.operator_context_invalidated = true;
+    check(!fd::poisson_airbox_window_iteration_limit_retry_eligible(
+              rejected, kIterationLimitReason),
+          "an invalidated operator context must not retry");
+    rejected = input;
+    rejected.eps_lifetime_unsafe = true;
+    check(!fd::poisson_airbox_window_iteration_limit_retry_eligible(
+              rejected, kIterationLimitReason),
+          "an unsafe EPS lifetime must fail closed");
+    rejected = input;
+    rejected.observed_ritz_processing_clean = false;
+    check(!fd::poisson_airbox_window_iteration_limit_retry_eligible(
+              rejected, kIterationLimitReason),
+          "an extraction or residual rejection must block recovery");
+    rejected = input;
+    rejected.rejection_stage_count = 1u;
+    check(!fd::poisson_airbox_window_iteration_limit_retry_eligible(
+              rejected, kIterationLimitReason),
+          "a recorded rejection stage must block recovery");
+
+    rejected = input;
+    rejected.current_requested_mode_count = 8u;
+    check(!fd::poisson_airbox_window_iteration_limit_retry_eligible(
+              rejected, kIterationLimitReason),
+          "the existing requested-mode cap must bound iteration recovery");
+    rejected = input;
+    rejected.next_requested_mode_count = 9u;
+    check(!fd::poisson_airbox_window_iteration_limit_retry_eligible(
+              rejected, kIterationLimitReason),
+          "a retry must not exceed the subwindow requested-mode cap");
+    rejected = input;
+    rejected.next_requested_mode_count = rejected.current_requested_mode_count;
+    check(!fd::poisson_airbox_window_iteration_limit_retry_eligible(
+              rejected, kIterationLimitReason),
+          "a retry must strictly increase the requested mode count");
+    rejected = input;
+    rejected.current_nev = rejected.maximum_nev;
+    check(!fd::poisson_airbox_window_iteration_limit_retry_eligible(
+              rejected, kIterationLimitReason),
+          "the existing NEV cap must bound iteration recovery");
+    rejected = input;
+    rejected.next_nev = rejected.maximum_nev + 1u;
+    check(!fd::poisson_airbox_window_iteration_limit_retry_eligible(
+              rejected, kIterationLimitReason),
+          "a retry must not exceed the split-operator NEV cap");
+    rejected = input;
+    rejected.next_nev = rejected.current_nev;
+    check(!fd::poisson_airbox_window_iteration_limit_retry_eligible(
+              rejected, kIterationLimitReason),
+          "a retry must strictly increase NEV");
+}
+
 void EpsDimensionsFormatterPreservesSignedQueriesAndBoundsBuffers()
 {
     char json[192]{};
@@ -1023,6 +1143,7 @@ int main()
     ModalKrylovTuningRejectsMalformedValuesAndInvalidDefaults();
     ModalKspProgressUsesLinearResidualSemanticsAndValidJson();
     SubwindowTerminationFormatterPreservesMeasuredNullableEpsFields();
+    (WindowIterationLimitRecoveryEligibilityPreservesFailureBoundaries)();
     EpsDimensionsFormatterPreservesSignedQueriesAndBoundsBuffers();
     CertifiesSchurMatShellAgainstFullCoupledSparseReference();
     PlannerRequiresExplicitCertifiedSchurSelection();

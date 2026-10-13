@@ -1483,6 +1483,18 @@
       "path": "packages/fullmag-py/src/fullmag/runtime/script_builder.py",
       "symbol": "render_scene_document_as_script",
       "responsibility": "Recreate editable public scripts without losing the independently authored PBC policy."
+    },
+    {
+      "id": "source-k0-window-iteration-limit-recovery",
+      "path": "backends/fem/cpu/frequency_domain/poisson_airbox_schur_matshell.hpp",
+      "symbol": "poisson_airbox_window_iteration_limit_retry_eligible",
+      "responsibility": "Admit bounded safe EPS iteration-limit recovery without relaxing residual/coverage/unsafe-lifetime boundaries."
+    },
+    {
+      "id": "source-k0-window-iteration-limit-regression",
+      "path": "backends/fem/tests/frequency_domain/poisson_airbox_schur_matshell_test.cpp",
+      "symbol": "WindowIterationLimitRecoveryEligibilityPreservesFailureBoundaries",
+      "responsibility": "Exercise safe retry and rejected error/cancellation/lifetime/request-limit cases in native CI only."
     }
   ],
   "public_api": {

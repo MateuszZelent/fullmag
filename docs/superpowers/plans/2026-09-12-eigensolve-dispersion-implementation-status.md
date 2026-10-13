@@ -8649,3 +8649,79 @@ oraz konwergencja i identyczne porównanie COMSOL. Full S00–S12 OPEN.
 Build #243 nadal ma niezmienioną kapsułę 181b4e7b; nowy zapis dokumentacji
 nie zmienia jego źródeł ani nie uruchamia duplikatu. Obserwator sesji 45268
 czeka na succeeded/exit0 przed canonical driver de-smoke-two.
+
+
+## 2026-10-13 — build243 terminal, punkty signed ±2 i otwarte bramki okna
+
+Pełny zakres S00–S12 pozostaje OPEN; nie zastępujemy go dwoma punktami DE.
+Managed build #243 (`d622e1b693e74b2b9d49bd1fe4941adf`) osiągnął
+`succeeded`, exit0, z source 181b4e7b4e8b749cc5de3af0c15b3317e468306b.
+Attestacje runtime/dependency PASS, PETSc 3.24.6 i SLEPc 3.24.3, FEM CPU.
+
+Na rzeczywistym filmie DE 40×40×10 nm / 3 warstwy / hmax 10 nm, Ms = 800000 A/m,
+A = 13e-12 J/m, gamma0 = 221100 m/(A s), Bx = 0.1 T, PBC x/y, demag Poisson airbox
+2µm z każdej strony, niezależne runy dały:
+
+| k_y [rad/µm] | FEM [GHz] | DE n0 open-film [GHz] | Relative residual L2 |
+|---:|---:|---:|---:|
+| -2 | 9.722781258027445 | 9.725724283841093 | 8.639400207169205e-15 |
+| +2 | 9.722781146398083 | 9.725724283841093 | 8.823597332672856e-15 |
+
+Run IDs: negative 5d2df8ee94bf4bf9b2128e995dfd4680,
+positive 3f77817ff6eb4dc3bee147068da140f9. Rozmiary i SHA256 wszystkich
+wymaganych artefaktów ponownie sprawdzone; row preflight i independent
+physical-potential/element-demag reconstruction PASS. Oba runy
+`completed_unqualified`: **nie są pełną kwalifikacją naukową ani dowodem
+kompletności**. Różnica od analityki n0 wynosi około -0.0303%; konieczne
+nadal branch identity, mesh/airbox/mode convergence. K0 odrzucono i nie
+umieszczono na nowym diagnostycznym wykresie.
+
+### Konkretne naprawy wymagane po tym wykonaniu
+
+1. **K0 EPS recovery:** pilot dwóch punktów zatrzymał się już przy Gamma.
+   49/50 podokien przeszło; refinement shift 9.3203125 GHz wyczerpał 2000
+   iteracji EPS (reason -1, 3 converged pairs), kandydat 9.299249697 GHz pozostał
+   nieopublikowany. Scheduler w kapsule #243 zwiększał lokalny request wyłącznie
+   po status ok / saturated coverage; bezpieczna granica recovery została
+   opisana w 0830, anchor `k0-window-iteration-limit-recovery`.
+   Przygotowana poprawka dodaje ograniczone recovery tylko EPS_DIVERGED_ITS,
+   maksymalnie dwie próby w istniejących granicach request/NEV. Zachowuje
+   fresh EPS, residual, obie krawędzie i two-pass cluster certificate oraz
+   historię nieudanych prób także przed hard-error return. Review źródeł,
+   mapa dokumentacji i 38 lekkich testów walidatora PASS; kompilacja CI
+   oraz nowy managed runtime nadal NOT VERIFIED.
+   Regresja predykatu: istniejący native Schur contract w GitHub Actions;
+   rzeczywisty dowód naprawy dopiero z nowego managed build i obu punktów.
+2. **Non-k0 count certificate:** w
+   `production_cpu_modal_eigen.cpp::solve_sparse_production_modal_window_payload`
+   oraz `production_window_diagnostics_json` wynik pozostaje `complete=false`,
+   `window_completeness.status=not_certified`, `certification_method=none`,
+   `additional_modes_may_exist=true`. To rzeczywisty brak count-certificate;
+   sam `status=ok`, pełny residual lub dwa zgodne punkty nie zamykają bramki.
+   Nie wolno zmienić flag bez wykonanej certyfikacji. Następny przyrost musi
+   objąć actual Floquet Schur operator, guarded/full-window retrieval,
+   niezależny certyfikat kompletności z odrzucaniem brakujących/rejected modes,
+   binding do k/mesh/source i spójne native→Rust→artifact→UI semantics.
+   Nie zastępujemy tej trasy domyślnym dense oracle ani analityką.
+3. **A1 cap/PBC order:** izolacja kolejnych operacji wskazuje pierwszą
+   mutację dokładnie przy `setPeriodic` pary x ścian górnej warstwy filmu:
+   39 istniejących węzłów zmienia XYZ, 79 trójkątów capu zmienia geometrię.
+   Para y daje łącznie 78 przesuniętych węzłów i 158 zmienionych trójkątów.
+   Synchronizacja CAD, samo seedowanie, subdivision i generate3 nie są
+   pierwszym źródłem tej mutacji. Zadeklarowanie PBC przed seedowaniem
+   zachowuje cap, ale generate3 odrzuca brak odpowiednika węzła 3565
+   krzywej 14 na krzywej 16; mapy sześciu ścian filmu pozostają puste.
+   Bitowe przeniesienie XYZ i parametrów 5805 węzłów / 11118 parametrów
+   nie usuwa tego błędu. Hipoteza braku samych parametrów jest odrzucona.
+   Potrzebna osobna analiza klasyfikacji węzłów seeded CAD i periodycznych
+   krawędzi. Bez produkcyjnej zmiany, snapowania ani luzowania tolerancji.
+   Brak PBC nie jest rozwiązaniem.
+4. **Publikacja/broader goal:** po naprawach wciąż wymagane signed 15 / full path,
+   serial/adaptive parity, pełne bands window, convergence mesh/airbox/modes,
+   identical COMSOL A1, S09 typed 2.5D / MFEM owner, interactions/GPU, real GUI/WebGL,
+   review i integracja/cleanup. Nie oznaczamy żadnej z tych bramek jako
+   ukończonej na podstawie nowych dwóch punktów.
+
+Szczegółowe dowody lokalne: katalog `layered-cap-sliver-diagnostic-20261013`
+w task visualizations, raport `build243-de-signed-pair-report-20261013.md`,
+JSON pair, K0 failure i `seeded-film-cap-stage-probe-20261013.json`.

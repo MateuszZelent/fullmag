@@ -21,7 +21,8 @@ def main() -> int:
         "-DFULLMAG_FEM_WITH_SLEPC=OFF",
     ]
     target = "fem_modal_eigen_contract"
-    targets = [target, "fem_mode_kinematics_contract", "fem_floquet_modal_solver_contract"]
+    targets = [target, "fem_mode_kinematics_contract", "fem_floquet_modal_solver_contract",
+               "fem_poisson_airbox_schur_matshell_contract"]
     receipt = {
         "schema": "fullmag.ci.native_contract.v1", "source_sha": None, "requested_sha": os.environ.get("GITHUB_SHA"),
         "target": target, "targets": targets, "cmake_flags": flags,
@@ -38,7 +39,7 @@ def main() -> int:
             ["cmake", "-S", str(source / "native"), "-B", str(build), *flags],
             ["cmake", "--build", str(build), "--target", *targets, "--parallel", "2"],
             ["ctest", "--test-dir", str(build / "backends" / "fem"),
-             "-R", "^(fem_modal_eigen_contract|fem_mode_kinematics_contract|fem_floquet_modal_solver_contract)$", "--output-on-failure", "--no-tests=error"],
+             "-R", "^(fem_modal_eigen_contract|fem_mode_kinematics_contract|fem_floquet_modal_solver_contract|fem_poisson_airbox_schur_matshell_contract)$", "--output-on-failure", "--no-tests=error"],
         ]
         for index, command in enumerate(commands):
             log = root / f"step-{index}.log"

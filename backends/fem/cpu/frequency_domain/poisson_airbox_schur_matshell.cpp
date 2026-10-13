@@ -60,6 +60,7 @@ using Complex = std::complex<double>;
 
 constexpr std::uint64_t kFnvOffset = 1469598103934665603ULL;
 constexpr std::uint64_t kFnvPrime = 1099511628211ULL;
+constexpr std::uint32_t kMaximumWindowIterationLimitRetries = 2u;
 
 struct ComplexDenseMatrix {
     std::uint64_t rows = 0;
@@ -3767,6 +3768,32 @@ bool format_poisson_airbox_eps_dimensions_json(
     return true;
 }
 
+bool poisson_airbox_window_iteration_limit_retry_eligible(
+    const PoissonAirboxWindowIterationRetryEligibilityInput &input,
+    int eps_diverged_its_reason_code) noexcept
+{
+    return input.solve_status == FrequencyDomainStatus::solve_error &&
+        input.eps_reason_available &&
+        input.slepc_converged_reason_code == eps_diverged_its_reason_code &&
+        !input.eps_solve_error_code_available &&
+        !input.cancellation_observed &&
+        !input.slepc_process_quarantined &&
+        !input.operator_context_invalidated &&
+        !input.eps_lifetime_unsafe &&
+        input.observed_ritz_processing_clean &&
+        input.rejection_stage_count == 0u &&
+        input.iteration_limit_retry_count <
+            kMaximumWindowIterationLimitRetries &&
+        input.current_requested_mode_count > 0u &&
+        input.next_requested_mode_count > input.current_requested_mode_count &&
+        input.current_requested_mode_count < input.maximum_requested_mode_count &&
+        input.next_requested_mode_count <= input.maximum_requested_mode_count &&
+        input.current_nev > 0u &&
+        input.next_nev > input.current_nev &&
+        input.current_nev < input.maximum_nev &&
+        input.next_nev <= input.maximum_nev;
+}
+
 FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
     const PoissonAirboxEigenBlockProblem &problem,
     PoissonAirboxModalEigenResult *out_result) noexcept
@@ -4167,6 +4194,46 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
                 FrequencyDomainStatus shifted_status =
                     FrequencyDomainStatus::solve_error;
                 std::uint32_t subwindow_retry_count = 0u;
+                struct IterationLimitRetrySummary {
+                    int reason_code = 0;
+                    std::uint32_t outer_iterations = 0u;
+                    std::uint32_t converged_eigenpair_count = 0u;
+                    std::uint64_t requested_nev = 0u;
+                    std::uint64_t requested_ncv = 0u;
+                    double elapsed_seconds = 0.0;
+                };
+                constexpr std::size_t maximum_iteration_limit_retry_count =
+                    kMaximumWindowIterationLimitRetries;
+                std::array<IterationLimitRetrySummary,
+                           maximum_iteration_limit_retry_count>
+                    iteration_limit_retry_history{};
+                std::size_t iteration_limit_retry_history_size = 0u;
+                std::uint32_t iteration_limit_retry_count = 0u;
+                auto append_iteration_limit_retry_history_json = [&]() {
+                    append_subwindow_json(
+                        "\"iteration_limit_retry_count\":%u,"
+                        "\"iteration_limit_retry_history\":[",
+                        iteration_limit_retry_count);
+                    for (std::size_t retry_index = 0u;
+                         retry_index < iteration_limit_retry_history_size;
+                         ++retry_index) {
+                        const IterationLimitRetrySummary &retry =
+                            iteration_limit_retry_history[retry_index];
+                        append_subwindow_json(
+                            "%s{\"reason_code\":%d,\"outer_iterations\":%u,"
+                            "\"converged_eigenpair_count\":%u,"
+                            "\"requested_nev\":%llu,\"requested_ncv\":%llu,"
+                            "\"elapsed_seconds\":%.17g}",
+                            retry_index == 0u ? "" : ",",
+                            retry.reason_code,
+                            retry.outer_iterations,
+                            retry.converged_eigenpair_count,
+                            static_cast<unsigned long long>(retry.requested_nev),
+                            static_cast<unsigned long long>(retry.requested_ncv),
+                            retry.elapsed_seconds);
+                    }
+                    append_subwindow_json("%s", "]");
+                };
                 std::size_t final_local_accepted_mode_count = 0u;
                 double final_selected_coverage_radius_hz = 0.0;
                 double final_selected_frequency_min_hz = 0.0;
@@ -4198,6 +4265,11 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
                     shifted_status = solve_poisson_airbox_modal_eigen_cpu_schur(
                         shifted_problem,
                         shifted_result_storage.get());
+                    const auto attempt_finished_at = std::chrono::steady_clock::now();
+                    const double attempt_elapsed_seconds =
+                        std::chrono::duration<double>(
+                            attempt_finished_at - attempt_started_at)
+                            .count();
                     if (window_operator_context.invalidated) {
                         break;
                     }
@@ -4363,19 +4435,93 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
                          rejection_stage_count > 0u) &&
                         !request_limit_reached &&
                         !nev_limit_reached;
-                    if (!local_request_saturated) {
-                        break;
-                    }
                     const std::uint32_t next_requested_mode_count =
                         std::min<std::uint32_t>(
                             maximum_subwindow_requested_mode_count,
                             std::max<std::uint32_t>(
                                 subwindow_requested_mode_count + 1u,
                                 subwindow_requested_mode_count * 2u));
+                    const std::uint64_t next_nev =
+                        resolved_nev(next_requested_mode_count);
+                    PoissonAirboxWindowIterationRetryEligibilityInput
+                        iteration_retry_input{};
+                    iteration_retry_input.solve_status = shifted_status;
+                    iteration_retry_input.eps_reason_available =
+                        attempted_result.eps_reason_available;
+                    iteration_retry_input.slepc_converged_reason_code =
+                        attempted_result.slepc_converged_reason_code;
+                    iteration_retry_input.eps_solve_error_code_available =
+                        attempted_result.eps_solve_error_code_available;
+                    iteration_retry_input.cancellation_observed =
+                        shifted_status == FrequencyDomainStatus::interrupted ||
+                        attempted_result.eps_cancellation_observed ||
+                        poisson_airbox_modal_cancel_requested(problem);
+                    iteration_retry_input.slepc_process_quarantined =
+                        attempted_result.slepc_process_quarantined;
+                    iteration_retry_input.operator_context_invalidated =
+                        attempted_result.operator_context_invalidated ||
+                        window_operator_context.invalidated;
+                    iteration_retry_input.eps_lifetime_unsafe =
+                        attempted_result.eps_lifetime_unsafe;
+                    iteration_retry_input.observed_ritz_processing_clean =
+                        attempted_result.raw_ritz_retrieval_failed_count == 0u &&
+                        attempted_result.raw_ritz_nonfinite_count == 0u &&
+                        attempted_result.raw_ritz_complex_rejected_count == 0u &&
+                        attempted_result.action_residual_evaluation_failed_count == 0u &&
+                        attempted_result.q_vector_extraction_failed_count == 0u &&
+                        attempted_result.full_vector_reconstruction_failed_count == 0u &&
+                        attempted_result.full_vector_nonfinite_count == 0u &&
+                        attempted_result.full_residual_evaluation_failed_count == 0u &&
+                        attempted_result.full_residual_rejected_count == 0u;
+                    iteration_retry_input.rejection_stage_count =
+                        rejection_stage_count;
+                    iteration_retry_input.iteration_limit_retry_count =
+                        iteration_limit_retry_count;
+                    iteration_retry_input.current_requested_mode_count =
+                        subwindow_requested_mode_count;
+                    iteration_retry_input.next_requested_mode_count =
+                        next_requested_mode_count;
+                    iteration_retry_input.maximum_requested_mode_count =
+                        maximum_subwindow_requested_mode_count;
+                    iteration_retry_input.current_nev = attempted_nev;
+                    iteration_retry_input.next_nev = next_nev;
+                    iteration_retry_input.maximum_nev = maximum_nev;
+                    const bool iteration_limit_retry_eligible =
+                        poisson_airbox_window_iteration_limit_retry_eligible(
+                            iteration_retry_input,
+                            static_cast<int>(EPS_DIVERGED_ITS));
+                    if (iteration_limit_retry_eligible &&
+                        iteration_limit_retry_history_size <
+                            iteration_limit_retry_history.size()) {
+                        IterationLimitRetrySummary &summary =
+                            iteration_limit_retry_history[
+                                iteration_limit_retry_history_size++];
+                        summary.reason_code =
+                            attempted_result.slepc_converged_reason_code;
+                        summary.outer_iterations =
+                            attempted_result.outer_iterations;
+                        summary.converged_eigenpair_count =
+                            attempted_result.converged_eigenpair_count;
+                        summary.requested_nev = attempted_nev;
+                        summary.requested_ncv = resolved_ncv(attempted_nev);
+                        summary.elapsed_seconds = attempt_elapsed_seconds;
+                        ++iteration_limit_retry_count;
+                        ++subwindow_retry_count;
+                        subwindow_requested_mode_count =
+                            next_requested_mode_count;
+                        pass_effective_requested_mode_count[pass_index] =
+                            std::max(
+                                pass_effective_requested_mode_count[pass_index],
+                                subwindow_requested_mode_count);
+                        continue;
+                    }
+                    if (!local_request_saturated) {
+                        break;
+                    }
                     if (next_requested_mode_count <= subwindow_requested_mode_count) {
                         break;
                     }
-                    if (resolved_nev(next_requested_mode_count) <= attempted_nev) {
+                    if (next_nev <= attempted_nev) {
                         final_nev_limit_reached = true;
                         break;
                     }
@@ -4479,7 +4625,7 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
                         "\"operator_context_invalidated\":true,"
                         "\"eps_lifetime_unsafe\":true,"
                         "\"accepted_mode_count\":0,"
-                        "\"window_complete\":false}",
+                        "\"window_complete\":false,",
                         executed_subwindows_size == 1u ? "" : ",",
                         pass_index == 0u ? "base" : "refinement",
                         subwindow_index,
@@ -4492,6 +4638,8 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
                             : "\"eps_reason_available\":false,"
                               "\"slepc_converged_reason_code\":null,"
                               "\"outer_iterations\":null");
+                    append_iteration_limit_retry_history_json();
+                    append_subwindow_json("%s", "}");
                     finalize_subwindow_json();
                     return fail_production_schur(
                         problem,
@@ -4693,8 +4841,7 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
                     "\"construction_seconds\":%s,"
                     "\"shifted_setup_seconds\":%s,"
                     "\"eps_solve_seconds\":%s},"
-                    "\"stop_reason\":\"%s\",\"raw_ritz_classification\":%s,"
-                    "\"accepted_frequencies_hz\":[",
+                    "\"stop_reason\":\"%s\",\"raw_ritz_classification\":%s,",
                     pass_index == 0u && subwindow_index == 0u ? "" : ",",
                     pass_index == 0u ? "base" : "refinement",
                     subwindow_index,
@@ -4783,6 +4930,8 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
                     shifted_result.raw_ritz_classification_json[0] != '\0'
                         ? shifted_result.raw_ritz_classification_json
                         : "{\"available\":false,\"samples\":[]}");
+                append_iteration_limit_retry_history_json();
+                append_subwindow_json("%s", ",\"accepted_frequencies_hz\":[");
                 for (std::size_t accepted_index = 0;
                      accepted_index < in_window_modes.size();
                      ++accepted_index) {

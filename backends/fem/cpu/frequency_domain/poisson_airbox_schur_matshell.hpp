@@ -140,6 +140,33 @@ bool format_poisson_airbox_eps_dimensions_json(
     char *destination,
     std::size_t destination_size) noexcept;
 
+struct PoissonAirboxWindowIterationRetryEligibilityInput {
+    FrequencyDomainStatus solve_status = FrequencyDomainStatus::unavailable;
+    bool eps_reason_available = false;
+    int slepc_converged_reason_code = 0;
+    bool eps_solve_error_code_available = false;
+    bool cancellation_observed = false;
+    bool slepc_process_quarantined = false;
+    bool operator_context_invalidated = false;
+    bool eps_lifetime_unsafe = false;
+    bool observed_ritz_processing_clean = false;
+    std::uint64_t rejection_stage_count = 0;
+    std::uint32_t iteration_limit_retry_count = 0;
+    std::uint32_t current_requested_mode_count = 0;
+    std::uint32_t next_requested_mode_count = 0;
+    std::uint32_t maximum_requested_mode_count = 0;
+    std::uint64_t current_nev = 0;
+    std::uint64_t next_nev = 0;
+    std::uint64_t maximum_nev = 0;
+};
+
+// Returns true only for a clean EPS iteration-limit exhaustion with room for
+// another bounded request increase.  Pass EPS_DIVERGED_ITS explicitly so this
+// header remains independent of PETSc/SLEPc headers.
+bool poisson_airbox_window_iteration_limit_retry_eligible(
+    const PoissonAirboxWindowIterationRetryEligibilityInput &input,
+    int eps_diverged_its_reason_code) noexcept;
+
 // Production shared-domain K0 lane.  The scalar Poisson block is eliminated
 // through a persistent PETSc factorization and SLEPc operates on the
 // real-frequency-rotated Schur pencil.  Synthetic/dense certification remains
