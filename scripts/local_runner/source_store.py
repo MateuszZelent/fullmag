@@ -171,7 +171,35 @@ class SourceContentStore:
                     0o600,
                 )
             except FileExistsError:
-                _regular_file(lock_path, "content publication lock")
+                _real_directory(
+                    lock_path.parent,
+                    "content publication lock directory",
+                    create=False,
+                )
+                try:
+                    metadata = lock_path.lstat()
+                except FileNotFoundError:
+                    # The owner may remove its lock after O_EXCL reports a conflict.
+                    # Confirm the parent is still safe before retrying acquisition.
+                    _real_directory(
+                        lock_path.parent,
+                        "content publication lock directory",
+                        create=False,
+                    )
+                    if time.monotonic() >= deadline:
+                        raise SourceContentStoreError(
+                            f"content publication lock acquisition timed out: {lock_path}"
+                        )
+                    time.sleep(0.025)
+                    continue
+                except OSError as error:
+                    raise SourceContentStoreError(
+                        f"cannot inspect content publication lock: {lock_path}"
+                    ) from error
+                if _is_reparse(metadata) or not stat.S_ISREG(metadata.st_mode):
+                    raise SourceContentStoreError(
+                        f"content publication lock is not a regular file: {lock_path}"
+                    )
                 if time.monotonic() >= deadline:
                     raise SourceContentStoreError(
                         f"content publication lock is held or stale: {lock_path}"

@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import subprocess
 import tempfile
+from threading import Event
 import unittest
 from unittest.mock import patch
 
@@ -109,6 +110,214 @@ class LocalRunnerSourceStoreTests(unittest.TestCase):
             if first_file.stat().st_nlink:
                 self.assertGreaterEqual(first_file.stat().st_nlink, 3)
             self.assertFalse(object_file.with_name(object_file.name + ".lock").exists())
+
+    def test_publication_lock_retries_when_owner_releases_after_exclusive_create(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="fullmag-source-lock-race-") as raw:
+            root = Path(raw)
+            object_parent = root / "objects"
+            object_parent.mkdir()
+            object_path = object_parent / "digest-100644"
+            lock_path = object_parent / "digest-100644.lock"
+            store = source_store.SourceContentStore(root / "store")
+            owner = store._publication_lock(object_path)
+            owner.__enter__()
+            owner_active = True
+            contender_observed_conflict = Event()
+            owner_released = Event()
+            real_open = source_store.os.open
+
+            def pause_after_conflict(*args, **kwargs):
+                try:
+                    return real_open(*args, **kwargs)
+                except FileExistsError:
+                    if Path(args[0]) == lock_path and not contender_observed_conflict.is_set():
+                        contender_observed_conflict.set()
+                        if not owner_released.wait(timeout=5):
+                            raise TimeoutError("owner release was not signaled")
+                    raise
+
+            def contender() -> str:
+                with store._publication_lock(object_path):
+                    return "acquired"
+
+            try:
+                with patch.object(source_store.os, "open", side_effect=pause_after_conflict):
+                    with ThreadPoolExecutor(max_workers=1) as executor:
+                        pending = executor.submit(contender)
+                        self.assertTrue(contender_observed_conflict.wait(timeout=5))
+                        owner.__exit__(None, None, None)
+                        owner_active = False
+                        owner_released.set()
+                        self.assertEqual(pending.result(timeout=5), "acquired")
+            finally:
+                owner_released.set()
+                if owner_active:
+                    owner.__exit__(None, None, None)
+            self.assertFalse(lock_path.exists())
+
+    def test_publication_lock_rejects_nonregular_leaf(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="fullmag-source-lock-unsafe-") as raw:
+            object_parent = Path(raw) / "objects"
+            object_parent.mkdir()
+            object_path = object_parent / "digest-100644"
+            object_path.with_name(object_path.name + ".lock").mkdir()
+            store = source_store.SourceContentStore(Path(raw) / "store")
+
+            with patch.object(source_store.os, "open", side_effect=FileExistsError) as open_mock:
+                with self.assertRaisesRegex(
+                    source_store.SourceContentStoreError,
+                    "content publication lock is not a regular file",
+                ):
+                    with store._publication_lock(object_path):
+                        self.fail("directory lock leaf must not be acquired")
+            self.assertEqual(open_mock.call_count, 1)
+
+    def test_publication_lock_rechecks_parent_when_leaf_disappears_during_lstat(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="fullmag-source-lock-parent-") as raw:
+            object_parent = Path(raw) / "objects"
+            object_parent.mkdir()
+            object_path = object_parent / "digest-100644"
+            lock_path = object_path.with_name(object_path.name + ".lock")
+            lock_path.write_text("owner\n", encoding="ascii")
+            store = source_store.SourceContentStore(Path(raw) / "store")
+            real_lstat = Path.lstat
+            real_open = source_store.os.open
+            leaf_lstat_calls = 0
+            open_calls = 0
+
+            def remove_parent_during_leaf_lstat(path: Path):
+                nonlocal leaf_lstat_calls
+                if path == lock_path:
+                    leaf_lstat_calls += 1
+                    if leaf_lstat_calls == 2:
+                        lock_path.unlink()
+                        object_parent.rmdir()
+                        raise FileNotFoundError("simulated lock release and parent loss")
+                return real_lstat(path)
+
+            def count_open(*args, **kwargs):
+                nonlocal open_calls
+                open_calls += 1
+                return real_open(*args, **kwargs)
+
+            with patch.object(Path, "lstat", new=remove_parent_during_leaf_lstat):
+                with patch.object(source_store.os, "open", side_effect=count_open):
+                    with self.assertRaisesRegex(
+                        source_store.SourceContentStoreError,
+                        "content publication lock directory does not exist",
+                    ):
+                        with store._publication_lock(object_path):
+                            self.fail("missing parent must not be treated as a release race")
+
+            self.assertEqual(leaf_lstat_calls, 2)
+            self.assertEqual(open_calls, 1)
+
+    def test_publication_lock_rejects_reparse_leaf_after_initial_guard(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="fullmag-source-lock-reparse-") as raw:
+            object_parent = Path(raw) / "objects"
+            object_parent.mkdir()
+            object_path = object_parent / "digest-100644"
+            lock_path = object_path.with_name(object_path.name + ".lock")
+            lock_path.write_text("owner\n", encoding="ascii")
+            store = source_store.SourceContentStore(Path(raw) / "store")
+            real_lstat = Path.lstat
+            leaf_lstat_calls = 0
+            open_calls = 0
+
+            class ReparseMetadata:
+                st_mode = source_store.stat.S_IFREG | 0o600
+                st_file_attributes = 0x400
+
+            def expose_reparse_on_leaf_lstat(path: Path):
+                nonlocal leaf_lstat_calls
+                if path == lock_path:
+                    leaf_lstat_calls += 1
+                    if leaf_lstat_calls == 2:
+                        return ReparseMetadata()
+                return real_lstat(path)
+
+            real_open = source_store.os.open
+
+            def count_open(*args, **kwargs):
+                nonlocal open_calls
+                open_calls += 1
+                return real_open(*args, **kwargs)
+
+            with patch.object(Path, "lstat", new=expose_reparse_on_leaf_lstat):
+                with patch.object(source_store.os, "open", side_effect=count_open):
+                    with self.assertRaisesRegex(
+                        source_store.SourceContentStoreError,
+                        "content publication lock is not a regular file",
+                    ):
+                        with store._publication_lock(object_path):
+                            self.fail("reparse lock leaf must not be acquired")
+
+            self.assertEqual(leaf_lstat_calls, 2)
+            self.assertEqual(open_calls, 1)
+
+    def test_publication_lock_does_not_retry_leaf_permission_errors(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="fullmag-source-lock-io-") as raw:
+            object_parent = Path(raw) / "objects"
+            object_parent.mkdir()
+            object_path = object_parent / "digest-100644"
+            lock_path = object_path.with_name(object_path.name + ".lock")
+            lock_path.write_text("owner\n", encoding="ascii")
+            store = source_store.SourceContentStore(Path(raw) / "store")
+            real_lstat = Path.lstat
+            leaf_lstat_calls = 0
+            open_calls = 0
+
+            def fail_leaf_second_lstat(path: Path):
+                nonlocal leaf_lstat_calls
+                if path == lock_path:
+                    leaf_lstat_calls += 1
+                    if leaf_lstat_calls == 2:
+                        raise PermissionError("simulated denied lock inspection")
+                return real_lstat(path)
+
+            real_open = source_store.os.open
+
+            def count_open(*args, **kwargs):
+                nonlocal open_calls
+                open_calls += 1
+                return real_open(*args, **kwargs)
+
+            with patch.object(Path, "lstat", new=fail_leaf_second_lstat):
+                with patch.object(source_store.os, "open", side_effect=count_open):
+                    with self.assertRaisesRegex(
+                        source_store.SourceContentStoreError,
+                        "cannot inspect content publication lock",
+                    ) as raised:
+                        with store._publication_lock(object_path):
+                            self.fail("permission failure must not acquire the lock")
+
+            self.assertIsInstance(raised.exception.__cause__, PermissionError)
+            self.assertEqual(leaf_lstat_calls, 2)
+            self.assertEqual(open_calls, 1)
+
+    def test_publication_lock_deadline_bounds_repeated_missing_leaf_race(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="fullmag-source-lock-deadline-") as raw:
+            object_parent = Path(raw) / "objects"
+            object_parent.mkdir()
+            object_path = object_parent / "digest-100644"
+            store = source_store.SourceContentStore(Path(raw) / "store")
+
+            with patch.object(source_store.os, "open", side_effect=FileExistsError) as open_mock:
+                with patch.object(
+                    source_store.time,
+                    "monotonic",
+                    side_effect=(0.0, 1.0, source_store._LOCK_WAIT_SECONDS + 1.0),
+                ):
+                    with patch.object(source_store.time, "sleep") as sleep_mock:
+                        with self.assertRaisesRegex(
+                            source_store.SourceContentStoreError,
+                            "content publication lock acquisition timed out",
+                        ):
+                            with store._publication_lock(object_path):
+                                self.fail("deadline must stop repeated absent-leaf conflicts")
+
+            self.assertEqual(open_mock.call_count, 2)
+            self.assertEqual(sleep_mock.call_count, 1)
 
     def test_changed_bytes_get_a_distinct_object_and_execution_copy_is_private(self) -> None:
         with tempfile.TemporaryDirectory(prefix="fullmag-source-store-test-") as raw:

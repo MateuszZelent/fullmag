@@ -587,3 +587,45 @@ Ponowiony szerszy zestaw po poprawce fixture:341 tests/2skips,
 ERROR w test_parallel_captures_share_verified_objects_and_keep_v1_identity.
 Publication lock znika po FileExistsError, przed _guard_path/lstat;
 trwa diagnoza wyścigu zwolnienia blokady. Nie wdrożono obrazu runnera.
+
+## 2026-10-13 — zgodna topologia po legalnym one-sided 2→2
+
+Poprzednia propozycja wymagała dwóch wspólnych apexów i pozostawiła trzy
+mismatche. Dalszy exact probe wybiera legalny kierunek: flipuje stronę ze
+wspólnym apexem do triangulacji drugiej strony. Wszystkie trzy brakujące
+flipy przeszły guards granic cavity, objętości, orientacji, capów, duplikatów,
+slab ownership oraz exact SAT również względem otoczenia. Liczba mismatchów
+maleje3→0. Pełny niezmieniony validator kernela PASS:142/142nodes,498tets,
+0 off-box/internal-cap freefaces,90/90 shared-cap triangles, exact slab volumes.
+To postęp topologii; strict PBC helper nadal FAIL jak dla wejścia. Brak
+kwalifikacji siatki i produkcyjnego routingu. Rozdzielamy teraz niezgodność
+translacyjnych zbiorów węzłów od triangulacji przeciwległych faset; brak
+Gmsh node-pairs w zapisanym NPZ nie daje podstaw do pominięcia PBC.
+Raport: visualization delaunay-slab-proposal-20261013/
+exact-quad-one-sided-reconciliation-report.md; kod repo bez zmian tego probe.
+
+Bieżąca kontrola runnera: healthy/worker_alive, bez active jobs i retention;
+free_storage_bytes3430211584 poniżej progu8GiB. CAS2660/7721 bez wznowienia.
+Naprawa release-race publication lock w implementacji; bramki i rollout OPEN.
+
+Granica dowodu PBC: helper porównuje surowe współrzędne floating-point
+po dokładnej translacji. Produkcyjny adapter wymaga dostarczonej kanonicznej
+bijekcji node-pairs, pełnej zgodności triangle IDs i przemienności naroży;
+residual translacji porównuje z już zadanym tolerance_m. Dlatego helperFAIL
+nie jest sam w sobie dowodem fizycznej nieperiodyczności. Bez canonical
+Gmsh maps kwalifikacja produkcyjnego kontraktu pozostaje NOT VERIFIED.
+Nie dodajemy nowej tolerancji ani dopasowania węzłów, aby obejść bramkę.
+
+Release-race CAS naprawiony w source_store._publication_lock: po O_EXCL
+FileExistsError parent jest sprawdzany no-follow; tylko ENOENT liścia po
+ponownej walidacji istniejącego parenta prowadzi do ograniczonego retry.
+Reparse/nonregular, utrata parenta i PermissionError pozostają fail-closed;
+release ownership, digest i ReadOnly validation bez zmian. Sześć nowych
+regresji PASS, cały source_store18/18PASS i parallel capture15/15PASS.
+Root review objęło wszystkie linie diffu i dodatkowe okno utraty parenta,
+reparse pojawiający się po initial guard oraz retry przed upływem deadline.
+Szerszy zestaw po poprawce:347tests,2skips,159,251s,exit0.
+Log: visualization runner-retention-fingerprint-diagnostic-20261013/
+runner-regression-after-lock-fix.log. To dowód źródłowy, nie deployment.
+Przygotowany wcześniejszy obraz3a81 nie zawiera tej późniejszej poprawki;
+przed rollout trzeba zbudować nowy obraz z aktualnego checkpointu.

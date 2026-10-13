@@ -3,7 +3,12 @@
 
 **Pełny cel S00–S12 pozostaje OPEN.** Bieżące prace wykonuje worktree
 `dispersion-mode-ui-20261008`, branch `codex/dispersion-mode-ui-20261008`.
-Poprzedni checkpoint kernela: `7a90a7d11f814bdc46869404712bace8c5f3c9fc`, na remote.
+Ostatni opublikowany checkpoint: `961aa64ef6e1d3c9466796ae9403be442cd61d1b`.
+Ruch 4→4 zapisano w75c778f4; czytnik runnera w5f76503e, fixture retention w961aa64e.
+Naprawa wyścigu zwolnienia publication lock CAS przechodzi regresje źródłowe;
+koordynator nie został jeszcze podmieniony, repair CAS nadal2660/7721.
+Kandydat retriangulacji498tet ma pełny exact topology PASS; kontrakt PBC
+wymaga kanonicznych map Gmsh i pozostaje NOT VERIFIED.
 Bieżący przyrost dodaje zatwierdzony przez użytkownika dokładny ruch 4→4;
 nie zamyka regionalnej bramki siatki ani kwalifikacji produkcyjnej.
 Oryginalny worktree dyspersji zawiera odrębną niezakończoną pracę;
