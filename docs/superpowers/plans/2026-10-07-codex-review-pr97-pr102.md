@@ -4210,3 +4210,9 @@ Nowy full-catalog resource ma własny local suffix ::complete-catalog, bez zmian
 Realtime source trace: hysteresis.rs825-856 pisze progress przedStepUpdate; orchestrator.rs1803/2219-2245 aktualizuje stage record; API session.rs2072-2080 zwiększa stages_revision; main.rs272/499-508 emituje Stages recommended_fetch. CurrentLiveSnapshot/communication policy scala progress do latest snapshot co1s, a catalog refresh jest revision-driven. Synthetic points observer nie jest obecnym wire producer; existing points/metrics guards pozostały w testach.
 
 Atomic writer opublikowany wcześniej04b14efdef865c56fda75fefc1295a912758e36e, CI38481140369 potwierdzone in_progress. Nowy UI fragment nie zastępuje jego Windows/Linux gate ani real browser/science handoff. Source publication nowego fragmentu pending; bez lokalnych testów, Node lub buildu.
+
+### 2026-10-14 — naprawa uruchamiania TypeScript po integracji
+
+Run GitHub Actions `38482194992` przeszedł 50 plików / 1116 testów frontendowych, ale pełny typecheck zatrzymał się przed uruchomieniem kompilatora na `ERR_PACKAGE_PATH_NOT_EXPORTED`. TypeScript 7.0.2 deklaruje `bin.tsc`, lecz nie eksportuje subpath `typescript/bin/tsc`.
+
+Wrapper rozwiązuje teraz eksportowany `typescript/package.json`, odczytuje względne `bin.tsc` i uruchamia je przez ten sam `process.execPath`. Wersja zależności, zakres typechecka i reguły storage pozostają zachowane. Source review ukończony; lokalnie nie wykonywano Node ani testów. Weryfikacja nowego wrappera w GitHub Actions pozostaje PENDING. Poprawki katalogu i odświeżania `4240898366` / `4240898359` pozostają `pending_ci_browser`; udany test jednostkowy nie zastępuje typechecka ani runtime/browser.
