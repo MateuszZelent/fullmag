@@ -1495,6 +1495,20 @@
       "path": "backends/fem/tests/frequency_domain/poisson_airbox_schur_matshell_test.cpp",
       "symbol": "WindowIterationLimitRecoveryEligibilityPreservesFailureBoundaries",
       "responsibility": "Exercise safe retry and rejected error/cancellation/lifetime/request-limit cases in native CI only."
+    },
+    {
+      "id": "source-reference-modal-action",
+      "path": "backends/fem/cpu/frequency_domain/poisson_airbox_modal_eigen.cpp",
+      "symbol": "apply_poisson_airbox_modal_shift_invert_action_cpu_reference",
+      "responsibility": "Bounded dense complex full-coupled algebraic action (A-sigma B)^-1 Bv; no EPS/PETSc/SLEPc dependency and no production spectrum qualification.",
+      "evidence_status": "source visible; ABI CI pending"
+    },
+    {
+      "id": "source-reference-modal-action-abi-test",
+      "path": "backends/fem/tests/frequency_domain/modal_eigen_contract_test.cpp",
+      "symbol": "modal_poisson_airbox_tail_shift_invert_action_writes_artifact",
+      "responsibility": "Require reference artifact, correct adapter and finite small residual with nonzero output independently of SLEPc availability.",
+      "evidence_status": "post-correction CI NOT VERIFIED"
     }
   ],
   "public_api": {

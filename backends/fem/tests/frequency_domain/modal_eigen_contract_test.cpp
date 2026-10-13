@@ -4250,7 +4250,6 @@ void modal_poisson_airbox_tail_shift_invert_action_writes_artifact()
             result.error_message != nullptr ? result.error_message : "null",
             result.diagnostics_json != nullptr ? result.diagnostics_json : "null");
     }
-#if FULLMAG_FEM_WITH_SLEPC
     check(result.status == FULLMAG_FEM_FD_OK,
           "modal C ABI Poisson-airbox shift-invert action must solve");
     check(contains(result.artifact_manifest_path,
@@ -4268,10 +4267,17 @@ void modal_poisson_airbox_tail_shift_invert_action_writes_artifact()
     check(artifact.find("\"full_modal_shift_invert_claim\":true") !=
               std::string::npos,
           "modal C ABI action artifact must claim true modal shift-invert");
-#else
-    check(result.status == FULLMAG_FEM_FD_UNAVAILABLE,
-          "modal C ABI Poisson-airbox shift-invert action must require SLEPc when unavailable");
-#endif
+    check(contains(artifact.c_str(),
+                   "\"solver_adapter\":\"k0_poisson_airbox_cpu_full_coupled_shift_invert_reference\""),
+          "modal C ABI action artifact must identify the dependency-free reference adapter");
+    const double residual = extract_json_number(
+        artifact.c_str(), "\"shifted_system_relative_residual\":", "Poisson reference action");
+    check(std::isfinite(residual) && residual >= 0.0 && residual <= 1.0e-10,
+          "modal C ABI reference action must solve the shifted system accurately");
+    const double output_norm = extract_json_number(
+        artifact.c_str(), "\"output_q_l2_norm\":", "Poisson reference action");
+    check(std::isfinite(output_norm) && output_norm > 0.0,
+          "modal C ABI reference action must produce finite nonzero output");
     fullmag_fem_frequency_domain_result_destroy(&result);
 }
 

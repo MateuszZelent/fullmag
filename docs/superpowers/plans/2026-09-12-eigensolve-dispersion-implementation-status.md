@@ -49,7 +49,13 @@ ABI Poisson-airbox shift-invert action przed oczekiwanym dependency status.
 Dodano wydruk rzeczywistego status/error/diagnostics wyłącznie przy
 nieoczekiwanym błędzie action, bez zmiany asercji lub parametrów.
 Pełny kontrakt nadal NOT VERIFIED do rozstrzygnięcia kolejnej przyczyny;
-nowa diagnostyka wymaga normalnego CI;
+CI38463988116/source44f9276ca i bezpośredni odczyt implementacji
+potwierdziły, że action zwraca OK bez SLEPc: to bounded dense complex
+reference, nie EPS. Usunięto nieaktualne dependency oczekiwanie testu;
+artefakt i status OK są teraz sprawdzane w obu konfiguracjach, dodatkowo
+adapter reference, finite residual<=1e-10 i finite nonzero output norm.
+Nota0830/mapa zachowują granicę reference vs production runtime.
+Poprawiona bramka oczekuje na CI;
 lokalny zakaz kompilacji testów zachowano. Aktywna kapsuła244 nie jest zmieniana.
 Build244 potwierdza stage native-build oraz działające procesy C++ MFEM/SLEPc;
 status running nie jest już wyłącznie dowodem przygotowania źródeł.

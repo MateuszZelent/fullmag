@@ -2146,3 +2146,23 @@ znaczenia NEV/NCV/MPD: [dokumentacja SLEPc EPSGetDimensions](https://slepc.upv.e
 | source-k0-eps-dimensions-format | backends/fem/cpu/frequency_domain/poisson_airbox_schur_matshell.hpp + format_poisson_airbox_eps_dimensions_json | Signed nullable wymiary odczytane, bez setterów/getterów w formatterze |
 | source-k0-subwindow-termination-test | backends/fem/tests/frequency_domain/poisson_airbox_schur_matshell_test.cpp + main | Regresja actual formattera wymiarów; niekompilowana |
 | source-gamma-query-trial | scripts/de_gamma_krylov_trial.py + validate_gamma_krylov_trial | Zachowanie opcjonalnych rzeczywistych wymiarów osobno dla każdego podokna |
+
+## Referencyjna akcja algebraiczna a zależność SLEPc — korekta 2026-10-13
+
+<!-- DOC-ANCHOR:reference-action-dependency-boundary -->
+
+`apply_poisson_airbox_modal_shift_invert_action_cpu_reference` rozwiązuje
+mały, zwalidowany układ `(A - sigma B) y = B v` przez istniejący solver
+dense complex, z augmentacją gauge gdy jest wymagana. Nie wywołuje EPS,
+PETSc ani SLEPc. Test ABI ze `synthetic_algebraic_oracle` musi zatem
+sprawdzać tę samą akcję także w konfiguracji bez SLEPc: poprawny artefakt,
+adapter `k0_poisson_airbox_cpu_full_coupled_shift_invert_reference`,
+skończony residual nie większy niż 1e-10 i niezerową skończoną normę wyjścia.
+
+Bramka bez SLEPc nie dowodzi produkcyjnego widma, niezależnego count proof,
+parytetu GPU lub jakości siatki. Produkcyjny sparse MatShell/SLEPc i jego
+managed runtime mają odrębne obowiązkowe bramki. Równania, jednostki SI,
+Python→IR i parametry solvera produkcyjnego pozostają niezmienione.
+CI38463988116/source44f9276ca potwierdziło dojście do tego nieaktualnego
+oczekiwania po wcześniejszych regresjach pamięci i demag admission.
+Poprawiony kontrakt wymaga wykonania CI; status pełnej kwalifikacji NOT VERIFIED.
