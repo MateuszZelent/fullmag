@@ -3,13 +3,14 @@
 
 **Pełny cel S00–S12 pozostaje OPEN.** Bieżące prace wykonuje worktree
 `dispersion-mode-ui-20261008`, branch `codex/dispersion-mode-ui-20261008`.
-Ostatni opublikowany checkpoint przed bieżącą korektą: `4211c204b2973d25b3a1a8ffe0e1e0d921ef116d`.
+Ostatni opublikowany checkpoint przed bieżącą korektą: `0bb23d0dc97c8112025a4a3df99ea559b855a1b5`.
 Ruch 4→4 zapisano w75c778f4; czytnik runnera w5f76503e, fixture retention w961aa64e.
 Naprawa wyścigu zwolnienia publication lock CAS przechodzi347 regresji źródłowych
 (2 skips). Koordynator podmieniono zarządzaną receptą na obraz d376e87b…;
 health i hashe dwóch zmienionych modułów potwierdzono w działającym kontenerze.
-Repair CAS wznowiono po fizycznej kontroli prefixu2660; nadal RUNNING,
-bez terminalnego sukcesu. Surface-PBC actual Gmsh PASS nie dowodzi jeszcze
+Repair CAS zakończył się exit0, succeeded7721/7721. Końcowa kontrola
+trzech receiptów i bieżących atrybutów7721 obiektów PASS. Nie zmieniono
+bytes ani nie usunięto danych. Surface-PBC actual Gmsh PASS nie dowodzi jeszcze
 periodycznej topologii objętościowej.
 Kandydat retriangulacji498tet ma pełny exact topology PASS; kontrakt PBC
 wymaga kanonicznych map Gmsh i pozostaje NOT VERIFIED.
@@ -20,8 +21,8 @@ jego dirty/staged plików nie zmieniono w tym przyroście.
 
 | Zakres | Potwierdzone obecnymi dowodami | Warunek zamknięcia / następny krok |
 |---|---|---|
-| Capture/storage | Poprawka prywatnego stagingu zachowuje ścisłą walidację rzeczywistych hardlinków CAS; lokalnie12 interpretowanych regresji PASS. CI38378068321 capture-contract:262PASS/181subtests | Nowe capture nadal blokuje utrata ReadOnly w istniejących obiektach CAS. Użytkownik zatwierdził repair7721 obiektów. Po naprawie czytnika i publication lock oraz rollout koordynatora przywracanie wznowiono po fizycznej kontroli2660 obiektów. Proces39823 potwierdził4992/7721 (64,65%); receipt apply-20261013T125214695080Z.jsonl nadal otwarty. Brak terminalnego sukcesu; nie dodano implicit repair do capture |
-| Regionalna siatka | Aktualne CI38381498619 nadal FAIL: pusty ROI. Geometry-only sampling daje zmienne przekroje43/56/43 i ROI3/11/3; kernel404tet/142nodes po cap flips ma minimum det/max_edge³2.09e-4. Zatwierdzony interior4→4: kernel15PASS,43 legalne ruchy na baseline142/404, exact validator PASS. Global unique-edge p95 maleje113,578→109,991nm, max144,568nm bez zmiany; regionalna bramka nadal OPEN. Wcześniej adapter14PASS i2 actual probes PASS | Pozostała jakość i rozmiary komórek, potem production routing owner fields/lower-upper/quality/markers/PBC/exact-z; prototyp i test topologii nie zamykają bramki |
+| Capture/storage | Poprawka prywatnego stagingu zachowuje ścisłą walidację rzeczywistych hardlinków CAS; lokalnie12 interpretowanych regresji PASS. CI38378068321 capture-contract:262PASS/181subtests | Historyczne capture blokowała utrata ReadOnly w istniejących obiektach CAS. Użytkownik zatwierdził repair7721 obiektów. Po naprawie czytnika i publication lock oraz rollout koordynatora przywracanie wznowiono po fizycznej kontroli2660 obiektów. Proces39823 zakończył się exit0, succeeded7721/7721. Terminalny summary i closing-verification.json potwierdzają kompletne trzy receipty oraz bieżące identity/size/link_count/ReadOnly wszystkich obiektów. Blokada ReadOnly usunięta; nowe capture/build nie zostało jeszcze wykonane. Nie dodano implicit repair do capture |
+| Regionalna siatka | Aktualne CI38404566060 dla74ed88322 nadal FAIL: pusty ROI (309tests,1FAIL/1SKIP). Geometry-only sampling daje zmienne przekroje43/56/43 i ROI3/11/3; kernel404tet/142nodes po cap flips ma minimum det/max_edge³2.09e-4. Zatwierdzony interior4→4: kernel15PASS,43 legalne ruchy na baseline142/404, exact validator PASS. Global unique-edge p95 maleje113,578→109,991nm, max144,568nm bez zmiany; regionalna bramka nadal OPEN. Wcześniej adapter14PASS i2 actual probes PASS | Pozostała jakość i rozmiary komórek, potem production routing owner fields/lower-upper/quality/markers/PBC/exact-z; prototyp i test topologii nie zamykają bramki |
 | Runtime i serial/adaptive | Istnieją historyczne managed wyniki oraz siedem wybranych punktów; selected-only nie jest pełnym oknem spektralnym | Świeży build dokładnych źródeł i przebieg, pełne diagnostics/residuale, signed sweep oraz pomierzony parytet serial/adaptive |
 | Spektrum i nauka | Źródłowe kontrakty i analityczne oracles; wcześniejsze wyniki nie zamykają kwalifikacji | Pełne okno/mod count, DE/BV, zbieżność siatki i airboxu, porównanie identycznego COMSOL A1 oraz wymagane GPU |
 | S09 / 2.5D | Wcześniejsze źródła frame/UV/world, bindings i regresje zachowane | Provider/operator, world equivalence, invariance/equilibrium, typed routing i owner MFEM, z wykonanym runtime proof |

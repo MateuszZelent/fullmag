@@ -725,3 +725,26 @@ Pre-inventory czterech execution #238–#241: odpowiednio316927274,
 647016132,647134298,647348531 logical bytes; nie jest to deletion plan.
 Reparse symlinks .so w trzech execution pominięto bez podążania.
 Nie usuwano danych, wyników, runtime ani cache. Pełny S00–S12 OPEN.
+
+## 2026-10-13 — ReadOnly CAS terminalnie zakończony
+
+Proces39823 zakończył się exit0; summary succeeded,total_verified7721,
+prior_verified2660,verified_this_run5061,modified_this_run5061.
+Preview SHAe4592b39ed5daf81211411eab0be3439540b2c228074a69bf05cb0fee22e88ef
+bez zmian; bytes_changed=false/deleted=false.
+Terminalny receipt apply-20261013T125214695080Z.jsonl i summary zachowane
+w visualization/cas-readonly-repair-20261013. Końcowa kontrola wszystkich
+7721 wierszy trzech receiptów: ordinal/path/hash/size/identity/link_count
+oraz dozwolony attributes_after=attributes_before|1 PASS. Bieżące lstat
+wszystkich7721 obiektów potwierdza identity,size,link_count i wyłącznie
+ReadOnly. Content hash był sprawdzany pod lockiem przed/po każdym zapisie
+w repair; closing scan go nie powtarza. Wynik closing-verification.json.
+Blokada CAS została usunięta. Nie jest to jeszcze capture/build/FEM proof.
+
+Delaunay-per-slab na SAME141 periodic nodes zmniejsza hK p95/max do
+24.20/26.08nm, ale odrzucenie topologiczne pozostaje widoczne: raw520,
+24exact-zero,496positive;88/88 shared-cap triangles,141/141nodes.
+Exact validator FAIL exterior face away from box boundary;28 free
+verticalfaces. PBC triangle mismatch x6/6,y6/6 pomimo nodecoveragePASS.
+Nie uruchomiono napraw ani nie włączono tego odrzuconego wariantu.
+Pełny S00–S12 pozostaje OPEN.
