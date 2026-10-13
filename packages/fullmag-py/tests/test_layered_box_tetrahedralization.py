@@ -206,6 +206,39 @@ class LayeredBoxTetrahedralizationTests(unittest.TestCase):
         self.assertIn(len(nodes) - 2, cells)
         self.assertIn(len(nodes) - 1, cells)
 
+    def test_paired_boundary_insertions_keep_translated_periodic_facets(self) -> None:
+        # Pair existing boundary nodes; do not infer conformity from node counts.
+        # Each cap has different density and each periodic face is checked as
+        # a complete set of geometric triangles after the prescribed translation.
+        for axis in (0, 1):
+            with self.subTest(axis=axis):
+                nodes, planes, bounds = _coarse_fine_coarse_input()
+                extras = []
+                for level, z in enumerate(planes):
+                    for offset in (-1.0, 0.0, 1.0)[:level + 1]:
+                        for side in (-2.0, 2.0):
+                            xy = [offset * _SCALE, offset * _SCALE]
+                            xy[axis] = side * _SCALE
+                            extras.append((*xy, float(z)))
+                nodes = np.vstack((nodes, np.asarray(extras)))
+                cells = tetrahedralize_layered_box(nodes, planes, bounds)
+                self._assert_mesh_contract(nodes, planes, bounds, cells)
+                counts, _ = _face_incidence(nodes, cells, planes)
+                sides = []
+                other_axes = [dimension for dimension in range(3) if dimension != axis]
+                for coordinate in (-2.0 * _SCALE, 2.0 * _SCALE):
+                    triangles = {
+                        tuple(sorted(
+                            tuple(float(nodes[index, dimension]) for dimension in other_axes)
+                            for index in face
+                        ))
+                        for face, count in counts.items()
+                        if count == 1 and all(nodes[index, axis] == coordinate for index in face)
+                    }
+                    self.assertTrue(triangles)
+                    sides.append(triangles)
+                self.assertEqual(sides[0], sides[1])
+
     def test_reordering_and_exact_binary_translation_preserve_mesh_contract(self) -> None:
         nodes, planes, bounds = _coarse_fine_coarse_input()
         original = tetrahedralize_layered_box(nodes, planes, bounds)

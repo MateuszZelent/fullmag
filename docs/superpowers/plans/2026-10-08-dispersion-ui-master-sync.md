@@ -298,3 +298,15 @@ wymaga odpowiedzi na przedstawioną propozycję; nie wykonano tej mutacji.
 Ta poprawka stagingu nie usuwa blokady integralności przy nowym capture.
 Pełne S00–S12, regionalne owner fields/PBC, fresh runtime, serial/adaptive,
 zbieżność, COMSOL, S09/GPU, GUI i integracja nadal OPEN.
+
+
+## Translacyjna zgodność faset prototypu — 13.10.2026
+
+Nowa regresja kernela sprawdza obie osie x/y: istniejące pary węzłów
+brzegowych na trzech capach o różnej gęstości oraz cały zbiór trójkątów
+zewnętrznych po translacji. Kontrola nie opiera się na samych liczbach
+węzłów/faset; wykorzystuje pełny mesh contract, incidence i geometryczne
+klucze trójkątów. Interpretowany pytest:7PASS/13subtests,1.16s.
+To dowód dla małego fixture kernela, nie certyfikat dowolnej siatki PBC.
+Produkcja nadal wymaga bijektywnego node mapping, markerów, zgodnych
+faset oraz Floquet/solver proof. Nie wykonano lokalnej kompilacji testów.
