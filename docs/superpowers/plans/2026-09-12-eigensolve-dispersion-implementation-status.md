@@ -14,12 +14,13 @@ jego dirty/staged plików nie zmieniono w tym przyroście.
 | Runtime i serial/adaptive | Istnieją historyczne managed wyniki oraz siedem wybranych punktów; selected-only nie jest pełnym oknem spektralnym | Świeży build dokładnych źródeł i przebieg, pełne diagnostics/residuale, signed sweep oraz pomierzony parytet serial/adaptive |
 | Spektrum i nauka | Źródłowe kontrakty i analityczne oracles; wcześniejsze wyniki nie zamykają kwalifikacji | Pełne okno/mod count, DE/BV, zbieżność siatki i airboxu, porównanie identycznego COMSOL A1 oraz wymagane GPU |
 | S09 / 2.5D | Wcześniejsze źródła frame/UV/world, bindings i regresje zachowane | Provider/operator, world equivalence, invariance/equilibrium, typed routing i owner MFEM, z wykonanym runtime proof |
-| UI i integracja | Wcześniejszy browser demonstrator nie jest bieżącą kwalifikacją produktu; obecne CI frontend/native jeszcze trwa w chwili tego wpisu | Docelowy naukowy workspace w istniejącym szablonie, prawdziwe dane/mody, browser/WebGL, review, PR/master i bezpieczny cleanup |
+| UI i integracja | Wcześniejszy browser demonstrator nie jest bieżącą kwalifikacją produktu; CI frontend/native dla70f930 i aaea731b5 zakończyło się SUCCESS | Docelowy naukowy workspace w istniejącym szablonie, prawdziwe dane/mody, browser/WebGL, review, PR/master i bezpieczny cleanup |
 
 CI38378068314 dispersion-artifact-consumers:SUCCESS dla dokładnego70f930ed0.
-CI38378068321: capture-contract i exact-layer-mesh SUCCESS; pozostałe joby
-jeszcze in_progress w chwili zapisu. Status należy odczytać po zakończeniu;
-nie uznawać całego workflow za PASS na podstawie dwóch jobów.
+CI38378068321 zakończone SUCCESS4/4. Kolejny checkpoint kodu
+`aaea731b5a2ad0cfb52f457da950b55ebe0f650f`: regresja translacyjnej zgodności
+faset x/y,7PASS/13subtests. CI38379025215 dla tego dokładnegoSHA
+zakończone SUCCESS4/4. Są to źródłowe/regresyjne bramki, nie science proof.
 
 Następny wykonywalny krok siatki: actual-Gmsh test generowania przekrojów
 po geometrycznych extrusion, przed generate(3), z istniejącymi polami

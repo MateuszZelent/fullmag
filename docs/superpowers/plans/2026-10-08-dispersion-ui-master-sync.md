@@ -310,3 +310,34 @@ klucze trójkątów. Interpretowany pytest:7PASS/13subtests,1.16s.
 To dowód dla małego fixture kernela, nie certyfikat dowolnej siatki PBC.
 Produkcja nadal wymaga bijektywnego node mapping, markerów, zgodnych
 faset oraz Floquet/solver proof. Nie wykonano lokalnej kompilacji testów.
+
+
+## Actual Gmsh → zmienne capy → kernel — 13.10.2026
+
+Fixture wykazał błąd początkowej diagnozy timeout: hmax podano w SI tam,
+gdzie helper oczekuje już jednostek Gmsh. Poprawiono tylko jednostki testu,
+bez zmiany modelu/targetu. Meshed extrusion z produkcyjnymi argumentami
+numElements=[1],heights=[1],recombine=True kopiuje cap XY:43/43/43nodes,
+ROI3/3/3. Geometry-only extrusion z tym samym Restrict/VolumesList i
+IncludeBoundary=1:43/56/43nodes,ROI3/11/3; shared cap i exact-z zachowane.
+Interpretowany test porównawczy2PASS; geometry-only rozszerzony o kernel
+1PASS/1deselected.142rzeczywiste SI nodes bez snapu,404tets,142/142nodes
+użyte,90 zgodnych faset middlecap,51 centroidówtetwROI, volume relative
+error7.35e-16. Kernel0.6198052s.
+
+Dodatnia topologia nie wystarcza: minimum determinant3.6786376201e-35m^3
+wygląda na bardzo cienki tetraedr; trwa osobny pomiar jakości bezwymiarowej.
+Nie podłączono tego wyniku do produkcyjnego eigensolve, nie usunięto
+żadnego węzła/komórki ani nie zastosowano jitter/snap. Adapter MeshData
+z markerami i pełnym mappingiem fasetPBC jest implementowany osobno.
+Geometry-only sam nie rozwiązuje jakości, lower/upper controls i runtime.
+CIaaea731b5 (`38379025215`) zakończone SUCCESS4/4. Pełna kwalifikacja S00–S12OPEN.
+
+Pomiar bezwymiarowy actualcapskernel: det/max_edge³min1.2177e-14,
+pervertexdet/edgeproductmin3.0985e-14;386/404tetów w histogramie[0,.1).
+Najgorsze trójki capnodes są około1e-19m od linii. To poważne ryzyko
+sliverów; topologyPASS nie dopuszcza productionrouting. Nie porównano
+bezpośrednio tych metryk z SICN/gamma lub mixedcertp05 i nie zmieniono
+progów. Recepta diagnosticCI używa pytest-s, aby zachować actualmetrics
+w logu także przy zielonej kontroli topologii. Naprawa jakości jest teraz
+jawnym warunkiem poprzedzającym runtime tej nowej ścieżki.

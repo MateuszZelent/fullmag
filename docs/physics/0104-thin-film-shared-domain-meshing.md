@@ -276,7 +276,7 @@ różne podziały capu. Nie zastosowano perturbacji QJ ani filtrowania komórek.
 Wynik uzasadnia zmianę algorytmu; nie jest dowodem nowego kernela.
 
 Owner: `packages/fullmag-py/src/fullmag/meshing/_layered_box_tetrahedralization.py::tetrahedralize_layered_box`.
-Regresje `LayeredBoxTetrahedralizationTests`: **6 PASS, 11 subtests PASS**
+Regresje `LayeredBoxTetrahedralizationTests`: **7 PASS, 13 subtests PASS**
 w interpretowanym pytest. Obejmują coarse/fine/coarse z niepustym ROI,
 cztery płaszczyzny, inserty na brzegu i przekątnej, permutację, dokładną
 translację binarną oraz rzeczywiste dziesiętne współrzędne SI. Zespolone
@@ -287,6 +287,44 @@ Każde wstawienie przegląda bieżącą topologię. Koszt dokładnej arytmetyki
 oraz pełnych przeglądów ogranicza prototyp do małych przypadków; nie jest
 to kwalifikowany algorytm wydajnościowy dla dużych meshy.
 Regional-density actual Gmsh i managed eigensolve pozostają **OPEN**.
+
+Actual-Gmsh4.15.2 fixture porównuje tę samą geometrię120×80×20nm,
+trzy capy z=−10,0,+10nm i owner-scoped Box z target3nm w centralnym ROI
+oraz20nm poza nim. Meshed extrusion (`numElements=[1]`, `recombine=True`)
+dało43/43/43 węzły oraz3/3/3 węzły ROI; geometry-only extrusion bez tych
+ograniczeń dało43/56/43 oraz3/11/3. W obu przypadkach potwierdzono wspólny
+cap i Restrict z tymi samymi volume owners, IncludeBoundary=1 i z-planes.
+To izoluje kopiowanie cap mesh przez meshed extrusion; nie dowodzi jeszcze
+jakości tetów ani produkcyjnej realizacji wszystkich pól3D. W małym fixture
+rzeczywiste142 węzły SI przekazane bez przesunięć do kernela dały404tets,
+90 zgodnych faset middlecap i51tetcentroidów w ROI. Zgodność topologiczna
+nie zastępuje jakości: minimalny determinant3.6786e-35m³ wymaga pomiaru
+bezwymiarowego i ewentualnej naprawy elementów przed routingiem FEM.
+Obserwacyjny pomiar tego fixture daje minimum det/max_edge³≈1.22e−14
+oraz minimum per-vertex det/(iloczyn trzech krawędzi)≈3.10e−14. Najgorsze
+trójki węzłów capu leżą około1e−19m od linii prostej. Jest to poważne
+ryzyko sliverów i uwarunkowania operatora; nie wprowadzono arbitralnego
+progu akceptacji. Te metryki nie są SICN ani gamma Gmsh i nie wolno
+utożsamiać ich z bramką certyfikatu mixed-topology. Wzorzec naprawy
+ma generować2D na geometrycznych capach, a exact slab volume realizować
+kernelem. Nie wolno podmienić tej ścieżki na niekontrolowane generate(3).
+
+Projektowany adapter wewnętrzny ma przekazać wynik kernela do istniejącego
+kanonicznego `MeshData`, bez nowego formatu publicznego. Magnetic bounds
+muszą być dwoma istniejącymi płaszczyznami; klasyfikacja markerów magnetic=1
+oraz air=2 opiera się na pełnym zawieraniu slabu, nie tolerowanym centroidzie.
+Fasety są wyprowadzone z incydencji rzeczywistych tetraedrów: zewnętrzne
+mają orientację na zewnątrz, magnetic-air marker10 i normalną od magnetic
+do air. Wewnętrzne fasety tego samego materiału nie są granicą fizyczną.
+
+Dla par osiowych x/y wymagane jest bijektywne pokrycie wszystkich węzłów
+przeciwległych boków oraz zgodność kompletnych zbiorów trójkątów po mapowaniu.
+Translacja ma odpowiadać szerokości Boxa; wejściowe tolerancje SI nie są
+rozszerzane. Samo równe liczenie węzłów nie jest dowodem zgodności. Adapter
+nie może wytwarzać zaakceptowanego certyfikatu periodycznego, raportu jakości
+ani realization proof bez odrębnego producenta i sprawdzonych bramek.
+To kontrakt przed implementacją adaptera; routing produkcyjny, jakość,
+rzeczywiste owner fields i Floquet pozostają niezweryfikowane.
 
 (thin-film-mesh-validation)=
 ## Validation
@@ -319,7 +357,8 @@ nie kwalifikuje operatora ani managed runtime.
 | Tetra fields | `packages/fullmag-py/src/fullmag/meshing/_size_field_plan.py` | `_build_field_stack` | strefy surface/edge/corner/air |
 | Quality | `packages/fullmag-py/src/fullmag/meshing/_gmsh_extraction.py` | `_extract_quality_metrics` | bieżące metryki Gmsh |
 | Zmienne przekroje | `packages/fullmag-py/src/fullmag/meshing/_layered_box_tetrahedralization.py` | `tetrahedralize_layered_box` | dokładny prototyp zgodnej topologii; brak production routing |
-| Regresja kernela | `packages/fullmag-py/tests/test_layered_box_tetrahedralization.py` | `LayeredBoxTetrahedralizationTests` | 6 PASS, 11 subtests; runtime/PBC/quality OPEN |
+| Regresja kernela | `packages/fullmag-py/tests/test_layered_box_tetrahedralization.py` | `LayeredBoxTetrahedralizationTests` | 7 PASS, 13 subtests; runtime/PBC/quality OPEN |
+| Actual cap sampling | `packages/fullmag-py/tests/test_layered_cap_field_sampling.py` | `TestLayeredCapFieldSampling` | porównanie mesh/geometry extrusion i rzeczywiste nodes→kernel; produkcja i quality OPEN |
 
 
 (thin-film-periodic-tetrahedral-layer-realization)=

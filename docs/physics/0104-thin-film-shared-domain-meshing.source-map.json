@@ -194,6 +194,13 @@
       "symbol": "class LayeredBoxTetrahedralizationTests",
       "responsibility": "Variable cap density, shared facets, exact slabs, original node preservation, SI coordinates, reorder/translation and invalid geometry checks.",
       "evidence_status": "python_passed"
+    },
+    {
+      "id": "actual-variable-cap-sampling",
+      "path": "packages/fullmag-py/tests/test_layered_cap_field_sampling.py",
+      "symbol": "class TestLayeredCapFieldSampling",
+      "responsibility": "Actual Gmsh comparison of meshed extrusion and geometry-only extrusion with the same owner-scoped Box field and exact cap levels; no production qualification.",
+      "evidence_status": "python_passed_production_not_verified"
     }
   ],
   "public_api": {

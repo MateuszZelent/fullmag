@@ -144,3 +144,5 @@ jobs:
           python -m pip install 'pytest>=9,<10' -e 'packages/fullmag-py[meshing]'
       - name: Verify exact layers and periodic topology with scoped fields
         run: python -B -m pytest -q scripts/test_box_layered_airbox_mesh.py packages/fullmag-py/tests/test_gmsh_quality_units.py packages/fullmag-py/tests/test_layered_box_tetrahedralization.py
+      - name: Observe actual scoped cap sampling and prototype quality
+        run: python -B -m pytest -q -s packages/fullmag-py/tests/test_layered_cap_field_sampling.py
