@@ -74,3 +74,40 @@ Diff check i parser rustfmt PASS. Testów jednostkowych lokalnie nie
 kompilowano. Wykonanie regresji i Doctor wymaga świeżego GitHub Actions;
 wynik nie jest jeszcze potwierdzony. Nie zmieniono solvera, progów residualu
 ani istniejących danych. Pełne S00–S12 i kwalifikacja naukowa pozostają OPEN.
+
+
+## Wynik weryfikacji i kolejny runtime — 13.10.2026
+
+Commit naprawy `00b14fb05acd597a1506b3b191a1166631ce2368` jest na remote.
+CI https://github.com/MateuszZelent/fullmag/actions/runs/38357947899 zakończone
+SUCCESS: frontend, native-resource-contracts i capture-contract PASS.
+Oznacza to zamknięcie obu poprzednich awarii tej konfiguracji CI, nie naukową
+kwalifikację solvera lub akceptację projektu interfejsu.
+
+Runner potwierdzony healthy/accepting, bez aktywnych buildów. Wykonano managed
+serial preflight i rzeczywistą próbę `de-smoke-parallel-probe` na runtime #241
+`4ebf0c524ca2479eab4672836694586d`, source digest
+`711a91e06a61f5b9dd0352959dd96ef5fd356be1268079f826cd859031cea66d`.
+Dry-run PASS; wykonanie terminal FAILED/exit1 przed eigensolve.
+Output: `storage/runs/dispersion-mode-ui-20261008-9aae306a4b5f5e7d/4ebf0c524ca2479eab4672836694586d/comsol-dispersion/bf0e6c0f6a3643629a35769db4997f9f`.
+Runtime.log: `scoped layer-partitioned realization requested 3 layers but resolved 9 exact z intervals`.
+Nie zmieniono wymagania trzech warstw ani guardu; nie zlecono adaptive dla
+odrzuconego modelu. Nowszy solver checkpoint `1827c3436f80ff17396c285d13c0e269eecf4b25`
+zawiera rozbudowane poprawki _gmsh_swept/_gmsh_fields; ich zależności i dowody
+należy sprawdzić przed integracją. Cudzy dirty worktree pozostaje zachowany.
+
+Wykonano niezależny postsolve siedmiu wcześniej obliczonych punktów #241:
+parametry z rzeczywistego metadata, dokładne sample_index/k/frequency z JSON
+modów, full residual <=1e-8 i pełne lokalne descriptor certificates.
+Raport z hashami wejść i źródeł orakli, PNG/PDF:
+`storage/runs/dispersion-mode-ui-20261008-9aae306a4b5f5e7d/postsolve-seven-20261013-e2b3056ac79a453bb4c3fc73a86edfa4`.
+Nie są to nowe punkty FEM. Względem istniejącego finite-Dirichlet n=0:
+Gamma praktycznie 0%, ±5 około -0.0733%, ±15 około -0.5345%, ±25 około -1.255%.
+Open-film thickness N=32 pozostawia około -1.023% przy ±25 i ma inne BC.
+N=0 jest przybliżeniem; ten raport nie ustala przyczyny różnicy i nie zamyka
+zbieżności siatki/airboxu/gałęzi ani porównania COMSOL. Wykres sprawdzony wizualnie.
+
+Następna zależność planu: integracja sprawdzonej realizacji warstw przy
+zachowaniu owner-scoped zagęszczenia -> aktualny managed runtime -> powtórzenie
+serial/adaptive probe -> kontrola parytetu -> signed DE/BV i zbieżność.
+Docelowy projekt UI oraz pełne S00–S12 pozostają OPEN.
