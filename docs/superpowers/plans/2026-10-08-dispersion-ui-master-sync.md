@@ -435,3 +435,43 @@ nie dowodzą wykonania regionalnej gęstości. Production gate pozostaje FAIL.
 Dowody operatorowe: visualization layered-cap-sliver-diagnostic-20261013,
 scoped-mesh-field-boundary-probe.py oraz baseline/patched/surface.log.
 Nie traktujemy probe jako managed runtime ani jako naukowej walidacji eigensolve.
+
+
+## 2026-10-13 — potwierdzona lineage capów i częściowe wznowienie CAS
+
+Trzecia próba Gmsh: jawne SurfacesList na Restrict10 i owner masks15/20,
+pozostawione VolumesList[4,5], VIn1/VOut0. Deduped granice objętości pobrane
+oddzielnie obejmują wspólny cap92. Po generate(2) każda płaszczyzna
+−10/0/+10nm ma18 trójkątów, identyczną triangulację XY i0 centroidów
+trójkątów w radius15nm. Fasety Tet4 dokładnie odtwarzają te cap triangles.
+Nadal135nodes/108magneticTet4/ROI0, exit1 przy niezmienionej asercji.
+`geo.extrude(..., numElements=[1], recombine=True)` kopiuje tę samą
+siatkę capów; dodatkowe flagi/powierzchnie/premeshing nie realizują pola
+zależnego od z. To bezpośredni dowód ograniczenia trasy, nie poprawka.
+
+CAS: druga operacja zatrzymała się terminalnie po2537 verified przy
+niekompletnym state=error rekordu koordynatora. Receipt2537 wierszy
+sprawdzony względem approved preview SHA256e4592b39ed5daf81211411eab0be3439540b2c228074a69bf05cb0fee22e88ef.
+Runner ponownie potwierdził healthy/idle, bez active jobs i retention.
+Operator resume_approved_readonly.py fizycznie sprawdził hash/size/identity/
+link_count/ReadOnly wszystkich2537 obiektów pod blokadami przed wznowieniem.
+Wznowienie unified-exec72887 zakończyło się exit1 po kolejnych123 obiektach;
+receipt apply-20261013T113613647521Z.jsonl. Łącznie2660/7721 verified.
+Przyczyna: odczyt statusu koordynatora zwrócił FileNotFoundError dla
+/storage/index/local-runner-service.json. Nie wykonujemy ślepego restartu
+ani nie ignorujemy błędu kontroli healthy/idle; potrzebna diagnoza publikacji rekordu.
+Nie zmieniono zawartości ani nie usunięto danych. Kolejne błędy zatrzymują
+proces, bez automatycznego retry. Miejsce około7GB poniżej progu8GiB;
+nowego managed buildu nie zgłoszono.
+
+4→4: po wcześniejszej odmowie automatycznego review użytkownik jawnie
+zatwierdził dokładną propozycję i oba pliki źródeł/testów. Root read-review
+i ponowne10/10 syntetycznych checks PASS. Rozpoczęto adaptację do kernela;
+wynik integracji i pomiar actual mesh pozostają do sprawdzenia.
+Zgoda usuwa blokadę uprawnień, lecz nie zastępuje kwalifikacji produkcji.
+
+Dalsza hipoteza geometryczna: actual cap-node sets43/56/43 mają23 wspólne
+XY we wszystkich płaszczyznach (outer caps43 wspólne). Badamy seed z ich
+konformnej pryzmatycznej triangulacji, aby ograniczyć dalekie apices podczas
+stellar insertions. To eksperyment poza repo; żadnej produkcyjnej zmiany
+ani domniemanej kwalifikacji nie dokonano.

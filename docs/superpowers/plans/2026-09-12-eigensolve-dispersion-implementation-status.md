@@ -65,9 +65,17 @@ przekrojach i topologii, nie kwalifikacja rozmiaru3nm: każda komórka
 przez slab ma krawędź≥10nm. Kontrakt h_K^edge obejmuje wszystkie krawędzie
 3D, bez wyjątku „tylko XY”. Nie wolno zmieniać żądanej liczby warstw
 w celu zaliczenia testu. Osobny produkcyjny test floor-only8nm/upper3nm
-ma efektywny regionalny h_target=8nm; dz=10nm samo w sobie nie wyklucza
-jego planned p95≤10nm/max≤12nm. Przyczynę pustego ROI należy naprawić
-w rzeczywistej trasie i zmierzyć, zamiast przenosić wniosek z fixture3nm.
+ma efektywny regionalny h_target=8nm. Korekta analityczna: dla
+niezdegenerowanego tetraedru leżącego na dwóch capach max krawędź3D jest
+ściśle większa niż dz. Gdyby każda krawędź między capami była dokładnie
+dz, wszystkie ich końce miałyby identyczne XY i tetraedr miałby zerową
+objętość. Nominalne dz=10nm nie pozostawia więc zapasu dla planned
+p95(h_K^edge)≤10nm; max≤12nm jest odrębnym ograniczeniem. Istniejący
+actual-density test sprawdza medianę wszystkich sześciu krawędzi w ROI,
+nie p95 maksymalnej krawędzi każdej komórki — te metryki nie są zamienne.
+Nie zmieniamy żądanych exact_layers ani progów fixture. Przyczynę pustego
+ROI nadal należy naprawić w rzeczywistej trasie i zmierzyć, a pełną
+kwalifikację rozmiaru wykonać z osobnym dowodem zgodności dz i h_target.
 
 Dalsze wymagane podpunkty:
 
