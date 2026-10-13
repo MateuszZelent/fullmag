@@ -629,3 +629,32 @@ Log: visualization runner-retention-fingerprint-diagnostic-20261013/
 runner-regression-after-lock-fix.log. To dowód źródłowy, nie deployment.
 Przygotowany wcześniejszy obraz3a81 nie zawiera tej późniejszej poprawki;
 przed rollout trzeba zbudować nowy obraz z aktualnego checkpointu.
+
+## 2026-10-13 — rollout koordynatora i wznowione ReadOnly
+
+Obraz z commita30e30ccd2 zbudowany przez just runner-coordinator-image,
+exit0, sha256:d376e87bf6375eb7821b3a7d6216d53a38b43ffb7cbb7bedfcedac994fce1921.
+Zarządzane stop potwierdziło paused, accepting=false, active_jobs=[],
+retention_busy=false, retention_draining=true. Następnie container-replace
+zakończyło się exit0 i resume zwróciło resumed=true/worker_started=true.
+Nowy container6a4b0842f181219b1c16d06c57026be98d6328d8d21f37379340a0944a0b7552;
+API potwierdza healthy/idle/worker_alive, bez błędów i aktywnych zadań.
+Live source SHA container_main89bc969b…77bb oraz source_storee58301dc…a697
+są identyczne z worktree. Dane, mount storage i profile zachowuje managed
+replace; nie wykonywano nowego configure, nie usuwano wyników ani wolumenów.
+To runtime proof koordynatora, nie FEM/science qualification.
+
+Zatwierdzony repair CAS wznowiono przez resume_approved_readonly_2660.py
+SHA2560340a3d58561ee05ea90d480d671dac040787bf4abad09a46035b7909ca1a802.
+Ponownie sprawdzono oba wcześniejsze receipty i fizycznie wszystkie2660
+obiektów prefixu pod publication locks. Każdy kolejny zapis weryfikuje
+niezmieniony approved preview SHAe4592b39…, hash/size/identity/link_count,
+zdrowy idle runner oraz zmianę wyłącznie ReadOnly. Bieżący proces nadal
+RUNNING, handle39823; receipt apply-20261013T125214695080Z.jsonl.
+Ostatnie obserwowane cumulative2688/7721; brak terminalnego sukcesu.
+
+Korekta interpretacji PBC: test_layered_cap_field_sampling.py jawnie nie
+kwalifikuje PBC i nie deklaruje setPeriodic/getPeriodicNodes. Zapisanej
+nieperiodycznej próbki nie wolno traktować jako periodycznego benchmarku.
+Kolejny probe wymaga jawnej periodyczności oraz canonical node-pairs;
+nie używamy najbliższych współrzędnych ani nowej tolerancji do zastąpienia map.
