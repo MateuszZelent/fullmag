@@ -234,9 +234,23 @@ def validate_managed_view(layout):
         raise StorageError(f"Wrong managed backing image: expected {layout['native_backing_image']}, observed {observed}")
 
 
+def _assert_no_storage_dotenv_reparse(path):
+    """Reject a dotenv file or parent that redirects before inspecting it."""
+    for ancestor in (path, *path.parents):
+        try:
+            redirected = is_link(ancestor)
+        except OSError as error:
+            raise StorageError(f"Cannot safely inspect storage settings path: {path}") from error
+        if redirected:
+            raise StorageError(
+                f"Storage settings file must not traverse a symlink/junction: {path} (at {ancestor})"
+            )
+
+
 def storage_dotenv(main_repo):
     """Read only storage settings; never execute or interpolate dotenv values."""
     path = main_repo / ".env"
+    _assert_no_storage_dotenv_reparse(path)
     if not path.is_file():
         return {}
     values = {}

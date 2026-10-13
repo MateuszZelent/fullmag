@@ -68,6 +68,45 @@ class StorageTests(unittest.TestCase):
         with self.assertRaises(storage.StorageError):
             self.resolve()
 
+    def test_dotenv_rejects_reparse_file_and_parent_before_read(self):
+        outside = self.project / "outside.env"
+        outside.write_text("FULLMAG_PROJECT_STORAGE_ROOT=redirected\n", encoding="utf-8")
+        dotenv = self.repo / ".env"
+        try:
+            dotenv.symlink_to(outside)
+        except OSError as error:
+            if os.name != "nt":
+                raise
+        else:
+            try:
+                with self.assertRaisesRegex(storage.StorageError, "symlink/junction"):
+                    storage.storage_dotenv(self.repo)
+            finally:
+                dotenv.unlink()
+
+        dotenv.write_text("FULLMAG_PROJECT_STORAGE_ROOT=redirected\n", encoding="utf-8")
+        alias = self.project / "repo-link"
+        try:
+            alias.symlink_to(self.repo, target_is_directory=True)
+        except OSError as error:
+            if os.name != "nt":
+                raise
+            result = subprocess.run(
+                ["cmd", "/c", "mklink", "/J", str(alias), str(self.repo)],
+                capture_output=True,
+                text=True,
+            )
+            if result.returncode:
+                self.skipTest(f"Host cannot create a symlink/junction: {error}")
+        try:
+            with self.assertRaisesRegex(storage.StorageError, "symlink/junction"):
+                storage.storage_dotenv(alias)
+        finally:
+            try:
+                alias.unlink()
+            except (IsADirectoryError, PermissionError):
+                alias.rmdir()
+
     def test_nested_worktree_uses_common_project_and_isolated_build(self):
         subprocess.run(["git", "-C", str(self.repo), "-c", "user.name=Test", "-c",
                         "user.email=test@example.invalid", "commit", "--quiet", "--allow-empty", "-m", "fixture"], check=True)
