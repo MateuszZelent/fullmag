@@ -30,6 +30,11 @@ potwierdził stack-use-after-return: factory lambda zwracała pointer do
 macierzy w swoim zakończonym frame. Poprawka jawnie przechwytuje obie
 zewnętrzne tablice przez referencję; regresja sprawdza tożsamość obu buforów
 przed solve. Usunięto tymczasowe odczyty adresów/nieprawidłowego bufora.
+CI38461188739 (normal) i38461182049 (ASAN), sourceaebb4b7bc6,
+wykazały FAIL kontroli tożsamości bufora mimo jawnego reference capture.
+Kolejna poprawka usuwa zależność od capture tablic constexpr: bezstanowa
+factory otrzymuje jawne wskaźniki od wywołującego. Obie asercje tożsamości
+i wszystkie warunki walidacji pozostają bez zmian.
 Nowa poprawka pozostaje NOT VERIFIED do normalnego i ASAN CI;
 lokalny zakaz kompilacji testów zachowano. Aktywna kapsuła244 nie jest zmieniana.
 Build244 potwierdza stage native-build oraz działające procesy C++ MFEM/SLEPc;

@@ -3281,14 +3281,14 @@ void modal_floquet_wavevector_validation_precedes_tiny_dispatch()
 {
     constexpr double stiffness_matrix_row_major[] = {1.0, 0.0, 0.0, 1.0};
     constexpr double gyrotropic_mass_row_major[] = {0.0, -1.0, 1.0, 0.0};
-    const auto tiny_floquet_request = [&stiffness_matrix_row_major,
-                                       &gyrotropic_mass_row_major]() {
+    const auto tiny_floquet_request = [](const double *stiffness_buffer,
+                                         const double *gyrotropic_buffer) {
         FullmagFemModalEigenRequest request = base_request();
         request.operator_request.spin_wave_bc_kind = "floquet";
         request.tiny_validation_enabled = 1;
         request.tiny_validation_tangent_dof_count = 2;
-        request.tiny_validation_stiffness_matrix_row_major = stiffness_matrix_row_major;
-        request.tiny_validation_mass_matrix_row_major = gyrotropic_mass_row_major;
+        request.tiny_validation_stiffness_matrix_row_major = stiffness_buffer;
+        request.tiny_validation_mass_matrix_row_major = gyrotropic_buffer;
         return request;
     };
     const auto expect_invalid_wavevector = [](FullmagFemModalEigenRequest request) {
@@ -3309,7 +3309,8 @@ void modal_floquet_wavevector_validation_precedes_tiny_dispatch()
         -std::numeric_limits<double>::infinity(),
     };
     for (double component : nonfinite_components) {
-        FullmagFemModalEigenRequest request = tiny_floquet_request();
+        FullmagFemModalEigenRequest request = tiny_floquet_request(
+            stiffness_matrix_row_major, gyrotropic_mass_row_major);
         request.has_floquet_k_vector = 1;
         request.floquet_k_vector_rad_per_m[0] = component;
         expect_invalid_wavevector(request);
@@ -3318,35 +3319,40 @@ void modal_floquet_wavevector_validation_precedes_tiny_dispatch()
     const double short_wavevector[] = {0.0, 0.0};
     const double raw_zero_wavevector[] = {0.0, 0.0, 0.0};
     const double long_wavevector[] = {0.0, 0.0, 0.0, 0.0};
-    FullmagFemModalEigenRequest invalid_length = tiny_floquet_request();
+    FullmagFemModalEigenRequest invalid_length = tiny_floquet_request(
+            stiffness_matrix_row_major, gyrotropic_mass_row_major);
     invalid_length.operator_request.k_vector_rad_m = short_wavevector;
     invalid_length.operator_request.k_vector_len = 2;
     expect_invalid_wavevector(invalid_length);
 
     const int invalid_raw_lengths[] = {0, -1, 4};
     for (int invalid_raw_length : invalid_raw_lengths) {
-        FullmagFemModalEigenRequest invalid_raw_length_request = tiny_floquet_request();
+        FullmagFemModalEigenRequest invalid_raw_length_request = tiny_floquet_request(
+            stiffness_matrix_row_major, gyrotropic_mass_row_major);
         invalid_raw_length_request.operator_request.k_vector_rad_m =
             invalid_raw_length == 4 ? long_wavevector : raw_zero_wavevector;
         invalid_raw_length_request.operator_request.k_vector_len = invalid_raw_length;
         expect_invalid_wavevector(invalid_raw_length_request);
     }
 
-    FullmagFemModalEigenRequest null_raw_pointer_with_length = tiny_floquet_request();
+    FullmagFemModalEigenRequest null_raw_pointer_with_length = tiny_floquet_request(
+            stiffness_matrix_row_major, gyrotropic_mass_row_major);
     null_raw_pointer_with_length.operator_request.k_vector_rad_m = nullptr;
     null_raw_pointer_with_length.operator_request.k_vector_len = 3;
     expect_invalid_wavevector(null_raw_pointer_with_length);
 
     for (double component : nonfinite_components) {
         const double raw_nonfinite_wavevector[] = {component, 0.0, 0.0};
-        FullmagFemModalEigenRequest request = tiny_floquet_request();
+        FullmagFemModalEigenRequest request = tiny_floquet_request(
+            stiffness_matrix_row_major, gyrotropic_mass_row_major);
         request.operator_request.k_vector_rad_m = raw_nonfinite_wavevector;
         request.operator_request.k_vector_len = 3;
         expect_invalid_wavevector(request);
     }
 
     // A valid raw vector takes precedence over a malformed fixed-array fallback.
-    FullmagFemModalEigenRequest raw_vector_wins = tiny_floquet_request();
+    FullmagFemModalEigenRequest raw_vector_wins = tiny_floquet_request(
+            stiffness_matrix_row_major, gyrotropic_mass_row_major);
     raw_vector_wins.operator_request.k_vector_rad_m = raw_zero_wavevector;
     raw_vector_wins.operator_request.k_vector_len = 3;
     raw_vector_wins.has_floquet_k_vector = 1;
@@ -3374,14 +3380,16 @@ void modal_floquet_wavevector_validation_precedes_tiny_dispatch()
     fullmag_fem_frequency_domain_result_destroy(&raw_vector_wins_result);
 
     // A positive but invalid raw length must not be hidden by a valid fallback.
-    FullmagFemModalEigenRequest raw_invalid_length_with_fallback = tiny_floquet_request();
+    FullmagFemModalEigenRequest raw_invalid_length_with_fallback = tiny_floquet_request(
+            stiffness_matrix_row_major, gyrotropic_mass_row_major);
     raw_invalid_length_with_fallback.operator_request.k_vector_rad_m = short_wavevector;
     raw_invalid_length_with_fallback.operator_request.k_vector_len = 2;
     raw_invalid_length_with_fallback.has_floquet_k_vector = 1;
     expect_invalid_wavevector(raw_invalid_length_with_fallback);
 
     // An empty raw pointer/length pair can still select the explicit fallback.
-    FullmagFemModalEigenRequest raw_empty_with_fallback = tiny_floquet_request();
+    FullmagFemModalEigenRequest raw_empty_with_fallback = tiny_floquet_request(
+            stiffness_matrix_row_major, gyrotropic_mass_row_major);
     raw_empty_with_fallback.operator_request.k_vector_rad_m = raw_zero_wavevector;
     raw_empty_with_fallback.operator_request.k_vector_len = 0;
     raw_empty_with_fallback.has_floquet_k_vector = 1;
@@ -3395,7 +3403,8 @@ void modal_floquet_wavevector_validation_precedes_tiny_dispatch()
     fullmag_fem_frequency_domain_result_destroy(&raw_empty_with_fallback_result);
 
     // A null raw pointer also selects the fixed-array fallback when it is declared.
-    FullmagFemModalEigenRequest null_raw_with_fallback = tiny_floquet_request();
+    FullmagFemModalEigenRequest null_raw_with_fallback = tiny_floquet_request(
+            stiffness_matrix_row_major, gyrotropic_mass_row_major);
     null_raw_with_fallback.operator_request.k_vector_rad_m = nullptr;
     null_raw_with_fallback.operator_request.k_vector_len = 3;
     null_raw_with_fallback.has_floquet_k_vector = 1;
@@ -3409,7 +3418,8 @@ void modal_floquet_wavevector_validation_precedes_tiny_dispatch()
     fullmag_fem_frequency_domain_result_destroy(&null_raw_with_fallback_result);
 
     // A missing explicit vector remains the legacy implicit-Gamma request.
-    FullmagFemModalEigenRequest implicit_gamma = tiny_floquet_request();
+    FullmagFemModalEigenRequest implicit_gamma = tiny_floquet_request(
+            stiffness_matrix_row_major, gyrotropic_mass_row_major);
     FullmagFemFrequencyDomainResult implicit_gamma_result =
         fullmag_fem_modal_eigen_solve(&implicit_gamma);
     check(implicit_gamma_result.status == FULLMAG_FEM_FD_OK,
@@ -3420,7 +3430,8 @@ void modal_floquet_wavevector_validation_precedes_tiny_dispatch()
     fullmag_fem_frequency_domain_result_destroy(&implicit_gamma_result);
 
     // The ABI's fixed-array presence flag is another explicit k-vector source.
-    FullmagFemModalEigenRequest explicit_gamma = tiny_floquet_request();
+    FullmagFemModalEigenRequest explicit_gamma = tiny_floquet_request(
+            stiffness_matrix_row_major, gyrotropic_mass_row_major);
     explicit_gamma.has_floquet_k_vector = 1;
     FullmagFemFrequencyDomainResult explicit_gamma_result =
         fullmag_fem_modal_eigen_solve(&explicit_gamma);
