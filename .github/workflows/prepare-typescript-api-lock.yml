@@ -1,0 +1,85 @@
+name: prepare-typescript-api-lock
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ['codex/**']
+    paths:
+      - '.github/workflows/prepare-typescript-api-lock.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  prepare-lock-artifact:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10.8.1
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24.18.0
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+      - name: Prepare managed frontend paths
+        run: python -B scripts/fullmag_storage.py prepare-links --profile linux-host --frontend
+      - name: Stage unchanged source manifests
+        run: python -B scripts/ci/prepare_eigensolve_ui_workspace.py
+      - name: Add only the compiler API compatibility dependency in staging
+        shell: python
+        run: |
+          import hashlib
+          import json
+          import os
+          import subprocess
+          from pathlib import Path
+          root = Path(os.environ['FULLMAG_CI_FRONTEND_WORKSPACE_ROOT'])
+          package_path = root / 'apps/control-room/package.json'
+          package_bytes = package_path.read_bytes()
+          package = json.loads(package_bytes)
+          assert package['devDependencies']['typescript'] == '7.0.2'
+          assert '@typescript/typescript6' not in package['devDependencies']
+          receipt = {
+              'schema': 'typescript_api_lock_candidate.v1',
+              'source_sha': subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(),
+              'original_package_sha256': hashlib.sha256(package_bytes).hexdigest(),
+              'original_lock_sha256': hashlib.sha256((root / 'pnpm-lock.yaml').read_bytes()).hexdigest(),
+              'compiler_package': 'typescript@7.0.2',
+              'api_package': '@typescript/typescript6@6.0.2',
+              'pnpm_version': '10.8.1',
+          }
+          package['devDependencies']['@typescript/typescript6'] = '6.0.2'
+          package['devDependencies'] = dict(sorted(package['devDependencies'].items()))
+          package_path.write_text(json.dumps(package, indent=2, ensure_ascii=False) + '\n', encoding='utf-8')
+          (root / 'typescript-api-lock-receipt.json').write_text(json.dumps(receipt, indent=2) + '\n', encoding='utf-8')
+      - name: Generate candidate lock without installing or running package scripts
+        run: >-
+          python -B scripts/fullmag_storage.py run --profile linux-host --
+          pnpm --dir "$FULLMAG_CI_FRONTEND_WORKSPACE_ROOT" install
+          --lockfile-only --ignore-scripts --no-frozen-lockfile
+      - name: Bind candidate bytes to receipt
+        shell: python
+        run: |
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          root = Path(os.environ['FULLMAG_CI_FRONTEND_WORKSPACE_ROOT'])
+          path = root / 'typescript-api-lock-receipt.json'
+          receipt = json.loads(path.read_text())
+          receipt['candidate_package_sha256'] = hashlib.sha256((root / 'apps/control-room/package.json').read_bytes()).hexdigest()
+          receipt['candidate_lock_sha256'] = hashlib.sha256((root / 'pnpm-lock.yaml').read_bytes()).hexdigest()
+          path.write_text(json.dumps(receipt, indent=2) + '\n', encoding='utf-8')
+      - name: Preserve reviewable lock candidate
+        uses: actions/upload-artifact@v7
+        with:
+          name: typescript-api-lock-${{ github.run_id }}
+          path: |
+            ${{ env.FULLMAG_CI_FRONTEND_WORKSPACE_ROOT }}/pnpm-lock.yaml
+            ${{ env.FULLMAG_CI_FRONTEND_WORKSPACE_ROOT }}/apps/control-room/package.json
+            ${{ env.FULLMAG_CI_FRONTEND_WORKSPACE_ROOT }}/typescript-api-lock-receipt.json
+          if-no-files-found: error

@@ -4240,3 +4240,9 @@ Frontend source prerequisite: wymagane request_scope_epoch uzupełnione w trzech
 ### 2026-10-14 — naprawa DOM buffer boundaries
 
 Run38484953873 exact c2d96035 nie zgłasza wcześniejszych błędów Stage/ribbon, ale typecheck nadal FAIL na AST API oraz ArrayBufferLike w WebCrypto/Blob. Nowy fragment przekazuje do WebCrypto i Blob ArrayBuffer; pełny nieshared backing zachowuje, a dla sliced view lub shared backing kopiuje tylko widoczne bajty. Brak unsound casts i zmian publicznych API. Regresja jawnie sprawdza wejście WebCrypto [1,2,3] oraz niezależny znany SHA w fallbacku; persistence test sprawdza MIME i bajty pobieranego Blob, a open fixture zachowuje sliced input. Workflow obejmuje rzeczywiste dwa focused testy oraz provider Stage fixture. TypeScript7 compiler pozostaje; API AST wymaga osobnego fragmentu. Source review ukończony, GHA pending, brak lokalnej egzekucji projektu.
+
+### 2026-10-14 — generacja reviewable lockfile wyłącznie w CI
+
+Buffer fragment opublikowany ead8c4611f950497a3884b5721e504d89ccaccec. Run38485642570 typecheck nadal FAIL wyłącznie na API AST w TypeScript7; anotacje nie zgłaszają wcześniejszych buffer/Stage/ribbon błędów. Wymaga jeszcze pełnego odczytu named regresji.
+
+Nowy workflow prepare-typescript-api-lock nie modyfikuje manifestów w źródłowym checkoutcie i nie publikuje sam commita. Kopiuje unchanged manifesty przez istniejący managed staging, dodaje wyłącznie @typescript/typescript6@6.0.2 w stagingu, generuje pnpm10.8.1 lockfile-only z ignore-scripts, zachowuje typescript7.0.2 i eksportuje reviewable artifact z exact source SHA i hashami wejść/wyjść. Zależność/API source+lock będą publikowane dopiero po review artefaktu. Oficjalny opis zgodności API side-by-side: https://devblogs.microsoft.com/typescript/announcing-typescript-7-0/ . Brak generacji lockfile lokalnie, brak zmian protected Cargo.lock/Git.
