@@ -122,6 +122,24 @@ file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/generated")
 file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/generated/ceed")
 file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/generated/interface")
 
+# CMake's file(WRITE) refreshes the output timestamp even when the generated
+# bytes are unchanged.  MFEM consumes the installed CEED public header, so
+# that timestamp alone can invalidate every MFEM translation unit on the next
+# configure.  Write a short-lived sibling temporary file and let COPY_FILE
+# skip the destination when its bytes already match.  Keeping the temporary
+# name short avoids adding unnecessary MAX_PATH pressure to native builds.
+function(fullmag_write_generated_file_if_different output content)
+    if(NOT IS_ABSOLUTE "${output}")
+        message(FATAL_ERROR "Generated CEED output must be an absolute path: ${output}")
+    endif()
+    get_filename_component(output_directory "${output}" DIRECTORY)
+    file(MAKE_DIRECTORY "${output_directory}")
+    set(temporary_output "${output}.tmp")
+    file(WRITE "${temporary_output}" "${content}")
+    file(COPY_FILE "${temporary_output}" "${output}" ONLY_IF_DIFFERENT)
+    file(REMOVE "${temporary_output}")
+endfunction()
+
 # MSVC's aligned allocator must be paired with its own free/realloc routines.
 # Keep the pinned checkout read-only and patch only the v0.12.0 allocator
 # fragment into a generated translation unit.  Exact-source guards make a
@@ -180,7 +198,9 @@ if(NOT CEED_CORE_SOURCE MATCHES "_aligned_malloc" OR
    NOT CEED_CORE_SOURCE MATCHES "_aligned_free")
     message(FATAL_ERROR "Windows libCEED allocator patch was not applied")
 endif()
-file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/generated/interface/ceed-windows-core.c" "${CEED_CORE_SOURCE}")
+fullmag_write_generated_file_if_different(
+    "${CMAKE_CURRENT_BINARY_DIR}/generated/interface/ceed-windows-core.c"
+    "${CEED_CORE_SOURCE}")
 
 # JiT source paths can arrive from Windows __FILE__ values with a drive-colon
 # and backslashes.  The upstream Linux path splitter would mistake `C:` for a
@@ -226,7 +246,9 @@ if(CEED_JIT_HELPER_OFFSET EQUAL -1 OR
    CEED_JIT_BACKSLASH_OFFSET EQUAL -1)
     message(FATAL_ERROR "Windows libCEED JiT path patch was not applied")
 endif()
-file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/generated/interface/ceed-windows-jit-tools.c" "${CEED_JIT_TOOLS_SOURCE}")
+fullmag_write_generated_file_if_different(
+    "${CMAKE_CURRENT_BINARY_DIR}/generated/interface/ceed-windows-jit-tools.c"
+    "${CEED_JIT_TOOLS_SOURCE}")
 
 file(READ "${CEED_SOURCE_DIR}/include/ceed/ceed.h" CEED_PUBLIC_HEADER)
 string(REPLACE "\r\n" "\n" CEED_PUBLIC_HEADER "${CEED_PUBLIC_HEADER}")
@@ -238,7 +260,7 @@ string(REPLACE
     "#define CEED_EXTERN extern CEED_VISIBILITY(default)"
     "#define CEED_EXTERN extern CEED_WINDOWS_EXPORT"
     CEED_PUBLIC_HEADER "${CEED_PUBLIC_HEADER}")
-file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/generated/ceed/ceed.h"
+string(CONCAT CEED_PUBLIC_HEADER_CONTENT
     "/* Generated Windows ABI wrapper around libCEED v0.12.0. */\n"
     "#if defined(_WIN32)\n"
     "#if defined(CEED_BUILDING_DLL)\n"
@@ -253,6 +275,9 @@ file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/generated/ceed/ceed.h"
     "#define CEED_SKIP_VISIBILITY 1\n"
     "#endif\n"
     "${CEED_PUBLIC_HEADER}")
+fullmag_write_generated_file_if_different(
+    "${CMAKE_CURRENT_BINARY_DIR}/generated/ceed/ceed.h"
+    "${CEED_PUBLIC_HEADER_CONTENT}")
 configure_file(
     "${CMAKE_CURRENT_LIST_DIR}/ceed_jit_source_root_install.c.in"
     "${CMAKE_CURRENT_BINARY_DIR}/generated/ceed-jit-source-root-install.c"
@@ -330,7 +355,7 @@ else()
     set(CEED_MANIFEST_CUDA_RUNTIME "disabled")
     set(CEED_MANIFEST_BACKENDS "/cpu/self/ref/serial")
 endif()
-file(WRITE "${CEED_ADAPTER_MANIFEST}"
+string(CONCAT CEED_ADAPTER_MANIFEST_CONTENT
     "schema=fullmag.native-ceed.adapter.v1\n"
     "libceed_version=0.12.0\n"
     "windows_abi=x64-msvc\n"
@@ -339,6 +364,9 @@ file(WRITE "${CEED_ADAPTER_MANIFEST}"
     "backends=${CEED_MANIFEST_BACKENDS}\n"
     "allocator_adapter=generated/interface/ceed-windows-core.c;aligned-crt\n"
     "jit_path_adapter=generated/interface/ceed-windows-jit-tools.c;drive-colon-and-both-separators\n")
+fullmag_write_generated_file_if_different(
+    "${CEED_ADAPTER_MANIFEST}"
+    "${CEED_ADAPTER_MANIFEST_CONTENT}")
 install(TARGETS ceed
     RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}"
     ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}")
