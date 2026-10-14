@@ -1,5 +1,55 @@
 use super::*;
 use crate::{OpaqueAsset, ProjectId, RawJsonEnvelope};
+use fullmag_ir::{FemMeshAssetIR, GeometryAssetsIR, MeshIR};
+
+/// Test-only structural input for the accepted FEM planner fixture. The exact
+/// authored box dimensions and Tet4 topology exercise mesh binding and node
+/// handoff; this is not a generated, quality-certified, or runtime mesh.
+fn structural_box_mesh_for_planner() -> MeshIR {
+    let nodes = vec![
+        [-100.0e-9, -10.0e-9, -3.0e-9],
+        [100.0e-9, -10.0e-9, -3.0e-9],
+        [100.0e-9, 10.0e-9, -3.0e-9],
+        [-100.0e-9, 10.0e-9, -3.0e-9],
+        [-100.0e-9, -10.0e-9, 3.0e-9],
+        [100.0e-9, -10.0e-9, 3.0e-9],
+        [100.0e-9, 10.0e-9, 3.0e-9],
+        [-100.0e-9, 10.0e-9, 3.0e-9],
+    ];
+    let elements = vec![
+        [0, 1, 2, 6],
+        [0, 2, 3, 6],
+        [0, 3, 7, 6],
+        [0, 7, 4, 6],
+        [0, 4, 5, 6],
+        [0, 5, 1, 6],
+    ];
+    let boundary_faces = vec![
+        [0, 1, 2],
+        [0, 1, 5],
+        [1, 2, 6],
+        [0, 2, 3],
+        [2, 3, 6],
+        [0, 3, 7],
+        [3, 6, 7],
+        [0, 4, 7],
+        [4, 6, 7],
+        [0, 4, 5],
+        [4, 5, 6],
+        [1, 5, 6],
+    ];
+    MeshIR::from_legacy_tet4(
+        "accepted-fem-planner-structural-box-test-only".into(),
+        nodes,
+        elements,
+        vec![1; 6],
+        boundary_faces,
+        vec![1; 12],
+        Vec::new(),
+        Vec::new(),
+        std::collections::HashMap::new(),
+    )
+}
 
 fn inputs() -> (
     ProjectEnvelope,
@@ -7,10 +57,20 @@ fn inputs() -> (
     StudyProblemCatalog,
     RunIntentAuthoring,
 ) {
-    let fixture: Value = serde_json::from_str(include_str!(
+    let mut fixture: Value = serde_json::from_str(include_str!(
         "../../../tests/fixtures/runtime/accepted-fem-preparation-run-v2.json"
     ))
     .unwrap();
+    let geometry_assets = GeometryAssetsIR {
+        fem_mesh_assets: vec![FemMeshAssetIR {
+            geometry_name: "strip".into(),
+            mesh_source: None,
+            mesh: Some(structural_box_mesh_for_planner()),
+        }],
+        ..GeometryAssetsIR::default()
+    };
+    fixture["study_problem_catalog"]["entries"][0]["problem"]["geometry_assets"] =
+        serde_json::to_value(geometry_assets).unwrap();
     let original: RunIntent = serde_json::from_value(fixture["run_intent"].clone()).unwrap();
     let authored = RunIntentAuthoring {
         run_id: original.specification.run_id,

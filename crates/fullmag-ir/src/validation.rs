@@ -131,15 +131,47 @@ fn validate_v04_magnetization_constraints(problem: &ProblemIRV04, errors: &mut V
 pub(crate) fn pipeline_stage_ids(
     metadata: &BTreeMap<String, serde_json::Value>,
 ) -> BTreeSet<String> {
+    collect_pipeline_stage_ids(metadata, false)
+}
+
+fn collect_pipeline_stage_ids(
+    metadata: &BTreeMap<String, serde_json::Value>,
+    enabled_only: bool,
+) -> BTreeSet<String> {
+    let mut ids = BTreeSet::new();
+    if let Some(nodes) = metadata
+        .get("study_pipeline")
+        .and_then(|value| value.get("nodes"))
+        .and_then(serde_json::Value::as_array)
+    {
+        let mut pending: Vec<_> = nodes.iter().collect();
+        while let Some(node) = pending.pop() {
+            if enabled_only
+                && node.get("enabled").and_then(serde_json::Value::as_bool) == Some(false)
+            {
+                continue;
+            }
+            if let Some(id) = node.get("id").and_then(serde_json::Value::as_str) {
+                ids.insert(id.to_string());
+            }
+            if node.get("node_kind").and_then(serde_json::Value::as_str) == Some("group") {
+                if let Some(children) = node.get("children").and_then(serde_json::Value::as_array) {
+                    pending.extend(children);
+                }
+            }
+        }
+    }
+    ids
+}
+
+fn enabled_pipeline_stage_ids(
+    metadata: &BTreeMap<String, serde_json::Value>,
+) -> Option<BTreeSet<String>> {
     metadata
         .get("study_pipeline")
         .and_then(|value| value.get("nodes"))
         .and_then(serde_json::Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|node| node.get("id").and_then(serde_json::Value::as_str))
-        .map(str::to_string)
-        .collect()
+        .map(|_| collect_pipeline_stage_ids(metadata, true))
 }
 
 pub(crate) fn declared_pipeline_stage_ids(
@@ -1696,9 +1728,10 @@ pub(crate) fn validate_field_drives(problem: &ProblemIR, errors: &mut Vec<String
             errors.push("runtime_metadata.stage_waveform_origin_time_s must be finite, non-negative, and no later than stage_start_time_s".to_string());
         }
     }
+    let enabled_stage_ids = enabled_pipeline_stage_ids(&problem.problem_meta.runtime_metadata);
     if let Some(stage_id) = active_stage_id {
         if stage_id.trim().is_empty()
-            || pipeline_stage_ids
+            || enabled_stage_ids
                 .as_ref()
                 .is_some_and(|ids| !ids.contains(stage_id))
         {
@@ -4469,5 +4502,95 @@ fn validate_adaptive_timestep(
             "llg.adaptive_timestep.norm_tolerance must be finite and positive when provided"
                 .to_string(),
         );
+    }
+}
+
+
+#[cfg(test)]
+mod nested_pipeline_stage_identity_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn metadata() -> BTreeMap<String, serde_json::Value> {
+        BTreeMap::from([("study_pipeline".to_string(), json!({
+            "nodes": [
+                {"node_kind": "group", "id": "outer", "children": [
+                    {"node_kind": "primitive", "id": "first-inspection"},
+                    {"node_kind": "group", "id": "inner", "children": [
+                        {"node_kind": "macro", "id": "repeat-inspection"},
+                        {"node_kind": "primitive", "id": "disabled-child", "enabled": false}
+                    ]}
+                ]},
+                {"node_kind": "group", "id": "disabled-parent", "enabled": false,
+                 "children": [{"node_kind": "primitive", "id": "hidden-child"}]},
+                {"id": "legacy-flat-stage"}
+            ]
+        }))])
+    }
+
+    #[test]
+    fn declared_pipeline_nodes_preserve_disabled_owners_and_enabled_nodes_prune_disabled_subtrees() {
+        assert_eq!(pipeline_stage_ids(&metadata()), BTreeSet::from([
+            "outer", "inner", "first-inspection", "repeat-inspection", "legacy-flat-stage",
+            "disabled-child", "disabled-parent", "hidden-child"
+        ].map(str::to_string)));
+        assert_eq!(enabled_pipeline_stage_ids(&metadata()), Some(BTreeSet::from([
+            "outer", "inner", "first-inspection", "repeat-inspection", "legacy-flat-stage"
+        ].map(str::to_string))));
+        assert_eq!(declared_pipeline_stage_ids(&BTreeMap::new()), None);
+        assert_eq!(declared_pipeline_stage_ids(&BTreeMap::from([
+            ("study_pipeline".to_string(), json!({"nodes": []}))
+        ])), Some(BTreeSet::new()));
+    }
+
+    #[test]
+    fn disabled_declared_field_activation_remains_valid_without_a_disabled_active_owner() {
+        let mut problem = ProblemIR::bootstrap_example();
+        problem.problem_meta.runtime_metadata.extend(metadata());
+        problem.field_drives.push(crate::RegionalFieldDriveIR {
+            id: "disabled-stage-drive".into(),
+            name: "Disabled stage drive".into(),
+            kind: crate::FieldDriveKindIR::Regional,
+            enabled: true,
+            target: FieldTargetIR::Global {},
+            amplitude_b_t: 1e-3,
+            direction: [0.0, 1.0, 0.0],
+            spatial_profile: FieldSpatialProfileIR::Uniform {},
+            waveform: TimeDependenceIR::Constant,
+            time_origin: crate::FieldTimeOriginIR::StageLocal,
+            activation: crate::DriveActivationIR::StageIds {
+                stage_ids: vec!["disabled-child".into(), "hidden-child".into()],
+            },
+            migration: None,
+        });
+        let mut errors = Vec::new();
+        validate_field_drives(&problem, &mut errors);
+        assert!(errors.is_empty(), "{errors:?}");
+        problem.field_drives[0].activation = crate::DriveActivationIR::StageIds {
+            stage_ids: vec!["undeclared-child".into()],
+        };
+        errors.clear();
+        validate_field_drives(&problem, &mut errors);
+        assert!(errors.iter().any(|error| error.contains("activation stage id 'undeclared-child' does not exist")), "{errors:?}");
+    }
+
+    #[test]
+    fn nested_active_stage_identity_is_preserved_and_unknown_or_disabled_owners_are_refused() {
+        let mut problem = ProblemIR::bootstrap_example();
+        problem.problem_meta.runtime_metadata.extend(metadata());
+        for owner in ["first-inspection", "repeat-inspection", "legacy-flat-stage"] {
+            problem.problem_meta.runtime_metadata.insert("active_stage_id".into(), json!(owner));
+            let before = problem.problem_meta.runtime_metadata.clone();
+            let mut errors = Vec::new();
+            validate_field_drives(&problem, &mut errors);
+            assert!(errors.is_empty(), "{owner}: {errors:?}");
+            assert_eq!(problem.problem_meta.runtime_metadata, before);
+        }
+        for owner in ["disabled-child", "hidden-child", "disabled-parent", "unknown-owner"] {
+            problem.problem_meta.runtime_metadata.insert("active_stage_id".into(), json!(owner));
+            let mut errors = Vec::new();
+            validate_field_drives(&problem, &mut errors);
+            assert!(errors.iter().any(|error| error.contains("does not identify an enabled study pipeline stage")), "{owner}: {errors:?}");
+        }
     }
 }

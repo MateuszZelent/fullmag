@@ -243,29 +243,28 @@ fn cartesian_and_zip_axes_expand_with_stable_children_and_seeds() {
     assert_eq!(cartesian.cases.len(), 4);
     cartesian.validate_integrity().unwrap();
 
-    let zipped = expand_independent_batch(request(vec![
+    let zipped_request = request(vec![
         axis(
             "field",
             vec![json!(0.0), json!(1.0)],
             BatchAxisJoin::Cartesian,
         ),
         axis("angle", vec![json!(0.0), json!(90.0)], BatchAxisJoin::Zip),
-    ]))
-    .unwrap();
+    ]);
+    let zipped = expand_independent_batch(zipped_request.clone()).unwrap();
     assert_eq!(zipped.cases.len(), 2);
     zipped.validate_integrity().unwrap();
     assert_ne!(cartesian.manifest_sha256, zipped.manifest_sha256);
 
-    let replay = expand_independent_batch(request(vec![
-        axis(
-            "field",
-            vec![json!(0.0), json!(1.0)],
-            BatchAxisJoin::Cartesian,
-        ),
-        axis("angle", vec![json!(0.0), json!(90.0)], BatchAxisJoin::Zip),
-    ]))
-    .unwrap();
+    let replay = expand_independent_batch(zipped_request.clone()).unwrap();
     assert_eq!(zipped, replay);
+
+    let mut different_source_identity = zipped_request;
+    different_source_identity.template.run_id =
+        crate::RunId::parse("run-source-distinct").unwrap();
+    let different_source = expand_independent_batch(different_source_identity).unwrap();
+    assert_ne!(zipped.source_run_sha256, different_source.source_run_sha256);
+
     assert!(zipped.cases.iter().all(|case| {
         case.case_seed > 0
             && case.specification.seeds.is_empty()
@@ -396,7 +395,7 @@ fn manifest_integrity_rejects_child_or_digest_tampering() {
         .validate_integrity()
         .unwrap_err()
         .to_string()
-        .contains("does not match the axis position"));
+        .contains("parameter tuple does not match its axis position"));
 
     let mut changed_digest = expand_independent_batch(request(vec![axis(
         "field",
@@ -780,16 +779,19 @@ fn materialization_binds_zhang_li_axis_to_named_executable_module() {
     let study = materialization_study();
     let mut problem = ProblemIR::bootstrap_example();
     problem.spin_torque_modules = vec![SpinTorqueModuleIR::ZhangLi {
-        schema_version: None,
+        schema_version: Some("zhang_li_torque.v1".into()),
         id: Some("batch-zl".into()),
-        target: None,
-        formula_version: "zhang_li.legacy_fullmag.v0".into(),
-        operator_version: None,
+        target: Some(fullmag_ir::RegionRefIR {
+            object_id: "strip".into(),
+            region_id: None,
+        }),
+        formula_version: "zhang_li.mumax3.v1".into(),
+        operator_version: Some("zl_mumax3_central_v1".into()),
         current_density: Some([1.0e11, 0.0, 0.0]),
         current_source: None,
         degree: 0.4,
         beta: 0.02,
-        lande_g: None,
+        lande_g: Some(2.0),
     }];
     let source_catalog = StudyProblemCatalog::from_entries(
         &study,
