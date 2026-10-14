@@ -442,7 +442,9 @@ try {
     waitUntil: "domcontentloaded",
     timeout: timeoutMs,
   });
-  await page.locator("main").waitFor({ state: "visible", timeout: timeoutMs });
+  await page
+    .locator("main.fm-workspace-shell")
+    .waitFor({ state: "visible", timeout: timeoutMs });
   try {
     await page
       .locator(".fm-explorer")
