@@ -4286,6 +4286,7 @@ mod pipeline_eigen_solver_policy_tests {
     fn eigenmode_pipeline_stage(base: ProblemIR) -> ResolvedScriptStage {
         let config = ScriptExecutionConfig {
             ir: base,
+            antenna_inventory: ScriptAntennaAuthoringInventory::default(),
             shared_geometry_assets: None,
             default_until_seconds: None,
             study_pipeline: Some(StudyPipelineDocument {
