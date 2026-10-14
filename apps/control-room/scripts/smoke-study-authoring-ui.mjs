@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 
@@ -19,6 +19,13 @@ const workflowActionsOnly =
   process.env.CONTROL_ROOM_STUDY_AUTHORING_SMOKE_WORKFLOW_ACTIONS_ONLY === "1";
 const resultsOnly =
   process.env.CONTROL_ROOM_STUDY_AUTHORING_SMOKE_RESULTS_ONLY === "1";
+const explorerCatalogOnly =
+  process.env.CONTROL_ROOM_STUDY_AUTHORING_SMOKE_EXPLORER_CATALOG_ONLY === "1";
+const catalogRunId = "study-authoring-smoke-run";
+const catalogSessionId = "study-authoring-smoke";
+const catalogSessionEpoch = "study-authoring-smoke-session-epoch";
+const catalogRequestScopeEpoch = "study-authoring-smoke-request-scope";
+const catalogCursorAfter500 = "catalog-after-500";
 const workflowAntennaScreenshot =
   process.env.CONTROL_ROOM_STUDY_WORKFLOW_ANTENNA_SCREENSHOT ?? null;
 const workflowRunScreenshot =
@@ -50,7 +57,24 @@ const scriptSyncs = [];
 const fixtureRequests = [];
 const fieldVectorRequests = [];
 const responseFieldVectorRequests = [];
+const datasetCatalogRequests = [];
+const realtimeConnections = [];
+const realtimeFixtureEvents = [];
+const realtimeSocketCloses = [];
+let latestRealtimeFixtureEvent = null;
 const failedResponses = [];
+let datasetCatalogGeneration = 0;
+let activeCatalogRealtimeRoute = null;
+
+function sendRealtimeFixtureEvent(route, event) {
+  realtimeFixtureEvents.push(event);
+  latestRealtimeFixtureEvent = {
+    sessionId: event.session_id ?? null,
+    seq: event.seq ?? null,
+    type: event.type ?? null,
+  };
+  route.send(JSON.stringify(event));
+}
 const scene = {
   metadata: {
     authoring_schema: "scene-document.v1",
@@ -188,18 +212,45 @@ function workflowActionStageFixture() {
   ];
 }
 
-const browser = await playwright.chromium.launch();
+let browser;
+if (explorerCatalogOnly) {
+  const buildStorageRoot = process.env.FULLMAG_BUILD_STORAGE_ROOT;
+  if (!buildStorageRoot || !isAbsolute(buildStorageRoot)) {
+    throw new Error("Explorer browser proof requires resolved managed build storage.");
+  }
+  const browserTempRoot = resolve(buildStorageRoot, "tmp");
+  if (
+    process.platform === "linux" &&
+    Buffer.byteLength(
+      `${browserTempRoot}/com.google.Chrome.XXXXXX/SingletonSocket`,
+      "utf8",
+    ) >= 108
+  ) {
+    throw new Error("Managed browser temp path exceeds the Linux socket limit.");
+  }
+  browser = await playwright.chromium.launch({
+    channel: "chrome",
+    env: {
+      ...process.env,
+      TMPDIR: browserTempRoot,
+      TMP: browserTempRoot,
+      TEMP: browserTempRoot,
+    },
+  });
+} else {
+  browser = await playwright.chromium.launch();
+}
 const page = await browser.newPage({ viewport: { height: 900, width: 1440 } });
 const errors = [];
 
-await page.addInitScript(() => {
+await page.addInitScript((disableRealtime) => {
   window.__FULLMAG_CONFIG__ = {
     ...(window.__FULLMAG_CONFIG__ ?? {}),
     allowMissingSessionSmoke: true,
     controlRoomApiBase: window.location.origin,
-    disableRealtime: true,
+    disableRealtime,
   };
-});
+}, !explorerCatalogOnly);
 
 page.on("console", (message) => {
   if (message.type() === "error") {
@@ -212,12 +263,89 @@ page.on("response", (response) => {
   const status = response.status();
   if (status >= 400) failedResponses.push(`${status} ${response.url()}`);
 });
+page.on("websocket", (socket) => {
+  if (new URL(socket.url()).pathname === "/v2/sessions/current/events/ws") {
+    socket.on("close", () =>
+      realtimeSocketCloses.push({
+        datasetCatalogRequestCount: datasetCatalogRequests.length,
+        lastFixtureEvent: latestRealtimeFixtureEvent,
+        url: socket.url(),
+      }),
+    );
+  }
+});
+
+if (explorerCatalogOnly) {
+  await page.routeWebSocket("**/v2/sessions/current/events/ws**", (route) => {
+    const connection = {
+      path: new URL(route.url()).pathname,
+      protocolOffer: route.protocols().join(","),
+      route,
+    };
+    realtimeConnections.push(connection);
+    activeCatalogRealtimeRoute = route;
+    const helloEvent = {
+      payload: { request_scope_epoch: catalogRequestScopeEpoch },
+      seq: 0,
+      session_id: catalogSessionId,
+      type: "hello",
+    };
+    sendRealtimeFixtureEvent(route, helloEvent);
+  });
+}
 
 await page.route("**/v2/**", async (route) => {
   const request = route.request();
   const url = new URL(request.url());
   const pathname = url.pathname;
   fixtureRequests.push(`${request.method()} ${pathname}`);
+
+  if (
+    explorerCatalogOnly &&
+    request.method() === "GET" &&
+    pathname === `/v2/sessions/current/analysis/results/runs/${catalogRunId}/datasets`
+  ) {
+    const cursor = url.searchParams.get("cursor");
+    const pageIndex = cursor === null ? 0 : 1;
+    const totalCount = datasetCatalogGeneration === 0 ? 501 : 502;
+    const firstIndex = pageIndex === 0 ? 0 : 500;
+    const pageLength = Math.min(500, totalCount - firstIndex);
+    const items = Array.from({ length: pageLength }, (_, offset) => {
+      const index = firstIndex + offset;
+      const paddedIndex = String(index).padStart(4, "0");
+      return {
+        dataset_id: `catalog-dataset-${paddedIndex}`,
+        dataset_revision: `dataset-revision-${datasetCatalogGeneration + 1}`,
+        product_kind: "hysteresis_loop",
+        run_id: catalogRunId,
+        stage_id: `hysteresis-stage-${paddedIndex}`,
+        title:
+          index === 500
+            ? "Catalog dataset 0500 from the second page"
+            : index === 501
+              ? "Catalog dataset 0501 after StageExecution"
+              : `Catalog dataset ${paddedIndex}`,
+      };
+    });
+    datasetCatalogRequests.push({
+      cursor,
+      generation: datasetCatalogGeneration,
+      itemCount: items.length,
+      limit: url.searchParams.get("limit"),
+      totalCount,
+      url: request.url(),
+    });
+    await fulfillJson(route, {
+      items,
+      next_cursor: pageIndex === 0 ? catalogCursorAfter500 : null,
+      revision: `catalog-revision-${datasetCatalogGeneration + 1}`,
+      run_id: catalogRunId,
+      schema_version: "analysis-result-dataset-catalog.v1",
+      status: "ready",
+      total_count: totalCount,
+    });
+    return;
+  }
 
   if (
     request.method() === "GET" &&
@@ -329,7 +457,9 @@ try {
     .locator(".fm-explorer .fm-tabs-trigger", { hasText: "Model" })
     .waitFor({ state: "visible", timeout: timeoutMs });
   await assertStatusBarFallbackReadback();
-  if (resultsOnly) {
+  if (explorerCatalogOnly) {
+    await verifyCompleteAnalysisResultDatasetCatalogBrowser();
+  } else if (resultsOnly) {
     await verifyFrequencyDomainDrivenResults();
   } else {
     await page
@@ -490,7 +620,9 @@ try {
   }
 
   console.log(
-    workflowActionsOnly
+    explorerCatalogOnly
+      ? `Explorer complete analysis result catalog browser proof passed. Actual HTTP pages: ${JSON.stringify(datasetCatalogRequests)}. Production-client WebSocket handshakes: ${JSON.stringify(realtimeConnections.map(({ path, protocolOffer }) => ({ path, protocolOffer })))}. Fixture events: ${JSON.stringify(realtimeFixtureEvents.map((event) => ({ type: event.type, sessionId: event.session_id, seq: event.seq, recommendedFetch: event.payload?.changes?.[0]?.recommended_fetch ?? null })))}. Foreign-scope socket closures: ${JSON.stringify(realtimeSocketCloses)}. This uses a fixture API backend; it is not a live FEM/API or scientific qualification.`
+      : workflowActionsOnly
       ? `Study workflow action inspectors smoke passed at ${workspaceUrl}.`
       : `Study authoring UI smoke passed at ${workspaceUrl} with ${transactions.length} model transactions and ${scriptSyncs.length} authoring script syncs.`,
   );
@@ -700,6 +832,18 @@ async function discardDirtyInspectorSelection() {
 }
 
 function resourceForPath(pathname) {
+  if (explorerCatalogOnly && pathname === "/v2/sessions") {
+    return {
+      sessions: [
+        {
+          current: true,
+          request_scope_epoch: catalogRequestScopeEpoch,
+          session_epoch: catalogSessionEpoch,
+          session_id: catalogSessionId,
+        },
+      ],
+    };
+  }
   if (pathname === "/v2/sessions/current/status") return sessionStatus();
   if (pathname === "/v2/sessions/current/simulation/preparation") {
     return simulationPreparation();
@@ -922,6 +1066,236 @@ function simulationPreparation() {
     started_at_unix_ms: startedAt,
     status: "ready",
   };
+}
+
+async function verifyCompleteAnalysisResultDatasetCatalogBrowser() {
+  const resultsTab = page
+    .locator(".fm-explorer .fm-tabs-trigger")
+    .filter({ hasText: /^Results$/ });
+  await resultsTab.click();
+
+  const initialPages = await waitForCatalogPages(0);
+  assertCatalogPagePair(initialPages, 501, "initial catalog");
+  if (realtimeConnections.length === 0) {
+    const deadline = Date.now() + timeoutMs;
+    while (realtimeConnections.length === 0 && Date.now() < deadline) {
+      await page.waitForTimeout(50);
+    }
+  }
+  const realtimeConnection = realtimeConnections[0];
+  if (!realtimeConnection) {
+    throw new Error(
+      `Production realtime client did not connect. HTTP catalog pages: ${JSON.stringify(initialPages)}. Fixture requests: ${JSON.stringify(summarizeFixtureRequests())}.`,
+    );
+  }
+  const requestedProtocols = realtimeConnection.protocolOffer
+    .split(",")
+    .map((protocol) => protocol.trim());
+  if (
+    realtimeConnection.path !== "/v2/sessions/current/events/ws" ||
+    !requestedProtocols.includes("fullmag.live.v1")
+  ) {
+    throw new Error(
+      `Unexpected production realtime handshake: ${JSON.stringify({ path: realtimeConnection.path, protocolOffer: realtimeConnection.protocolOffer })}.`,
+    );
+  }
+
+  const resultsRootId = `results:run:${catalogRunId}`;
+  await expandExplorerNode(resultsRootId);
+  const hysteresisRootId = `${resultsRootId}:hysteresis`;
+  await expandExplorerNode(hysteresisRootId);
+  const secondPageNodeId = `${hysteresisRootId}:catalog-dataset-0500`;
+  const secondPageNode = page.locator(`[data-node-id="${secondPageNodeId}"]`);
+  await scrollExplorerTreeToEnd();
+  await secondPageNode.waitFor({ state: "visible", timeout: timeoutMs });
+  const secondPageLabel = secondPageNode.locator(
+    ".fm-explorer-tree-row__label",
+  );
+  if (
+    (await secondPageLabel.textContent()) !==
+    "Catalog dataset 0500 from the second page"
+  ) {
+    throw new Error(
+      `Explorer did not render the dataset from page two: ${await secondPageNode.innerText()}.`,
+    );
+  }
+
+  if (!activeCatalogRealtimeRoute) {
+    throw new Error("The production realtime WebSocket route was not retained.");
+  }
+  datasetCatalogGeneration = 1;
+  const stageExecutionEvent = {
+    payload: {
+      changes: [
+        {
+          recommended_fetch: "/v2/sessions/current/simulation/stages/execution",
+          resource: "stages",
+          revision: 2,
+        },
+      ],
+    },
+    run_id: catalogRunId,
+    seq: 1,
+    session_id: catalogSessionId,
+    type: "resource.batch_changed",
+  };
+  sendRealtimeFixtureEvent(activeCatalogRealtimeRoute, stageExecutionEvent);
+  const refreshedPages = await waitForCatalogPages(1);
+  assertCatalogPagePair(refreshedPages, 502, "StageExecution-refreshed catalog");
+
+  const refreshedNodeId = `${hysteresisRootId}:catalog-dataset-0501`;
+  const refreshedNode = page.locator(`[data-node-id="${refreshedNodeId}"]`);
+  await scrollExplorerTreeToEnd();
+  await refreshedNode.waitFor({ state: "visible", timeout: timeoutMs });
+  const refreshedLabel = refreshedNode.locator(
+    ".fm-explorer-tree-row__label",
+  );
+  if (
+    (await refreshedLabel.textContent()) !==
+    "Catalog dataset 0501 after StageExecution"
+  ) {
+    throw new Error(
+      `StageExecution did not refresh the visible complete catalog: ${await refreshedNode.innerText()}.`,
+    );
+  }
+
+  const catalogRequestCountBeforeForeignEvent = datasetCatalogRequests.length;
+  const renderedNodeBeforeForeignEvent = await refreshedNode.evaluate((node) => {
+    window.__FULLMAG_CATALOG_NODE_BEFORE_FOREIGN_EVENT__ = node;
+    return {
+      label: node.querySelector(".fm-explorer-tree-row__label")?.textContent ?? null,
+      nodeId: node.getAttribute("data-node-id"),
+    };
+  });
+  if (
+    renderedNodeBeforeForeignEvent.nodeId !== refreshedNodeId ||
+    renderedNodeBeforeForeignEvent.label !== "Catalog dataset 0501 after StageExecution"
+  ) {
+    throw new Error(
+      "The StageExecution result node changed before foreign-scope validation: " +
+        JSON.stringify(renderedNodeBeforeForeignEvent) +
+        ".",
+    );
+  }
+
+  const closesBeforeForeignEvent = realtimeSocketCloses.length;
+  const foreignSessionEvent = {
+    payload: {
+      changes: [
+        {
+          recommended_fetch: "/v2/sessions/current/simulation/stages/execution",
+          resource: "stages",
+          revision: 99,
+        },
+      ],
+    },
+    run_id: catalogRunId,
+    seq: 2,
+    session_id: "foreign-session",
+    type: "resource.batch_changed",
+  };
+  sendRealtimeFixtureEvent(activeCatalogRealtimeRoute, foreignSessionEvent);
+  const foreignScopeClose = () =>
+    realtimeSocketCloses
+      .slice(closesBeforeForeignEvent)
+      .find(
+        (close) =>
+          close.lastFixtureEvent?.sessionId === foreignSessionEvent.session_id &&
+          close.lastFixtureEvent?.seq === foreignSessionEvent.seq,
+      ) ?? null;
+  const closeDeadline = Date.now() + timeoutMs;
+  let foreignScopeCloseRecord = foreignScopeClose();
+  while (!foreignScopeCloseRecord && Date.now() < closeDeadline) {
+    await page.waitForTimeout(50);
+    foreignScopeCloseRecord = foreignScopeClose();
+  }
+  if (!foreignScopeCloseRecord) {
+    throw new Error("Production realtime client did not close the socket after the foreign session event.");
+  }
+  if (
+    foreignScopeCloseRecord.datasetCatalogRequestCount !==
+    catalogRequestCountBeforeForeignEvent
+  ) {
+    throw new Error(
+      "A foreign-session event refetched the catalog before scope rejection closed the socket: " +
+        JSON.stringify({
+          before: catalogRequestCountBeforeForeignEvent,
+          atClose: foreignScopeCloseRecord.datasetCatalogRequestCount,
+          event: foreignScopeCloseRecord.lastFixtureEvent,
+        }) +
+        ".",
+    );
+  }
+  const renderedNodeAfterForeignEvent = await refreshedNode.evaluate((node) => ({
+    isConnected: node.isConnected,
+    label: node.querySelector(".fm-explorer-tree-row__label")?.textContent ?? null,
+    nodeId: node.getAttribute("data-node-id"),
+    sameNode: node === window.__FULLMAG_CATALOG_NODE_BEFORE_FOREIGN_EVENT__,
+  }));
+  if (
+    !renderedNodeAfterForeignEvent.isConnected ||
+    !renderedNodeAfterForeignEvent.sameNode ||
+    renderedNodeAfterForeignEvent.nodeId !== renderedNodeBeforeForeignEvent.nodeId ||
+    renderedNodeAfterForeignEvent.label !== renderedNodeBeforeForeignEvent.label
+  ) {
+    throw new Error(
+      "The existing StageExecution result node did not remain unchanged through foreign-scope rejection: " +
+        JSON.stringify(renderedNodeAfterForeignEvent) +
+        ".",
+    );
+  }
+}
+
+async function waitForCatalogPages(generation) {
+  const deadline = Date.now() + timeoutMs;
+  let pages = datasetCatalogRequests.filter(
+    (request) => request.generation === generation,
+  );
+  while (pages.length < 2 && Date.now() < deadline) {
+    await page.waitForTimeout(50);
+    pages = datasetCatalogRequests.filter(
+      (request) => request.generation === generation,
+    );
+  }
+  if (pages.length !== 2) {
+    throw new Error(
+      `Expected exactly two catalog HTTP page requests for generation ${generation}; got ${JSON.stringify(pages)}.`,
+    );
+  }
+  return pages;
+}
+
+function assertCatalogPagePair(pages, totalCount, label) {
+  const [firstPage, secondPage] = pages;
+  if (
+    firstPage.limit !== "500" ||
+    firstPage.cursor !== null ||
+    firstPage.itemCount !== 500 ||
+    firstPage.totalCount !== totalCount ||
+    secondPage.limit !== "500" ||
+    secondPage.cursor !== catalogCursorAfter500 ||
+    secondPage.itemCount !== totalCount - 500 ||
+    secondPage.totalCount !== totalCount
+  ) {
+    throw new Error(`${label} did not use the two expected server pages: ${JSON.stringify(pages)}.`);
+  }
+  for (const pageRequest of pages) {
+    const parsedUrl = new URL(pageRequest.url);
+    if (
+      parsedUrl.pathname !==
+      `/v2/sessions/current/analysis/results/runs/${catalogRunId}/datasets`
+    ) {
+      throw new Error(`${label} used an unexpected API route: ${pageRequest.url}.`);
+    }
+  }
+}
+
+async function scrollExplorerTreeToEnd() {
+  const tree = page.locator(".fm-explorer-tree");
+  await tree.evaluate((element) => {
+    element.scrollTop = element.scrollHeight;
+  });
+  await page.waitForTimeout(50);
 }
 
 async function verifyFrequencyDomainDrivenResults() {
@@ -2859,6 +3233,12 @@ function sessionStatus() {
     session: {
       created_at: "2026-06-02T00:00:00.000Z",
       name: "Study authoring smoke",
+      ...(explorerCatalogOnly
+        ? {
+            request_scope_epoch: catalogRequestScopeEpoch,
+            session_epoch: catalogSessionEpoch,
+          }
+        : {}),
       session_id: "study-authoring-smoke",
       workspace_root: "/tmp/fullmag-study-authoring-smoke",
     },
