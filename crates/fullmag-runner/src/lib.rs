@@ -2636,6 +2636,9 @@ fn validate_parallel_execution_workflow(
                     message: "parallel_execution adaptive is unsupported for FEM frequency-response workflows; use serial execution".into(),
                 });
             }
+            BackendPlanIR::AntennaExternalLeadInspection(_) => {
+                return Err(antenna_plan_requires_dedicated_inspection());
+            }
         },
     };
 

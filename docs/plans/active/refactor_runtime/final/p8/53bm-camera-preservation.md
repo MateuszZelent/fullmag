@@ -516,3 +516,69 @@ bez natywnego consumera i bez niepustego dokumentu.
 Scoped lint PASS, exit 0, `0c39a4a0de25403ebe26a99dae50f580`.
 Przyczyna odmowy rzeczywistej próby 4f501 nadal nie jest potwierdzona:
 ten przyrost usuwa lukę diagnostyczną, nie kwalifikuje restartu.
+
+### Pakiet diagnostyki i odmowa produkcyjnego typechecku
+
+Przyrost diagnostyki kandydata zapisano na remote master:
+`279b634ea57f0d6383d58793c9e065e58ad45eea`
+(`fix: distinguish candidate confirmation capture refusals`). Niezależny
+review nie znalazł P0/P1/P2. Managed build-only
+`native-build-a491c62a9cb84fa8aaf9d7c0cdbd92aa.log` zakończył się
+`completed`, exit 0, `2026-10-13T23:21:49.195357+02:00`.
+API/CLI: 1m05s, desktop: 1m10s (fazy Cargo, nie całe przygotowanie).
+Manifest SHA256 `3ab4d4ca2feb2a3fee1ab859e70992c8d0838d86c8f6ca65eccd0c252532b0d4`;
+API SHA256 `7ebef7b8d249453af53c18aa3a9c3ebad3682716ed05dfd6c4ce73f13e231865`.
+Kapsuła `c51d4a7f9fd00d76be469846f3a42040262bb403a14315c260270454cbc8c04a`,
+source snapshot `81f4edbc50b611424f0aa6ff2dc17c6c0bae3c51e4da79b7565a242f5c767b0f`,
+inventory `4d9a8e59b7d197250d3dd9d2f1b86a59e6a18b1dea4189622099feca4ae3f105`.
+Hashy ownerów, kontrolera i action service w kapsule i checkoutcie są zgodne.
+
+Następna prywatna próba `2217069eff234263823106a5d37a1928` zakończyła się
+przed otwarciem UI: `Staged frontend typecheck failed`, exit 1 (recipe 2),
+17/17 procesów terminalnych. Nie wykonano restartu ani nowej próby capture.
+Pełne diagnozy produkcyjnego TypeScript:
+
+- `ComputeEnvironmentSettings.tsx(124,27) TS2322`: przekazanie
+  `ComputeEnvironment | null` do panelu wymagającego niepustego odczytu;
+- `ExecutionProfilesSettings.tsx(210,92) TS2339`: odwołanie do `kind`
+  po wyczerpaniu zamkniętego union distributed/single_process.
+
+W checkoutcie dodano tylko jawny warunek `compute !== null` do gałęzi
+szczegółów oraz usunięto niemożliwe odwołanie do `parallelism?.kind`
+w końcowej gałęzi; brak konfiguracji nadal jest prezentowany jako Inherit.
+Obie linie znajdują się w cudzych nowych, niezacommitowanych sekcjach,
+nieobecnych w HEAD. Nie stage'owano całych plików ani nie przypisano sobie
+tych implementacji. Nowy snapshot musi zawierać te poprawki; istniejącej
+kapsuły nie modyfikowano.
+
+`just check-control-room-production-source`: PASS, exit 0,
+`f49b7b793a844873a05e7a0bc9e91a21`, digest przed i po
+`83605d27af259a3c64e9144e11f5dfce29c84398a126fdb394c9aaa113d397b9`.
+Nie kompilowano testów jednostkowych. Ten dowód usuwa blokadę typów bieżącego
+checkoutu, lecz nie zmienia wyniku próby 221706 ani nie potwierdza restartu.
+
+### Kontrola pakietu diagnostyki podczas oczekiwania na slot
+
+Niezależny review dwóch lokalnych poprawek TypeScript zakończył się bez
+P0/P1/P2. Wcześniejsze zgłoszenie dotyczące końcowego `parallelism?.kind`
+wycofano jako false positive: poprawiona gałąź kończy się `undefined`,
+zachowując etykietę Single process dla właściwego wariantu.
+
+`just verify-windows-frozen-development-backend-api` z manifestem
+`3ab4d4ca2feb2a3fee1ab859e70992c8d0838d86c8f6ca65eccd0c252532b0d4`
+zakończył się niepowodzeniem, exit 1 (recipe 2), receipt
+`caab51c039de43a38d93fc3d93c830d2`, po 7 kontrolach. Timeout 10 sekund
+wystąpił w końcowym `child.wait` dla własnego API `owner-empty`, po żądaniu
+zatrzymania przez weryfikator. Receipt ma 4/5 procesów z `waited=true`;
+PID 158332 nie występował już w późniejszym odczycie procesów, ale brak
+terminalnego wait w receipt pozostaje luką dowodową. Nie przedstawiać
+tej próby jako pełnej regresji API ani jako potwierdzonego błędu restartu.
+Nie uruchomiono UI, nie restartowano sesji użytkownika.
+Hash weryfikatora `931ebdb1afedab11dd41b63b437f5038ccc44301f86a6ab60c4cacc2c94934ef`.
+
+Główny checkout został w międzyczasie zaktualizowany przez inną pracę do
+`7224c257b36ca1ed6dc6c54290ddedbf14caf73d`. Lokalne poprawki TypeScript
+pozostają obecne, cudze pliki pozostają poza stagingiem tego zadania.
+Po potwierdzeniu zakończenia obcego buildu FEM zlecono nowy
+`just windows-workspace-build dev dev 3258 true`. Wynik tego buildu i
+rzeczywisty restart z kamerą wymagają odrębnego terminalnego dowodu.

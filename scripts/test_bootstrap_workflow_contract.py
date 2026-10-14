@@ -210,6 +210,102 @@ jobs:
             with self.subTest(action=action):
                 _assert_required_action_version(workflow, action, expected_reference)
 
+        document = yaml.safe_load(workflow)
+        expected_node_setup = {
+            "generated-api-determinism": {
+                "name": "Setup Node.js",
+                "with": {
+                    "node-version": "24.18.0",
+                    "cache": "pnpm",
+                    "cache-dependency-path": "pnpm-lock.yaml",
+                },
+            },
+            "api-hygiene-rg13": {
+                "name": "Setup Node.js",
+                "with": {"node-version": "24.18.0"},
+            },
+            "control-room-contracts": {
+                "name": "Setup Node.js",
+                "with": {
+                    "node-version": "24.18.0",
+                    "cache": "pnpm",
+                    "cache-dependency-path": "pnpm-lock.yaml",
+                },
+            },
+            "browser-fixture-smoke": {
+                "name": "Setup Node.js",
+                "with": {
+                    "node-version": "24.18.0",
+                    "cache": "pnpm",
+                    "cache-dependency-path": "pnpm-lock.yaml",
+                },
+            },
+            "inspector-actions-browser-smoke": {
+                "name": "Setup Node.js",
+                "with": {
+                    "node-version": "24.18.0",
+                    "cache": "pnpm",
+                    "cache-dependency-path": "pnpm-lock.yaml",
+                },
+            },
+            "runner-retention-contracts": {
+                "name": "Setup Node for retention console contracts",
+                "with": {"node-version": "24.18.0"},
+            },
+        }
+        actual_node_setup = {}
+        for job_name, job in document["jobs"].items():
+            setup_steps = [
+                (index, step)
+                for index, step in enumerate(job.get("steps", []))
+                if isinstance(step, dict)
+                and str(step.get("uses", "")).partition("@")[0]
+                == "actions/setup-node"
+            ]
+            if not setup_steps:
+                continue
+            self.assertEqual(
+                len(setup_steps),
+                1,
+                f"{job_name} must have exactly one named/id setup-node step",
+            )
+            index, step = setup_steps[0]
+            identity = step.get("name") or step.get("id")
+            self.assertTrue(
+                identity,
+                f"{job_name} setup-node step must have a name or id",
+            )
+            options = step.get("with") or {}
+            self.assertIsInstance(options, dict)
+            self.assertEqual(
+                str(options.get("node-version", "")),
+                "24.18.0",
+                f"{job_name}/{identity} must pin node-version 24.18.0",
+            )
+            actual_node_setup[job_name] = (index, identity, options)
+
+        self.assertEqual(
+            set(actual_node_setup),
+            set(expected_node_setup),
+            "every setup-node job must be explicitly covered by this contract",
+        )
+        for job_name, expected in expected_node_setup.items():
+            index, identity, options = actual_node_setup[job_name]
+            with self.subTest(job=job_name):
+                self.assertEqual(identity, expected["name"])
+                self.assertEqual(options, expected["with"])
+                if expected["with"].get("cache") == "pnpm":
+                    prior_steps = document["jobs"][job_name]["steps"][:index]
+                    self.assertTrue(
+                        any(
+                            str(prior.get("uses", "")).partition("@")[0]
+                            == "pnpm/action-setup"
+                            for prior in prior_steps
+                            if isinstance(prior, dict)
+                        ),
+                        f"{job_name}/{identity} requires pnpm/action-setup first",
+                    )
+
     def test_ci_runs_openapi_build_identity_regressions(self) -> None:
         workflow = (ROOT / ".github/workflows/bootstrap.yml").read_text()
         generated_job = workflow.split("  generated-api-determinism:\n", 1)[1].split(
@@ -241,9 +337,30 @@ jobs:
     def test_rust_contracts_resolve_artifact_storage_before_running_tests(self) -> None:
         workflow = yaml.safe_load((ROOT / ".github/workflows/bootstrap.yml").read_text())
         steps = workflow["jobs"]["rust-contracts"]["steps"]
-        index = next(i for i, step in enumerate(steps)
-                     if step.get("name") == "Resolve storage for API artifact fixtures")
-        self.assertEqual(steps[index + 1]["name"], "Run Rust quantity, API and CLI contracts")
+        resolver_indices = [
+            i for i, step in enumerate(steps)
+            if step.get("name") == "Resolve storage for API artifact fixtures"
+        ]
+        self.assertEqual(
+            len(resolver_indices),
+            1,
+            "rust-contracts must have exactly one artifact-storage resolver step",
+        )
+        index = resolver_indices[0]
+        rust_contract_indices = [
+            i for i, step in enumerate(steps)
+            if step.get("name") == "Run Rust quantity, API and CLI contracts"
+        ]
+        self.assertEqual(
+            len(rust_contract_indices),
+            1,
+            "rust-contracts must have exactly one quantity/API/CLI contract step",
+        )
+        self.assertLess(
+            index,
+            rust_contract_indices[0],
+            "artifact storage must be resolved before Rust quantity/API/CLI contracts",
+        )
         lines = steps[index]["run"].rstrip().splitlines()
         self.assertEqual(lines[-1], "PY")
         source = "\n".join(lines[1:-1])
@@ -295,10 +412,6 @@ jobs:
         self.assertEqual(
             workflow.count("actions/checkout@v7"),
             workflow.count("- name: Checkout"),
-        )
-        self.assertEqual(
-            workflow.count("actions/setup-node@v7"),
-            workflow.count("- name: Setup Node.js"),
         )
         self.assertIn("actions/setup-python@v7", workflow)
         self.assertIn("actions/upload-artifact@v7", workflow)

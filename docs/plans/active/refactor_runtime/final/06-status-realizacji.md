@@ -9,8 +9,16 @@ oraz `48d3893cca7d7f7fdd0b7408051d3955039318ac` są na remote master.
 Rzeczywisty browser utworzył 1 obiekt, 1 region i 1 materiał oraz potwierdził
 niezerowy canvas bez utraty kontekstu. Restart odmówił capture przed POST;
 próba została jawnie anulowana, 19/19 procesów terminalnych. Brak dowodu
-kamery po restarcie. Nowy build diagnostyki nie wystartował przez zajęty
-slot (120s, exit 2). **P8-53BM i P8-53 pozostają IN PROGRESS**; procentów
+kamery po restarcie. Następny build diagnostyki zakończył się completed,
+exit 0, manifest `3ab4d4ca2feb2a3fee1ab859e70992c8d0838d86c8f6ca65eccd0c252532b0d4`.
+Próba browser `2217069eff234263823106a5d37a1928` odmówiła przed UI przez
+dwa błędy TypeScript (17/17 procesów terminalnych); minimalne poprawki
+mają production typecheck PASS i review bez P0/P1/P2. Fixture bannera
+potwierdził osobną diagnostykę odmowy potwierdzenia kandydata, 13 kontroli.
+Regresja API nowego pakietu `caab51c039de43a38d93fc3d93c830d2` przerwała
+się po 7 kontrolach na timeout wait własnego procesu; brak pełnego PASS.
+Nowy snapshot z poprawkami TypeScript jest w budowie.
+**P8-53BM i P8-53 pozostają IN PROGRESS**; procentów
 całego planu nie zmieniono. [P8-55](p8/55-network-storage-assessment-20261013.md)
 uzupełnia ocenę Z: o niezależne bramki lokalnego writera i TEMP; nie ma
 kwalifikacji aktywnego storage SMB ani migracji.

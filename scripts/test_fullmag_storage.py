@@ -36,9 +36,9 @@ class StorageTests(unittest.TestCase):
         profile = kwargs.pop("profile", "test")
         return storage.resolve_layout(self.repo, profile=profile, environ=self.env, **kwargs)
 
-    def test_storage_uses_canonical_project_root_and_is_stable(self):
+    def test_storage_is_sibling_of_main_checkout_and_stable(self):
         layout = self.resolve()
-        expected_root = (self.repo if os.name == "nt" else self.project) / "storage"
+        expected_root = self.project / "storage"
         self.assertEqual(Path(layout["storage_root"]), expected_root)
         self.assertEqual(layout, self.resolve())
         self.assertFalse(expected_root.exists())
@@ -51,9 +51,9 @@ class StorageTests(unittest.TestCase):
     def test_windows_canonical_storage_override_is_allowed(self):
         if os.name != "nt":
             self.skipTest("Windows canonical checkout storage contract")
-        self.env["FULLMAG_PROJECT_STORAGE_ROOT"] = str(self.repo / "storage")
+        self.env["FULLMAG_PROJECT_STORAGE_ROOT"] = str(self.project / "storage")
         layout = self.resolve(profile="windows-native")
-        self.assertEqual(Path(layout["storage_root"]), self.repo / "storage")
+        self.assertEqual(Path(layout["storage_root"]), self.project / "storage")
 
     def test_inventory_ignores_non_registration_json_arrays(self):
         layout = self.resolve()
@@ -65,7 +65,7 @@ class StorageTests(unittest.TestCase):
         self.assertEqual(result["worktree_count"], 1)
 
     def test_dotenv_storage_root_and_process_precedence(self):
-        project_root = self.repo if os.name == "nt" else self.project
+        project_root = self.project
         custom = self.project / "configured-storage"
         custom.mkdir()
         (custom / ".fullmag-storage.json").write_text(json.dumps({
@@ -93,7 +93,7 @@ class StorageTests(unittest.TestCase):
         self.assertNotEqual(main["build_root"], other["build_root"])
 
     def test_worktree_reads_main_dotenv_without_local_copy(self):
-        project_root = self.repo if os.name == "nt" else self.project
+        project_root = self.project
         subprocess.run(["git", "-C", str(self.repo), "-c", "user.name=Test", "-c",
                         "user.email=test@example.invalid", "commit", "--quiet", "--allow-empty", "-m", "fixture"], check=True)
         worktree = self.project / "worktrees" / "task"
