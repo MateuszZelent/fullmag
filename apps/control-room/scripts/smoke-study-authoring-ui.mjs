@@ -64,8 +64,10 @@ const realtimeConnections = [];
 const realtimeFixtureEvents = [];
 const realtimeClientCloseFrames = [];
 const realtimeSocketCloses = [];
-const pendingRealtimePageSockets = [];
+const realtimePageEvents = [];
 const realtimeWebSocketPath = "/v2/sessions/current/events/ws";
+const realtimePageObserverBindingName = "__fullmagStudyAuthoringRealtimePageEvent";
+const maxRealtimeObserverMessageChars = 64 * 1024;
 const failedResponses = [];
 const observationFrameResponses = [];
 let datasetCatalogGeneration = 0;
@@ -172,69 +174,158 @@ function isEchoableWebSocketCloseCode(code) {
   );
 }
 
-function attachRealtimePageSocket(socket, connection, observation) {
-  if (connection.pageSocket && connection.pageSocket !== socket) {
-    throw new Error(`Realtime route ${connection.id} already has a browser socket.`);
-  }
-  if (observation.connectionId && observation.connectionId !== connection.id) {
-    throw new Error("A browser WebSocket hello was matched to more than one route connection.");
-  }
-  connection.pageSocket = socket;
-  connection.pageSocketObservation = observation;
-  observation.connectionId = connection.id;
-  observation.helloTimestamp = connection.helloTimestamp;
-  const pendingIndex = pendingRealtimePageSockets.indexOf(observation);
-  if (pendingIndex >= 0) pendingRealtimePageSockets.splice(pendingIndex, 1);
-  socket.on("close", () => {
-    realtimeSocketCloses.push({
-      clientCloseFrame: connection.clientCloseFrame ?? null,
-      connectionId: connection.id,
-      datasetCatalogRequestCount: datasetCatalogRequests.length,
-      lastFixtureEvent: connection.lastFixtureEvent ?? null,
-      url: socket.url(),
-    });
-  });
-}
-
-function bindRealtimePageSocket(socket) {
-  const path = new URL(socket.url()).pathname;
-  if (path !== realtimeWebSocketPath) return;
-  const observation = {
-    path,
-    socket,
-    connectionId: null,
-    helloTimestamp: null,
-    lastHelloTimestamp: null,
-    frameParseError: null,
-  };
-  pendingRealtimePageSockets.push(observation);
-  socket.on("framereceived", (frame) => {
-    const payload = frame?.payload;
-    const text =
-      typeof payload === "string"
-        ? payload
-        : Buffer.isBuffer(payload)
-          ? payload.toString("utf8")
-          : null;
-    if (text === null) {
-      observation.frameParseError = "WebSocket frame payload was not text or Buffer.";
-      return;
-    }
-    let parsed;
-    try {
-      parsed = JSON.parse(text);
-    } catch (error) {
-      observation.frameParseError =
-        error instanceof Error ? error.message : String(error);
-      return;
-    }
-    if (parsed?.type !== "hello" || typeof parsed.ts !== "string") return;
-    observation.lastHelloTimestamp = parsed.ts;
-    const connection = realtimeConnections.find(
-      (candidate) =>
-        candidate.path === path && candidate.helloTimestamp === parsed.ts,
+function recordRealtimePageEvent(source, observation) {
+  if (source.page !== page || source.frame !== page.mainFrame()) {
+    errors.push(
+      "Realtime page observer callback came from an unexpected page or frame: " +
+        JSON.stringify({
+          isMainFrame: source.frame === page.mainFrame(),
+          isExpectedPage: source.page === page,
+        }),
     );
-    if (connection) attachRealtimePageSocket(socket, connection, observation);
+    return;
+  }
+  if (!observation || typeof observation !== "object") {
+    errors.push("Realtime page observer callback had no event record.");
+    return;
+  }
+  if (observation.kind === "observer-error") {
+    errors.push(`Realtime page observer failed: ${observation.message ?? "unknown error"}`);
+    return;
+  }
+  if (
+    observation.path !== realtimeWebSocketPath ||
+    observation.protocol !== "fullmag.live.v1"
+  ) {
+    errors.push(
+      "Realtime page observer reported the wrong path or subprotocol: " +
+        JSON.stringify({
+          kind: observation.kind,
+          path: observation.path,
+          protocol: observation.protocol,
+        }),
+    );
+    return;
+  }
+
+  let helloTimestamp = observation.helloTimestamp;
+  if (
+    observation.kind === "message" &&
+    observation.messageType === "hello"
+  ) {
+    helloTimestamp = observation.messageTs;
+  }
+  if (typeof helloTimestamp !== "string") {
+    errors.push(
+      "Realtime page event had no exact hello timestamp: " +
+        JSON.stringify({
+          kind: observation.kind,
+          messageType: observation.messageType ?? null,
+          path: observation.path,
+        }),
+    );
+    return;
+  }
+  const connection = realtimeConnections.find(
+    (candidate) =>
+      candidate.path === observation.path &&
+      candidate.helloTimestamp === helloTimestamp,
+  );
+  if (!connection) {
+    errors.push(
+      "Realtime page event did not match one exact route hello timestamp: " +
+        JSON.stringify({
+          helloTimestamp,
+          kind: observation.kind,
+          path: observation.path,
+        }),
+    );
+    return;
+  }
+
+  const eventRecord = {
+    closeCode: observation.code ?? null,
+    closeReason: observation.reason ?? null,
+    connectionId: connection.id,
+    helloTimestamp,
+    kind: observation.kind,
+    messageTs: observation.messageTs ?? null,
+    messageType: observation.messageType ?? null,
+    protocol: observation.protocol,
+    requestScopeEpoch: observation.requestScopeEpoch ?? null,
+    readyState: observation.readyState ?? null,
+    seq: observation.seq ?? null,
+    sessionId: observation.sessionId ?? null,
+    wasClean: observation.wasClean ?? null,
+  };
+  realtimePageEvents.push(eventRecord);
+
+  if (observation.kind === "message") {
+    connection.pageMessages.push(eventRecord);
+    if (observation.messageType === "hello") {
+      if (connection.pageSocketObservation) {
+        errors.push(`Realtime route ${connection.id} delivered more than one hello.`);
+        return;
+      }
+      if (
+        observation.messageTs !== connection.helloTimestamp ||
+        observation.sessionId !== catalogSessionId ||
+        observation.requestScopeEpoch !== catalogRequestScopeEpoch ||
+        observation.seq !== 0
+      ) {
+        errors.push(
+          "Realtime page hello did not preserve its route identity and scope: " +
+            JSON.stringify(eventRecord),
+        );
+        return;
+      }
+      connection.pageSocketObservation = {
+        connectionId: connection.id,
+        helloTimestamp,
+        path: observation.path,
+        protocol: observation.protocol,
+      };
+    } else if (!connection.pageSocketObservation) {
+      errors.push(`Realtime route ${connection.id} delivered a message before its hello.`);
+    }
+    return;
+  }
+
+  if (observation.kind !== "close") {
+    errors.push(`Realtime page observer reported an unsupported event kind: ${observation.kind}`);
+    return;
+  }
+  if (!connection.pageSocketObservation || connection.pageCloseEvent) {
+    errors.push(
+      `Realtime route ${connection.id} delivered an unpaired or duplicate page close event.`,
+    );
+    return;
+  }
+  if (!connection.clientCloseFrame) {
+    errors.push(
+      `Realtime route ${connection.id} dispatched a page close without an observed client close frame.`,
+    );
+    return;
+  }
+  const pageCloseEvent = {
+    code: observation.code ?? null,
+    connectionId: connection.id,
+    helloTimestamp,
+    path: observation.path,
+    protocol: observation.protocol,
+    readyState: observation.readyState ?? null,
+    reason: observation.reason ?? "",
+    wasClean: observation.wasClean === true,
+  };
+  connection.pageCloseEvent = pageCloseEvent;
+  realtimeSocketCloses.push({
+    clientCloseFrame: connection.clientCloseFrame ?? null,
+    connectionId: connection.id,
+    datasetCatalogRequestCount: datasetCatalogRequests.length,
+    helloTimestamp,
+    lastFixtureEvent: connection.lastFixtureEvent ?? null,
+    pageCloseEvent,
+    path: observation.path,
   });
 }
 
@@ -257,7 +348,9 @@ function summarizeRealtimeConnections() {
     connectionId: connection.id,
     helloTimestamp: connection.helloTimestamp ?? null,
     lastFixtureEvent: connection.lastFixtureEvent ?? null,
-    pageSocketBound: Boolean(connection.pageSocket),
+    pageSocketBound: Boolean(connection.pageSocketObservation),
+    pageCloseObserved: Boolean(connection.pageCloseEvent),
+    pageMessages: connection.pageMessages,
     path: connection.path,
     protocolOffer: connection.protocolOffer,
   }));
@@ -275,7 +368,11 @@ function requireActiveRealtimeConnection(purpose) {
     !realtimeConnections.includes(connection) ||
     connection.path !== realtimeWebSocketPath ||
     !protocols.includes("fullmag.live.v1") ||
-    !connection.pageSocket ||
+    !connection.pageSocketObservation ||
+    connection.pageSocketObservation.connectionId !== connection.id ||
+    connection.pageSocketObservation.helloTimestamp !== connection.helloTimestamp ||
+    connection.pageSocketObservation.path !== connection.path ||
+    connection.pageSocketObservation.protocol !== "fullmag.live.v1" ||
     connection.clientCloseFrame !== null
   ) {
     throw new Error(
@@ -283,22 +380,49 @@ function requireActiveRealtimeConnection(purpose) {
         JSON.stringify({
           activeConnectionId: connection?.id ?? null,
           activeConnectionClosed: connection?.clientCloseFrame !== null,
-          activePageSocketBound: Boolean(connection?.pageSocket),
+          activePageSocketBound: Boolean(connection?.pageSocketObservation),
           clientCloseFrameConnectionIds: realtimeClientCloseFrames.map(
             (frame) => frame.connectionId,
           ),
           connections: summarizeRealtimeConnections(),
-          pendingPageSockets: pendingRealtimePageSockets.map(
-            ({ path, lastHelloTimestamp, frameParseError }) => ({
-              frameParseError,
-              lastHelloTimestamp,
-              path,
-            }),
-          ),
+          pageEvents: realtimePageEvents.slice(-8),
+          observerErrors: errors.filter((entry) => entry.includes("Realtime page observer")),
         }),
     );
   }
   return connection;
+}
+
+async function waitForRealtimePageMessage(connection, expectedEvent, purpose) {
+  const matchesExpectedEvent = (message) =>
+    message.kind === "message" &&
+    message.helloTimestamp === connection.helloTimestamp &&
+    message.messageType === expectedEvent.type &&
+    message.messageTs === expectedEvent.ts &&
+    message.sessionId === expectedEvent.session_id &&
+    message.seq === expectedEvent.seq;
+  const deadline = Date.now() + timeoutMs;
+  let message = connection.pageMessages.find(matchesExpectedEvent);
+  while (!message && Date.now() < deadline) {
+    await page.waitForTimeout(25);
+    message = connection.pageMessages.find(matchesExpectedEvent);
+  }
+  if (!message) {
+    throw new Error(
+      `The browser did not dispatch the exact ${purpose} message on realtime connection ${connection.id}: ` +
+        JSON.stringify({
+          expected: {
+            helloTimestamp: connection.helloTimestamp,
+            messageTs: expectedEvent.ts,
+            messageType: expectedEvent.type,
+            seq: expectedEvent.seq,
+            sessionId: expectedEvent.session_id,
+          },
+          observed: connection.pageMessages,
+        }),
+    );
+  }
+  return message;
 }
 const scene = {
   metadata: {
@@ -468,14 +592,181 @@ if (explorerCatalogOnly) {
 const page = await browser.newPage({ viewport: { height: 900, width: 1440 } });
 const errors = [];
 
-await page.addInitScript((disableRealtime) => {
+if (explorerCatalogOnly) {
+  await page.exposeBinding(realtimePageObserverBindingName, (source, observation) => {
+    const previousErrorCount = errors.length;
+    recordRealtimePageEvent(source, observation);
+    if (errors.length > previousErrorCount) {
+      throw new Error(errors.at(-1));
+    }
+  });
+}
+
+await page.addInitScript((options) => {
   window.__FULLMAG_CONFIG__ = {
     ...(window.__FULLMAG_CONFIG__ ?? {}),
     allowMissingSessionSmoke: true,
     controlRoomApiBase: window.location.origin,
-    disableRealtime,
+    disableRealtime: options.disableRealtime,
   };
-}, !explorerCatalogOnly);
+  if (!options.observeRealtime) return;
+
+  const prototype = EventTarget.prototype;
+  const originalDescriptor = Object.getOwnPropertyDescriptor(prototype, "dispatchEvent");
+  const reportObserverError = (message, path = null, protocol = null) => {
+    const callback = window[options.bindingName];
+    if (typeof callback !== "function") {
+      window.setTimeout(() => {
+        throw new Error("The realtime page observer binding is unavailable.");
+      }, 0);
+      return;
+    }
+    try {
+      Promise.resolve(
+        callback({
+          kind: "observer-error",
+          message: String(message).slice(0, 512),
+          path,
+          protocol,
+        }),
+      ).catch((error) => {
+        window.setTimeout(() => {
+          throw new Error(`The realtime page observer binding failed: ${String(error).slice(0, 512)}`);
+        }, 0);
+      });
+    } catch (error) {
+      window.setTimeout(() => {
+        throw new Error(`The realtime page observer binding failed: ${String(error).slice(0, 512)}`);
+      }, 0);
+    }
+  };
+
+  if (
+    !originalDescriptor ||
+    typeof originalDescriptor.value !== "function" ||
+    !originalDescriptor.configurable ||
+    !originalDescriptor.writable
+  ) {
+    reportObserverError("EventTarget.prototype.dispatchEvent is not safely replaceable.");
+    return;
+  }
+
+  const originalDispatchEvent = originalDescriptor.value;
+  const helloTimestamps = new WeakMap();
+  const notify = (observation) => {
+    const callback = window[options.bindingName];
+    if (typeof callback !== "function") {
+      reportObserverError("The realtime page observer binding is unavailable.", observation.path, observation.protocol);
+      return;
+    }
+    try {
+      Promise.resolve(callback(observation)).catch((error) => {
+        window.setTimeout(() => {
+          throw new Error(`The realtime page observer binding failed: ${String(error).slice(0, 512)}`);
+        }, 0);
+      });
+    } catch (error) {
+      reportObserverError(error, observation.path, observation.protocol);
+    }
+  };
+  const wrappedDispatchEvent = function (event) {
+    const result = Reflect.apply(originalDispatchEvent, this, [event]);
+    if (typeof WebSocket !== "function" || !(this instanceof WebSocket)) return result;
+
+    let path = null;
+    let protocol = null;
+    try {
+      const socketUrl = typeof this.url === "string" ? new URL(this.url, window.location.href) : null;
+      path = socketUrl?.pathname ?? null;
+      protocol = typeof this.protocol === "string" ? this.protocol : null;
+      if (path !== options.path || protocol !== options.protocol) return result;
+
+      if (event instanceof MessageEvent && event.type === "message") {
+        if (typeof event.data !== "string" || event.data.length > options.maxMessageChars) {
+          throw new Error("Realtime mock message was not a bounded JSON string.");
+        }
+        const envelope = JSON.parse(event.data);
+        if (!envelope || typeof envelope !== "object" || Array.isArray(envelope)) {
+          throw new Error("Realtime mock message did not contain a JSON object.");
+        }
+        const messageType = envelope.type;
+        const messageTs = envelope.ts;
+        const sessionId = envelope.session_id;
+        const seq = envelope.seq;
+        if (
+          typeof messageType !== "string" || messageType.length > 128 ||
+          typeof messageTs !== "string" || messageTs.length > 128 ||
+          typeof sessionId !== "string" || sessionId.length > 256 ||
+          !Number.isSafeInteger(seq)
+        ) {
+          throw new Error("Realtime mock message identity fields were invalid or oversized.");
+        }
+        const payload = envelope.payload && typeof envelope.payload === "object" && !Array.isArray(envelope.payload)
+          ? envelope.payload
+          : null;
+        const requestScopeEpoch = payload?.request_scope_epoch ?? null;
+        if (requestScopeEpoch !== null && (typeof requestScopeEpoch !== "string" || requestScopeEpoch.length > 256)) {
+          throw new Error("Realtime request scope epoch was invalid or oversized.");
+        }
+        let helloTimestamp = helloTimestamps.get(this) ?? null;
+        if (messageType === "hello") {
+          if (helloTimestamp !== null) throw new Error("Realtime mock dispatched a duplicate hello.");
+          helloTimestamp = messageTs;
+          helloTimestamps.set(this, helloTimestamp);
+        } else if (helloTimestamp === null) {
+          throw new Error("Realtime mock dispatched a message before its hello.");
+        }
+        notify({
+          helloTimestamp,
+          kind: "message",
+          messageTs,
+          messageType,
+          path,
+          protocol,
+          readyState: this.readyState,
+          requestScopeEpoch,
+          seq,
+          sessionId,
+        });
+      } else if (event instanceof CloseEvent && event.type === "close") {
+        const helloTimestamp = helloTimestamps.get(this) ?? null;
+        if (helloTimestamp === null) throw new Error("Realtime mock closed before its hello.");
+        if (typeof event.reason !== "string" || event.reason.length > 123) {
+          throw new Error("Realtime close reason exceeded its bounded observation size.");
+        }
+        notify({
+          code: event.code,
+          helloTimestamp,
+          kind: "close",
+          path,
+          protocol,
+          readyState: this.readyState,
+          reason: event.reason,
+          wasClean: event.wasClean,
+        });
+      }
+    } catch (error) {
+      reportObserverError(error, path, protocol);
+    }
+    return result;
+  };
+
+  try {
+    Object.defineProperty(prototype, "dispatchEvent", {
+      ...originalDescriptor,
+      value: wrappedDispatchEvent,
+    });
+  } catch (error) {
+    reportObserverError(error);
+  }
+}, {
+  bindingName: realtimePageObserverBindingName,
+  disableRealtime: !explorerCatalogOnly,
+  maxMessageChars: maxRealtimeObserverMessageChars,
+  observeRealtime: explorerCatalogOnly,
+  path: realtimeWebSocketPath,
+  protocol: "fullmag.live.v1",
+});
 
 page.on("console", (message) => {
   if (message.type() === "error") {
@@ -490,8 +781,6 @@ page.on("response", (response) => {
     failedResponses.push(`${status} ${response.url()}`);
   }
 });
-page.on("websocket", (socket) => bindRealtimePageSocket(socket));
-
 if (explorerCatalogOnly) {
   await page.routeWebSocket("**/v2/sessions/current/events/ws**", (route) => {
     const connection = {
@@ -500,8 +789,9 @@ if (explorerCatalogOnly) {
       protocolOffer: route.protocols().join(","),
       route,
       lastFixtureEvent: null,
-      pageSocket: null,
+      pageMessages: [],
       pageSocketObservation: null,
+      pageCloseEvent: null,
       clientCloseFrame: null,
       helloTimestamp: null,
     };
@@ -928,7 +1218,7 @@ try {
 
   console.log(
     explorerCatalogOnly
-      ? `Explorer complete analysis result catalog browser proof passed. Actual HTTP pages: ${JSON.stringify(datasetCatalogRequests)}. Fixture API requests: ${JSON.stringify(summarizeFixtureRequests())}. Typed empty active-run observation-frame responses: ${JSON.stringify(observationFrameResponses)}. Production-client WebSocket handshakes: ${JSON.stringify(realtimeConnections.map(({ id, path, protocolOffer, helloTimestamp, pageSocket }) => ({ id, path, protocolOffer, helloTimestamp, pageSocketBound: Boolean(pageSocket) })))}. Fixture events: ${JSON.stringify(realtimeFixtureEvents.map((event) => ({ type: event.type, sessionId: event.session_id, seq: event.seq, recommendedFetch: event.payload?.changes?.[0]?.recommended_fetch ?? null })))}. Client-originated close frames: ${JSON.stringify(realtimeClientCloseFrames)}. Foreign-scope browser socket closures: ${JSON.stringify(realtimeSocketCloses)}. This uses a fixture API backend; it is not a live FEM/API or scientific qualification.`
+      ? `Explorer complete analysis result catalog browser proof passed. Actual HTTP pages: ${JSON.stringify(datasetCatalogRequests)}. Fixture API requests: ${JSON.stringify(summarizeFixtureRequests())}. Typed empty active-run observation-frame responses: ${JSON.stringify(observationFrameResponses)}. Production-client WebSocket handshakes and browser-dispatched events: ${JSON.stringify(summarizeRealtimeConnections())}. Fixture events: ${JSON.stringify(realtimeFixtureEvents.map((event) => ({ type: event.type, sessionId: event.session_id, seq: event.seq, recommendedFetch: event.payload?.changes?.[0]?.recommended_fetch ?? null })))}. Client-originated close frames: ${JSON.stringify(realtimeClientCloseFrames)}. Browser-observed close events: ${JSON.stringify(realtimeSocketCloses)}. The browser observer covers Playwright's mocked WebSocket event path only. This uses a fixture API backend; it is not a live FEM/API or scientific qualification.`
       : workflowActionsOnly
       ? `Study workflow action inspectors smoke passed at ${workspaceUrl}.`
       : `Study authoring UI smoke passed at ${workspaceUrl} with ${transactions.length} model transactions and ${scriptSyncs.length} authoring script syncs.`,
@@ -1783,7 +2073,7 @@ async function verifyCompleteAnalysisResultDatasetCatalogBrowser() {
   assertCatalogPagePair(initialPages, 501, "initial catalog");
   const realtimeReadyDeadline = Date.now() + timeoutMs;
   while (
-    (!activeCatalogRealtimeConnection?.pageSocket ||
+    (!activeCatalogRealtimeConnection?.pageSocketObservation ||
       !realtimeConnections.includes(activeCatalogRealtimeConnection)) &&
     Date.now() < realtimeReadyDeadline
   ) {
@@ -1837,6 +2127,11 @@ async function verifyCompleteAnalysisResultDatasetCatalogBrowser() {
     ],
   });
   sendRealtimeFixtureEvent(stageRealtimeConnection, stageExecutionEvent);
+  await waitForRealtimePageMessage(
+    stageRealtimeConnection,
+    stageExecutionEvent,
+    "StageExecution resource-batch event",
+  );
   const refreshedPages = await waitForCatalogPages(1);
   assertCatalogPagePair(refreshedPages, 502, "StageExecution-refreshed catalog");
 
@@ -1892,15 +2187,26 @@ async function verifyCompleteAnalysisResultDatasetCatalogBrowser() {
     ],
   });
   sendRealtimeFixtureEvent(foreignRealtimeConnection, foreignSessionEvent);
+  await waitForRealtimePageMessage(
+    foreignRealtimeConnection,
+    foreignSessionEvent,
+    "foreign-session resource-batch event",
+  );
   const foreignScopeClose = () =>
     realtimeSocketCloses
       .slice(closesBeforeForeignEvent)
       .find(
         (close) =>
           close.connectionId === foreignRealtimeConnection.id &&
+          close.helloTimestamp === foreignRealtimeConnection.helloTimestamp &&
           close.clientCloseFrame?.connectionId === foreignRealtimeConnection.id &&
           close.clientCloseFrame?.initiatedBy === "page" &&
           close.clientCloseFrame?.closeReplyForwarded === true &&
+          close.pageCloseEvent?.connectionId === foreignRealtimeConnection.id &&
+          close.pageCloseEvent?.helloTimestamp === foreignRealtimeConnection.helloTimestamp &&
+          close.pageCloseEvent?.path === foreignRealtimeConnection.path &&
+          close.pageCloseEvent?.protocol === "fullmag.live.v1" &&
+          close.pageCloseEvent?.readyState === 3 &&
           close.clientCloseFrame?.echoedCloseCode ===
             (isEchoableWebSocketCloseCode(close.clientCloseFrame.closeCode)
               ? close.clientCloseFrame.closeCode
@@ -1925,15 +2231,10 @@ async function verifyCompleteAnalysisResultDatasetCatalogBrowser() {
       "Production realtime client did not complete the foreign-session close handshake. " +
         JSON.stringify({
           activeConnectionId: foreignRealtimeConnection.id,
-          activePageSocketBound: Boolean(foreignRealtimeConnection.pageSocket),
+          activePageSocketBound: Boolean(foreignRealtimeConnection.pageSocketObservation),
           connections: summarizeRealtimeConnections(),
-          pendingPageSockets: pendingRealtimePageSockets.map(
-            ({ path, lastHelloTimestamp, frameParseError }) => ({
-              frameParseError,
-              lastHelloTimestamp,
-              path,
-            }),
-          ),
+          pageEvents: realtimePageEvents.slice(-16),
+          observerErrors: errors.filter((entry) => entry.includes("Realtime page observer")),
           clientCloseFrameConnectionIds: realtimeClientCloseFrames.map(
             (frame) => frame.connectionId,
           ),
