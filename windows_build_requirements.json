@@ -94,7 +94,9 @@
         "method": "winget",
         "id": "Git.Git",
         "source": "winget",
-        "official_url": "https://git-scm.com/download/win"
+        "official_url": "https://git-scm.com/download/win",
+        "override": "/VERYSILENT /NORESTART /NOCANCEL /SP- /o:PathOption=BashOnly",
+        "path_policy": "installer_must_not_modify_user_or_machine_path"
       }
     },
     "msvc_x64": {
@@ -225,7 +227,9 @@
         "method": "winget",
         "id": "Python.Python.3.12",
         "source": "winget",
-        "official_url": "https://www.python.org/downloads/windows/"
+        "official_url": "https://www.python.org/downloads/windows/",
+        "override": "/quiet InstallAllUsers=0 PrependPath=0 AppendPath=0 Include_launcher=0",
+        "path_policy": "installer_must_not_modify_user_or_machine_path"
       }
     },
     "uv": {
@@ -311,6 +315,20 @@
     "prepare_policy": "Run only through the managed Windows build recipe after the compiler/tooling check; this setup command never invokes a provider build directly.",
     "required_for": ["ninja", "clang_cl", "msmpi_sdk", "mfem", "hypre", "libceed"],
     "source_policy": "official upstream Git refs plus SHA-256-checked archives",
+    "internal_helpers": {
+      "zstd": {
+        "kind": "provider_bootstrap_internal_helper",
+        "version": "1.5.7",
+        "archive": "zstd-v1.5.7-win64.zip",
+        "url": "https://github.com/facebook/zstd/releases/download/v1.5.7/zstd-v1.5.7-win64.zip",
+        "archive_sha256": "acb4e8111511749dc7a3ebedca9b04190e37a17afeb73f55d4425dbf0b90fad9",
+        "tool_directory": "zstd-1.5.7",
+        "executable_name": "zstd.exe",
+        "decode_memory": "2048MB",
+        "host_requirement": false,
+        "managed_by": "scripts/windows/native_fem_dependencies.ps1"
+      }
+    },
     "cuda_architecture_required": true,
     "receipt_contract": {
       "schema": "fullmag.windows.fem-providers.v1",
