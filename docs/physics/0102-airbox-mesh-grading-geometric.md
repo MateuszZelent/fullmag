@@ -267,17 +267,26 @@ production criteria, not claims about the current partial report.
 - Current reports do not yet publish the complete canonical band/growth gate.
 - Linear grading remains compatibility behavior and is not removed here.
 - FMMQ v1 cannot carry mixed topology quality evidence.
-- The scoped exact-layer route now creates exact CAD layer partitions with
-  geometry-only GEO extrusion, without `numElements`, `heights` or
-  `recombine`, then generates one conforming 3D mesh after magnetic-owner and
-  air-volume sizing fields are installed. The fields, rather than a copied
-  source-face triangulation or cap projection, determine the in-plane density
-  in each owner volume. Exact magnetic z planes and periodic surface pairings
-  remain separate geometry/topology obligations. The GHA regressions must
-  still establish exact planes, scoped body and air density in a common region,
-  positive cells, shared-face incidence at body layer seams, mapped periodic
-  node translations, and actual near-to-far air coarsening before this route
-  is runtime-qualified.
+- The scoped exact-layer route has different source strategies for Box and ring
+  geometries. In the scoped Box branch, each precomputed CAD slab calls GEO
+  extrusion with `numElements=[1]`, `heights=[1.0]` and `recombine=False` to
+  request one extrusion mesh layer per slab. The scoped ring branch remains
+  geometry-only; this Box constraint does not establish ring support.
+- This Box change is source-implemented but runtime `NOT VERIFIED`. The source
+  installs owner-volume and air-volume fields before its final
+  `mesh.generate(3)`, but Gmsh's extrusion-with-mesh mode may couple the
+  in-plane discretization to the source surface mesh. The existing evidence
+  does not yet prove that the Box call preserves exact owner-volume upper and
+  lower fields, independent air sizing, or the prior body XY mesh. Those
+  behaviors must be measured on the exact Gmsh 4.15.2 route; configured field
+  values alone are not evaluated size values.
+- GHA must establish exact magnetic z planes, one nonempty body mesh slab per
+  requested interval, no tetrahedron crossing an internal plane, positive
+  cells, shared-face incidence at body layer seams, mapped periodic node
+  translations, unchanged body XY under air-cap changes, and measured
+  near-to-far air coarsening before the Box route is runtime-qualified. The
+  geometry-only scoped ring route also remains unqualified until its own
+  existing ring tests pass.
 - The resolved exact-layer generator cap and the reported `effective_airbox_target`
   are currently distinct. `_resolve_box_airbox_layer_sizes` derives a finite
   outer target from the interface target and growth ratio when no maximum was
@@ -310,7 +319,8 @@ production criteria, not claims about the current partial report.
 | Boundary span | `packages/fullmag-py/src/fullmag/meshing/_size_field_plan.py` | `_resolve_airbox_boundary_transition_span` | resolves numeric side/corner transition spans | FEM meshing | planner tests |
 | Physical model | `docs/physics/0102-airbox-mesh-grading-geometric.md` | `DOC-ANCHOR:airbox-grading-governing-equations` | source-free exterior equations motivating grading | FEM contract | publication review |
 | Chordal ring volume bound | `docs/physics/0102-airbox-mesh-grading-geometric.md` | `DOC-ANCHOR:eq-ring-polygon-hole-volume-bound` | conditional geometric bound for a verified common polygonal hole prism | FEM mesh geometry | planned GHA regression |
-| Exact-layer ring construction | `packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py` | `_generate_coincident_ring_airbox_mesh` | creates exact per-plane CAD volumes and meshes scoped body/air fields in one conforming 3D pass | FEM meshing | actual GHA required |
+| Exact-layer Box extrusion | `packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py` | `_generate_coincident_ring_airbox_mesh` | requests one extrusion mesh layer per scoped Box CAD slab; owner/air field behavior remains unverified | FEM meshing | source implemented; runtime NOT VERIFIED, GHA required |
+| Exact-layer ring extrusion | `packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py` | `_generate_coincident_ring_airbox_mesh` | retains geometry-only scoped ring slabs; ring runtime qualification remains open | FEM meshing | source implemented; runtime NOT VERIFIED, GHA required |
 | Ring volume applicability regression | `packages/fullmag-py/tests/test_meshing.py` | `test_scoped_exact_ring_lower_bound_uses_layer_route_and_report` | verifies body planes, positive tetrahedra, closed boundary geometry, shared body-seam incidence, owner-floor provenance, regional density, and actual periodic node translations | FEM meshing | source regression; GHA pending |
 | Implicit exact-layer cap regression | `packages/fullmag-py/tests/test_meshing.py` | `test_exact_layer_implicit_airbox_cap_coarsens_far_air` | verifies measured far-air tetrahedral sizes coarsen relative to near-air sizes when only the growth ratio sets the outer cap | FEM meshing | source regression; GHA pending |
 | Pure chordal-bound regression | `packages/fullmag-py/tests/test_meshing.py` | `test_ring_chordal_bound_guard_and_refinement` | checks the analytic inequality, invalid geometry rejection, and bound tightening under refinement | FEM mesh geometry | source test added; GHA pending |
