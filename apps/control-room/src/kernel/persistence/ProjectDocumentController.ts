@@ -919,7 +919,7 @@ export function bytesToBase64(bytes: Uint8Array): string {
   return Buffer.from(bytes).toString("base64");
 }
 
-export function base64ToBytes(value: string): Uint8Array {
+export function base64ToBytes(value: string): Uint8Array<ArrayBuffer> {
   if (typeof atob === "function") {
     const binary = atob(value);
     const bytes = new Uint8Array(binary.length);
@@ -931,7 +931,7 @@ export function base64ToBytes(value: string): Uint8Array {
   return new Uint8Array(Buffer.from(value, "base64"));
 }
 
-function downloadProjectArchive(bytes: Uint8Array, fileName: string): void {
+function downloadProjectArchive(bytes: Uint8Array<ArrayBuffer>, fileName: string): void {
   if (typeof document === "undefined" || typeof URL === "undefined") {
     throw new Error("Project downloads are unavailable in this environment.");
   }
