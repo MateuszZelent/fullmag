@@ -1181,16 +1181,17 @@ describe("buildModelTree", () => {
   it("infers material DMI only from finite nonzero canonical scalar values", () => {
     const snapshot = modelTreeSnapshotFromScene({
       materials: [
-        { id: "missing", properties: { Ms: 800000 } },
-        { id: "null", properties: { Dind: null, Dbulk: null } },
-        { id: "zero", properties: { Dind: 0, Dbulk: -0 } },
+        { id: "missing", name: "Missing", properties: { Ms: 800000 } },
+        { id: "null", name: "Null", properties: { Dind: null, Dbulk: null } },
+        { id: "zero", name: "Zero", properties: { Dind: 0, Dbulk: -0 } },
         {
           id: "nonfinite",
+          name: "Nonfinite",
           properties: { Dind: Number.NaN, Dbulk: "Infinity" },
         },
-        { id: "positive", properties: { Dind: 0.25, Dbulk: "0.5" } },
-        { id: "negative", properties: { Dind: "-0.25", Dbulk: -0.5 } },
-        { id: "nondecimal", properties: { Dind: " ", Dbulk: "0x10" } },
+        { id: "positive", name: "Positive", properties: { Dind: 0.25, Dbulk: "0.5" } },
+        { id: "negative", name: "Negative", properties: { Dind: "-0.25", Dbulk: -0.5 } },
+        { id: "nondecimal", name: "Nondecimal", properties: { Dind: " ", Dbulk: "0x10" } },
       ],
       objects: [
         { id: "missing", material_ref: "missing" },
@@ -1260,6 +1261,7 @@ describe("buildModelTree", () => {
       materials: [
         {
           id: "nonzero",
+          name: "Nonzero",
           properties: { Dind: 0.25, Dbulk: -0.5 },
         },
       ],

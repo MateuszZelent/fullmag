@@ -1,6 +1,8 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
+import type { ComputeNodesResource } from "@/kernel/api/apiTypes";
+
 import { ComputeNodeInventoryDetails } from "../ComputeNodeInventoryDetails";
 import { ComputeNodeInventoryStatus } from "../ComputeNodeInventoryStatus";
 import { parseComputeNodeSnapshot, summarizeComputeNodeInventory } from "./computeNodeInventory";
@@ -54,7 +56,7 @@ const snapshot = {
     gpu_visibility: "supported",
     storage_quota: "unavailable",
   },
-};
+} as unknown as ComputeNodesResource["nodes"][number]["snapshot"];
 
 describe("compute-node snapshot inventory", () => {
   it("parses stable host topology and renders explicit last-known GPU identity", () => {
@@ -196,7 +198,7 @@ describe("compute-node snapshot inventory", () => {
               over_budget: false,
               blocking_reasons: [],
             },
-          },
+          } as unknown as NonNullable<ComputeNodesResource["nodes"][number]["node_policy"]>,
         }],
       },
       status: "ready",

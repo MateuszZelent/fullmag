@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProjectBatchCasesQuery } from "@/kernel/api/apiTypes";
 import {
   findElement,
+  findElements,
   installSimulationPreparationTestDom,
   type TestElement,
 } from "@/kernel/layout/simulationPreparationTestDom.test-support";
@@ -177,9 +178,14 @@ describe("ProjectBatchesSection", () => {
     expect(container.textContent).toContain("Published child run: run-b");
     expect(container.textContent).toContain("Task catalog revision 7 · 1 task(s)");
     expect(container.textContent).toContain("running · task-b");
-    expect(Array.from(container.querySelectorAll("button")).filter((button) =>
-      button.textContent?.trim() === "View run details",
-    )).toHaveLength(1);
+    expect(
+      findElements(
+        container,
+        (element) =>
+          element.tagName === "BUTTON" &&
+          element.textContent.trim() === "View run details",
+      ),
+    ).toHaveLength(1);
     const viewRun = findElement(
       container as unknown as TestElement,
       (element) => element.tagName === "BUTTON" && element.textContent?.trim() === "View run details",

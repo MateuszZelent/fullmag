@@ -109,6 +109,7 @@ function stageExecutionAt(
     runtime_state: "running",
     session_epoch: "scratch-session@1700000000000",
     session_id: "scratch-session",
+    request_scope_epoch: "api-instance:scratch",
     stage_statuses: [],
     stages: [],
     total_stages: 0,

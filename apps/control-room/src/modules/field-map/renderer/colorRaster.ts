@@ -26,7 +26,7 @@ export function colorizeScalarRaster(
   range: ColorRange,
   mask?: ArrayLike<number>,
   options: { colormap?: string; opacity?: number } = {},
-): Uint8ClampedArray {
+): Uint8ClampedArray<ArrayBuffer> {
   const opacity = options.opacity ?? 1;
   if (!Number.isFinite(opacity) || opacity < 0 || opacity > 1) {
     throw new Error("Planar raster opacity must be finite and within [0, 1]");

@@ -266,6 +266,7 @@ describe("StudyInspectorPanelModel", () => {
       run_id: "run-1",
       session_id: "session-1",
       session_epoch: "session-1@1",
+      request_scope_epoch: "api-instance:1",
     };
     const scope = (
       resourceStatus: StageExecutionScope["resourceStatus"],
@@ -347,7 +348,10 @@ describe("StudyInspectorPanelModel", () => {
       }
     }
 
-    const noCurrentRun = { ...stageExecution, run_id: null };
+    const noCurrentRun = {
+      ...stageExecution,
+      run_id: null,
+    } as unknown as StageExecutionResource;
     for (const resourceStatus of ["ready", "stale", "error"] as const) {
       expect(
         stageExecutionForCurrentScope(
@@ -387,6 +391,7 @@ describe("StudyInspectorPanelModel", () => {
       runtime_state: "running",
       session_epoch: "session-1@1",
       session_id: "session-1",
+      request_scope_epoch: "api-instance:1",
       stage_statuses: ["running"],
       stages: [
         {

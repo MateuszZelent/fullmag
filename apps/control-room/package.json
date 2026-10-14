@@ -124,6 +124,7 @@
     "storybook": "^10.5.10",
     "tailwindcss": "^4.2.2",
     "typescript": "7.0.2",
+    "typescript-legacy-compiler": "npm:typescript@5.8.3",
     "vite": "8.3.2",
     "vitest": "^5.0.3"
   }
