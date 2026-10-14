@@ -350,6 +350,57 @@ class _GmshApiDiagnosticProxy:
         return getattr(self._actual, name)
 
 
+def _gmsh_realization_failure_diagnostic_line(snapshots, fixture_name, error):
+    prefix = "GMSH_REALIZATION_DIAGNOSTICS: "
+    payload = {
+        "evidence_kind": "configured Gmsh API values immediately before mesh.generate(3)",
+        "pointwise_field_values_evaluated": False,
+        "fixture_name": str(fixture_name)[:128],
+        "exception_type": type(error).__name__[:128],
+        "exception_message": str(error)[:512],
+        "snapshot_count": len(snapshots),
+        "snapshots": snapshots,
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    if len((prefix + encoded + "\n").encode("utf-8")) <= _MAX_BODY_XY_DIAGNOSTIC_BYTES:
+        return prefix + encoded
+
+    summary = {
+        "evidence_kind": payload["evidence_kind"],
+        "pointwise_field_values_evaluated": False,
+        "fixture_name": payload["fixture_name"],
+        "exception_type": payload["exception_type"],
+        "exception_message": payload["exception_message"],
+        "snapshot_count": len(snapshots),
+        "truncated": True,
+        "serialized_bytes_before_truncation": len(encoded.encode("utf-8")),
+        "capture_summaries": [
+            {
+                "stage": str(snapshot.get("stage", ""))[:128],
+                "capture_error": str(snapshot.get("capture_error", ""))[:256] or None,
+                "field_registration_call_count": snapshot.get("field_registration_call_count"),
+                "registered_field_count": snapshot.get("registered_field_count"),
+                "field_setter_call_count": snapshot.get("field_setter_call_count"),
+                "mesh_option_set_call_count": snapshot.get("mesh_option_set_call_count"),
+                "volume_count": snapshot.get("volume_count"),
+            }
+            for snapshot in snapshots[:8]
+            if isinstance(snapshot, dict)
+        ],
+    }
+    encoded = json.dumps(summary, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    if len((prefix + encoded + "\n").encode("utf-8")) > _MAX_BODY_XY_DIAGNOSTIC_BYTES:
+        encoded = json.dumps({
+            "evidence_kind": payload["evidence_kind"],
+            "pointwise_field_values_evaluated": False,
+            "fixture_name": payload["fixture_name"],
+            "exception_type": payload["exception_type"],
+            "snapshot_count": len(snapshots),
+            "truncated": True,
+        }, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    return prefix + encoded
+
+
 def _realize_public_de_smoke_box(
     monkeypatch, tmp_path, *, universe_mesh_call, fixture_name, gmsh_diagnostics=None,
 ):
@@ -396,9 +447,8 @@ def _realize_public_de_smoke_box(
             study_universe=meta["study_universe"],
             mesh_workflow=meta["mesh_workflow"],
         )
-        if gmsh_diagnostics is None:
-            return realize()
-        capture = _GmshApiConfigurationCapture(gmsh_diagnostics)
+        capture_snapshots = gmsh_diagnostics if gmsh_diagnostics is not None else []
+        capture = _GmshApiConfigurationCapture(capture_snapshots)
         actual_import_gmsh = _gmsh_swept_module._import_gmsh
         with monkeypatch.context() as gmsh_patch:
             gmsh_patch.setattr(
@@ -406,7 +456,32 @@ def _realize_public_de_smoke_box(
                 "_import_gmsh",
                 lambda: _GmshApiDiagnosticProxy(actual_import_gmsh(), capture),
             )
-            return realize()
+            try:
+                return realize()
+            except Exception as error:
+                try:
+                    print(
+                        _gmsh_realization_failure_diagnostic_line(
+                            capture_snapshots, fixture_name, error,
+                        ),
+                        file=sys.stderr,
+                        flush=True,
+                    )
+                except Exception:
+                    try:
+                        print(
+                            "GMSH_REALIZATION_DIAGNOSTICS: " + json.dumps({
+                                "evidence_kind": "configured Gmsh API capture unavailable",
+                                "pointwise_field_values_evaluated": False,
+                                "snapshot_count": len(capture_snapshots),
+                                "truncated": True,
+                            }, sort_keys=True, separators=(",", ":")),
+                            file=sys.stderr,
+                            flush=True,
+                        )
+                    except Exception:
+                        pass
+                raise
     finally:
         fm.reset()
 
