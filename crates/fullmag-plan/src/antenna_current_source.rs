@@ -1373,6 +1373,9 @@ mod tests {
         f.stage.field_sampling_domain = FieldTargetIR::Object {
             object_id: "device-object".into(),
         };
+        f.stage.target_refs = vec![FieldTargetIR::Object {
+            object_id: "device-object".into(),
+        }];
         f.stage.outputs = vec![fullmag_ir::AntennaNamedOutputIR {
             id: "inspection-output".into(),
             quantity: "H_ant_basis".into(),

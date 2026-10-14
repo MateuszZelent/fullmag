@@ -4286,3 +4286,11 @@ CI522 fullrunner dwie awarie zdiagnozowano na exactsource. Tampered H jest prawi
 Cancel przed rename pozostawia wspólny organizujący parent v2namespace, bez końcowej content-addressed rewizji. Produkcyjne cleanup/rename nie są zmieniane; test sprawdza brak finalleaf/manifest/member/temp oraz brak jakichkolwiek children w fresh uniquenamespace. Nie usuwa się parenta mogącego należeć do współbieżnych publisherów. Trzy named actual regressions wykonywane na obu platformach; Linux fullrunner zachowany. Hosted execution pending, gate nie jest osłabiony.
 
 Source fragment classification IR37313772c652c989167f77e7abc6aecc1bb20f6c opublikowany; istniejące CI obserwowane niezależnie. Brak lokalnego wykonania projektu i danych usuniętych z storage.
+
+### 2026-10-14 — zgodność planner fixture z rzeczywistą authoring semantics
+
+Scope373 fullIR i cztery named antenowe negativecontracts przeszły; pełny planner570PASS/11FAIL. Dziewięć antenowych przypadków blokował public_inspection_fixture, który ustawiał sampling domain istniejącego device-object, lecz pozostawiał wymagane target_refs puste. Dodano ten sam prawdziwy FieldTarget Object, zgodnie z publicznym przykładem; to nie projection. Raw inspection -> basis/projection qualification odmowy zachowane.
+
+Dwa spin/charge testy oczekiwały tylko markerów bottom/back, mimo że fixture jawnie deklaruje także left/right VoltageElectrode. Oczekiwania zachowują komplet authored boundary attributes11/12/13/15 z0/.1/.1/0 i insulation14/16. To markery facetów, nie vertexDOFs; runtime dopiero mapuje je naH1. Resolver/fizyka pozostają bez zmian. Poprawka nie kwalifikuje realnego electricalsolve ani zgodności napięć na współdzielonych narożnikach. Existingstrictplannerpositive/negative tests pozostają pełną bramką, hostedexecution pending.
+
+UI38488385823 exact7013 SUCCESS:56files/1205tests, completeTypecheck, architecture, nativeChrome155 canvas400x100/offset4/exactcolors/settled/dispose0. Artifact11860926256 pobrany, pełnylogSHA256 E263638F5C1DAA44DA1F393B6D9A7F06717FF448B65AC97C67F3FB6FCEF426C2. Jest to konkretny planar renderer proof; fullworkspace/API/liveExplorer/FEM/GPU nie są nim kwalifikowane. Nowe sourcebackendrepairs a72 wCI38489057227:LinuxjobSUCCESS, Windows przy ostatniejobserwacji wnamedintegritystep; pełnygatejeszczeobserwowany.
