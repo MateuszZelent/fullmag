@@ -119,7 +119,7 @@ pub(crate) struct AppState {
     pub development_backend:
         crate::router_v2::handlers::platform::development_backend::DevelopmentBackendConfig,
     pub development_restart_transport:
-        crate::router_v2::handlers::platform::development_restart_request::DevelopmentRestartTransportConfig,
+        crate::router_v2::handlers::platform::development_transport::DevelopmentRestartTransportConfig,
     pub development_consumer_readiness:
         crate::development_consumer_readiness::DevelopmentConsumerReadiness,
     pub repo_root: PathBuf,

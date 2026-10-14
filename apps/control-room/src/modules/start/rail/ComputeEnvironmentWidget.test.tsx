@@ -94,7 +94,7 @@ describe("ComputeEnvironmentWidget solver routes", () => {
       state: "current",
     });
 
-    expect(html).toContain("Host inventory · Current · 1 node");
+    expect(html.replace(/<[^>]*>/g, "")).toContain("Host inventory · Current · 1 node");
     expect(html).toContain("Samples become stale after 30 seconds.");
   });
 });

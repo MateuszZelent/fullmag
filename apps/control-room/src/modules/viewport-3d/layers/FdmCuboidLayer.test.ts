@@ -1032,16 +1032,17 @@ describe("FdmCuboidLayer model", () => {
     );
   });
 
-  it("mutates the owned surface material through its Three.js ref", () => {
+  it("invalidates only the owned material mounted on the Three.js surface", () => {
     const layerSource = readFileSync(fdmCuboidLayerPath, "utf8").replace(/\r\n/g, "\n");
 
     expect(layerSource).toContain(
       "const surfaceMaterialRef = useRef<MeshBasicMaterial>(null);",
     );
     expect(layerSource).toContain("ref={surfaceMaterialRef}");
-    expect(layerSource).toContain(
-      "surfaceMaterialRef.current.needsUpdate = true;",
-    );
+    expect(layerSource).toContain("const mountedSurfaceMaterial = surface.material;");
+    expect(layerSource).toContain("mountedSurfaceMaterial === surfaceMaterial");
+    expect(layerSource).toContain("mountedSurfaceMaterial instanceof MeshBasicMaterial");
+    expect(layerSource).toContain("mountedSurfaceMaterial.needsUpdate = true;");
     expect(layerSource).not.toContain("surfaceMaterial.needsUpdate = true;");
   });
 

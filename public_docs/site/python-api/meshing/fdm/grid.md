@@ -154,4 +154,4 @@ Focused constructor, lowering, and mesh-report tests are the evidence boundary f
 
 | Claim | Path | Stable symbol | Responsibility | Evidence |
 |---|---|---|---|---|
-| Per-magnet Cartesian grid contract. | `packages/fullmag-py/src/fullmag/model/discretization.py` | `class FDMGrid` | Per-magnet Cartesian grid contract. | Source-map validator and focused API tests |
+| Per-magnet Cartesian grid contract. | [`packages/fullmag-py/src/fullmag/model/discretization.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/discretization.py#L19) | [`class FDMGrid`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/discretization.py#L19) | Per-magnet Cartesian grid contract. | Source-map validator and focused API tests |

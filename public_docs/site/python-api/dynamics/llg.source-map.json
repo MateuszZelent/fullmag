@@ -1,38 +1,54 @@
 {
   "document": {
-    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367",
+    "reviewed_revision": "5e99782acbb7fb3f65d0cad872e102bf67733103",
     "path": "public_docs/site/python-api/dynamics/llg.md"
   },
   "backend_matrix": [
+    {"solver": "FEM", "device": "CPU", "status": "documented"},
+    {"solver": "FEM", "device": "GPU", "status": "documented"},
+    {"solver": "FDM", "device": "CPU", "status": "documented"},
+    {"solver": "FDM", "device": "GPU", "status": "documented"}
+  ],
+  "equations": [
     {
-      "solver": "FEM",
-      "device": "CPU",
-      "status": "documented"
-    },
-    {
-      "solver": "FEM",
-      "device": "GPU",
-      "status": "documented"
-    },
-    {
-      "solver": "FDM",
-      "device": "CPU",
-      "status": "documented"
-    },
-    {
-      "solver": "FDM",
-      "device": "GPU",
-      "status": "documented"
+      "id": "eq-python-llg-rhs",
+      "symbols": ["m_i", "H_eff_i", "gamma0", "alpha_i", "s_prec", "tau_direct_i", "t"],
+      "sources": ["owner", "fem-cpu-llg", "fem-gpu-llg"]
     }
   ],
-  "equations": [],
-  "symbols": [],
+  "symbols": [
+    {"id": "m_i", "latex": "\\mathbf{m}_i", "meaning": "Reduced magnetization unit vector at active node/cell $i$", "si_unit": "1"},
+    {"id": "H_eff_i", "latex": "\\mathbf{H}_{\\mathrm{eff},i}", "meaning": "Total effective magnetic field at node/cell $i$", "si_unit": "\\mathrm{A\\,m^{-1}}"},
+    {"id": "gamma0", "latex": "\\gamma_0", "meaning": "Reduced gyromagnetic ratio (`LLG.gamma`)", "si_unit": "\\mathrm{m\\,A^{-1}\\,s^{-1}}"},
+    {"id": "alpha_i", "latex": "\\alpha_i", "meaning": "Dimensionless Gilbert damping parameter (`alpha`)", "si_unit": "1"},
+    {"id": "s_prec", "latex": "s_{\\mathrm{prec}}", "meaning": "Precession switch ($1$ in time evolution, $0$ in pure-damping relaxation)", "si_unit": "1"},
+    {"id": "tau_direct_i", "latex": "\\boldsymbol{\\tau}_{\\mathrm{direct},i}", "meaning": "Optional direct current-driven spin torque rate", "si_unit": "\\mathrm{s^{-1}}"},
+    {"id": "t", "latex": "t", "meaning": "Physical simulation time", "si_unit": "\\mathrm{s}"}
+  ],
   "sources": [
     {
       "id": "owner",
       "path": "packages/fullmag-py/src/fullmag/model/dynamics.py",
       "symbol": "class LLG",
-      "responsibility": "Owns the documented public API, validation, and lowering."
+      "responsibility": "Owns the documented public API, validation, and lowering"
+    },
+    {
+      "id": "study-builder",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "class StudyBuilder",
+      "responsibility": "Stage-workflow .solver(...) configuration and ProblemIR compilation"
+    },
+    {
+      "id": "fem-cpu-llg",
+      "path": "backends/fem/cpu/mfem/integrators/llg_rhs.cpp",
+      "symbol": "llg_rhs_aos",
+      "responsibility": "Native FEM CPU nodewise LLG right-hand-side evaluation"
+    },
+    {
+      "id": "fem-gpu-llg",
+      "path": "backends/fem/gpu/cuda/integrators/llg/llg_rhs_kernels.cu",
+      "symbol": "fullmag_cuda_llg_rhs_fused",
+      "responsibility": "Native FEM CUDA fused LLG right-hand-side kernel"
     }
   ],
   "public_api": {
@@ -45,7 +61,7 @@
         "validation": "Positive finite gyromagnetic ratio used by the H-field LLG convention.",
         "meaning": "Positive finite gyromagnetic ratio used by the H-field LLG convention.",
         "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
-        "problem_ir": "`study.dynamics.gamma`"
+        "problem_ir": "`study.dynamics.gyromagnetic_ratio`"
       },
       {
         "python": "LLG.integrator",

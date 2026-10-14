@@ -226,7 +226,18 @@ describe("planar renderer lifecycle", () => {
 
     try {
       renderer.resize(10, 10, 1);
-      renderer.draw(new Uint8ClampedArray(4), 1, 1);
+      const backing = new Uint8ClampedArray([99, 1, 2, 3, 4, 88]);
+      renderer.draw(backing.subarray(1, 5), 1, 1);
+      const ordinaryImage = context.putImageData.mock.calls.at(-1)?.[0];
+      expect([...ordinaryImage.data]).toEqual([1, 2, 3, 4]);
+      expect(ordinaryImage.data.buffer).toBe(backing.buffer);
+      const shared = new Uint8ClampedArray(new SharedArrayBuffer(6));
+      shared.set([99, 5, 6, 7, 8, 88]);
+      renderer.draw(shared.subarray(1, 5), 1, 1);
+      const sharedImage = context.putImageData.mock.calls.at(-1)?.[0];
+      expect([...sharedImage.data]).toEqual([5, 6, 7, 8]);
+      expect(sharedImage.data.buffer).toBeInstanceOf(ArrayBuffer);
+      expect([...shared]).toEqual([99, 5, 6, 7, 8, 88]);
       const beforeResize = context.drawImage.mock.calls.length;
       renderer.resize(10, 10, 2);
 

@@ -522,6 +522,9 @@ export class TestHTMLOptionElement extends TestElement {
   }
 }
 
+/** Keep form association checks distinct from generic HTMLElement checks. */
+export class TestHTMLFormElement extends TestElement {}
+
 /**
  * Model the select/option value and selectedness IDL used by React DOM and
  * Radix's hidden form control, without changing TestElement input values.
@@ -666,6 +669,7 @@ export class TestDocument extends TestNode {
 
   createElement(tagName: string): TestElement {
     const normalizedTagName = tagName.toLowerCase();
+    if (normalizedTagName === "form") return new TestHTMLFormElement(this, tagName);
     if (normalizedTagName === "select") {
       return new TestHTMLSelectElement(this, tagName);
     }
@@ -749,6 +753,7 @@ export function installSimulationPreparationTestDom({
     Element: TestElement,
     Event: TestEvent,
     HTMLElement: TestElement,
+    HTMLFormElement: TestHTMLFormElement,
     HTMLSelectElement: TestHTMLSelectElement,
     HTMLIFrameElement: TestHtmlIFrameElement,
     location: { search: "" },
@@ -771,6 +776,7 @@ export function installSimulationPreparationTestDom({
     Element: TestElement,
     Event: TestEvent,
     HTMLElement: TestElement,
+    HTMLFormElement: TestHTMLFormElement,
     HTMLSelectElement: TestHTMLSelectElement,
     MutationObserver: TestMutationObserver,
     Node: TestNode,

@@ -2305,11 +2305,11 @@ mod tests {
         let legacy_environment = worker_environment(None, false);
         let host_environment = worker_environment(None, true);
         for name in HOST_WORKER_PARENT_THREAD_ENV {
-            assert!(!legacy_environment.iter().any(|(key, _)| key == name));
+            assert!(!legacy_environment.iter().any(|(key, _)| *key == name));
             assert_eq!(
                 host_environment
                     .iter()
-                    .find(|(key, _)| key == name)
+                    .find(|(key, _)| *key == name)
                     .map(|(_, value)| value),
                 Some(&None),
                 "host worker must remove inherited {name}"

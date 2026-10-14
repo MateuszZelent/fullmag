@@ -1,127 +1,218 @@
 ---
 title: Floquet Boundary Conditions
-status: partial
+status: implemented
 doc_kind: reference
 audience: user
 owner: fullmag-public-docs
-last_updated: 2026-08-31
-reviewed_revision: ab3c8802a691a535063102c12f9a79bb0043b367
+last_updated: 2026-10-14
+reviewed_revision: 5e99782acbb7fb3f65d0cad872e102bf67733103
 ---
 
 # Floquet boundary conditions
 
 (public-docs-python-api-boundary-conditions-floquet-boundary-conditions)=
 (python-api-boundary-conditions-floquet-boundary-conditions-problem-statement)=
-## Problem statement
+## 1. Physical problem and solver family
 
-Use Floquet pairs when the periodic condition includes a wave-vector phase convention.
+`fm.FloquetBC` configures Bloch/Floquet phase-twisted periodic boundary constraints across paired opposite cell boundaries for wave-vector-resolved spin-wave eigenmode (`Eigenmodes`) and steady-state frequency-response (`FrequencyResponse`) stages.
 
-This page documents the public Python authoring boundary, not an undocumented runtime promise. Construction creates typed authoring data, while to_ir() is the object-level lowering boundary consumed by the study/script pipeline.
+Unlike strict zero-phase periodic boundaries (`fm.PeriodicBC`), `fm.FloquetBC` couples the real and imaginary parts of the dynamic magnetization $\delta\mathbf{m}(\mathbf{r})$ and dynamic magnetostatic scalar potential $\delta\phi(\mathbf{r})$ across the unit-cell translation vector $\Delta\mathbf{r}$ via a wave-vector-dependent complex phase factor $\exp(-\mathrm{i}\,\mathbf{k}\cdot\Delta\mathbf{r})$.
 
 (python-api-boundary-conditions-floquet-boundary-conditions-governing-equations)=
-## Governing equations
+## 2. Governing equations
+
+Across any master/slave boundary pair $(\partial\Omega_-, \partial\Omega_+)$ separated by lattice translation vector $\Delta\mathbf{r} = \mathbf{r}_+ - \mathbf{r}_-$, the Bloch-periodic boundary condition under the canonical `exp_minus_i_k_dot_delta_r` convention enforces:
 
 ```{math}
-:label: eq-floquet
+:label: eq-floquet-bloch
 
-q_{\mathrm{IR}} = \mathrm{floquet}(\text{qualified inputs})
+\delta\mathbf{m}(\mathbf{r}_- + \Delta\mathbf{r}) = \mathrm{e}^{-\mathrm{i}\,\mathbf{k}\cdot\Delta\mathbf{r}}\,\delta\mathbf{m}(\mathbf{r}_-), \qquad \delta\phi(\mathbf{r}_- + \Delta\mathbf{r}) = \mathrm{e}^{-\mathrm{i}\,\mathbf{k}\cdot\Delta\mathbf{r}}\,\delta\phi(\mathbf{r}_-)
 ```
 
-The physical term or constraint is represented by the canonical IR object floquet. The exact discrete operator, quadrature, mesh treatment, and solver selection are backend responsibilities; this page does not replace their qualification evidence.
+In the real-split two-component tangent-plane and Poisson-airbox representation $(\Re,\Im)$, the complex phase factor $\mathrm{e}^{-\mathrm{i}\theta}$ with $\theta = \mathbf{k}\cdot\Delta\mathbf{r}$ acts as an orthogonal $2\times 2$ rotation matrix mixing the real and imaginary sub-blocks (`real_imag_mixing = true`):
+
+```{math}
+:label: eq-floquet-real-split
+
+\begin{bmatrix} \Re\,\delta u(\mathbf{r}_+) \\ \Im\,\delta u(\mathbf{r}_+) \end{bmatrix} = \begin{bmatrix} \cos(\mathbf{k}\cdot\Delta\mathbf{r}) & \sin(\mathbf{k}\cdot\Delta\mathbf{r}) \\ -\sin(\mathbf{k}\cdot\Delta\mathbf{r}) & \cos(\mathbf{k}\cdot\Delta\mathbf{r}) \end{bmatrix} \begin{bmatrix} \Re\,\delta u(\mathbf{r}_-) \\ \Im\,\delta u(\mathbf{r}_-) \end{bmatrix}
+```
+
+When the wave-vector norm satisfies the planner $\Gamma$-point threshold $\|\mathbf{k}\|_2 \le \varepsilon_\Gamma = 10^{-12}\,\mathrm{rad\,m^{-1}}$, the off-diagonal $\sin(\mathbf{k}\cdot\Delta\mathbf{r})$ terms vanish and the constraint reduces to zero-phase periodicity.
 
 (python-api-boundary-conditions-floquet-boundary-conditions-symbols-and-si-units)=
-## Symbols and SI units
+## 3. Symbols and SI units
 
 | Symbol | Meaning | SI unit |
 |---|---|---|
-| q | canonical typed authoring quantity | \mathrm{1} |
-
-All dimensional inputs are documented in SI units. Vector quantities use Cartesian components in the repository coordinate convention. Dimensionless parameters are explicitly marked 1; a default of None means that the constructor selects or omits the field according to the contract.
+| $\delta\mathbf{m}$ | complex dynamic magnetization amplitude | $\mathrm{1}$ |
+| $\delta\phi$ | complex dynamic magnetostatic scalar potential amplitude | $\mathrm{A}$ |
+| $\delta u$ | generic complex dynamic field component ($\delta\mathbf{m}$ or $\delta\phi$) | $\mathrm{1}$ |
+| $\mathbf{r}_-, \mathbf{r}_+$ | paired master and slave boundary coordinates | $\mathrm{m}$ |
+| $\Delta\mathbf{r}$ | periodic lattice translation vector $\mathbf{r}_+ - \mathbf{r}_-$ | $\mathrm{m}$ |
+| $\mathbf{k}$ | Bloch wave vector | $\mathrm{rad\,m^{-1}}$ |
+| $\theta$ | Bloch phase angle $\mathbf{k}\cdot\Delta\mathbf{r}$ across the boundary pair | $\mathrm{rad}$ |
+| $\varepsilon_\Gamma$ | planner $\Gamma$-point classification threshold ($10^{-12}$) | $\mathrm{rad\,m^{-1}}$ |
 
 (python-api-boundary-conditions-floquet-boundary-conditions-assumptions-and-validity)=
-## Assumptions and validity
+## 4. Assumptions, boundary meaning, and validity limits
 
-Inputs are finite and typed. Positive lengths, densities, conductivities, temperatures, and material constants are rejected when the source constructor requires positivity. Unsupported combinations fail closed in the constructor or lowering boundary rather than being silently converted.
+| Choice | Mathematical meaning | What it does not mean |
+|---|---|---|
+| `fm.FloquetBC(pair_ids=("x_minus_x_plus",))` | Enforces Bloch phase twist $\mathrm{e}^{-\mathrm{i}\,\mathbf{k}\cdot\Delta\mathbf{r}}$ on paired boundaries in the 3D unit-cell formulation (`PeriodicPhasePolicyIR::BlochPhase`). | Does not eliminate the propagation axis into a 2D cross-section mesh (use `waveguide_2p5d` for 2.5D translationally invariant waveguides). |
+| `phase_convention="exp_minus_i_k_dot_delta_r"` | Uses $\psi(\mathbf{r}+\Delta\mathbf{r}) = \mathrm{e}^{-\mathrm{i}\,\mathbf{k}\cdot\Delta\mathbf{r}}\psi(\mathbf{r})$ consistent with $\mathrm{e}^{\mathrm{i}(\omega t - \mathbf{k}\cdot\mathbf{r})}$. | Does not flip the sign of $\omega$ without corresponding adjustment in the real-split operator. |
+| `magnetostatic_bc="floquet_airbox"` | Applies the same Bloch phase constraint (`MagnetostaticPotentialDynamic`) on the shared magnetostatic airbox lateral faces. | Does not apply open Dirichlet truncation on the periodic lateral faces. |
 
 (python-api-boundary-conditions-floquet-boundary-conditions-python-api)=
-## Python API
+## 5. Python API and complete parameter reference
 
-### Constructor or function
+### Constructor signature
 
-fm.FloquetBC(pair_ids, phase_convention="exp_minus_i_k_dot_delta_r")
+```text
+fm.FloquetBC(
+    pair_ids,
+    phase_convention="exp_minus_i_k_dot_delta_r",
+)
+```
 
-### Parameters
-
-| Python name | Type | Default | SI unit | Validation | Meaning | FEM/FDM CPU/GPU support | ProblemIR destination |
-|---|---|---|---|---|---|---|---|
-| ```pair_ids``` | ```Sequence[str]``` | ```required``` | ```1``` | non-empty sequence; IDs non-empty | boundary pairs carrying the Bloch phase | FEM/FDM CPU/GPU: IR; resolved support required | ```pair_ids``` |
-| ```phase_convention``` | ```str``` | ```exp_minus_i_k_dot_delta_r``` | ```1``` | non-empty string | phase sign convention | FEM/FDM CPU/GPU: IR; resolved support required | ```phase_convention``` |
-
-### Stage-first example
+### Stage-first example: 3D unit-cell Floquet dispersion
 
 ```python
 # %%
 import fullmag as fm
 
-study = fm.study("public-api-example")
-study.objects.mesh.defaults(maximum_element_size=5e-9)
-body = study.geometry(fm.Box(size=(100e-9, 20e-9, 5e-9)), name="film")
-body.Ms = 800.0e3
-body.Aex = 13.0e-12
-body.alpha = 0.02
-body.m = fm.texture.uniform(1.0, 0.0, 0.0)
-study.stages.add_relax(stage_id="api-example", dt=5e-13, max_steps=1)
-# Author the documented object after the stage exists.
-value = fm.FloquetBC(("x_minus_x_plus",))
-canonical_ir = value.to_ir()
+study = fm.study("unit_cell_floquet_dispersion")
+study.objects.mesh.defaults(maximum_element_size=5.0e-9)
+
+cell = study.geometry(fm.Box(size=(50.0e-9, 50.0e-9, 10.0e-9)), name="magnonic_cell")
+cell.Ms = 800.0e3
+cell.Aex = 13.0e-12
+cell.alpha = 0.01
+cell.m = fm.texture.uniform(1.0, 0.0, 0.0)
+
+study.exchange()
+study.demag(model="airbox", variant="robin")
+
+# %%
+# Configure 3D unit-cell Floquet boundary conditions along x
+floquet_bc = fm.FloquetBC(
+    pair_ids=("x_minus_x_plus",),
+    phase_convention="exp_minus_i_k_dot_delta_r",
+)
+
+study.stages.add_relax(stage_id="relax_eq", dt=5.0e-13, max_steps=100)
+study.stages.add_eigenmodes(
+    stage_id="floquet_bands",
+    equilibrium_source="relax",
+    count=6,
+    operator="linearized_llg",
+    damping_policy="include",
+    k_sampling=fm.KPath(
+        points=[
+            fm.KPoint("Gamma", (0.0, 0.0, 0.0)),
+            fm.KPoint("X", (6.283185307e7, 0.0, 0.0)),
+        ],
+        samples_per_segment=[8],
+    ),
+    bc=floquet_bc,
+    magnetostatic_bc="floquet_airbox",
+)
+
+canonical_ir = floquet_bc.to_ir()
 ```
 
-The example intentionally exposes the object-level boundary. In a full stage, attach canonical_ir through the corresponding study/module registration method; no implicit runtime route is inferred from this page.
+### Parameter reference
+
+| Python name | Type | Default | SI unit | Validation | Meaning | FEM/FDM CPU/GPU support | ProblemIR destination |
+|---|---|---|---|---|---|---|---|
+| `pair_ids` | `Sequence[str]` | `required` | `1` | non-empty sequence; IDs non-empty | boundary pairs carrying the Bloch phase | FEM/FDM CPU/GPU: IR; resolved support required | `pair_ids` |
+| `phase_convention` | `str` | `exp_minus_i_k_dot_delta_r` | `1` | non-empty string | phase sign convention | FEM/FDM CPU/GPU: IR; resolved support required | `phase_convention` |
 
 (python-api-boundary-conditions-floquet-boundary-conditions-problem-ir)=
-## ProblemIR
+## 6. ProblemIR, normalization, and provenance
 
-value.to_ir() is the canonical serialization boundary. It emits a typed floquet record with the fields listed above; nested geometry, targets, profiles, or material references remain nested typed records rather than opaque Python objects. The IR is the requested intent. Backend resolution must preserve the record or reject an unsupported combination.
+`FloquetBC.to_ir()` emits the canonical `SpinWaveBoundaryConditionIR::Config` record, which the FEM planner lowers into `PeriodicConstraintSetIR` entries for both dynamic magnetization and dynamic magnetostatic scalar potential:
+
+```json
+{
+  "spin_wave_bc": {
+    "kind": "floquet",
+    "pair_ids": ["x_minus_x_plus"],
+    "phase_convention": "exp_minus_i_k_dot_delta_r"
+  },
+  "periodic_constraint_sets": [
+    {
+      "unknown_family": "magnetization_dynamic",
+      "domain_scope": "magnetic_domain",
+      "pair_ids": ["x_minus_x_plus"],
+      "phase_policy": {
+        "kind": "bloch_phase",
+        "phase_convention": "exp_minus_i_k_dot_delta_r",
+        "k_vector_rad_per_m": [62831853.07, 0.0, 0.0],
+        "real_imag_mixing": true
+      }
+    }
+  ]
+}
+```
 
 (python-api-boundary-conditions-floquet-boundary-conditions-round-trip-and-failure-semantics)=
-## Round-trip and failure semantics
-The requested intent is preserved before resolved execution. Validation errors identify invalid inputs, while unsupported combinations are rejected.
+## 7. Round-trip and failure semantics
 
+The requested intent is preserved in `ProblemIR` before resolved execution, while validation errors identify invalid inputs and unsupported combinations are rejected explicitly:
 
-A supported record is expected to round-trip through the repository script/scene representation without changing qualified values, units, or identifiers. Invalid types, missing required fields, non-finite values, contradictory options, and unsupported backend combinations are rejected with an explicit validation error. This page makes no claim that every backend accepts every legal authoring object.
+- Empty `pair_ids` or blank pair identifier strings raise `ValueError("FloquetBC requires at least one pair_id")`.
+- Blank `phase_convention` strings fail closed in `FloquetBC.__post_init__`.
+- Closed phase loops around intersecting periodic pairs are checked by planner phase-loop diagnostics (`frequency_response_phase_loop_diagnostics`).
 
 (python-api-boundary-conditions-floquet-boundary-conditions-discrete-realization)=
-## Discrete realization
+## 8. Discrete realization and execution sequence
 
-The FEM/FDM realization selects its own mesh, stencil or element operator, boundary treatment, and CPU/GPU execution lane. The Python contract supplies the physical inputs and canonical IR only; numerical equivalence requires the backend-specific validation named below.
+### 8.1 Constraint assembly
+
+For each paired master/slave node set on `pair_ids`, the backend constructs the complex Bloch phase constraint $\mathrm{e}^{-\mathrm{i}\,\mathbf{k}\cdot\Delta\mathbf{r}}$ and eliminates slave degrees of freedom into master degrees of freedom via the $2\times 2$ real-split orthogonal rotation block.
+
+### 8.2 FEM CPU
+
+FEM CPU applies the real-split Bloch constraint to both the tangent-plane magnetic subspace and (when `magnetostatic_bc="floquet_airbox"`) the $H^1(\Omega_{\mathrm{ms}})$ scalar potential space.
+
+### 8.3 FEM GPU
+
+FEM GPU uses the same planner-validated `PeriodicConstraintSetIR` contract when assembling device or host-transferred Floquet operators.
 
 (python-api-boundary-conditions-floquet-boundary-conditions-implementation-mapping)=
-## Implementation mapping
+## 9. Implementation mapping
 
-The authoritative implementation is packages/fullmag-py/src/fullmag/model/study.py symbol class FloquetBC. The public constructor signature, validation branches, defaults, and to_ir() field names are derived from that source, not from a historical example.
+- Python DSL class: `packages/fullmag-py/src/fullmag/model/study.py` (`class FloquetBC`).
+- IR types: `crates/fullmag-ir/src/execution.rs` (`SpinWaveBoundaryConditionIR`), `crates/fullmag-ir/src/plan.rs` (`PeriodicPhasePolicyIR`, `PeriodicConstraintSetIR`).
+- Planner constraint lowering: `crates/fullmag-plan/src/fem.rs` (`frequency_response_periodic_constraint_sets`).
 
 (python-api-boundary-conditions-floquet-boundary-conditions-validation)=
-## Validation
+## 10. Validation and qualification
 
-Focused repository tests covering this contract include: test_eigenmodes_serializes_floquet_pair_ids. These tests are evidence for authoring/IR behavior; live runtime, device performance, and Control Room browser behavior require separate qualification.
+| Validation layer | Required check | Evidence required |
+|---|---|---|
+| Python $\to$ IR serialization | `test_eigenmodes_serializes_floquet_pair_ids` | Verifies `FloquetBC` lowers to `kind="floquet"` with `pair_ids` and `phase_convention`. |
+| Planner constraint lowering | `PeriodicConstraintSetIR` verification | Confirms `BlochPhase` with `real_imag_mixing = true` is emitted for both magnetic and magnetostatic domains. |
 
 (python-api-boundary-conditions-floquet-boundary-conditions-limitations)=
-## Limitations and Control Room
+## 11. Limitations and failure modes
 
-Control Room route: no dedicated route is claimed for this low-level authoring object. It is observable only through a session/problem/field view when the owning module exposes it; a dedicated object editor or route is not currently exposed. No unsupported UI or runtime capability is implied.
+- Requiring `FloquetBC` without paired periodic mesh faces on the specified `pair_ids` fails during mesh/planner constraint validation.
+- Using `FloquetBC` without a wave-vector specification (`k_sampling`) leaves the Bloch phase vector unresolved in frequency-response or modal stages.
 
 (python-api-boundary-conditions-floquet-boundary-conditions-scientific-bibliography)=
-## Scientific bibliography
+## 12. Scientific bibliography
 
-- C. Geuzaine and J.-F. Remacle, Gmsh: a three-dimensional finite element mesh generator, Int. J. Numer. Meth. Eng. 79 (2009), DOI: https://doi.org/10.1002/nme.2579
+- F. Bloch, *Über die Quantenmechanik der Elektronen in Kristallgittern*, Z. Physik **52**, 555–600 (1929), DOI: [10.1007/BF01339455](https://doi.org/10.1007/BF01339455).
+- M. Krawczyk and D. Grundler, *Review and prospects of magnonic crystals and devices with reprogrammable band structure*, J. Phys.: Condens. Matter **26**, 123202 (2014), DOI: [10.1088/0953-8984/26/12/123202](https://doi.org/10.1088/0953-8984/26/12/123202).
 
 (python-api-boundary-conditions-floquet-boundary-conditions-source-code-index)=
-## Source code index
+## 13. Source-code index
 
 | Source path | Symbol | Responsibility |
 |---|---|---|
-| packages/fullmag-py/src/fullmag/model/study.py | class FloquetBC | public constructor and IR lowering |
-
-- Implementation: packages/fullmag-py/src/fullmag/model/study.py::class FloquetBC
-- Source-map: boundary-conditions/floquet-boundary-conditions.source-map.json
-- Contract status: current constructor and to_ir() boundary documented against revision ab3c8802a691a535063102c12f9a79bb0043b367.
+| [`packages/fullmag-py/src/fullmag/model/study.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/study.py#L629) | `class FloquetBC` | public constructor and IR lowering for Bloch/Floquet boundary pairs |
+| [`crates/fullmag-ir/src/execution.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-ir/src/execution.rs#L476) | `SpinWaveBoundaryConditionIR` | canonical IR enum for spin-wave boundary conditions |
+| [`crates/fullmag-ir/src/plan.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-ir/src/plan.rs#L1964) | `PeriodicPhasePolicyIR` | planner IR representation of zero-phase vs Bloch-phase boundary policies |
+| [`crates/fullmag-ir/src/plan.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-ir/src/plan.rs#L1980) | `PeriodicConstraintSetIR` | resolved periodic/Floquet constraint set for magnetic and magnetostatic domains |
+| [`crates/fullmag-plan/src/fem.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-plan/src/fem.rs#L6504) | `frequency_response_periodic_constraint_sets` | lowers Floquet and periodic boundary conditions into planner constraint sets |

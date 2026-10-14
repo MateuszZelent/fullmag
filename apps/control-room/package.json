@@ -109,6 +109,7 @@
     "three": "^0.186.1"
   },
   "devDependencies": {
+    "@eslint/compat": "2.1.1",
     "@playwright/test": "^1.51.1",
     "@storybook/addon-a11y": "^10.6.1",
     "@storybook/nextjs-vite": "^10.6.1",
@@ -123,8 +124,9 @@
     "playwright": "^1.60.0",
     "storybook": "^10.5.10",
     "tailwindcss": "^4.2.2",
-    "typescript": "7.0.2",
-    "typescript-legacy-compiler": "npm:typescript@5.8.3",
+    "typescript": "npm:@typescript/typescript6@6.0.2",
+    "typescript-native": "npm:typescript@7.0.2",
+    "@typescript/typescript6": "6.0.2",
     "vite": "8.3.2",
     "vitest": "^5.0.3"
   }

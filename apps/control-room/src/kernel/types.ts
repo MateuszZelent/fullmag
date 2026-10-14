@@ -28,7 +28,6 @@ import type { ModeCompositionController } from "./visualization/ModeCompositionC
 import type { VisualizationDebugController } from "./visualization/VisualizationDebugController";
 import type { VisualizationRegistrySyncController } from "./visualization/VisualizationRegistrySyncController";
 import type { ProjectDocumentController } from "./persistence/ProjectDocumentController";
-import type { DevelopmentKernelHost } from "./development/DevelopmentKernelHost";
 
 export type SlotId =
   | "app-menu"
@@ -72,7 +71,6 @@ export interface ModuleManifest {
 }
 
 export interface KernelApi {
-  readonly developmentWorkspace?: DevelopmentKernelHost;
   readonly api: ControlRoomApi;
   readonly analysisFieldOverlay: AnalysisFieldOverlayController;
   readonly authoringHistory?: AuthoringHistoryController;

@@ -195,4 +195,4 @@ No page-specific physical claims; airbox physics: {doc}`index`.
 
 | Claim | Path | Stable symbol | Responsibility | Evidence |
 |---|---|---|---|---|
-| Airbox geometry construction and mesh extraction boundary. | `packages/fullmag-py/src/fullmag/meshing/_gmsh_airbox.py` | `add_air_box` | Airbox geometry construction and mesh extraction boundary. | Source-map validator and focused API tests |
+| Airbox geometry construction and mesh extraction boundary. | [`packages/fullmag-py/src/fullmag/meshing/_gmsh_airbox.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/_gmsh_airbox.py#L1457) | [`add_air_box`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/_gmsh_airbox.py#L1457) | Airbox geometry construction and mesh extraction boundary. | Source-map validator and focused API tests |

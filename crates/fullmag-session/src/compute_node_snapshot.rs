@@ -1350,6 +1350,8 @@ mod tests {
         assert_eq!(inventory_next.capabilities_revision, same.capabilities_revision);
 
         let mut capability_change = valid_data(at + Duration::seconds(3));
+        capability_change.cpu.os_constraints.allowed_logical_cpu_ids =
+            available(BTreeSet::from([0]));
         capability_change.capabilities = available(vec!["fdm.cpu".into()]);
         let capability_next = ComputeNodeSnapshot::successor(
             capability_change,
@@ -1384,6 +1386,15 @@ mod tests {
         rebooted.boot_id = "boot-next".into();
         rebooted.inventory_revision = u64::MAX;
         rebooted.capabilities_revision = u64::MAX;
+        assert!(ComputeNodeSnapshot::successor(
+            rebooted.clone(),
+            Some(&owner_next),
+            at + Duration::seconds(5),
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("owner_epoch must not decrease"));
+        rebooted.owner_epoch = owner_next.owner_epoch;
         let reboot_snapshot = ComputeNodeSnapshot::successor(
             rebooted,
             Some(&owner_next),

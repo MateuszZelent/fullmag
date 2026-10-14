@@ -129,4 +129,4 @@ Frontend source owner: `apps/control-room/src/modules/inspector/panels/ObjectMag
 
 | Claim | Path | Stable symbol | Responsibility | Evidence |
 |---|---|---|---|---|
-| factory and versioning | `packages/fullmag-py/src/fullmag/init/textures.py` | `texture.uniform`, `PresetTexture` | preset construction and IR | signature/evaluator tests |
+| factory and versioning | [`packages/fullmag-py/src/fullmag/init/textures.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/init/textures.py#L266) | `texture.[`uniform`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/init/textures.py#L266)`, `PresetTexture` | preset construction and IR | signature/evaluator tests |

@@ -4,6 +4,8 @@ status: partial
 doc_kind: reference
 audience: user
 owner: fullmag-public-docs
+last_updated: 2026-10-14
+reviewed_revision: 5e99782acbb7fb3f65d0cad872e102bf67733103
 ---
 
 (public-docs-numerical-methods-frequency-domain-floquet-response)=
@@ -101,8 +103,8 @@ study.stages.add_frequency_response(
 |---|---|---|---|---|---|---|---|
 | `FloquetBC.pair_ids` | `Sequence[str]` | required | $1$ | at least one nonempty pair ID | periodic face pair identities | FEM mesh/planner | `study.spin_wave_bc.pair_ids` |
 | `FloquetBC.phase_convention` | `str` | `exp_minus_i_k_dot_delta_r` | $1$ | nonempty supported convention | sign convention for phase | FEM Floquet | `study.spin_wave_bc.phase_convention` |
-| `FrequencyResponseStageSpec.k_vector` | `tuple[float,float,float] | None` | `None` | $\mathrm{m^{-1}}$ | finite three-vector | legacy Bloch vector | FEM Floquet | `study.k_vector` |
-| `FrequencyResponseStageSpec.k_sampling` | `object | None` | `None` | $1$ | valid k sampling schema | Bloch sampling | FEM Floquet | `study.k_sampling` |
+| `FrequencyResponseStageSpec.k_vector` | `tuple[float,float,float] \| None` | `None` | $\mathrm{m^{-1}}$ | finite three-vector | legacy Bloch vector | FEM Floquet | `study.k_vector` |
+| `FrequencyResponseStageSpec.k_sampling` | `object \| None` | `None` | $1$ | valid k sampling schema | Bloch sampling | FEM Floquet | `study.k_sampling` |
 | `FrequencyResponseStageSpec.include_demag` | `bool` | `True` | $1$ | Boolean | include dynamic demag | narrow gated slice | `study.operator.include_demag` |
 | `FrequencyResponseStageSpec.magnetostatic_bc` | `str` | `open` | $1$ | `open`, `periodic_airbox_k0`, or `floquet_airbox` | magnetostatic closure | FEM | `study.magnetostatic_bc` |
 
@@ -136,9 +138,10 @@ they cannot silently become free boundaries or open demagnetization. Requested i
 
 | Claim | Repository path | Stable symbol | Responsibility | Lane |
 |---|---|---|---|---|
-| Floquet boundary schema | `packages/fullmag-py/src/fullmag/model/study.py` | `class FloquetBC` | pair IDs and phase convention | Python |
-| Request validation | `backends/fem/src/frequency_domain/operator_contract.cpp` | `validate_driven_frequency_response_request` | Floquet legality checks | FEM |
-| Response contract | `backends/fem/src/frequency_domain/modal_eigen_solver.cpp` | `solve_driven_response_contract` | projected response diagnostics | FEM |
+| Floquet boundary schema | [`packages/fullmag-py/src/fullmag/model/study.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/study.py#L629) | `class FloquetBC` | pair IDs and phase convention | Python |
+| Planner Floquet constraints | [`crates/fullmag-plan/src/fem.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-plan/src/fem.rs#L6504) | `frequency_response_periodic_constraint_sets` | lowers Floquet pair IDs and Bloch phase into planner constraint sets | Rust planner |
+| Request validation | [`backends/fem/src/frequency_domain/operator_contract.cpp`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/src/frequency_domain/operator_contract.cpp#L107) | `validate_driven_frequency_response_request` | Floquet legality checks | FEM |
+| Response contract | [`backends/fem/src/frequency_domain/modal_eigen_solver.cpp`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/src/frequency_domain/modal_eigen_solver.cpp#L3328) | `solve_driven_response_contract` | projected response diagnostics | FEM |
 
 (numerical-methods-floquet-response-validation)=
 ## Validation
@@ -172,6 +175,7 @@ Use `Model Explorer -> Stages -> Add stage -> <stage kind>` for stage-level cont
 
 | Claim | Repository path | Stable symbol | Responsibility | Evidence |
 |---|---|---|---|---|
-| Floquet schema | `packages/fullmag-py/src/fullmag/model/study.py` | `class FloquetBC` | pair IDs and phase | Python source |
-| Native validation | `backends/fem/src/frequency_domain/operator_contract.cpp` | `validate_driven_frequency_response_request` | legality | native source |
-| Native response | `backends/fem/src/frequency_domain/modal_eigen_solver.cpp` | `solve_driven_response_contract` | response contract | native source |
+| Floquet schema | [`packages/fullmag-py/src/fullmag/model/study.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/study.py#L629) | `class FloquetBC` | pair IDs and phase | Python source |
+| Planner Floquet constraints | [`crates/fullmag-plan/src/fem.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-plan/src/fem.rs#L6504) | `frequency_response_periodic_constraint_sets` | Floquet constraint lowering | Rust planner |
+| Native validation | [`backends/fem/src/frequency_domain/operator_contract.cpp`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/src/frequency_domain/operator_contract.cpp#L107) | `validate_driven_frequency_response_request` | legality | native source |
+| Native response | [`backends/fem/src/frequency_domain/modal_eigen_solver.cpp`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/src/frequency_domain/modal_eigen_solver.cpp#L3328) | `solve_driven_response_contract` | response contract | native source |

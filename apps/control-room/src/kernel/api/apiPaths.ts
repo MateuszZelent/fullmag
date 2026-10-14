@@ -23,54 +23,9 @@ export const PLATFORM_HEALTH_PATH = openApiV2Path(
   "/v2/platform/health",
 );
 
-export const PLATFORM_DEVELOPMENT_BACKEND_PATH = openApiV2Path(
-  "/v2/platform/development-backend",
-);
-
-export const PLATFORM_DEVELOPMENT_BACKEND_BUILD_REQUESTS_PATH =
-  openApiV2Path("/v2/platform/development-backend/build-requests");
-
-export const PLATFORM_DEVELOPMENT_BACKEND_BUILD_REQUEST_PATH =
-  openApiV2Path("/v2/platform/development-backend/build-requests/{request_id}");
-
-export function developmentBackendBuildRequestPathParams(requestId: string) {
-  return { path: { request_id: requestId } };
-}
-
 export const PLATFORM_RUNTIME_SERVICE_PATH = openApiV2Path(
   "/v2/platform/runtime-service",
 );
-
-export const PLATFORM_DEVELOPMENT_RESTART_REQUESTS_PATH = openApiV2Path(
-  "/v2/platform/development-restart-requests",
-);
-
-export const PLATFORM_DEVELOPMENT_RESTART_REQUEST_PATH = openApiV2Path(
-  "/v2/platform/development-restart-requests/{request_id}",
-);
-
-export function developmentRestartRequestPathParams(requestId: string) {
-  return { path: { request_id: requestId } };
-}
-
-export function isDevelopmentRestartRequestStatusPath(path: string): boolean {
-  const pathParameter = "{request_id}";
-  const parameterOffset = PLATFORM_DEVELOPMENT_RESTART_REQUEST_PATH.indexOf(
-    pathParameter,
-  );
-  if (parameterOffset < 0 || path.includes("?")) return false;
-
-  const prefix = PLATFORM_DEVELOPMENT_RESTART_REQUEST_PATH.slice(
-    0,
-    parameterOffset,
-  );
-  const requestId = path.slice(prefix.length);
-  return (
-    path.startsWith(prefix) &&
-    requestId.length > 0 &&
-    !requestId.includes("/")
-  );
-}
 
 export const PLATFORM_OPENAPI_PATH = openApiV2Path(
   "/v2/platform/openapi.json",
@@ -1231,3 +1186,4 @@ export function workspaceItemThumbnailUrl(baseUrl: string, id: string): string {
 export const PLATFORM_COMPUTE_PROFILES_PATH = openApiV2Path("/v2/platform/compute/profiles");
 export const PLATFORM_COMPUTE_PREVIEW_PATH = openApiV2Path("/v2/platform/compute/preview");
 export const PLATFORM_COMPUTE_NODES_PATH = openApiV2Path("/v2/platform/compute/nodes");
+export const PLATFORM_COMPUTE_NODE_PATH = openApiV2Path("/v2/platform/compute/nodes/{node_id}");

@@ -287,7 +287,7 @@ def main():
                 if child.poll() is not None:
                     raise RuntimeError(f"Własny proces API zakończył start: {child.returncode}; {log_path}")
                 try:
-                    code, _ = request(origin, "/v2/platform/development-backend", timeout=2)
+                    code, _ = request(origin, "/v2/platform/health", timeout=2)
                     if code != 200:
                         raise RuntimeError(f"Startup API: HTTP {code}")
                     break

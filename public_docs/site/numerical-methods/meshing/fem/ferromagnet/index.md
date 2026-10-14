@@ -7,7 +7,7 @@ doc_kind: reference
 audience: user
 owner: fullmag-public-docs
 last_updated: 2026-08-24
-reviewed_revision: 5db00ccf0113b9756fec2d46feb36ade762b12c2
+reviewed_revision: 5e99782acbb7fb3f65d0cad872e102bf67733103
 source_of_truth: "PerObjectMeshRecipe, Gmsh object generators, object policy resources and realized scoped quality reports"
 ---
 
@@ -239,13 +239,13 @@ A magnetic mesh can be valid geometrically yet unsupported by the selected inter
 
 | Responsibility | Repository source | Stable owner / symbol |
 | --- | --- | --- |
-| Object mesh recipe | [`packages/fullmag-py/src/fullmag/model/discretization.py`](https://github.com/MateuszZelent/fullmag/blob/5db00ccf0113b9756fec2d46feb36ade762b12c2/packages/fullmag-py/src/fullmag/model/discretization.py) | `PerObjectMeshRecipe` |
-| Gmsh generators | [`packages/fullmag-py/src/fullmag/meshing/_gmsh_generators.py`](https://github.com/MateuszZelent/fullmag/blob/5db00ccf0113b9756fec2d46feb36ade762b12c2/packages/fullmag-py/src/fullmag/meshing/_gmsh_generators.py) | `generate_mesh` |
-| Swept generator | [`packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py`](https://github.com/MateuszZelent/fullmag/blob/5db00ccf0113b9756fec2d46feb36ade762b12c2/packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py) | `generate_swept_mesh` |
-| Object policy model | [`apps/control-room/src/modules/inspector/panels/ObjectMeshPolicyPanelModel.ts`](https://github.com/MateuszZelent/fullmag/blob/5db00ccf0113b9756fec2d46feb36ade762b12c2/apps/control-room/src/modules/inspector/panels/ObjectMeshPolicyPanelModel.ts) | `ObjectMeshPolicyDraft` |
-| Scoped quality panels | [`apps/control-room/src/modules/inspector/panels/ScopedMeshQualityPanels.tsx`](https://github.com/MateuszZelent/fullmag/blob/5db00ccf0113b9756fec2d46feb36ade762b12c2/apps/control-room/src/modules/inspector/panels/ScopedMeshQualityPanels.tsx) | `scoped mesh quality` |
+| Object mesh recipe | [`packages/fullmag-py/src/fullmag/model/discretization.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/discretization.py) | `PerObjectMeshRecipe` |
+| Gmsh generators | [`packages/fullmag-py/src/fullmag/meshing/_gmsh_generators.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/_gmsh_generators.py) | `generate_mesh` |
+| Swept generator | [`packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py) | `generate_swept_mesh` |
+| Object policy model | [`apps/control-room/src/modules/inspector/panels/ObjectMeshPolicyPanelModel.ts`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/apps/control-room/src/modules/inspector/panels/ObjectMeshPolicyPanelModel.ts) | `ObjectMeshPolicyDraft` |
+| Scoped quality panels | [`apps/control-room/src/modules/inspector/panels/ObjectMeshPolicyPanel.tsx`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/apps/control-room/src/modules/inspector/panels/ObjectMeshPolicyPanel.tsx) | `ObjectMeshPolicyPanel` |
 
-Implementation map reviewed against commit `5db00ccf0113b9756fec2d46feb36ade762b12c2` on 2026-08-24.
+Implementation map reviewed against commit `5e99782acbb7fb3f65d0cad872e102bf67733103` on 2026-08-24.
 
 ## References
 

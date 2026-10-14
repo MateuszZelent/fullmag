@@ -1458,12 +1458,15 @@ study.pbc(x=True, y=True, demag="truncated_images", images=(2, 3, 0))
             let overrides = scene_document_overrides(&scene).expect("project Rust overrides");
             assert_eq!(overrides.get("pbc").is_none(), case == "missing");
             let export_copy = workspace.path().join(format!("export_{case}.py"));
-            rewrite_script_via_python_helper(
+            rewrite_script_via_python_helper_with_policy(
                 &root,
                 workspace.path(),
                 &source_path,
                 Some(&overrides),
                 Some(&export_copy),
+                PythonHelperOutputPolicy::Bounded {
+                    workspace_root: workspace.path(),
+                },
             )
             .expect("rewrite managed copy through Python with Rust overrides");
             let restored = load_scene_document_state(&root, workspace.path(), &export_copy)

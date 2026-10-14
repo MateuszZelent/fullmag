@@ -1,52 +1,45 @@
 {
   "document": {
     "path": "public_docs/site/python-api/dynamics/field-refresh.md",
-    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367"
+    "reviewed_revision": "5e99782acbb7fb3f65d0cad872e102bf67733103"
   },
   "backend_matrix": [
+    {"solver": "FEM", "device": "CPU", "status": "documented"},
+    {"solver": "FEM", "device": "GPU", "status": "documented"},
+    {"solver": "FDM", "device": "CPU", "status": "documented"},
+    {"solver": "FDM", "device": "GPU", "status": "documented"}
+  ],
+  "equations": [
     {
-      "solver": "FEM",
-      "device": "CPU",
-      "status": "documented"
-    },
-    {
-      "solver": "FEM",
-      "device": "GPU",
-      "status": "documented"
-    },
-    {
-      "solver": "FDM",
-      "device": "CPU",
-      "status": "documented"
-    },
-    {
-      "solver": "FDM",
-      "device": "GPU",
-      "status": "documented"
+      "id": "eq-python-field-refresh",
+      "symbols": ["H_eff", "H_fast", "H_d", "dt_demag", "t_last", "t"],
+      "sources": ["source-1", "source-2"]
     }
   ],
-  "equations": [],
-  "symbols": [],
+  "symbols": [
+    {"id": "H_eff", "latex": "\\mathbf{H}_{\\mathrm{eff}}", "meaning": "Total effective magnetic field", "si_unit": "\\mathrm{A\\,m^{-1}}"},
+    {"id": "H_fast", "latex": "\\mathbf{H}_{\\mathrm{fast}}", "meaning": "Local and short-range effective field contributions", "si_unit": "\\mathrm{A\\,m^{-1}}"},
+    {"id": "H_d", "latex": "\\mathbf{H}_{\\mathrm{d}}", "meaning": "Demagnetizing field", "si_unit": "\\mathrm{A\\,m^{-1}}"},
+    {"id": "dt_demag", "latex": "\\Delta t_{\\mathrm{demag}}", "meaning": "Demagnetization refresh interval (`demag_interval_s`)", "si_unit": "\\mathrm{s}"},
+    {"id": "t_last", "latex": "t_{\\mathrm{last}}", "meaning": "Physical time of the most recent demagnetization evaluation", "si_unit": "\\mathrm{s}"},
+    {"id": "t", "latex": "t", "meaning": "Current simulation time", "si_unit": "\\mathrm{s}"}
+  ],
   "sources": [
     {
       "id": "source-1",
       "path": "packages/fullmag-py/src/fullmag/model/dynamics.py",
       "symbol": "class FieldRefreshPolicy",
-      "responsibility": "Demagnetization refresh policy validation and IR lowering."
+      "responsibility": "Demagnetization refresh policy validation and IR lowering"
+    },
+    {
+      "id": "source-2",
+      "path": "packages/fullmag-py/src/fullmag/model/dynamics.py",
+      "symbol": "class LLG",
+      "responsibility": "Attaches FieldRefreshPolicy to the LLG dynamics contract"
     }
   ],
   "public_api": {
     "parameters": [
-      {
-        "python": "---",
-        "type": "---",
-        "default": "---",
-        "si_unit": "1",
-        "validation": "---",
-        "meaning": "---",
-        "backend_support": "FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative",
-        "problem_ir": "---"
-      },
       {
         "python": "FieldRefreshPolicy.demag_interval_s",
         "type": "`float | None`",

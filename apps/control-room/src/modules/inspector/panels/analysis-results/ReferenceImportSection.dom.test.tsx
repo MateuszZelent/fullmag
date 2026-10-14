@@ -9,6 +9,7 @@ import {
   findElements,
   installSimulationPreparationTestDom,
   TestEvent,
+  TestHTMLFormElement,
   type TestElement,
   type TestHTMLOptionElement,
   type TestHTMLSelectElement,
@@ -53,6 +54,12 @@ describe("ReferenceImportSection file selection", () => {
       const section = dom.document.createElement("section");
       section.setAttribute("class", "reference-import");
       const trigger = dom.document.createElement("button");
+      const formConstructor = dom.document.defaultView?.HTMLFormElement;
+      expect(formConstructor).toBe(TestHTMLFormElement);
+      expect((globalThis as unknown as Record<string, unknown>).HTMLFormElement)
+        .toBe(TestHTMLFormElement);
+      expect(form).toBeInstanceOf(TestHTMLFormElement);
+      expect(section).not.toBeInstanceOf(TestHTMLFormElement);
       form.appendChild(section);
       section.appendChild(trigger);
 

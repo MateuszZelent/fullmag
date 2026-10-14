@@ -1895,14 +1895,8 @@ fn expand_uniform_material_latest_fields(latest_fields: &mut LatestFields, sampl
     }
 }
 
-fn finalize_current_live_apply(
-    current: &mut SessionStateResponse,
-    flags: CurrentLiveApplyFlags,
-) -> Result<(), ApiError> {
-    // A standalone inspection has its own owner-bound conductor/sampling
-    // payloads. Neither a previous magnetic frame nor a late runtime frame
-    // may provide magnetic state for this read model.
-    if current
+fn is_standalone_antenna_lead_inspection(current: &SessionStateResponse) -> bool {
+    current
         .metadata
         .as_ref()
         .and_then(|value| value.get("execution_plan"))
@@ -1910,7 +1904,16 @@ fn finalize_current_live_apply(
         .and_then(|value| value.get("kind"))
         .and_then(Value::as_str)
         == Some("antenna_external_lead_inspection")
-    {
+}
+
+fn finalize_current_live_apply(
+    current: &mut SessionStateResponse,
+    flags: CurrentLiveApplyFlags,
+) -> Result<(), ApiError> {
+    // A standalone inspection has its own owner-bound conductor/sampling
+    // payloads. Neither a previous magnetic frame nor a late runtime frame
+    // may provide magnetic state for this read model.
+    if is_standalone_antenna_lead_inspection(current) {
         let mut removed_quantities: BTreeSet<String> = current
             .latest_fields
             .entries()
@@ -2611,6 +2614,7 @@ fn apply_current_live_runtime_frame_in_place(
             .map_err(|error| ApiError::bad_request(format!("invalid live step record: {error}")))?;
     }
     let apply_start = std::time::Instant::now();
+    let standalone_antenna_lead_inspection = is_standalone_antenna_lead_inspection(current);
     let mut affected_field_quantities = BTreeSet::new();
     if let Some(preview_field) = current
         .live_state
@@ -2725,8 +2729,17 @@ fn apply_current_live_runtime_frame_in_place(
             .flatten();
         current.live_state = Some(live_state);
         if let Some(preview_field) = active_preview {
-            validate_preview_field_sources(current, std::slice::from_ref(&preview_field), None)?;
-            merge_cached_preview_fields(&mut current.preview_cache, vec![preview_field]);
+            // Standalone inspection is finalized as a nonmagnetic read model
+            // below. Its transient preview is not an accepted public source,
+            // so do not validate or promote it before finalization removes it.
+            if !standalone_antenna_lead_inspection {
+                validate_preview_field_sources(
+                    current,
+                    std::slice::from_ref(&preview_field),
+                    None,
+                )?;
+                merge_cached_preview_fields(&mut current.preview_cache, vec![preview_field]);
+            }
         }
     }
     if let Some(fem_mesh) = frame.fem_mesh {
@@ -5354,6 +5367,9 @@ mod tests {
             current.metadata = Some(json!({
                 "artifact_layout": { "backend": "fdm", "grid_cells": [1, 1, 1] }
             }));
+            if kind == "compute_fields" {
+                add_physical_observation(&mut current, 0, None);
+            }
             merge_cached_preview_fields(&mut current.preview_cache, vec![preview_field("m")]);
             let mut record = tracked_command("cmd-target", kind);
             if kind == "compute_fields" {

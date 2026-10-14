@@ -8,9 +8,31 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
+import re
 import socket
 import time
 import uuid
+
+
+def _valid_uuid(value):
+    try:
+        parsed = uuid.UUID(value)
+    except (AttributeError, TypeError, ValueError):
+        return False
+    return parsed.int != 0 and str(parsed) == value
+
+
+def _health(get):
+    code, _, body = get()
+    instance_id = getattr(get, "instance_id", None)
+    assert code == 200 and isinstance(body, dict)
+    assert set(body) == {"status", "uptime_seconds", "api_contract_version", "active_session"}
+    assert body["status"] == "ok"
+    assert type(body["uptime_seconds"]) is int and body["uptime_seconds"] >= 0
+    assert body["api_contract_version"] == "1.0.0"
+    assert type(body["active_session"]) is bool
+    assert _valid_uuid(instance_id)
+    return instance_id, body
 
 
 def exercise(*, frame, with_api, configured, fixture_storage, run_root,
@@ -41,7 +63,8 @@ def exercise(*, frame, with_api, configured, fixture_storage, run_root,
             assert time.monotonic() < deadline, "Owned private listener was not published"
             time.sleep(0.05)
         assert owner["owner_token_sha256"] == hashlib.sha256(owner_token.encode()).hexdigest()
-        assert owner["api_instance_id"] == get()[2]["workspace_identity"]["api_instance_id"]
+        health_instance_id, _ = _health(get)
+        assert owner["api_instance_id"] == health_instance_id
         address, port = owner["control_address"].rsplit(":", 1)
         assert address == "127.0.0.1"
 
@@ -177,11 +200,34 @@ def exercise(*, frame, with_api, configured, fixture_storage, run_root,
         })
         assert code == 201 and created["session_id"]
         checks.append("consumer-readiness-does-not-acquire-or-freeze-workspace")
-        code, _, public = get()
-        assert code == 200 and public["restart_available"] is False
+        code, _, session_status = get("/v2/sessions/current/status")
+        session = session_status.get("session") if isinstance(session_status, dict) else None
+        assert code == 200 and isinstance(session, dict)
+        session_id = session.get("session_id")
+        session_resource_epoch = session.get("session_epoch")
+        request_scope_epoch = session.get("request_scope_epoch")
+        assert session_id == created["session_id"]
+        assert isinstance(session_id, str) and session_id.strip()
+        assert (isinstance(session_resource_epoch, str)
+                and session_resource_epoch.startswith(session_id + "@")
+                and re.fullmatch(r"[1-9][0-9]*",
+                                 session_resource_epoch[len(session_id) + 1:]))
+        scope_prefix = health_instance_id + ":"
+        assert (isinstance(request_scope_epoch, str)
+                and request_scope_epoch.startswith(scope_prefix)
+                and re.fullmatch(r"(?:0|[1-9][0-9]*)", request_scope_epoch[len(scope_prefix):]))
+        receipt["readiness_session_scope"] = {
+            "api_instance_id": health_instance_id,
+            "session_id": session_id,
+            "session_resource_epoch": session_resource_epoch,
+            "request_scope_epoch": request_scope_epoch,
+        }
+        checks.append("consumer-readiness-session-scope-remains-authoritative")
+        health_instance_id_after, health = _health(get)
+        assert health_instance_id_after == health_instance_id
         assert not {"candidate_bundle_id", "candidate_manifest_sha256", "owner_token",
-                    "readiness_confirmed", "expires_at"}.intersection(public)
-        checks.append("consumer-readiness-does-not-promote-or-expand-public-resource")
+                    "readiness_confirmed", "expires_at"}.intersection(health)
+        checks.append("consumer-readiness-does-not-promote-or-expand-health-resource")
 
     receipt["readiness_fixture"] = "controlled watcher/current/candidate pins; no selector or cross-build proof"
     config = {**configured, "FULLMAG_DEVELOPMENT_OWNER_TOKEN": owner_token,

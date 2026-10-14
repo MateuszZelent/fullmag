@@ -1,44 +1,155 @@
 {
   "document": {
     "path": "public_docs/site/python-api/studies/frequency-response.md",
-    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367"
+    "reviewed_revision": "5e99782acbb7fb3f65d0cad872e102bf67733103"
   },
   "backend_matrix": [
     {
       "solver": "FEM",
       "device": "CPU",
-      "status": "documented"
+      "status": "implemented",
+      "reason": "Native FEM CPU driven response and Schur-complement lanes implemented"
     },
     {
       "solver": "FEM",
       "device": "GPU",
-      "status": "documented"
+      "status": "partial",
+      "reason": "GPU-operator/host-Krylov lane supported on qualified configurations"
     },
     {
       "solver": "FDM",
       "device": "CPU",
-      "status": "documented"
+      "status": "unsupported",
+      "reason": "Planner rejects native FDM frequency-response execution"
     },
     {
       "solver": "FDM",
       "device": "GPU",
-      "status": "documented"
+      "status": "unsupported",
+      "reason": "Planner rejects native FDM GPU frequency-response execution"
     }
   ],
-  "equations": [],
-  "symbols": [],
+  "equations": [
+    {
+      "id": "eq-studies-frequency-response-system",
+      "symbols": [
+        "f",
+        "omega",
+        "h_ext",
+        "phi_drive",
+        "A_omega",
+        "K",
+        "G",
+        "C",
+        "q_hat",
+        "b_hat"
+      ],
+      "sources": [
+        "source-1",
+        "source-2",
+        "source-5",
+        "source-6"
+      ]
+    }
+  ],
+  "symbols": [
+    {
+      "id": "f",
+      "latex": "f",
+      "meaning": "prescribed harmonic drive frequency (`frequencies_hz`)",
+      "si_unit": "\\mathrm{Hz}"
+    },
+    {
+      "id": "omega",
+      "latex": "\\omega",
+      "meaning": "angular drive frequency $2\\pi f$",
+      "si_unit": "\\mathrm{rad\\,s^{-1}}"
+    },
+    {
+      "id": "h_ext",
+      "latex": "\\widehat{\\mathbf{h}}_{\\mathrm{ext}}",
+      "meaning": "transverse excitation field amplitude (`excitation_field_au_per_m`)",
+      "si_unit": "\\mathrm{A\\,m^{-1}}"
+    },
+    {
+      "id": "phi_drive",
+      "latex": "\\phi_{\\mathrm{drive}}",
+      "meaning": "global harmonic drive phase (`excitation_phase_rad`)",
+      "si_unit": "\\mathrm{rad}"
+    },
+    {
+      "id": "A_omega",
+      "latex": "\\mathsf{A}(\\omega)",
+      "meaning": "shifted complex tangent response operator",
+      "si_unit": "\\mathrm{rad\\,s^{-1}}"
+    },
+    {
+      "id": "K",
+      "latex": "\\mathsf{K}",
+      "meaning": "linearized effective-field stiffness operator",
+      "si_unit": "\\mathrm{rad\\,s^{-1}}"
+    },
+    {
+      "id": "G",
+      "latex": "\\mathsf{G}",
+      "meaning": "gyrotropic and Gilbert damping operator",
+      "si_unit": "\\mathrm{1}"
+    },
+    {
+      "id": "C",
+      "latex": "\\mathsf{C}",
+      "meaning": "tangent-plane drive projection operator",
+      "si_unit": "\\mathrm{m\\,A^{-1}\\,s^{-1}}"
+    },
+    {
+      "id": "q_hat",
+      "latex": "\\widehat{\\mathbf{q}}(\\omega)",
+      "meaning": "complex tangent-coordinate response vector",
+      "si_unit": "\\mathrm{1}"
+    },
+    {
+      "id": "b_hat",
+      "latex": "\\widehat{\\mathbf{b}}(\\omega)",
+      "meaning": "assembled harmonic right-hand side vector",
+      "si_unit": "\\mathrm{rad\\,s^{-1}}"
+    }
+  ],
   "sources": [
     {
       "id": "source-1",
       "path": "packages/fullmag-py/src/fullmag/model/study.py",
       "symbol": "class FrequencyResponse",
-      "responsibility": "Frequency-response study parameters and IR lowering."
+      "responsibility": "Frequency-response study parameters and IR lowering"
     },
     {
       "id": "source-2",
       "path": "packages/fullmag-py/src/fullmag/model/study.py",
       "symbol": "class FrequencyResponseSolverPolicy",
-      "responsibility": "Frequency-response solver policy validation and lowering."
+      "responsibility": "Frequency-response solver policy validation and lowering"
+    },
+    {
+      "id": "source-3",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "class FrequencyResponseStageSpec",
+      "responsibility": "Stage-first frequency-response specification"
+    },
+    {
+      "id": "source-4",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "add_frequency_response",
+      "responsibility": "Stage-first authoring entrypoint on StudyStagesBuilder"
+    },
+    {
+      "id": "source-5",
+      "path": "crates/fullmag-plan/src/fem.rs",
+      "symbol": "plan_fem_frequency_response",
+      "responsibility": "Lowers FrequencyResponse IR into FemFrequencyResponsePlanIR"
+    },
+    {
+      "id": "source-6",
+      "path": "backends/fem/src/frequency_domain/driven_response_solver.cpp",
+      "symbol": "solve_driven_frequency_response",
+      "responsibility": "Executes FEM harmonic response sweep and residual verification"
     }
   ],
   "public_api": {
@@ -132,6 +243,56 @@
         "meaning": "Solver method and preconditioner overrides",
         "backend_support": "FEM/FDM CPU/GPU; several methods are planned",
         "problem_ir": "`solver_policy`"
+      },
+      {
+        "python": "FrequencyResponseSolverPolicy.method",
+        "type": "`str | None`",
+        "default": "`None`",
+        "si_unit": "1",
+        "validation": "Supported solver method name (`auto`, `dense_reference`, `schur_reduced`, `gpu_operator_host_krylov`, etc.)",
+        "meaning": "Requested linear solver lane",
+        "backend_support": "FEM CPU/GPU",
+        "problem_ir": "`solver_policy.method`"
+      },
+      {
+        "python": "FrequencyResponseSolverPolicy.preconditioner",
+        "type": "`str | None`",
+        "default": "`None`",
+        "si_unit": "1",
+        "validation": "One of `auto`, `graph_demag_coarse`, `demag_coarse`, `block_jacobi`, `none`",
+        "meaning": "Requested Krylov preconditioner",
+        "backend_support": "FEM CPU/GPU",
+        "problem_ir": "`solver_policy.preconditioner`"
+      },
+      {
+        "python": "FrequencyResponseSolverPolicy.rtol",
+        "type": "`float | None`",
+        "default": "`None`",
+        "si_unit": "1",
+        "validation": "Finite and positive",
+        "meaning": "Relative algebraic residual tolerance",
+        "backend_support": "FEM CPU/GPU",
+        "problem_ir": "`solver_policy.rtol`"
+      },
+      {
+        "python": "FrequencyResponseSolverPolicy.max_iterations",
+        "type": "`int | None`",
+        "default": "`None`",
+        "si_unit": "1",
+        "validation": "Positive integer",
+        "meaning": "Maximum Krylov iterations per frequency",
+        "backend_support": "FEM CPU/GPU",
+        "problem_ir": "`solver_policy.max_iterations`"
+      },
+      {
+        "python": "FrequencyResponseSolverPolicy.restart_iterations",
+        "type": "`int | None`",
+        "default": "`None`",
+        "si_unit": "1",
+        "validation": "Positive integer $\\le$ `max_iterations`",
+        "meaning": "GMRES/FGMRES restart subspace dimension",
+        "backend_support": "FEM CPU/GPU",
+        "problem_ir": "`solver_policy.restart_iterations`"
       }
     ]
   }

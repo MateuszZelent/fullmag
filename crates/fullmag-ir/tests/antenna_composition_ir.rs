@@ -1,7 +1,8 @@
 use fullmag_ir::{
     AntennaPortBranchV2IR, AntennaPortModeIR, ChargeBoundaryIR, ChargePotentialGaugeIR,
-    ChargeSolverPolicyIR, ChargeTransportDefinitionIR, CurrentModuleIR, CurrentTransportModelIR,
-    LinearTransportSolverPolicyIR, PhysicsObjectIR, PhysicsObjectTypeIR, ProblemIRV04,
+    ChargeSolverPolicyIR, ChargeTransportDefinitionIR, ChargeTransportMaterialAssignmentIR,
+    ChargeTransportMaterialIR, CurrentModuleIR, CurrentTransportModelIR,
+    LinearTransportSolverPolicyIR, PhysicsObjectIR, PhysicsObjectTypeIR, ProblemIRV04, RegionRefIR,
     SurfaceRefIR, TransportCouplingIR,
 };
 
@@ -14,6 +15,10 @@ fn problem_with_charge_transport() -> ProblemIRV04 {
         PhysicsObjectTypeIR::Antenna,
         geometry_id,
     ));
+    let charge_region = RegionRefIR {
+        object_id: "antenna_1".to_string(),
+        region_id: None,
+    };
     let surface = |surface_id: &str| SurfaceRefIR {
         object_id: "antenna_1".to_string(),
         surface_id: surface_id.to_string(),
@@ -30,8 +35,16 @@ fn problem_with_charge_transport() -> ProblemIRV04 {
             coupling: TransportCouplingIR::OneWay,
             time_envelope: None,
             definition: Some(ChargeTransportDefinitionIR {
-                domain: Vec::new(),
-                materials: Vec::new(),
+                domain: vec![charge_region.clone()],
+                materials: vec![ChargeTransportMaterialAssignmentIR {
+                    region: charge_region,
+                    material: ChargeTransportMaterialIR {
+                        sigma_spm: 1.0,
+                        sigma_parallel_spm: None,
+                        sigma_perpendicular_spm: None,
+                        sigma_ahe_spm: None,
+                    },
+                }],
                 boundaries: vec![
                     ChargeBoundaryIR::VoltageElectrode {
                         id: "signal_in".to_string(),
@@ -74,10 +87,8 @@ fn problem_with_charge_transport() -> ProblemIRV04 {
     problem
 }
 
-#[test]
-fn balanced_port_mode_is_composition_only_and_round_trips() {
-    let mut problem = problem_with_charge_transport();
-    problem.antenna_port_modes.push(AntennaPortModeIR {
+fn balanced_port_mode() -> AntennaPortModeIR {
+    AntennaPortModeIR {
         schema_version: "antenna_port_mode.v2".to_string(),
         id: "common_mode".to_string(),
         source_object_id: "antenna_1".to_string(),
@@ -97,7 +108,13 @@ fn balanced_port_mode_is_composition_only_and_round_trips() {
             },
         ],
         normalization_current_a: 1.0,
-    });
+    }
+}
+
+#[test]
+fn balanced_port_mode_is_composition_only_and_round_trips() {
+    let mut problem = problem_with_charge_transport();
+    problem.antenna_port_modes.push(balanced_port_mode());
 
     assert!(problem.validate().is_ok());
     let value = serde_json::to_value(&problem).unwrap();
@@ -106,6 +123,30 @@ fn balanced_port_mode_is_composition_only_and_round_trips() {
     assert!(port.get("conductivity").is_none());
     let round_trip: ProblemIRV04 = serde_json::from_value(value).unwrap();
     assert_eq!(round_trip.antenna_port_modes, problem.antenna_port_modes);
+}
+
+#[test]
+fn port_mode_rejects_terminals_outside_transport_domain() {
+    let mut problem = problem_with_charge_transport();
+    problem.antenna_port_modes.push(balanced_port_mode());
+    match &mut problem.current_modules[0] {
+        CurrentModuleIR::CurrentTransport {
+            definition: Some(definition),
+            ..
+        } => definition.domain.clear(),
+        _ => unreachable!("the fixture contains one typed CurrentTransport"),
+    }
+
+    let errors = problem.validate().unwrap_err();
+    let out_of_domain_terminals = errors
+        .iter()
+        .filter(|error| {
+            error.contains(
+                "must be an electrical terminal on one object in the CurrentTransport domain",
+            )
+        })
+        .count();
+    assert_eq!(out_of_domain_terminals, 4, "{errors:#?}");
 }
 
 #[test]

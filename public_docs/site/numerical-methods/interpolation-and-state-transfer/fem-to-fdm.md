@@ -144,8 +144,8 @@ counts; no silent extrapolation is allowed.
 
 | Claim | Repository path | Stable symbol | Responsibility | Lane |
 |---|---|---|---|---|
-| FEM field to grid | `crates/fullmag-engine/src/fem_solution_transfer.rs` | `transfer_fem_field_to_grid` | locate/interpolate FEM field at FDM centres | transfer |
-| Continuation orchestration | `crates/fullmag-cli/src/step_utils.rs` | `resample_continuation_if_cross_backend` | selects cross-backend transfer | runtime |
+| FEM field to grid | [`crates/fullmag-engine/src/fem_solution_transfer.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-engine/src/fem_solution_transfer.rs#L357) | [`transfer_fem_field_to_grid`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-engine/src/fem_solution_transfer.rs#L357) | locate/interpolate FEM field at FDM centres | transfer |
+| Continuation orchestration | [`crates/fullmag-cli/src/step_utils.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-cli/src/step_utils.rs#L1233) | [`resample_continuation_if_cross_backend`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-cli/src/step_utils.rs#L1233) | selects cross-backend transfer | runtime |
 
 (numerical-methods-fem-to-fdm-validation)=
 ## Validation
@@ -186,5 +186,5 @@ page and its sidecar map.
 
 | Claim | Repository path | Stable symbol | Responsibility | Evidence |
 |---|---|---|---|---|
-| FEM→FDM interpolation | `crates/fullmag-engine/src/fem_solution_transfer.rs` | `transfer_fem_field_to_grid` | field transfer | engine unit tests |
-| Runtime selection | `crates/fullmag-cli/src/step_utils.rs` | `resample_continuation_if_cross_backend` | continuation routing | CLI tests |
+| FEM→FDM interpolation | [`crates/fullmag-engine/src/fem_solution_transfer.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-engine/src/fem_solution_transfer.rs#L357) | [`transfer_fem_field_to_grid`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-engine/src/fem_solution_transfer.rs#L357) | field transfer | engine unit tests |
+| Runtime selection | [`crates/fullmag-cli/src/step_utils.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-cli/src/step_utils.rs#L1233) | [`resample_continuation_if_cross_backend`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-cli/src/step_utils.rs#L1233) | continuation routing | CLI tests |

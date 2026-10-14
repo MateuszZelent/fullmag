@@ -159,7 +159,8 @@ the implementation must reduce
 
 ```{math}
 :label: eq-demag-formulation-discrete-energy
-E_{mathrm d}^{h}=-rac{mu_0}{2}sum_i w_i,mathbf M_icdotmathbf H_{mathrm d,i},
+E_{mathrm d}^{h}=-
+rac{mu_0}{2}sum_i w_i,mathbf M_icdotmathbf H_{mathrm d,i},
 ```
 
 where $w_i$ is the cell volume or FEM quadrature/lumped weight selected by the backend.
@@ -228,6 +229,6 @@ Use the scientific bibliography and source-code index on the linked terminal pag
 
 | Repository path | Stable symbol | Responsibility |
 |---|---|---|
-| `crates/fullmag-fdm-demag/src/newell.rs` | `compute_newell_kernels` | Cell-averaged FDM demag tensor. |
-| `backends/fem/cpu/mfem/interactions/demag_poisson_rhs.cpp` | `assemble_demag_poisson_rhs` | FEM weak-form right-hand side. |
-| `backends/fem/cpu/mfem/interactions/demag_poisson_energy.cpp` | `demag_poisson_energy_from_field` | FEM demag energy reduction. |
+| [`crates/fullmag-fdm-demag/src/newell.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-fdm-demag/src/newell.rs#L542) | [`compute_newell_kernels`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-fdm-demag/src/newell.rs#L542) | Cell-averaged FDM demag tensor. |
+| [`backends/fem/cpu/mfem/interactions/demag_poisson_rhs.cpp`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/cpu/mfem/interactions/demag_poisson_rhs.cpp#L182) | [`assemble_demag_poisson_rhs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/cpu/mfem/interactions/demag_poisson_rhs.cpp#L182) | FEM weak-form right-hand side. |
+| [`backends/fem/cpu/mfem/interactions/demag_poisson_energy.cpp`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/cpu/mfem/interactions/demag_poisson_energy.cpp#L24) | [`demag_poisson_energy_from_field`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/cpu/mfem/interactions/demag_poisson_energy.cpp#L24) | FEM demag energy reduction. |

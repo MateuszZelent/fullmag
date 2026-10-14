@@ -1,7 +1,7 @@
 {
   "document": {
     "path": "public_docs/site/numerical-methods/frequency-domain/floquet-response.md",
-    "reviewed_revision": "a1de38b4d7dad275dccbdbfd937b757d6ca7ee99",
+    "reviewed_revision": "5e99782acbb7fb3f65d0cad872e102bf67733103",
     "source_of_truth": "Current repository source declarations and public Python API contracts."
   },
   "backend_matrix": [
@@ -11,8 +11,8 @@
     {"solver": "FDM", "device": "GPU", "status": "unsupported", "reason": "No public FDM CUDA Floquet response lane."}
   ],
   "equations": [
-    {"id": "eq-numerical-floquet-phase", "symbols": ["mhat", "r", "dr", "k"], "sources": ["bc"]},
-    {"id": "eq-numerical-floquet-response", "symbols": ["K", "k", "omega", "G", "qhat", "bhat"], "sources": ["response"]}
+    {"id": "eq-numerical-floquet-phase", "symbols": ["mhat", "r", "dr", "k"], "sources": ["bc", "planner_floquet"]},
+    {"id": "eq-numerical-floquet-response", "symbols": ["K", "k", "omega", "G", "qhat", "bhat"], "sources": ["validate", "response"]}
   ],
   "symbols": [
     {"id": "mhat", "latex": "$\\widehat{\\mathbf m}$", "meaning": "complex dynamic magnetization amplitude", "si_unit": "$1$"},
@@ -27,6 +27,7 @@
   ],
   "sources": [
     {"id": "bc", "path": "packages/fullmag-py/src/fullmag/model/study.py", "symbol": "class FloquetBC", "responsibility": "Floquet pair and phase schema."},
+    {"id": "planner_floquet", "path": "crates/fullmag-plan/src/fem.rs", "symbol": "frequency_response_periodic_constraint_sets", "responsibility": "Lowers Floquet pair IDs and Bloch phase into planner constraint sets."},
     {"id": "validate", "path": "backends/fem/src/frequency_domain/operator_contract.cpp", "symbol": "validate_driven_frequency_response_request", "responsibility": "Floquet legality and dynamic-demag gate."},
     {"id": "response", "path": "backends/fem/src/frequency_domain/modal_eigen_solver.cpp", "symbol": "solve_driven_response_contract", "responsibility": "Projected response contract and diagnostics."}
   ],
@@ -35,7 +36,9 @@
       {"python": "FloquetBC.pair_ids", "type": "Sequence[str]", "default": "required", "si_unit": "$1$", "validation": "at least one nonempty pair ID", "meaning": "periodic face pair identities", "backend_support": "FEM mesh/planner", "problem_ir": "`study.spin_wave_bc.pair_ids`"},
       {"python": "FloquetBC.phase_convention", "type": "str", "default": "exp_minus_i_k_dot_delta_r", "si_unit": "$1$", "validation": "nonempty supported convention", "meaning": "sign convention for phase", "backend_support": "FEM Floquet", "problem_ir": "`study.spin_wave_bc.phase_convention`"},
       {"python": "FrequencyResponseStageSpec.k_vector", "type": "tuple[float,float,float] | None", "default": "None", "si_unit": "$\\mathrm{m^{-1}}$", "validation": "finite three-vector", "meaning": "legacy Bloch vector", "backend_support": "FEM Floquet", "problem_ir": "`study.k_vector`"},
-      {"python": "FrequencyResponseStageSpec.include_demag", "type": "bool", "default": "True", "si_unit": "$1$", "validation": "Boolean", "meaning": "include dynamic demag", "backend_support": "narrow gated slice", "problem_ir": "`study.operator.include_demag`"}
+      {"python": "FrequencyResponseStageSpec.k_sampling", "type": "object | None", "default": "None", "si_unit": "$1$", "validation": "valid k sampling schema", "meaning": "Bloch sampling", "backend_support": "FEM Floquet", "problem_ir": "`study.k_sampling`"},
+      {"python": "FrequencyResponseStageSpec.include_demag", "type": "bool", "default": "True", "si_unit": "$1$", "validation": "Boolean", "meaning": "include dynamic demag", "backend_support": "narrow gated slice", "problem_ir": "`study.operator.include_demag`"},
+      {"python": "FrequencyResponseStageSpec.magnetostatic_bc", "type": "str", "default": "open", "si_unit": "$1$", "validation": "`open`, `periodic_airbox_k0`, or `floquet_airbox`", "meaning": "magnetostatic closure", "backend_support": "FEM", "problem_ir": "`study.magnetostatic_bc`"}
     ]
   }
 }

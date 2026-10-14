@@ -1,5 +1,8 @@
 {
-  "document": {"path": "public_docs/site/numerical-methods/time-integration/adaptive-stepping.md", "reviewed_revision": "a1de38b4d7dad275dccbdbfd937b757d6ca7ee99"},
+  "document": {
+    "path": "public_docs/site/numerical-methods/time-integration/adaptive-stepping.md",
+    "reviewed_revision": "5e99782acbb7fb3f65d0cad872e102bf67733103"
+  },
   "backend_matrix": [
     {"solver": "FEM", "device": "CPU", "status": "documented"},
     {"solver": "FEM", "device": "GPU", "status": "source-backed", "reason": "FEM device-lane parity requires executed managed evidence."},
@@ -7,9 +10,9 @@
     {"solver": "FDM", "device": "GPU", "status": "source-backed", "reason": "Device-side reductions are contract-tested, but runtime qualification is separate."}
   ],
   "equations": [
-    {"id": "eq-adaptive-normalized-error", "symbols": ["e", "atol", "rtol", "eta_i", "m"], "sources": ["adaptive-policy"]},
-    {"id": "eq-adaptive-global-error", "symbols": ["eta", "eta_i"], "sources": ["fdm-adaptive-test"]},
-    {"id": "eq-adaptive-controller", "symbols": ["dt", "s", "eta", "q", "rho_shrink", "rho_growth"], "sources": ["adaptive-policy"]}
+    {"id": "eq-adaptive-normalized-error", "symbols": ["e", "atol", "rtol", "eta_i", "m"], "sources": ["adaptive-policy", "fem-adaptive-native"]},
+    {"id": "eq-adaptive-global-error", "symbols": ["eta", "eta_i"], "sources": ["fem-adaptive-gpu", "fdm-adaptive-test"]},
+    {"id": "eq-adaptive-controller", "symbols": ["dt", "s", "eta", "q", "rho_shrink", "rho_growth"], "sources": ["adaptive-policy", "shared-adaptive-decision", "fem-adaptive-controller", "fdm-adaptive-controller"]}
   ],
   "symbols": [
     {"id": "e", "latex": "e_i", "meaning": "embedded error vector at active point i", "si_unit": "1"},
@@ -25,10 +28,15 @@
     {"id": "rho_growth", "latex": "\\rho_{\\mathrm{growth}}", "meaning": "upper step-ratio limit", "si_unit": "1"}
   ],
   "sources": [
-    {"id": "adaptive-policy", "path": "packages/fullmag-py/src/fullmag/model/dynamics.py", "symbol": "class AdaptiveTimestep", "responsibility": "Public adaptive controller validation and IR."},
-    {"id": "llg-policy", "path": "packages/fullmag-py/src/fullmag/model/dynamics.py", "symbol": "class LLG", "responsibility": "Compatibility of integrator and adaptive policy."},
-    {"id": "fdm-adaptive-test", "path": "backends/fdm/gpu/cuda/runtime/reductions_fp64.cu", "symbol": "reduce_adaptive_error_policy", "responsibility": "FDM GPU device-side adaptive error policy."},
-    {"id": "fdm-stream-test", "path": "backends/fdm/gpu/cuda/runtime/reductions_fp64.cu", "symbol": "reduce_max_scalar_sqrt", "responsibility": "FDM GPU scalar reduction implementation."}
+    {"id": "adaptive-policy", "path": "packages/fullmag-py/src/fullmag/model/dynamics.py", "symbol": "class AdaptiveTimestep", "responsibility": "Public adaptive controller validation and IR"},
+    {"id": "llg-policy", "path": "packages/fullmag-py/src/fullmag/model/dynamics.py", "symbol": "class LLG", "responsibility": "Compatibility of integrator and adaptive policy"},
+    {"id": "shared-adaptive-decision", "path": "native/include/fullmag_adaptive_step_decision.hpp", "symbol": "decide_adaptive_step", "responsibility": "Backend-neutral history-aware scalar accept/retry/dt-min policy"},
+    {"id": "fem-adaptive-native", "path": "backends/fem/cpu/mfem/integrators/adaptive_dt.cpp", "symbol": "compute_adaptive_error_norm", "responsibility": "Native FEM nodewise mixed error norm and fail-closed guards"},
+    {"id": "fem-adaptive-controller", "path": "backends/fem/cpu/mfem/integrators/adaptive_dt.cpp", "symbol": "adaptive_pi_step", "responsibility": "Native FEM history-aware scalar controller and rejection accounting"},
+    {"id": "fem-adaptive-gpu", "path": "backends/fem/gpu/cuda/integrators/rk/adaptive_error_kernels.cu", "symbol": "adaptive_error_norm_blocks_kernel", "responsibility": "Native FEM GPU device reduction of the nodewise error norm"},
+    {"id": "fdm-adaptive-controller", "path": "crates/fullmag-engine/src/fdm/cpu/integrators.rs", "symbol": "decide_adaptive_step", "responsibility": "FDM CPU history-aware bounded proposal and dt-min decision"},
+    {"id": "fdm-adaptive-test", "path": "backends/fdm/gpu/cuda/runtime/reductions_fp64.cu", "symbol": "reduce_adaptive_error_policy", "responsibility": "FDM GPU device-side adaptive error policy"},
+    {"id": "fdm-stream-test", "path": "backends/fdm/gpu/cuda/runtime/reductions_fp64.cu", "symbol": "reduce_max_scalar_sqrt", "responsibility": "FDM GPU scalar reduction implementation"}
   ],
   "public_api": {"parameters": [
     {"python": "AdaptiveTimestep.atol", "type": "float", "default": "1e-6", "si_unit": "1", "validation": "non-negative; not both tolerances zero", "meaning": "absolute error component", "backend_support": "RK23/RK45 lanes", "problem_ir": "adaptive_timestep.atol"},
@@ -38,6 +46,8 @@
     {"python": "AdaptiveTimestep.dt_max", "type": "float | None", "default": "None", "si_unit": "\\mathrm{s}", "validation": "positive and", "meaning": "maximum allowed step", "backend_support": "RK23/RK45 lanes", "problem_ir": "adaptive_timestep.dt_max"},
     {"python": "AdaptiveTimestep.safety", "type": "float", "default": "0.9", "si_unit": "1", "validation": "safety factor", "meaning": "conservative controller factor", "backend_support": "RK23/RK45 lanes", "problem_ir": "adaptive_timestep.safety"},
     {"python": "AdaptiveTimestep.growth_limit", "type": "float", "default": "2.0", "si_unit": "1", "validation": "growth_limit", "meaning": "maximum step growth ratio", "backend_support": "RK23/RK45 lanes", "problem_ir": "adaptive_timestep.growth_limit"},
-    {"python": "AdaptiveTimestep.shrink_limit", "type": "float", "default": "0.2", "si_unit": "1", "validation": "shrink_limit", "meaning": "minimum step ratio", "backend_support": "RK23/RK45 lanes", "problem_ir": "adaptive_timestep.shrink_limit"}
+    {"python": "AdaptiveTimestep.shrink_limit", "type": "float", "default": "0.2", "si_unit": "1", "validation": "shrink_limit", "meaning": "minimum step ratio", "backend_support": "RK23/RK45 lanes", "problem_ir": "adaptive_timestep.shrink_limit"},
+    {"python": "AdaptiveTimestep.max_spin_rotation", "type": "float | None", "default": "None", "si_unit": "\\mathrm{rad}", "validation": "positive when set", "meaning": "per-step maximum spin-angle rotation guard", "backend_support": "RK23/RK45 lanes", "problem_ir": "adaptive_timestep.max_spin_rotation"},
+    {"python": "AdaptiveTimestep.norm_tolerance", "type": "float | None", "default": "None", "si_unit": "1", "validation": "positive when set", "meaning": "pre-normalization unit-length drift guard", "backend_support": "RK23/RK45 lanes", "problem_ir": "adaptive_timestep.norm_tolerance"}
   ]}
 }

@@ -155,6 +155,12 @@ function makeKernel(
       },
       platform: {
         capabilities: async () => { throw new Error("capabilities are not served in this test"); },
+        computeNodes: async () => ({
+          nodes: [],
+          schema_version: "compute_nodes.v1",
+          stale_after_seconds: 30,
+          state: "not_probed",
+        }),
       },
       workspace: {
         item: async () => { throw new Error("the workspace database is not served in this test"); },

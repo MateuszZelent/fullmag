@@ -121,4 +121,4 @@ Frontend source owner: `apps/control-room/src/modules/inspector/panels/ObjectMes
 ## Source-code index
 | Claim | Path | Stable symbol | Responsibility | Evidence |
 |---|---|---|---|---|
-| Constructor, validation, lowering | `packages/fullmag-py/src/fullmag/model/discretization.py` | `class FDM` | Canonical Python API behavior | Ownership test and source-map validator |
+| Constructor, validation, lowering | [`packages/fullmag-py/src/fullmag/model/discretization.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/discretization.py#L19) | [`class FDM`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/discretization.py#L19) | Canonical Python API behavior | Ownership test and source-map validator |

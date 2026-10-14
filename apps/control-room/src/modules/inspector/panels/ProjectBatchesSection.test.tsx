@@ -178,14 +178,10 @@ describe("ProjectBatchesSection", () => {
     expect(container.textContent).toContain("Published child run: run-b");
     expect(container.textContent).toContain("Task catalog revision 7 · 1 task(s)");
     expect(container.textContent).toContain("running · task-b");
-    expect(
-      findElements(
-        container,
-        (element) =>
-          element.tagName === "BUTTON" &&
-          element.textContent.trim() === "View run details",
-      ),
-    ).toHaveLength(1);
+    expect(findElements(
+      container as unknown as TestElement,
+      (element) => element.tagName === "BUTTON" && element.textContent?.trim() === "View run details",
+    )).toHaveLength(1);
     const viewRun = findElement(
       container as unknown as TestElement,
       (element) => element.tagName === "BUTTON" && element.textContent?.trim() === "View run details",

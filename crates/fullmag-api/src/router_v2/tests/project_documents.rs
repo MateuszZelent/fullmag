@@ -4139,6 +4139,7 @@ async fn project_batch_submit_replays_and_lists_durable_parent() {
     assert_eq!(published_run["tasks"][0]["lifecycle"], "accepted");
 
     let second_page = app
+        .clone()
         .oneshot(
             Request::builder()
                 .method(Method::GET)

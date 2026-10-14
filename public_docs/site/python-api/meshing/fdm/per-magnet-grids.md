@@ -168,5 +168,5 @@ Focused constructor, lowering, and mesh-report tests are the evidence boundary f
 
 | Claim | Path | Stable symbol | Responsibility | Evidence |
 |---|---|---|---|---|
-| Per-magnet grid policy and lowering. | `packages/fullmag-py/src/fullmag/model/discretization.py` | `class FDM` | Per-magnet grid policy and lowering. | Source-map validator and focused API tests |
-| Per-magnet cell-size validation. | `packages/fullmag-py/src/fullmag/model/discretization.py` | `class FDMGrid` | Per-magnet cell-size validation. | Source-map validator and focused API tests |
+| Per-magnet grid policy and lowering. | [`packages/fullmag-py/src/fullmag/model/discretization.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/discretization.py#L19) | [`class FDM`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/discretization.py#L19) | Per-magnet grid policy and lowering. | Source-map validator and focused API tests |
+| Per-magnet cell-size validation. | [`packages/fullmag-py/src/fullmag/model/discretization.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/discretization.py#L19) | [`class FDMGrid`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/discretization.py#L19) | Per-magnet cell-size validation. | Source-map validator and focused API tests |

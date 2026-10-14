@@ -125,11 +125,11 @@ Frontend source owner: `apps/control-room/src/modules/inspector/panels/StudyInsp
 ## Source-code index
 | Claim | Path | Stable symbol | Responsibility | Evidence |
 |---|---|---|---|---|
-| Problem validation | `packages/fullmag-py/src/fullmag/model/problem.py` | `class Problem` | Authoring/lowering validation | Validation tests |
+| Problem validation | [`packages/fullmag-py/src/fullmag/model/problem.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/problem.py#L2601) | [`class Problem`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/problem.py#L2601) | Authoring/lowering validation | Validation tests |
 | Shared checks | `packages/fullmag-py/src/fullmag/_validation.py` | `require_non_empty`, `require_positive` | Reusable domain checks | Unit tests |
 
 ### Source-map coverage
 
 | Claim | Path | Stable symbol | Responsibility | Evidence |
 |---|---|---|---|---|
-| Constructor and lowering validation boundary. | `packages/fullmag-py/src/fullmag/model/problem.py` | `class Problem` | Constructor and lowering validation boundary. | Source-map validator and focused API tests |
+| Constructor and lowering validation boundary. | [`packages/fullmag-py/src/fullmag/model/problem.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/problem.py#L2601) | [`class Problem`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/problem.py#L2601) | Constructor and lowering validation boundary. | Source-map validator and focused API tests |

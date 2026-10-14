@@ -260,7 +260,7 @@ no longer matches the source files.
   <strong>Control Room</strong><br />
   <a href="apps/control-room/package.json"><img alt="Next.js 16.3.8" src="https://img.shields.io/badge/Next.js-16.3.8-000000?style=for-the-badge&amp;logo=nextdotjs&amp;logoColor=white" /></a>
   <a href="apps/control-room/package.json"><img alt="React 19.2.4" src="https://img.shields.io/badge/React-19.2.4-20232A?style=for-the-badge&amp;logo=react&amp;logoColor=61DAFB" /></a>
-  <a href="apps/control-room/package.json"><img alt="TypeScript 7.0.2" src="https://img.shields.io/badge/TypeScript-7.0.2-3178C6?style=for-the-badge&amp;logo=typescript&amp;logoColor=white" /></a>
+  <a href="apps/control-room/package.json"><img alt="TypeScript npm:@typescript/typescript6@6.0.2" src="https://img.shields.io/badge/TypeScript-npm%3A%40typescript%2Ftypescript6%406.0.2-3178C6?style=for-the-badge&amp;logo=typescript&amp;logoColor=white" /></a>
   <a href="apps/control-room/package.json"><img alt="Three.js ^0.186.1" src="https://img.shields.io/badge/Three.js-%5E0.186.1-000000?style=for-the-badge&amp;logo=threedotjs&amp;logoColor=white" /></a>
   <a href="apps/control-room/package.json"><img alt="ECharts ^6.1.0" src="https://img.shields.io/badge/ECharts-%5E6.1.0-AA344D?style=for-the-badge&amp;logo=apacheecharts&amp;logoColor=white" /></a>
   <a href="Cargo.toml"><img alt="Tauri 2.11.1" src="https://img.shields.io/badge/Tauri-2.11.1-24C8DB?style=for-the-badge&amp;logo=tauri&amp;logoColor=000000" /></a>
@@ -275,7 +275,7 @@ no longer matches the source files.
 | Core toolchain | Python `>=3.10`; Node `24.18.0`; Rust `stable` / edition `2021` | `pyproject.toml`, `.node-version`, `rust-toolchain.toml`, `Cargo.toml` | compatibility range or pinned channel/version |
 | Managed FEM/GPU bundle | CUDA `12.4.1`; CMake `3.30.5`; MFEM `4.10`; hypre `3.1.0`; libCEED `0.12.0` | `docker/fem-gpu/Dockerfile` | exact reproducible build pins |
 | Python scientific API | NumPy `>=1.24,<3`; Zarr `>=2.18,<4`; h5py `>=3.9,<4`; Gmsh `>=4.12,<5` | `packages/fullmag-py/pyproject.toml` | declared compatibility ranges |
-| Control Room direct stack | Next.js `16.3.8`; React `19.2.4`; TypeScript `7.0.2`; Three.js `^0.186.1`; ECharts `^6.1.0` | `apps/control-room/package.json` | direct constraints; complete transitive resolution is pinned in `pnpm-lock.yaml` |
+| Control Room direct stack | Next.js `16.3.8`; React `19.2.4`; TypeScript `npm:@typescript/typescript6@6.0.2`; Three.js `^0.186.1`; ECharts `^6.1.0` | `apps/control-room/package.json` | direct constraints; complete transitive resolution is pinned in `pnpm-lock.yaml` |
 | Rust/Python and desktop bridge | PyO3 `0.29`; Tauri `2.11.1` | `Cargo.toml` | workspace dependency constraints |
 
 Regenerate after changing a version source:

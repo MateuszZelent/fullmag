@@ -138,12 +138,12 @@ bounds from center and size. `build_domain_mesh` materializes the shared-domain 
 
 | Responsibility | Repository path | Stable symbol |
 | --- | --- | --- |
-| validation and serialization | `packages/fullmag-py/src/fullmag/world.py` | `class StudyUniverseConfig` |
-| public authoring facade | `packages/fullmag-py/src/fullmag/world.py` | `class StudyUniverseHandle` |
-| universe update lowering | `packages/fullmag-py/src/fullmag/world.py` | `def _configure_study_universe` |
+| validation and serialization | [`packages/fullmag-py/src/fullmag/world.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/world.py#L2406) | [`class StudyUniverseConfig`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/world.py#L2406) |
+| public authoring facade | [`packages/fullmag-py/src/fullmag/world.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/world.py#L5240) | [`class StudyUniverseHandle`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/world.py#L5240) |
+| universe update lowering | [`packages/fullmag-py/src/fullmag/world.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/world.py#L5024) | `def [`_configure_study_universe`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/world.py#L5024)` |
 | mesh request | `packages/fullmag-py/src/fullmag/world.py` | `def build_domain_mesh` |
-| explicit/auto bounds and grading lowering | `packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py` | `def _study_universe_airbox_options` |
-| rectangular realized bounds | `packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py` | `def _rectangular_airbox_bounds_from_options` |
+| explicit/auto bounds and grading lowering | [`packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py#L1570) | `def [`_study_universe_airbox_options`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py#L1570)` |
+| rectangular realized bounds | [`packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py#L1664) | `def [`_rectangular_airbox_bounds_from_options`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py#L1664)` |
 | shape status | `packages/fullmag-py/src/fullmag/meshing/_gmsh_generators.py` | `def _airbox_shape_status` |
 
 (airbox-geometry-validation)=
@@ -167,12 +167,12 @@ error estimate, Robin coefficient, mesh-convergence receipt, or GPU qualificatio
 
 | Claim | Repository path | Stable symbol | Evidence |
 | --- | --- | --- | --- |
-| geometry and IR fields | `packages/fullmag-py/src/fullmag/world.py` | `class StudyUniverseConfig` | source-backed |
-| `packages/fullmag-py/src/fullmag/world.py` | `class StudyUniverseHandle` | Public `StudyUniverseHandle.mesh` owns authored FEM/FDM mesh controls and the asymmetric `cell_size` routing. |
-| `packages/fullmag-py/src/fullmag/world.py` | `_configure_study_universe` | Public `universe.airbox(...)` configuration owns authored `AirboxOptions` before asset-pipeline realization. |
+| geometry and IR fields | [`packages/fullmag-py/src/fullmag/world.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/world.py#L2406) | [`class StudyUniverseConfig`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/world.py#L2406) | source-backed |
+| [`packages/fullmag-py/src/fullmag/world.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/world.py#L5240) | [`class StudyUniverseHandle`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/world.py#L5240) | Public `StudyUniverseHandle.mesh` owns authored FEM/FDM mesh controls and the asymmetric `cell_size` routing. |
+| [`packages/fullmag-py/src/fullmag/world.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/world.py#L5024) | [`_configure_study_universe`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/world.py#L5024) | Public `universe.airbox(...)` configuration owns authored `AirboxOptions` before asset-pipeline realization. |
 | materialization | `packages/fullmag-py/src/fullmag/world.py` | `def build_domain_mesh` | source-backed |
-| auto and explicit bounds lowering | `packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py` | `def _study_universe_airbox_options` | source-backed |
-| realized rectangular bounds | `packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py` | `def _rectangular_airbox_bounds_from_options` | source-backed |
+| auto and explicit bounds lowering | [`packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py#L1570) | `def [`_study_universe_airbox_options`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py#L1570)` | source-backed |
+| realized rectangular bounds | [`packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py#L1664) | `def [`_rectangular_airbox_bounds_from_options`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py#L1664)` | source-backed |
 | sphere degradation | `packages/fullmag-py/src/fullmag/meshing/_gmsh_generators.py` | `def _airbox_shape_status` | source-backed |
 
 

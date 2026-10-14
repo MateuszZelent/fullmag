@@ -4,7 +4,9 @@ status: implemented
 doc_kind: reference
 audience: user
 owner: fullmag-public-docs
-source_of_truth: response-solver, floquet-response, their source maps, frequency-domain planner headers, and source revision 88c7160080bc1e8519950df283d2dd02087cc3da
+last_updated: 2026-10-14
+reviewed_revision: 5e99782acbb7fb3f65d0cad872e102bf67733103
+source_of_truth: response-solver, floquet-response, their source maps, frequency-domain planner headers, and source revision 5e99782acbb7fb3f65d0cad872e102bf67733103
 ---
 
 (public-docs-numerical-methods-frequency-domain-root)=
@@ -355,14 +357,15 @@ The terminal page {doc}`response-solver` owns exact `ProblemIR` paths and round-
 
 | Responsibility | Repository path | Stable symbol |
 |---|---|---|
-| Public response schema | `packages/fullmag-py/src/fullmag/world.py` | `class FrequencyResponseStageSpec` |
-| Stage construction | `packages/fullmag-py/src/fullmag/world.py` | `frequency_response_stage` |
-| Floquet boundary schema | `packages/fullmag-py/src/fullmag/model/study.py` | `class FloquetBC` |
-| Native request legality | `backends/fem/src/frequency_domain/operator_contract.cpp` | `validate_driven_frequency_response_request` |
-| Native response contract | `backends/fem/src/frequency_domain/modal_eigen_solver.cpp` | `solve_driven_response_contract` |
-| Execution-lane model | `backends/fem/include/frequency_domain/planner/frequency_solve_plan.hpp` | `FrequencySolvePlan` and related enums |
-| Lane selection | `backends/fem/include/frequency_domain/planner/frequency_solve_planner.hpp` | `plan_frequency_response` |
-| Runtime orchestration | `crates/fullmag-runner/src/frequency_response.rs` | frequency-response runner owner |
+| Public response schema | [`packages/fullmag-py/src/fullmag/world.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/world.py#L2816) | `class FrequencyResponseStageSpec` |
+| Stage construction | [`packages/fullmag-py/src/fullmag/world.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/world.py#L3272) | `frequency_response_stage` |
+| Floquet boundary schema | [`packages/fullmag-py/src/fullmag/model/study.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/study.py#L629) | `class FloquetBC` |
+| Native request legality | [`backends/fem/src/frequency_domain/operator_contract.cpp`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/src/frequency_domain/operator_contract.cpp#L107) | `validate_driven_frequency_response_request` |
+| Native response contract | [`backends/fem/src/frequency_domain/modal_eigen_solver.cpp`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/src/frequency_domain/modal_eigen_solver.cpp#L3328) | `solve_driven_response_contract` |
+| Production response solver | [`backends/fem/src/frequency_domain/driven_response_solver.cpp`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/src/frequency_domain/driven_response_solver.cpp#L16901) | `solve_driven_frequency_response` |
+| Execution-lane model | [`backends/fem/include/frequency_domain/planner/frequency_solve_plan.hpp`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/include/frequency_domain/planner/frequency_solve_plan.hpp#L48) | `struct FrequencySolvePlan` |
+| Lane selection | [`backends/fem/include/frequency_domain/planner/frequency_solve_planner.hpp`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/include/frequency_domain/planner/frequency_solve_planner.hpp#L26) | `plan_frequency_response` |
+| Runtime orchestration | [`crates/fullmag-runner/src/frequency_response.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-runner/src/frequency_response.rs#L199) | `resolved_frequency_response_solver_method_name` |
 
 ## Validation programme
 

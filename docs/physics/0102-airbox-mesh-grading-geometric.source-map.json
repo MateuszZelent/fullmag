@@ -321,7 +321,7 @@
       "id": "scoped-layer-geometry-only",
       "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py",
       "symbol": "_generate_coincident_ring_airbox_mesh",
-      "responsibility": "Creates scoped exact CAD partitions with geometry-only extrusion, then applies owner-volume floors/upper targets and air-volume grading in one conforming 3D mesh; GHA qualification remains pending.",
+      "responsibility": "Creates scoped exact CAD partitions with geometry-only extrusion, then applies owner-volume floors/upper targets and air-volume grading in one conforming 3D mesh; GHA qualification remains pending. CAD partitioning alone does not prove exact magnetic mesh planes; public Box/DE integration fixtures currently fail the unchanged layer-count guard. Constraint candidates must preserve all owner/air and topology gates.",
       "evidence_status": "implemented"
     },
     {
@@ -343,6 +343,13 @@
       "path": "packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py",
       "symbol": "_resolve_effective_shared_domain_targets",
       "responsibility": "Produces the effective target report, which does not currently expose the exact-layer implicit outer cap.",
+      "evidence_status": "implemented"
+    },
+    {
+      "id": "exact-layer-diagnostic-variants",
+      "path": "scripts/verify_exact_layer_mesh_diagnostics.py",
+      "symbol": "_prepare_variant",
+      "responsibility": "Builds strictly bounded in-memory extrusion candidates for diagnostics only; does not change the checked-out mesher, public intent or scientific qualification. Existing scoped-ring and implicit-cap regressions remain acceptance inputs.",
       "evidence_status": "implemented"
     }
   ],

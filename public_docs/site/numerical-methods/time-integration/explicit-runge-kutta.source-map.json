@@ -1,5 +1,8 @@
 {
-  "document": {"path": "public_docs/site/numerical-methods/time-integration/explicit-runge-kutta.md", "reviewed_revision": "a1de38b4d7dad275dccbdbfd937b757d6ca7ee99"},
+  "document": {
+    "path": "public_docs/site/numerical-methods/time-integration/explicit-runge-kutta.md",
+    "reviewed_revision": "5e99782acbb7fb3f65d0cad872e102bf67733103"
+  },
   "backend_matrix": [
     {"solver": "FEM", "device": "CPU", "status": "documented"},
     {"solver": "FEM", "device": "GPU", "status": "source-backed", "reason": "The source-facade lane is present, but universal executed-device qualification is not claimed."},
@@ -9,8 +12,8 @@
   "equations": [
     {"id": "eq-time-llg-rhs", "symbols": ["m", "F", "gamma", "alpha", "H_eff"], "sources": ["python-llg"]},
     {"id": "eq-rk-stage", "symbols": ["Y", "y", "dt", "a", "K", "t", "c"], "sources": ["fem-stage-rhs"]},
-    {"id": "eq-rk-update", "symbols": ["y", "dt", "b", "K"], "sources": ["fem-explicit-step"]},
-    {"id": "eq-rk-embedded-error", "symbols": ["y", "dt", "btilde", "K", "e"], "sources": ["adaptive-policy"]}
+    {"id": "eq-rk-update", "symbols": ["y", "dt", "b", "K"], "sources": ["fem-explicit-step", "fem-gpu-step"]},
+    {"id": "eq-rk-embedded-error", "symbols": ["y", "dt", "btilde", "K", "e"], "sources": ["adaptive-policy", "fem-gpu-attempt"]}
   ],
   "symbols": [
     {"id": "m", "latex": "\\mathbf m", "meaning": "reduced magnetization", "si_unit": "1"},
@@ -30,12 +33,17 @@
     {"id": "e", "latex": "e_{n+1}", "meaning": "embedded local error estimate", "si_unit": "1"}
   ],
   "sources": [
-    {"id": "python-llg", "path": "packages/fullmag-py/src/fullmag/model/dynamics.py", "symbol": "class LLG", "responsibility": "Public LLG integrator contract and ProblemIR serialization."},
-    {"id": "adaptive-policy", "path": "packages/fullmag-py/src/fullmag/model/dynamics.py", "symbol": "class AdaptiveTimestep", "responsibility": "Adaptive tolerance and step-bound validation."},
-    {"id": "study-solver", "path": "packages/fullmag-py/src/fullmag/world.py", "symbol": "class StudyBuilder", "responsibility": "Canonical stage-workflow solver-policy facade."},
-    {"id": "fem-stage-rhs", "path": "backends/fem/cpu/mfem/integrators/rk_stage_rhs.cpp", "symbol": "evaluate_rk_stage_rhs", "responsibility": "FEM stage right-hand-side evaluation."},
-    {"id": "fem-explicit-step", "path": "backends/fem/cpu/mfem/integrators/rk_explicit_step.cpp", "symbol": "context_step_explicit_rk_mfem", "responsibility": "FEM explicit RK step execution."},
-    {"id": "fem-rk-contract", "path": "backends/fem/cpu/mfem/integrators/rk_explicit.cpp", "symbol": "stepper_workspace_allocate", "responsibility": "FEM reusable explicit-RK workspace implementation."}
+    {"id": "python-llg", "path": "packages/fullmag-py/src/fullmag/model/dynamics.py", "symbol": "class LLG", "responsibility": "Public LLG integrator contract and ProblemIR serialization"},
+    {"id": "adaptive-policy", "path": "packages/fullmag-py/src/fullmag/model/dynamics.py", "symbol": "class AdaptiveTimestep", "responsibility": "Adaptive tolerance and step-bound validation"},
+    {"id": "study-solver", "path": "packages/fullmag-py/src/fullmag/world.py", "symbol": "class StudyBuilder", "responsibility": "Canonical stage-workflow solver-policy facade"},
+    {"id": "fem-stage-rhs", "path": "backends/fem/cpu/mfem/integrators/rk_stage_rhs.cpp", "symbol": "evaluate_rk_stage_rhs", "responsibility": "FEM stage right-hand-side evaluation"},
+    {"id": "fem-explicit-step", "path": "backends/fem/cpu/mfem/integrators/rk_explicit_step.cpp", "symbol": "context_step_explicit_rk_mfem", "responsibility": "FEM explicit RK step execution"},
+    {"id": "fem-rk-contract", "path": "backends/fem/cpu/mfem/integrators/rk_explicit.cpp", "symbol": "stepper_workspace_allocate", "responsibility": "FEM reusable explicit-RK workspace implementation"},
+    {"id": "fem-gpu-step", "path": "backends/fem/gpu/cuda/integrators/rk/rk_step.cu", "symbol": "gpu_rk_device_resident_step", "responsibility": "Device-resident GPU RK step orchestration"},
+    {"id": "fem-gpu-attempt", "path": "backends/fem/gpu/cuda/integrators/rk/rk_attempt_loop.cu", "symbol": "gpu_rk_run_accepted_attempt_loop", "responsibility": "GPU RK accepted-attempt loop and atomic rollback"},
+    {"id": "fem-gpu-fsal", "path": "backends/fem/gpu/cuda/integrators/rk/rk_fsal_policy.cpp", "symbol": "gpu_rk_rhs_allows_fsal_reuse", "responsibility": "Host-side FSAL eligibility and operator-signature policy"},
+    {"id": "fdm-abm3-checkpoint", "path": "crates/fullmag-engine/src/fdm/cpu/state.rs", "symbol": "FdmCpuSolverCheckpointV1", "responsibility": "FDM CPU multistep (abm3) checkpoint state representation"},
+    {"id": "fdm-abm3-resume", "path": "crates/fullmag-runner/src/lib.rs", "symbol": "resume_reference_fdm_from_abm3_checkpoint", "responsibility": "Resumes FDM CPU abm3 execution from a saved multistep checkpoint"}
   ],
   "public_api": {"parameters": [
     {"python": "LLG.gamma", "type": "float", "default": "2.211e5", "si_unit": "\\mathrm{m\\,A^{-1}\\,s^{-1}}", "validation": "finite and", "meaning": "gyromagnetic ratio", "backend_support": "FEM/FDM CPU/GPU", "problem_ir": "study.dynamics.gyromagnetic_ratio"},

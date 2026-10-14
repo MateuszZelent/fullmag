@@ -370,12 +370,12 @@ and **unsupported combinations** fail before mesh replacement.
 | recipe lowering | `packages/fullmag-py/src/fullmag/model/discretization.py` | `PerObjectMeshRecipe.to_ir` |
 | operation schema | `packages/fullmag-py/src/fullmag/model/discretization.py` | `MeshOperation.to_ir` |
 | stage-first object mesh facade | `packages/fullmag-py/src/fullmag/world.py` | magnetic object mesh authoring surface |
-| target precedence | `packages/fullmag-py/src/fullmag/meshing/_mesh_targets.py` | `resolve_shared_domain_targets` |
+| target precedence | [`packages/fullmag-py/src/fullmag/meshing/_mesh_targets.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/_mesh_targets.py#L573) | [`resolve_shared_domain_targets`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/_mesh_targets.py#L573) |
 | size fields | `packages/fullmag-py/src/fullmag/meshing/_size_field_plan.py` | size-field plan owner |
 | swept construction | `packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py` | swept generation owner |
-| realized operation/fallback report | `packages/fullmag-py/src/fullmag/meshing/mesh_build_report.py` | `_build_mesh_operation_statuses`, `_build_shared_domain_build_report` |
-| UI controls | `apps/control-room/src/modules/inspector/panels/ObjectMeshPolicyPanel.tsx` | `ObjectMeshPolicyPanel` |
-| UI canonicalization | `apps/control-room/src/modules/inspector/panels/ObjectMeshPolicyPanelModel.ts` | `buildObjectMeshPolicyReplaceRequest` |
+| realized operation/fallback report | [`packages/fullmag-py/src/fullmag/meshing/mesh_build_report.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/mesh_build_report.py#L30) | `_build_mesh_operation_statuses`, [`_build_shared_domain_build_report`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/mesh_build_report.py#L30) |
+| UI controls | [`apps/control-room/src/modules/inspector/panels/ObjectMeshPolicyPanel.tsx`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/apps/control-room/src/modules/inspector/panels/ObjectMeshPolicyPanel.tsx#L880) | [`ObjectMeshPolicyPanel`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/apps/control-room/src/modules/inspector/panels/ObjectMeshPolicyPanel.tsx#L880) |
+| UI canonicalization | [`apps/control-room/src/modules/inspector/panels/ObjectMeshPolicyPanelModel.ts`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/apps/control-room/src/modules/inspector/panels/ObjectMeshPolicyPanelModel.ts#L503) | [`buildObjectMeshPolicyReplaceRequest`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/apps/control-room/src/modules/inspector/panels/ObjectMeshPolicyPanelModel.ts#L503) |
 | topology capability gate | `apps/control-room/src/modules/inspector/panels/ObjectMeshPolicyPanelModel.ts` | `resolveObjectMeshTopologyCapabilities` |
 
 (python-api-discretization-per-object-meshing-validation)=

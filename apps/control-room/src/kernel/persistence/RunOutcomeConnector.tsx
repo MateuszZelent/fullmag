@@ -64,11 +64,9 @@ async function recordRunOutcome(
 export function RunOutcomeConnector({
   kernel,
   sessionIdentity,
-  paused,
 }: {
   kernel: KernelApi;
   sessionIdentity: SessionResourceIdentity;
-  paused: boolean;
 }) {
   const observation = useSessionStatusSelector(selectRunLifecycle, {
     isEqual: runLifecycleObservationsEqual,
@@ -86,9 +84,6 @@ export function RunOutcomeConnector({
   }, [sessionKey]);
 
   useEffect(() => {
-    const host = kernel.developmentWorkspace?.getSnapshot();
-    if (paused || host?.paused || (host && host.kernel !== kernel)) return;
-
     const controller = kernel.projectDocument;
     const releaseReservation = controller?.tryReserveRunOutcome();
     if (controller && !releaseReservation) return;
@@ -105,7 +100,7 @@ export function RunOutcomeConnector({
     } finally {
       if (!reservationTransferred) releaseReservation?.();
     }
-  }, [documentSnapshot, kernel, observation, paused, sessionKey]);
+  }, [documentSnapshot, kernel, observation, sessionKey]);
 
   return null;
 }

@@ -1,5 +1,10 @@
 # P8-54 — natywny build backendu na żądanie
 
+Decyzja użytkownika 14.10.2026: panel Development backend, ręczne żądania
+buildu i restart z UI usunięto z zakresu produktu. Poniższy opis i wyniki
+pozostają historycznym zapisem. Zarządzane buildy CLI oraz utrwalanie źródeł
+pozostają aktualne.
+
 ## Cel i decyzja użytkownika
 
 05.10.2026: użytkownik zastąpił wcześniejszą decyzję o automatycznym watcherze

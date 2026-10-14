@@ -201,4 +201,4 @@ Focused constructor, lowering, and mesh-report tests are the evidence boundary f
 
 | Claim | Path | Stable symbol | Responsibility | Evidence |
 |---|---|---|---|---|
-| Imported FEM mesh request and lowering. | `packages/fullmag-py/src/fullmag/model/discretization.py` | `class FEM` | Imported FEM mesh request and lowering. | Source-map validator and focused API tests |
+| Imported FEM mesh request and lowering. | [`packages/fullmag-py/src/fullmag/model/discretization.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/discretization.py#L476) | [`class FEM`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/discretization.py#L476) | Imported FEM mesh request and lowering. | Source-map validator and focused API tests |

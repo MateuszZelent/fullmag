@@ -4561,6 +4561,7 @@ mod tests {
         );
         snapshot.schema_version =
             crate::compute_node_snapshot::COMPUTE_NODE_SNAPSHOT_SCHEMA_V2.into();
+        snapshot.runtime_owner_id = ledger.owner_id();
         snapshot.host_owner_id = Some(owner.descriptor().host_owner_id.clone());
         snapshot.host_owner_epoch = Some(owner.descriptor().host_owner_epoch);
         snapshot.validate().unwrap();
@@ -4600,6 +4601,7 @@ mod tests {
         );
         first_sample.schema_version =
             crate::compute_node_snapshot::COMPUTE_NODE_SNAPSHOT_SCHEMA_V2.into();
+        first_sample.runtime_owner_id = ledger.owner_id();
         first_sample.host_owner_id = Some(first_owner.descriptor().host_owner_id.clone());
         first_sample.host_owner_epoch = Some(first_owner.descriptor().host_owner_epoch);
         ledger
@@ -4632,6 +4634,7 @@ mod tests {
         );
         second_sample.schema_version =
             crate::compute_node_snapshot::COMPUTE_NODE_SNAPSHOT_SCHEMA_V2.into();
+        second_sample.runtime_owner_id = ledger.owner_id();
         second_sample.host_owner_id = Some(second_owner.descriptor().host_owner_id.clone());
         second_sample.host_owner_epoch = Some(second_owner.descriptor().host_owner_epoch);
         ledger
@@ -4658,6 +4661,7 @@ mod tests {
             1,
         );
         sample.schema_version = crate::compute_node_snapshot::COMPUTE_NODE_SNAPSHOT_SCHEMA_V2.into();
+        sample.runtime_owner_id = ledger.owner_id();
         sample.host_owner_id = Some(owner.descriptor().host_owner_id.clone());
         sample.host_owner_epoch = Some(owner.descriptor().host_owner_epoch);
         let topology = sample.cpu.topology.known_value().cloned();
@@ -4710,6 +4714,7 @@ mod tests {
             1,
         );
         sample.schema_version = crate::compute_node_snapshot::COMPUTE_NODE_SNAPSHOT_SCHEMA_V2.into();
+        sample.runtime_owner_id = ledger.owner_id();
         sample.host_owner_id = Some(owner.descriptor().host_owner_id.clone());
         sample.host_owner_epoch = Some(owner.descriptor().host_owner_epoch);
         sample.cpu.effective_capacity_millis =
@@ -4763,6 +4768,7 @@ mod tests {
             1,
         );
         sample.schema_version = crate::compute_node_snapshot::COMPUTE_NODE_SNAPSHOT_SCHEMA_V2.into();
+        sample.runtime_owner_id = ledger.owner_id();
         sample.host_owner_id = Some(owner.descriptor().host_owner_id.clone());
         sample.host_owner_epoch = Some(owner.descriptor().host_owner_epoch);
         if let Reported::Available { value } = &mut sample.gpus {
@@ -4770,6 +4776,7 @@ mod tests {
                 value: GpuPartition::Unknown,
             };
         }
+        sample.inventory_sha256 = sample.computed_inventory_sha256().unwrap();
         ledger
             .publish_compute_node_snapshot_with_owner(&owner, &sample)
             .unwrap();
@@ -5021,6 +5028,7 @@ mod tests {
         );
         sample.schema_version =
             crate::compute_node_snapshot::COMPUTE_NODE_SNAPSHOT_SCHEMA_V2.into();
+        sample.runtime_owner_id = ledger.owner_id();
         sample.host_owner_id = Some(inventory_owner.descriptor().host_owner_id.clone());
         sample.host_owner_epoch = Some(inventory_owner.descriptor().host_owner_epoch);
         ledger
@@ -6726,10 +6734,10 @@ mod tests {
         };
         let active = HostResourceReservation::from_request(&active_request).unwrap();
         let document = HostResourceLedgerDocument {
-            schema_version: HOST_RESOURCE_LEDGER_SCHEMA_V1.to_string(),
+            schema_version: HOST_RESOURCE_LEDGER_SCHEMA_V3.to_string(),
             policy: policy.clone(),
             reservations: vec![released.clone(), active],
-            node_policy: None,
+            node_policy: Some(NodePolicy::initial_for_capacity(&policy)),
         };
         assert!(validate_ledger_document(&document, directory.path()).is_err());
 

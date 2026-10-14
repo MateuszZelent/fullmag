@@ -1,57 +1,89 @@
 {
   "document": {
     "path": "public_docs/site/python-api/dynamics/adaptive-timestep.md",
-    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367"
+    "reviewed_revision": "5e99782acbb7fb3f65d0cad872e102bf67733103"
   },
   "backend_matrix": [
+    {"solver": "FEM", "device": "CPU", "status": "documented"},
+    {"solver": "FEM", "device": "GPU", "status": "documented"},
+    {"solver": "FDM", "device": "CPU", "status": "documented"},
+    {"solver": "FDM", "device": "GPU", "status": "documented"}
+  ],
+  "equations": [
     {
-      "solver": "FEM",
-      "device": "CPU",
-      "status": "documented"
+      "id": "eq-python-adaptive-error",
+      "symbols": ["rho_k", "e_i", "atol", "rtol", "m_old", "m_high", "A"],
+      "sources": ["source-1", "fem-cpu-err", "fem-gpu-err", "fdm-gpu-err"]
     },
     {
-      "solver": "FEM",
-      "device": "GPU",
-      "status": "documented"
-    },
-    {
-      "solver": "FDM",
-      "device": "CPU",
-      "status": "documented"
-    },
-    {
-      "solver": "FDM",
-      "device": "GPU",
-      "status": "documented"
+      "id": "eq-python-adaptive-pi",
+      "symbols": ["dt_k", "q_k", "q_min", "q_max", "dt_min", "dt_max", "s", "rho_k", "rho_prev", "p"],
+      "sources": ["source-1", "shared-decision", "fdm-cpu-decision"]
     }
   ],
-  "equations": [],
-  "symbols": [],
+  "symbols": [
+    {"id": "e_i", "latex": "\\mathbf{e}_i", "meaning": "Embedded high-minus-low vector error at active point $i$", "si_unit": "1"},
+    {"id": "m_old", "latex": "\\mathbf{m}_i^{\\mathrm{old}}", "meaning": "Accepted magnetization state at the start of step $k$", "si_unit": "1"},
+    {"id": "m_high", "latex": "\\mathbf{m}_i^{\\mathrm{high}}", "meaning": "High-order candidate magnetization state before final normalization", "si_unit": "1"},
+    {"id": "atol", "latex": "\\mathrm{atol}", "meaning": "Absolute normalized-state error tolerance", "si_unit": "1"},
+    {"id": "rtol", "latex": "\\mathrm{rtol}", "meaning": "Relative normalized-state error tolerance", "si_unit": "1"},
+    {"id": "rho_k", "latex": "\\rho_k", "meaning": "Maximum normalized local error ratio at attempt $k$", "si_unit": "1"},
+    {"id": "rho_prev", "latex": "\\rho_{k-1}", "meaning": "Previous accepted non-zero normalized error ratio", "si_unit": "1"},
+    {"id": "p", "latex": "p", "meaning": "Embedded error-estimator order ($2$ for `rk23`, $4$ for `rk45`)", "si_unit": "1"},
+    {"id": "s", "latex": "s", "meaning": "Controller safety factor (`safety`)", "si_unit": "1"},
+    {"id": "q_k", "latex": "q_k", "meaning": "Raw adaptive step-size multiplier", "si_unit": "1"},
+    {"id": "q_min", "latex": "q_{\\min}", "meaning": "Minimum step-size shrink ratio (`shrink_limit`)", "si_unit": "1"},
+    {"id": "q_max", "latex": "q_{\\max}", "meaning": "Maximum step-size growth ratio (`growth_limit`)", "si_unit": "1"},
+    {"id": "dt_k", "latex": "\\Delta t_k", "meaning": "Attempted time step", "si_unit": "\\mathrm{s}"},
+    {"id": "dt_min", "latex": "\\Delta t_{\\min}", "meaning": "Minimum allowed time step (`dt_min`)", "si_unit": "\\mathrm{s}"},
+    {"id": "dt_max", "latex": "\\Delta t_{\\max}", "meaning": "Maximum allowed time step (`dt_max`)", "si_unit": "\\mathrm{s}"},
+    {"id": "A", "latex": "\\mathcal{A}", "meaning": "Active magnetic cell/node index set ($M_{s,i} > 0$)", "si_unit": "1"}
+  ],
   "sources": [
     {
       "id": "source-1",
       "path": "packages/fullmag-py/src/fullmag/model/dynamics.py",
       "symbol": "class AdaptiveTimestep",
-      "responsibility": "Adaptive-step parameters, validation, and IR lowering."
+      "responsibility": "Adaptive-step parameters, validation, and IR lowering"
+    },
+    {
+      "id": "shared-decision",
+      "path": "native/include/fullmag_adaptive_step_decision.hpp",
+      "symbol": "decide_adaptive_step",
+      "responsibility": "Backend-neutral order-aware history PI step decision"
+    },
+    {
+      "id": "fem-cpu-err",
+      "path": "backends/fem/cpu/mfem/integrators/adaptive_dt.cpp",
+      "symbol": "compute_adaptive_error_norm",
+      "responsibility": "Native FEM nodewise mixed error norm and geometric guards"
+    },
+    {
+      "id": "fem-gpu-err",
+      "path": "backends/fem/gpu/cuda/integrators/rk/adaptive_error_kernels.cu",
+      "symbol": "adaptive_error_norm_blocks_kernel",
+      "responsibility": "Native FEM GPU block reduction for the active-node error norm"
+    },
+    {
+      "id": "fdm-cpu-decision",
+      "path": "crates/fullmag-engine/src/fdm/cpu/integrators.rs",
+      "symbol": "decide_adaptive_step",
+      "responsibility": "FDM CPU history-aware PI step decision"
+    },
+    {
+      "id": "fdm-gpu-err",
+      "path": "backends/fdm/gpu/cuda/runtime/reductions_fp64.cu",
+      "symbol": "reduce_adaptive_error_policy",
+      "responsibility": "FDM GPU adaptive error reduction and dt-min policy"
     }
   ],
   "public_api": {
     "parameters": [
       {
-        "python": "---",
-        "type": "---",
-        "default": "---",
-        "si_unit": "1",
-        "validation": "---",
-        "meaning": "---",
-        "backend_support": "FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative",
-        "problem_ir": "---"
-      },
-      {
         "python": "AdaptiveTimestep.atol",
         "type": "`float`",
         "default": "`1e-6`",
-        "si_unit": "\\mathrm{s}",
+        "si_unit": "1",
         "validation": "Non-negative; one of atol/rtol positive",
         "meaning": "Absolute tolerance",
         "backend_support": "FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative",
@@ -61,7 +93,7 @@
         "python": "AdaptiveTimestep.rtol",
         "type": "`float`",
         "default": "`1e-3`",
-        "si_unit": "\\mathrm{s}",
+        "si_unit": "1",
         "validation": "Non-negative",
         "meaning": "Relative tolerance",
         "backend_support": "FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative",
@@ -101,7 +133,7 @@
         "python": "AdaptiveTimestep.safety",
         "type": "`float`",
         "default": "`0.9`",
-        "si_unit": "\\mathrm{s}",
+        "si_unit": "1",
         "validation": "`(0, 1]`",
         "meaning": "Step safety factor",
         "backend_support": "FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative",
@@ -111,7 +143,7 @@
         "python": "AdaptiveTimestep.growth_limit",
         "type": "`float`",
         "default": "`2.0`",
-        "si_unit": "\\mathrm{s}",
+        "si_unit": "1",
         "validation": "`> 1`",
         "meaning": "Growth limit",
         "backend_support": "FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative",
@@ -121,7 +153,7 @@
         "python": "AdaptiveTimestep.shrink_limit",
         "type": "`float`",
         "default": "`0.2`",
-        "si_unit": "\\mathrm{s}",
+        "si_unit": "1",
         "validation": "`(0, 1)`",
         "meaning": "Shrink limit",
         "backend_support": "FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative",
@@ -131,7 +163,7 @@
         "python": "AdaptiveTimestep.max_spin_rotation",
         "type": "`float | None`",
         "default": "`None`",
-        "si_unit": "\\mathrm{s}",
+        "si_unit": "\\mathrm{rad}",
         "validation": "Positive",
         "meaning": "Spin-rotation cap",
         "backend_support": "FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative",
@@ -141,7 +173,7 @@
         "python": "AdaptiveTimestep.norm_tolerance",
         "type": "`float | None`",
         "default": "`None`",
-        "si_unit": "\\mathrm{s}",
+        "si_unit": "1",
         "validation": "Positive",
         "meaning": "Norm tolerance",
         "backend_support": "FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative",

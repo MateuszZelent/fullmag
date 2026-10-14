@@ -133,26 +133,10 @@ case "${recipe}" in
     if [[ -n "${build_only}" ]]; then launcher_arguments+=(-BuildOnly); fi
     exec powershell.exe "${launcher_arguments[@]}"
     ;;
-  *"scripts/windows/watch_backend.py"*)
-    backend_watch_pattern='^python "[^"]+/scripts/windows/watch_backend.py" --repo-root "[^"]+" --web-port "([1-9][0-9]{0,4})"$'
-    if [[ ! "${recipe}" =~ ${backend_watch_pattern} ]]; then
-      echo "[fullmag just] invalid native backend watcher recipe" >&2
-      exit 2
-    fi
-    web_port="${BASH_REMATCH[1]}"
-    if ! is_windows_shell || (( web_port > 65535 )); then
-      echo "[fullmag just] native backend watcher requires Windows and a port from 1 to 65535" >&2
-      exit 2
-    fi
-    # The watcher acquires its own closed watch lease and delegates each build
-    # to run-windows-workspace-build; do not wrap its lifetime in the generic
-    # worktree build lock.
-    exec "${python_cmd}" "${script_dir}/windows/watch_backend.py" --repo-root "${repo_root}" --web-port "${web_port}"
-    ;;
   *"scripts/verify_control_room_sources.py"*)
     # Never execute the recipe text: accept only the fixed argument shape and
     # invoke the trusted helper from this checkout with the selected route.
-    source_recipe_pattern='^[^[:space:]]+ "[^"]+/scripts/verify_control_room_sources.py" --route (generate-client|production-source|api-hygiene|lint|openapi-import-check|typecheck-cli-check|explorer-physics-reporting-check|react-doctor|development-restart-check|resource-client-cache-check|development-kernel-host-check|development-transport-pause-check|development-run-outcome-handoff-check|development-run-outcome-handoff-lint|development-restart-action-check|development-restart-action-lint|development-backend-build-action-check) --repo-root "[^"]+"( --dependency-workspace "([^"]+)")?[[:space:]]*$'
+    source_recipe_pattern='^[^[:space:]]+ "[^"]+/scripts/verify_control_room_sources.py" --route (generate-client|production-source|api-hygiene|lint|openapi-import-check|typecheck-cli-check|explorer-physics-reporting-check|react-doctor|resource-client-cache-check) --repo-root "[^"]+"( --dependency-workspace "([^"]+)")?[[:space:]]*$'
     if [[ ! "${recipe}" =~ ${source_recipe_pattern} ]]; then
       echo "[fullmag just] invalid lightweight frontend recipe" >&2
       exit 2
@@ -203,7 +187,6 @@ case "${recipe}" in
       fi
       exec "${python_cmd}" "${script_dir}/verify_development_backend_api.py" --repo-root "${repo_root}" --compute-cancellation-only --frozen-native-build-id "${BASH_REMATCH[1]}"
     fi
-    frozen_native_pattern='^[^[:space:]]+ "[^"]+/scripts/verify_development_backend_api.py" --repo-root "[^"]+" --frozen-native-build-id "([0-9a-f]{64})"$'
     compute_host_initialization_pattern='^[^[:space:]]+ "[^"]+/scripts/verify_development_backend_api.py" --repo-root "[^"]+" --compute-host-initialization-only --frozen-native-build-id "([0-9a-f]{64})"$'
     compute_scheduler_cancellation_pattern='^[^[:space:]]+ "[^"]+/scripts/verify_development_backend_api.py" --repo-root "[^"]+" --compute-scheduler-cancellation-only --frozen-native-build-id "([0-9a-f]{64})"$'
     if [[ "${recipe}" =~ ${compute_scheduler_cancellation_pattern} ]]; then
@@ -220,17 +203,6 @@ case "${recipe}" in
       fi
       exec "${python_cmd}" "${script_dir}/verify_development_backend_api.py" --repo-root "${repo_root}" --compute-host-initialization-only --frozen-native-build-id "${BASH_REMATCH[1]}"
     fi
-    if [[ "${recipe}" =~ ${frozen_native_pattern} ]]; then
-      if ! is_windows_shell; then
-        echo "[fullmag just] frozen native package verification requires Windows" >&2
-        exit 2
-      fi
-      exec "${python_cmd}" "${script_dir}/verify_development_backend_api.py" --repo-root "${repo_root}" --frozen-native-build-id "${BASH_REMATCH[1]}"
-    fi
-      workspace_browser_pattern='^[^[:space:]]+ "[^"]+/scripts/verify_development_backend_api.py" --repo-root "[^"]+" --workspace-browser-owner-bundle "([0-9a-f]{32})"$'
-      if [[ "${recipe}" =~ ${workspace_browser_pattern} ]]; then
-        exec "${python_cmd}" "${script_dir}/verify_development_backend_api.py" --repo-root "${repo_root}" --workspace-browser-owner-bundle "${BASH_REMATCH[1]}"
-      fi
       candidate_preparation_pattern='^[^[:space:]]+ "[^"]+/scripts/verify_development_backend_api.py" --repo-root "[^"]+" --candidate-preparation-only$'
       if [[ "${recipe}" =~ ${candidate_preparation_pattern} ]]; then
         exec "${python_cmd}" "${script_dir}/verify_development_backend_api.py" --repo-root "${repo_root}" --candidate-preparation-only
@@ -275,20 +247,12 @@ case "${recipe}" in
       if [[ "${recipe}" =~ ${observer_pause_pattern} ]]; then
         exec "${python_cmd}" "${script_dir}/verify_development_backend_api.py" --repo-root "${repo_root}" --observer-pause-only
       fi
-      restart_transport_pattern='^[^[:space:]]+ "[^"]+/scripts/verify_development_backend_api.py" --repo-root "[^"]+" --restart-transport-only$'
-      if [[ "${recipe}" =~ ${restart_transport_pattern} ]]; then
-        exec "${python_cmd}" "${script_dir}/verify_development_backend_api.py" --repo-root "${repo_root}" --restart-transport-only
-      fi
       project_document_pattern='^[^[:space:]]+ "[^"]+/scripts/verify_development_backend_api.py" --repo-root "[^"]+" --project-document-only$'
       if [[ "${recipe}" =~ ${project_document_pattern} ]]; then
         exec "${python_cmd}" "${script_dir}/verify_development_backend_api.py" --repo-root "${repo_root}" --project-document-only
       fi
-      development_api_pattern='^[^[:space:]]+ "[^"]+/scripts/verify_development_backend_api.py" --repo-root "[^"]+" --cross-build-bundle "([0-9a-f]{32})?"$'
-      if [[ ! "${recipe}" =~ ${development_api_pattern} ]]; then
-        echo "[fullmag just] invalid development API check recipe" >&2
-        exit 2
-      fi
-      exec "${python_cmd}" "${script_dir}/verify_development_backend_api.py" --repo-root "${repo_root}" --cross-build-bundle "${BASH_REMATCH[1]:-}"
+      echo "[fullmag just] unsupported development API check recipe" >&2
+      exit 2
       ;;
     *"scripts/verify_development_handoff.py"*)
     handoff_check_pattern='^[^[:space:]]+ "[^"]+/scripts/verify_development_handoff.py" --repo-root "[^"]+"$'
@@ -424,18 +388,6 @@ case "${recipe}" in
     if [[ "${recipe}" =~ ${cpw_viewport_browser_pattern} ]]; then
       exec "${python_cmd}" "${script_dir}/verify_pinned_dataset_browser.py" --repo-root "${repo_root}" --port 3260 --scenario antenna-cpw-viewport
     fi
-    restart_action_browser_pattern='^[^[:space:]]+ "[^"]+/scripts/verify_pinned_dataset_browser.py" --repo-root "[^"]+" --port 3254 --scenario development-restart-action$'
-    if [[ "${recipe}" =~ ${restart_action_browser_pattern} ]]; then
-      exec "${python_cmd}" "${script_dir}/verify_pinned_dataset_browser.py" --repo-root "${repo_root}" --port 3254 --scenario development-restart-action
-    fi
-    outcome_handoff_browser_pattern='^[^[:space:]]+ "[^"]+/scripts/verify_pinned_dataset_browser.py" --repo-root "[^"]+" --port 3253 --scenario development-run-outcome-handoff$'
-    if [[ "${recipe}" =~ ${outcome_handoff_browser_pattern} ]]; then
-      exec "${python_cmd}" "${script_dir}/verify_pinned_dataset_browser.py" --repo-root "${repo_root}" --port 3253 --scenario development-run-outcome-handoff
-    fi
-    kernel_host_browser_pattern='^[^[:space:]]+ "[^"]+/scripts/verify_pinned_dataset_browser.py" --repo-root "[^"]+" --port 3252 --scenario development-kernel-host$'
-    if [[ "${recipe}" =~ ${kernel_host_browser_pattern} ]]; then
-      exec "${python_cmd}" "${script_dir}/verify_pinned_dataset_browser.py" --repo-root "${repo_root}" --port 3252 --scenario development-kernel-host
-    fi
     transport_browser_pattern='^[^[:space:]]+ "[^"]+/scripts/verify_pinned_dataset_browser.py" --repo-root "[^"]+" --port 3254 --scenario antenna-transport-drafts$'
     if [[ "${recipe}" =~ ${transport_browser_pattern} ]]; then
       exec "${python_cmd}" "${script_dir}/verify_pinned_dataset_browser.py" --repo-root "${repo_root}" --port 3254 --scenario antenna-transport-drafts
@@ -471,10 +423,6 @@ case "${recipe}" in
     antenna_browser_pattern='^[^[:space:]]+ "[^"]+/scripts/verify_pinned_dataset_browser.py" --repo-root "[^"]+" --port 3252 --scenario antenna-external-lead-inspection$'
     if [[ "${recipe}" =~ ${antenna_browser_pattern} ]]; then
       exec "${python_cmd}" "${script_dir}/verify_pinned_dataset_browser.py" --repo-root "${repo_root}" --port 3252 --scenario antenna-external-lead-inspection
-    fi
-    project_browser_pattern='^[^[:space:]]+ "[^"]+/scripts/verify_pinned_dataset_browser.py" --repo-root "[^"]+" --port 3251 --scenario project-document-handoff$'
-    if [[ "${recipe}" =~ ${project_browser_pattern} ]]; then
-      exec "${python_cmd}" "${script_dir}/verify_pinned_dataset_browser.py" --repo-root "${repo_root}" --port 3251 --scenario project-document-handoff
     fi
     study_profile_browser_pattern='^[^[:space:]]+ "[^"]+/scripts/verify_pinned_dataset_browser.py" --repo-root "[^"]+" --port 3256 --scenario study-execution-profile$'
     if [[ "${recipe}" =~ ${study_profile_browser_pattern} ]]; then

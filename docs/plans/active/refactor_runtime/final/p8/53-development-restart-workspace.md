@@ -1,5 +1,10 @@
 # P8-53 — bezpieczne zastosowanie nowego backendu w workspace
 
+Decyzja użytkownika 14.10.2026: panel Development backend, ręczne żądania
+buildu i restart z UI usunięto z zakresu produktu. Poniższy opis i wyniki
+pozostają historycznym zapisem. Zarządzane buildy CLI oraz utrwalanie źródeł
+pozostają aktualne.
+
 Aktualny odbiór 14.10.2026: [P8-53BO](53bo-grid-modal-correlation.md)
 potwierdził pełny pojedynczy restart niepustego modelu z dirty dokumentem
 i kamerą, a następnie Grid/Compute/Close (81eb7f40, exit 0). Historyczne

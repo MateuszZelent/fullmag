@@ -16,11 +16,11 @@ const tsBuildInfoFile = frontendRoot
   ? resolve(frontendRoot, "tsbuildinfo", "control-room.tsbuildinfo")
   : undefined;
 const require = createRequire(import.meta.url);
-const typescriptPackagePath = require.resolve("typescript/package.json");
+const typescriptPackagePath = require.resolve("typescript-native/package.json");
 const typescriptPackage = JSON.parse(readFileSync(typescriptPackagePath, "utf8"));
 const typescriptCommand = typescriptPackage.bin?.tsc;
 if (typeof typescriptCommand !== "string" || !typescriptCommand.trim()) {
-  throw new Error("TypeScript package does not declare a tsc command");
+  throw new Error("typescript-native package does not declare a tsc command");
 }
 const toolEntrypoints = {
   next: require.resolve("next/dist/bin/next"),

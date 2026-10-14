@@ -1,82 +1,9 @@
 import type { ProjectDocumentResource } from "../api/apiTypes";
-import type { ProjectDocumentSnapshot } from "./ProjectDocumentController";
 
-export const PROJECT_DOCUMENT_DEVELOPMENT_HANDOFF_SCHEMA =
-  "fullmag.project-document-development-handoff.v1" as const;
-
-const MAX_HANDOFF_JSON_BYTES = 64 * 1024 * 1024;
-const MAX_HANDOFF_DEPTH = 32;
-const MAX_HANDOFF_NODES = 200_000;
-const MAX_ARCHIVE_BASE64_CHARS = MAX_HANDOFF_JSON_BYTES;
-
-export type ProjectDocumentDevelopmentSnapshot = Extract<
-  ProjectDocumentSnapshot,
-  { readonly state: "empty" | "ready" }
->;
-
-export interface ProjectDocumentDevelopmentHandoff {
-  readonly schema: typeof PROJECT_DOCUMENT_DEVELOPMENT_HANDOFF_SCHEMA;
-  readonly snapshot: ProjectDocumentDevelopmentSnapshot;
-}
-
-export interface CaptureProjectDocumentDevelopmentHandoffOptions {
-  readonly carryUnsaved?: boolean;
-}
-
-/** Validate and detach one bounded plain JSON object from caller-owned input. */
-export function cloneBoundedProjectJsonObject(
-  value: unknown,
-): Record<string, unknown> {
-  const detached = cloneJsonValue(value);
-  const record = requireRecord(detached, "project JSON object");
-  ensureBoundedJson(record);
-  return record;
-}
-
-/** Capture a detached, bounded snapshot of the current project document. */
-export function captureProjectDocumentDevelopmentHandoff(
-  snapshot: ProjectDocumentSnapshot,
-  options: CaptureProjectDocumentDevelopmentHandoffOptions = {},
-): ProjectDocumentDevelopmentHandoff {
-  if (snapshot.state === "loading" || snapshot.state === "error") {
-    throw new Error("A loading or failed project document cannot be handed off.");
-  }
-
-  const detachedSnapshot = normalizeSnapshot(cloneJsonValue(snapshot));
-  if (
-    detachedSnapshot.state === "ready" &&
-    detachedSnapshot.resource.dirty &&
-    options.carryUnsaved !== true
-  ) {
-    throw new Error("Unsaved project changes require explicit carryUnsaved approval.");
-  }
-
-  const handoff: ProjectDocumentDevelopmentHandoff = {
-    schema: PROJECT_DOCUMENT_DEVELOPMENT_HANDOFF_SCHEMA,
-    snapshot: detachedSnapshot,
-  };
-  ensureBoundedJson(handoff);
-  return handoff;
-}
-
-/** Validate and detach an untrusted handoff before it reaches controller state. */
-export function validateProjectDocumentDevelopmentHandoff(
-  value: unknown,
-): ProjectDocumentDevelopmentHandoff {
-  const detached = cloneJsonValue(value);
-  const record = requireRecord(detached, "project document handoff");
-  requireExactKeys(record, ["schema", "snapshot"]);
-  if (record.schema !== PROJECT_DOCUMENT_DEVELOPMENT_HANDOFF_SCHEMA) {
-    throw new Error("Unsupported project document handoff schema.");
-  }
-
-  const handoff: ProjectDocumentDevelopmentHandoff = {
-    schema: PROJECT_DOCUMENT_DEVELOPMENT_HANDOFF_SCHEMA,
-    snapshot: normalizeSnapshot(record.snapshot),
-  };
-  ensureBoundedJson(handoff);
-  return handoff;
-}
+const MAX_PROJECT_JSON_BYTES = 64 * 1024 * 1024;
+const MAX_PROJECT_JSON_DEPTH = 32;
+const MAX_PROJECT_JSON_NODES = 200_000;
+const MAX_ARCHIVE_BASE64_CHARS = MAX_PROJECT_JSON_BYTES;
 
 /** Validate a resource returned by the typed persistence facade. */
 export function validateProjectDocumentResource(
@@ -87,72 +14,14 @@ export function validateProjectDocumentResource(
   return resource;
 }
 
-/** Require the bytes-only open operation to reproduce the captured document. */
-export function assertProjectDocumentReopenMatches(
-  captured: ProjectDocumentResource,
-  reopened: ProjectDocumentResource,
-): void {
-  if (
-    reopened.project_id !== captured.project_id ||
-    reopened.name !== captured.name ||
-    reopened.schema_version !== captured.schema_version ||
-    reopened.revision !== captured.revision ||
-    reopened.mode.kind !== captured.mode.kind ||
-    (reopened.mode.kind === "read_only" &&
-      captured.mode.kind === "read_only" &&
-      reopened.mode.reason !== captured.mode.reason) ||
-    reopened.migration.target_schema !== captured.migration.target_schema ||
-    reopened.migration.can_write !== captured.migration.can_write ||
-    !sameCanonicalArchiveBytes(
-      reopened.archive_base64,
-      captured.archive_base64,
-    )
-  ) {
-    throw new Error(
-      "Reopened project document differs from the captured handoff snapshot.",
-    );
-  }
-}
-
-function normalizeSnapshot(value: unknown): ProjectDocumentDevelopmentSnapshot {
-  const record = requireRecord(value, "project document snapshot");
-  requireExactKeys(record, ["error", "fileName", "hostPath", "resource", "state"]);
-
-  if (record.state === "empty") {
-    if (
-      record.error !== null ||
-      record.fileName !== null ||
-      record.hostPath !== null ||
-      record.resource !== null
-    ) {
-      throw new Error("Invalid empty project document snapshot.");
-    }
-    return {
-      error: null,
-      fileName: null,
-      hostPath: null,
-      resource: null,
-      state: "empty",
-    };
-  }
-
-  if (record.state !== "ready" || record.error !== null) {
-    throw new Error("Only empty or ready project document snapshots are supported.");
-  }
-  const fileName = boundedString(record.fileName, "project document file name", 1024);
-  const hostPath = nullableBoundedString(
-    record.hostPath,
-    "project document host path",
-    32_768,
-  );
-  const resource = normalizeResource(record.resource);
-  return {
-    error: null,
-    fileName,
-    hostPath,
-    resource,
-    state: "ready",
-  };
+/** Validate and detach one bounded plain JSON object from caller-owned input. */
+export function cloneBoundedProjectJsonObject(
+  value: unknown,
+): Record<string, unknown> {
+  const detached = cloneJsonValue(value);
+  const record = requireRecord(detached, "project JSON object");
+  ensureBoundedJson(record);
+  return record;
 }
 
 function normalizeResource(value: unknown): ProjectDocumentResource {
@@ -305,14 +174,6 @@ function boundedString(
   return value;
 }
 
-function nullableBoundedString(
-  value: unknown,
-  label: string,
-  maximumLength: number,
-): string | null {
-  return value === null ? null : boundedString(value, label, maximumLength);
-}
-
 function safeRevision(value: unknown, label: string): number {
   if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
     throw new Error(`Invalid ${label}.`);
@@ -362,13 +223,6 @@ function base64Digit(code: number): number {
   return -1;
 }
 
-function sameCanonicalArchiveBytes(left: string, right: string): boolean {
-  validateCanonicalBase64(left);
-  validateCanonicalBase64(right);
-  // Canonical base64 has exactly one textual representation per byte sequence.
-  return left === right;
-}
-
 function requireRecord(
   value: unknown,
   label: string,
@@ -396,7 +250,7 @@ function requireExactKeys(
     keys.some((key) => typeof key !== "string" || !allowed.has(key)) ||
     required.some((key) => !Object.hasOwn(record, key))
   ) {
-    throw new Error("Project document handoff contains missing or unknown fields.");
+    throw new Error("Project document contains missing or unknown fields.");
   }
 }
 
@@ -413,8 +267,8 @@ function cloneJsonNode(
   depth: number,
 ): unknown {
   budget.nodes += 1;
-  if (budget.nodes > MAX_HANDOFF_NODES || depth > MAX_HANDOFF_DEPTH) {
-    throw new Error("Project document handoff is too complex.");
+  if (budget.nodes > MAX_PROJECT_JSON_NODES || depth > MAX_PROJECT_JSON_DEPTH) {
+    throw new Error("Project document is too complex.");
   }
   if (
     value === null ||
@@ -424,23 +278,23 @@ function cloneJsonNode(
     return value;
   }
   if (typeof value === "number") {
-    if (!Number.isFinite(value)) throw new Error("Handoff numbers must be finite.");
+    if (!Number.isFinite(value)) throw new Error("Project document numbers must be finite.");
     return value;
   }
   if (typeof value !== "object") {
-    throw new Error("Project document handoff must contain only JSON values.");
+    throw new Error("Project document must contain only JSON values.");
   }
   if (ancestors.has(value)) {
-    throw new Error("Project document handoff cannot contain cycles.");
+    throw new Error("Project document cannot contain cycles.");
   }
   ancestors.add(value);
   try {
     if (Array.isArray(value)) {
       if (
         Object.getPrototypeOf(value) !== Array.prototype ||
-        value.length > MAX_HANDOFF_NODES
+        value.length > MAX_PROJECT_JSON_NODES
       ) {
-        throw new Error("Invalid project document handoff array.");
+        throw new Error("Invalid project document array.");
       }
       const keys = Reflect.ownKeys(value);
       if (
@@ -457,13 +311,13 @@ function cloneJsonNode(
           );
         })
       ) {
-        throw new Error("Invalid project document handoff array fields.");
+        throw new Error("Invalid project document array fields.");
       }
       const clone: unknown[] = [];
       for (let index = 0; index < value.length; index += 1) {
         const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
         if (!descriptor || !descriptor.enumerable || !("value" in descriptor)) {
-          throw new Error("Project document handoff arrays cannot contain holes or accessors.");
+          throw new Error("Project document arrays cannot contain holes or accessors.");
         }
         clone.push(cloneJsonNode(descriptor.value, ancestors, budget, depth + 1));
       }
@@ -472,7 +326,7 @@ function cloneJsonNode(
 
     const prototype = Object.getPrototypeOf(value);
     if (prototype !== Object.prototype && prototype !== null) {
-      throw new Error("Project document handoff objects must be plain JSON records.");
+      throw new Error("Project document objects must be plain JSON records.");
     }
     const clone: Record<string, unknown> = Object.create(null) as Record<
       string,
@@ -480,11 +334,11 @@ function cloneJsonNode(
     >;
     for (const key of Reflect.ownKeys(value)) {
       if (typeof key !== "string") {
-        throw new Error("Project document handoff cannot contain symbol keys.");
+        throw new Error("Project document cannot contain symbol keys.");
       }
       const descriptor = Object.getOwnPropertyDescriptor(value, key);
       if (!descriptor || !descriptor.enumerable || !("value" in descriptor)) {
-        throw new Error("Project document handoff cannot contain accessors.");
+        throw new Error("Project document cannot contain accessors.");
       }
       clone[key] = cloneJsonNode(descriptor.value, ancestors, budget, depth + 1);
     }
@@ -497,10 +351,10 @@ function cloneJsonNode(
 function ensureBoundedJson(value: unknown): void {
   const serialized = JSON.stringify(value);
   if (typeof serialized !== "string") {
-    throw new Error("Project document handoff is not JSON serializable.");
+    throw new Error("Project document is not JSON serializable.");
   }
   const size = new TextEncoder().encode(serialized).byteLength;
-  if (size > MAX_HANDOFF_JSON_BYTES) {
-    throw new Error("Project document handoff exceeds the 64 MiB limit.");
+  if (size > MAX_PROJECT_JSON_BYTES) {
+    throw new Error("Project document exceeds the 64 MiB limit.");
   }
 }

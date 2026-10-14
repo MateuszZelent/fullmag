@@ -127,6 +127,6 @@ Frontend source owner: `apps/control-room/src/modules/inspector/panels/stages/Au
 ## Source-code index
 | Claim | Path | Stable symbol | Responsibility | Evidence |
 |---|---|---|---|---|
-| SaveField constructor, validation, lowering | `packages/fullmag-py/src/fullmag/model/outputs.py` | `class SaveField` | Canonical Python API behavior | Ownership test and source-map validator |
+| SaveField constructor, validation, lowering | [`packages/fullmag-py/src/fullmag/model/outputs.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/outputs.py#L79) | [`class SaveField`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/outputs.py#L79) | Canonical Python API behavior | Ownership test and source-map validator |
 
-| SaveScalar constructor, validation, lowering | `packages/fullmag-py/src/fullmag/model/outputs.py` | `class SaveScalar` | Canonical scalar-output API behavior | Ownership test and source-map validator |
+| SaveScalar constructor, validation, lowering | [`packages/fullmag-py/src/fullmag/model/outputs.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/outputs.py#L100) | [`class SaveScalar`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/outputs.py#L100) | Canonical scalar-output API behavior | Ownership test and source-map validator |

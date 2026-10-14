@@ -2,7 +2,18 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 
 import { describe, expect, it } from "vitest";
-import { createSourceFile, forEachChild, isCallExpression, isExportDeclaration, isImportDeclaration, isStringLiteral, ScriptKind, ScriptTarget, SyntaxKind } from "typescript-legacy-compiler";
+import {
+  createSourceFile,
+  forEachChild,
+  isCallExpression,
+  isExportDeclaration,
+  isImportDeclaration,
+  isStringLiteral,
+  ScriptKind,
+  ScriptTarget,
+  SyntaxKind,
+} from "@typescript/typescript6";
+import type { Node } from "@typescript/typescript6";
 
 const appSourceRoot = resolve(process.cwd(), "src");
 const sharedRoots = [
@@ -46,7 +57,7 @@ function sourceFiles(root: string): string[] {
 function moduleImportSpecifiers(fileName: string, source: string): string[] {
   const sourceFile = createSourceFile(fileName, source, ScriptTarget.Latest, true, fileName.endsWith(".tsx") ? ScriptKind.TSX : ScriptKind.TS);
   const specifiers: string[] = [];
-  const visit = (node: import("typescript-legacy-compiler").Node) => {
+  const visit = (node: Node) => {
     const specifier = isImportDeclaration(node) || isExportDeclaration(node)
       ? node.moduleSpecifier
       : isCallExpression(node) && node.expression.kind === SyntaxKind.ImportKeyword

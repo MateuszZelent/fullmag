@@ -157,12 +157,12 @@ Imported `hex8` preservation does not establish hex assembly, a qualified transi
 
 | Path | Stable symbol | Responsibility |
 | --- | --- | --- |
-| `packages/fullmag-py/src/fullmag/world.py` | `thin_film` | Public prismatic authoring and lowering |
-| `packages/fullmag-py/src/fullmag/model/discretization.py` | `class PerObjectMeshRecipe` | Lowered recipe validation and IR |
-| `packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py` | `class MeshData` | Canonical typed variable-arity CSR |
-| `packages/fullmag-py/src/fullmag/meshing/_gmsh_extraction.py` | `_MESHIO_VOLUME_TYPES` | Canonical volume families |
-| `packages/fullmag-py/src/fullmag/meshing/_gmsh_extraction.py` | `_CELL_LOCAL_FACETS` | Typed local facets |
-| `packages/fullmag-py/tests/test_mixed_element_meshing.py` | `test_mesh_data_accepts_canonical_mixed_typed_csr` | No coercion regression |
+| [`packages/fullmag-py/src/fullmag/world.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/world.py#L2149) | [`thin_film`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/world.py#L2149) | Public prismatic authoring and lowering |
+| [`packages/fullmag-py/src/fullmag/model/discretization.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/discretization.py#L679) | [`class PerObjectMeshRecipe`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/discretization.py#L679) | Lowered recipe validation and IR |
+| [`packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py#L1357) | [`class MeshData`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py#L1357) | Canonical typed variable-arity CSR |
+| [`packages/fullmag-py/src/fullmag/meshing/_gmsh_extraction.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/_gmsh_extraction.py#L466) | [`_MESHIO_VOLUME_TYPES`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/_gmsh_extraction.py#L466) | Canonical volume families |
+| [`packages/fullmag-py/src/fullmag/meshing/_gmsh_extraction.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/_gmsh_extraction.py#L474) | [`_CELL_LOCAL_FACETS`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/_gmsh_extraction.py#L474) | Typed local facets |
+| [`packages/fullmag-py/tests/test_mixed_element_meshing.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/tests/test_mixed_element_meshing.py#L3515) | [`test_mesh_data_accepts_canonical_mixed_typed_csr`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/tests/test_mixed_element_meshing.py#L3515) | No coercion regression |
 
 ## Scope and purpose
 

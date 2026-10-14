@@ -53,28 +53,6 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
             "/v2/platform/runtime-service",
             get(handlers::platform::runtime_service::get_runtime_service),
         )
-        .route(
-            "/v2/platform/development-backend",
-            get(handlers::platform::development_backend::get_development_backend),
-        )
-        .route(
-            "/v2/platform/development-backend/build-requests",
-            post(handlers::platform::development_backend_build_request::post_development_backend_build_request)
-                .layer(axum::extract::DefaultBodyLimit::max(8 * 1024)),
-        )
-        .route(
-            "/v2/platform/development-backend/build-requests/:request_id",
-            get(handlers::platform::development_backend_build_request::get_development_backend_build_request),
-        )
-        .route(
-            "/v2/platform/development-restart-requests",
-            post(handlers::platform::development_restart_request::post_development_restart_request)
-                .layer(axum::extract::DefaultBodyLimit::max(32 * 1024 * 1024)),
-        )
-        .route(
-            "/v2/platform/development-restart-requests/:request_id",
-            get(handlers::platform::development_restart_request::get_development_restart_request),
-        )
         .route("/v2", get(get_v2_index))
         .route("/v2/", get(get_v2_index))
         .route("/v2/platform/openapi.json", get(get_openapi_json))

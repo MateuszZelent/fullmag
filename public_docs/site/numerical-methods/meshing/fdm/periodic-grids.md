@@ -116,12 +116,12 @@ Finite images require convergence and are not an Ewald implementation. The defau
 
 | Source | Stable symbol | Evidence |
 | --- | --- | --- |
-| `packages/fullmag-py/src/fullmag/world.py` | `class StudyBuilder` | public `fdm(...)` and `pbc(...)` application routes |
-| `packages/fullmag-py/src/fullmag/model/problem.py` | `class FdmPbc` | policy validation and IR |
-| `crates/fullmag-ir/src/execution.rs` | `resolve_demag_boundary` | default/resolved image counts and image-term budget |
-| `crates/fullmag-ir/src/execution.rs` | `resolve_periodic_images` | periodic padding and workspace accounting |
-| `crates/fullmag-runner/src/fdm/mod.rs` | `resolve_fdm_demag_boundary_for_periodicity` | runtime policy resolution |
-| `crates/fullmag-engine/src/fdm/cpu/fft.rs` | `compute_periodic_newell_kernel_spectra` | CPU periodic spectra |
+| [`packages/fullmag-py/src/fullmag/world.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/world.py#L5775) | [`class StudyBuilder`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/world.py#L5775) | public `fdm(...)` and `pbc(...)` application routes |
+| [`packages/fullmag-py/src/fullmag/model/problem.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/problem.py#L208) | [`class FdmPbc`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/problem.py#L208) | policy validation and IR |
+| [`crates/fullmag-ir/src/execution.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-ir/src/execution.rs#L289) | [`resolve_demag_boundary`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-ir/src/execution.rs#L289) | default/resolved image counts and image-term budget |
+| [`crates/fullmag-ir/src/execution.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-ir/src/execution.rs#L341) | [`resolve_periodic_images`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-ir/src/execution.rs#L341) | periodic padding and workspace accounting |
+| [`crates/fullmag-runner/src/fdm/mod.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-runner/src/fdm/mod.rs#L90) | [`resolve_fdm_demag_boundary_for_periodicity`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-runner/src/fdm/mod.rs#L90) | runtime policy resolution |
+| [`crates/fullmag-engine/src/fdm/cpu/fft.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-engine/src/fdm/cpu/fft.rs#L676) | [`compute_periodic_newell_kernel_spectra`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-engine/src/fdm/cpu/fft.rs#L676) | CPU periodic spectra |
 
 ## Scope and purpose
 

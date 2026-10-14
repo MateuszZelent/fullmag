@@ -8,12 +8,12 @@ const kernelProviderSource = readFileSync(
 ).replace(/\r\n/g, "\n");
 
 describe("KernelProvider performance contracts", () => {
-  it("preserves the kernel host across Fast Refresh through lazy state ownership", () => {
+  it("preserves the kernel across Fast Refresh through lazy state ownership", () => {
     expect(kernelProviderSource).toContain(
-      "const [host] = useState(() => new DevelopmentKernelHost(createKernel));",
+      "const [kernel] = useState(() => createKernel());",
     );
     expect(kernelProviderSource).not.toContain(
-      "useMemo(() => new DevelopmentKernelHost(createKernel)",
+      "DevelopmentKernelHost",
     );
   });
 
@@ -25,7 +25,7 @@ describe("KernelProvider performance contracts", () => {
       "resourceData: runtimeResourceDataRef.current",
     );
     expect(kernelProviderSource).toContain(
-      "}, [kernel, sessionScopeKey, startupVisible, paused]);",
+      "}, [kernel, sessionScopeKey, startupVisible]);",
     );
     expect(kernelProviderSource).not.toContain(
       "}, [kernel, runtimeResourceData, startupVisible]);",
@@ -64,7 +64,7 @@ describe("KernelProvider performance contracts", () => {
       "const expectedSessionId = sessionIdentity?.sessionId ?? null;",
     );
     expect(kernelProviderSource).toContain(
-      "}, [kernel, sessionScopeKey, expectedRequestScopeEpoch, expectedSessionId, paused]);",
+      "}, [kernel, sessionScopeKey, expectedRequestScopeEpoch, expectedSessionId]);",
     );
   });
 

@@ -220,5 +220,5 @@ Use the scientific bibliography and source-code index on the linked terminal pag
 
 | Repository path | Stable symbol | Responsibility |
 |---|---|---|
-| `packages/fullmag-py/src/fullmag/model/energy.py` | `class Demag` | Validation target selection. |
-| `backends/fem/cpu/mfem/interactions/demag.cpp` | `compute_demag_field_for_magnetization` | FEM production field path used by validation. |
+| [`packages/fullmag-py/src/fullmag/model/energy.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/energy.py#L51) | [`class Demag`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/energy.py#L51) | Validation target selection. |
+| [`backends/fem/cpu/mfem/interactions/demag.cpp`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/cpu/mfem/interactions/demag.cpp#L164) | [`compute_demag_field_for_magnetization`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/cpu/mfem/interactions/demag.cpp#L164) | FEM production field path used by validation. |

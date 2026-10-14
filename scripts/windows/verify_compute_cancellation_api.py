@@ -40,10 +40,33 @@ def _persist_evidence(path: Path, evidence: dict) -> None:
     storage.atomic_json(path, evidence)
 
 
+def _valid_api_instance_id(value: object) -> bool:
+    try:
+        parsed = uuid.UUID(value)
+    except (TypeError, ValueError, AttributeError):
+        return False
+    return parsed.int != 0 and str(parsed) == value
+
+
+def _valid_platform_health(body: object) -> bool:
+    return (
+        isinstance(body, dict)
+        and set(body) == {"status", "uptime_seconds", "api_contract_version", "active_session"}
+        and body.get("status") == "ok"
+        and type(body.get("uptime_seconds")) is int
+        and body["uptime_seconds"] >= 0
+        and body.get("api_contract_version") == "1.0.0"
+        and type(body.get("active_session")) is bool
+    )
+
+
 def _http_json(port: int, path: str, evidence: dict, evidence_path: Path,
                *, method: str = "GET", payload: dict | None = None) -> tuple[int, object]:
     body = json.dumps(payload).encode("utf-8") if payload is not None else None
     headers = {"Content-Type": "application/json"} if body is not None else {}
+    expected_instance_id = evidence.get("api_instance_id")
+    if expected_instance_id is not None:
+        headers["x-fullmag-api-instance"] = expected_instance_id
     request = urllib.request.Request(
         f"http://127.0.0.1:{port}{path}",
         method=method,
@@ -51,18 +74,23 @@ def _http_json(port: int, path: str, evidence: dict, evidence_path: Path,
         data=body,
     )
     record = {"method": method, "path": path, "request": payload}
+    response_instance_id = None
     try:
         try:
             with urllib.request.urlopen(request, timeout=HTTP_TIMEOUT_SECONDS) as response:
                 raw = response.read(HTTP_BODY_LIMIT_BYTES + 1)
                 status = response.status
+                response_instance_id = response.headers.get("x-fullmag-api-instance")
         except urllib.error.HTTPError as error:
             raw = error.read(HTTP_BODY_LIMIT_BYTES + 1)
             status = error.code
+            response_instance_id = error.headers.get("x-fullmag-api-instance")
         if len(raw) > HTTP_BODY_LIMIT_BYTES:
             raise RuntimeError(f"HTTP response exceeded {HTTP_BODY_LIMIT_BYTES} bytes")
         result = json.loads(raw.decode("utf-8")) if raw else None
-        record.update(status=status, response=result)
+        record.update(status=status, response=result, api_instance_id=response_instance_id)
+        if expected_instance_id is not None and response_instance_id != expected_instance_id:
+            raise RuntimeError("HTTP response has a different API instance pin")
         return status, result
     except Exception as error:
         record["transport_error"] = f"{type(error).__name__}: {error}"
@@ -426,7 +454,7 @@ def exercise(api: Path, repo: Path, run_root: Path, receipt: dict) -> None:
                 "waited": False,
             }
             receipt["processes"].append(process_record)
-            health_path = "/v2/platform/development-backend"
+            health_path = "/v2/platform/health"
             deadline = time.monotonic() + 20
             while True:
                 if child.poll() is not None:
@@ -438,7 +466,9 @@ def exercise(api: Path, repo: Path, run_root: Path, receipt: dict) -> None:
                     with urllib.request.urlopen(
                         health_request, timeout=HTTP_TIMEOUT_SECONDS
                     ) as response:
-                        if response.status == 200:
+                        instance_id = response.headers.get("x-fullmag-api-instance")
+                        if response.status == 200 and _valid_api_instance_id(instance_id):
+                            evidence["api_instance_id"] = instance_id
                             break
                 except (OSError, urllib.error.URLError):
                     if time.monotonic() >= deadline:
@@ -449,12 +479,14 @@ def exercise(api: Path, repo: Path, run_root: Path, receipt: dict) -> None:
             status, health = _http_json(port, health_path, evidence, evidence_path)
             _check(
                 "owned-api-ready",
-                status == 200 and isinstance(health, dict),
+                status == 200 and _valid_platform_health(health)
+                and _valid_api_instance_id(evidence.get("api_instance_id")),
                 evidence,
                 evidence_path,
                 receipt,
                 {"status": status, "body": health},
             )
+            process_record["api_instance_id"] = evidence["api_instance_id"]
 
             base = f"/v2/persistence/projects/{project_id}/runs/{run_id}"
             status, before = _http_json(port, base, evidence, evidence_path)

@@ -70,6 +70,10 @@ SOURCE_PATHS = (
     "scripts/verify_development_backend_api.py",
     "scripts/test_windows_development_fixture_publication.py",
     "scripts/fullmag_storage.py",
+    "scripts/frontend_source_workspace.py",
+    "scripts/test_frontend_source_workspace.py",
+    "scripts/windows/stage_workspace_frontend.py",
+    "scripts/capture_source_snapshot_identity.py",
     "scripts/test_fullmag_storage.py",
     "scripts/test_bootstrap_workflow_contract.py",
     ".github/workflows/bootstrap.yml",
@@ -81,7 +85,6 @@ SOURCE_PATHS = (
     "scripts/test_windows_compiler_inputs.py",
     "scripts/test_windows_development_compiler_inputs.py",
     "scripts/windows/development_status.py",
-    "scripts/windows/watch_backend.py",
     "scripts/windows/workspace_backend_identity.py",
     "scripts/windows/runtime_lease.py",
     "scripts/windows/recover_runtime.py",
@@ -110,7 +113,8 @@ def source_identity(repo: Path) -> str:
 
 def run(repo_root: str, suite: str = "handoff") -> int:
     patterns = {"handoff": "test_*development_*.py", "storage": "test_fullmag_storage.py",
-                "bootstrap": "test_bootstrap_workflow_contract.py"}
+                "bootstrap": "test_bootstrap_workflow_contract.py",
+                "frontend-workspace": "test_frontend_source_workspace.py"}
     if suite not in patterns:
         raise storage.StorageError("Unknown interpreted check suite")
     layout = storage.resolve_layout(repo_root, "development-handoff-checks")
@@ -192,7 +196,7 @@ def run(repo_root: str, suite: str = "handoff") -> int:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo-root", required=True)
-    parser.add_argument("--suite", choices=("handoff", "storage", "bootstrap"), default="handoff")
+    parser.add_argument("--suite", choices=("handoff", "storage", "bootstrap", "frontend-workspace"), default="handoff")
     args = parser.parse_args()
     try:
         return run(args.repo_root, args.suite)

@@ -479,10 +479,12 @@ function normalizeSha256Fingerprint(value: string): string | null {
 export async function sha256HexBytes(payload: Uint8Array): Promise<string> {
   const subtle = globalThis.crypto?.subtle;
   if (!subtle) return sha256FallbackHex(payload);
-  const digestBytes = payload.buffer instanceof ArrayBuffer
+  // WebCrypto accepts ArrayBuffer views, not SharedArrayBuffer views. Keep
+  // ordinary payloads zero-copy and preserve the exact subview boundaries.
+  const input = payload.buffer instanceof ArrayBuffer
     ? new Uint8Array(payload.buffer, payload.byteOffset, payload.byteLength)
     : new Uint8Array(payload);
-  const digest = await subtle.digest("SHA-256", digestBytes);
+  const digest = await subtle.digest("SHA-256", input);
   return [...new Uint8Array(digest)]
     .map((value) => value.toString(16).padStart(2, "0"))
     .join("");

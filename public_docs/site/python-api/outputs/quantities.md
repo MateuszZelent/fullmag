@@ -130,10 +130,10 @@ Frontend source owner: `apps/control-room/src/modules/inspector/panels/stages/Au
 ## Source-code index
 | Claim | Path | Stable symbol | Responsibility | Evidence |
 |---|---|---|---|---|
-| Quantity output | `packages/fullmag-py/src/fullmag/model/outputs.py` | `class SaveQuantity` | Id-driven output | Ownership test |
+| Quantity output | [`packages/fullmag-py/src/fullmag/model/outputs.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/outputs.py#L389) | [`class SaveQuantity`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/outputs.py#L389) | Id-driven output | Ownership test |
 
 ### Source-map coverage
 
 | Claim | Path | Stable symbol | Responsibility | Evidence |
 |---|---|---|---|---|
-| Generic quantity output validation and lowering. | `packages/fullmag-py/src/fullmag/model/outputs.py` | `class SaveQuantity` | Generic quantity output validation and lowering. | Source-map validator and focused API tests |
+| Generic quantity output validation and lowering. | [`packages/fullmag-py/src/fullmag/model/outputs.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/outputs.py#L389) | [`class SaveQuantity`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/outputs.py#L389) | Generic quantity output validation and lowering. | Source-map validator and focused API tests |

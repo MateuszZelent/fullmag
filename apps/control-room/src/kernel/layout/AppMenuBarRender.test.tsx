@@ -71,6 +71,17 @@ describe("AppMenuBar", () => {
     );
   });
 
+  it("mounts the on-demand readiness helper trigger next to Local API instead of permanently in the ribbon", () => {
+    const source = readFileSync(appMenuBarSourceUrl, "utf8");
+    const ribbonSource = readFileSync(
+      new URL("../../modules/ribbon/RibbonModule.tsx", import.meta.url),
+      "utf8",
+    );
+
+    expect(source).toContain("<ReadinessHelperHeaderControl");
+    expect(ribbonSource).not.toContain("<ScratchAuthoringGuide");
+  });
+
   it("derives the header title and runtime badge from session status", () => {
     expect(
       resolveHeaderSessionDisplay({

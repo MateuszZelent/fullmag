@@ -210,14 +210,6 @@ windows-backend-dev web_port="3197":
 verify-windows-development-handoff:
     @{{storage_python}} "{{repo_root}}/scripts/verify_development_handoff.py" --repo-root "{{repo_root}}"
 
-# Observe the development resource in an owned empty API; no unit compilation.
-verify-windows-development-backend-api cross_build_bundle="":
-    @{{storage_python}} "{{repo_root}}/scripts/verify_development_backend_api.py" --repo-root "{{repo_root}}" --cross-build-bundle "{{cross_build_bundle}}"
-
-# Explicit frozen native package gate, pinned to the completed manifest digest.
-verify-windows-frozen-development-backend-api build_id:
-    @{{storage_python}} "{{repo_root}}/scripts/verify_development_backend_api.py" --repo-root "{{repo_root}}" --frozen-native-build-id "{{build_id}}"
-
 # Owned HTTP cancellation protocol proof, pinned to a verified native package.
 # Uses fixture-seeded task catalogs; does not qualify Submit, solver, or host release.
 verify-compute-cancellation-api build_id:
@@ -259,17 +251,9 @@ verify-windows-development-active-run-paused-refusal owner_bundle:
 verify-windows-development-start-freeze-race:
     @{{storage_python}} "{{repo_root}}/scripts/verify_development_backend_api.py" --repo-root "{{repo_root}}" --start-freeze-race-only
 
-# Owned native restart with a real nonempty browser workspace and unsaved draft.
-verify-windows-development-workspace-browser owner_bundle:
-    @{{storage_python}} "{{repo_root}}/scripts/verify_development_backend_api.py" --repo-root "{{repo_root}}" --workspace-browser-owner-bundle "{{owner_bundle}}"
-
 # Real candidate helper faults in owned processes; no API or unit compilation.
 verify-windows-candidate-preparation:
     @{{storage_python}} "{{repo_root}}/scripts/verify_development_backend_api.py" --repo-root "{{repo_root}}" --candidate-preparation-only
-
-# Native request transport proof; no unit-test compilation or user-session restart.
-verify-windows-development-restart-transport:
-    @{{storage_python}} "{{repo_root}}/scripts/verify_development_backend_api.py" --repo-root "{{repo_root}}" --restart-transport-only
 
 # Observe actual runtime-free project archives without compiling unit tests.
 verify-windows-project-document:
@@ -530,32 +514,8 @@ verify-control-room-openapi-import:
 check-control-room-api-hygiene dependency_workspace="":
     {{storage_python}} "{{repo_root}}/scripts/verify_control_room_sources.py" --route api-hygiene --repo-root "{{repo_root}}" {{if dependency_workspace != "" { "--dependency-workspace \"" + dependency_workspace + "\"" } else { "" }}}
 
-verify-control-room-development-restart:
-    {{storage_python}} "{{repo_root}}/scripts/verify_control_room_sources.py" --route development-restart-check --repo-root "{{repo_root}}"
-
 verify-control-room-resource-client-cache:
     {{storage_python}} "{{repo_root}}/scripts/verify_control_room_sources.py" --route resource-client-cache-check --repo-root "{{repo_root}}"
-
-verify-control-room-development-kernel-host:
-    {{storage_python}} "{{repo_root}}/scripts/verify_control_room_sources.py" --route development-kernel-host-check --repo-root "{{repo_root}}"
-
-verify-control-room-development-transport-pause:
-    {{storage_python}} "{{repo_root}}/scripts/verify_control_room_sources.py" --route development-transport-pause-check --repo-root "{{repo_root}}"
-
-verify-control-room-development-run-outcome-handoff:
-    {{storage_python}} "{{repo_root}}/scripts/verify_control_room_sources.py" --route development-run-outcome-handoff-check --repo-root "{{repo_root}}"
-
-lint-control-room-development-run-outcome-handoff:
-    {{storage_python}} "{{repo_root}}/scripts/verify_control_room_sources.py" --route development-run-outcome-handoff-lint --repo-root "{{repo_root}}"
-
-verify-control-room-development-restart-action:
-    {{storage_python}} "{{repo_root}}/scripts/verify_control_room_sources.py" --route development-restart-action-check --repo-root "{{repo_root}}"
-
-lint-control-room-development-restart-action:
-    {{storage_python}} "{{repo_root}}/scripts/verify_control_room_sources.py" --route development-restart-action-lint --repo-root "{{repo_root}}"
-
-verify-control-room-development-backend-build-action:
-    {{storage_python}} "{{repo_root}}/scripts/verify_control_room_sources.py" --route development-backend-build-action-check --repo-root "{{repo_root}}"
 
 # Actual browser interaction on an isolated managed frontend source snapshot.
 # Responses are fixtures; this is neither a backend runtime nor a solver gate.
@@ -565,19 +525,6 @@ verify-pinned-dataset-browser:
 # Full Inspector CI smoke against controlled HTTP in an isolated workspace.
 verify-inspector-routing-browser:
     {{storage_python}} "{{repo_root}}/scripts/verify_pinned_dataset_browser.py" --repo-root "{{repo_root}}" --port 3261 --scenario inspector-routing
-
-# Production project controller in an isolated Next browser fixture; no unit builds.
-verify-project-document-handoff-browser:
-    {{storage_python}} "{{repo_root}}/scripts/verify_pinned_dataset_browser.py" --repo-root "{{repo_root}}" --port 3251 --scenario project-document-handoff
-
-verify-development-kernel-host-browser:
-    {{storage_python}} "{{repo_root}}/scripts/verify_pinned_dataset_browser.py" --repo-root "{{repo_root}}" --port 3252 --scenario development-kernel-host
-
-verify-development-run-outcome-handoff-browser:
-    {{storage_python}} "{{repo_root}}/scripts/verify_pinned_dataset_browser.py" --repo-root "{{repo_root}}" --port 3253 --scenario development-run-outcome-handoff
-
-verify-development-restart-action-browser:
-    {{storage_python}} "{{repo_root}}/scripts/verify_pinned_dataset_browser.py" --repo-root "{{repo_root}}" --port 3254 --scenario development-restart-action
 
 # Real Study profile component/facade against controlled HTTP; no solver gate.
 verify-study-execution-profile-browser:

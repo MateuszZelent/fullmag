@@ -2,7 +2,6 @@
 from contextlib import contextmanager
 import json
 import hashlib
-import os
 from pathlib import Path
 
 import pytest
@@ -81,7 +80,8 @@ def test_build_lock_released_only_after_validated_handshake(layout, monkeypatch)
     assert status["state"] == "completed"
     assert status["build_lease"] == "released_after_sealing"
     assert status["launcher_waited"] is True
-    assert status["watcher_waited"] is True
+    assert "watcher_pid" not in status
+    assert "watcher_waited" not in status
     assert lease._is_terminal_runtime_receipt(status)
 
 
@@ -112,54 +112,6 @@ def test_active_dependency_change_is_rejected_before_build(layout, monkeypatch):
         lease.assert_frozen_dependencies(layout, active)
     monkeypatch.setattr(lease, "fingerprint", lambda *args: {"sha256": "old"})
     assert lease.assert_frozen_dependencies(layout, active) == "old"
-
-
-def test_dev_starts_owned_watcher_after_sealing_and_requests_stop_on_exit(layout, monkeypatch):
-    events = []
-    class Child:
-        pid = 12
-        def __init__(self, command, cwd, env, **stdio):
-            self.is_watcher = "--stop-file" in command
-            if self.is_watcher:
-                assert "FULLMAG_NATIVE_RUNTIME_ACTIVE" not in env
-                assert stdio["stdin"] == lease.subprocess.DEVNULL
-                assert stdio["stderr"] == lease.subprocess.STDOUT
-                log = stdio["stdout"]
-                assert Path(log.name).parent == Path(layout["runtime_root"]) / "logs"
-                assert Path(log.name).name.startswith("backend-watch-")
-                log.write(b"isolated backend consumer output\n")
-                log.flush()
-                events.append("watcher")
-                self.pid = 13
-                self.stop = Path(command[command.index("--stop-file") + 1])
-            else:
-                Path(env["FULLMAG_NATIVE_RUNTIME_READY_FILE"]).write_text(json.dumps({
-                    "schema": "fullmag.native-runtime-ready.v2", "nonce": env["FULLMAG_NATIVE_RUNTIME_NONCE"],
-                    "launcher_pid": self.pid, "launch_root": str(Path(layout["runtime_root"]) / "native-launch/dev"), "bundle_root": "fixture"}))
-        def poll(self):
-            return None
-        def wait(self):
-            if self.is_watcher:
-                assert self.stop.exists()
-                events.append("watcher drained")
-            else:
-                events.append("ui exited")
-            return 0
-    real_atomic_json = lease.atomic_json
-    def record_stop(path, value):
-        if Path(path).name.startswith("native-watch-stop-"):
-            events.append("stop requested")
-        return real_atomic_json(path, value)
-    monkeypatch.setattr(lease, "atomic_json", record_stop)
-    monkeypatch.setattr(lease.subprocess, "Popen", Child)
-    monkeypatch.setattr(lease, "validate_bundle", lambda *args: ({"source": {"backend_source_sha256": "a" * 64}}, {}))
-    assert lease.run_sealed_runtime(layout, ["stub", "-Frontend", "dev", "-WebPort", "3197"], {}, "dev") == 0
-    assert events == ["watcher", "ui exited", "stop requested", "watcher drained"]
-    receipt = json.loads((Path(layout["runtime_root"]) / "native-workspace-status.json").read_text())
-    assert Path(receipt["watcher_log"]).read_bytes() == b"isolated backend consumer output\n"
-    stops = list(Path(layout["runtime_root"]).glob("native-watch-stop-*.json"))
-    assert len(stops) == 1
-    assert json.loads(stops[0].read_text())["schema"] == "fullmag.native-watch-stop.v1"
 
 
 def test_live_manager_in_nonrunning_state_fails_closed_for_new_build(layout, monkeypatch):
@@ -202,7 +154,7 @@ def test_nonterminal_owner_record_blocks_relaunch_before_any_spawn(layout, monke
     assert status.read_bytes() == before
 
 
-def test_incomplete_terminal_receipt_is_not_treated_as_quiescent(layout, monkeypatch):
+def test_legacy_incomplete_terminal_receipt_is_not_treated_as_quiescent(layout, monkeypatch):
     status = Path(layout["runtime_root"]) / "native-workspace-status.json"
     status.write_text(json.dumps({
         "state": "completed", "pid": 12, "manager_pid": 12, "launcher_pid": 13,
@@ -215,7 +167,7 @@ def test_incomplete_terminal_receipt_is_not_treated_as_quiescent(layout, monkeyp
         lease.active_runtime(layout)
 
 
-def test_terminal_receipt_requires_successful_watcher_exit():
+def test_legacy_terminal_receipt_requires_successful_watcher_exit():
     receipt = {
         "state": "completed", "manager_pid": 10, "launcher_pid": 11,
         "launcher_waited": True, "watcher_waited": True, "watcher_pid": 12,
@@ -223,49 +175,6 @@ def test_terminal_receipt_requires_successful_watcher_exit():
     }
 
     assert not lease._is_terminal_runtime_receipt(receipt)
-
-
-def test_nonzero_watcher_exit_keeps_runtime_unknown(layout, monkeypatch):
-    class Child:
-        pid = 12
-
-        def __init__(self, command, cwd, env, **stdio):
-            self.is_watcher = "--stop-file" in command
-            if self.is_watcher:
-                self.pid = 13
-                self.stop = Path(command[command.index("--stop-file") + 1])
-            else:
-                Path(env["FULLMAG_NATIVE_RUNTIME_READY_FILE"]).write_text(json.dumps({
-                    "schema": "fullmag.native-runtime-ready.v2",
-                    "nonce": env["FULLMAG_NATIVE_RUNTIME_NONCE"],
-                    "launcher_pid": self.pid,
-                    "launch_root": str(Path(layout["runtime_root"]) / "native-launch/dev"), "bundle_root": "fixture",
-                }))
-
-        def poll(self):
-            return None
-
-        def wait(self):
-            if self.is_watcher:
-                assert self.stop.exists()
-                return 130
-            return 0
-
-    monkeypatch.setattr(lease.subprocess, "Popen", Child)
-    monkeypatch.setattr(lease, "validate_bundle", lambda *args: (
-        {"source": {"backend_source_sha256": "a" * 64}}, {}))
-    monkeypatch.setattr(lease, "assert_no_independent_service", lambda *args, **kwargs: None)
-
-    with pytest.raises(StorageError, match="watcher.*exit code 130"):
-        lease.run_sealed_runtime(
-            layout, ["stub", "-Frontend", "dev", "-WebPort", "3197"], {}, "dev")
-
-    status = json.loads((Path(layout["runtime_root"]) / "native-workspace-status.json").read_text())
-    assert status["state"] == "unknown"
-    assert status["watcher_pid"] == 13
-    assert status["watcher_exit_code"] == 130
-    assert status["watcher_waited"] is True
-    assert not lease._is_terminal_runtime_receipt(status)
 
 
 def test_no_independent_service_passes_when_canonical_owner_files_are_absent(layout):
@@ -459,44 +368,3 @@ def test_malformed_unhashable_runtime_state_fails_closed(layout):
 
     with pytest.raises(StorageError, match="not a verified terminal receipt"):
         lease.active_runtime(layout)
-
-
-def test_controlled_exception_persists_unknown_owner_and_drains_watcher(layout, monkeypatch):
-    events = []
-
-    class Child:
-        pid = 12
-        def __init__(self, command, cwd, env, **stdio):
-            self.is_watcher = "--stop-file" in command
-            if self.is_watcher:
-                self.pid = 13
-                self.stop = Path(command[command.index("--stop-file") + 1])
-            else:
-                Path(env["FULLMAG_NATIVE_RUNTIME_READY_FILE"]).write_text(json.dumps({
-                    "schema": "fullmag.native-runtime-ready.v2", "nonce": env["FULLMAG_NATIVE_RUNTIME_NONCE"],
-                    "launcher_pid": self.pid, "launch_root": str(Path(layout["runtime_root"]) / "native-launch/dev"), "bundle_root": "fixture"}))
-
-        def poll(self):
-            return None
-
-        def wait(self):
-            if self.is_watcher:
-                assert self.stop.exists()
-                events.append("watcher drained")
-                return 0
-            raise RuntimeError("launcher observation interrupted")
-
-    monkeypatch.setattr(lease.subprocess, "Popen", Child)
-    monkeypatch.setattr(lease, "validate_bundle", lambda *args: ({"source": {"backend_source_sha256": "a" * 64}}, {}))
-
-    with pytest.raises(RuntimeError, match="observation interrupted"):
-        lease.run_sealed_runtime(layout, ["stub", "-Frontend", "dev", "-WebPort", "3197"], {}, "dev")
-
-    status = json.loads((Path(layout["runtime_root"]) / "native-workspace-status.json").read_text())
-    assert status["state"] == "unknown"
-    assert status["manager_pid"] == os.getpid()
-    assert status["launcher_pid"] == 12
-    assert status["watcher_pid"] == 13
-    assert status["watcher_waited"] is True
-    assert not lease._is_terminal_runtime_receipt(status)
-    assert events == ["watcher drained"]

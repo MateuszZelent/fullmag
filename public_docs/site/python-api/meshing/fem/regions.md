@@ -163,4 +163,4 @@ Focused constructor, lowering, and mesh-report tests are the evidence boundary f
 
 | Claim | Path | Stable symbol | Responsibility | Evidence |
 |---|---|---|---|---|
-| Region markers and typed mesh realization. | `packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py` | `class MeshData` | Region markers and typed mesh realization. | Source-map validator and focused API tests |
+| Region markers and typed mesh realization. | [`packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py#L1357) | [`class MeshData`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py#L1357) | Region markers and typed mesh realization. | Source-map validator and focused API tests |

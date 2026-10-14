@@ -36,10 +36,6 @@ SCENARIOS = {
     "inspector-routing": ("smoke-inspector.mjs", "fullmag_inspector_routing_browser_fixture_v1", None, "CONTROL_ROOM_INSPECTOR"),
     "antenna-cpw-viewport": ("smoke-antenna-cpw-viewport.mjs", "fullmag_antenna_cpw_viewport_browser_fixture_v1", "antenna-cpw-viewport", "FULLMAG_ANTENNA_CPW_VIEWPORT"),
     "pinned-dataset": ("smoke-pinned-materialized-dataset.mjs", "fullmag_pinned_dataset_browser_fixture_v1", None, "FULLMAG_PINNED_DATASET"),
-    "project-document-handoff": ("smoke-project-document-handoff.mjs", "fullmag_project_document_browser_fixture_v1", "project-document-handoff", "FULLMAG_PROJECT_DOCUMENT"),
-    "development-kernel-host": ("smoke-development-kernel-host.mjs", "fullmag_development_kernel_host_browser_fixture_v1", "development-kernel-host", "FULLMAG_PROJECT_DOCUMENT"),
-    "development-run-outcome-handoff": ("smoke-development-run-outcome-handoff.mjs", "fullmag_development_run_outcome_handoff_browser_fixture_v1", "development-run-outcome-handoff", "FULLMAG_DEVELOPMENT_RUN_OUTCOME"),
-    "development-restart-action": ("smoke-development-restart-action.mjs", "fullmag_development_restart_action_browser_fixture_v1", "development-restart-action", "FULLMAG_DEVELOPMENT_RESTART_ACTION"),
     "antenna-external-lead-inspection": ("smoke-antenna-external-lead-inspection.mjs", "fullmag_antenna_inspection_browser_fixture_v1", "antenna-external-lead-inspection", "FULLMAG_ANTENNA_INSPECTION"),
     "antenna-microstrip-stations": ("smoke-antenna-microstrip-stations.mjs", "fullmag_antenna_microstrip_stations_browser_fixture_v1", "antenna-microstrip-stations", "FULLMAG_ANTENNA_STATIONS"),
     "antenna-transport-drafts": ("smoke-antenna-transport-drafts.mjs", "fullmag_antenna_transport_drafts_browser_fixture_v1", "antenna-transport-drafts", "FULLMAG_ANTENNA_TRANSPORT"),
@@ -235,7 +231,7 @@ def run(repo: Path, port: int, scenario: str = "pinned-dataset"):
                 env[report_prefix + "_BROWSER_CHANNEL"] = BROWSER_CHANNEL
             if fixture_route:
                 env["CONTROL_ROOM_URL"] = f"http://127.0.0.1:{port}/{fixture_route}"
-                if scenario in {"development-kernel-host", "development-restart-action", "execution-profiles", "study-execution-profile", "inspector-actions", "explorer-physics-reporting"}:
+                if scenario in {"execution-profiles", "study-execution-profile", "inspector-actions", "explorer-physics-reporting"}:
                     env["CONTROL_ROOM_URL"] += "?fullmag_api_instance=11111111-1111-4111-8111-111111111111"
             receipt["source_view"] = str(fixture_app)
             receipt["dependency_root"] = str(real_dependencies)

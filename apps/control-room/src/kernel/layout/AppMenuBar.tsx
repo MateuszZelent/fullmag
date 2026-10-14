@@ -77,6 +77,7 @@ import { RegistryInspectorDialog } from "./RegistryInspectorDialog";
 import { DiagnosticRecorderDialog } from "./diagnostic-recorder/DiagnosticRecorderDialog";
 import { useHomeViewOpen } from "./homeView";
 import { NewProblemDialog, useNewProblemRequest } from "./NewProblemDialog";
+import { ReadinessHelperHeaderControl } from "./ReadinessHelperDialog";
 
 function subscribeToHydration(): () => void {
   return () => {};
@@ -710,6 +711,11 @@ function SessionAppMenuBar() {
           {sessionDisplay.sessionBadge}
         </span>
       </button>
+
+      <ReadinessHelperHeaderControl
+        commandContext={commandContext}
+        kernel={kernel}
+      />
 
       <ApiConnectionErrorDialog
         details={apiErrorDetails}

@@ -99,7 +99,7 @@ def run_probe(repo, fixture, env, prepared_result, old_api_instance_id, receipt,
                     raise capsule.HandoffError("Owned replacement API failed before readiness")
                 connection = http.client.HTTPConnection("127.0.0.1", port, timeout=1)
                 try:
-                    path = "/v2/sessions/current/model/scene" if envelope is not None else "/v2/platform/development-backend"
+                    path = "/v2/sessions/current/model/scene" if envelope is not None else "/v2/platform/health"
                     connection.request("GET", path)
                     response = connection.getresponse()
                     raw = response.read(capsule.MAX_SNAPSHOT_BYTES + 1)
@@ -116,6 +116,14 @@ def run_probe(repo, fixture, env, prepared_result, old_api_instance_id, receipt,
                 time.sleep(0.025)
             if observed is None:
                 raise capsule.HandoffError("Owned replacement API readiness outcome is unknown")
+            if envelope is None and (
+                    set(observed) != {"status", "uptime_seconds", "api_contract_version", "active_session"}
+                    or observed.get("status") != "ok"
+                    or type(observed.get("uptime_seconds")) is not int
+                    or observed["uptime_seconds"] < 0
+                    or observed.get("api_contract_version") != "1.0.0"
+                    or type(observed.get("active_session")) is not bool):
+                raise capsule.HandoffError("Replacement API health response is invalid")
             parsed_pin = uuid.UUID(pin)
             if not parsed_pin.int or str(parsed_pin) != pin or pin == old_api_instance_id:
                 raise capsule.HandoffError("Replacement API did not create a fresh canonical pin")
@@ -427,13 +435,24 @@ def complete_live_restore(host, control_port, owner_token, pin, http_port,
     connection = http.client.HTTPConnection("127.0.0.1", http_port, timeout=2)
     try:
         if prepared["envelope"] is None:
-            connection.request("GET", "/v2/platform/development-backend")
+            connection.request("GET", "/v2/platform/health")
         else:
             connection.request("PUT", "/v2/sessions/current/model/scene",
                                body=json.dumps(prepared["envelope"]["scene_document"]).encode(),
                                headers={"Content-Type": "application/json"})
         result = connection.getresponse()
-        result.read(capsule.MAX_SNAPSHOT_BYTES + 1)
+        raw = result.read(capsule.MAX_SNAPSHOT_BYTES + 1)
+        if len(raw) > capsule.MAX_SNAPSHOT_BYTES:
+            raise capsule.HandoffError("Live completion response exceeds its observation limit")
+        if prepared["envelope"] is None:
+            health = capsule._strict_json(raw, "live completion health response")
+            if (set(health) != {"status", "uptime_seconds", "api_contract_version", "active_session"}
+                    or health.get("status") != "ok"
+                    or type(health.get("uptime_seconds")) is not int
+                    or health["uptime_seconds"] < 0
+                    or health.get("api_contract_version") != "1.0.0"
+                    or type(health.get("active_session")) is not bool):
+                raise capsule.HandoffError("Live completion health response is invalid")
         if result.status != 200 or result.getheader("x-fullmag-api-instance") != pin:
             raise capsule.HandoffError("Live completion did not reopen pinned HTTP admission")
     finally:

@@ -146,9 +146,9 @@ The OCC path assigns periodic physical surfaces first, then adds remaining `gamm
 
 | Responsibility | Repository path | Stable symbol |
 | --- | --- | --- |
-| marker default | `packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py` | `class AirboxOptions` |
-| periodic marker allocation | `packages/fullmag-py/src/fullmag/meshing/_gmsh_occ.py` | `def _add_periodic_boundary_physical_groups` |
-| periodic exclusion | `packages/fullmag-py/src/fullmag/meshing/_gmsh_occ.py` | `def _configure_axis_periodic_surfaces` |
+| marker default | [`packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py#L655) | [`class AirboxOptions`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py#L655) |
+| periodic marker allocation | [`packages/fullmag-py/src/fullmag/meshing/_gmsh_occ.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/_gmsh_occ.py#L350) | `def [`_add_periodic_boundary_physical_groups`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/_gmsh_occ.py#L350)` |
+| periodic exclusion | [`packages/fullmag-py/src/fullmag/meshing/_gmsh_occ.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/_gmsh_occ.py#L210) | `def [`_configure_axis_periodic_surfaces`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/_gmsh_occ.py#L210)` |
 | demag authoring | `packages/fullmag-py/src/fullmag/world.py` | `def demag` |
 
 (airbox-boundary-closure-validation)=
@@ -171,12 +171,12 @@ The marker default is not a global uniqueness proof and no public coefficient AP
 
 | Claim | Repository path | Stable symbol | Evidence |
 | --- | --- | --- | --- |
-| marker default | `packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py` | `class AirboxOptions` | source-backed |
-| periodic groups | `packages/fullmag-py/src/fullmag/meshing/_gmsh_occ.py` | `def _add_periodic_boundary_physical_groups` | source-backed |
-| outer pairing | `packages/fullmag-py/src/fullmag/meshing/_gmsh_occ.py` | `def _configure_axis_periodic_surfaces` | source-backed |
-| canonical realization validation/lowering | `packages/fullmag-py/src/fullmag/model/energy.py` | `class Demag` | source-backed |
+| marker default | [`packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py#L655) | [`class AirboxOptions`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py#L655) | source-backed |
+| periodic groups | [`packages/fullmag-py/src/fullmag/meshing/_gmsh_occ.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/_gmsh_occ.py#L350) | `def [`_add_periodic_boundary_physical_groups`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/_gmsh_occ.py#L350)` | source-backed |
+| outer pairing | [`packages/fullmag-py/src/fullmag/meshing/_gmsh_occ.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/_gmsh_occ.py#L210) | `def [`_configure_axis_periodic_surfaces`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/_gmsh_occ.py#L210)` | source-backed |
+| canonical realization validation/lowering | [`packages/fullmag-py/src/fullmag/model/energy.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/energy.py#L51) | [`class Demag`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/energy.py#L51) | source-backed |
 | direct demag request | `packages/fullmag-py/src/fullmag/world.py` | `def demag` | source-backed module-level public entry point; the `StudyBuilder.demag` method delegates to it |
-| `packages/fullmag-py/src/fullmag/world.py` | `class StudyBuilder` | Public `StudyBuilder.demag` delegates to `world.demag`; world state owns enabled-state and resolved-realization lowering. |
+| [`packages/fullmag-py/src/fullmag/world.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/world.py#L5775) | [`class StudyBuilder`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/world.py#L5775) | Public `StudyBuilder.demag` delegates to `world.demag`; world state owns enabled-state and resolved-realization lowering. |
 
 ## Scope and purpose
 

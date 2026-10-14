@@ -59,7 +59,6 @@ import type { MeshSizeDistributionHoverBin } from "./MeshQualityChart";
 import { MeshQualityStatisticsView } from "./MeshQualityStatisticsView";
 import { emitMeshSizeHistogramHover } from "./meshSizeHistogramHover";
 import { MeshBuildHistorySection } from "./mesh-details/MeshBuildHistorySection";
-import { FemMeshReadinessGuideCard } from "./mesh-guide/FemMeshReadinessGuideCard";
 import {
   initialInspectorDraftState,
   resolveInspectorDraftState,
@@ -1357,11 +1356,6 @@ export function ObjectMeshPolicyPanel({ selection }: InspectorPanelProps) {
       <Tabs value={activeTab} className="fm-inspector-tabs">
 
         <TabsContent value="policy" className="fm-tabs-content">
-          <FemMeshReadinessGuideCard
-            compact
-            selectedObjectId={objectId}
-            selectedObjectPolicy={resource}
-          />
           <ObjectMeshOverrideSection draft={draft} updateDraft={updateDraft} />
           <ObjectMeshTransactionsSection
             buildLabel={isDirty ? "Apply & Build Object Mesh" : "Build Object Mesh"}

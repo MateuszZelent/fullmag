@@ -275,9 +275,9 @@ Use the scientific bibliography and source-code index on the linked terminal pag
 
 | Responsibility | Repository path | Stable symbol |
 |---|---|---|
-| Stage capture | `packages/fullmag-py/src/fullmag/world.py` | `study` |
+| Stage capture | [`packages/fullmag-py/src/fullmag/world.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/world.py#L6887) | [`study`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/world.py#L6887) |
 | Scalar autosave contract | `packages/fullmag-py/src/fullmag/model/study.py` | `TableAutosave` |
 | Field autosave contract | `packages/fullmag-py/src/fullmag/model/study.py` | `FieldAutosave` |
-| Planner output legality | `crates/fullmag-plan/src/validate.rs` | `validate_executable_outputs` |
-| Quantity evaluation registry | `crates/fullmag-quantities/src/registry.rs` | `evaluate_by_name` |
-| FEM field extraction | `backends/fem/cpu/mfem/runtime/state_io.cpp` | `context_copy_field_f64` |
+| Planner output legality | [`crates/fullmag-plan/src/validate.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-plan/src/validate.rs#L668) | [`validate_executable_outputs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-plan/src/validate.rs#L668) |
+| Quantity evaluation registry | [`crates/fullmag-quantities/src/registry.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-quantities/src/registry.rs#L41) | [`evaluate_by_name`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-quantities/src/registry.rs#L41) |
+| FEM field extraction | [`backends/fem/cpu/mfem/runtime/state_io.cpp`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/cpu/mfem/runtime/state_io.cpp#L226) | [`context_copy_field_f64`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/cpu/mfem/runtime/state_io.cpp#L226) |

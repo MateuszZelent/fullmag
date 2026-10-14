@@ -298,7 +298,10 @@ export function createPlanarRenderer(
     },
     draw(pixels, width, height) {
       scratch ??= document.createElement("canvas");
-      const image = new ImageData(pixels, width, height);
+      const imagePixels = pixels.buffer instanceof ArrayBuffer
+        ? new Uint8ClampedArray(pixels.buffer, pixels.byteOffset, pixels.length)
+        : new Uint8ClampedArray(pixels);
+      const image = new ImageData(imagePixels, width, height);
       scratch.width = width;
       scratch.height = height;
       scratch.getContext("2d")?.putImageData(image, 0, 0);

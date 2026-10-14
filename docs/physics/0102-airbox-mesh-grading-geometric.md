@@ -1,7 +1,7 @@
 # Airbox mesh grading
 
 - Status: geometric and legacy linear field generation implemented; full 0105 production evidence pending
-- Last updated: 2026-10-10
+- Last updated: 2026-10-14
 - Governing ADR: `docs/adr/0027-canonical-fem-mesh-policy-and-quality-evidence.md`
 
 (airbox-grading-problem-statement)=
@@ -278,6 +278,43 @@ production criteria, not claims about the current partial report.
   positive cells, shared-face incidence at body layer seams, mapped periodic
   node translations, and actual near-to-far air coarsening before this route
   is runtime-qualified.
+- On the 2026-10-14 integration baseline, the four public Box/DE fixtures
+  requesting $L=6$ magnetic layers were rejected because the realized magnetic
+  nodes contained seven to nine intervals. These are interior magnetic planes,
+  not additional airbox boundaries. CAD partitions alone therefore do not yet
+  prove the ADR-0027 $L+1$ node-plane contract. The existing guard must remain
+  fail closed; neither the requested layer count nor the guard tolerance is
+  relaxed to accept this output.
+- A diagnostic candidate may set `numElements=[1]` and `heights=[1.0]` for
+  each scoped GEO interval, without restoring the old copied-cap field stack
+  or enabling recombination. Gmsh documents these arguments as controlling
+  elements and normalized layer heights in mesh extrusion (see its
+  [extrusion API](https://gmsh.info/doc/texinfo/gmsh.html#index-gmsh_002fmodel_002fgeo_002fextrude)).
+  This is an experimental candidate, not the implemented production route.
+  It is admissible only if the same realization satisfies exact planes,
+  owner-floor and body/air size separation, positive tet4, seam incidence,
+  periodic translations and actual near-to-far air growth. Passing the count
+  alone cannot justify copying one in-plane mesh through all air levels or
+  losing independent owner-volume fields. An isolated diagnostic executes the
+  candidate in memory; it does not change requested Python/ProblemIR intent,
+  published capability status or numerical solver qualification.
+- A second diagnostic candidate confines that mesh constraint to intervals
+  whose midpoint lies inside the magnetic thickness. Exterior air intervals
+  remain geometry-only so that their 3D size fields retain freedom to coarsen.
+  For a ring, the grouped extrusion also constrains the complementary hole
+  within those thickness intervals; this consequence must be measured, not
+  treated as equivalent to unrestricted air meshing. Both candidates use the
+  same authored $L$, original size fields and unchanged acceptance guards.
+- A further diagnostic candidate (`magnetic_prism_partitions`) adds
+  `recombine=True` only to the constrained magnetic-thickness intervals.
+  Exterior air intervals remain geometry-only and all owner/air size fields
+  remain unchanged. The existing `subdivide_layered_prisms` converter replaces
+  prism6 and quad4 cells with tet4 and tri3 without adding nodes, using shared
+  coordinate ordering to choose matching diagonals on periodic copies. This
+  tests whether local tetrahedral extrusion splitting caused the failed face
+  bijection; it is not a production correction or a proven diagnosis. The
+  grouped ring-hole constraint and every exact-plane, density, positivity,
+  seam and periodic acceptance gate still apply.
 - The resolved exact-layer generator cap and the reported `effective_airbox_target`
   are currently distinct. `_resolve_box_airbox_layer_sizes` derives a finite
   outer target from the interface target and growth ratio when no maximum was

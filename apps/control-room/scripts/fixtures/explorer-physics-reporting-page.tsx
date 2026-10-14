@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState, useSyncExternalStore } from "react";
 
 import { KernelProvider } from "@/kernel/KernelProvider";
 import type { SceneResource } from "@/kernel/api/apiTypes";
@@ -14,6 +14,10 @@ import { modelTreeSnapshotFromScene } from "@/modules/explorer/builders/sceneMod
 import { Button } from "@/shared/ui/Button";
 
 type ScenarioId = "zero-and-missing" | "signed-nonzero" | "explicit-overrides";
+
+const subscribeHydration = () => () => {};
+const clientHydrated = () => true;
+const serverHydrated = () => false;
 
 const scenarioLabels: Record<ScenarioId, string> = {
   "zero-and-missing": "Zero and missing DMI",
@@ -147,8 +151,7 @@ function sceneForScenario(scenario: ScenarioId): SceneResource {
 
 function ExplorerPhysicsReportingView() {
   const kernel = useKernel();
-  const [interactive, setInteractive] = useState(false);
-  useEffect(() => setInteractive(true), []);
+  const interactive = useSyncExternalStore(subscribeHydration, clientHydrated, serverHydrated);
   const [scenario, setScenario] = useState<ScenarioId>("zero-and-missing");
   const scene = useMemo(() => sceneForScenario(scenario), [scenario]);
   const snapshot = useMemo(() => modelTreeSnapshotFromScene(scene), [scene]);

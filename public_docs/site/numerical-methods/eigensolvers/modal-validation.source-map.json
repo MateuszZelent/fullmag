@@ -1,8 +1,8 @@
 {
   "document": {
     "path": "public_docs/site/numerical-methods/eigensolvers/modal-validation.md",
-    "reviewed_revision": "a1de38b4d7dad275dccbdbfd937b757d6ca7ee99",
-    "source_of_truth": "Current repository source declarations and public Python API contracts."
+    "reviewed_revision": "5e99782acbb7fb3f65d0cad872e102bf67733103",
+    "source_of_truth": "Current repository source declarations, ProblemIR validation schemas, and FEM modal qualification contracts."
   },
   "backend_matrix": [
     {"solver": "FEM", "device": "CPU", "status": "source-backed"},
@@ -11,8 +11,11 @@
     {"solver": "FDM", "device": "GPU", "status": "unsupported", "reason": "No native CUDA modal lane is claimed."}
   ],
   "equations": [
-    {"id": "eq-numerical-modal-validation-relative-error", "symbols": ["fnum", "fref", "eps", "epsmax"], "sources": ["dispersion", "native"]},
-    {"id": "eq-numerical-modal-validation-kittel", "symbols": ["fnum", "fkit", "H", "df"], "sources": ["kittel", "native"]}
+    {"id": "eq-numerical-modal-validation-relative-error", "symbols": ["fnum", "fref", "eps", "epsmax", "j"], "sources": ["dispersion", "kittel", "native"]},
+    {"id": "eq-numerical-modal-validation-kittel", "symbols": ["fnum", "fkit", "H", "df", "j"], "sources": ["kittel", "runner_kittel_artifacts", "runner_sweep_exec"]},
+    {"id": "eq-numerical-modal-validation-kittel-models", "symbols": ["fmodels", "H0", "gamma0", "Nxyz"], "sources": ["kittel", "runner_kittel_synth", "runner_periodic_k0", "runner_sweep_oracle"]},
+    {"id": "eq-numerical-modal-validation-kalinikos-slavin", "symbols": ["fks", "gamma0", "H0", "d_lex_k"], "sources": ["dispersion", "dispersion_scenario", "planner_fem_eigen"]},
+    {"id": "eq-numerical-modal-validation-overlap", "symbols": ["res_eig", "Ablocks", "M_overlap"], "sources": ["coupled_residuals", "residual_cert", "floquet_cert_mode", "runner_tracking", "runner_mass_metric"]}
   ],
   "symbols": [
     {"id": "fnum", "latex": "$f_j^{\\mathrm{num}}$", "meaning": "computed frequency at sample $j$", "si_unit": "$\\mathrm{Hz}$"},
@@ -21,21 +24,60 @@
     {"id": "epsmax", "latex": "$\\varepsilon_{\\max}$", "meaning": "permitted maximum relative error", "si_unit": "$1$"},
     {"id": "fkit", "latex": "$f_{\\mathrm{Kittel}}$", "meaning": "Kittel reference frequency", "si_unit": "$\\mathrm{Hz}$"},
     {"id": "H", "latex": "$\\mathbf H_j$", "meaning": "bias field at sample $j$", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
-    {"id": "df", "latex": "$\\Delta f_j$", "meaning": "signed frequency difference", "si_unit": "$\\mathrm{Hz}$"}
+    {"id": "df", "latex": "$\\Delta f_j$", "meaning": "signed frequency difference", "si_unit": "$\\mathrm{Hz}$"},
+    {"id": "j", "latex": "$j$", "meaning": "validation sample index", "si_unit": "$1$"},
+    {"id": "H0", "latex": "$H_0, M_{\\mathrm{eff}}, M_s$", "meaning": "internal static bias field, effective thin-film magnetization, and saturation magnetization", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "gamma0", "latex": "$\\gamma_0$", "meaning": "rescaled gyromagnetic prefactor $\\mu_0|\\gamma|$", "si_unit": "$\\mathrm{m\\,A^{-1}\\,s^{-1}}$"},
+    {"id": "fmodels", "latex": "$f_{\\mathrm{Larmor}}, f_{\\mathrm{film}}, f_{\\mathrm{demag}}$", "meaning": "Larmor, thin-film in-plane, and general ellipsoidal Kittel frequencies", "si_unit": "$\\mathrm{Hz}$"},
+    {"id": "Nxyz", "latex": "$N_x, N_y, N_z$", "meaning": "diagonal demagnetizing factors ($N_x+N_y+N_z=1$)", "si_unit": "$1$"},
+    {"id": "fks", "latex": "$f_{\\mathrm{KS}}, P_{00}(kd)$", "meaning": "Kalinikos–Slavin $n=0$ frequency and dipolar form factor", "si_unit": "$\\mathrm{Hz}$, $1$"},
+    {"id": "d_lex_k", "latex": "$d, \\ell_{\\mathrm{ex}}, k, \\varphi_{\\mathbf k}$", "meaning": "film thickness, exchange length, wave-vector magnitude, and in-plane propagation angle", "si_unit": "$\\mathrm{m}$, $\\mathrm{m}$, $\\mathrm{rad\\,m^{-1}}$, $\\mathrm{rad}$"},
+    {"id": "res_eig", "latex": "$\\varepsilon_{\\mathrm{eig},n}, r_{q,n}, r_{\\phi,n}$", "meaning": "relative coupled eigenpair residual and magnetic/Poisson block residuals", "si_unit": "$1$, problem-dependent"},
+    {"id": "Ablocks", "latex": "$A_{qq}, A_{q\\phi}, B_{qq}, \\mathbf q_n, \\boldsymbol\\phi_n, \\lambda_n$", "meaning": "coupled magnetostatic blocks, tangent mode vector, scalar potential vector, and eigenvalue", "si_unit": "problem-dependent, $1$, $\\mathrm{A}$, $\\mathrm{s^{-1}}$"},
+    {"id": "M_overlap", "latex": "$M, \\mathcal O_{ab}, v_a, v_b$", "meaning": "consistent $P_1$ mass matrix, mode overlap, and complex spatial mode vectors", "si_unit": "$\\mathrm{m^3}$, $1$, $1$"}
   ],
   "sources": [
+    {"id": "dispersion_scenario", "path": "packages/fullmag-py/src/fullmag/model/eigen.py", "symbol": "class DispersionValidationScenario", "responsibility": "DE/BV dispersion scenario schema."},
     {"id": "dispersion", "path": "packages/fullmag-py/src/fullmag/model/eigen.py", "symbol": "class ThinFilmDEBVDispersionValidation", "responsibility": "Dispersion validation schema."},
+    {"id": "kittel_sample", "path": "packages/fullmag-py/src/fullmag/model/eigen.py", "symbol": "class K0KittelFieldSample", "responsibility": "Bias-field sweep sample schema."},
     {"id": "kittel", "path": "packages/fullmag-py/src/fullmag/model/eigen.py", "symbol": "class K0KittelFieldSweepValidation", "responsibility": "Kittel field-sweep validation schema."},
-    {"id": "native", "path": "backends/fem/src/frequency_domain/modal_eigen_solver.cpp", "symbol": "solve_modal_eigen_contract", "responsibility": "Native modal diagnostics and status."}
+    {"id": "planner_fem_eigen", "path": "crates/fullmag-plan/src/fem.rs", "symbol": "plan_fem_eigen", "responsibility": "Resolves FemEigenPlanIR and validation metadata."},
+    {"id": "runner_kittel_artifacts", "path": "crates/fullmag-runner/src/fem/eigen_path.rs", "symbol": "append_eigen_path_k0_kittel_validation_artifacts", "responsibility": "Appends k=0 Kittel validation comparison artifacts."},
+    {"id": "runner_periodic_k0", "path": "crates/fullmag-runner/src/fem/eigen_path.rs", "symbol": "eigen_path_periodic_airbox_k0_metrics_from_single_k_artifacts", "responsibility": "Computes periodic-airbox k=0 thin-film Kittel metrics."},
+    {"id": "runner_kittel_synth", "path": "crates/fullmag-runner/src/fem/eigen_path.rs", "symbol": "solve_k0_kittel_synthetic_demag_factor_single_k", "responsibility": "Executes synthetic (Nx,Ny,Nz) Kittel verification."},
+    {"id": "runner_sweep_oracle", "path": "crates/fullmag-runner/src/fem/eigen_sweep.rs", "symbol": "validate_bias_field_sweep_oracle_contract", "responsibility": "Validates field-sweep Kittel oracle inputs and tolerances."},
+    {"id": "runner_sweep_exec", "path": "crates/fullmag-runner/src/fem/eigen_sweep.rs", "symbol": "build_native_field_sweep_artifact", "responsibility": "Assembles field-sweep spectra and Kittel error reports."},
+    {"id": "runner_tracking", "path": "crates/fullmag-runner/src/eigen/tracking.rs", "symbol": "track_branches", "responsibility": "Matches mode branches across k and bias-field steps."},
+    {"id": "runner_mass_metric", "path": "crates/fullmag-runner/src/eigen/tracking_mass.rs", "symbol": "ConsistentP1TrackingMetric", "responsibility": "Consistent P1 finite-element inner product for mode overlap."},
+    {"id": "runner_cert_v6", "path": "crates/fullmag-runner/src/fem/eigen_certificate.rs", "symbol": "build_owned_modal_certificate_v6_binding", "responsibility": "Cryptographic V6 binding of equilibrium, mesh, and seam maps."},
+    {"id": "native", "path": "backends/fem/src/frequency_domain/modal_eigen_solver.cpp", "symbol": "solve_modal_eigen_contract", "responsibility": "Native modal diagnostics and status."},
+    {"id": "coupled_residuals", "path": "backends/fem/cpu/frequency_domain/poisson_airbox_modal_eigen.hpp", "symbol": "evaluate_poisson_airbox_modal_residuals", "responsibility": "Evaluates coupled magnetic and Poisson block residuals."},
+    {"id": "residual_cert", "path": "backends/fem/cpu/frequency_domain/poisson_airbox_modal_eigen.hpp", "symbol": "apply_poisson_airbox_modal_residual_certification", "responsibility": "Enforces coupled residual acceptance criteria."},
+    {"id": "floquet_cert_mode", "path": "backends/fem/include/frequency_domain/floquet_dynamic_demag_k.hpp", "symbol": "certify_floquet_realified_mode", "responsibility": "Certifies complex Floquet modes reconstructed from real-split pencils."},
+    {"id": "shifted_ksp_conv", "path": "backends/fem/cpu/frequency_domain/modal/shifted_ksp_true_convergence.hpp", "symbol": "floquet_shifted_true_convergence_test", "responsibility": "Enforces true unpreconditioned KSP residual convergence."}
   ],
   "public_api": {
     "parameters": [
       {"python": "ThinFilmDEBVDispersionValidation.film_thickness_m", "type": "float", "default": "required", "si_unit": "$\\mathrm{m}$", "validation": "positive", "meaning": "film thickness", "backend_support": "FEM validation", "problem_ir": "`runtime_metadata.dispersion_validation.film_thickness_m`"},
+      {"python": "ThinFilmDEBVDispersionValidation.equilibrium_magnetization", "type": "tuple[float,float,float]", "default": "required", "si_unit": "$1$", "validation": "nonzero three-vector", "meaning": "equilibrium direction/magnitude input", "backend_support": "FEM validation", "problem_ir": "`runtime_metadata.dispersion_validation.equilibrium_magnetization`"},
+      {"python": "ThinFilmDEBVDispersionValidation.scenarios", "type": "Sequence[DispersionValidationScenario]", "default": "required", "si_unit": "$1$", "validation": "must include both geometries", "meaning": "branch/sample cases", "backend_support": "FEM validation", "problem_ir": "`runtime_metadata.dispersion_validation.scenarios`"},
+      {"python": "ThinFilmDEBVDispersionValidation.film_normal", "type": "tuple[float,float,float]", "default": "(0,0,1)", "si_unit": "$1$", "validation": "nonzero three-vector", "meaning": "film normal", "backend_support": "FEM validation", "problem_ir": "`runtime_metadata.dispersion_validation.film_normal`"},
+      {"python": "ThinFilmDEBVDispersionValidation.frequency_window_hz", "type": "tuple[float,float]", "default": "(0,5e9)", "si_unit": "$\\mathrm{Hz}$", "validation": "nonnegative lower, greater upper, upper at most $5$ GHz", "meaning": "validation frequency domain", "backend_support": "FEM validation", "problem_ir": "`runtime_metadata.dispersion_validation.frequency_window_hz`"},
       {"python": "ThinFilmDEBVDispersionValidation.max_k_rad_per_m", "type": "float", "default": "3e6", "si_unit": "$\\mathrm{m^{-1}}$", "validation": "positive and at most $3e6$", "meaning": "wave-vector bound", "backend_support": "FEM validation", "problem_ir": "`runtime_metadata.dispersion_validation.max_k_rad_per_m`"},
       {"python": "ThinFilmDEBVDispersionValidation.max_relative_error", "type": "float", "default": "0.10", "si_unit": "$1$", "validation": "positive and at most `0.25`", "meaning": "permitted dispersion error", "backend_support": "FEM validation", "problem_ir": "`runtime_metadata.dispersion_validation.max_relative_error`"},
+      {"python": "ThinFilmDEBVDispersionValidation.analytic_model", "type": "str", "default": "kalinikos_slab_n0", "si_unit": "$1$", "validation": "currently `kalinikos_slab_n0`", "meaning": "analytical dispersion model", "backend_support": "FEM validation", "problem_ir": "`runtime_metadata.dispersion_validation.analytic_model`"},
+      {"python": "DispersionValidationScenario.geometry", "type": "str", "default": "required", "si_unit": "$1$", "validation": "`damon_eshbach` or `backward_volume`", "meaning": "propagation geometry relative to $\\mathbf m_0$", "backend_support": "FEM validation", "problem_ir": "`runtime_metadata.dispersion_validation.scenarios[].geometry`"},
+      {"python": "DispersionValidationScenario.branch_id", "type": "str", "default": "required", "si_unit": "$1$", "validation": "non-empty string", "meaning": "tracked branch identifier", "backend_support": "FEM validation", "problem_ir": "`runtime_metadata.dispersion_validation.scenarios[].branch_id`"},
+      {"python": "DispersionValidationScenario.sample_indices", "type": "tuple[int,...]", "default": "required", "si_unit": "$1$", "validation": "non-empty nonnegative integers", "meaning": "path sample indices for scenario", "backend_support": "FEM validation", "problem_ir": "`runtime_metadata.dispersion_validation.scenarios[].sample_indices`"},
       {"python": "K0KittelFieldSweepValidation.samples", "type": "Sequence[K0KittelFieldSample]", "default": "required", "si_unit": "$1$", "validation": "at least three unique samples", "meaning": "bias-field sweep samples", "backend_support": "FEM validation", "problem_ir": "`runtime_metadata.k0_kittel_validation.samples`"},
       {"python": "K0KittelFieldSweepValidation.model", "type": "str", "default": "macrospin_larmor", "si_unit": "$1$", "validation": "`macrospin_larmor` or `thin_film_in_plane`", "meaning": "Kittel model", "backend_support": "FEM validation", "problem_ir": "`runtime_metadata.k0_kittel_validation.model`"},
-      {"python": "K0KittelFieldSweepValidation.relative_tolerance", "type": "float", "default": "0.05", "si_unit": "$1$", "validation": "positive and at most `0.25`", "meaning": "permitted Kittel error", "backend_support": "FEM validation", "problem_ir": "`runtime_metadata.k0_kittel_validation.relative_tolerance`"}
+      {"python": "K0KittelFieldSweepValidation.effective_magnetisation", "type": "float | None", "default": "None", "si_unit": "$\\mathrm{A\\,m^{-1}}$", "validation": "positive when required by model", "meaning": "effective magnetization", "backend_support": "FEM validation", "problem_ir": "`runtime_metadata.k0_kittel_validation.material.effective_magnetisation`"},
+      {"python": "K0KittelFieldSweepValidation.relative_tolerance", "type": "float", "default": "0.05", "si_unit": "$1$", "validation": "positive and at most `0.25`", "meaning": "permitted Kittel error", "backend_support": "FEM validation", "problem_ir": "`runtime_metadata.k0_kittel_validation.relative_tolerance`"},
+      {"python": "K0KittelFieldSweepValidation.case_id", "type": "str | None", "default": "None", "si_unit": "$1$", "validation": "nonempty when supplied", "meaning": "reproducible case identity", "backend_support": "all validation", "problem_ir": "`runtime_metadata.k0_kittel_validation.case_id`"},
+      {"python": "K0KittelFieldSweepValidation.demag_kind", "type": "str | None", "default": "None", "si_unit": "$1$", "validation": "`none`, `periodic_airbox_k0`, or `synthetic_demag_factor`", "meaning": "demag assumption", "backend_support": "FEM validation", "problem_ir": "`runtime_metadata.k0_kittel_validation.demag_kind`"},
+      {"python": "K0KittelFieldSweepValidation.demag_factors", "type": "tuple[float,float,float] | None", "default": "None", "si_unit": "$1$", "validation": "finite nonnegative triad summing to $1$", "meaning": "diagonal demagnetizing factors $(N_x,N_y,N_z)$", "backend_support": "FEM validation", "problem_ir": "`runtime_metadata.k0_kittel_validation.demag_factors`"},
+      {"python": "K0KittelFieldSample.sample_index", "type": "int", "default": "required", "si_unit": "$1$", "validation": "nonnegative unique integer", "meaning": "sweep sample index", "backend_support": "FEM validation", "problem_ir": "`runtime_metadata.k0_kittel_validation.samples[].sample_index`"},
+      {"python": "K0KittelFieldSample.bias_field", "type": "tuple[float,float,float]", "default": "required", "si_unit": "$\\mathrm{A\\,m^{-1}}$", "validation": "finite nonzero three-vector", "meaning": "static external field $\\mathbf H_j$", "backend_support": "FEM validation", "problem_ir": "`runtime_metadata.k0_kittel_validation.samples[].bias_field`"}
     ]
   }
 }

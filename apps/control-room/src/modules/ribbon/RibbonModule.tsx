@@ -59,7 +59,6 @@ import {
   useObjectVisualizationSelector,
 } from "@/kernel/visualization/useObjectVisualization";
 import { useVisualizationStateResource } from "@/kernel/visualization/useVisualizationStateResource";
-import { ScratchAuthoringGuide } from "@/kernel/authoring/ScratchAuthoringGuide";
 import { CommandDetailDialog } from "@/shared/runtime/CommandDetailDialog";
 import { Button } from "@/shared/ui/Button";
 import {
@@ -544,11 +543,6 @@ export default function RibbonModule({ kernel }: ModuleProps) {
         activeTabId={stripActiveTab}
         onAction={handleAction}
         onCommandDetail={setSelectedCommandId}
-      />
-      <ScratchAuthoringGuide
-        commandContext={commandContext}
-        kernel={kernel}
-        readiness={modelReadiness}
       />
       <CommandDetailDialog
         commandId={selectedCommandId}

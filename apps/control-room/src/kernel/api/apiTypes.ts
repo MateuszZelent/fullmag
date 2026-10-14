@@ -227,21 +227,6 @@ export type GeometryRealizationResource =
 export type GeometryValidationResource =
   components["schemas"]["GeometryValidationResource"];
 export type HealthResource = components["schemas"]["HealthResponse"];
-export type DevelopmentBackendResource =
-  components["schemas"]["DevelopmentBackendResource"];
-export type DevelopmentBackendBuildRequest =
-  components["schemas"]["DevelopmentBackendBuildRequest"] & {
-    schema: "fullmag.development-backend-build-request.v1";
-  };
-export type DevelopmentBackendBuildRequestResource =
-  components["schemas"]["DevelopmentBackendBuildRequestResource"] & {
-    ready_build_id: string | null;
-    ready_source_sha256: string | null;
-  };
-export type DevelopmentRestartRequest =
-  components["schemas"]["DevelopmentRestartRequest"];
-export type DevelopmentRestartResource =
-  components["schemas"]["DevelopmentRestartResource"];
 export type ImportSessionAssetRequest =
   components["schemas"]["ImportSessionAssetRequest"];
 export type SessionAssetImportResponse =

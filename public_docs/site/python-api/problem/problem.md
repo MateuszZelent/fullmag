@@ -295,6 +295,6 @@ Frontend source owner: `apps/control-room/src/modules/inspector/panels/StudyInsp
 
 | Claim | Path | Stable symbol | Responsibility | Evidence |
 |---|---|---|---|---|
-| aggregate API and IR | `packages/fullmag-py/src/fullmag/model/problem.py` | `class Problem` | graph validation and lowering | signature/source-map/round-trip tests |
+| aggregate API and IR | [`packages/fullmag-py/src/fullmag/model/problem.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/problem.py#L2601) | [`class Problem`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/problem.py#L2601) | graph validation and lowering | signature/source-map/round-trip tests |
 | selections | `packages/fullmag-py/src/fullmag/model/selection.py` | `SelectionDefinition` | canonical selection graph | selection validation tests |
 | constraints | `packages/fullmag-py/src/fullmag/model/constraints.py` | `FrozenSpins` | magnetization constraint semantics | constraint tests |

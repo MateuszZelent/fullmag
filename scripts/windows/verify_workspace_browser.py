@@ -323,52 +323,46 @@ def read_api(port, pin, path):
         return json.loads(raw)
 
 
-def read_session_scope(api_port, api_instance_id, identity):
-    status = read_api(api_port, api_instance_id, "/v2/sessions/current/status")
-    session = status.get("session")
-    if (not isinstance(session, dict)
-            or session.get("session_id") != identity.get("session_id")
-            or not isinstance(session.get("session_epoch"), str)
-            or not session["session_epoch"]
-            or type(identity.get("session_epoch")) is not int
-            or identity["session_epoch"] < 0
-            or session.get("request_scope_epoch") != f"{api_instance_id}:{identity['session_epoch']}"):
-        raise storage.StorageError("Session resource scope is not bound to the actual API owner")
-    return {"session_resource_epoch": session["session_epoch"],
-            "request_scope_epoch": session["request_scope_epoch"]}
-
-
 def read_execution_scope(api_port, api_instance_id):
     """Read the actual pinned API/session identity used by execution resources."""
     if not valid_uuid(api_instance_id):
         raise storage.StorageError("Execution observation has no canonical API pin")
-    backend = read_api(api_port, api_instance_id, "/v2/platform/development-backend")
-    identity = backend.get("workspace_identity")
-    if (not isinstance(identity, dict)
-            or identity.get("api_instance_id") != api_instance_id
-            or not isinstance(identity.get("session_id"), str)
-            or not identity["session_id"].strip()
-            or type(identity.get("session_epoch")) is not int
-            or identity["session_epoch"] < 0):
-        raise storage.StorageError("Execution API has no exact workspace identity")
     status = read_api(api_port, api_instance_id, "/v2/sessions/current/status")
     session = status.get("session")
-    session_id = identity["session_id"]
+    session_id = session.get("session_id") if isinstance(session, dict) else None
+    session_resource_epoch = session.get("session_epoch") if isinstance(session, dict) else None
+    request_scope_epoch = session.get("request_scope_epoch") if isinstance(session, dict) else None
+    prefix = api_instance_id + ":"
+    request_counter = request_scope_epoch[len(prefix):] if isinstance(request_scope_epoch, str) \
+        and request_scope_epoch.startswith(prefix) else None
     if (not isinstance(session, dict)
-            or session.get("session_id") != session_id
-            or not isinstance(session.get("session_epoch"), str)
-            or not session["session_epoch"].startswith(session_id + "@")
-            or not session["session_epoch"][len(session_id) + 1:]
-            or session.get("request_scope_epoch") != f"{api_instance_id}:{identity['session_epoch']}"):
+            or not isinstance(session_id, str) or not session_id.strip()
+            or not isinstance(session_resource_epoch, str) or not session_resource_epoch
+            or not isinstance(request_scope_epoch, str)
+            or request_counter is None
+            or not re.fullmatch(r"(?:0|[1-9][0-9]*)", request_counter)):
+        raise storage.StorageError("Execution API has no exact workspace identity")
+    backend_session_epoch = int(request_counter)
+    parse_session_resource_epoch(session_id, session_resource_epoch)
+    if request_scope_epoch != f"{api_instance_id}:{backend_session_epoch}":
         raise storage.StorageError("Execution status is not bound to the observed API/session transition")
-    parse_session_resource_epoch(session_id, session["session_epoch"])
     return {
         "api_instance_id": api_instance_id,
         "session_id": session_id,
-        "backend_session_epoch": identity["session_epoch"],
-        "session_resource_epoch": session["session_epoch"],
-        "request_scope_epoch": session["request_scope_epoch"],
+        "backend_session_epoch": backend_session_epoch,
+        "session_resource_epoch": session_resource_epoch,
+        "request_scope_epoch": request_scope_epoch,
     }
+
+
+def read_session_identity(api_port, api_instance_id):
+    scope = read_execution_scope(api_port, api_instance_id)
+    identity = {"api_instance_id": scope["api_instance_id"],
+                "session_id": scope["session_id"],
+                "session_epoch": scope["backend_session_epoch"]}
+    session_scope = {"session_resource_epoch": scope["session_resource_epoch"],
+                    "request_scope_epoch": scope["request_scope_epoch"]}
+    return identity, session_scope
 
 
 def read_admission_observation(api_port, api_instance_id):
@@ -1019,13 +1013,7 @@ class ProofBridge:
         objects = scene.get("objects")
         if not isinstance(objects, list) or not objects:
             raise storage.StorageError("Browser proof requires a nonempty canonical scene")
-        backend = read_api(self.api_port, proof["api_instance_id"], "/v2/platform/development-backend")
-        identity = backend.get("workspace_identity")
-        if (not isinstance(identity, dict) or identity.get("api_instance_id") != proof["api_instance_id"]
-                or not isinstance(identity.get("session_id"), str)
-                or type(identity.get("session_epoch")) is not int):
-            raise storage.StorageError("Nonempty browser scene has no exact workspace identity")
-        session_scope = read_session_scope(self.api_port, proof["api_instance_id"], identity)
+        identity, session_scope = read_session_identity(self.api_port, proof["api_instance_id"])
         camera = camera_for_proof(read_api(
             self.api_port, proof["api_instance_id"], "/v2/sessions/current/visualization/state"
         ).get("camera"))
@@ -1065,15 +1053,12 @@ class ProofBridge:
         ).get("camera"))
         execution = self.execution()
         scene = read_api(self.api_port, body["new_api_instance_id"], "/v2/sessions/current/model/scene")
-        backend = read_api(self.api_port, body["new_api_instance_id"], "/v2/platform/development-backend")
-        identity = backend.get("workspace_identity", {})
+        identity, session_scope = read_session_identity(self.api_port, body["new_api_instance_id"])
         if (canonical(scene) != canonical(scene_after_successful_grid(before["scene"]))
-                or identity.get("api_instance_id") != body["new_api_instance_id"]
-                or not isinstance(identity.get("session_id"), str)
+                or identity["api_instance_id"] != body["new_api_instance_id"]
                 or identity["session_id"] == before["identity"]["session_id"]
-                or identity.get("session_epoch") != 1):
+                or identity["session_epoch"] != 1):
             raise storage.StorageError("Native restart changed the scene or failed to establish the fresh session")
-        session_scope = read_session_scope(self.api_port, body["new_api_instance_id"], identity)
         if (session_scope["request_scope_epoch"] == before["session_scope"]["request_scope_epoch"]
                 or session_scope["session_resource_epoch"] == before["session_scope"]["session_resource_epoch"]):
             raise storage.StorageError("Native restart reused the old session resource scope")
@@ -1310,7 +1295,7 @@ def start_frontend(repo, native, fixture, manifest, bridge_url, api_port, receip
     next_cli = dependencies / "next/dist/bin/next"
     if not node or not next_cli.is_file():
         raise storage.StorageError("Browser proof needs existing verified Node/Next dependencies")
-    for required in ("typescript/bin/tsc", "@types/node/index.d.ts", "@types/react/index.d.ts"):
+    for required in ("typescript-native/bin/tsc", "@types/node/index.d.ts", "@types/react/index.d.ts"):
         if not (dependencies / required).is_file():
             raise storage.StorageError(f"Frozen frontend dependencies are incomplete: {required}; no automatic install")
     page, diagnostic = stage_diagnostic_page(repo, app, fixture)
@@ -1379,7 +1364,7 @@ def check_frontend_sources(fixture, receipt):
         time.sleep(0.1)
     node = shutil.which("node")
     commands = [
-        ("typecheck", [node, str(dependencies / "typescript/bin/tsc"), "--noEmit", "--project", str(config)]),
+        ("typecheck", [node, str(dependencies / "typescript-native/bin/tsc"), "--noEmit", "--project", str(config)]),
         ("lint", [node, str(dependencies / "eslint/bin/eslint.js"), "--no-cache", staged["test_route"]]),
     ]
     checks = receipt.setdefault("workspace_browser_source_checks", [])

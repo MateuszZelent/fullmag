@@ -152,11 +152,11 @@ This is not a general sweepability, higher-order, arbitrary UI layer-count, nonu
 
 | Path | Stable symbol | Responsibility |
 | --- | --- | --- |
-| `packages/fullmag-py/src/fullmag/world.py` | `thin_film` | Public prismatic authoring and lowering |
-| `packages/fullmag-py/src/fullmag/model/discretization.py` | `class PerObjectMeshRecipe` | Policy validation |
-| `packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py` | `generate_swept_mesh` | Native dispatch |
-| `apps/control-room/src/modules/inspector/panels/ObjectMeshPolicyPanelModel.ts` | `resolveObjectMeshTopologyCapabilities` | Capability gate |
-| `packages/fullmag-py/tests/test_mixed_element_meshing.py` | `test_body_only_box_prism_mesh_has_exact_requested_layers` | Exact layers |
+| [`packages/fullmag-py/src/fullmag/world.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/world.py#L2149) | [`thin_film`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/world.py#L2149) | Public prismatic authoring and lowering |
+| [`packages/fullmag-py/src/fullmag/model/discretization.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/discretization.py#L679) | [`class PerObjectMeshRecipe`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/discretization.py#L679) | Policy validation |
+| [`packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py#L4237) | [`generate_swept_mesh`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py#L4237) | Native dispatch |
+| [`apps/control-room/src/modules/inspector/panels/ObjectMeshPolicyPanelModel.ts`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/apps/control-room/src/modules/inspector/panels/ObjectMeshPolicyPanelModel.ts#L138) | [`resolveObjectMeshTopologyCapabilities`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/apps/control-room/src/modules/inspector/panels/ObjectMeshPolicyPanelModel.ts#L138) | Capability gate |
+| [`packages/fullmag-py/tests/test_mixed_element_meshing.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/tests/test_mixed_element_meshing.py#L1228) | [`test_body_only_box_prism_mesh_has_exact_requested_layers`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/tests/test_mixed_element_meshing.py#L1228) | Exact layers |
 
 ## Scope and purpose
 

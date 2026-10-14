@@ -117,10 +117,10 @@ No universal CPU/GPU parity or accuracy order is established. The displayed ener
 
 | Source | Stable symbol | Evidence |
 | --- | --- | --- |
-| `packages/fullmag-py/src/fullmag/world.py` | `class StudyBuilder` | public `fdm(...)` route used by the example |
-| `packages/fullmag-py/src/fullmag/model/discretization.py` | `class FDM` | validates and lowers fields; it does not implement the conceptual energy equation |
-| `crates/fullmag-plan/src/tests.rs` | `fdm_boundary_params_passthrough_phi_floor_and_delta_min` | planner passthrough |
-| `crates/fullmag-plan/src/tests.rs` | `fdm_boundary_correction_rejects_geometry_without_supported_sdf` | fail-closed geometry |
+| [`packages/fullmag-py/src/fullmag/world.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/world.py#L5775) | [`class StudyBuilder`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/world.py#L5775) | public `fdm(...)` route used by the example |
+| [`packages/fullmag-py/src/fullmag/model/discretization.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/discretization.py#L19) | [`class FDM`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/discretization.py#L19) | validates and lowers fields; it does not implement the conceptual energy equation |
+| [`crates/fullmag-plan/src/tests.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-plan/src/tests.rs#L15372) | [`fdm_boundary_params_passthrough_phi_floor_and_delta_min`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-plan/src/tests.rs#L15372) | planner passthrough |
+| [`crates/fullmag-plan/src/tests.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-plan/src/tests.rs#L15445) | [`fdm_boundary_correction_rejects_geometry_without_supported_sdf`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-plan/src/tests.rs#L15445) | fail-closed geometry |
 
 ## Scope and purpose
 

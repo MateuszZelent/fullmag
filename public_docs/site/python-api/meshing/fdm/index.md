@@ -138,9 +138,9 @@ Frontend source owner: `apps/control-room/src/modules/inspector/inspectorRouteCa
 
 | Claim | Path | Stable symbol | Responsibility | Evidence |
 |---|---|---|---|---|
-| constructor and lowering | `packages/fullmag-py/src/fullmag/model/discretization.py` | `class FDM` | default/per-magnet grid and boundary policy | signature and IR tests |
-| per-magnet grid | `packages/fullmag-py/src/fullmag/model/discretization.py` | `class FDMGrid` | positive cell triple | validation tests |
-| demag grid policy | `packages/fullmag-py/src/fullmag/model/discretization.py` | `class FDMDemag` | strategy, mode, and common-grid consistency | validation tests |
+| constructor and lowering | [`packages/fullmag-py/src/fullmag/model/discretization.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/discretization.py#L19) | [`class FDM`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/discretization.py#L19) | default/per-magnet grid and boundary policy | signature and IR tests |
+| per-magnet grid | [`packages/fullmag-py/src/fullmag/model/discretization.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/discretization.py#L19) | [`class FDMGrid`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/discretization.py#L19) | positive cell triple | validation tests |
+| demag grid policy | [`packages/fullmag-py/src/fullmag/model/discretization.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/discretization.py#L50) | [`class FDMDemag`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/discretization.py#L50) | strategy, mode, and common-grid consistency | validation tests |
 
 ```{toctree}
 :maxdepth: 2

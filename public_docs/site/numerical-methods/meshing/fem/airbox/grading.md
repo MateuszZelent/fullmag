@@ -146,12 +146,12 @@ Gmsh receives mesh options after shared-domain assembly. The narrow-region field
 
 | Responsibility | Repository path | Stable symbol |
 | --- | --- | --- |
-| public mesh controls | `packages/fullmag-py/src/fullmag/world.py` | `class StudyUniverseHandle` |
-| normalized controls | `packages/fullmag-py/src/fullmag/world.py` | `class StudyUniverseConfig` |
-| generic validation | `packages/fullmag-py/src/fullmag/world.py` | `def _validate_mesh_control_values` |
-| auto grading realization | `packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py` | `def _study_universe_airbox_options` |
-| Gmsh options | `packages/fullmag-py/src/fullmag/meshing/_gmsh_fields.py` | `def _apply_mesh_options` |
-| body-only field restriction | `packages/fullmag-py/src/fullmag/meshing/_gmsh_fields.py` | `def _add_narrow_region_field` |
+| public mesh controls | [`packages/fullmag-py/src/fullmag/world.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/world.py#L5240) | [`class StudyUniverseHandle`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/world.py#L5240) |
+| normalized controls | [`packages/fullmag-py/src/fullmag/world.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/world.py#L2406) | [`class StudyUniverseConfig`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/world.py#L2406) |
+| generic validation | [`packages/fullmag-py/src/fullmag/world.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/world.py#L285) | `def [`_validate_mesh_control_values`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/world.py#L285)` |
+| auto grading realization | [`packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py#L1570) | `def [`_study_universe_airbox_options`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py#L1570)` |
+| Gmsh options | [`packages/fullmag-py/src/fullmag/meshing/_gmsh_fields.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/_gmsh_fields.py#L158) | `def [`_apply_mesh_options`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/_gmsh_fields.py#L158)` |
+| body-only field restriction | [`packages/fullmag-py/src/fullmag/meshing/_gmsh_fields.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/_gmsh_fields.py#L368) | `def [`_add_narrow_region_field`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/_gmsh_fields.py#L368)` |
 
 (airbox-grading-validation)=
 ## Validation
@@ -174,12 +174,12 @@ Current code bounds `g` and resolves the grading vocabulary, but has no universa
 
 | Claim | Repository path | Stable symbol | Evidence |
 | --- | --- | --- | --- |
-| API and aliases | `packages/fullmag-py/src/fullmag/world.py` | `class StudyUniverseHandle` | source-backed |
-| constraints and IR | `packages/fullmag-py/src/fullmag/world.py` | `class StudyUniverseConfig` | source-backed |
-| input validation | `packages/fullmag-py/src/fullmag/world.py` | `def _validate_mesh_control_values` | source-backed |
-| `auto` to `geometric` realization | `packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py` | `def _study_universe_airbox_options` | source-backed |
-| Gmsh application | `packages/fullmag-py/src/fullmag/meshing/_gmsh_fields.py` | `def _apply_mesh_options` | source-backed |
-| airbox-safe refinement | `packages/fullmag-py/src/fullmag/meshing/_gmsh_fields.py` | `def _add_narrow_region_field` | source-backed |
+| API and aliases | [`packages/fullmag-py/src/fullmag/world.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/world.py#L5240) | [`class StudyUniverseHandle`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/world.py#L5240) | source-backed |
+| constraints and IR | [`packages/fullmag-py/src/fullmag/world.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/world.py#L2406) | [`class StudyUniverseConfig`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/world.py#L2406) | source-backed |
+| input validation | [`packages/fullmag-py/src/fullmag/world.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/world.py#L285) | `def [`_validate_mesh_control_values`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/world.py#L285)` | source-backed |
+| `auto` to `geometric` realization | [`packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py#L1570) | `def [`_study_universe_airbox_options`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py#L1570)` | source-backed |
+| Gmsh application | [`packages/fullmag-py/src/fullmag/meshing/_gmsh_fields.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/_gmsh_fields.py#L158) | `def [`_apply_mesh_options`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/_gmsh_fields.py#L158)` | source-backed |
+| airbox-safe refinement | [`packages/fullmag-py/src/fullmag/meshing/_gmsh_fields.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/_gmsh_fields.py#L368) | `def [`_add_narrow_region_field`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/_gmsh_fields.py#L368)` | source-backed |
 
 ## Scope and purpose
 

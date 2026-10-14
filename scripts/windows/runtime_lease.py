@@ -11,7 +11,7 @@ import uuid
 from datetime import datetime
 
 from fullmag_storage import StorageError, atomic_json, build_lock, file_lock, now, process_alive, validate_path
-from windows.runtime_bundle import _check_path_chain, validate_bundle
+from windows.runtime_bundle import validate_bundle
 from windows.workspace_backend_identity import DEPENDENCY_INPUTS, fingerprint
 
 
@@ -46,13 +46,22 @@ def _is_terminal_runtime_receipt(value, status_path=None):
         and type(value.get("launcher_pid")) is int
         and value["launcher_pid"] > 0
         and value.get("launcher_waited") is True
-        and value.get("watcher_waited") is True
+        # Accept legacy receipts from the removed watcher only after their
+        # recorded watcher has drained successfully; new receipts omit these
+        # fields entirely.
+        and ("watcher_waited" not in value or value.get("watcher_waited") is True)
         and type(value.get("exit_code")) is int
         and isinstance(value.get("finished_at"), str)
         and bool(value["finished_at"])
-        and (value.get("watcher_pid") is None or type(value.get("watcher_pid")) is int)
-        and (value.get("watcher_pid") is None or
-             (type(value.get("watcher_exit_code")) is int and value["watcher_exit_code"] == 0))
+        and (
+            "watcher_pid" not in value
+            or value.get("watcher_pid") is None
+            or (
+                type(value.get("watcher_pid")) is int
+                and type(value.get("watcher_exit_code")) is int
+                and value["watcher_exit_code"] == 0
+            )
+        )
     )
 
 
@@ -253,9 +262,7 @@ def run_sealed_runtime(layout, command, env, profile):
         "manager_pid": os.getpid(),
         "launch_nonce": nonce,
         "launcher_pid": None,
-        "watcher_pid": None,
         "launcher_waited": False,
-        "watcher_waited": True,
         "started_at": now(),
         "state": "starting",
         "execution_mode": "windows-workspace",
@@ -275,8 +282,6 @@ def run_sealed_runtime(layout, command, env, profile):
         assert_no_independent_service(layout, env)
         atomic_json(status, state)
         child = None
-        watcher = None
-        stop_file = runtime / ("native-watch-stop-" + nonce + ".json")
         sealed = False
         try:
             with build_lock(layout):
@@ -302,55 +307,10 @@ def run_sealed_runtime(layout, command, env, profile):
                         atomic_json(status, state)
                         break
                     time.sleep(0.1)
-            if sealed and profile == "dev" and command[command.index("-Frontend") + 1] == "dev":
-                import sys
-                watch_env = dict(env)
-                for key in (
-                    "FULLMAG_STORAGE_LOCK_TOKEN",
-                    "FULLMAG_STORAGE_LOCK_KEY",
-                    "FULLMAG_NATIVE_RUNTIME_ACTIVE",
-                    "FULLMAG_NATIVE_ACTIVE_DEPENDENCY_SHA256",
-                    "FULLMAG_DEVELOPMENT_BACKEND_GENERATION",
-                    "FULLMAG_DEVELOPMENT_BACKEND_STATUS_FILE",
-                    "FULLMAG_DEVELOPMENT_BACKEND_SOURCE",
-                    "FULLMAG_DEVELOPMENT_BACKEND_VERSION",
-                ):
-                    watch_env.pop(key, None)
-                watcher_log = validate_path(
-                    Path(layout["runtime_root"]) / "logs" / f"backend-watch-{nonce}.log",
-                    layout["storage_root"], "backend request consumer log",
-                )
-                _check_path_chain(watcher_log, "backend request consumer log", allow_missing=True)
-                watcher_log.parent.mkdir(parents=True, exist_ok=True)
-                _check_path_chain(watcher_log, "backend request consumer log", allow_missing=True)
-                # A background consumer must not depend on the UI terminal
-                # draining its output or accepting input while a build runs.
-                with watcher_log.open("xb") as output:
-                    watcher = subprocess.Popen([
-                        sys.executable, str(Path(__file__).with_name("watch_backend.py")),
-                        "--repo-root", layout["repo_root"], "--web-port", command[command.index("-WebPort") + 1],
-                        "--stop-file", str(stop_file), "--baseline-digest", bundle["source"]["backend_source_sha256"],
-                        "--generation-id", nonce,
-                    ], cwd=layout["repo_root"], env=watch_env,
-                       stdin=subprocess.DEVNULL, stdout=output, stderr=subprocess.STDOUT)
-                state["watcher_log"] = str(watcher_log)
-                state["watcher_pid"] = watcher.pid
-                state["watcher_waited"] = False
-                atomic_json(status, state)
             result = child.wait()
             state.update(launcher_waited=True, exit_code=result)
             if result == 0 and not sealed:
                 raise StorageError("Native launcher exited without publishing its sealed runtime")
-            if watcher is not None:
-                # The runtime remains nonterminal while the watcher drains any
-                # build already admitted before this stop request.
-                atomic_json(stop_file, {"schema": "fullmag.native-watch-stop.v1", "nonce": nonce})
-                state["watcher_exit_code"] = watcher.wait()
-                state["watcher_waited"] = True
-                if state["watcher_exit_code"] != 0:
-                    raise StorageError(
-                        f"Native backend watcher did not drain cleanly; exit code {state['watcher_exit_code']}"
-                    )
             state.update(state="completed" if result == 0 else "failed", finished_at=now())
             atomic_json(status, state)
             return result
@@ -369,17 +329,4 @@ def run_sealed_runtime(layout, command, env, profile):
             except Exception:
                 # Any earlier starting/running record is itself nonterminal.
                 pass
-            if watcher is not None:
-                try:
-                    atomic_json(stop_file, {"schema": "fullmag.native-watch-stop.v1", "nonce": nonce})
-                    state["watcher_stop_requested_at"] = now()
-                    state["watcher_exit_code"] = watcher.wait()
-                    state["watcher_waited"] = True
-                    atomic_json(status, state)
-                except BaseException as cleanup_error:
-                    state["watcher_drain_error"] = str(cleanup_error)[:1000]
-                    try:
-                        atomic_json(status, state)
-                    except Exception:
-                        pass
             raise
