@@ -1339,9 +1339,36 @@ def certify_extracted_periodic_mesh(
                 )
         for source_index in source_faces:
             source_face = faces[source_index]
-            mapped_vertices = frozenset(mapping.get(int(node), -1) for node in source_face)
-            if -1 in mapped_vertices or mapped_vertices not in destination_by_vertices:
-                raise ValueError(f"periodic face bijection for '{pair_id}' is incomplete")
+            source_nodes = tuple(int(node) for node in source_face)
+            unmapped_source_nodes = tuple(node for node in source_nodes if node not in mapping)
+            if unmapped_source_nodes:
+                raise ValueError(
+                    f"periodic face bijection for '{pair_id}' is incomplete: "
+                    f"source face has unmapped node IDs {unmapped_source_nodes}; "
+                    f"markers={marker_a}->{marker_b}, "
+                    f"source_faces={len(source_faces)}, "
+                    f"destination_faces={len(destination_faces)}, "
+                    f"mapped_nodes={len(mapping)}"
+                )
+            mapped_vertices = frozenset(mapping[node] for node in source_nodes)
+            if mapped_vertices not in destination_by_vertices:
+                shared_edge_candidates: list[tuple[int, ...]] = []
+                for destination_vertices in destination_by_vertices:
+                    if len(mapped_vertices.intersection(destination_vertices)) >= 2:
+                        shared_edge_candidates.append(tuple(sorted(destination_vertices)))
+                        if len(shared_edge_candidates) == 3:
+                            break
+                raise ValueError(
+                    f"periodic face bijection for '{pair_id}' is incomplete: "
+                    "mapped source face has no destination face; "
+                    f"source_nodes={tuple(sorted(source_nodes))}, "
+                    f"mapped_nodes={tuple(sorted(mapped_vertices))}, "
+                    f"destination_faces_sharing_edge={tuple(shared_edge_candidates)}, "
+                    f"markers={marker_a}->{marker_b}, "
+                    f"source_faces={len(source_faces)}, "
+                    f"destination_faces={len(destination_faces)}, "
+                    f"mapped_nodes={len(mapping)}"
+                )
             destination_index = destination_by_vertices[mapped_vertices]
             source_normal = np.cross(
                 coordinates[source_face[1]] - coordinates[source_face[0]],
