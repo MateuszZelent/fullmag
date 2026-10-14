@@ -457,7 +457,19 @@ set_target_properties(fullmag_fem PROPERTIES
 )
 
 # Record the exact target selected by this configure, including its SONAME links.
-file(GENERATE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/fullmag-fem-library-path.txt"
+# Multi-configuration generators (Visual Studio and Ninja Multi-Config) expand
+# the target path once per configuration.  A single shared output would make
+# CMake reject generation because Debug and Release produce different content.
+# Keep the flat name for single-configuration generators because the managed
+# Unix build and older consumers use that path deliberately.
+if(CMAKE_CONFIGURATION_TYPES)
+    set(FULLMAG_FEM_LIBRARY_PATH_METADATA
+        "${CMAKE_CURRENT_BINARY_DIR}/fullmag-fem-library-path-$<CONFIG>.txt")
+else()
+    set(FULLMAG_FEM_LIBRARY_PATH_METADATA
+        "${CMAKE_CURRENT_BINARY_DIR}/fullmag-fem-library-path.txt")
+endif()
+file(GENERATE OUTPUT "${FULLMAG_FEM_LIBRARY_PATH_METADATA}"
     CONTENT "$<TARGET_FILE:fullmag_fem>\n")
 
 # ── Tests ──
