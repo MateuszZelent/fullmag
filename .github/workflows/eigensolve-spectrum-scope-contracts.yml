@@ -34,6 +34,13 @@ jobs:
           set -o pipefail
           cargo test --locked -p fullmag-ir --test study_v04 spectrum_scope_v04_root_and_standalone_preserve_authoring_intent -- --exact --nocapture | tee "$RUNNER_TEMP/eigen-spectrum-v04.log"
           grep -F "spectrum_scope_v04_root_and_standalone_preserve_authoring_intent ... ok" "$RUNNER_TEMP/eigen-spectrum-v04.log"
+      - name: Verify actual antenna version boundaries and root references
+        run: |
+          set -euo pipefail
+          for test_name in v03_antenna_study_selection_rejects_missing_reference v04_typed_study_deserialization_rejects_unsupported_antenna_field_solve v04_migration_rejects_unsupported_antenna_field_solve_atomically v04_antenna_projection_rejects_missing_stage_output_reference; do
+            cargo test --locked -p fullmag-ir --test ir_tests "$test_name" -- --exact --nocapture | tee "$RUNNER_TEMP/$test_name.log"
+            grep -F "$test_name ... ok" "$RUNNER_TEMP/$test_name.log"
+          done
       - name: Run complete IR and planner contracts
         run: cargo test --locked -p fullmag-ir -p fullmag-plan --no-fail-fast
       - name: Run complete application materialization contracts

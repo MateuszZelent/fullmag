@@ -1926,18 +1926,88 @@ fn antenna_study_selection_is_optional_and_typed() {
 }
 
 #[test]
-fn both_ir_versions_reject_a_missing_antenna_selection_reference() {
+fn v03_antenna_study_selection_rejects_missing_reference() {
     let study: StudyIR = serde_json::from_value(serde_json::json!({
-        "kind": "antenna_field_solve", "sampling": {"outputs": []},
+        "kind": "antenna_field_solve",
+        "sampling": {"outputs": []},
         "selection": {"stage_id": "missing", "port_mode_id": "port"}
-    })).unwrap();
+    }))
+    .unwrap();
     let mut legacy = ProblemIR::bootstrap_example();
-    legacy.study = study.clone();
-    let mut objects = fullmag_ir::ProblemIRV04::bootstrap_example();
-    objects.study = study;
-    for errors in [legacy.validate().unwrap_err(), objects.validate().unwrap_err()] {
-        assert!(errors.iter().any(|error| error.contains("antenna_field_solve.selection")));
-    }
+    legacy.study = study;
+
+    let errors = legacy
+        .validate()
+        .expect_err("V03 antenna selection must reference a declared solve and port mode");
+    assert!(errors
+        .iter()
+        .any(|error| error.contains("antenna_field_solve.selection")));
+}
+
+#[test]
+fn v04_typed_study_deserialization_rejects_unsupported_antenna_field_solve() {
+    let mut value = serde_json::to_value(fullmag_ir::ProblemIRV04::bootstrap_example()).unwrap();
+    value["study"] = serde_json::json!({
+        "kind": "antenna_field_solve",
+        "sampling": {"outputs": []}
+    });
+
+    let error = serde_json::from_value::<fullmag_ir::ProblemIRV04>(value)
+        .expect_err("V04 typed wire must reject a study kind it does not model")
+        .to_string();
+    assert!(error.contains("unknown variant"), "{error}");
+    assert!(error.contains("antenna_field_solve"), "{error}");
+}
+
+#[test]
+fn v04_migration_rejects_unsupported_antenna_field_solve_atomically() {
+    let mut value = serde_json::to_value(ProblemIR::bootstrap_example()).unwrap();
+    value["study"] = serde_json::json!({
+        "kind": "antenna_field_solve",
+        "sampling": {"outputs": []}
+    });
+    let before = value.clone();
+
+    let error = migrate_v0_3_problem_ir_to_v0_4(&mut value)
+        .expect_err("V04 migration must fail closed for an unsupported study kind");
+    assert!(
+        error.contains("/study/kind: unsupported study kind 'antenna_field_solve'"),
+        "{error}"
+    );
+    assert_eq!(value, before, "failed V04 migration must leave its input unchanged");
+}
+
+#[test]
+fn v04_antenna_projection_rejects_missing_stage_output_reference() {
+    let mut value = serde_json::to_value(fullmag_ir::ProblemIRV04::bootstrap_example()).unwrap();
+    value["antenna_target_projections"] = serde_json::json!([{
+        "id": "projection",
+        "solution": {
+            "kind": "stage_output",
+            "stage_id": "missing_stage",
+            "output_id": "missing_output"
+        },
+        "target": {"kind": "global"},
+        "output_id": "projected_field"
+    }]);
+
+    let objects: fullmag_ir::ProblemIRV04 =
+        serde_json::from_value(value).expect("the projection wire itself is typed");
+    let errors = objects
+        .validate()
+        .expect_err("V04 composition must validate antenna root references");
+    assert!(
+        errors.iter().any(|error| {
+            error == "antenna_target_projections[0].solution must reference an H_ant_basis output"
+        }),
+        "{errors:#?}"
+    );
+    assert!(
+        errors.iter().any(|error| {
+            error == "antenna_target_projections[0] must reference a declared stage output or complete published solution and valid target"
+        }),
+        "{errors:#?}"
+    );
 }
 
 #[test]
