@@ -8,6 +8,8 @@ on:
       - 'crates/fullmag-runner/src/hysteresis.rs'
       - 'crates/fullmag-authoring/src/scene.rs'
       - 'crates/fullmag-runner/src/lib.rs'
+      - 'crates/fullmag-runner/src/antenna_field_solution.rs'
+      - 'crates/fullmag-runner/src/antenna_stage.rs'
       - 'crates/fullmag-ir/tests/ir_tests.rs'
       - 'scripts/fullmag_storage.py'
       - '.github/workflows/eigensolve-hysteresis-publication-contracts.yml'
@@ -17,6 +19,8 @@ on:
       - 'crates/fullmag-runner/src/hysteresis.rs'
       - 'crates/fullmag-authoring/src/scene.rs'
       - 'crates/fullmag-runner/src/lib.rs'
+      - 'crates/fullmag-runner/src/antenna_field_solution.rs'
+      - 'crates/fullmag-runner/src/antenna_stage.rs'
       - 'crates/fullmag-ir/tests/ir_tests.rs'
       - 'scripts/fullmag_storage.py'
       - '.github/workflows/eigensolve-hysteresis-publication-contracts.yml'
@@ -74,6 +78,14 @@ jobs:
           set -euo pipefail
           python -B scripts/fullmag_storage.py run --profile '${{ matrix.profile }}' -- cargo test --locked -p fullmag-runner --lib adaptive_parallel_rejects_standalone_antenna_inspection_but_serial_remains_supported -- --nocapture | tee "$RUNNER_TEMP/antenna-adaptive-admission.log"
           grep -F 'adaptive_parallel_rejects_standalone_antenna_inspection_but_serial_remains_supported ... ok' "$RUNNER_TEMP/antenna-adaptive-admission.log"
+      - name: Verify antenna integrity classification and cancellation publication
+        shell: bash
+        run: |
+          set -euo pipefail
+          for test_name in rejects_tampered_manifest_and_field_payload referenced_payload_verifier_distinguishes_hash_size_and_finite_failures interruptible_publication_rejects_cancel_before_atomic_rename; do
+            python -B scripts/fullmag_storage.py run --profile '${{ matrix.profile }}' -- cargo test --locked -p fullmag-runner --lib "$test_name" -- --nocapture | tee "$RUNNER_TEMP/$test_name.log"
+            grep -F "$test_name ... ok" "$RUNNER_TEMP/$test_name.log"
+          done
       - name: Verify complete runner compatibility
         if: runner.os == 'Linux'
         shell: bash
@@ -87,5 +99,8 @@ jobs:
             ${{ runner.temp }}/atomic-json-writer.log
             ${{ runner.temp }}/hysteresis-atomic-progress.log
             ${{ runner.temp }}/antenna-adaptive-admission.log
+            ${{ runner.temp }}/rejects_tampered_manifest_and_field_payload.log
+            ${{ runner.temp }}/referenced_payload_verifier_distinguishes_hash_size_and_finite_failures.log
+            ${{ runner.temp }}/interruptible_publication_rejects_cancel_before_atomic_rename.log
             ${{ env.FULLMAG_BUILD_ROOT }}/build-status.json
           if-no-files-found: error

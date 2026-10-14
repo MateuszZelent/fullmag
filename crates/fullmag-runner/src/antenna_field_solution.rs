@@ -421,15 +421,22 @@ fn verify_binary_ref(
         .ok_or_else(|| RunError {
             message: format!("missing antenna field payload '{}'", reference.path),
         })?;
-    if sha256(&payload.bytes) != reference.sha256
-        || payload.bytes.len() != reference.value_count.saturating_mul(8)
-        || payload.bytes.chunks_exact(8).any(|chunk| {
-            !f64::from_le_bytes(chunk.try_into().expect("eight-byte chunk")).is_finite()
-        })
-    {
+    if sha256(&payload.bytes) != reference.sha256 {
+        return Err(RunError {
+            message: format!("antenna field payload '{}' sha256 mismatch", reference.path),
+        });
+    }
+    if payload.bytes.len() != reference.value_count.saturating_mul(8) {
+        return Err(RunError {
+            message: format!("antenna field payload '{}' size mismatch", reference.path),
+        });
+    }
+    if payload.bytes.chunks_exact(8).any(|chunk| {
+        !f64::from_le_bytes(chunk.try_into().expect("eight-byte chunk")).is_finite()
+    }) {
         return Err(RunError {
             message: format!(
-                "antenna field payload '{}' sha256, size, or finite-value check failed",
+                "antenna field payload '{}' contains a non-finite value",
                 reference.path
             ),
         });
@@ -3235,6 +3242,85 @@ mod tests {
         .unwrap_err()
         .message
         .contains("stale reference"));
+    }
+    #[test]
+    fn referenced_payload_verifier_distinguishes_hash_size_and_finite_failures() {
+        let path = "antenna/field_solutions/solution_1/common/H_per_A.f64le";
+        let make_reference = |bytes: &[u8], value_count| StoredBinaryFieldRef {
+            path: path.into(),
+            sha256: sha256(bytes),
+            scalar_type: "float64_le".into(),
+            layout: "sample_xyz_interleaved".into(),
+            unit: "A/m/A".into(),
+            value_count,
+        };
+        let valid_bytes: Vec<u8> = [1.0_f64, 2.0, 3.0]
+            .into_iter()
+            .flat_map(f64::to_le_bytes)
+            .collect();
+        let valid_payload = vec![AuxiliaryArtifact {
+            relative_path: path.into(),
+            bytes: valid_bytes.clone(),
+        }];
+        let valid_reference = make_reference(&valid_bytes, 3);
+        assert!(verify_binary_ref(
+            &valid_reference,
+            &valid_payload,
+            "float64_le",
+            "sample_xyz_interleaved",
+            "A/m/A",
+        )
+        .is_ok());
+
+        let mut tampered_reference = make_reference(&valid_bytes, 3);
+        tampered_reference.sha256 = "0".repeat(64);
+        assert!(verify_binary_ref(
+            &tampered_reference,
+            &valid_payload,
+            "float64_le",
+            "sample_xyz_interleaved",
+            "A/m/A",
+        )
+        .unwrap_err()
+        .message
+        .contains("sha256 mismatch"));
+
+        let short_bytes = &valid_bytes[..valid_bytes.len() - 1];
+        let short_payload = vec![AuxiliaryArtifact {
+            relative_path: path.into(),
+            bytes: short_bytes.to_vec(),
+        }];
+        let short_reference = make_reference(short_bytes, 3);
+        assert!(verify_binary_ref(
+            &short_reference,
+            &short_payload,
+            "float64_le",
+            "sample_xyz_interleaved",
+            "A/m/A",
+        )
+        .unwrap_err()
+        .message
+        .contains("size mismatch"));
+
+        let nonfinite_bytes: Vec<u8> = [1.0_f64, f64::NAN, 3.0]
+            .into_iter()
+            .flat_map(f64::to_le_bytes)
+            .collect();
+        let nonfinite_payload = vec![AuxiliaryArtifact {
+            relative_path: path.into(),
+            bytes: nonfinite_bytes.clone(),
+        }];
+        let nonfinite_reference = make_reference(&nonfinite_bytes, 3);
+        assert!(verify_binary_ref(
+            &nonfinite_reference,
+            &nonfinite_payload,
+            "float64_le",
+            "sample_xyz_interleaved",
+            "A/m/A",
+        )
+        .unwrap_err()
+        .message
+        .contains("non-finite value"));
     }
 
     #[test]

@@ -4278,3 +4278,11 @@ UI38487637462 exactb7ffc7e5:56files/1205testsPASS, pełny typecheck i architectu
 ### 2026-10-14 — publiczna klasyfikacja odrzucenia v04 wire
 
 Scope38487954642 exactc928: legacy scope, strictv04scope i V03 antenna selection named checks przeszły; V04 typed rejection działa, lecz nowy test oczekiwał późniejszego serde unknown-variant. Actual ProblemIRV04::deserialize najpierw wywołuje validate_v04_study_wire, która zwraca publiczny /study/kind: unsupported study kind 'antenna_field_solve'. Poprawiono asercję na tę konkretną klasyfikację/pointer, zachowując obowiązkowe odrzucenie i pozostałe trzy regresje. Nie zmieniono productionvalidator ani zakresu wsparcia. Ponowne hostedexecution pending.
+
+### 2026-10-14 — naprawa rzeczywistych failure contracts antenowej publikacji
+
+CI522 fullrunner dwie awarie zdiagnozowano na exactsource. Tampered H jest prawidłowo odrzucany przez wcześniejszy common verifier; generic połączony komunikat zasłaniał specyficzną klasyfikację SHA oczekiwaną przez loader test. Verifier rozdziela SHA/size/finite errors w tym samym porządku i zachowuje każdy predicate. Dodano realne helpercases validpayload, badSHA, truncatedpayload z poprawnym digestem i nonfinitepayload z poprawnym digestem; loader tamperassert pozostaje hash-specific.
+
+Cancel przed rename pozostawia wspólny organizujący parent v2namespace, bez końcowej content-addressed rewizji. Produkcyjne cleanup/rename nie są zmieniane; test sprawdza brak finalleaf/manifest/member/temp oraz brak jakichkolwiek children w fresh uniquenamespace. Nie usuwa się parenta mogącego należeć do współbieżnych publisherów. Trzy named actual regressions wykonywane na obu platformach; Linux fullrunner zachowany. Hosted execution pending, gate nie jest osłabiony.
+
+Source fragment classification IR37313772c652c989167f77e7abc6aecc1bb20f6c opublikowany; istniejące CI obserwowane niezależnie. Brak lokalnego wykonania projektu i danych usuniętych z storage.

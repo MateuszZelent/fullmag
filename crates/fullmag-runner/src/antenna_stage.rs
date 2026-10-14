@@ -1603,6 +1603,7 @@ mod tests {
             uuid::Uuid::new_v4().simple()
         ));
         let result = field_solve_result("solution", 2.0);
+        let (asset_id, _) = manifest_metadata(&result).unwrap();
         let signal = AtomicBool::new(true);
         let error = publish_antenna_field_solution_atomically_interruptible(
             &root,
@@ -1611,7 +1612,28 @@ mod tests {
         )
         .expect_err("cancelled publication must not return a ready asset");
         assert!(error.message.contains("cancelled before atomic rename"));
-        assert!(!root.join("antenna/field_solutions/solution").exists());
+        let revision_parent = root.join("antenna/field_solutions/solution");
+        let final_revision = revision_parent.join(&asset_id);
+        assert!(revision_parent.is_dir(), "retain the shared organizing parent");
+        assert!(
+            !final_revision.exists(),
+            "cancelled publication must not rename the revision"
+        );
+        assert!(!final_revision.join(SOLUTION_MANIFEST_NAME).exists());
+        assert!(!final_revision.join("common/H_per_A.f64le").exists());
+        let staging_prefix = format!(".solution.{asset_id}.tmp-");
+        let leaked_staging = fs::read_dir(&revision_parent)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .any(|name| name.to_string_lossy().starts_with(&staging_prefix));
+        assert!(
+            !leaked_staging,
+            "cancelled publication must remove its temporary directory"
+        );
+        assert!(
+            fs::read_dir(&revision_parent).unwrap().next().is_none(),
+            "a cancelled publication in a fresh namespace must leave no revision or staging children"
+        );
         fs::remove_dir_all(&root).ok();
     }
 
