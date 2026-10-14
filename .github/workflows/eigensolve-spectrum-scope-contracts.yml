@@ -9,6 +9,7 @@ on:
       - 'crates/fullmag-application/**'
       - 'crates/fullmag-runner/**'
       - 'crates/fullmag-cli/**'
+      - 'scripts/fullmag_storage.py'
       - '.github/workflows/eigensolve-spectrum-scope-contracts.yml'
 permissions:
   contents: read
@@ -18,8 +19,35 @@ jobs:
     timeout-minutes: 45
     env:
       RUST_MIN_STACK: 16777216
+      FULLMAG_PROJECT_STORAGE_ROOT: ${{ github.workspace }}/../storage
     steps:
       - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+      - name: Resolve canonical project storage for publication tests
+        shell: python
+        run: |
+          import json
+          import os
+          import subprocess
+          import sys
+          layout = json.loads(subprocess.check_output([
+              sys.executable, "-B", "scripts/fullmag_storage.py", "resolve",
+              "--profile", "linux-host", "--create",
+          ], text=True))
+          storage_root = layout["env"]["FULLMAG_PROJECT_STORAGE_ROOT"]
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as environment:
+              environment.write(f"FULLMAG_PROJECT_STORAGE_ROOT={storage_root}\n")
+          receipt = {key: layout[key] for key in (
+              "repo_root", "project_root", "storage_root", "profile", "worktree_id",
+          )}
+          receipt["source_sha"] = os.environ.get("GITHUB_SHA")
+          receipt_path = os.path.join(os.environ["RUNNER_TEMP"], "scope-storage-preflight.json")
+          with open(receipt_path, "w", encoding="utf-8") as stream:
+              json.dump(receipt, stream, indent=2)
+              stream.write("\n")
+          print(json.dumps(receipt, indent=2))
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Preserve exact source identity
@@ -65,3 +93,11 @@ jobs:
         run: |
           cargo check --locked -p fullmag-runner --tests
           cargo check --locked -p fullmag-cli -p fullmag-api --bins
+      - name: Preserve canonical storage preflight evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: scope-storage-preflight-${{ github.run_id }}
+          path: ${{ runner.temp }}/scope-storage-preflight.json
+          if-no-files-found: warn
+
