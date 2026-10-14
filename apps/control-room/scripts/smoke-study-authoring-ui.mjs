@@ -910,6 +910,106 @@ function resourceForPath(pathname) {
     return frequencyDomainResponseFieldMeta();
   }
   if (pathname === "/v2/sessions/current/model/scene") return scene;
+  if (
+    explorerCatalogOnly &&
+    pathname === "/v2/sessions/current/model/readiness"
+  ) {
+    const checks = [
+      {
+        id: "method",
+        state: "complete",
+        label: "Simulation method",
+        target_resource: "model/study",
+      },
+      {
+        id: "domain",
+        state: "complete",
+        label: "Domain policy",
+        target_resource: "meshing/policies/universe",
+        reason:
+          "Automatic domain policy follows the authored geometry; FEM air requirements depend on the selected physics.",
+      },
+      {
+        id: "geometry",
+        state: "complete",
+        label: "Geometry",
+        target_resource: "model/scene",
+      },
+      {
+        id: "material",
+        state: "blocked",
+        label: "Material",
+        target_resource: "model/objects/film",
+        reason: "Assign a material to every magnetic object.",
+      },
+      {
+        id: "texture",
+        state: "blocked",
+        label: "Initial magnetization",
+        target_resource: "model/objects/film",
+        reason: "Assign initial magnetization to every magnetic object.",
+      },
+      {
+        id: "interactions",
+        state: "blocked",
+        label: "Interactions",
+        target_resource: "model/objects/film",
+        reason: "Enable at least one interaction for every magnetic object.",
+      },
+      {
+        id: "discretization",
+        state: "blocked",
+        label: "Discretization",
+        target_resource: "meshing/builds/current",
+        reason: "Build a current shared-domain mesh before running.",
+      },
+      {
+        id: "study",
+        state: "complete",
+        label: "Study",
+        target_resource: "model/study",
+      },
+      {
+        id: "execution",
+        state: "complete",
+        label: "Execution request",
+        target_resource: "model/study",
+        reason:
+          "The requested device is configured; engine availability is checked during preparation for each run.",
+      },
+    ];
+    const blockers = checks
+      .filter((check) => check.state !== "complete")
+      .map((check) => check.reason);
+    const exportCheckIds = new Set([
+      "geometry",
+      "material",
+      "texture",
+      "interactions",
+    ]);
+    return {
+      scene_revision: sceneRevision,
+      ready_to_run: blockers.length === 0,
+      ready_to_export: checks
+        .filter((check) => exportCheckIds.has(check.id))
+        .every((check) => check.state === "complete"),
+      checks,
+      blockers,
+      capabilities: {
+        move: { available: true, reason: null },
+        rotate: {
+          available: false,
+          reason:
+            "Rotate and Scale require a canonical geometry contract newer than ProblemIR 0.3.",
+        },
+        scale: {
+          available: false,
+          reason:
+            "Rotate and Scale require a canonical geometry contract newer than ProblemIR 0.3.",
+        },
+      },
+    };
+  }
   if (pathname === "/v2/sessions/current/model/script") {
     const source = canonicalPythonSourceForScene(scene);
     return {
@@ -991,6 +1091,28 @@ function resourceForPath(pathname) {
   }
   if (pathname === "/v2/sessions/current/visualization/state") {
     return visualizationState();
+  }
+  if (
+    explorerCatalogOnly &&
+    pathname ===
+      "/v2/sessions/current/visualization/mode-compositions/active"
+  ) {
+    return {
+      schema_version: "mode-composition.v1",
+      revision: 1,
+      composition_id: "active",
+      lifecycle: {
+        session_id: catalogSessionId,
+        run_id: catalogRunId,
+        artifact_revision: 0,
+        mesh_revision: 0,
+      },
+      run_id: "",
+      stage_id: "",
+      artifact_revision: "",
+      phase_clock: { synchronized: true, master_rate_hz: 1.0 },
+      layers: [],
+    };
   }
   if (pathname === "/v2/sessions/current/simulation/commands") {
     return { commands: [], latest_completed: null, revision: sceneRevision };
