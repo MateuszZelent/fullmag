@@ -26,6 +26,8 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: '3.11'
+      - name: Install Python runtime for API script round-trip regression
+        run: python -m pip install -e packages/fullmag-py
       - name: Resolve canonical project storage for publication tests
         shell: python
         run: |
@@ -95,6 +97,17 @@ jobs:
           set -o pipefail
           cargo test --locked -p fullmag-api --bin fullmag-api router_v2::tests::authoring_transactions_create_transform_and_delete_objects -- --exact --nocapture | tee "$RUNNER_TEMP/authoring-transaction-resource.log"
           grep -F "router_v2::tests::authoring_transactions_create_transform_and_delete_objects ... ok" "$RUNNER_TEMP/authoring-transaction-resource.log"
+      - name: Verify named API hysteresis, field topology, and Python sync regressions
+        env:
+          FULLMAG_REPO_ROOT: ${{ github.workspace }}
+        run: |
+          set -o pipefail
+          cargo test --locked -p fullmag-api --bin fullmag-api router_v2::handlers::simulation::runtime::hysteresis_invalidation_tests::invalidation_does_not_follow_hysteresis_kind_from_a_different_active_stage -- --exact --nocapture | tee "$RUNNER_TEMP/runtime-hysteresis-invalidation.log"
+          grep -F "router_v2::handlers::simulation::runtime::hysteresis_invalidation_tests::invalidation_does_not_follow_hysteresis_kind_from_a_different_active_stage ... ok" "$RUNNER_TEMP/runtime-hysteresis-invalidation.log"
+          cargo test --locked -p fullmag-api --bin fullmag-api router_v2::tests::topological_charge_uses_fdm_field_topology_with_retained_fem_mesh -- --exact --nocapture | tee "$RUNNER_TEMP/topological-charge-field-topology.log"
+          grep -F "router_v2::tests::topological_charge_uses_fdm_field_topology_with_retained_fem_mesh ... ok" "$RUNNER_TEMP/topological-charge-field-topology.log"
+          cargo test --locked -p fullmag-api --bin fullmag-api script::tests::scene_pbc_overrides_roundtrip_via_python_helper -- --exact --nocapture | tee "$RUNNER_TEMP/scene-pbc-python-roundtrip.log"
+          grep -F "script::tests::scene_pbc_overrides_roundtrip_via_python_helper ... ok" "$RUNNER_TEMP/scene-pbc-python-roundtrip.log"
       - name: Compile integration callers and API CLI binaries
         run: |
           cargo check --locked -p fullmag-runner --tests

@@ -42356,6 +42356,8 @@ async fn topological_charge_uses_fdm_field_topology_with_retained_fem_mesh() {
             status: "running".into(),
             updated_at_unix_ms: 1_700_000_000_789,
             latest_step: StepUpdateView {
+                kind: fullmag_quantities::StepDataKind::PhysicalObservation,
+                solver_progress: None,
                 step: 1,
                 time: 0.0,
                 dt: 1.0e-13,

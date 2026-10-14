@@ -4177,6 +4177,7 @@ mod hysteresis_invalidation_tests {
             stage_index: Some(stage_index),
             started_at_unix_ms: None,
             applied_step: None,
+            completed_step: None,
             applied_time_seconds: None,
             segment_id: None,
             completed_at_unix_ms: None,
